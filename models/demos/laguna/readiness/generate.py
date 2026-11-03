@@ -10,7 +10,7 @@ reference file contains prompt tokens, ground truth continuation tokens, and
 top-K predictions for validation.
 
 CLI:
-    python -m models.common.readiness_check.generate \\
+    python -m models.demos.laguna.readiness.generate \\
         --hf-model meta-llama/Llama-3.1-8B-Instruct \\
         --prompt-source aime24 \\
         --chat-template \\
@@ -18,7 +18,7 @@ CLI:
         --output llama31_8b.refpt
 
 Python:
-    from models.common.readiness_check.generate import generate_reference
+    from models.demos.laguna.readiness.generate import generate_reference
     generate_reference(
         hf_model_id="meta-llama/Llama-3.1-8B-Instruct",
         prompt_source="aime24",
@@ -45,14 +45,14 @@ try:
 except ImportError:
     tqdm = None
 
-from models.common.readiness_check.schema import Reference, ReferenceEntry, save_reference
+from models.demos.laguna.readiness.schema import Reference, ReferenceEntry, save_reference
 
 DEFAULT_K = 100
 DEFAULT_PROMPT_LEN = 128
 DEFAULT_GEN_LEN = 100
 DEFAULT_PROMPT_SOURCE = "book"
 DEFAULT_AIME24_PROMPTS_FILE = (
-    Path(__file__).resolve().parents[2] / "demos" / "deepseek_v3" / "demo" / "aime_under_8k_prompts.json"
+    Path(__file__).resolve().parents[3] / "demos" / "deepseek_v3" / "demo" / "aime_under_8k_prompts.json"
 )
 PROMPT_SOURCE_CHOICES = ("book", "aime24", "text", "file")
 
@@ -61,12 +61,12 @@ def _load_book_text() -> str:
     """Load the tale of two cities book text."""
     # Use the book from tt_transformers tests
     current_file_path = os.path.abspath(__file__)
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
-    book_file = os.path.join(repo_root, "tt_transformers/tests/tale-of-two-cities.txt.bz2")
+    models_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file_path))))
+    book_file = os.path.join(models_dir, "ttt_compat/tests/tale-of-two-cities.txt.bz2")
 
     if not os.path.exists(book_file):
         raise FileNotFoundError(
-            f"Book text not found at {book_file}. " "Expected models/tt_transformers/tests/tale-of-two-cities.txt.bz2"
+            f"Book text not found at {book_file}. " "Expected models/ttt_compat/tests/tale-of-two-cities.txt.bz2"
         )
 
     with bz2.open(book_file, "rt", encoding="utf-8") as f:

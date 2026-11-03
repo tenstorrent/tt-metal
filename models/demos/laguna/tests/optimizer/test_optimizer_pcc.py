@@ -57,7 +57,7 @@ import pytest  # noqa: E402
 import torch  # noqa: E402
 
 import ttnn  # noqa: E402
-from models.common.readiness_check.schema import load_reference  # noqa: E402
+from models.demos.laguna.readiness.schema import load_reference  # noqa: E402
 from models.demos.laguna.tests.laguna_test_utils import close_mesh, open_mesh, resolve_profile  # noqa: E402
 from models.demos.laguna.tt.generator import LagunaGenerator  # noqa: E402
 

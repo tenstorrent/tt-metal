@@ -13,7 +13,7 @@ Validates TT model prefill accuracy by:
 Use alongside `run_teacher_forcing.py` to validate both prefill and decode paths.
 
 CLI:
-    python -m models.common.readiness_check.run_prefill_check \\
+    python -m models.demos.laguna.readiness.run_prefill_check \\
         --model-dir models/autoports/<model_name> \\
         --reference references/<model>.refpt \\
         --mesh-device N150
@@ -29,18 +29,18 @@ from typing import Any, Dict, List
 
 import torch
 
-from models.common.readiness_check.contract import (
+from models.demos.laguna.readiness.contract import (
     BUILD_GENERATOR_FUNCTION_NAME,
     GENERATOR_MODULE_RELPATH,
     BuildGeneratorFn,
     Generator,
 )
-from models.common.readiness_check.mesh_device import (
+from models.demos.laguna.readiness.mesh_device import (
     add_mesh_device_args,
     close_readiness_mesh_device,
     open_readiness_mesh_device,
 )
-from models.common.readiness_check.schema import Reference, ReferenceEntry, load_reference
+from models.demos.laguna.readiness.schema import Reference, ReferenceEntry, load_reference
 
 
 def _import_build_generator(model_dir: Path) -> BuildGeneratorFn:
@@ -66,7 +66,7 @@ def _import_build_generator(model_dir: Path) -> BuildGeneratorFn:
     if fn is None or not callable(fn):
         raise AttributeError(
             f"{generator_path} does not export a callable `{BUILD_GENERATOR_FUNCTION_NAME}`. "
-            f"See models/common/readiness_check/contract.py."
+            f"See models/demos/laguna/readiness/contract.py."
         )
     return fn  # type: ignore[return-value]
 

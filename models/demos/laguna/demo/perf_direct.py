@@ -244,7 +244,7 @@ KV_BLOCK = 64
 def aime_prompt():
     """The accuracy test's AIME24 chat prompt (235 tokens; tests/reference_outputs), the text the CPU DFlash
     acceptance check (tests/dflash_acceptance.py) uses."""
-    from models.common.readiness_check.schema import load_reference
+    from models.demos.laguna.readiness.schema import load_reference
 
     ref = REPO_ROOT / "models" / "demos" / "laguna" / "tests" / "reference_outputs" / "readiness_aime24_chat_s.refpt"
     return torch.as_tensor(load_reference(ref).entries[0].prompt_tokens[0], dtype=torch.int64)

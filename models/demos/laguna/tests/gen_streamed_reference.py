@@ -3,7 +3,7 @@
 """Layer-streamed HF readiness reference for Laguna (no full-model load).
 
 Laguna-S-2.1 is 235 GB in bf16, more than this host can hold next to other jobs, so the shared
-``models.common.readiness_check.generate`` (which loads the whole model) cannot produce its reference.
+``models.demos.laguna.readiness.generate`` (which loads the whole model) cannot produce its reference.
 This tool runs the exact HF ``LagunaDecoderLayer`` code one layer at a time over one fixed token
 sequence: load layer i from the checkpoint, run it on the hidden states of all positions, free it,
 continue. Peak host memory is one layer (~30 GB for an S MoE layer in fp32), not the model.
@@ -33,7 +33,7 @@ from pathlib import Path
 
 import torch
 
-from models.common.readiness_check.schema import Reference, ReferenceEntry, load_reference, save_reference
+from models.demos.laguna.readiness.schema import Reference, ReferenceEntry, load_reference, save_reference
 from models.demos.laguna.tests import laguna_reference as R
 from models.demos.laguna.tests import laguna_weights as W
 from models.demos.laguna.tt.model_spec import MODEL_ID

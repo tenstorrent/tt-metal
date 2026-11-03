@@ -3,7 +3,7 @@
 """Readiness/serving generator for poolside/Laguna-XS-2.1 on Blackhole P150 ASIC meshes.
 
 Implements the standard Metal readiness ``Generator`` contract
-(``models.common.readiness_check.contract.Generator``): low-level ``prefill_forward`` /
+(``models.demos.laguna.readiness.contract.Generator``): low-level ``prefill_forward`` /
 ``decode_forward`` (the vLLM-shared level where the caller owns cache + page table) and the
 high-level ``generate`` (owns cache/page table internally, loops deterministically).
 
@@ -32,7 +32,7 @@ import torch
 from tt_transformers.modules.sampling.sampling_1d import Sampling1D
 
 import ttnn
-from models.common.readiness_check.contract import Generator as ReadinessGenerator
+from models.demos.laguna.readiness.contract import Generator as ReadinessGenerator
 
 # The readiness runner loads this file as a standalone module (not as a package member), so relative
 # imports fail there — fall back to the absolute package path.

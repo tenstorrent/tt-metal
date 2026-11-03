@@ -42,9 +42,6 @@ source:
     # Shared production modules reached by generator.py and Sampling1D, including
     # the latter's lazy log-probability initialization.
     - models/common/lightweightmodule.py
-    - models/common/modules/lazy_buffer.py
-    - models/common/modules/tt_ccl.py
-    - models/common/modules/sampling/sampling_1d.py
     - models/common/utils.py
     - models/common/sampling/__init__.py
     - models/common/sampling/_utils.py
@@ -52,14 +49,9 @@ source:
     - models/common/sampling/tt_log_probs.py
     - models/common/sampling/tt_penalties.py
     - models/common/sampling/tt_sampling.py
-    # Importing readiness_check.contract executes this package initializer, whose
-    # production exports require the five modules below.
-    - models/common/readiness_check/__init__.py
-    - models/common/readiness_check/contract.py
-    - models/common/readiness_check/contract_vllm.py
-    - models/common/readiness_check/generate.py
-    - models/common/readiness_check/schema.py
-    - models/common/readiness_check/teacher_forcing.py
+    # generator.py subclasses the readiness Generator contract (the package initializer imports nothing else).
+    - models/demos/laguna/readiness/__init__.py
+    - models/demos/laguna/readiness/contract.py
   ubuntu: "22.04"
   python: "3.12"
 

@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 
 import torch
 
-from models.common.readiness_check.schema import Reference, load_reference
+from models.demos.laguna.readiness.schema import Reference, load_reference
 
 
 class TokenAccuracy:

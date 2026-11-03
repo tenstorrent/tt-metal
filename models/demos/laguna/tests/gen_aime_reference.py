@@ -4,7 +4,7 @@
 
 Reuses the shared readiness scoring/serialisation (``_generate_one_entry``, ``save_reference``,
 ``Reference``, the AIME24 prompt loader and stop-id logic) verbatim so the produced .refpt is
-schema- and semantics-identical to ``models.common.readiness_check.generate``. The only override:
+schema- and semantics-identical to ``models.demos.laguna.readiness.generate``. The only override:
 this model's tokenizer returns a dict from ``apply_chat_template(tokenize=True)`` (an ``input_ids``
 key), which the shared CLI's list-comprehension can't consume — we extract ``input_ids`` here.
 
@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from models.common.readiness_check.generate import (
+from models.demos.laguna.readiness.generate import (
     DEFAULT_AIME24_PROMPTS_FILE,
     _generate_continuation_tokens,
     _generate_one_entry,
@@ -28,7 +28,7 @@ from models.common.readiness_check.generate import (
     _load_aime24_prompt,
     _safe_pad_id,
 )
-from models.common.readiness_check.schema import Reference, save_reference
+from models.demos.laguna.readiness.schema import Reference, save_reference
 
 MODEL_ID = "poolside/Laguna-XS-2.1"
 

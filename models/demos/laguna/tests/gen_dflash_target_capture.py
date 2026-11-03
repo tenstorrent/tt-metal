@@ -88,7 +88,7 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     _start_memory_guard(args.abort_free_gib)
 
-    from models.common.readiness_check.schema import load_reference
+    from models.demos.laguna.readiness.schema import load_reference
 
     entry = load_reference(READINESS_REFERENCES[MODEL_ID]).entries[0]
     prompt_ids = [int(t) for t in entry.prompt_tokens[0].tolist()]

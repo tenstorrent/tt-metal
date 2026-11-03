@@ -4,9 +4,9 @@
 
 Subcommands:
   prefill   — prefill_forward(return_all_logits=True) top-1/5/100 vs the AIME24 reference (faithful
-              to models.common.readiness_check.run_prefill_check scoring, but builds a mesh-correct
+              to models.demos.laguna.readiness.run_prefill_check scoring, but builds a mesh-correct
               page table / cache instead of the shared runner's single-device placeholder).
-  teacher   — drives the official models.common.readiness_check.run_teacher_forcing programmatically
+  teacher   — drives the official models.demos.laguna.readiness.run_teacher_forcing programmatically
               (traced token-out decode; top-1/5/100 + TTFT + decode t/s/u).
   autoreg   — free-running generate for one prompt; writes hf/tt completions + meta for the
               degeneracy check.
@@ -120,7 +120,7 @@ def _assert_acceptance_profile(args):
 
 
 def cmd_prefill(args):
-    from models.common.readiness_check.schema import load_reference
+    from models.demos.laguna.readiness.schema import load_reference
 
     ref = load_reference(REF)
     e = ref.entries[0]
@@ -154,10 +154,10 @@ def cmd_prefill(args):
 
 
 def cmd_prefill_official(args):
-    """Drive the OFFICIAL models.common.readiness_check.run_prefill_check programmatically on the
+    """Drive the OFFICIAL models.demos.laguna.readiness.run_prefill_check programmatically on the
     selected mesh. Documents whether the shared runner can drive a
     multi-device model given its single-device placeholder page-table setup."""
-    from models.common.readiness_check.run_prefill_check import run_prefill_check
+    from models.demos.laguna.readiness.run_prefill_check import run_prefill_check
 
     mesh = open_mesh(ttnn, args.profile_spec)
     try:
@@ -175,7 +175,7 @@ def cmd_prefill_official(args):
 
 
 def cmd_teacher(args):
-    from models.common.readiness_check.run_teacher_forcing import run_teacher_forcing
+    from models.demos.laguna.readiness.run_teacher_forcing import run_teacher_forcing
 
     mesh = open_mesh(ttnn, args.profile_spec)
     try:
@@ -193,7 +193,7 @@ def cmd_teacher(args):
 
 
 def cmd_autoreg(args):
-    from models.common.readiness_check.schema import load_reference
+    from models.demos.laguna.readiness.schema import load_reference
 
     ref = load_reference(REF)
     e = ref.entries[0]
@@ -233,7 +233,7 @@ def cmd_autoreg(args):
 
 def cmd_prefill_autoreg(args):
     """Prefill top-k + free-running autoregressive + qualitative artifacts in ONE model build."""
-    from models.common.readiness_check.schema import load_reference
+    from models.demos.laguna.readiness.schema import load_reference
 
     ref = load_reference(REF)
     e = ref.entries[0]

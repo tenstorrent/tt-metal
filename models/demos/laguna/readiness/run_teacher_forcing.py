@@ -6,7 +6,7 @@ Run the teacher-forcing portion of the model-readiness check.
 
 Given a model directory containing a `tt/generator.py` that satisfies the
 contract in `contract.py`, and a reference file produced by
-`models.common.readiness_check.generate`, this runner:
+`models.demos.laguna.readiness.generate`, this runner:
 
   1. Builds the generator via `<model_dir>/tt/generator.py::build_generator`.
   2. For each entry in the reference, requires `generator.generate()` to
@@ -18,9 +18,9 @@ contract in `contract.py`, and a reference file produced by
      directly timed TTFT and traced decode t/s/u.
 
 CLI:
-    python -m models.common.readiness_check.run_teacher_forcing \\
+    python -m models.demos.laguna.readiness.run_teacher_forcing \\
         --model-dir models/autoports/<model_name> \\
-        --reference models/common/readiness_check/references/<model>.refpt \\
+        --reference models/demos/laguna/tests/reference_outputs/<model>.refpt \\
         --mesh-device N150
 """
 
@@ -34,18 +34,18 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from models.common.readiness_check.contract import (
+from models.demos.laguna.readiness.contract import (
     BUILD_GENERATOR_FUNCTION_NAME,
     GENERATOR_MODULE_RELPATH,
     BuildGeneratorFn,
     Generator,
 )
-from models.common.readiness_check.mesh_device import (
+from models.demos.laguna.readiness.mesh_device import (
     add_mesh_device_args,
     close_readiness_mesh_device,
     open_readiness_mesh_device,
 )
-from models.common.readiness_check.teacher_forcing import TokenAccuracy
+from models.demos.laguna.readiness.teacher_forcing import TokenAccuracy
 
 
 def _import_build_generator(model_dir: Path) -> BuildGeneratorFn:
@@ -74,7 +74,7 @@ def _import_build_generator(model_dir: Path) -> BuildGeneratorFn:
     if fn is None or not callable(fn):
         raise AttributeError(
             f"{generator_path} does not export a callable `{BUILD_GENERATOR_FUNCTION_NAME}`. "
-            f"See models/common/readiness_check/contract.py."
+            f"See models/demos/laguna/readiness/contract.py."
         )
     return fn  # type: ignore[return-value]
 
