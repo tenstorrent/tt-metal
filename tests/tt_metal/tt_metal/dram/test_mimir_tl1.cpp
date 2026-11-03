@@ -787,6 +787,9 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
 
     std::vector<uint32_t> input(num_words);
     std::vector<uint32_t> cleared(num_words, 0);
+    // TL1 keeps its contents across processes and the input is the same every run, so without the poison a read that
+    // never lands would leave the last run's staging for the writes to copy.
+    const std::vector<uint32_t> staging_poison(num_words, 0xDEADBEEFu);
     for (uint32_t i = 0; i < num_words; ++i) {
         input[i] = 0xD2D10000u | (src_cce << 8) | i;
     }
@@ -823,7 +826,12 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
          local_base_slots,
          static_cast<uint32_t>(kGddrSlotStride)});
 
+    write_cce_sram(device, logical_src, noc_addr, staging_poison.data(), transfer_size);
     LaunchProgram(*mesh_device, program);
+
+    std::vector<uint32_t> staged(num_words, 0);
+    read_cce_sram(device, logical_src, noc_addr, staged.data(), transfer_size);
+    EXPECT_EQ(staged, input) << "src cce " << src_cce << " staging";
 
     for (uint32_t dest_cce : dest_cces) {
         std::vector<uint32_t> output(num_words, 0);
