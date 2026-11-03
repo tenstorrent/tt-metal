@@ -127,11 +127,11 @@ void kernel_main() {
             if constexpr (fp32_sfpu_finalizer) {
                 // These aliases share the input SRAM but maintain independent FIFO state. Advance
                 // them in both passes so their pointers remain aligned with the primary input CBs.
-                dfb_in0_fp32.reserve_back(block.full_block_size());
-                dfb_in0_fp32.push_back(block.full_block_size());
+                dfb_in0_fp32.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_in0_fp32.push_back(static_cast<uint16_t>(block.full_block_size()));
 #ifdef FUSE_PRE_ADD
-                dfb_in1_fp32.reserve_back(block.full_block_size());
-                dfb_in1_fp32.push_back(block.full_block_size());
+                dfb_in1_fp32.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_in1_fp32.push_back(static_cast<uint16_t>(block.full_block_size()));
 #endif
             }
         }  // wt loop
@@ -164,11 +164,11 @@ void kernel_main() {
 #endif
 #endif
             if constexpr (fp32_sfpu_finalizer) {
-                dfb_in0_fp32.reserve_back(block.full_block_size());
-                dfb_in0_fp32.push_back(block.full_block_size());
+                dfb_in0_fp32.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_in0_fp32.push_back(static_cast<uint16_t>(block.full_block_size()));
 #ifdef FUSE_PRE_ADD
-                dfb_in1_fp32.reserve_back(block.full_block_size());
-                dfb_in1_fp32.push_back(block.full_block_size());
+                dfb_in1_fp32.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_in1_fp32.push_back(static_cast<uint16_t>(block.full_block_size()));
 #endif
             }
 #endif
