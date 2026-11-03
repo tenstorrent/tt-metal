@@ -344,8 +344,8 @@ llk:
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 100
-    sim_wh_n150: 75
-    sim_bh_p150: 75
+    sim_wh_n150: 105
+    sim_bh_p150: 105
   weekly:
     sim_wh_n150_xl: 75
     sim_bh_p150_xl: 240
