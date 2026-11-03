@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -130,49 +129,25 @@ class _HistoryExchange:
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
 
 
-class _FusedOutputStaging:
-    """L1 staging for the fused output projection, shared by live layers of one geometry; freed with the last one."""
-
-    def __init__(self, tensor: ttnn.Tensor) -> None:
-        self.tensor = tensor
-
-    @classmethod
-    def shared(
-        cls,
-        mesh_device: ttnn.MeshDevice,
-        rows: int,
-        output_projection: ttnn.Tensor,
-        input_memory_config: ttnn.MemoryConfig,
-        ccl_kwargs: dict,
-    ) -> _FusedOutputStaging:
-        weight_k, weight_n = tuple(output_projection.shape)[-2:]
-        key = (
-            mesh_device.id(),
-            rows,
-            weight_k,
-            weight_n,
-            output_projection.dtype,
-            input_memory_config.buffer_type,
-            tuple(sorted((name, str(value)) for name, value in ccl_kwargs.items())),
+def _fused_output_staging(mesh_device, rows: int, weight: ttnn.Tensor, memory_config, ccl_kwargs: dict) -> ttnn.Tensor:
+    """The fused output projection's L1 staging, allocated once per mesh and geometry and shared by its layers."""
+    key = (mesh_device.id(), rows, *tuple(weight.shape)[-2:], weight.dtype, memory_config.buffer_type, str(ccl_kwargs))
+    if key not in _fused_output_stagings:
+        activation = ttnn.empty(
+            (1, rows, weight.shape[-2]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=memory_config,
         )
-        staging = _fused_output_stagings.get(key)
-        if staging is None:
-            activation = ttnn.empty(
-                (1, rows, weight_k),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                memory_config=input_memory_config,
-            )
-            staging = cls(
-                ttnn.experimental.matmul_reduce_scatter_prefill_staging(activation, output_projection, **ccl_kwargs)
-            )
-            ttnn.deallocate(activation)
-            _fused_output_stagings[key] = staging
-        return staging
+        _fused_output_stagings[key] = ttnn.experimental.matmul_reduce_scatter_prefill_staging(
+            activation, weight, **ccl_kwargs
+        )
+        ttnn.deallocate(activation)
+    return _fused_output_stagings[key]
 
 
-_fused_output_stagings: weakref.WeakValueDictionary[tuple, _FusedOutputStaging] = weakref.WeakValueDictionary()
+_fused_output_stagings: dict[tuple, ttnn.Tensor] = {}
 
 
 @dataclass(frozen=True)
@@ -389,7 +364,7 @@ class ttKDA:
                 topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
             )
-            self._fused_output_staging = _FusedOutputStaging.shared(
+            self._fused_output_staging = _fused_output_staging(
                 mesh_device,
                 self.active_seq_len_local,
                 self.weights.output_projection,
@@ -550,7 +525,7 @@ class ttKDA:
                 **self._fused_output_ccl_kwargs,
                 compute_kernel_config=self.fused_output_projection_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                staging_tensor=self._fused_output_staging.tensor,
+                staging_tensor=self._fused_output_staging,
             )
         output = ttnn.linear(
             output,
