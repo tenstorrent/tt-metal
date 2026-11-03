@@ -1,0 +1,6 @@
+# Large raw Tracy captures stay local; portable CSV/table evidence is committed.
+doc/functional_decoder/profile_raw/
+# Full-model tensors and raw multi-GB profiler state remain local.
+readiness*.refpt
+doc/full_model/local/
+doc/optimized_full_model/local/

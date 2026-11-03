@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "config_id": "head4_ccl4_norm4_lofi",
+  "weight_groups": {
+    "attention_dtype": "bfloat4_b",
+    "attention_decode_dtype": "bfloat4_b",
+    "output_weight_dtype": "bfloat4_b",
+    "mlp_dtype": "bfloat4_b",
+    "down_weight_dtype": "bfloat4_b",
+    "experts_dtype": "bfloat4_b",
+    "expert_down_dtype": "bfloat4_b",
+    "value_dtype": "bfloat4_b"
+  },
+  "layer_exceptions": [
+    {
+      "layers": [
+        0,
+        1,
+        2
+      ],
+      "weight_groups": {
+        "attention_dtype": "bfloat8_b"
+      }
+    }
+  ],
+  "compute_fidelities": {
+    "attention": "LoFi",
+    "mlp": "LoFi",
+    "experts": "LoFi",
+    "value": "LoFi"
+  },
+  "activations": {
+    "attention_activation": "bfloat4_b",
+    "mlp_activation": "bfloat4_b",
+    "expert_activation": "bfloat8_b",
+    "expanded_expert_activation": "bfloat8_b",
+    "prefill_value_activation": "bfloat8_b",
+    "ep_value_activation": "bfloat8_b",
+    "prefill_norm_dtype": "bfloat16",
+    "dense_prefill_hidden_dtype": "bfloat8_b",
+    "ep_expert_activation": "bfloat8_b",
+    "value_activation": "bfloat16"
+  },
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": "bfloat4_b",
+  "prefill_ccl_dtype": "bfloat16",
+  "kv_cache_dtype": "bfloat8_b",
+  "lm_head_dtype": "bfloat4_b",
+  "lm_head_fidelity": "LoFi",
+  "embedding_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "norm_fidelity": "HiFi4",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "routing": "packed projection precision; BF16 routing scores/top-k; weighting follows activation dtype except BFP4 promotes to BF16; active value4/MLP8",
+  "sdpa_fidelities": {
+    "prefill": "HiFi2",
+    "short": "LoFi",
+    "middle": "HiFi2",
+    "long": "HiFi2"
+  },
+  "max_context": 524288
+}
