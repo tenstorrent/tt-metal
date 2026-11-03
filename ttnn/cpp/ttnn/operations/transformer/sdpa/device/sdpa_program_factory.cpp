@@ -163,7 +163,11 @@ ChunkedParams compute_chunked_params(
     if (flexible_chunked) {
         p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         p.page_table_stick_size = p.max_blocks_per_seq * sizeof(int32_t);
-        TT_FATAL(p.page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
+        TT_FATAL(
+            p.page_table_stick_size % 32 == 0,
+            "chunked SDPA reads the page table in 32-byte rows: its width (blocks per sequence) must be a multiple of "
+            "8, got {}",
+            p.max_blocks_per_seq);
     } else {
         p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         p.page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
