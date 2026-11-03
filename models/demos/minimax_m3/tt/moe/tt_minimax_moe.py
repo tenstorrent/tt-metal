@@ -188,7 +188,8 @@ class TtMiniMaxMoE(LightweightModule):
         )
         global_expert_idx_tt = ttnn.squeeze(ttnn.squeeze(global_expert_idx_tt, 0), 0)
         # M3 routed expert: the fused unified_routed_expert_moe kernel with the clamped swigluoai
-        # activation (RoutedExpertActivation.SwiGluOai bakes in M3's alpha=1.702 / limit=7.0). This
+        # activation (RoutedExpertActivation.SwiGluOai bakes in alpha=1.702 / limit=7.0; MLP asserts the config
+        # matches, utils/checkpoint.py::ROUTED_EXPERT_SWIGLU). This
         # replaced the earlier host-loop CompositeRoutedExpert once #47825 added swigluoai to the kernel.
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,

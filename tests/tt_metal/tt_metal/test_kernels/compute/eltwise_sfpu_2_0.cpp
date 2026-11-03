@@ -24,6 +24,12 @@
 #if (DST_TILE_START != 0) && (defined(SFPU_OP_CHAIN_0) || defined(SFPU_BINARY_OP) || defined(SFPU_TERNARY_OP))
 #error "DST_TILE_START is a unary datacopy knob: SFPU chains target DEST tile 0, binary / ternary inputs sit at 1 / 2"
 #endif
+// Which DEST tile the unary / binary chains pack back. Defaults to the tile they computed into; a chain
+// that must observe a neighbouring DEST tile it has to leave untouched (tiled_prod_next_tile) packs that
+// one instead. Unlike DST_TILE_START this does not move where the chain runs, so it is legal with a chain.
+#ifndef SFPU_PACK_DST_INDEX
+#define SFPU_PACK_DST_INDEX DST_TILE_START
+#endif
 
 void kernel_main() {
     const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
@@ -108,7 +114,7 @@ void kernel_main() {
 #if defined(SFPU_TERNARY_OP)
             pack_tile(/*dst_index=*/3, out_id);
 #else
-            pack_tile(/*dst_index=*/DST_TILE_START, out_id);
+            pack_tile(/*dst_index=*/SFPU_PACK_DST_INDEX, out_id);
 #endif
             tile_regs_release();
 

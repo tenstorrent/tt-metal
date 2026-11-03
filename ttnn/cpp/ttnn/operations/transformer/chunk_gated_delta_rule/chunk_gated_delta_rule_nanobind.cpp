@@ -53,7 +53,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    std::optional<uint32_t> num_key_heads) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -73,7 +74,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         eye,
         tril,
         ones,
-        masks);
+        masks,
+        num_key_heads);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -150,6 +152,62 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
         gdn_default_compute_kernel_config(v_beta.device()->arch(), compute_kernel_config),
         use_mcast,
         force_serial);
+}
+
+std::vector<ttnn::Tensor> chunk_gdn_fused_launch(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    const ttnn::Tensor& eye,
+    const ttnn::Tensor& tril,
+    const ttnn::Tensor& ones,
+    const ttnn::Tensor& masks,
+    const ttnn::Tensor& initial_state,
+    uint32_t chunk_size,
+    bool output_final_state,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const ttnn::transformer::ChunkGdnFusedProgramConfig& program_config,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse,
+    bool v_flat,
+    uint32_t HV,
+    bool qk_norm,
+    float scale,
+    bool qk_flat,
+    uint32_t Hk,
+    uint32_t num_heads,
+    uint32_t head_offset,
+    const std::optional<ttnn::Tensor>& o_out,
+    const std::optional<ttnn::Tensor>& final_state_out) {
+    return ttnn::prim::chunk_gdn(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        eye,
+        tril,
+        ones,
+        masks,
+        initial_state,
+        chunk_size,
+        output_final_state,
+        memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+        gdn_default_compute_kernel_config(q.device()->arch(), compute_kernel_config),
+        ttnn::prim::ChunkGdnDeviceProgramConfig{program_config},
+        wy_inverse,
+        v_flat,
+        HV,
+        qk_norm,
+        scale,
+        qk_flat,
+        Hk,
+        num_heads,
+        head_offset,
+        o_out,
+        final_state_out);
 }
 
 std::string py_bool(bool b) { return b ? "True" : "False"; }
@@ -260,7 +318,11 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 report through the watcher's ASSERT, so run with TT_METAL_WATCHER set.
             handoff_fault (int): default 0. Debug, needs handoff_checks: compile one deliberate protocol
                 breach into the kernels (1 double credit, 2 wrong canary, 3 short push, 4 wrong owner,
-                5 no credit) so the fault test can prove the named check trips.)doc")
+                5 no credit) so the fault test can prove the named check trips.
+            wave_heads (int, optional): heads per program. The BH heads run as ceil(BH / wave_heads)
+                programs of nearly equal size, each with its own geometry, into shared outputs. None:
+                the op's plan (see chunk_gdn_fused_wave_plan): one program up to 32 heads when a
+                geometry fits, else the fewest waves of at most 24 heads.)doc")
         .def(
             nb::init<
                 std::optional<uint32_t>,
@@ -272,7 +334,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 std::optional<bool>,
                 std::optional<float>,
                 bool,
-                uint32_t>(),
+                uint32_t,
+                std::optional<uint32_t>>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
@@ -283,7 +346,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             nb::arg("producer_pool") = nb::none(),
             nb::arg("pool_extra_share") = nb::none(),
             nb::arg("handoff_checks") = false,
-            nb::arg("handoff_fault") = 0)
+            nb::arg("handoff_fault") = 0,
+            nb::arg("wave_heads") = nb::none())
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
@@ -294,10 +358,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         .def_rw("pool_extra_share", &ChunkGdnFusedProgramConfig::pool_extra_share)
         .def_rw("handoff_checks", &ChunkGdnFusedProgramConfig::handoff_checks)
         .def_rw("handoff_fault", &ChunkGdnFusedProgramConfig::handoff_fault)
+        .def_rw("wave_heads", &ChunkGdnFusedProgramConfig::wave_heads)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={}, producer_pool={}, pool_extra_share={}, handoff_checks={}, handoff_fault={})",
+                "unicast={}, posted={}, producer_pool={}, pool_extra_share={}, handoff_checks={}, handoff_fault={}, "
+                "wave_heads={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
@@ -307,7 +373,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 py_opt(c.producer_pool),
                 py_opt(c.pool_extra_share),
                 py_bool(c.handoff_checks),
-                c.handoff_fault);
+                c.handoff_fault,
+                py_opt(c.wave_heads));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
@@ -366,6 +433,35 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         resolves to), 2 = both (what producer_pool=None and the op's default dispatch resolve to).
         fixed_placement: -1 = free, 0 = row-major, 1 = row-local; a pinned per-head placement excludes
         the pool.)doc");
+    mod.def(
+        "chunk_gdn_fused_wave_plan",
+        [](uint32_t grid_x,
+           uint32_t grid_y,
+           uint32_t BH,
+           uint32_t NC,
+           uint32_t Vt,
+           uint32_t max_wave,
+           uint32_t fixed_nv,
+           uint32_t fixed_np) {
+            const auto p = ttnn::prim::plan_fused_waves(grid_x, grid_y, BH, NC, Vt, max_wave, fixed_nv, fixed_np);
+            return std::make_tuple(p.waves, p.t_fused_us, p.t_phased_us, p.fused_pays);
+        },
+        nb::arg("grid_x"),
+        nb::arg("grid_y"),
+        nb::arg("BH"),
+        nb::arg("NC"),
+        nb::arg("Vt") = 4,
+        nb::arg("max_wave") = 0,
+        nb::arg("fixed_nv") = 0,
+        nb::arg("fixed_np") = 0,
+        R"doc(Heads per fused program the op runs for BH heads on (grid_x, grid_y) when the fused program
+        config leaves wave_heads free: (waves, T_fused_us, T_phased_us, fused_pays). waves lists the head
+        count of each program in launch order (empty: no fused geometry fits): one program up to 32 heads
+        when a geometry fits, else the fewest waves of at most max_wave heads (0 = 24), sizes within one of
+        each other, more waves only if a size does not fit; T_fused_us is the cost model's sum over them;
+        fixed_nv / fixed_np pin num_receivers / num_producers as in chunk_gdn_fused_geometry. The op's default
+        dispatch takes the fused path when fused_pays, and also whenever BH exceeds the compute grid (the
+        phased scan needs one core per head, so only the waves can run there) as long as waves is not empty.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,
@@ -483,12 +579,14 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             Rank 3, flat token-major: q/k/v are the per-head concatenations a projection or the causal
                 conv emits, passed RAW (unnormalized, unscaled). No host relayout: the prep reader
                 tile-addresses each head's chunk out of the flat grid, maps value heads to key heads for
-                GQA at read time, and applies the L2 norm over K and `scale` in the kernel. Requires
-                K == V (assumed, not verifiable from a flat width: K = V, H = flat q width / V, HV =
-                beta's last dim), chunk_size == 32 and T a multiple of chunk_size; fused and phased paths
-                only (mono rejects it). The rank of q/k and of v is checked independently, but pass all
-                three the same way. g, beta and initial_state keep the shapes above on both paths. This is
-                the zero-relayout entry point for callers whose q/k/v are already token-major.
+                GQA at read time, and applies the L2 norm over K and `scale` in the kernel. K == V is
+                assumed unless `num_key_heads` is given (not verifiable from a flat width: K = V,
+                H = flat q width / V, HV = beta's last dim; with `num_key_heads`: H = num_key_heads and
+                K = flat q width / H, so K != V works), chunk_size == 32 and T a multiple of chunk_size;
+                fused and phased paths only (mono rejects it). The rank of q/k and of v is checked
+                independently, but pass all three the same way. g, beta and initial_state keep the shapes
+                above on both paths. This is the zero-relayout entry point for callers whose q/k/v are
+                already token-major.
 
         Keyword Args:
             scale (float, optional): defaults to K**-0.5; multiplied into q on the host (rank 4) or in
@@ -505,7 +603,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             program_config (ChunkGdnFusedProgramConfig | ChunkGdnPhasedProgramConfig |
                 ChunkGdnMonoProgramConfig, optional): which device implementation runs and how it is
                 laid out on the chip — the alternative you pass selects the path, its fields the
-                geometry (see each class). None: the fused path or the phased path depending on the cost model.
+                geometry (see each class). None: the fused path or the phased path depending on the cost
+                model. The fused path runs any batch size: heads beyond what one program's core map
+                holds run as further programs (waves) into the same outputs.
             wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO. How each chunk's WY inverse is
                 computed: HORNER on the matrix engine (every architecture),
                 FORWARD_SUBSTITUTION (one solve on the SFPU, Blackhole and chunk_size 32 only, refused
@@ -525,6 +625,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 chunk_size.
             masks (ttnn.Tensor, optional): [1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
                 tril/ones.
+            num_key_heads (int, optional): number of key heads H of flat (rank-3) q/k, which lets the
+                flat path run with K != V: H = num_key_heads, K = flat q width / H (must divide). Without
+                it the flat path assumes K == V. For rank-4 q/k it is redundant and, if given, must
+                equal q's head count.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -556,7 +660,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("eye") = nb::none(),
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
-        nb::arg("masks") = nb::none());
+        nb::arg("masks") = nb::none(),
+        nb::arg("num_key_heads") = nb::none());
 
     const auto* prep_doc =
         R"doc(
@@ -688,6 +793,53 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("force_serial") = false,
         nb::call_guard<nb::gil_scoped_release>(),
         scan_doc);
+
+    const auto* fused_doc =
+        R"doc(
+        Fused-GDN prim — testing/debug surface for ttnn::prim::chunk_gdn with the fused program factory, i.e.
+        ONE launch of the public op's fused path (the op launches it once per wave of heads). Takes the
+        preprocessed inputs the public op builds: head-major q/k/v [rows, NC, C, D] (q scaled, q/k L2-normalized)
+        or the flat token-major forms (v_flat / qk_flat, which the kernels normalize and scale), token-major
+        gates g/beta [B, T, HV] with B * HV == rows, the constant tiles, and initial_state [rows, K, V] fp32.
+
+        Computes heads [head_offset, head_offset + num_heads) of those rows (num_heads 0 = all rows). With
+        o_out / final_state_out (the full [rows, ...] fp32 outputs) it writes its head range into them; without,
+        it returns compact [num_heads, ...] outputs holding that range at rows 0..num_heads-1.
+
+        Returns [o [num_heads or rows, NC, C, V] fp32, final_state [.., K, V] fp32] (or the preallocated pair).
+        )doc";
+    mod.def(
+        "chunk_gdn_fused",
+        &chunk_gdn_fused_launch,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("g").noconvert(),
+        nb::arg("beta").noconvert(),
+        nb::arg("eye").noconvert(),
+        nb::arg("tril").noconvert(),
+        nb::arg("ones").noconvert(),
+        nb::arg("masks").noconvert(),
+        nb::arg("initial_state").noconvert(),
+        nb::kw_only(),
+        nb::arg("chunk_size") = 32,
+        nb::arg("output_final_state") = true,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("program_config") = ttnn::transformer::ChunkGdnFusedProgramConfig{},
+        nb::arg("wy_inverse") = ttnn::transformer::ChunkGdnWyInverse::AUTO,
+        nb::arg("v_flat") = false,
+        nb::arg("HV") = 0,
+        nb::arg("qk_norm") = false,
+        nb::arg("scale") = 1.0f,
+        nb::arg("qk_flat") = false,
+        nb::arg("Hk") = 0,
+        nb::arg("num_heads") = 0,
+        nb::arg("head_offset") = 0,
+        nb::arg("o_out") = nb::none(),
+        nb::arg("final_state_out") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        fused_doc);
 }
 
 }  // namespace ttnn::operations::transformer
