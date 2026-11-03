@@ -27,11 +27,14 @@ TENSOR_N_TILES = HIDDEN // TILE
 
 # Largest K block per round. Round 0 must land before compute starts, so a larger block lengthens the fill.
 K_BLOCK_MAX = 8
-# select_blocking takes the fewest waves among K blocks >= this, then the largest K block. One wave skips the second
-# wave's re-read of the straddling expert's w; a K block below it costs more per-round sync than that saves.
-# t3072 (8x384): 2 waves at k = 8 138.5-140.8 -> 1 wave at k = 6 133.5-134.8 us; t4096 1 wave would need k = 4
-# (164 -> 177 us).
+# select_blocking takes the fewest waves among K blocks >= K_BLOCK_ONE_PASS_MIN while a wave's per-core rows stay
+# <= ONE_PASS_MAX_ROWS, then the largest K block. Fewer waves skip re-reading the straddling expert's w; a smaller K
+# block costs more per-round sync, and more rows per step lengthen the x chain. t3072 (8x384, 23 rows at 1 wave):
+# 2 waves at k = 8 138.5-140.8 -> 1 wave at k = 6 133.5-134.8 us. t4096 (30 rows at 1 wave): L1 x needs k = 4
+# (164 -> 177 us); DRAM x fits k = 6 (208 -> 223 us). Only with y in L1: one wave leaves the whole store as the tail,
+# which a DRAM y store (about 4x the L1 one) cannot afford (t3072 DRAM y 159 -> 165 us).
 K_BLOCK_ONE_PASS_MIN = 6
+ONE_PASS_MAX_ROWS = 24
 MAX_WAVES = 4
 X_DEPTH = 2
 W_DEPTH = 2
@@ -246,17 +249,22 @@ def cb_budget_bytes(num_l1_banks, x_in_dram, out_in_dram):
     return CB_BUDGET_BYTES + x_in_dram * x_bank_bytes + out_in_dram * y_bank_bytes
 
 
-def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes=CB_BUDGET_BYTES):
-    """The fewest waves, then the largest k_block_tiles >= K_BLOCK_ONE_PASS_MIN, that fit budget_bytes; failing that the
-    largest k_block_tiles (divisor of 96, <= K_BLOCK_MAX), then the fewest waves."""
+def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes=CB_BUDGET_BYTES, out_in_dram=False):
+    """Unless out_in_dram, the fewest waves (<= ONE_PASS_MAX_ROWS rows per core), then the largest
+    k_block_tiles >= K_BLOCK_ONE_PASS_MIN, that fit budget_bytes; failing that the largest k_block_tiles (divisor of
+    96, <= K_BLOCK_MAX), then the fewest waves."""
     k_blocks = [k for k in range(K_BLOCK_MAX, 0, -1) if TENSOR_K_TILES % k == 0]
     waves = range(1, MAX_WAVES + 1)
     # Unrestricted fewest waves first (one wave at k = 4) measured 8x512 layer 0 172 -> 177 us (L1 / L1), 221 -> 223 us
     # (DRAM x), hence the K block floor.
-    order = [(k, w) for w in waves for k in k_blocks if k >= K_BLOCK_ONE_PASS_MIN]
-    order += [(k, w) for k in k_blocks for w in waves]
-    for k_block_tiles, num_waves in order:
+    order = (
+        [] if out_in_dram else [(k, w, ONE_PASS_MAX_ROWS) for w in waves for k in k_blocks if k >= K_BLOCK_ONE_PASS_MIN]
+    )
+    order += [(k, w, None) for k in k_blocks for w in waves]
+    for k_block_tiles, num_waves, max_rows in order:
         core_row_tiles_max = _div_up(_div_up(tensor_row_tiles, num_waves), layout.num_m_groups)
+        if max_rows is not None and core_row_tiles_max > max_rows:
+            continue
         if (
             footprint_bytes(core_row_tiles_max, k_block_tiles, layout.core_n_tiles, counts_page_bytes, num_waves)
             <= budget_bytes
@@ -292,7 +300,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     x_in_dram = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
     out_in_dram = output.memory_config().buffer_type == ttnn.BufferType.DRAM
     budget_bytes = cb_budget_bytes(grid.x * grid.y, x_in_dram, out_in_dram)
-    blocking = select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes)
+    blocking = select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, out_in_dram)
     core_n_tiles = layout.core_n_tiles
     in_tile = ttnn.tile_size(ttnn.bfloat8_b)
     cores = layout.cores

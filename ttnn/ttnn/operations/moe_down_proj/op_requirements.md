@@ -148,7 +148,7 @@ NoC0 219 / 249 / 369 us across three schedules (NoC0 column contention with w, s
 prefetch reads off NoC1 (writer RISC reads into a stage CB handed to the reader, up to 13 us), then a geometry that
 delivers the strip core's x without a second injection from the row sender; R2 only after x stops binding.
 
-### [ ] Refinement 3 - Speed up the DRAM-bound rows (t = 1024 / 2048 / 3072)
+### [x] Refinement 3 - Speed up the DRAM-bound rows (t = 1024 / 2048 / 3072)
 
 **Type**: perf
 
@@ -172,3 +172,23 @@ record that and close the phase.
 **Done when**: device-ns improves on at least one of `t1024_scaled`, `t2048_scaled` and `t3072_scaled` toward
 74.6 us, none of the three regresses, every t = 4096 row holds, the precision gates hold, the golden suite is green,
 and there is no regression across the same guard set as Refinement 2.
+
+**Outcome**: device us (L1 / L1), before -> after: t1024 102.1-102.8 -> 85-88, t2048 112.1-112.7 -> 107.6-108.8,
+t3072 137.8-138.5 -> 133.6-134.1. t4096 layers 0-5 hold (163.9 / 161.9 / 163.0 / 163.2 / 163.2 / 161.8). Guard: t1
+44 -> 39, t16 86 -> 67-70, t37 135 -> 82, t300 96 -> 81, t1858 110 -> 102-105; t1024 DRAM x / y / both 114 / 112 /
+118 -> 108 / 94 / 114; t3072 and t4096 DRAM placements hold. Levers kept: (1) `w_reader_share()`: on one-wave
+blockings, 0-4 eighths of each w step's DRAM reads (fewer as rows per core grow) are issued by the reader RISC on
+NoC1 into `cb_w_stage` (cross-RISC CB handoff, `cb_w_owner` carries the sender's step ownership, x / w reads use
+separate transaction ids). Ablations at t1024: no w reads 55 us, reads with a one-tile multicast 80 us, both
+103 us, so the w read responses and the w multicast contend on NoC0. NoC1 DRAM reads run about half as fast
+(all-reads-on-NoC1 155-163 us), so only a share pays. (2) `select_blocking` takes one wave at k >= 6 while rows
+per core <= 24 and y is in L1, which removes the straddling expert's w re-read (t3072 138 -> 134). Measured and
+not kept: w issue quota 4 / 8 / 24 (flat or worse), W_DEPTH 3 (flat), k = 12 / 16 at t1024 (110 / 115), DRAM
+bank stagger on the w walk (flat to +4 us), any share with 2 waves (t4096 +10-20 us, x binds NoC1), one wave at
+t4096 DRAM x (208 -> 223) and t3072 DRAM y (159 -> 165, exposed store tail). The stateful one-packet store was
+measured flat in Refinement 2 and was not re-run. Bottleneck now: t1024 sits about 30 us above its no-w-reads
+floor (55 us). The w stream is split across NoC0, contended by the multicast, and NoC1, which is slower. t2048 /
+t3072 are bound by their x / sync floors (92 / 124 us with w reads stubbed). Next to try: shrink the w multicast's
+NoC0 footprint (multicast only the experts each column's rows touch, the deferred R2 range pruning, now that w
+binds at small t), then a per-row-count share rule refit at t2048. Not done here because pruning is a topology
+change, outside this phase's knob-turn scope.

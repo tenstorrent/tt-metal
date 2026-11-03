@@ -98,3 +98,41 @@
 - Issues encountered: multi-id `--profile` runs under inline precompile hit the known stand-in weight leak (pcc nan),
   so measurements used `--no-precompile`.
 - Tests added: none (the perf rows in test_moe_down_proj_perf.py cover the change).
+
+## Refinement 3 - Speed up the DRAM-bound rows (t = 1024 / 2048 / 3072)
+- Date: 2026-11-03
+- What was done: two levers. (1) Split w DRAM reads across both dataflow RISCs. The staged w prefetch moved into
+  `kernels/moe_down_proj_w_prefetch.h` (`MoeWPrefetch`), so either RISC can run it. On one-wave blockings,
+  `w_reader_share()` / `W_SHARE_DEN` (8) of each owned step's tiles are read by the reader RISC on NoC1 into
+  `cb_w_stage`, which it reserves and pushes one step before the owned step. The writer RISC reads the rest on NoC0,
+  waits for the stage, multicasts and pops. The writer publishes its sender ownership (first owned step, period) to
+  the reader through the new 16 B `cb_w_owner`. The mcast host adapter refuses a sender channel on a kernel of
+  another NoC, so the reader cannot take the w args directly. The reader's x and w reads carry separate
+  transaction ids, so neither barrier waits on the other channel. The share is
+  `clamp((25 - core_row_tiles_max) // 5, 0, 4)`, and 0 with >= 2 waves. Share 0 is the previous writer-only path.
+  (2) `select_blocking` takes the fewest waves at `k_block_tiles >= 6` while rows per core <= 24 and y is in L1,
+  then falls back to the old K-block-first order. This makes t3072 L1 / L1 one wave at k = 6.
+  Reused: the staged prefetch logic, the rotating w channel, `cb_w_stage`, `cb_plan()`. Added: the prefetch header,
+  `cb_w_owner`, the share and one-wave knobs, and t3072 rows in `test_moe_down_proj_perf_placement`.
+- Device kernel time (us), before -> after: t1024 102.1-102.8 -> 85-88; t2048 112.1-112.7 -> 107.6-108.8; t3072
+  137.8-138.5 -> 133.6-134.1. t4096 layers 0-5 hold: 163.5 / 162.1 / 163.2 / 163.9 / 162.9 / 161.5 ->
+  163.9 / 161.9 / 163.0 / 163.2 / 163.2 / 161.8. Unit shapes: t1 44.2 -> 38.8, t16 85.8 -> 67-70, t37 135.4 -> 82,
+  t300 96.4 -> 81, t1858 110.5 -> 102-105; t4096 uniform / one_expert / zeros_between hold. Placements: t1024
+  DRAM x / y / both 114.0 / 112.4 / 117.7 -> 107.8 / 93.5-95.5 / 114.0. t3072 and t4096 DRAM placements hold (t4096
+  DRAM both ranges 242-251 in both versions).
+- Ablations (t1024): w reads stubbed 55 us; w reads with a one-tile multicast 80 us; full 103 us. The w read
+  responses contend with the w multicast on NoC0. All w reads on NoC1: 155-163 us (NoC1 DRAM reads about half
+  as fast), hence a partial share. Stub floors at t2048 / t3072: 92 / 124 us (x / sync bound).
+- Measured and not kept: w issue quota 4 / 8 / 24 (vs 16; flat or worse), W_DEPTH 3 (flat), k = 12 / 16 at t1024
+  with a raised budget (110 / 115), DRAM bank stagger of the w walk (flat to +4 us), a reader share with >= 2 waves
+  (t4096 +10-20 us), one wave at t4096 DRAM x (208 -> 223) and t3072 DRAM y (159 -> 165, exposed store tail),
+  hence the row cap and the L1-y gate.
+- Remaining headroom: t1024 is about 30 us above its no-w-reads floor. Next lever: range-pruned w multicast (R2's
+  deferred topology), which shrinks the NoC0 multicast traffic the reads contend with.
+- Accuracy achieved: PCC=0.99991, rel_rms=1.90e-2 (LoFi default; t1024 1.9004e-2, t4096 1.9008e-2), HiFi2 PCC=0.999999;
+  summation order unchanged at k = 8. t3072 L1 / L1 now accumulates in k = 6 blocks and passes golden.
+- Golden test progress: 60/60 on the slice run (all t1024 / t2048 / t3072 cells incl. loose, small shapes, t1858,
+  the regression file, t4096 layer0 and one_expert across placements); unit dir 76/76 (72 plus the
+  four new t3072 placement rows).
+- Issues encountered: `git checkout <rev> -- <path>` for A/B baselines also staged the old files; reset the index.
+- Tests added: t3072_scaled in `PLACEMENT_CASES` (test_moe_down_proj_perf.py).

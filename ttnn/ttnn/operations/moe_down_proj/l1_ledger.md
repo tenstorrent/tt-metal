@@ -13,9 +13,10 @@ Every CB has the same index and size on every core of the layout (multicast slot
 | `cb_partials` | `core_row_tiles_max * core_n_tiles` | the whole wave block, `core_row_tiles * core_n_tiles` tiles, live from round 0 to the untilize | `{m: spans -> core_row_tiles_max, n: spans -> core_n_tiles, k: streams (folded by packer L1 accumulation each round), e: streams (sub-blocks of every expert occupy disjoint rows of the same block), wave: streams (recycled per wave)}` | Float32 (`fp32_dest_acc_en = True`, the only supported value) | compute (pack) | compute (unpack, untilize) | one wave | none: live across every round of the wave, so it overlaps `cb_x_round` / `cb_w_round` for its whole life; at the untilize it overlaps `cb_output_rows`. Not aliased with the next wave's x/w because the reader prefetches wave p+1 rounds 0-1 during wave p's untilize (explicit pipelining decision). |
 | `cb_output_rows` | `out_depth_blocks * core_n_tiles`: `max(OUT_DEPTH, core_row_tiles_max)` blocks when the store is paced (`num_waves >= 2`), else `OUT_DEPTH` = 2 | paced: the whole untilized wave block, drained over wave p + 1's rounds; unpaced: 2 tile rows (one being written, one being packed) | `{n: spans -> core_n_tiles, m: spans -> core_row_tiles_max (paced) / streams (unpaced), k: none (after accumulation), e: none, wave: streams}` | Float16_b (output dtype) | compute | writer RISC (L1 y) or reader RISC (DRAM y, `store_on_reader`) | untilize of wave p to the end of wave p + 1's store | none: concurrent with `cb_partials` during the untilize and with every x / w round of wave p + 1 while the paced store drains. Cannot alias `cb_partials` (format, overlapping lifetime). The whole wave block is what lets compute start wave p + 1 without waiting on the store (Refinement 2: t = 4096 172 -> 163 us). |
 | `cb_x_stage` (implementer) | `core_row_tiles_max * k_block_tiles` | 1 step: the next owned x step's rows, prefetched by the rotating sender | `{m: spans, k: spans, n/e/wave: streams}` | Bfp8_b | reader (NoC reads) | reader (multicast source) | whole kernel, RISC-private, no CB credits | none: live from the prefetch issue (one step after the sender's previous send) to its next send, overlapping `cb_x_round`'s two slots. It decouples the sender's L1 reads from the slot ring (X_DEPTH alone would cap the lookahead at one round). |
-| `cb_w_stage` (implementer) | `NUM_EXPERTS * core_n_tiles * k_block_tiles` | 1 step of in-wave expert chunks | `{e, n, k: spans; m, wave: streams}` | Bfp8_b | writer RISC (DRAM reads) | writer RISC (multicast source) | whole kernel, RISC-private | none: same reason as `cb_x_stage`; lets every line keep several steps of w DRAM reads in flight. |
+| `cb_w_stage` (implementer) | `NUM_EXPERTS * core_n_tiles * k_block_tiles` | 1 step of in-wave expert chunks | `{e, n, k: spans; m, wave: streams}` | Bfp8_b | DRAM reads split by tile: `w_reader_share / W_SHARE_DEN` by the reader RISC (NoC1, CB credits: reserve / push one step before the owned step), the rest by the writer RISC (NoC0, RISC-private writes into the same slots) | writer RISC (multicast source; waits / pops when `w_reader_share > 0`) | whole kernel | none: same reason as `cb_x_stage`; lets every line keep several steps of w DRAM reads in flight. Refinement 3: the reader share takes part of the read responses off NoC0, where they contended with the w multicast (t = 1024 102.8 -> 85 us). With share 0 (any blocking with >= 2 waves) it stays writer-private, no credits move. |
 | `cb_counts_compute` | 1 (32 B page, constant) | 1 | `{m, n, k, e, wave: none}` (constant) | UInt32 | reader | compute | whole kernel | none: a second consumer (writer) would violate the one-consumer rule, hence `cb_counts_writer`. 32 B. |
 | `cb_counts_writer` | 1 (32 B page, constant) | 1 | `{m, n, k, e, wave: none}` (constant) | UInt32 | reader | writer | whole kernel | none: see `cb_counts_compute`; the reader issues one 32 B DRAM read per CB. |
+| `cb_w_owner` (Refinement 3) | 1 (16 B page, constant) | 1 | `{m, n, k, e, wave: none}` (constant) | UInt32 | writer (the w sender's first owned step and rotation period, from the mcast helper's `should_send`) | reader (its w share's step ownership) | kernel start, used only when `w_reader_share > 0` | none: written before either RISC's main loop. A separate CB because the mcast host adapter refuses a sender channel on a kernel of another NoC, so the reader cannot carry the w channel args. 16 B. |
 
 Pattern check (Rule 3):
 
@@ -34,8 +35,8 @@ Pattern check (Rule 3):
 | `num_m_groups` | 9 (L layout, p100a), 11 (Rect, p100a), `grid.x` or `grid.y - 1` in general | `select_layout(grid, tensor_row_tiles)` |
 | `num_n_lines` | divisor of 24: 12 (L), 8 (Rect) | `select_layout` |
 | `core_n_tiles` | `24 / num_n_lines` in {2, 3} on p100a, <= 24 always | `select_layout` |
-| `num_waves` | 1..`MAX_WAVES` = 4 | `select_blocking`: smallest value with `footprint(num_waves, K_BLOCK_MAX) <= CB_BUDGET_BYTES` |
-| `core_row_tiles_max` | `ceil(ceil(tensor_row_tiles / num_waves) / num_m_groups)` <= 15 on p100a | `select_blocking`; device `core_row_tiles <= core_row_tiles_max` because the device clamps `active_row_tiles <= tensor_row_tiles` |
+| `num_waves` | 1..`MAX_WAVES` = 4 | `select_blocking`: with y in L1, the fewest waves at `k_block_tiles >= K_BLOCK_ONE_PASS_MIN` = 6 and `core_row_tiles_max <= ONE_PASS_MAX_ROWS` = 24 that fit; otherwise the largest `k_block_tiles`, then the fewest waves (Refinement 3: t = 3072 L1 / L1 is 1 wave at k = 6) |
+| `core_row_tiles_max` | `ceil(ceil(tensor_row_tiles / num_waves) / num_m_groups)` <= 24 on p100a (23 at t = 3072 one wave) | `select_blocking`; device `core_row_tiles <= core_row_tiles_max` because the device clamps `active_row_tiles <= tensor_row_tiles` |
 | `k_block_tiles` | divisor of 96, <= `K_BLOCK_MAX` = 8 | `select_blocking` |
 | `NUM_EXPERTS` | 8 | `validate()`: E == 8 |
 | `X_DEPTH`, `W_DEPTH`, `OUT_DEPTH` | 2 each (`cb_output_rows` grows to the wave block when `STORE_PACED` and `num_waves >= 2`) | host constants; `out_depth_blocks()` |
@@ -51,7 +52,7 @@ footprint = (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * 1088      # + c
           + (W_DEPTH + 1) * NUM_EXPERTS * core_n_tiles * k_block_tiles * 1088  # + cb_w_stage
           + core_row_tiles_max * core_n_tiles * 4096
           + out_depth_blocks * core_n_tiles * 2048         # max(OUT_DEPTH, core_row_tiles_max) when paced
-          + 2 * 32
+          + 2 * 32 + 16                                     # counts, cb_w_owner
 ```
 
 | Term | Scales with |
@@ -61,11 +62,13 @@ footprint = (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * 1088      # + c
 | `cb_x_stage`, `cb_w_stage` | one round of `cb_x_round` / `cb_w_round` each (depth 1, sender-private) |
 | `cb_partials` | `core_row_tiles_max` x `core_n_tiles`; independent of `k_block_tiles` |
 | `cb_output_rows` | `core_n_tiles` x (`core_row_tiles_max` when paced, else `OUT_DEPTH`) |
-| counts | constant |
+| counts, `cb_w_owner` | constant |
 
 p100a, L layout (`core_n_tiles` = 2, `num_m_groups` = 9, `k_block_tiles` = 8): t = 4096 (2 waves, `core_row_tiles_max` = 15) 391,680 + 417,792 + 122,880 + 8,192 + 64 = 940,608 B (staging included); with the paced store `cb_output_rows` is 15 blocks (61,440 B), so 993,856 B. One wave would exceed the budget, which is why `num_waves` = 2 there.
 
-Implementation note: the w channel runs on the writer RISC (NoC0) and x on the reader RISC (NoC1), each sender multicasting from its staging buffer; w moves as one multicast per K round covering the wave's expert slot range.
+Implementation note: the w channel runs on the writer RISC (NoC0) and x on the reader RISC (NoC1), each sender multicasting from its staging buffer; w moves as one multicast per K round covering the wave's expert slot range. With one wave, `w_reader_share()` eighths of the w DRAM reads are issued by the reader RISC on NoC1 (4 down to 0 as rows per core grow, see the descriptor).
+
+p100a, t = 3072 L1 / L1 (1 wave, `k_block_tiles` = 6, `core_row_tiles_max` = 23): 450,432 + 313,344 + 188,416 + 8,192 + 80 = 960,464 B.
 
 ## Data-movement budget
 
@@ -77,6 +80,9 @@ Per call at t = 4096, R = 8416, L layout, 2 waves, layer-0 counts (`active_row_t
 | x (27.5 MB) | 0 (L1, Phase 0); 1 when x is in DRAM | each x tile is read by exactly one sender (its m-group's, rotating per round) | NoC reads 27.5 MB into the senders; multicast to `num_n_lines - 1` = 11 receivers (row multicast plus the strip copy) |
 | counts (32 B) | 2 per core (216 reads of 32 B) | one read per counts CB | none |
 | y (12.9 MB) | 0 (L1, Phase 0); 1 when output is in DRAM | each row segment written once by its owner | NoC writes 12.9 MB in 128 B segments (DRAM y: issued by the reader RISC on NoC1) |
+
+One-wave shapes (t <= 3072 with y in L1, t <= 2048 otherwise) read w exactly once (20.05 MB, no straddling expert). With
+`w_reader_share` > 0, that share of the w read responses travels NoC1 instead of NoC0.
 
 Totals per tier: DRAM 20.05 to 22.5 MB (w), plus 27.5 MB (x) and/or 12.9 MB (y) for the DRAM placements. L1-to-NoC reads 27.5 MB (x). Multicast payload received: about 1.9 MB w + 3.1 MB x per core. Writes 12.9 MB.
 

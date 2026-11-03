@@ -53,7 +53,11 @@ PLACEMENTS = {
     "dram_out": (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
     "dram_both": (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 }
-PLACEMENT_CASES = [("t4096_layer0", 4096, LAYERS[0]), ("t1024_scaled", 1024, SCALED[1024])]
+PLACEMENT_CASES = [
+    ("t4096_layer0", 4096, LAYERS[0]),
+    ("t3072_scaled", 3072, SCALED[3072]),
+    ("t1024_scaled", 1024, SCALED[1024]),
+]
 
 
 @pytest.mark.parametrize("placement", list(PLACEMENTS), ids=list(PLACEMENTS))
