@@ -21,6 +21,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_print_tiles_multiple.cpp
     device_print/test_checkpoint.cpp
     device_print/test_cb_hash.cpp
+    l1_ecc_halt/test_l1_ecc_halt.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
     watcher/test_mcast_wrap_around.cpp

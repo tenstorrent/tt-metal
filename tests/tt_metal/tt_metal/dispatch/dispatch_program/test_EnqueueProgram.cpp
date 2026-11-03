@@ -2381,7 +2381,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
             continue;
         }
 
-        Program program = CreateProgram(*this->devices_[0]);
+        Program program = CreateProgram(*device_);
         workload.add_program(this->device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(this->device_range_);
 

@@ -423,7 +423,7 @@ def _assert_signed_zero_partition_valid():
         ),
         MathOperation.Heaviside: (
             "heaviside(-0.0) returns the scalar now. Its zero arm ignores the sign bit, as Sign's "
-            "does (SFPLZ NOSGN on Wormhole, sfpi::abs(v) on Blackhole), for the same SFPSETCC "
+            "does (SFPABS + SFPSETCC NE0 on Wormhole, sfpi::abs(v) on Blackhole), for the same SFPSETCC "
             "reasoning."
         ),
         MathOperation.Signbit: (
