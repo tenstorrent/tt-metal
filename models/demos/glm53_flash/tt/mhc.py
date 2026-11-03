@@ -141,6 +141,11 @@ assert MHC_PRE_SINKHORN in ("llk", "fused"), MHC_PRE_SINKHORN
 # in a different order), PCC-level is.
 MHC_PRE_SPLIT = os.environ.get("GLM53_MHC_PRE_SPLIT", "extras")
 assert MHC_PRE_SPLIT in ("cols", "extras"), MHC_PRE_SPLIT
+# the fused pre-block's projection operands: 3 = x as hi + lo + lo2 bf16 parts (12 FPU passes per column), 1 = bf16(x)
+# alone (4 passes, one split pass): the FPU rounds its operands either way (custom_ops/mhc_pre_block/README.md,
+# Precision), so 1 is the same error class with less serial work; gate = the chain's decode ids / PCC.
+MHC_PRE_XPARTS = int(os.environ.get("GLM53_MHC_PRE_XPARTS", "3"))
+assert MHC_PRE_XPARTS in (1, 3), MHC_PRE_XPARTS
 # the post-mix kernel's work split: "tile" = one (token-tile, column-tile) position per unit (128 over 120 cores: 8
 # cores take two); "extras" = those 8 cores' second positions split by output stream over 32 one-position cores
 # (critical path 12 -> 9 cost units; every output tile is still computed by exactly one core: bit-identical)
@@ -968,6 +973,7 @@ class TtMHCFast(LightweightModule):
                 exact=MHC_PRE_BLOCK == 2,
                 sinkhorn=self.pre_sinkhorn,
                 split=self.pre_split,
+                x_parts=MHC_PRE_XPARTS,
             )
             self._pre_block_norm = weight
         return self.pre_block

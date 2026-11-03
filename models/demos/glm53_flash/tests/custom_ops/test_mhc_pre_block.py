@@ -10,6 +10,8 @@ fed the float64 mixes, and vs float64), plus a trace capture + replay.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 
@@ -38,11 +40,16 @@ def _build(mesh_device, which="ffn", exact=False):
         w_norm.to(torch.bfloat16).float(),
         n=kcfg.n,
         C=kcfg.dim,
-        sinkhorn_iters=kcfg.sinkhorn_iters,
+        # timing experiments only: a wrong iteration count fails the numerics but still records the op's device time
+        sinkhorn_iters=int(os.environ.get("GLM53_MHC_PRE_ITERS_OVERRIDE", kcfg.sinkhorn_iters)),
         eps=kcfg.eps,
         norm_eps=kcfg.norm_eps,
         rms_eps=float(cfg.rms_norm_eps),
         exact=exact,
+        # the served program variants under test: unset = the op's own defaults (llk Sinkhorn, cols split, 3 parts)
+        sinkhorn=os.environ.get("GLM53_MHC_PRE_SINKHORN", "llk"),
+        split=os.environ.get("GLM53_MHC_PRE_SPLIT", "cols"),
+        x_parts=int(os.environ.get("GLM53_MHC_PRE_XPARTS", "3")),
     )
     return op, kcfg, (fn, base, scale)
 

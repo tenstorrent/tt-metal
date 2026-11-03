@@ -157,6 +157,7 @@ class MhcPreBlock:
         exact: bool = False,
         sinkhorn: str = "llk",
         split: str = "cols",
+        x_parts: int = 3,
     ):
         """``fn [(2+n)*n, n*C]`` (bf16-exact values), ``consts`` the Sinkhorn constants ``[8,32,32]`` fp32 on
         device (``build_consts``), ``norm_weight [C]`` the sublayer's RMSNorm weight; ``norm_eps`` is the
@@ -167,6 +168,8 @@ class MhcPreBlock:
         ``"extras"`` (delegated stream tiles, define MHC_MAX_EXTRA; FPU projection only). Both change the compiled
         program (its defines), neither its tensors or ABI; the defaults are today's program."""
         assert sinkhorn in self.SINKHORN_MODES and split in self.SPLIT_MODES, (sinkhorn, split)
+        assert x_parts in (1, 3), x_parts  # bf16 parts of x in the FPU projection (define MHC_X_PARTS)
+        self.x_parts = x_parts
         self.device, self.n, self.C = device, n, C
         self.sinkhorn = sinkhorn
         self.split = split if not exact else "cols"  # the exact SFPU projection has no extras path
@@ -483,6 +486,8 @@ class MhcPreBlock:
             defines.append(("MHC_SINKHORN_FUSED", "1"))
         if self.max_extra:
             defines.append(("MHC_MAX_EXTRA", str(self.max_extra)))
+        if self.x_parts != 3:
+            defines.append(("MHC_X_PARTS", str(self.x_parts)))
         sems = [
             ttnn.SemaphoreDescriptor(s, ttnn.CoreType.WORKER, self.cores, 0)
             for s in (self.SEM_ARRIVE1, self.SEM_ARRIVE2, self.SEM_PRE, self.SEM_RS2)

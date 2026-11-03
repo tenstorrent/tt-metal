@@ -30,6 +30,13 @@
 #ifndef MHC_SINKHORN_FUSED
 #define MHC_SINKHORN_FUSED 0
 #endif
+// MHC_X_PARTS: the bf16 parts of x the FPU projection multiplies (3 = hi + lo + lo2, x represented exactly;
+// 1 = bf16(x) alone: 4 matmul passes per column instead of 12 and one split pass instead of three. The FPU
+// rounds its operands to the same width either way (README, Precision), so 1 is the cheaper program of the
+// same error class; the chain's decode ids are the gate.
+#ifndef MHC_X_PARTS
+#define MHC_X_PARTS 3
+#endif
 #ifndef MHC_MAX_EXTRA
 #define MHC_MAX_EXTRA 0
 #endif
@@ -101,6 +108,8 @@ constexpr uint32_t INV_C_BITS = get_compile_time_arg_val(33);     // 1 / C
 constexpr uint32_t NORM_EPS_BITS = get_compile_time_arg_val(34);  // the sublayer norm eps
 constexpr uint32_t MAX_COLS = 2;  // column tiles per core (128 column tiles over 120 cores)
 constexpr bool SINKHORN_FUSED = MHC_SINKHORN_FUSED != 0;
+constexpr uint32_t X_PARTS = MHC_X_PARTS;
+static_assert(X_PARTS == 1 || X_PARTS == 3, "MHC_X_PARTS: 1 or 3");
 constexpr uint32_t MAX_EXTRA = MHC_MAX_EXTRA;  // extra single stream tiles projected on this core (0: none)
 static_assert(N == 4, "the lane layout and the dest slot plan are written for n = 4");
 static_assert(MAX_EXTRA <= N, "an extras group is split like one column: at most N tiles in dest slots 0..N-1");
@@ -354,8 +363,11 @@ FORCE_INLINE void split_x_tiles(uint32_t x0, uint32_t cnt) {
     }
     cbhi.push_back(cnt);
     tile_regs_release();
-    // lo = bf16(x - hi)
     cbhi.wait_front(cnt);
+    if constexpr (X_PARTS == 1) {
+        return;  // bf16(x) is the only part; srcA stays configured for CB_X
+    }
+    // lo = bf16(x - hi)
     tile_regs_acquire();
     copy_init(CB_X);
     for (uint32_t i = 0; i < cnt; ++i) {
@@ -427,7 +439,7 @@ FORCE_INLINE void project_partial_tiles(uint32_t x0, uint32_t f0, uint32_t cnt) 
     tile_regs_acquire();
     copy_init(CB_ZERO);
     copy_tile(CB_ZERO, 0, 4);  // the accumulator starts at zero
-    for (uint32_t part = 0; part < 3; ++part) {
+    for (uint32_t part = 0; part < X_PARTS; ++part) {
         const uint32_t cb = part == 0 ? CB_HI : (part == 1 ? CB_LO : CB_LO2);
         reconfig_data_format(cb, CB_FN);
         matmul_init(cb, CB_FN);
@@ -449,8 +461,10 @@ FORCE_INLINE void project_partial_tiles(uint32_t x0, uint32_t f0, uint32_t cnt) 
     pack_one(4, CB_PARTS);
     tile_regs_release();
     cbhi.pop_front(cnt);
-    cblo.pop_front(cnt);
-    cblo2.pop_front(cnt);
+    if constexpr (X_PARTS > 1) {
+        cblo.pop_front(cnt);
+        cblo2.pop_front(cnt);
+    }
 }
 
 FORCE_INLINE void project_partial(uint32_t col) { project_partial_tiles(col * N, col * N, N); }
