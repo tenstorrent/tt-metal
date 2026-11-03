@@ -183,6 +183,12 @@ TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_la
     auto shard_grid_fit_error = CMAKE_UNIQUE_NAMESPACE::get_shape_fits_shard_grid_error(tensor_layout_, logical_shape_);
     TT_FATAL(!shard_grid_fit_error.has_value(), "{}", shard_grid_fit_error);
     CMAKE_UNIQUE_NAMESPACE::validate_dtype_and_layout(data_type(), layout());
+    // The BFP2 unpacker packs 16 two-bit values per dword and assumes 16 elements per face row; a narrower
+    // face would write past the end of the unpacked float buffer.
+    TT_FATAL(
+        data_type() != DataType::BFLOAT2_B || tile().get_face_shape()[1] == 16,
+        "BFLOAT2_B requires a face width of 16, got {}",
+        tile().get_face_shape()[1]);
     populate_sharding_specs();
 }
 
