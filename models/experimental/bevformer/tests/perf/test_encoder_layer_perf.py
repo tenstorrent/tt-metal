@@ -14,11 +14,9 @@ Camera geometry comes from the dataset's fixed rig, not from random matrices.
 rebatch length, which sizes every spatial-path tensor; drawing it from the RNG
 would make the measured workload depend on the seed and on allocation order.
 
-No trace capture. ``build_rebatch_plan`` still calls ``ttnn.to_torch`` on
-``bev_mask`` and the host result decides ``max_len`` / tensor shapes for the
-ops that follow; reads and writes both TT_FATAL inside a capture region.
-Until that host round-trip is gone the signposted region carries host dispatch,
-so read it as end-to-end device time, not as a traced-replay figure.
+No trace capture: the measured region dispatches the layer live, so read it as
+end-to-end device time, not as a traced-replay figure. The rebatch plan, whose
+count readback a capture region would reject, is built once outside it.
 """
 
 import subprocess
@@ -54,12 +52,14 @@ def _head_sha():
 
 @torch.no_grad()
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("config_name", ["nuscenes_base"])
+# Each upstream model at its own BEV grid; base also at 100x100.
 @pytest.mark.parametrize(
-    "bev_size",
+    "config_name, bev_size",
     [
-        pytest.param((100, 100), id="bev_100x100"),
-        pytest.param((200, 200), id="bev_200x200"),
+        pytest.param("nuscenes_base", (100, 100), id="bev_100x100-nuscenes_base"),
+        pytest.param("nuscenes_base", (200, 200), id="bev_200x200-nuscenes_base"),
+        pytest.param("nuscenes_small_upstream", (150, 150), id="bev_150x150-nuscenes_small_upstream"),
+        pytest.param("nuscenes_tiny_upstream", (50, 50), id="bev_50x50-nuscenes_tiny_upstream"),
     ],
 )
 @pytest.mark.parametrize("batch_size", [1])
@@ -156,7 +156,7 @@ def test_bevformer_layer_perf(
     )
 
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    # The layer takes camera features batch-first; the encoder owns the permute.
+    # The layer takes camera features batch-first, [B, num_cams, H*W, C].
     tt_value = ttnn.from_torch(
         camera_features.permute(2, 0, 1, 3), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )

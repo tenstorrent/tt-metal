@@ -241,6 +241,7 @@ class TtMoe(LightweightModule):
         overlap_routed_expert_with_combine: Optional[bool] = False,
         moe_transport: Optional[str] = "direct",
         combine_fwd_reduction: Optional[int] = None,
+        dispatch_fwd_vc_pages: Optional[int] = None,
     ):
         """
         Initialize TtMoe module.
@@ -356,6 +357,8 @@ class TtMoe(LightweightModule):
                 mesh with init_helpers.moe_fabric_payload_size for a model that opts in.
             combine_fwd_reduction: combine_fabric2d's fwd_reduction, the model's COMBINE_FWD_REDUCTION.
                 Needed only when the transport resolves to "fabric2d".
+            dispatch_fwd_vc_pages: dispatch_fabric2d's fwd_vc_pages, the model's DISPATCH_FWD_VC_PAGES.
+                None takes the op's default.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -564,6 +567,12 @@ class TtMoe(LightweightModule):
                 cluster_axis=0,
                 num_links=self.row_num_links,
                 subdevice_id=self.dispatch_sd_id,
+                # Fetched here, at init, so the buffers are placed before any forward's tensors, and every layer
+                # shares one pair.
+                buffers=self.tt_ccl.get_dispatch_fabric2d_buffers(
+                    self.routed_emb_dim, seq_len_per_chip, self.row_num_links, fwd_vc_pages=dispatch_fwd_vc_pages
+                ),
+                fwd_vc_pages=dispatch_fwd_vc_pages,
             )
         else:
             self.dispatch_module = TtDispatchModule(
