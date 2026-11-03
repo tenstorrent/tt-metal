@@ -75,10 +75,8 @@ def run_softmax_l1(mesh, shape, compute_kernel_config=None, label=None):
     x_torch = U.torch_rand(shape)
     x = U.to_tile_l1(x_torch, mesh)
 
-    if compute_kernel_config is None:
-        out = ttnn.softmax(x, dim=2)
-    else:
-        out = ttnn.softmax(x, dim=2, compute_kernel_config=compute_kernel_config)
+    # compute_kernel_config=None is the binding's default, i.e. the same call the model makes.
+    out = ttnn.softmax(x, dim=2, compute_kernel_config=compute_kernel_config)
 
     # Read back once: the metrics and the PCC assert share it (readback dominates sim/emulator time).
     got = U.from_tt(out, mesh)
