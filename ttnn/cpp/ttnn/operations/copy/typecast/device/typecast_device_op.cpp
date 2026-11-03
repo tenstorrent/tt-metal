@@ -4,11 +4,10 @@
 
 #include "typecast_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/copy/source_output_topologies.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/hal.hpp>
-
-#include <algorithm>
 
 using namespace tt::tt_metal;
 
@@ -173,17 +172,8 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
 
 std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
     const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
-    // As prim::copy: a typecast is distributed like its source, so a fresh output and a preallocated one overwritten on
-    // every device take the source's label; one spanning other mesh coordinates is left to the framework default.
-    const Tensor& src = tensor_args.input;
-    if (tensor_args.preallocated_output.has_value()) {
-        const auto& src_coords = src.tensor_topology().mesh_coords();
-        const auto& dst_coords = tensor_args.preallocated_output->tensor_topology().mesh_coords();
-        if (!std::is_permutation(src_coords.begin(), src_coords.end(), dst_coords.begin(), dst_coords.end())) {
-            return {};
-        }
-    }
-    return {src.tensor_topology()};
+    // A typecast is distributed like its source.
+    return source_output_topologies(tensor_args.input, tensor_args.preallocated_output);
 }
 
 bool TypecastDeviceOperation::skip_launch(
