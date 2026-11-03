@@ -65,7 +65,7 @@ struct ScratchpadSpec {
     ScratchpadSpecName unique_id;
 
     // Size of the SRAM ("L1") region reserved on each node, in bytes.
-    // The node set is inferred from bindings unless advanced_options.override_placement is set.
+    // (Only occupies space on nodes where the scratchpad is emplaced on.)
     uint32_t size_per_node = 0;
 
     ////////////////////////////////////

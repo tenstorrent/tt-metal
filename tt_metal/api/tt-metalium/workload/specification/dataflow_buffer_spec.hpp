@@ -72,8 +72,6 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 //------------------------------------------------
 
 struct DataflowBufferSpec {
-    // Invariant: borrowed_from and advanced_options.override_placement cannot both be set.
-
     // DFB identifier: used to reference this DFB within the ProgramSpec
     DFBSpecName unique_id;
 
