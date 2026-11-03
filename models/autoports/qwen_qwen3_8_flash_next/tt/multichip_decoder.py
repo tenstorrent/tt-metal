@@ -333,14 +333,10 @@ class ParallelHyperConnection:
         # Flat decode: rows of [1,1,4B,640] cycle through the four streams, so the
         # gamma rows do too (sliced to 4B rows for the compact views).
         self.norm_rows = ops.shards([x.reshape(1, 1, 4, 640).repeat(1, 1, 32, 1) for x in norm_parts])
-        # Exact one-hot helpers for the flat [1,1,B,2560] stream layout: mean over
-        # the four 640-wide streams, and expansion of a per-stream scalar.
-        stream_mean = torch.zeros(2560, 640)
+        # Exact one-hot expansion of a per-stream scalar over the flat [1,1,B,2560] stream layout.
         inject_expand = torch.zeros(4, 2560)
         for j in range(4):
-            stream_mean[j * 640 : (j + 1) * 640] = 0.25 * torch.eye(640)
             inject_expand[j, j * 640 : (j + 1) * 640] = 1.0
-        self.stream_mean = ops.upload(stream_mean.reshape(1, 1, 2560, 640))
         self.inject_expand = ops.upload(inject_expand.reshape(1, 1, 4, 2560))
         packed = torch.cat(
             (
@@ -426,13 +422,22 @@ class ParallelHyperConnection:
         mix = ttnn.sigmoid(
             self.ops.linear(ttnn.silu(packed[..., :320]), self.up, compute_kernel_config=self.compute, max_cores=5)
         )
-        mixed = ttnn.matmul(ttnn.multiply(mix, streams), self.stream_mean, compute_kernel_config=self.ops.exact_compute)
+        # Stack the four 640-wide stream columns as [1,4,B,640] and reduce with ttnn.mean: the same
+        # FPU reduction as read()'s mean over [1,B,4,640] (bit-identical). The exact one-hot matmul
+        # rounds differently (~8% of values by 1 ulp), which compounds over 96 reads (KL ~0.05).
+        prod = ttnn.multiply(mix, streams)
+        stacked = ttnn.concat([prod[..., j * 640 : (j + 1) * 640] for j in range(4)], dim=1)
+        mixed = ttnn.mean(stacked, dim=1, keepdim=True)
         inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
         return self.ops.gather(mixed), inject
 
     def write_flat(self, x, update, inject):
         """x [1,1,B,2560] + (update [1,1,B,640] repeated per stream) * (inject [1,1,B,4] per stream)."""
         scale = ttnn.matmul(inject, self.inject_expand, compute_kernel_config=self.ops.exact_compute)
+        if update.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            # The MoE shard arrives as bfloat8_b; write() sees it as BF16 (its layout round trip), so the
+            # product must not be rounded to bfloat8_b here.
+            update = ttnn.typecast(update, ttnn.bfloat16)
         return ttnn.add(x, ttnn.multiply(ttnn.concat([update] * 4, dim=-1), scale))
 
 
