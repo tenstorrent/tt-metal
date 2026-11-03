@@ -273,12 +273,16 @@ def _h3_tile_rows():
     return [148, 74, 287, 427, 470]
 
 
-def _h3_all_gather_sweep(mesh_device, dim, cluster_axis, width, rows_list, num_workers_per_link, miss_indices=()):
-    """Gather [1,1,rows,width] per chip along `dim` over `cluster_axis`, alternating two semaphore sets."""
+def _h3_all_gather_sweep(
+    mesh_device, dim, cluster_axis, width, rows_list, num_workers_per_link, miss_indices=(), tile_shape=(32, 32)
+):
+    """Gather [1,1,rows,width] per chip along `dim` over `cluster_axis`, alternating two semaphore sets.
+    `rows_list` counts tile rows of `tile_shape`."""
     import torch
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
     torch.manual_seed(0)
+    tile = None if tuple(tile_shape) == (32, 32) else ttnn.Tile(tile_shape)
     mesh_shape = tuple(mesh_device.shape)
     ring = mesh_shape[cluster_axis]
     compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -291,7 +295,7 @@ def _h3_all_gather_sweep(mesh_device, dim, cluster_axis, width, rows_list, num_w
 
     def run(variant):
         rows, w = variant
-        full_shape = [1, 1, rows * 32, w]
+        full_shape = [1, 1, rows * tile_shape[0], w]
         full_shape[dim] *= ring
         torch_full = torch.randn(full_shape, dtype=torch.bfloat16)
         shard_dims = (None, dim) if cluster_axis == 1 else (dim, None)
@@ -300,6 +304,7 @@ def _h3_all_gather_sweep(mesh_device, dim, cluster_axis, width, rows_list, num_w
             torch_full,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
+            tile=tile,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
         tt_input = ttnn.to_device(tt_host, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -349,3 +354,14 @@ def test_all_gather_h3_dynamic_rows_flat_cache(bh_2d_mesh_device, dim, cluster_a
 def test_all_gather_h3_width_change_misses(bh_2d_mesh_device):
     """Only the row count is runtime: a new width adds a program."""
     _h3_all_gather_sweep(bh_2d_mesh_device, 2, 1, 96, [148, 74], 4, miss_indices=(2,))
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(31)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("dim, cluster_axis", [(3, 0), (2, 1)], ids=["width_gather", "height_gather"])
+def test_all_gather_tiny_tile_rows(bh_2d_mesh_device, dim, cluster_axis):
+    """16x32 tiles: a page is one tile, so the page counts the workers split and the per-chip offsets come from
+    the tensor's own tile height, and the row count still serves as a runtime word."""
+    _h3_all_gather_sweep(bh_2d_mesh_device, dim, cluster_axis, 64, [2, 4, 9], 2, tile_shape=(16, 32))
+    assert bh_2d_mesh_device.num_program_cache_entries() == 1
