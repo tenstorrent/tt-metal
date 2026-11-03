@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Writes the tiles of dataflow buffer out to tiles start_id .. start_id + num_tiles - 1 of tensor out.
-// With USE_VARARGS, num_tiles and start_id are runtime varargs 0 and 1 instead of named arguments.
+// With USE_ARRAY_ARGS, num_tiles and start_id are elements 0 and 1 of the runtime array work instead of named
+// arguments; with USE_VARARGS (C++ only), they are runtime varargs 0 and 1.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -12,7 +13,11 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-#ifdef USE_VARARGS
+#if defined(USE_ARRAY_ARGS)
+    const auto work = get_arg(args::work);
+    const uint32_t num_tiles = work[0];
+    const uint32_t start_id = work[1];
+#elif defined(USE_VARARGS)
     const uint32_t num_tiles = get_vararg(0);
     const uint32_t start_id = get_vararg(1);
 #else
