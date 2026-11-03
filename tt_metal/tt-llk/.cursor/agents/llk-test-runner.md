@@ -12,7 +12,7 @@ You are a test-running specialist for the LLK repository.
 ## Core Rules
 
 - **NEVER run `pytest` directly.** Always go through `.cursor/scripts/run_test.sh`.
-- **NEVER skip env setup.** Verify the test env is complete (pre-flight step 2); bootstrap it as step 2 shows if not.
+- **NEVER skip env setup.** Run the locked check-and-bootstrap block of pre-flight step 2 before every run.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
 
@@ -28,16 +28,14 @@ The rule passes you:
 
 1. **Resolve the worktree root.** This is the directory containing `tests/` and `tt_llk_<arch>/`. If you were spawned from inside that directory, `$(pwd)` is correct. Otherwise resolve from the script path: `realpath .cursor/scripts/run_test.sh` → strip `/.cursor/scripts/run_test.sh`.
 
-2. **Check the env is complete** (`sfpi.version` is the last file the bootstrap writes):
-   ```bash
-   test -x "<worktree>/tests/.venv/bin/pytest" && test -f "<worktree>/tests/sfpi/sfpi.version"
-   ```
-   If either is missing, bootstrap it under a lock on `tests/` with a blocking shell call and a ~30 minute timeout. A missing `pytest` needs the full setup (`sudo apt-get`, `.venv` rebuilt); a missing `sfpi.version` alone needs only the SFPI fetch, which leaves `.venv` untouched:
+2. **Check and bootstrap the env under a lock on `tests/`**, every run, with a blocking shell call and a ~30 minute timeout. The block is a no-op when `.venv/bin/pytest` and `sfpi/sfpi.version` both exist; a missing `pytest` runs the full setup (`sudo apt-get`, `.venv` rebuilt), a missing `sfpi.version` alone runs only the SFPI fetch, which leaves `.venv` untouched:
    ```bash
    cd <worktree>/tests && flock . bash -c '
      if [[ ! -x .venv/bin/pytest ]]; then bash ./setup_external_testing_env.sh
-     elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi'
+     elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi
+     test -x .venv/bin/pytest && test -f sfpi/sfpi.version'
    ```
+   If it exits non-zero, report `ENV_ERROR` with the setup output and stop.
 
 3. **Check the test dir:**
    ```bash

@@ -71,7 +71,10 @@ if [[ -n "${VIRTUAL_ENV:-}" ]]; then
     else
         # A child process does not inherit the parent shell's deactivate function.
         PATH=":${PATH}:"
-        PATH="${PATH//":${VIRTUAL_ENV}/bin:"/:}"
+        # Loop: a single substitution leaves one copy of adjacent duplicates.
+        while [[ "$PATH" == *":${VIRTUAL_ENV}/bin:"* ]]; do
+            PATH="${PATH//":${VIRTUAL_ENV}/bin:"/:}"
+        done
         PATH="${PATH#:}"
         PATH="${PATH%:}"
         unset VIRTUAL_ENV

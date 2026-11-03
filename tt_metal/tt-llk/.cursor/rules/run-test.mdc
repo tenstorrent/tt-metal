@@ -68,16 +68,18 @@ If `--arch` is not provided, infer in this order:
 
    MANDATORY pre-flight (do these BEFORE invoking run_test.sh):
 
-   1. Verify the env is complete: both `tests/.venv/bin/pytest` and
-      `tests/sfpi/sfpi.version` (the last file the bootstrap writes) exist.
-      If either is missing, run from the tt-llk worktree root, with a
-      blocking shell call and a ~30 minute timeout, under a lock on `tests/`:
+   1. Check and bootstrap the env under a lock on `tests/`, every run,
+      from the tt-llk worktree root, with a blocking shell call and a
+      ~30 minute timeout:
           cd tests && flock . bash -c '
             if [[ ! -x .venv/bin/pytest ]]; then bash ./setup_external_testing_env.sh
-            elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi'
-      A missing `pytest` needs the full setup (`sudo apt-get`, `tests/.venv`
-      rebuilt); a missing `sfpi.version` alone needs only the SFPI fetch,
-      which leaves `tests/.venv` untouched.
+            elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi
+            test -x .venv/bin/pytest && test -f sfpi/sfpi.version'
+      The block is a no-op when both files exist. A missing `pytest` runs
+      the full setup (`sudo apt-get`, `tests/.venv` rebuilt); a missing
+      `sfpi.version` alone runs only the SFPI fetch, which leaves
+      `tests/.venv` untouched. If the block exits non-zero, report
+      ENV_ERROR with the setup output and stop.
 
    2. Then invoke the runner with the worktree path and arch:
           bash .cursor/scripts/run_test.sh {command} \
