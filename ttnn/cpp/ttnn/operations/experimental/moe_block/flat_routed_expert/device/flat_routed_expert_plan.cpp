@@ -320,6 +320,14 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
         p.drisc_early_free = lo.drisc_early_free != 0;
     }
     p.drisc_probe = lo.drisc_probe;
+    p.gu_source = lo.gu_source;
+    TT_FATAL(
+        lo.gu_read_depth < 0 || (lo.gu_read_depth >= 1 && lo.gu_read_depth <= 6),
+        "flat layout gu_read_depth {}: 1..6",
+        lo.gu_read_depth);
+    if (lo.gu_read_depth > 0) {
+        p.gu_depth = lo.gu_read_depth;
+    }
     // layout.rows_hint (expected rows per expert, <= 320): 64-row sub-blocks for the plans with 128-row ones and
     // gate/up row passes - one pass a sub-block, so the next sub-block's x streams in during the whole pass and the
     // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us)

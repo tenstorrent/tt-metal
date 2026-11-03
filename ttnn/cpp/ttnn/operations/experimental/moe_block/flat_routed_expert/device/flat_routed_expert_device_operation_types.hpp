@@ -34,6 +34,20 @@ enum class FlatDriscTiles : uint32_t {
 };
 const char* to_string(FlatDriscTiles tiles);
 
+// Who reads the gate/up weights from DRAM into the gate/up cores' landing rings. Same weight layout, landing slots,
+// schedule and bit-identical y either way.
+enum class FlatGuSource : uint32_t {
+    // the DRAM cores' persistent DRISC senders (DMA from their own bank, NoC writes into the receivers), drisc_tiles
+    drisc = 0,
+    // every gate/up core reads its own blocks from its slot's bank: the NCRISC (NOC0, beside the x forwarder) issues
+    // the reads into the landing slots the receiver grants (the DRISC protocol, locally); the DRISC senders idle
+    tensix = 1,
+    // as tensix, but the bank's first slot's receivers (slot r < banks) read on NOC1 from their BRISC (the receiver
+    // loop), the second slot's on NOC0 from their NCRISC: the DRISC "both" NoC split
+    tensix_split = 2,
+};
+const char* to_string(FlatGuSource source);
+
 // DRISC sender probes (measurement only: the probes' y is garbage). Every probe also counts the sender's loop cycles
 // and events into its L1 (FlatDriscSenders::read_prof).
 enum class FlatDriscProbe : uint32_t {
@@ -74,6 +88,10 @@ struct FlatLayoutOptions {
     int32_t drisc_early_free = -1;
     // a measurement probe of the DRISC senders (FlatDriscProbe; none in production)
     FlatDriscProbe drisc_probe = FlatDriscProbe::none;
+    // who reads the gate/up weights (FlatGuSource): the DRISC senders (default) or the gate/up cores themselves
+    FlatGuSource gu_source = FlatGuSource::drisc;
+    // gu_source tensix*: weight reads in flight a gate/up core, 1..6 (-1: 2)
+    int32_t gu_read_depth = -1;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;

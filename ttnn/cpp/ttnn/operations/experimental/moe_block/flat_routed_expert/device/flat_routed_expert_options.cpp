@@ -29,6 +29,15 @@ const char* to_string(FlatDriscProbe probe) {
     return "?";
 }
 
+const char* to_string(FlatGuSource source) {
+    switch (source) {
+        case FlatGuSource::drisc: return "drisc";
+        case FlatGuSource::tensix: return "tensix";
+        case FlatGuSource::tensix_split: return "tensix_split";
+    }
+    return "?";
+}
+
 std::vector<uint32_t> FlatLayoutOptions::key() const {
     const auto u = [](int32_t v) { return static_cast<uint32_t>(v); };
     return {
@@ -41,14 +50,16 @@ std::vector<uint32_t> FlatLayoutOptions::key() const {
         u(drisc_dma_cap),
         drisc_mpfe,
         u(drisc_early_free),
-        static_cast<uint32_t>(drisc_probe)};
+        static_cast<uint32_t>(drisc_probe),
+        static_cast<uint32_t>(gu_source),
+        u(gu_read_depth)};
 }
 
 std::string FlatLayoutOptions::str() const {
     return fmt::format(
         "x_helpers {} pin_ratio {} rows_hint {} x_ready {} drisc_tiles {} drisc_ub {} drisc_dma_cap {} drisc_mpfe "
         "{:#x} "
-        "drisc_early_free {} drisc_probe {}",
+        "drisc_early_free {} drisc_probe {} gu_source {} gu_read_depth {}",
         x_helpers,
         pin_ratio,
         rows_hint,
@@ -58,7 +69,9 @@ std::string FlatLayoutOptions::str() const {
         drisc_dma_cap,
         drisc_mpfe,
         drisc_early_free,
-        to_string(drisc_probe));
+        to_string(drisc_probe),
+        to_string(gu_source),
+        gu_read_depth);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::flat_routed_expert

@@ -183,6 +183,8 @@ FLAT_LAYOUT_FIELDS = (
     "drisc_mpfe",
     "drisc_early_free",
     "drisc_probe",
+    "gu_source",
+    "gu_read_depth",
 )
 
 

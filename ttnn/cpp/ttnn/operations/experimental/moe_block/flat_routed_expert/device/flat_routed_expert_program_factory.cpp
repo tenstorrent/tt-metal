@@ -313,7 +313,9 @@ FlatProgramHandles add_flat_routed_expert_program(
         return d;
     };
     // the DRAM cores' persistent senders read and forward the gate/up weights (flat_drisc.hpp); the launcher only posts
-    // each call's jobs (se_drisc_go.cpp)
+    // each call's jobs (se_drisc_go.cpp). gu_source tensix*: the gate/up cores read their own blocks (se_gu_read.hpp)
+    // from the same bank layout; the senders stay up (idle) and the launcher posts nothing
+    const bool gu_tensix = p.gu_source != FlatGuSource::drisc;
     const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device, p.drisc_tiles);
     const uint32_t drisc_base = drisc.base;
     auto drisc_xy = [&](uint32_t r) { return drisc.virtual_xy(drisc.logical(r)); };
@@ -360,7 +362,14 @@ FlatProgramHandles add_flat_routed_expert_program(
                 post.lit(pk(p.gu[p.gu_at(r, j)]));
             }
         }
-        const auto k = dm("se_drisc_go.cpp", {p.launcher}, DataMovementProcessor::RISCV_0, NOC::NOC_0, {E}, dyn_def);
+        // (gate/up cores reading their own weights: the launcher only leads the schedule pull, it posts nothing)
+        const auto k =
+            dm("se_drisc_go.cpp",
+               {p.launcher},
+               DataMovementProcessor::RISCV_0,
+               NOC::NOC_0,
+               {E},
+               gu_tensix ? with(dyn_def, {{"SE_GU_TENSIX", "1"}}) : dyn_def);
         Args a;
         a.cat(post).cat(dyn);
         add_rt(k, p.launcher, a);
@@ -499,6 +508,21 @@ FlatProgramHandles add_flat_routed_expert_program(
         Defines recv_def = with(
             dyn_def,
             {{"SE_X_FWD_NC_CONS", "2"}, {"SE_X_FWD_NC_END", "3"}, {"SE_X_FWD_DEPTH", std::to_string(X_FWD_DEPTH)}});
+        // gate/up weights read by the gate/up cores (se_gu_read.hpp): the receiver's grant counter and DATA count as
+        // the DRISC protocol, semaphore 0 the loads-list mailbox to the NCRISC reader
+        Defines gu_def;
+        if (gu_tensix) {
+            gu_def = {
+                {"SE_GU_TENSIX", "1"},
+                {"SE_GU_BLK", std::to_string(p.slot * w_tile)},
+                {"SE_GU_PER_E", std::to_string(p.nk_gu)},
+                {"SE_GU_DEPTH", std::to_string(p.gu_depth)},
+                {"SE_GU_MBOX_SEM", "0"},
+                {"SE_GU_GRANT_SEM", std::to_string(GRANT)},
+                {"SE_GU_DATA_SEM", std::to_string(DATA)},
+                {"SE_DYN_HALF", dyn_def.at("SE_DYN_HALF")}};
+            recv_def.insert(gu_def.begin(), gu_def.end());
+        }
         if (p.nu) {  // 16-column units: the h run from K-tile cg NU / 2, half tiles at the ends
             recv_def["SE_HG_NU"] = std::to_string(p.nu);
             recv_def["SE_HPC"] = std::to_string(p.hpc);
@@ -519,7 +543,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                DataMovementProcessor::RISCV_1,
                NOC::NOC_0,
                {p.x_slots, x_bytes, x_pieces, XARR, SFREE, 2, 3, X_FWD_DEPTH},
-               Defines{});
+               gu_def);
         const bool gu_rp = p.gu_rp && !p.gu_full_sync;
         Defines cdef = with(
             dyn_def,
@@ -574,6 +598,20 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lits({2, 3, 0, SFREE, WORD})
                     .lits(head_xy)
                     .cat(dyn);
+                // the gate/up weight reads (se_gu_read.hpp): mode (1 NCRISC, 2 BRISC), weights, bank, this core's
+                // first block (slot region + block j / G), chunk bytes, landing ring (the arena's start)
+                const uint32_t gmode =
+                    !gu_tensix ? 0u : (p.gu_source == FlatGuSource::tensix_split && r < banks ? 2u : 1u);
+                Args gw;
+                gw.lit(gmode)
+                    .a(FlatAddr::GateUp)
+                    .lit(r % banks)
+                    .lit((r / banks) * p.region_bytes + (j / G) * p.slot * w_tile)
+                    .lit(p.rg * p.slot * w_tile)
+                    .a(FlatAddr::Arena, 0);
+                if (gu_tensix) {
+                    a.cat(gw);
+                }
                 add_rt(kr, gc, a);
                 // x ring, predecessor (+ its free word's sem), successor, relay + this core's word there
                 Args f;
@@ -583,6 +621,9 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(xlink[ci].succ0)
                     .lit(pk(p.relays[p.rect_of(gc)]))
                     .a(FlatAddr::Words, 0);
+                if (gu_tensix) {
+                    f.cat(gw);
+                }
                 add_rt(kxf, gc, f);
                 SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G, (cg_ * p.nu) & 1u});
             }

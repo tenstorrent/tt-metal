@@ -14,6 +14,9 @@
 //     3 successor xy (0: chain tail), 4 relay xy, 5 the relay's word for this core (a chain head)
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#ifdef SE_GU_TENSIX
+#include "se_gu_read.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t x_slots = get_compile_time_arg_val(0), x_bytes = get_compile_time_arg_val(1);
@@ -35,8 +38,31 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* xcons = sem(xcons_id);
     volatile tt_l1_ptr uint32_t* xend = sem(xend_id);
     uint32_t iss = 0, fwd = 0, rep = 0;  // pieces issued / acknowledged (+ XARR'd), blocks reported
+#ifdef SE_GU_TENSIX
+    // gate/up weights read from here (se_gu_read.hpp, RT 6..: mode 1), into the landing slots the receiver (BRISC)
+    // grants; the loads list comes from the receiver (its mailbox word, then the list in this RISC's half of CB 7)
+    SeGuRead gr;
+    bool g_done = true;
+    if (get_arg_val<uint32_t>(6) == 1) {
+        volatile tt_l1_ptr uint32_t* mbox = sem(SE_GU_MBOX_SEM);
+        while (*mbox == 0) {
+            invalidate_l1_cache();
+        }
+        volatile tt_l1_ptr uint32_t* mb =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF);
+        gr.init(6, SE_GU_BLK, SE_GU_PER_E, SE_GU_DEPTH, mb[0], mb + 1, sem(SE_GU_GRANT_SEM), sem(SE_GU_DATA_SEM));
+        g_done = gr.total == 0;
+    }
+#else
+    constexpr bool g_done = true;
+#endif
     while (true) {
         invalidate_l1_cache();
+#ifdef SE_GU_TENSIX
+        if (!g_done) {
+            g_done = gr.step();
+        }
+#endif
         if (sxy) {
             const uint32_t arrived = *xarr;
             while (iss < arrived && iss - fwd < depth && (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots)) {
@@ -64,10 +90,13 @@ void kernel_main() {
             rep = freed;
         }
         const uint32_t end = *xend;
-        if (end && rep == end - 1 && (!sxy || fwd == (end - 1) * xp)) {
+        if (g_done && end && rep == end - 1 && (!sxy || fwd == (end - 1) * xp)) {
             break;
         }
     }
+#ifdef SE_GU_TENSIX
+    gr.finish();
+#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     noc_async_write_set_trid(0);

@@ -115,6 +115,15 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .value("loop_only", FlatDriscProbe::loop_only)
         .value("call_time", FlatDriscProbe::call_time);
 
+    nb::enum_<FlatGuSource>(mod, "FlatGuSource", R"doc(
+        Who reads the flat expert's gate/up weights. ``drisc``: the DRAM cores' DRISC senders (default).
+        ``tensix``: each gate/up core reads its own blocks (NCRISC, NOC0). ``tensix_split``: a bank's first slot's
+        gate/up cores read on NOC1 (BRISC), the second slot's on NOC0 (NCRISC).
+    )doc")
+        .value("drisc", FlatGuSource::drisc)
+        .value("tensix", FlatGuSource::tensix)
+        .value("tensix_split", FlatGuSource::tensix_split);
+
     nb::class_<FlatLayoutOptions>(mod, "FlatLayoutOptions", R"doc(
         The flat routed expert's layout / program choices (part of the plan key and of the program hash). Unset
         fields keep the plan's own choice.
@@ -132,6 +141,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
             drisc_mpfe (int): the GDDR MPFE arbitration word (se_drisc.hpp SD_MPFE; 0: untouched).
             drisc_early_free (int): DRISC L1 slots refill once their writes left L1, not once acked (-1: the plan's).
             drisc_probe (FlatDriscProbe): a DRISC sender measurement probe (none).
+            gu_source (FlatGuSource): who reads the gate/up weights (drisc).
+            gu_read_depth (int): gu_source tensix*: weight reads in flight a gate/up core, 1..6 (-1: 2).
     )doc")
         .def(
             "__init__",
@@ -145,7 +156,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
                int32_t drisc_dma_cap,
                uint32_t drisc_mpfe,
                int32_t drisc_early_free,
-               FlatDriscProbe drisc_probe) {
+               FlatDriscProbe drisc_probe,
+               FlatGuSource gu_source,
+               int32_t gu_read_depth) {
                 new (self) FlatLayoutOptions{
                     .x_helpers = x_helpers,
                     .pin_ratio = pin_ratio,
@@ -156,7 +169,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
                     .drisc_dma_cap = drisc_dma_cap,
                     .drisc_mpfe = drisc_mpfe,
                     .drisc_early_free = drisc_early_free,
-                    .drisc_probe = drisc_probe};
+                    .drisc_probe = drisc_probe,
+                    .gu_source = gu_source,
+                    .gu_read_depth = gu_read_depth};
             },
             nb::kw_only(),
             nb::arg("x_helpers") = -1,
@@ -168,7 +183,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
             nb::arg("drisc_dma_cap") = -1,
             nb::arg("drisc_mpfe") = 0,
             nb::arg("drisc_early_free") = -1,
-            nb::arg("drisc_probe") = FlatDriscProbe::none)
+            nb::arg("drisc_probe") = FlatDriscProbe::none,
+            nb::arg("gu_source") = FlatGuSource::drisc,
+            nb::arg("gu_read_depth") = -1)
         .def_rw("x_helpers", &FlatLayoutOptions::x_helpers)
         .def_rw("pin_ratio", &FlatLayoutOptions::pin_ratio)
         .def_rw("rows_hint", &FlatLayoutOptions::rows_hint)
@@ -179,6 +196,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .def_rw("drisc_mpfe", &FlatLayoutOptions::drisc_mpfe)
         .def_rw("drisc_early_free", &FlatLayoutOptions::drisc_early_free)
         .def_rw("drisc_probe", &FlatLayoutOptions::drisc_probe)
+        .def_rw("gu_source", &FlatLayoutOptions::gu_source)
+        .def_rw("gu_read_depth", &FlatLayoutOptions::gu_read_depth)
         .def("key", &FlatLayoutOptions::key)
         .def("__repr__", [](const FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })
         .def("__eq__", [](const FlatLayoutOptions& a, const FlatLayoutOptions& b) { return a == b; });
@@ -243,6 +262,39 @@ void bind_flat_routed_expert(nb::module_& mod) {
         R"doc(
         The down coordinators' done words for ``plan``: a zeroed persistent uint32 tensor sharded over the plan's
         coordinator cores in L1 (or L1_SMALL). Keep it for every call of the op; the op leaves it zero.
+        )doc");
+
+    mod.def(
+        "flat_drisc_topology",
+        [](MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles drisc_tiles) {
+            const FlatDriscTopology t = FlatDriscTopology::of(mesh_device, drisc_tiles);
+            nb::dict d;
+            d["base"] = t.base;
+            d["size"] = t.size;
+            d["banks"] = t.banks;
+            nb::list slots;
+            for (uint32_t r = 0; r < n_slots; ++r) {
+                const auto [ac, aj] = t.alt(r);
+                const auto [sp, snoc] = t.sender(r);
+                nb::dict s;
+                s["xy"] = t.virtual_xy(t.logical(r));
+                s["job"] = FlatDriscTopology::job(r, t.banks);
+                s["alt_xy"] = aj != ~0u ? t.virtual_xy(ac) : 0u;
+                s["alt_job"] = aj != ~0u ? aj : 0u;
+                s["sender_noc0"] = nb::make_tuple(sp.x, sp.y);
+                s["sender_noc"] = snoc;
+                slots.append(s);
+            }
+            d["slots"] = slots;
+            return d;
+        },
+        nb::arg("mesh_device"),
+        nb::arg("n_slots"),
+        nb::arg("drisc_tiles") = FlatDriscTiles::both,
+        R"doc(
+        The flat expert's DRISC sender topology for ``n_slots`` gate/up weight slots: the senders' L1 working base,
+        and per slot its DRAM tile (NoC xy, packed x << 16 | y), job index, alternate tile / job (switch mode; 0: none)
+        and the tile that actually sends it (NOC0 grid coordinates, NoC). Introspection / benchmarks.
         )doc");
 
     nb::class_<FlatDriscSenders>(mod, "FlatDriscSenders", R"doc(

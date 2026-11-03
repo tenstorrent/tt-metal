@@ -30,6 +30,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "se_dyn.hpp"
+#ifdef SE_GU_TENSIX
+#include "se_gu_read.hpp"
+#endif
 #define SE_H_WRITE(...) noc_async_write(__VA_ARGS__)
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
@@ -148,6 +151,28 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* xarr_sem = sem(xarr_sem_id);
     volatile tt_l1_ptr uint32_t* harr_sem[2] = {sem(harr_sem_id), sem(harr1_sem_id)};
 
+#ifdef SE_GU_TENSIX
+    // the gate/up weights read by this core (se_gu_read.hpp; RT after the se_dyn.hpp args): the loads list handed to
+    // the NCRISC (mode 1) in its half of CB 7, or read from here (mode 2, NOC1)
+    const uint32_t ga = peer0 + SE_DYN_NARGS;
+    const uint32_t gmode = get_arg_val<uint32_t>(ga);
+    SeGuRead gr;
+    bool g_done = true;
+    {
+        volatile tt_l1_ptr uint32_t* mb =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF);
+        mb[0] = dyn.n_load;
+        for (uint32_t l = 0; l < dyn.n_load; ++l) {
+            mb[1 + l] = dyn.load_eid[l] | (uint32_t(dyn.region[l]) << 8);
+        }
+        if (gmode == 2) {
+            gr.init(ga, SE_GU_BLK, SE_GU_PER_E, SE_GU_DEPTH, dyn.n_load, mb + 1, granted_word, data_sem);
+            g_done = gr.total == 0;
+        } else if (gmode == 1) {
+            *sem(SE_GU_MBOX_SEM) = 1;
+        }
+    }
+#endif
     if (!is_b) {
         grant(w_slots);  // every landing slot starts free
     }
@@ -168,6 +193,11 @@ void kernel_main() {
             grant(1);
             ++granted;
         }
+#ifdef SE_GU_TENSIX
+        if (!g_done) {
+            g_done = gr.step();
+        }
+#endif
         while (!is_b && *data_sem > pushed) {
             cb_push_back(in1_cb, slot);
             ++pushed;
@@ -292,6 +322,11 @@ void kernel_main() {
     }
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_CONS)) = x_cons;
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_END)) = x_cons + 1;
+#ifdef SE_GU_TENSIX
+    if (gmode == 2) {
+        gr.finish();
+    }
+#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     // the write command buffer's packet tag back to transaction ID 0: the next program's plain writes (implicit ID

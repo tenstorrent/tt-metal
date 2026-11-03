@@ -71,6 +71,8 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 | `drisc_early_free` | -1 (on) | a DRISC L1 slot refills once its writes have left L1, not once acked (units of 2+ blocks) |
 | `drisc_mpfe` | 0 | the GDDR MPFE arbitration word for the call (0: untouched) |
 | `drisc_probe` | `none` | measurement probes of the DRISC senders (`timing`, `call_time`, `dma_only`, `write_only`, `loop_only`; garbage y except `timing` / `call_time`); counters via `FlatDriscSenders.read_prof()` |
+| `gu_source` | `drisc` | who reads the gate/up weights: `drisc` (the DRISC senders), `tensix` (each gate/up core's NCRISC reads its own blocks on NOC0, `se_gu_read.hpp`), `tensix_split` (a bank's first slot's cores read on NOC1 from the receiver BRISC, the second slot's on NOC0); same layout, schedule and bit-identical y. Galaxy loads: Tensix +8% (K3, split) to +20% (GLM-5.3-Flash) slower than `drisc` |
+| `gu_read_depth` | -1 (2) | `gu_source` tensix*: weight reads in flight a gate/up core, 1..6 |
 
 ## Tests
 
