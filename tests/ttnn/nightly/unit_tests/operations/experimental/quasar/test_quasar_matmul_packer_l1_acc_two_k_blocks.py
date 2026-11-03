@@ -25,55 +25,67 @@ pytestmark = pytest.mark.use_module_device
 qsr = ttnn._ttnn.operations.experimental.quasar
 
 
-def _two_vs_four_k_blocks_config(family, in0_block_w):
+# Per (family, grid): per_core_M, per_core_N, out_subblock_h, out_subblock_w, with out_block == per_core. The 8x1 and
+# 4x4 grids are the ones the #58177 / #61018 repros were written for; the 2x1 twins (two cores along x) fit the small
+# compute grids of the emulator images. M = N = 8 tiles in every case, so each config covers the whole output.
+_BLOCKING = {
+    ("reuse", (8, 1)): (1, 8, 1, 4),
+    ("reuse", (2, 1)): (4, 8, 1, 4),
+    ("1d_in1", (8, 1)): (1, 8, 1, 4),
+    ("1d_in1", (2, 1)): (4, 8, 1, 4),
+    ("1d_in0", (8, 1)): (8, 1, 4, 1),
+    ("1d_in0", (2, 1)): (8, 4, 4, 1),
+    ("2d", (4, 4)): (2, 2, 1, 2),
+    ("2d", (2, 1)): (8, 4, 1, 4),
+}
+_FULL_GRID = {"reuse": (8, 1), "1d_in1": (8, 1), "1d_in0": (8, 1), "2d": (4, 4)}
+
+
+def _family_grid_params():
+    return [
+        pytest.param(family, grid, id=f"{family}-{grid[0]}x{grid[1]}", marks=pytest.mark.requires_grid_size(grid))
+        for family, grid in _BLOCKING
+    ]
+
+
+def _two_vs_four_k_blocks_config(family, in0_block_w, grid=None):
+    grid = grid or _FULL_GRID[family]
+    per_core_M, per_core_N, out_subblock_h, out_subblock_w = _BLOCKING[(family, grid)]
+    grid_size = ttnn.CoreCoord(*grid)
     if family == "2d":
         return qsr.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+            compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,
-            out_subblock_h=1,
-            out_subblock_w=2,
-            out_block_h=2,
-            out_block_w=2,
-            per_core_M=2,
-            per_core_N=2,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=per_core_M,
+            out_block_w=per_core_N,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
             transpose_mcast=False,
             fused_activation=None,
         )
-    if family == "1d_in1":
+    if family in ("1d_in1", "1d_in0"):  # 1d_in0: M stays on every core, N is split
         return qsr.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+            compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            out_block_h=1,
-            out_block_w=8,
-            per_core_M=1,
-            per_core_N=8,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=per_core_M,
+            out_block_w=per_core_N,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
             fuse_batch=True,
             fused_activation=None,
-            mcast_in0=False,
-        )
-    if family == "1d_in0":  # M stays on every core, N is split (8 tiles -> 1 per core)
-        return qsr.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
-            in0_block_w=in0_block_w,
-            out_subblock_h=4,
-            out_subblock_w=1,
-            out_block_h=8,
-            out_block_w=1,
-            per_core_M=8,
-            per_core_N=1,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
+            mcast_in0=family == "1d_in0",
         )
     return qsr.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+        compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=4,
-        per_core_M=1,
-        per_core_N=8,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
     )
 
 
@@ -107,11 +119,12 @@ def test_quasar_matmul_packer_l1_acc_two_k_blocks(device, family):
     assert 1 - pcc[2] <= 1.1 * (1 - pcc[4]), f"{family}: PCC with 2 K blocks {pcc[2]:.5f}, with 4 K blocks {pcc[4]:.5f}"
 
 
-@pytest.mark.parametrize("family", ["reuse", "1d_in1", "1d_in0", "2d"])
+@pytest.mark.parametrize("family, grid", _family_grid_params())
 @pytest.mark.parametrize("num_k_blocks, packer_l1_acc", [(4, False), (4, True), (1, False)])
-def test_fp32_dest_acc_reuse_1d_2d(device, family, num_k_blocks, packer_l1_acc):
+def test_fp32_dest_acc_reuse_1d_2d(device, family, grid, num_k_blocks, packer_l1_acc):
     """The #61018 repro (256x512 @ 512x256 bf16, HiFi4, fp32_dest_acc_en) through every factory, with and without
-    packer_l1_acc requested, and with a single K block (the partials DFB is consumed even then)."""
+    packer_l1_acc requested, and with a single K block (the partials DFB is consumed even then), on the full grid of
+    the repro and on a two-core grid (skipped where the device grid is too small)."""
     torch.manual_seed(0)
     M, N = 256, 256
     in0_block_w = 4
@@ -129,14 +142,15 @@ def test_fp32_dest_acc_reuse_1d_2d(device, family, num_k_blocks, packer_l1_acc):
     output = ttnn.experimental.quasar.matmul(
         ttnn_input_a,
         ttnn_input_b,
-        program_config=_two_vs_four_k_blocks_config(family, in0_block_w),
+        program_config=_two_vs_four_k_blocks_config(family, in0_block_w, grid),
         compute_kernel_config=compute_kernel_config,
     )
     output = ttnn.to_torch(output).float()
     atol = 0.02 * golden.abs().max().item()
     max_err = (output - golden).abs().max().item()
     logger.info(
-        f"{family}, {num_k_blocks} K blocks, packer_l1_acc={packer_l1_acc}: max abs err {max_err:.4g} vs atol {atol:.4g}"
+        f"{family} on {grid[0]}x{grid[1]}, {num_k_blocks} K blocks, packer_l1_acc={packer_l1_acc}: "
+        f"max abs err {max_err:.4g} vs atol {atol:.4g}"
     )
     assert torch.allclose(
         output, golden, rtol=0.02, atol=atol
