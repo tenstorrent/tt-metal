@@ -14,14 +14,14 @@ ON-DEVICE `fold` output (folded small-face geometry) with the model's real `self
 mirrors the model's ACTUAL stem path verbatim so the fault reproduces in seconds instead of a ~28-min run.
 
 Mirrored verbatim from ttnn_functional_resnet50.py (__init__ stem setup + run() lines ~940-1004) and
-resnet50_test_infra.setup_input (Quasar branch):
-  * input image (batch=1): torch (1,3,224,224) -> NHWC, host-padded C 3->nearest_y(3,8)=8 -> (1,224,224,8)
-    bf16 ROW_MAJOR, interleaved L1.
-  * fold: stride=2, padding=[3,3,3,3,0,5] (fold_pad_h/w=kernel_size=3, fold_pad_c=C-c=5),
-    use_transpose_as_fold=False, input_is_nhwc=True, output_shape=(1,115,115,32), on the (device-clamped)
-    8x8 fold compute grid.
+resnet50_test_infra.setup_input:
+  * input image (batch=1): torch (1,3,224,224) NCHW bf16 ROW_MAJOR, L1 HEIGHT_SHARDED over the (device-clamped)
+    8x8 grid.
+  * fold: stride=2, padding=[3,3,3,3,0,1] (fold_pad_h/w=kernel_size=3, fold_pad_c=C-c=1),
+    use_transpose_as_fold=True, on the (device-clamped) 8x8 fold compute grid, output on the full device grid
+    (override_fold_mem_config) -> (1,115,115,16).
   * reshape fold output (n,c,h,w) -> (1,1,n*c*h,w).
-  * conv1: 32->64, 4x4, s1, p0, input 115x115, self.conv1_config (RELU, deallocate_activation,
+  * conv1: 16->64, 4x4, s1, p0, input 115x115, self.conv1_config (RELU, deallocate_activation,
     reallocate_halo_output=True, act_block_h_override=0 [Quasar], HEIGHT_SHARDED, reshard_if_not_optimal=False),
     packer_l1_acc compute config.
 
@@ -56,8 +56,8 @@ def test_quasar_conv2d_stem_model(mesh_device, batch_size):
     fold_kernel_size = 3  # resnet50_first_conv_kernel_size
     fold_stride = 2  # resnet50_first_conv_stride
 
-    # --- folded conv1 params (model __init__): 32->64, 4x4, s1, p0, folded input 115x115 ---
-    conv1_in_channels = 32
+    # --- folded conv1 params (model __init__): 16->64, 4x4, s1, p0, folded input 115x115 ---
+    conv1_in_channels = 16
     conv1_out_channels = 64
     conv1_kernel_size = (4, 4)
     conv1_stride = (1, 1)
@@ -68,14 +68,14 @@ def test_quasar_conv2d_stem_model(mesh_device, batch_size):
     fold_stride_h = fold_stride_w = fold_stride
     hp = h + fold_kernel_size * 2  # 230
     wp = w + fold_kernel_size * 2  # 230
-    C = _nearest_y(c, 8)  # 8 (Quasar aligns fold channels to 8)
-    fold_pad_c = C - c  # 5
+    C = _nearest_y(c, 4)  # 4
+    fold_pad_c = C - c  # 1
     fold_pad_h = fold_pad_w = fold_kernel_size  # 3
     fold_output_shape = (
         batch_size,
         hp // fold_stride_h,  # 115
         wp // fold_stride_w,  # 115
-        C * (fold_stride_h * fold_stride_w),  # 32
+        C * (fold_stride_h * fold_stride_w),  # 16
     )
 
     # fold compute grid: model default 8x8, clamped to the device's real core count (emulator 1-2 cores).
@@ -85,13 +85,32 @@ def test_quasar_conv2d_stem_model(mesh_device, batch_size):
     if fold_compute_grid_size.num_cores() > _dev_max_cores:
         fold_compute_grid_size = ttnn.num_cores_to_corerangeset(_dev_max_cores, _dev_grid, row_wise=True)
 
-    # --- input image: NHWC, host-padded C 3->8, bf16 ROW_MAJOR, interleaved L1 (test_infra Quasar branch) ---
+    # --- input image: NCHW, bf16 ROW_MAJOR, L1 HEIGHT_SHARDED over the capped 8x8 grid (test_infra) ---
     torch_input_nchw = torch.rand((batch_size, c, h, w), dtype=torch.float32)
-    nhwc = torch_input_nchw.permute(0, 2, 3, 1).contiguous()  # (1,224,224,3)
-    if C != c:
-        nhwc = torch.nn.functional.pad(nhwc, (0, C - c))  # (1,224,224,8)
-    tt_input = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(
-        device, ttnn.L1_MEMORY_CONFIG
+    input_rows = batch_size * c * h
+    num_input_cores = min(64, _dev_max_cores, input_rows)
+    input_grid = ttnn.num_cores_to_corerangeset(num_input_cores, _dev_grid, row_wise=True)
+    input_shard_height = (input_rows + num_input_cores - 1) // num_input_cores
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(input_grid, (input_shard_height, w), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input = ttnn.from_torch(torch_input_nchw, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(
+        device, input_mem_config
+    )
+
+    # --- override_fold_mem_config (model __init__): fold output HEIGHT_SHARDED over the full device grid ---
+    full_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_dev_grid.x - 1, _dev_grid.y - 1))}
+    )
+    fold_rows = batch_size * conv1_input_height * conv1_input_width
+    override_fold_mem_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, (fold_rows + full_grid.num_cores() - 1) // full_grid.num_cores(), conv1_in_channels),
+        core_grid=full_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
     )
 
     # --- folded conv1 weight/bias (model gets these preprocessed [out,in,4,4] from parameters; random here) ---
@@ -121,16 +140,15 @@ def test_quasar_conv2d_stem_model(mesh_device, batch_size):
         tt_input,
         fold_stride_h,
         fold_stride_w,
-        use_transpose_as_fold=False,
+        use_transpose_as_fold=True,
         padding=[fold_pad_h, fold_pad_h, fold_pad_w, fold_pad_w, 0, fold_pad_c],
         grid_size=fold_compute_grid_size,
-        input_is_nhwc=True,
-        output_shape=ttnn.Shape(list(fold_output_shape)),
+        override_memory_config=override_fold_mem_config,
     )
 
     # golden from the ACTUAL fold output (NHWC) -> NCHW folded conv (4x4/s1/p0) + bias + RELU.
     fold_torch = ttnn.to_torch(ttnn.from_device(fold_output_tensor)).float().reshape(fold_output_shape)
-    fold_nchw = fold_torch.permute(0, 3, 1, 2)  # (1,32,115,115)
+    fold_nchw = fold_torch.permute(0, 3, 1, 2)  # (1,16,115,115)
     golden = torch.relu(
         torch.nn.functional.conv2d(
             fold_nchw,
@@ -143,6 +161,7 @@ def test_quasar_conv2d_stem_model(mesh_device, batch_size):
 
     n, cc, hh, ww = fold_output_tensor.shape
     fold_output_tensor = ttnn.experimental.quasar.reshape(fold_output_tensor, (1, 1, n * cc * hh, ww))
+    ttnn.deallocate(tt_input)  # run() frees the input after the fold
 
     out, [out_h, out_w], [tt_weight, tt_bias] = ttnn.experimental.quasar.conv2d(
         input_tensor=fold_output_tensor,

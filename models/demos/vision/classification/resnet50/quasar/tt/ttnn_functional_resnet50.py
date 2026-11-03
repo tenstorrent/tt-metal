@@ -859,10 +859,7 @@ class resnet50:
         n = batch_size
         h += kernel_size * 2
         w += kernel_size * 2
-        # Quasar aligns fold channels to 8 (bf16 row-major 16B shard-width); the first-conv weights are
-        # folded to groups*8 input channels (see custom_preprocessing), so the direct fold's aligned
-        # groups*8 output feeds conv1 with no per-group padding strip. WH/BH keep alignment 4.
-        C = _nearest_y(c, 8 if is_quasar() else 4)
+        C = _nearest_y(c, 4)
         self.fold_pad_c = C - c
         self.fold_pad_h = kernel_size
         self.fold_pad_w = kernel_size
@@ -1002,32 +999,15 @@ class resnet50:
         logger.debug(f"==== fold on device")
 
         # run fold
-        if is_quasar():
-            # Direct data-movement fold. Input arrives channels-last (NHWC), host-padded to the aligned
-            # width (see setup_input); the transpose-chain fold has no Quasar kernel. output_shape
-            # C == groups*C_aligned (== fold_output_shape[3]) so c_keep == c_aligned -> the fold skips the
-            # per-group padding strip and returns the aligned groups*C_aligned width directly, which conv1
-            # consumes (its weights are folded to groups*C_aligned input channels with zero pad channels).
-            fold_output_tensor = ttnn.experimental.quasar.fold(
-                input_tensor,
-                self.fold_stride_h,
-                self.fold_stride_w,
-                use_transpose_as_fold=False,
-                padding=[self.fold_pad_h, self.fold_pad_h, self.fold_pad_w, self.fold_pad_w, 0, self.fold_pad_c],
-                grid_size=self.fold_compute_grid_size,
-                input_is_nhwc=True,
-                output_shape=ttnn.Shape(list(self.fold_output_shape)),
-            )
-        else:
-            fold_output_tensor = ttnn.experimental.quasar.fold(
-                input_tensor,
-                self.fold_stride_h,
-                self.fold_stride_w,
-                use_transpose_as_fold=True,
-                padding=[self.fold_pad_h, self.fold_pad_h, self.fold_pad_w, self.fold_pad_w, 0, self.fold_pad_c],
-                grid_size=self.fold_compute_grid_size,
-                override_memory_config=self.override_fold_mem_config,
-            )
+        fold_output_tensor = ttnn.experimental.quasar.fold(
+            input_tensor,
+            self.fold_stride_h,
+            self.fold_stride_w,
+            use_transpose_as_fold=True,
+            padding=[self.fold_pad_h, self.fold_pad_h, self.fold_pad_w, self.fold_pad_w, 0, self.fold_pad_c],
+            grid_size=self.fold_compute_grid_size,
+            override_memory_config=self.override_fold_mem_config,
+        )
         n, c, h, w = fold_output_tensor.shape
         fold_output_tensor = ttnn.experimental.quasar.reshape(fold_output_tensor, (1, 1, n * c * h, w))
         fold_output_tensor = _log_op("fold", fold_output_tensor)
