@@ -168,18 +168,18 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
 
 void DramPrefetcherConsumerDeviceOperation::ProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attrs,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/) {
     // Every other arg is compile-time. The hit may bring pipes re-carved in place of the program's, and
     // supplying the pipes rebinds the program to them (a no-op for the pipes it already holds).
-    if (attrs.prefetcher_pipes.empty()) {
+    if (operation_attributes.prefetcher_pipes.empty()) {
         return;
     }
     metal_exp::ProgramRunArgs run_args;
-    for (size_t i = 0; i < attrs.prefetcher_pipes.size(); ++i) {
+    for (size_t i = 0; i < operation_attributes.prefetcher_pipes.size(); ++i) {
         run_args.advanced_options.prefetcher_pipe_args.emplace(
-            pipe_param_name(i), metal_exp::PrefetcherPipeArgument{*attrs.prefetcher_pipes[i]});
+            pipe_param_name(i), metal_exp::PrefetcherPipeArgument{*operation_attributes.prefetcher_pipes[i]});
     }
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         metal_exp::UpdateProgramRunArgs(program, run_args);
