@@ -51,13 +51,17 @@ class TransformerModelFactory:
         """Initialize model factory from YAML config.
 
         Args:
-            yaml_config: Dictionary containing configuration
+            yaml_config: Training config whose training_config.model_config points to the model config,
+                or the model config itself (e.g. model_configs/gpt2s.yaml)
         """
         self.device_config = DeviceConfig(yaml_config)
 
-        tc = yaml_config["training_config"]
+        tc = yaml_config.get("training_config", {})
 
-        self.transformer_config = TransformerConfig(load_config(tc["model_config"]))
+        if "transformer_config" in yaml_config and "model_config" not in tc:
+            self.transformer_config = TransformerConfig(yaml_config)
+        else:
+            self.transformer_config = TransformerConfig(load_config(tc["model_config"]))
 
         self.multihost_config = resolve_multihost_config(yaml_config)
         self.model_type = self.transformer_config.model_type

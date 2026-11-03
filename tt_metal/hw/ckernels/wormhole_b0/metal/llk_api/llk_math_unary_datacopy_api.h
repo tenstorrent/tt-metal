@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_fast_tilize.h"
@@ -30,7 +31,7 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
         StateDiscard<std::uint32_t>(dst_index)));
 
     _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-        dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+        dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], get_operand_tensor_shape(operand_id));
 }
 
 template <
@@ -41,6 +42,7 @@ template <
 inline void llk_math_eltwise_unary_datacopy_block(
     std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     SAN_HOOK(execute<OperationFpuEltwiseUnaryDatacopy>(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
@@ -50,11 +52,11 @@ inline void llk_math_eltwise_unary_datacopy_block(
         StateDiscard<std::uint32_t>(start_dst_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
+    for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
         LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
         _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], tensor_shape);
     }
 }
 
@@ -71,16 +73,16 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         "ignored on WH)");
     (void)pack_mode;
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
     SAN_HOOK(init<OperationFpuEltwiseUnaryDatacopy>(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
-        StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(num_faces),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(get_operand_num_faces(operand_id)),
         StateVal<Operand<Exu::Fpu>::Format>(dst_format)));
 
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(
-        num_faces, dst_format);
+        tensor_shape, dst_format);
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>

@@ -5,8 +5,9 @@
 """Resolve the MiniMax-H3 diffusers snapshot, optionally fetching it from HuggingFace.
 
 Resolution order matches the lightx2v loader (`experimental/utils/lightx2v_loader.py`): an explicit
-path first, then the HuggingFace cache, then a download -- and the download only happens when it has
-been opted into with `TT_DIT_ALLOW_HF_DOWNLOAD=1`, so no test run pulls 144 GB by surprise.
+path first, then the HuggingFace cache (first linked in from the local mirror, see
+`utils/hf_local_mirror.py`), then a download -- and the download only happens when it has been opted
+into with `TT_DIT_ALLOW_HF_DOWNLOAD=1`, so no test run pulls 144 GB by surprise.
 
 Only the diffusers partitions the caller asks for are fetched. The repo's top-level `FL2VA/` and
 `Ref2VA/` trees are self-contained original-format bundles that duplicate the root partitions and
@@ -20,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
+
+from ...utils.hf_local_mirror import ensure_cached, hf_hub_cache_dir
 
 MINIMAX_H3_REPO_ID = "MiniMaxAI/MiniMax-H3"
 
@@ -48,10 +51,6 @@ class WeightsNotFoundError(FileNotFoundError):
     """Raised when the MiniMax-H3 snapshot is not on disk and downloads are disabled."""
 
 
-def _hf_cache_root() -> Path:
-    return Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface")
-
-
 def _missing_partitions(directory: Path, required: tuple[str, ...]) -> list[str]:
     return [name for name in required if not (directory / name).is_dir()]
 
@@ -74,7 +73,7 @@ def _cached_snapshot(required: tuple[str, ...]) -> Path | None:
     partial snapshot (weights present, tokenizer absent) is passed over rather than returned, so the
     caller falls through to a download that completes it instead of failing later at the tokenizer.
     """
-    repo_dir = _hf_cache_root() / "hub" / f"models--{MINIMAX_H3_REPO_ID.replace('/', '--')}"
+    repo_dir = hf_hub_cache_dir() / f"models--{MINIMAX_H3_REPO_ID.replace('/', '--')}"
     snapshots = repo_dir / "snapshots"
     if not snapshots.is_dir():
         return None
@@ -96,7 +95,7 @@ def _download(required: tuple[str, ...]) -> Path:
     estimate = sum(_PARTITION_GB.get(name, 0.0) for name in required)
     logger.info(
         f"Downloading MiniMax-H3 partitions {list(required)} (~{estimate:.0f} GB) from "
-        f"HuggingFace: {MINIMAX_H3_REPO_ID} -> {_hf_cache_root()}"
+        f"HuggingFace: {MINIMAX_H3_REPO_ID} -> {hf_hub_cache_dir()}"
     )
     return Path(snapshot_download(repo_id=MINIMAX_H3_REPO_ID, allow_patterns=allow_patterns))
 
@@ -109,7 +108,8 @@ def resolve_weights_dir(
     """The snapshot directory holding every partition in `required_subdirs`.
 
     `weights_dir` (or `$MINIMAX_H3_MODEL_PATH`) wins when it is set; otherwise the HuggingFace cache
-    is searched and then, with `$TT_DIT_ALLOW_HF_DOWNLOAD=1`, fetched. Raises `WeightsNotFoundError`
+    (after linking in the local mirror, if it holds the repo) is searched and then, with
+    `$TT_DIT_ALLOW_HF_DOWNLOAD=1`, fetched. Raises `WeightsNotFoundError`
     when nothing resolves and downloads are off.
 
     An explicit directory is checked for the required partitions only: it is the caller's own layout,
@@ -132,6 +132,7 @@ def resolve_weights_dir(
             raise WeightsNotFoundError(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
         return directory
 
+    ensure_cached(MINIMAX_H3_REPO_ID)
     cached = _cached_snapshot(required)
     if cached is not None:
         return cached
@@ -140,7 +141,7 @@ def resolve_weights_dir(
         raise WeightsNotFoundError(
             f"MiniMax-H3 weights not found (needed partitions: {list(required) or ['<any>']}).\n"
             f"Point {MODEL_PATH_ENV} at a diffusers snapshot, or re-run with {ALLOW_DOWNLOAD_ENV}=1 "
-            f"to fetch {MINIMAX_H3_REPO_ID} into {_hf_cache_root()}."
+            f"to fetch {MINIMAX_H3_REPO_ID} into {hf_hub_cache_dir()}."
         )
 
     snapshot = _download(required)
