@@ -69,6 +69,7 @@ class Attention(Module):
         },
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
+    ring_sdpa_exp_approx: bool = False
 
     def __init__(
         self,
@@ -278,7 +279,7 @@ class Attention(Module):
                 compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
                 q_chunk_size=ring_chunk_size[0],
                 k_chunk_size=ring_chunk_size[1],
-                exp_approx_mode=False,  # NOTE: False is more correct
+                exp_approx_mode=self.ring_sdpa_exp_approx,  # NOTE: False is more correct
             )
         return self.ring_sdpa_program_config[per_device_seq_len]
 
