@@ -178,11 +178,10 @@ What made it fast:
 
 - **Fused rotation**, `ttnn.experimental.rotary_embedding_hf`: 7.8 us against 26.7 for eight
   heads, same error.
-- **Swept matmul program configs** (`decode_matmul_config`): every winner uses 11 to 22 cores
-  rather than 64; `down_proj` went 112.8 to 69.6 us.
-- **DRAM-sharded predictor linears** (`DramShardedPlan`) on 8 cores, the bf8 MLP at HiFi2:
-  30.4 to 28.1 ms a frame on N150. The talker's prefill reads the same weights through an
-  interleaved matmul, so its step keeps `decode_matmul_config`.
+- **DRAM-sharded decoder linears** (`DramShardedPlan`) on 8 cores, the bf8 MLP at HiFi2: on
+  N150 the predictor frame goes 30.4 to 28.1 ms and the talker step 16.7 to 15.3 ms. The
+  talker's prefill reads the same weights through a 2D multicast matmul, the one prefill
+  config that takes a DRAM-sharded weight; a 60-position prefill costs about 15 ms more.
 - **MLP weights in `bfloat8_b`** (`MLP_WEIGHT_DTYPE`). Norm weights stay bf16 (bfp8 norms: PCC
   0.9751 against 0.9954); attention weights stay bf16 too (below).
 - **The predictor's codebook lookups and the talker's hidden state stay on device**: 1.1 ms a

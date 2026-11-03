@@ -53,15 +53,9 @@ OWNED_BLOCK_SIZE = 64
 NORM_NAMES = ("input_layernorm", "post_attention_layernorm")
 
 
-# The K reduction is cut into this many tiles per step so the weight stream pipelines
-# against the math, and out_subblock_h * w must stay under this ceiling because
-# fp32_dest_acc_en halves the register budget.
-DECODE_IN0_BLOCK_W = 4
-
-DECODE_MAX_SUBBLOCK = 4
-
-# Output tiles per core, which sets each matmul's row count. Flat from 4 to 6, worse outside.
-TARGET_PER_CORE_N = 5
+# out_subblock_h * w must stay under this ceiling because fp32_dest_acc_en halves the
+# register budget.
+MAX_OUT_SUBBLOCK = 4
 
 # The MLP's matmuls only: a fifth off the step at no measurable cost. README has the rest.
 MLP_WEIGHT_DTYPE = ttnn.bfloat8_b
@@ -70,46 +64,16 @@ MLP_WEIGHT_DTYPE = ttnn.bfloat8_b
 TILE_ROWS = 32
 
 
-def decode_matmul_config(device, in_features, out_features, fused_activation=None):
-    """1D-multicast matmul config for a single-position (M=1) decode linear.
-
-    A few full grid rows, each core holding a wide slice of the output; None when the
-    reduction will not chunk. Swept across all eight decode shapes: every winner spends 11 to
-    22 cores, not the 64 an exact-division search picks, because at M=1 the multicast
-    dominates. `down_proj` went 112.8 to 69.6 us. Dropping divisibility is what makes the
-    11-wide grid reachable, since no width here divides by 11.
-
-    `fused_activation` must travel in the config: `activation=` beside a program config runs
-    a second kernel instead of fusing.
-    """
-    k_tiles, n_tiles = in_features // 32, out_features // 32
-    grid = device.compute_with_storage_grid_size()
-
-    # A long reduction pipelines better in bigger chunks: down_proj, 69.6 us at 8 against 74.3.
-    in0_block_w = 8 if k_tiles % 8 == 0 and k_tiles > 64 else DECODE_IN0_BLOCK_W
-    if k_tiles % in0_block_w:
-        return None
-
-    cols = grid.x
-    rows = max(1, min(grid.y, round(n_tiles / (cols * TARGET_PER_CORE_N))))
-    per_core_n = -(-n_tiles // (cols * rows))
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(cols, rows),
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=next(w for w in range(min(per_core_n, DECODE_MAX_SUBBLOCK), 0, -1) if per_core_n % w == 0),
-        per_core_M=1,
-        per_core_N=per_core_n,
-        fuse_batch=True,
-        fused_activation=fused_activation,
-        mcast_in0=True,
-    )
-
-
 # Cores a DRAM-sharded linear spreads its activation over, at most. At M=1 the weight read
 # is spread over the DRAM banks whatever the core count, so more cores only thin each one's
 # K block: on every decode shape, 32 cores ran 1.3 to 2x slower than 8, and 4 matched 8.
 DRAM_SHARDED_MAX_CORES = 8
+
+# L1 a prefill linear's buffers may take on one core, below the L1 tensors the vLLM stage
+# keeps live: there, a 2048-row gate_proj estimated at 1.35 MB clashes with one at 1.42 MB.
+PREFILL_L1_BYTES = 1_000_000
+PREFILL_TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}
+FP32_TILE_BYTES = 4096
 
 
 def mlp_compute_config(device):
@@ -125,7 +89,8 @@ def mlp_compute_config(device):
 
 
 class DramShardedPlan:
-    """Configs for a DRAM-sharded decode linear of `in_features` by `out_features`.
+    """Configs for a DRAM-sharded linear of `in_features` by `out_features`, for the decode
+    step and, through `prefill`, for a whole prompt.
 
     The weight is width-sharded across the DRAM banks, so every bank streams its own slice
     and none sits idle; an interleaved weight reaches well under the DRAM peak at M=1. The
@@ -145,6 +110,8 @@ class DramShardedPlan:
         core_grid = ttnn.CoreGrid(x=cols, y=rows)
         self.in_features, self.out_features = in_features, out_features
         self.compute_config = compute_config
+        self.fused_activation = fused_activation
+        self._grid = grid
         self.input_memory = self._width_sharded(in_features // cores, core_grid)
         self.output_memory = self._width_sharded(out_features // cores, core_grid)
         self.program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -179,7 +146,7 @@ class DramShardedPlan:
     def weight(self, tensor, device, dtype):
         """A [K, N] host weight on device in this plan's DRAM sharding."""
         return ttnn.from_torch(
-            tensor.reshape(1, 1, self.in_features, self.out_features).contiguous(),
+            tensor.contiguous(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -198,6 +165,56 @@ class DramShardedPlan:
             program_config=self.program,
             memory_config=self.output_memory,
         )
+
+    def prefill(self, x, weight):
+        """x [1, rows, K] interleaved, any row count, against the same DRAM-sharded weight;
+        the output is interleaved. A 2D multicast matmul is the one prefill config that reads
+        a DRAM-sharded weight. Rows too many for one core's L1 are split in halves."""
+        rows = x.shape[-2]
+        program = self._prefill_program(rows, weight.dtype)
+        if program is None:
+            if rows <= TILE_ROWS:
+                raise ValueError(f"{rows} rows of a {self.in_features}x{self.out_features} linear fit no core's L1")
+            half = -(-rows // (2 * TILE_ROWS)) * TILE_ROWS
+            first = self.prefill(ttnn.slice(x, [0, 0, 0], [1, half, self.in_features]), weight)
+            second = self.prefill(ttnn.slice(x, [0, half, 0], [1, rows, self.in_features]), weight)
+            return ttnn.concat([first, second], dim=1)
+        return ttnn.linear(
+            x,
+            weight,
+            compute_kernel_config=self.compute_config,
+            program_config=program,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _prefill_program(self, rows, weight_dtype):
+        """The widest K block whose buffers fit `PREFILL_L1_BYTES`, or None if none does."""
+        grid = self._grid
+        m_tiles, k_tiles, n_tiles = -(-rows // TILE_ROWS), self.in_features // TILE_ROWS, self.out_features // TILE_ROWS
+        cols = next(c for c in range(grid.x, 0, -1) if n_tiles % c == 0)
+        grid_rows = min(grid.y, m_tiles)
+        per_core_m, per_core_n = -(-m_tiles // grid_rows), n_tiles // cols
+        weight_tile = PREFILL_TILE_BYTES[weight_dtype]
+        for in0_block_w in range(8, 0, -1):
+            if k_tiles % in0_block_w:
+                continue
+            # Double-buffered activation and weight blocks, the bf16 output block, and its
+            # fp32 accumulator.
+            used = 2 * in0_block_w * (per_core_m * PREFILL_TILE_BYTES[ttnn.bfloat16] + per_core_n * weight_tile)
+            used += per_core_m * per_core_n * (PREFILL_TILE_BYTES[ttnn.bfloat16] + FP32_TILE_BYTES)
+            if used <= PREFILL_L1_BYTES:
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(cols, grid_rows),
+                    in0_block_w=in0_block_w,
+                    out_subblock_h=1,
+                    out_subblock_w=next(w for w in range(MAX_OUT_SUBBLOCK, 0, -1) if per_core_n % w == 0),
+                    per_core_M=per_core_m,
+                    per_core_N=per_core_n,
+                    transpose_mcast=False,
+                    fused_activation=self.fused_activation,
+                    fuse_batch=True,
+                )
+        return None
 
 
 def linear_plans(device, config):
@@ -225,10 +242,18 @@ def decode_mlp(x, layer, plans):
     return ttnn.sharded_to_interleaved(plans["down_proj"](product, layer["down_proj"]))
 
 
+def prefill_mlp(x, layer, plans):
+    """The MLP over a whole prompt [1, rows, hidden], interleaved throughout."""
+    gate = plans["gate_proj"].prefill(x, layer["gate_proj"])
+    up = plans["up_proj"].prefill(x, layer["up_proj"])
+    return plans["down_proj"].prefill(ttnn.multiply(gate, up), layer["down_proj"])
+
+
 def preprocess_cached_talker_parameters(
     device, config=None, state=None, num_layers=None, dtype=ttnn.bfloat16, mlp_dtype=MLP_WEIGHT_DTYPE
 ):
-    """Weights for the cached decoder, with Q, K and V fused into one matmul.
+    """Weights for the cached decoder, with Q, K and V fused into one matmul and the layer
+    linears DRAM-sharded.
 
     Purely a repacking: three matmuls become one per layer and one weight streams instead of
     three. `mlp_dtype` is the split precision; pass bf16 to measure against a uniform model.
@@ -237,6 +262,7 @@ def preprocess_cached_talker_parameters(
     if num_layers is not None:
         cfg["num_hidden_layers"] = num_layers
     state = checkpoint.load_talker_state() if state is None else state
+    plans = linear_plans(device, cfg)
 
     def to_device(tensor, layout=ttnn.TILE_LAYOUT, as_dtype=None):
         return ttnn.from_torch(
@@ -247,8 +273,8 @@ def preprocess_cached_talker_parameters(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def linear(name, as_dtype=None):
-        return to_device(state[f"{name}.weight"].t(), as_dtype=as_dtype)
+    def sharded(key, name, as_dtype=None):
+        return plans[key].weight(state[f"{name}.weight"].t(), device, as_dtype or dtype)
 
     def norm(name):
         return to_device(state[f"{name}.weight"].reshape(1, 1, 1, -1))
@@ -264,13 +290,13 @@ def preprocess_cached_talker_parameters(
             {
                 "input_layernorm": norm(f"layers.{index}.input_layernorm"),
                 "post_attention_layernorm": norm(f"layers.{index}.post_attention_layernorm"),
-                "qkv": to_device(fused.t()),
-                "o_proj": linear(f"{prefix}.o_proj"),
+                "qkv": plans["qkv"].weight(fused.t(), device, dtype),
+                "o_proj": sharded("o_proj", f"{prefix}.o_proj"),
                 "q_norm": norm(f"{prefix}.q_norm"),
                 "k_norm": norm(f"{prefix}.k_norm"),
-                "gate_proj": linear(f"layers.{index}.mlp.gate_proj", mlp_dtype),
-                "up_proj": linear(f"layers.{index}.mlp.up_proj", mlp_dtype),
-                "down_proj": linear(f"layers.{index}.mlp.down_proj", mlp_dtype),
+                "gate_proj": sharded("gate_proj", f"layers.{index}.mlp.gate_proj", mlp_dtype),
+                "up_proj": sharded("up_proj", f"layers.{index}.mlp.up_proj", mlp_dtype),
+                "down_proj": sharded("down_proj", f"layers.{index}.mlp.down_proj", mlp_dtype),
             }
         )
 
@@ -395,14 +421,7 @@ class TtTalkerCachedDecoder:
         # live is corrupt once that trace runs unless it is released first.
         self._zero_cache = self._cache_tensor(empty) if self._owns_cache else None
 
-        # Decode-only matmul configs. gate_proj carries the silu so the activation runs
-        # inside the matmul rather than as a separate elementwise kernel.
-        silu = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-        first = parameters["layers"][0]
-        self._matmul = {
-            name: decode_matmul_config(device, *tuple(first[name].shape)[-2:], silu if name == "gate_proj" else None)
-            for name in ("qkv", "o_proj", "gate_proj", "up_proj", "down_proj")
-        }
+        self._linear = linear_plans(device, self.config)
 
         # The sharded norm wants its weight broadcast over the shard-height tile.
         self._norm_plan = sharded_norm_plan(device, self.hidden)
@@ -528,25 +547,6 @@ class TtTalkerCachedDecoder:
             x, cos, sin, is_decode_mode=decode, compute_kernel_config=self.compute_config
         )
 
-    def _mlp(self, x, layer, configs=None):
-        configs = configs or {}
-        gate = ttnn.linear(
-            x, layer["gate_proj"], compute_kernel_config=self.compute_config, program_config=configs.get("gate_proj")
-        )
-        # The silu is already fused when a program config carries it; applying it again
-        # would double up, and applying it never would be wrong.
-        if configs.get("gate_proj") is None or configs["gate_proj"].fused_activation is None:
-            gate = ttnn.silu(gate)
-        up = ttnn.linear(
-            x, layer["up_proj"], compute_kernel_config=self.compute_config, program_config=configs.get("up_proj")
-        )
-        return ttnn.linear(
-            ttnn.multiply(gate, up),
-            layer["down_proj"],
-            compute_kernel_config=self.compute_config,
-            program_config=configs.get("down_proj"),
-        )
-
     def _split_qkv(self, qkv, length):
         """[1, L, 4096] -> q [1, 16, L, 128], k/v [1, 8, L, 128]."""
         q_width = self.heads * self.head_dim
@@ -594,7 +594,7 @@ class TtTalkerCachedDecoder:
         the last layer's output, before the final norm."""
         for index, layer in enumerate(self.p["layers"]):
             normed = ttnn.rms_norm(x, weight=layer["input_layernorm"], epsilon=self.eps)
-            qkv = ttnn.linear(normed, layer["qkv"], compute_kernel_config=self.compute_config)
+            qkv = self._linear["qkv"].prefill(normed, layer["qkv"])
             query, key, value = self._split_qkv(qkv, length)
 
             query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), cos_tt, sin_tt)
@@ -619,9 +619,9 @@ class TtTalkerCachedDecoder:
             )
             attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (1, length, self.heads * self.head_dim))
 
-            x = ttnn.add(x, ttnn.linear(attended, layer["o_proj"], compute_kernel_config=self.compute_config))
+            x = ttnn.add(x, self._linear["o_proj"].prefill(attended, layer["o_proj"]))
             normed = ttnn.rms_norm(x, weight=layer["post_attention_layernorm"], epsilon=self.eps)
-            x = ttnn.add(x, self._mlp(normed, layer))
+            x = ttnn.add(x, prefill_mlp(normed, layer, self._linear))
         return x
 
     def _traced_prefill_ops(self, length):
@@ -663,9 +663,7 @@ class TtTalkerCachedDecoder:
     def _step_ops(self, x):
         for index, layer in enumerate(self.p["layers"]):
             normed = self._norm(x, layer, "input_layernorm")
-            qkv = ttnn.linear(
-                normed, layer["qkv"], compute_kernel_config=self.compute_config, program_config=self._matmul["qkv"]
-            )
+            qkv = ttnn.sharded_to_interleaved(self._linear["qkv"](normed, layer["qkv"]))
             # Fused per-head split. Emits [1, batch, heads, head_dim] height-sharded in L1,
             # the layout flash decode and the cache update want, so no permutes appear in the
             # step at all. It replaces 3 slices, 3 reshapes and 3 permutes.
@@ -705,17 +703,9 @@ class TtTalkerCachedDecoder:
                 compute_kernel_config=self.compute_config,
             )
             attended = ttnn.reshape(attended, (1, self.batch, self.heads * self.head_dim))
-            x = ttnn.add(
-                x,
-                ttnn.linear(
-                    attended,
-                    layer["o_proj"],
-                    compute_kernel_config=self.compute_config,
-                    program_config=self._matmul["o_proj"],
-                ),
-            )
+            x = ttnn.add(x, ttnn.sharded_to_interleaved(self._linear["o_proj"](attended, layer["o_proj"])))
             normed = self._norm(x, layer, "post_attention_layernorm")
-            x = ttnn.add(x, self._mlp(normed, layer, self._matmul))
+            x = ttnn.add(x, decode_mlp(normed, layer, self._linear))
         return self._norm(x, {"norm": self.p["norm"], "norm_wide": getattr(self, "_final_norm_wide", None)}, "norm")
 
     def set_position(self, position):
