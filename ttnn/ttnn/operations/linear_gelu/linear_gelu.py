@@ -94,6 +94,8 @@ def _resolve(input_tensor, compute_kernel_config, memory_config):
 
 def validate(input_tensor, weight, bias, *, compute_kernel_config=None, memory_config=None):
     _check_structure(input_tensor, weight, bias)
+    if input_tensor.device().arch() != ttnn.device.Arch.BLACKHOLE:
+        raise UnsupportedAxisValue("linear_gelu: the GELU kernel is Blackhole-only (SFPU load macros)")
 
     batch, _, seq, hidden = list(input_tensor.shape)
     ffn = list(weight.shape)[1]
@@ -158,5 +160,10 @@ def linear_gelu(
         input_tensor.device(),
         out_memory,
     )
-    descriptor = create_program_descriptor(input_tensor, weight, bias, output, cfg)
+    try:
+        descriptor = create_program_descriptor(input_tensor, weight, bias, output, cfg)
+    except RuntimeError as error:
+        # No blocking fits the L1 left free by the tensors already alive: a support refusal, not a crash.
+        ttnn.deallocate(output)
+        raise UnsupportedAxisValue(str(error)) from error
     return ttnn.generic_op([input_tensor, weight, bias, output], descriptor)

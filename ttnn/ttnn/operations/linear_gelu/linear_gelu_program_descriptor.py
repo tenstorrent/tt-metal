@@ -57,6 +57,16 @@ BLOCK_H_MAX_DRAM_OUT = 3
 # 8x512 DRAM out vs 138.7, and block_h 3 at 18 pages 138.6 vs 137.5 at 24.
 OUT_RING_PAGES = 24
 CB_BUDGET_BYTES = 900 * 1024
+# Kept free between the CBs and the lowest live L1 buffer.
+CB_HEADROOM_BYTES = 16 * 1024
+
+
+def cb_budget_bytes(device):
+    """CB_BUDGET_BYTES, capped at the L1 below the lowest live L1 buffer (CBs grow up from the allocator base; inside a
+    model other L1 tensors can sit lower than the budget assumes)."""
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    live = [int(block["address"]) for block in view.block_table if block["allocated"] == "yes"]
+    return min(CB_BUDGET_BYTES, min(live, default=view.total_bytes_per_bank) - CB_HEADROOM_BYTES)
 
 CB_ACTIVATION_BLOCK = 0
 CB_WEIGHT_RESIDENT = 1
@@ -121,7 +131,7 @@ def _footprint_bytes(block_h, core_n_tiles_max, block_w, tile_bytes):
     return fixed + act + out
 
 
-def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes, block_h_max):
+def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes, block_h_max, budget_bytes):
     """Split m over m_slots grid lines and N_TILES / block_w n-blocks over n_slots; None if the W slice won't fit."""
     n_blocks = N_TILES // block_w
     core_n_blocks = _div_up(n_blocks, n_slots)
@@ -130,7 +140,7 @@ def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes, block_h_ma
     fits = [
         h
         for h in range(1, min(core_m_tiles, block_h_max) + 1)
-        if _footprint_bytes(h, core_n_tiles_max, block_w, tile_bytes) <= CB_BUDGET_BYTES
+        if _footprint_bytes(h, core_n_tiles_max, block_w, tile_bytes) <= budget_bytes
     ]
     if not fits:
         return None
@@ -153,18 +163,19 @@ def select_blocking(input_tensor, compute_kernel_config, out_buffer_type):
 
     assert N_TILES % BLOCK_W == 0
     block_h_max = BLOCK_H_MAX_DRAM_OUT if out_buffer_type == ttnn.BufferType.DRAM else BLOCK_H_MAX
+    budget_bytes = cb_budget_bytes(input_tensor.device())
     # Orientation by output tiles per core (the per-tile GELU binds); ties keep m on grid rows.
     best = None
     for transposed in (False, True):
         m_slots, n_slots = (grid.x, grid.y) if transposed else (grid.y, grid.x)
-        cand = _candidate(tensor_m_tiles, BLOCK_W, m_slots, n_slots, tile_bytes, block_h_max)
+        cand = _candidate(tensor_m_tiles, BLOCK_W, m_slots, n_slots, tile_bytes, block_h_max, budget_bytes)
         if cand is None:
             continue
         tiles = cand["core_m_tiles"] * cand["core_n_tiles_max"]
         if best is None or tiles < best[0]:
             best = (tiles, transposed, cand)
     if best is None:
-        raise RuntimeError(f"linear_gelu: no W slice split fits {CB_BUDGET_BYTES} B of CBs on a {grid.x}x{grid.y} grid")
+        raise RuntimeError(f"linear_gelu: no W slice split fits {budget_bytes} B of CBs on a {grid.x}x{grid.y} grid")
     _, transposed, cand = best
     # fp32 DEST halves the half-sync DEST capacity.
     dest_tiles = 4 if compute_kernel_config.fp32_dest_acc_en else 8

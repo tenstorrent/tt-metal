@@ -103,6 +103,8 @@ def _check_structure(input_tensor, weight, expert_counts):
 
 def validate(input_tensor, weight, expert_counts, *, compute_kernel_config=None, memory_config=None):
     _check_structure(input_tensor, weight, expert_counts)
+    if input_tensor.device().arch() != ttnn.device.Arch.BLACKHOLE:
+        raise UnsupportedAxisValue("moe_down_proj: the accumulate kernel is Blackhole-only (raw LLK)")
 
     rows, ffn = list(input_tensor.shape)[-2:]
     hidden = list(weight.shape)[-2]
