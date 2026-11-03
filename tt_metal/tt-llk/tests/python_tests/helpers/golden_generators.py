@@ -4211,7 +4211,6 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             MathOperation.SfpuRsubInt32,
             MathOperation.SfpuCopyDest,
             MathOperation.SfpuMulInt32,
-            MathOperation.SfpuLogsigmoid,
             MathOperation.SfpuMaxInt32,
             MathOperation.SfpuMinInt32,
             MathOperation.SfpuMaxUint32,
