@@ -25,6 +25,8 @@ import pytest
 from helpers.counters import LLK_COUNTERS_HEADER, _parse_perf_cfg
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
+    COUNT_INIT,
+    COUNT_TILE_LOOP,
     PerfConfig,
     PerfReport,
     _assert_matches_catalog,
@@ -272,13 +274,12 @@ def _one_run_events(seed: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _run_hw_free(monkeypatch, run_types, run_count):
+def _run_hw_free(monkeypatch, run_types, run_count, *, launches=None):
     """Run PerfConfig.run() end-to-end with no chip; return the produced frame."""
-    # Class-level execution config: execute-only (skip build, don't pytest.skip),
-    # counters off, artefacts dir unused (get_elf_text_size is stubbed).
+    # Execute-only; supplying a launch log enables counters without hardware.
     monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.CONSUME)
     monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False)
-    monkeypatch.setattr(TestConfig, "ENABLE_PERF_COUNTERS", False)
+    monkeypatch.setattr(TestConfig, "ENABLE_PERF_COUNTERS", launches is not None)
     monkeypatch.setattr(TestConfig, "ARTEFACTS_DIR", Path("/tmp/hwfree"), raising=False)
     monkeypatch.setattr(TestConfig, "TENSIX_LOCATION", None, raising=False)
     monkeypatch.setattr(
@@ -317,9 +318,37 @@ def _run_hw_free(monkeypatch, run_types, run_count):
     ):
         monkeypatch.setattr(cfg, seam, lambda *a, **k: None)
 
+    if launches is not None:
+        monkeypatch.setattr(
+            cfg,
+            "run_elf_files",
+            lambda: launches.append((cfg.current_run_type, cfg.counted_zones)),
+        )
+        monkeypatch.setattr(cfg, "_read_counters_of_launch", lambda *a: None)
+
     report = PerfReport()
     cfg.run(report, run_count=run_count)
     return report._frames[-1]
+
+
+@pytest.mark.parametrize("target", ["ttsim", "hardware", "rtl"])
+@pytest.mark.parametrize("run_count", [1, 3])
+def test_run_counter_launches(monkeypatch, target, run_count):
+    """INIT-only launches require counter readback; timing launches always run."""
+    monkeypatch.delenv("LLK_PERF_RUN_TYPES", raising=False)
+    monkeypatch.setattr(TestConfig.TEST_TARGET, "run_simulator", target != "hardware")
+    monkeypatch.setenv(
+        "TT_METAL_SIMULATOR",
+        "/unused/libttsim.so" if target == "ttsim" else "/unused/rtl",
+    )
+    assert (TestConfig.counted_zones_address() is None) == (target == "ttsim")
+    launches = []
+    run_types = [PerfRunType.MATH_ISOLATE, PerfRunType.UNPACK_ISOLATE]
+    _run_hw_free(monkeypatch, run_types, run_count, launches=launches)
+    zones = [COUNT_TILE_LOOP] * run_count
+    if target != "ttsim":
+        zones += [COUNT_INIT] * run_count
+    assert launches == [(run_type, zone) for run_type in run_types for zone in zones]
 
 
 def test_run_end_to_end_conforms_to_output_schema(monkeypatch):
