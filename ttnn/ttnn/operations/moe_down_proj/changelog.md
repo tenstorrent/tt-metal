@@ -174,3 +174,86 @@
   stand-in leak in the golden helpers' case cache). Run golden slices with `--no-precompile`.
 - Tests added: `test_model_l1_occupancy`, `test_l1_occupancy_without_any_fit_refused` (test_moe_down_proj.py);
   `probes/sweep_occupied.py` (forced-blocking sweep, run explicitly).
+
+## Perf 1
+- Date: 2026-11-03
+- Focus: `t4096_layer0` LOOSE case (attention-flagged primary): x and y in L1, model L1 occupancy (853,568 B free),
+  bfloat8_b, op default config (LoFi, fp32_dest_acc_en=True, math_approx_mode=False). Every axis is in SUPPORTED.
+  Blocking there: 2 waves, k_block 6, 15 rows x 2 n tiles per core, 32 x steps + 32 w steps. Stock 179.0 us,
+  target 90.8 us.
+- Instrumentation: permanent `MaybeDeviceZoneScope` zones on every stage: compute_accumulate / compute_wait_inputs
+  (the round's x and w wait hoisted out of the matmul helper; the writer pushes a whole round at once, so the order
+  is unchanged) / compute_untilize; x_reserve / x_send (+ x_send_barrier) / x_receive / x_forward; w_reserve /
+  w_send (+ w_send_barrier) / w_receive; w_stage_complete; y_store / y_store_tail / y_store_tail_helper. At most 198
+  markers per RISC on the guard set (cap 250; a k_block 4 multi-wave blocking would exceed it on the reader).
+  Under the profiler the zones add 4-6 us to the focus number (uninstrumented HEAD kernels 172.1 us, instrumented
+  178.1 us). Every number below is instrumented vs instrumented.
+- Measured breakdown (focus, `perf_experiments/breakdown/BREAKDOWN.md`): zones showed compute starved about 60 us
+  of its 153 us on inputs, the x channel's receivers waiting about 120 us, and the last wave's store exposed
+  for about 14 us after compute. Cumulative ablation (us): full 178.3, no compute 168.0, + no w 165.4, + no x 82.9,
+  + no store 70.5. Solo: no x 149.9, no strip copy 160.3, no store 163.2, no w 174.5. Ranking: (1) the x chain
+  (about 82 us of data movement on the critical path; per row link the x bytes need about 39 us, so it is far from
+  the link roofline and bound by serialization), (2) the 70.5 us fully stubbed floor, (3) the compute payload
+  (about 93-116 us vs 68 us ideal at 16 cycles per tile product), (4) the store tail (about 13-15 us). w is not
+  binding (DRAM roofline 22.5 MB / 448 GB/s = 50 us, hidden). The early-ack subagent showed that item 2 is not
+  handshake latency: with every payload stubbed, the matmul scaffolding (SKIP_COMPUTE keeps unpack / pack,
+  about 57 us), the untilize and the store's wait on compute fill it, and NCRISC ends at about 50 us.
+- Portfolio and verdicts (focus ns, baseline -> candidate):
+  - early_ack_handshake (receivers ack step s + 1 before waiting on s, x and w channels): NULL. x only
+    178.2k -> 180.7k, x + w 181.4k, w only 177.5k; early send 184.7k, x / strip paired send 183.1k
+    (regressions). It helps only DRAM y (208.6k -> 201.0k), and that gain is inside what the strip forwarder
+    already took (dram_out 209.5k -> 187.0k). The raw protocol costs about 3 us over the helper with lookahead
+    disabled. What the helper would need: split `ack(round)` / `wait(round)` on the receiver, a ring of >= 2
+    data-ready flags indexed by round, and a non-blocking `acks_ready()` on the sender.
+  - strip_copy (the x copy to the L layout's strip core): WIN with option (b). Core (g, g) leaves the x sender
+    rotation and forwards each step to the strip core one step behind, so the rotating sender injects once:
+    177.2k -> 161.9-163.1k. (a) one channel over rect row + strip core: BLOCKED (`ttnn.Mcast` groups are
+    consecutive cores in one global order, and a rotating sender needs a rectangular receiver group). (c) xb
+    issued before xa without its own fence: REGRESSION 193.0k. Forwarder at x = gx - 1: 166.3k (worse than (g, g)).
+    Not pipelining the forward: 164.2k.
+  - store_tail (the exposed last-wave store): WIN with option (a). The storing RISC hands every odd block of the
+    last wave to the other dataflow RISC, so the tail runs on both NoCs: 177.0k -> 172.0-172.5k. Rotating
+    segment order: NULL. Alternating write command buffers (raw): REGRESSION 293.1k (breaks end-of-kernel write
+    accounting). Uneven wave split: not built (budget margin allows 16 / 14 rows, under 1 us). Streaming the
+    store per block: already in place.
+  - compute_payload (the matmul at the fixed precision contract): payload WIN, whole op flat before the other
+    two graduated. A compile-time `1 x core_n_tiles` subblock instead of 2x2 + tail gives payload
+    115.9 -> 99.4 us. At 2x2 the fp32 partials pack serialized with the matmul, a fixed cost per DEST acquire
+    (not pack volume or L1 accumulation). Bit-exact on every gate case. Same shape computed at runtime: 143.5
+    (REGRESSION). Raw-LLK 1x2: 96.0 payload, whole op flat, not graduated. Pack reconfig hoisted: NULL. Other
+    shapes 4x1 / 2x1 / 1x1 are slower. Holding 2 K rounds in DEST changes the summation order and needs
+    resident x / w for both rounds: not pursued.
+- Graduated (all three are the op's single path, with no predicate; the code they replace is deleted):
+  1. x strip forwarder: `_l_layout` takes core (g, g) out of the X_MAIN rotation (`McastRotatingSenderConfig`
+     over rect minus the diagonal) and makes it X_STRIP's fixed sender. The reader forwards the pending step
+     before acking the next one. The sender's second `send()` is gone. Domain: every L layout. The rect layout has
+     no strip channel. A grid with gx = 2 falls back to a fixed X_MAIN sender (unmeasured, correct by
+     construction). Focus 178.1 -> 162.8 us.
+  2. Last-wave store split (`moe_store_tail_owner` / `moe_store_tail_helper`, `cb_tail` 16 B pages, at most
+     ceil(core_row_tiles_max / 2) of them): every placement and wave count. With DRAM y the reader owns the store
+     and the writer helps. Focus 162.8 -> 156.0 us.
+  3. Compile-time `1 x core_n_tiles` subblock. 3-run A/B on HEAD: focus 156.3 -> 154.8, t4096 layer 3 occupied
+     156.0 -> 150.7, t3072 126.1-127.5 -> 125.3-126.1, t4096 DRAM y 179.5-180.5 -> 178.8-179.2.
+  No carve-outs: no guard case measured a material regression.
+- Whole op, focus: 178.1 -> 154.8 us (-13.1%, instrumented); stock 179.0, target 90.8 (not reached).
+- Guard set (instrumented, one run each, all checked for correctness), before -> after:
+  focus 178.1 -> 154.8 | t4096 layer 3 occupied 177.0 -> 150.4 | t4096 layer 2 occupied 177.1 -> 150.3 |
+  t4096 layer 0 unoccupied 170.5 -> 155.5 | t3072 138.2 -> 125.5 | t2048 111.1 -> 104.8 | t1024 86.5 -> 86.2 |
+  t4096 DRAM x 210.4 -> 199.7 | t4096 DRAM y 209.5 -> 178.9 | t1024 DRAM x and y 114.0 -> 109.3 |
+  t37 85.0 -> 82.7 | t1 41.4 -> 41.9 (noise). No regression.
+- Accuracy: the summation order is unchanged. Precision baseline: PCC 0.99991, rel_rms 1.90e-2 (LoFi);
+  HiFi2 PCC 0.999999.
+- Golden: 93/93 after every graduation. Unit (`test_moe_down_proj.py`, `_layouts.py`, `_precision_baseline.py`):
+  57/57.
+- Bottleneck now (focus zones): the x chain still binds. compute_wait_inputs is 50 us p50, x_receive 107 us
+  p50, and x_forward takes 48 us on the 9 forwarder cores. Round 2 should start there.
+- Tests added: `tests/ttnn/unit_tests/operations/moe_down_proj/probes/test_perf_bench.py` (focus + guard set,
+  kernel-dir and define overrides for ablations; run explicitly with `--profile --no-precompile`).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this (dataflow CB API: `get_read_ptr`) | capability | Reading block r ahead of a CB's front without popping. The store split keeps the handed blocks un-popped so the owner stays the only consumer, so it needs `front + r` with the ring wrap, which `get_read_ptr` cannot express. It reads `get_local_cb_interface(cb).fifo_rd_ptr` / `fifo_limit` / `fifo_size` directly. A `get_read_ptr(cb, page_offset)` with wrap would cover it. | n/a (inexpressible) | 154.8 us whole op | moe_down_proj_store.h:91 |
+
+The strip forwarder and the subblock change use only the existing helpers (`ttnn.Mcast` fixed and rotating
+senders, `matmul_block`). The NULL early-ack variant's helper gaps are listed with its verdict above.

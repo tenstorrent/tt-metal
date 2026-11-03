@@ -6,3 +6,4 @@
 {"event":"perf1_graduation","idea":"strip_copy","focus_ns":[178112,162827],"golden":"93/93","unit":"47/47","ts":"2026-11-03T10:30:27+00:00"}
 {"event":"perf1_graduation","idea":"store_tail","focus_ns":[162827,155960],"golden":"93/93","unit":"57/57","ts":"2026-11-03T10:33:26+00:00"}
 {"event":"perf1_graduation","idea":"compute_payload 1xN constexpr subblock","focus_ns_median":[156296,154837],"l3_occ_ns":[156170,150738],"golden":"93/93","unit":"57/57","bit_exact":true,"ts":"2026-11-03T10:36:49+00:00"}
+{"event":"perf1_complete","graduated":3,"null":1,"focus_ns":[178112,154837],"golden":"93/93","ts":"2026-11-03T10:38:08+00:00"}

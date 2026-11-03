@@ -53,3 +53,8 @@ solo: noX 149.9 (-28), noW 174.5 (-4), noStrip 160.3 (-18), noStore 163.2 (-15),
    is fixed; target 90.8 needs it.
 4. Store tail ~12-15 us (last wave's untilize + store exposed).
 5. w channel: ~3-4 us solo, not binding. DRAM w roofline 22.5 MB / 448 GB/s = 50 us, well hidden.
+
+## Correction (from the early_ack_handshake subagent)
+Item 2 is not handshake latency. In the fully stubbed run the matmul scaffolding (SKIP_COMPUTE keeps unpack /
+pack, about 57 us), the untilize and the store's wait on compute fill the 70.5 us, and NCRISC ends at about 50 us.
+Pipelining the acks measured flat (see changelog Perf 1).
