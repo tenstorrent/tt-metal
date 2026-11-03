@@ -357,6 +357,16 @@ inline void _perf_mock_binary_(const std::uint32_t tiles, const std::uint32_t nu
 #endif
 }
 
+// periods x (one SrcB handshake and a_count SrcA ones), the producer giving B first and the consumer taking it back last.
+// Wormhole isolate mocks only.
+template <bool PRODUCE>
+inline void _perf_mock_srcb_reuse_(const std::uint32_t a_count, const std::uint32_t periods)
+{
+#if defined(ARCH_WORMHOLE)
+    llk_perf_mock::srcb_reuse<PRODUCE>(a_count, periods);
+#endif
+}
+
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {
     std::uint32_t set_a = source == ckernel::SrcA ? 1 : 0;
