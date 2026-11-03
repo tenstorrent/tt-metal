@@ -291,8 +291,9 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::Int8;
         } else if (arch == tt::ARCH::QUASAR && data_format == DataFormat::Int16) {
             // Quasar only. On Wormhole/Blackhole this still throws: Int16 is not a pack source there.
-            // This cannot tell an Int16 input from an Int16 output. A consumed Int16 DFB with
-            // 32-bit Dest must unpack to Dest; ValidateUnpackModes enforces that.
+            // This walks every CB, so it cannot tell an Int16 input from an Int16 output.
+            // ProgramSpec rejects a consumed Int16 DFB with 32-bit Dest unless it unpacks to Dest.
+            // The FPU datacopy init rejects that input on every other kernel path.
             pack_src_format = DataFormat::Int16;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", data_format);
