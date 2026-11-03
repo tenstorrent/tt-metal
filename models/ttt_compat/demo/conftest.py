@@ -2,9 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import json
 
 from models.ttt_compat.tt.model_config import parse_optimizations
+
+
+def _cli_bool(value):
+    """argparse bool that accepts 1/0, true/false, yes/no, on/off (Python bool("False") is True)."""
+    if isinstance(value, bool):
+        return value
+    v = str(value).strip().lower()
+    if v in ("1", "true", "yes", "y", "on"):
+        return True
+    if v in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean (1/0, true/false), got {value!r}")
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
@@ -19,9 +32,17 @@ def pytest_addoption(parser):
     )
     parser.addoption("--data_parallel", action="store", type=int, help="Number of data parallel workers")
     parser.addoption(
-        "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
+        "--paged_attention",
+        action="store",
+        nargs="?",
+        const=True,
+        default=None,
+        type=_cli_bool,
+        help="Use paged attention (1/true) or default attention (0/false); omit for the parametrized default",
     )
-    parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
+    # type=dict cannot parse a command-line string, so accept a JSON object,
+    # e.g. --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    parser.addoption("--page_params", action="store", type=json.loads, help="Page parameters for paged attention")
     # type=dict cannot parse a command-line string, so the option was write-only until now;
     # accept a JSON object, e.g. --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
     parser.addoption("--sampling_params", action="store", type=json.loads, help="Sampling parameters for decoding")
@@ -45,15 +66,19 @@ def pytest_addoption(parser):
     parser.addoption(
         "--token_accuracy",
         action="store",
-        default=False,
-        type=bool,
+        nargs="?",
+        const=True,
+        default=None,
+        type=_cli_bool,
         help="Whether to compute top1 and top5 exact token matching accuracy",
     )
     parser.addoption(
         "--stress_test",
         action="store",
-        default=False,
-        type=bool,
+        nargs="?",
+        const=True,
+        default=None,
+        type=_cli_bool,
         help="Run stress test (same decode iteration over a large number of iterations",
     )
     parser.addoption("--enable_trace", action="store_true", default=None, help="Enable tracing")
@@ -75,8 +100,10 @@ def pytest_addoption(parser):
     parser.addoption(
         "--use_prefetcher",
         action="store",
-        default=False,
-        type=bool,
+        nargs="?",
+        const=True,
+        default=None,
+        type=_cli_bool,
         help="Whether to use DRAM prefetcher for prefetching weights into L1 during decode (only available on BH)",
     )
     parser.addoption(
