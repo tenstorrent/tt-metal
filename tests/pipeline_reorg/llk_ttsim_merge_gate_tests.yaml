@@ -1,9 +1,10 @@
 # WH/BH LLK kernels on ttsim. Catches SFPU instruction modes silicon accepts but ttsim does not.
-# Run by ttnn-smoke-tests-impl.yaml from merge-gate.yaml, on WH/BH/common/SFPI/LLK CI and ttsim changes.
+# Run by ttnn-smoke-tests-impl.yaml from merge-gate.yaml, on WH/BH/common/SFPI LLK and ttsim changes.
+# Covers the WH/BH SFPU kernels that Sanity runs on ttsim after merge (ttnn_sanity_tests.yaml).
 # If ttsim lacks an instruction a change needs, skip the tests in ttsim-skip-list.yaml.
 # Not covered: max_pool_indices and direct topk (skip-listed, too slow on ttsim); topk is reached
 # via test_sampling.py. SFPLOADMACRO is disabled on ttsim. test_binary_category5_float32.py is left
-# out to stay within budget; its ops run in bf16 below. ~8-11 min per leg on ubuntu-latest.
+# out to stay within budget; its ops run in bf16 below. ~4-10 min per leg on ubuntu-latest.
 
 # Unary bf16 and int. 567 tests.
 - name: "llk sfpu unary bf16 int sim"
@@ -85,6 +86,27 @@
     tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py
     tests/ttnn/unit_tests/operations/reduce/test_moe.py
     tests/ttnn/unit_tests/operations/reduce/test_sampling.py
+    -m "not disable_fast_runtime_mode"
+  skus:
+    sim_wh_n150:
+      timeout: 15
+    sim_bh_p150:
+      timeout: 15
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+
+# SFPU kernels outside eltwise that Sanity runs on ttsim. 690 tests.
+# sfpu_binary_bcast: welford layernorm (interleaved, large, sharded) and two_pass groupnorm.
+# reshuffle_rows: embedding_bw, the case ttnn_sanity_tests.yaml runs.
+- name: "llk sfpu norm embedding sim"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
+    tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
+    tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+    tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_with_program_cache
+    -k "welford or two_pass or embedding_bw_with_program_cache"
     -m "not disable_fast_runtime_mode"
   skus:
     sim_wh_n150:
