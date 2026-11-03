@@ -304,6 +304,8 @@ inline void calculate_sfpu_binary_mul(
 #ifndef DISABLE_SFPLOADMACRO
                 if (dst_index_out == dst_index_in0) {
                     TTI_SFPCONFIG(0x030, 8, 1);
+                    TTI_SFPNOP;
+                    TTI_SFPNOP;
                     TTI_REPLAY(0, 4, 1, 1);
                     TT_SFPLOAD(1, 0, 3, a1);
                     TT_SFPLOADMACRO((0 << 2) | 0, 0, 2, a0);
@@ -313,6 +315,8 @@ inline void calculate_sfpu_binary_mul(
                     TTI_REPLAY(0, 4, 0, 0);
                     TTI_REPLAY(0, 4, 0, 0);
                     TTI_SFPCONFIG(0, 8, 1);
+                    TTI_SFPNOP;
+                    TTI_SFPNOP;
                     return;
                 }
 #endif
