@@ -170,7 +170,6 @@ public:
             write_entry(EntryType::ZONE_START, id16, start_timestamp);
             write_entry(EntryType::ZONE_END, id16, end_timestamp);
         }
-        ckernel::fence_compiler();
     }
 };
 
