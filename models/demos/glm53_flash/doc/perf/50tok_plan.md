@@ -228,3 +228,9 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   only after this chip's intervening call of the other site, so the persistent staging is reused safely). Expected
   ~30 us per call: about -2.2 ms per step. Lesson booked: a chain run JIT-compiles kernels minutes after it imported
   op.py, so kernel edits wait for the running job (`gate84_B4_fabgather` died on that; rerun queued).
+* 23:44 **TP all-reduce measured** (`rowx_8x4_r3`, the (8, 4) torus, T = 4, 8 chunks / 2 per owner / 1 packet per peer
+  per phase): exact to one bf16 ulp on all 32 chips and after 20 replays, **34 us per traced call** (the composites:
+  51 us attention, 30-39 us MoE); gather 40 / reduce 41 us again. Per layer: 2 x ~10 us = about -0.9 ms per step on
+  top of the row exchange's -4.4. The first full-fabric chain gate died on a shape mismatch (the combine returned 32
+  logical rows where the add with the shared expert wants T): outputs now carry their logical rows; the gate reruns
+  (`gate84_B4_fabar`) after the gather-only one.

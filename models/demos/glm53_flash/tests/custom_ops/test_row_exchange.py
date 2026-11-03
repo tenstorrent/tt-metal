@@ -36,7 +36,8 @@ MESH_PARAMS = [
 
 
 def _chips(t: ttnn.Tensor) -> list[torch.Tensor]:
-    return [ttnn.to_torch(d).float().reshape(TILE, -1) for d in ttnn.get_device_tensors(t)]
+    """Per chip, the logical rows of ``t`` (the ops allocate T or rows * T logical rows, tile-padded)."""
+    return [ttnn.to_torch(d).float().reshape(t.shape[-2], -1) for d in ttnn.get_device_tensors(t)]
 
 
 def _timed(mesh_device, op, inputs, outputs) -> tuple[float, float]:
@@ -77,10 +78,8 @@ def test_gather(mesh_device):
         f"{op.np} packets per peer, groups per chip {[len(v) for v in op.groups.values()][:4]}..."
     )
     xg, wg = op([xd, wd])
-    exp_x = torch.zeros(TILE, H)
-    exp_x[: ROWS * T] = x[:, 0, :T].reshape(ROWS * T, H)
-    exp_w = torch.zeros(TILE, E)
-    exp_w[: ROWS * T] = w[:, 0, :T].reshape(ROWS * T, E)
+    exp_x = x[:, 0, :T].reshape(ROWS * T, H)
+    exp_w = w[:, 0, :T].reshape(ROWS * T, E)
     for i, (cx, cw) in enumerate(zip(_chips(xg), _chips(wg))):
         assert torch.equal(cx, exp_x), f"chip {i}: x gather differs ({(cx != exp_x).sum().item()} elements)"
         assert torch.equal(cw, exp_w), f"chip {i}: routing gather differs ({(cw != exp_w).sum().item()} elements)"
@@ -103,17 +102,12 @@ def test_reduce(mesh_device):
     (out,) = op([yd])
     chips = _chips(out)
     for r in range(ROWS):
-        exp = torch.zeros(TILE, H)
-        exp[:T] = y[:, 0, r * T : (r + 1) * T].sum(dim=0)  # over the source rows, fp32
-        exp = exp.bfloat16().float()
+        exp = y[:, 0, r * T : (r + 1) * T].sum(dim=0).bfloat16().float()  # over the source rows, fp32
         for c in range(COLS):
             got = chips[r * COLS + c]
             err = (got - exp).abs()
             tol = exp.abs() * (1 / 128) + 1e-3  # one bf16 ulp: the device's fp32 order may differ from torch's
-            assert bool(
-                (err <= tol).all()
-            ), f"chip ({r},{c}): max err {err.max().item():.4f} (rows {T}..31 zero: {bool((got[T:] == 0).all())})"
-            assert bool((got[T:] == 0).all()), f"chip ({r},{c}): padding rows not zero"
+            assert bool((err <= tol).all()), f"chip ({r},{c}): max err {err.max().item():.4f}"
     eager, traced = _timed(mesh_device, op, [yd], [out])
     chips2 = _chips(out)
     for i, (a, b) in enumerate(zip(chips, chips2)):
@@ -140,15 +134,12 @@ def test_allreduce(mesh_device):
     (out,) = op([yd])
     chips = _chips(out)
     for r in range(ROWS):
-        exp = torch.zeros(TILE, H)
-        exp[:T] = y[r, :, :T].sum(dim=0)
-        exp = exp.bfloat16().float()
+        exp = y[r, :, :T].sum(dim=0).bfloat16().float()
         for c in range(COLS):
             got = chips[r * COLS + c]
             err = (got - exp).abs()
             tol = exp.abs() * (1 / 128) + 1e-3
             assert bool((err <= tol).all()), f"chip ({r},{c}): max err {err.max().item():.4f}"
-            assert bool((got[T:] == 0).all()), f"chip ({r},{c}): padding rows not zero"
     eager, traced = _timed(mesh_device, op, [yd], [out])
     chips2 = _chips(out)
     for i, (a, b) in enumerate(zip(chips, chips2)):
