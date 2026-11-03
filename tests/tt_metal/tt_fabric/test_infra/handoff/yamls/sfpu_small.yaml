@@ -1,0 +1,25 @@
+# Compute payload gen/verify at the smallest payload sizes: four configs per receiver core keep a 16 B payload's ring
+# under 65536 slots (one data CB page per slot). Enough packets to wrap the rings. Run with
+# TT_FABRIC_TEST_SFPU_PAYLOAD=1 TT_FABRIC_TEST_SFPU_VERIFY=1; every test must pass.
+allocation_policies:
+  receiver:
+    max_configs_per_core: 4
+
+Tests:
+  - name: "SfpuSmallLinear"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      size: [16, 32, 48, 80, 112, 144, 272]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - {ntype: unicast_write, destination: {device: [0, 1]}}
+          - {ntype: fused_atomic_inc, destination: {device: [0, 1]}}
+          - {ntype: unicast_write, destination: {device: [0, 1]}}
+          - {ntype: fused_atomic_inc, destination: {device: [0, 1]}}
