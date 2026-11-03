@@ -43,6 +43,26 @@ def update_model_config(config, batch_size, device):
     head_seqL_t__x = (batch_per_y * head_num * seqL_t) // grid_x  # 7 on a 12-wide grid
     head_size_t = dim_t // head_num  # 2
     class__x = class_t // grid_x  # 3 on a 12-wide grid
+
+    # The sharded layout keeps each core's 4x-wide ff1 output next to its input and the residual in L1.
+    # Past a quarter of a core's L1, as on a grid of a few cores, every activation stays in DRAM instead and
+    # the ops pick their own program configs.
+    BFLOAT8_B_TILE_BYTES = 1088
+    ff1_output_bytes_per_core = seqL_t__y * dim_t__x * 4 * BFLOAT8_B_TILE_BYTES
+    l1_bytes_per_core = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    in_dram = ff1_output_bytes_per_core > l1_bytes_per_core // 4
+    if in_dram:
+        memory_configs = {
+            "interleaved": ttnn.DRAM_MEMORY_CONFIG,
+            "block_sharded": ttnn.DRAM_MEMORY_CONFIG,
+            "height_sharded": ttnn.DRAM_MEMORY_CONFIG,
+        }
+    else:
+        memory_configs = {
+            "interleaved": ttnn.L1_MEMORY_CONFIG,
+            "block_sharded": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "height_sharded": ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        }
     class_subb_w = class__x
     if class_subb_w > 8:  # max ratio of sub_block_w / sub_block_h = 8
         if class_subb_w % 3 == 0:
@@ -149,6 +169,12 @@ def update_model_config(config, batch_size, device):
             packer_l1_acc=True,
         ),
     }
+    if in_dram:
+        program_configs = {
+            name: None if name != "ln_compute_config" else program_config
+            for name, program_config in program_configs.items()
+        }
+        program_configs["softmax_program_config"] = ttnn.SoftmaxDefaultProgramConfig()
 
     # properties are not in the output of config.to_dict() but can be used later in the model
     # e.g. https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/configuration_utils.py#L368-L378
@@ -166,6 +192,8 @@ def update_model_config(config, batch_size, device):
         dict(
             **(config.to_dict() | properties),
             core_grid=core_grid,
+            in_dram=in_dram,
+            memory_configs=memory_configs,
             should_reallocate_in_attention=should_reallocate_in_attention,
             program_configs=program_configs,
         )
@@ -175,11 +203,26 @@ def update_model_config(config, batch_size, device):
 # https://github.com/huggingface/transformers/blob/v5.12.1/src/transformers/models/vit/modeling_vit.py
 
 
-def pixel_values_memory_config(device, shape):
-    """Height-sharded L1 config for the NHWC pixels that vit_patch_embeddings folds.
+def activation_memory_config(config, shape):
+    """Where an encoder activation of this shape lives: block-sharded over core_grid, or DRAM."""
+    if config.in_dram:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=config.core_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
 
-    Two cores per image split every image into whole groups of patch rows, which the fold needs.
+
+def pixel_values_memory_config(config, device, shape):
+    """Memory config for the NHWC pixels that vit_patch_embeddings folds.
+
+    Height-sharded in L1, two cores per image so that every shard holds whole groups of patch rows as the
+    fold needs; interleaved in DRAM when the model runs from DRAM.
     """
+    if config.in_dram:
+        return ttnn.DRAM_MEMORY_CONFIG
     batch_size, height, width, channels = shape
     num_cores = 2 * batch_size
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
@@ -200,7 +243,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
 
     folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)  # 1568, 1024
     ttnn.deallocate(pixel_values)
-    folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
+    folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=config.memory_configs["interleaved"])
     # Convert back to interleaved or otherwise to_layout will fail
     folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
@@ -211,7 +254,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
         folded_pixel_values,
         parameters.projection.weight,
         bias=parameters.projection.bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=config.memory_configs["interleaved"],
         dtype=ttnn.bfloat16,
         core_grid=config.core_grid,
     )
@@ -232,16 +275,33 @@ def vit_embeddings(
 ):
     parameters = parameters.vit.embeddings
 
-    l1_memory_config = ttnn.L1_MEMORY_CONFIG
-
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
-    embedding_output = ttnn.concat([cls_token, patch_embeddings], -2, memory_config=l1_memory_config)
+    embedding_output = ttnn.concat(
+        [cls_token, patch_embeddings], -2, memory_config=config.memory_configs["interleaved"]
+    )
     embedding_output = ttnn.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)
     embedding_output = ttnn.add(
-        embedding_output, position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
+        embedding_output, position_embeddings, memory_config=config.memory_configs["interleaved"], dtype=ttnn.bfloat8_b
     )
 
     return embedding_output
+
+
+def split_heads_interleaved(query_key_value, num_heads, head_size):
+    """Query, key (transposed) and value per head from the fused projection.
+
+    The fused weight is laid out head by head ([q, k, v] for each head), the order the sharded
+    split_query_key_value_and_split_heads expects; the interleaved op expects all of q, then k, then v,
+    so the heads are split here instead.
+    """
+    batch_size, sequence_size, _ = query_key_value.shape
+    heads = ttnn.reshape(query_key_value, (batch_size, sequence_size, num_heads, 3 * head_size))
+    heads = ttnn.permute(heads, (0, 2, 1, 3))
+    query = ttnn.slice(heads, (0, 0, 0, 0), (batch_size, num_heads, sequence_size, head_size))
+    key = ttnn.slice(heads, (0, 0, 0, head_size), (batch_size, num_heads, sequence_size, 2 * head_size))
+    value = ttnn.slice(heads, (0, 0, 0, 2 * head_size), (batch_size, num_heads, sequence_size, 3 * head_size))
+    ttnn.deallocate(heads)
+    return query, ttnn.permute(key, (0, 1, 3, 2)), value
 
 
 def vit_attention(
@@ -257,20 +317,23 @@ def vit_attention(
         hidden_states,
         parameters.query_key_value.weight,
         bias=parameters.query_key_value.bias,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["query_key_value_matmul_program_config"],
     )
 
-    (
-        query,
-        key,
-        value,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads(
-        query_key_value,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-        num_heads=num_heads,
-    )
+    if config.in_dram:
+        query, key, value = split_heads_interleaved(query_key_value, num_heads, head_size)
+    else:
+        (
+            query,
+            key,
+            value,
+        ) = ttnn.transformer.split_query_key_value_and_split_heads(
+            query_key_value,
+            memory_config=config.memory_configs["height_sharded"],
+            num_heads=num_heads,
+        )
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
     if config.should_reallocate_in_attention:
@@ -279,7 +342,7 @@ def vit_attention(
     attention_scores = ttnn.matmul(
         query,
         key,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["height_sharded"],
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["query_by_key_matmul_program_config"],
     )
@@ -300,7 +363,7 @@ def vit_attention(
     context_layer = ttnn.matmul(
         attention_probs,
         value,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["height_sharded"],
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"],
     )
@@ -309,14 +372,14 @@ def vit_attention(
 
     context_layer = ttnn.transformer.concatenate_heads(
         context_layer,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
     )
 
     self_output = ttnn.linear(
         context_layer,
         parameters.o_proj.weight,
         bias=parameters.o_proj.bias,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["self_output_matmul_program_config"],
     )
@@ -337,9 +400,11 @@ def vit_mlp(
         hidden_states,
         parameters.fc1.weight,
         bias=parameters.fc1.bias,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["ff1_matmul_program_config"],
+        # The sharded ff1 program config fuses GELU; without it the activation is passed explicitly.
+        activation="gelu" if config.in_dram else None,
     )
     ttnn.deallocate(hidden_states)
 
@@ -347,7 +412,7 @@ def vit_mlp(
         intermediate,
         parameters.fc2.weight,
         bias=parameters.fc2.bias,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["ff2_matmul_program_config"],
     )
@@ -364,7 +429,9 @@ def vit_feedforward(
     parameters,
 ):
     output = vit_mlp(config, hidden_states, parameters=parameters.mlp)
-    output = ttnn.add(output, attention_output, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+    output = ttnn.add(
+        output, attention_output, memory_config=config.memory_configs["block_sharded"], dtype=ttnn.bfloat8_b
+    )
     ttnn.deallocate(attention_output)
     return output
 
@@ -378,7 +445,7 @@ def vit_layer(
         hidden_states,
         weight=parameters.layernorm_before.weight,
         bias=parameters.layernorm_before.bias,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         program_config=config.program_configs["layernorm_before_program_config"],
         compute_kernel_config=config.program_configs["ln_compute_config"],
     )
@@ -392,7 +459,7 @@ def vit_layer(
     multi_head_attention_output = ttnn.add(
         multi_head_attention_output,
         hidden_states,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         dtype=ttnn.bfloat8_b,
     )
 
@@ -400,7 +467,7 @@ def vit_layer(
         multi_head_attention_output,
         weight=parameters.layernorm_after.weight,
         bias=parameters.layernorm_after.bias,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         program_config=config.program_configs["layernorm_after_output_program_config"],
         compute_kernel_config=config.program_configs["ln_compute_config"],
     )
@@ -420,20 +487,18 @@ def vit_encoder(
     embeddings,
     parameters,
 ):
-    TILE_HEIGHT = 32
-    emb_N, emb_S, emb_D = embeddings.shape
-    emb_S = (((emb_S - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
-    encoder_input = ttnn.to_memory_config(
-        embeddings,
-        memory_config=ttnn.create_sharded_memory_config(
-            [emb_N, emb_S, emb_D],
-            core_grid=config.core_grid,
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-        dtype=ttnn.bfloat8_b,
-    )
-    ttnn.deallocate(embeddings)
+    if config.in_dram:
+        # The embeddings are already bfloat8_b in DRAM. to_memory_config would hand back this same tensor,
+        # so it must not be freed.
+        encoder_input = embeddings
+    else:
+        TILE_HEIGHT = 32
+        emb_N, emb_S, emb_D = embeddings.shape
+        emb_S = (((emb_S - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
+        encoder_input = ttnn.to_memory_config(
+            embeddings, memory_config=activation_memory_config(config, [emb_N, emb_S, emb_D]), dtype=ttnn.bfloat8_b
+        )
+        ttnn.deallocate(embeddings)
 
     for encoder_parameters in parameters:
         encoder_output = vit_layer(
@@ -467,7 +532,7 @@ def vit(
         weight=parameters.vit.layernorm.weight,
         bias=parameters.vit.layernorm.bias,
         epsilon=config.layer_norm_eps,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         program_config=config.program_configs["layernorm_before_program_config"],
     )
 
@@ -476,7 +541,7 @@ def vit(
         output,
         parameters.classifier.weight,
         bias=parameters.classifier.bias,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=config.memory_configs["block_sharded"],
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["classifer_matmul_program_config"],
     )

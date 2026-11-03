@@ -26,7 +26,7 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
     torch.manual_seed(0)
 
     model = load_torch_model(model_location_generator, embedding=True)
-    config = model.config
+    config = ttnn_optimized_sharded_vit.update_model_config(model.config, batch_size, device)
 
     torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.float32)
     torch_output, *_ = model(torch_pixel_values)
@@ -48,10 +48,8 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn_optimized_sharded_vit.pixel_values_memory_config(device, torch_pixel_values.shape),
+        memory_config=ttnn_optimized_sharded_vit.pixel_values_memory_config(config, device, torch_pixel_values.shape),
     )
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
-
     output = ttnn_optimized_sharded_vit.vit_patch_embeddings(
         config, pixel_values, parameters=parameters, unittest_check=True
     )
@@ -111,7 +109,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn_optimized_sharded_vit.pixel_values_memory_config(device, torch_pixel_values.shape),
+        memory_config=ttnn_optimized_sharded_vit.pixel_values_memory_config(config, device, torch_pixel_values.shape),
     )
 
     output = ttnn_optimized_sharded_vit.vit_embeddings(
@@ -154,12 +152,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
 
     encoder_input = ttnn.to_memory_config(
         hidden_states,
-        memory_config=ttnn.create_sharded_memory_config(
-            hidden_states.shape,
-            core_grid=config.core_grid,  # Use dynamic blackhole core_grid
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        ),
+        memory_config=ttnn_optimized_sharded_vit.activation_memory_config(config, hidden_states.shape),
         dtype=ttnn.bfloat8_b,
     )
     ttnn.deallocate(hidden_states)
@@ -198,11 +191,8 @@ def test_vit_mlp(device, model_name, batch_size, sequence_size):
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.create_sharded_memory_config(
-            (batch_size, sequence_size, config.hidden_size),
-            core_grid=config.core_grid,
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        memory_config=ttnn_optimized_sharded_vit.activation_memory_config(
+            config, (batch_size, sequence_size, config.hidden_size)
         ),
     )
 
@@ -245,12 +235,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
 
     encoder_input = ttnn.to_memory_config(
         hidden_states,
-        memory_config=ttnn.create_sharded_memory_config(
-            hidden_states.shape,
-            core_grid=config.core_grid,  # Use dynamic blackhole core_grid
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        ),
+        memory_config=ttnn_optimized_sharded_vit.activation_memory_config(config, hidden_states.shape),
         dtype=ttnn.bfloat8_b,
     )
     ttnn.deallocate(hidden_states)
@@ -355,7 +340,7 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn_optimized_sharded_vit.pixel_values_memory_config(device, torch_pixel_values.shape),
+        memory_config=ttnn_optimized_sharded_vit.pixel_values_memory_config(config, device, torch_pixel_values.shape),
     )
 
     output = ttnn_optimized_sharded_vit.vit(
