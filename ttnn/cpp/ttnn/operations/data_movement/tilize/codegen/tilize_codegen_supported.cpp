@@ -57,7 +57,7 @@ constexpr uint32_t kTargetCores = 24;
 // Few-row DRAM split: a cut onto fewer cores than this keeps the full grid split instead.
 constexpr uint32_t kMinSplitCores = 5;
 // Most tile rows of a one-tile-wide, non-converting input that still routes to native; see is_demoted().
-constexpr uint32_t kDemoteMaxTileRows = 20;
+constexpr uint32_t kDemoteMaxTileRows = 2;
 
 std::optional<uint32_t> row_major_element_size(DataType dtype) {
     switch (dtype) {
@@ -292,7 +292,8 @@ bool supported_execution_controls(
     return !unsupported_execution_control(use_multicore, use_low_perf, tile, sub_core_grids).has_value();
 }
 
-// One tile per row has no width parallelism, so kernels this short don't amortize codegen's fixed per-launch cost.
+// One tile per row and at most two tile rows runs on at most two cores in about 1.7 us, so codegen's fixed
+// per-program cost is not amortized.
 bool is_demoted(const Tensor& input, DataType output_dtype) {
     using namespace tt::constants;
 
