@@ -292,29 +292,31 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
         cb_wait_front(cb_attention_weights, score_tiles);
         cb_pop_front(cb_attention_weights, score_tiles);
         cb_reserve_back(cb_attention_weights, score_tiles);
+        // Only mask stamps run in this loop, so the SFPU init and the L1-accumulate toggle (a packer stall
+        // each) bracket it, as apply_causal_mask_lightweight does.
         copy_init(cb_attn_mask);
+        binop_with_scalar_tile_init();
+        pack_reconfig_l1_acc(1);
         for (uint32_t t0 = 0; t0 < mask_tiles; t0 += sm_block_size) {
             const uint32_t n = (mask_tiles - t0 < sm_block_size) ? (mask_tiles - t0) : sm_block_size;
             tile_regs_acquire();
             for (uint32_t i = 0; i < n; ++i) {
                 copy_tile(cb_attn_mask, /* tile_idx */ t0 + i, /* dst */ i);
             }
-            binop_with_scalar_tile_init();
             for (uint32_t i = 0; i < n; ++i) {
                 add_unary_tile(i, minus_one_bits);   // 1/0 -> 0/-1
                 mul_unary_tile(i, custom_inf_bits);  // 0/-1 -> 0/-1e9
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_reconfig_l1_acc(1);
             for (uint32_t i = 0; i < n; ++i) {
                 for (uint32_t h = 0; h < heads_per_item; ++h) {
                     pack_tile</* out_of_order */ true>(i, cb_attention_weights, /* offset */ h * mask_tiles + t0 + i);
                 }
             }
-            pack_reconfig_l1_acc(0);
             tile_regs_release();
         }
+        pack_reconfig_l1_acc(0);
         cb_push_back(cb_attention_weights, score_tiles);
         cb_pop_front(cb_attn_mask, mask_tiles);
 #endif
