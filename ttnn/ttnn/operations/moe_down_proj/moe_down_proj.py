@@ -19,7 +19,11 @@ from .moe_down_proj_program_descriptor import (
     MAX_TOKENS,
     NUM_EXPERTS,
     TILE,
+    cb_budget_bytes,
     create_program_descriptor,
+    output_l1_bank_bytes,
+    select_blocking,
+    select_layout,
 )
 
 
@@ -141,6 +145,17 @@ def validate(input_tensor, weight, expert_counts, *, compute_kernel_config=None,
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"moe_down_proj: unsupported combination (refinement candidate): {exc}")
 
+    # The CBs must fit below the live L1 buffers (other tensors may be alive); refuse before allocating anything.
+    device = input_tensor.device()
+    row_tiles = rows // TILE
+    select_blocking(
+        row_tiles,
+        select_layout(device.compute_with_storage_grid_size(), row_tiles),
+        expert_counts.buffer_page_size(),
+        cb_budget_bytes(device, output_l1_bank_bytes(device, rows, out_memory)),
+        out_memory.buffer_type == ttnn.BufferType.DRAM,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -168,5 +183,9 @@ def moe_down_proj(
         input_tensor.device(),
         out_memory,
     )
-    descriptor = create_program_descriptor(input_tensor, weight, expert_counts, output, cfg)
+    try:
+        descriptor = create_program_descriptor(input_tensor, weight, expert_counts, output, cfg)
+    except Exception:
+        ttnn.deallocate(output)
+        raise
     return ttnn.generic_op([input_tensor, weight, expert_counts, output], descriptor)

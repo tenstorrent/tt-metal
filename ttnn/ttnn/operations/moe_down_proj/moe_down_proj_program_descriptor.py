@@ -16,6 +16,8 @@ from pathlib import Path
 
 import ttnn
 
+from ttnn.operations._op_contract import UnsupportedAxisValue
+
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE = 32
@@ -45,12 +47,10 @@ OUT_DEPTH = 2
 STORE_PACED = True
 MAX_TOKENS = 4096
 MAX_ROWS = TILE * (-(-2 * MAX_TOKENS // TILE) + NUM_EXPERTS - 1)
-# CBs sit below the L1 buffers: at R = MAX_ROWS = 8416, x (about 250 KB per bank) and y (about 118 KB per bank) leave
-# about 1.1 MB above the unreserved base on p100a (y's lowest address measured at 1,204,352 B). This budget assumes
-# both in L1 and keeps about 0.1 MB of that free; cb_budget_bytes() adds back the per-bank share of whichever lives
-# in DRAM. It must fit the paced store's whole-wave output CB at 2 waves (993,856 B at t = 4096): 3
-# waves measured 8x512 172 -> 179-188 us.
-CB_BUDGET_BYTES = 976 * 1024
+# CBs are allocated upward from the L1 allocator base and must end below the lowest live L1 buffer, so the budget is
+# read from the allocator at call time (other model tensors may be alive). Each CB start is aligned to this (the DRAM
+# alignment, 64 B on Blackhole, 32 B on Wormhole).
+CB_ADDR_ALIGN = 64
 
 CB_X_ROUND = 0
 CB_W_ROUND = 1
@@ -233,23 +233,44 @@ def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, 
 
 def footprint_bytes(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves):
     return sum(
-        pages * page_bytes
+        _div_up(pages * page_bytes, CB_ADDR_ALIGN) * CB_ADDR_ALIGN
         for _, pages, page_bytes, _ in cb_plan(
             core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves
         )
     )
 
 
-def cb_budget_bytes(num_l1_banks, x_in_dram, out_in_dram):
-    """CB_BUDGET_BYTES plus the per-bank share a MAX_ROWS x / y would take, for each one that lives in DRAM.
-    Shape- and placement-derived only, so a cached program never depends on live allocator state."""
-    max_row_tiles = MAX_ROWS // TILE
-    x_bank_bytes = _div_up(max_row_tiles * TENSOR_K_TILES, num_l1_banks) * ttnn.tile_size(ttnn.bfloat8_b)
-    y_bank_bytes = _div_up(MAX_ROWS, num_l1_banks) * HIDDEN * 2
-    return CB_BUDGET_BYTES + x_in_dram * x_bank_bytes + out_in_dram * y_bank_bytes
+def _l1_view(device):
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    # Block addresses are relative to the allocator base, where the CB region starts.
+    blocks = [(int(b["address"]), int(b["size"]), b["allocated"] == "yes") for b in view.block_table]
+    return view.total_bytes_per_bank, view.num_banks, blocks
 
 
-def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes=CB_BUDGET_BYTES, out_in_dram=False):
+def cb_budget_bytes(device, pending_l1_bank_bytes=0):
+    """Per-core bytes free for CBs: from the allocator base to the lowest live L1 buffer.
+
+    pending_l1_bank_bytes: per-bank size of an L1 buffer not allocated yet (the output, at validate time). It is
+    charged against the budget unless a free block above the lowest live buffer can hold it, which the allocator
+    (top-down, smallest size class first) takes before the open space below."""
+    total, _, blocks = _l1_view(device)
+    lowest = min((addr for addr, _, used in blocks if used), default=total)
+    if pending_l1_bank_bytes and not any(
+        not used and addr >= lowest and size >= pending_l1_bank_bytes for addr, size, used in blocks
+    ):
+        lowest -= pending_l1_bank_bytes
+    return max(0, lowest)
+
+
+def output_l1_bank_bytes(device, rows, out_memory):
+    """Per-bank bytes of the (rows, HIDDEN) bf16 ROW_MAJOR output if it goes to L1, else 0."""
+    if out_memory.buffer_type != ttnn.BufferType.L1:
+        return 0
+    _, num_banks, _ = _l1_view(device)
+    return _div_up(rows, num_banks) * HIDDEN * 2
+
+
+def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, out_in_dram=False):
     """Unless out_in_dram, the fewest waves (<= ONE_PASS_MAX_ROWS rows per core), then the largest
     k_block_tiles >= K_BLOCK_ONE_PASS_MIN, that fit budget_bytes; failing that the largest k_block_tiles (divisor of
     96, <= K_BLOCK_MAX), then the fewest waves."""
@@ -270,8 +291,8 @@ def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes=CB
             <= budget_bytes
         ):
             return Blocking(tensor_row_tiles, num_waves, k_block_tiles, core_row_tiles_max)
-    raise RuntimeError(
-        f"moe_down_proj: no (num_waves <= {MAX_WAVES}, k_block_tiles) fits {budget_bytes} B of CBs "
+    raise UnsupportedAxisValue(
+        f"moe_down_proj: no (num_waves <= {MAX_WAVES}, k_block_tiles) fits the {budget_bytes} B of L1 free for CBs "
         f"for {tensor_row_tiles} tile rows on the {layout.name} layout"
     )
 
@@ -297,9 +318,8 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     tensor_row_tiles = list(input_tensor.shape)[-2] // TILE
     counts_page_bytes = expert_counts.buffer_page_size()
     layout = select_layout(grid, tensor_row_tiles, layout_override)
-    x_in_dram = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
     out_in_dram = output.memory_config().buffer_type == ttnn.BufferType.DRAM
-    budget_bytes = cb_budget_bytes(grid.x * grid.y, x_in_dram, out_in_dram)
+    budget_bytes = cb_budget_bytes(device)
     blocking = select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, out_in_dram)
     core_n_tiles = layout.core_n_tiles
     in_tile = ttnn.tile_size(ttnn.bfloat8_b)
