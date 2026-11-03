@@ -7,8 +7,8 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
-// This kernel reconfigs ~30x; inlining the LLK Src zero-flag DEFAULT configurator at each site pushes
-// the program over the kernel-config buffer. Force it out-of-line here.
+// The LLK Src zero-flag DEFAULT configurator is reached from many reconfig sites: outlined to fit the kernel config
+// buffer.
 #define LLK_ZEROFLAG_OUTLINE 1
 
 #include "api/compute/compute_kernel_api.h"
@@ -111,6 +111,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
+    // PACK_DONE capacity 15: the resident step posts one token per S5 batch.
+    init_sdpa_streaming_semaphores<15>();
 
     // The identity scale stays fronted for the whole op.
     CircularBuffer(cb_identity_scale_in).wait_front(1);
@@ -164,8 +166,7 @@ void kernel_main() {
             const bool ring_iter_needs_global_n_mask =
                 global_n_is_within_ring_iter && (global_n_padded_tiles_iter > 0 || global_n_partial_col > 0);
             const uint32_t global_n_padded_tiles = ring_iter_needs_global_n_mask ? global_n_padded_tiles_iter : 0;
-            // Local padded tail of the shard.
-            const bool local_n_needs_masking = local_n_has_padding;
+            // Local padded tail of the shard (masked whenever local_n_has_padding).
             const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
 
             sdpa_ring_resident<
@@ -218,7 +219,6 @@ void kernel_main() {
                 num_local_k_chunks,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
-                local_n_needs_masking,
                 global_n_mask_chunk_id,
                 local_n_mask_chunk_id,
                 global_n_padded_tiles,

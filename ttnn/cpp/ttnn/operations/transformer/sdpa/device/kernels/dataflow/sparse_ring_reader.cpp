@@ -131,9 +131,6 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t head_sender_semaphore_id = HeadChainArgs::sender_semaphore_id;
     [[maybe_unused]] constexpr uint32_t head_receiver_semaphore_id = HeadChainArgs::receiver_semaphore_id;
     [[maybe_unused]] constexpr uint32_t head_valid_semaphore_id = HeadChainArgs::valid_semaphore_id;
-    constexpr bool head_mcast_enabled = HeadChainArgs::mcast_enabled;
-    constexpr bool batch_mcast_enabled = BatchChainArgs::mcast_enabled;
-    constexpr bool gqa_mcast_enabled = GqaChainArgs::mcast_enabled;
 
     constexpr uint32_t cb_arg_offset =
         chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count + GqaChainArgs::arg_count;
@@ -161,7 +158,7 @@ void kernel_main() {
     constexpr uint32_t mask_row_bytes = get_named_compile_time_arg_val("mask_row_bytes");
     constexpr uint32_t cb_sparse_plan = get_named_compile_time_arg_val("cb_sparse_plan");
     constexpr uint32_t cb_pooled_bias = get_named_compile_time_arg_val("cb_pooled_bias");
-    // The pooled route (Sol-Attn's correction for the dropped blocks): pooled K/V entries and their column bias on
+    // The pooled route (the correction for the dropped blocks): pooled K/V entries and their column bias on
     // each pass's first active ring iteration. Off: kept blocks only, the pooled accessors are null and unused.
     constexpr bool pooled_route = get_named_compile_time_arg_val("pooled_route") == 1;
     // Words of per-shard kept-block bits in every plan record (block-form mask).
@@ -200,7 +197,6 @@ void kernel_main() {
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
-    constexpr uint32_t v_cb_entry_tiles = v_chunk_tiles;
 
     Noc noc;
 
@@ -313,36 +309,11 @@ void kernel_main() {
     // every pass, so the totals stay equal across passes.
     [[maybe_unused]] uint32_t res_group_pieces = 0;
 
-    /**
-     * Iterate over ring indices.
-     * On the first iteration, read from local K, V.
-     * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
-     */
     const uint32_t ring_index =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     // The ring order before any iteration, replayed by the passes after the first.
     const auto ring_seq_start = fused_op_receiver.seq;
-    auto arrival_preview = fused_op_receiver.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
-        ring_size,
-        kv_local_padded_Nt,
-        logical_nt,
-        active_ring_iter_mask,
-        kv_region_Nt,
-        Sk_chunk_t,
-        /*has_sliding_window=*/false,
-        [&] {
-            return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
-        });
-    const uint32_t source_group_size = packed_schedule.source_group_size;
-    // Grouped K/V sources are statically off (GROUPED_KV_SOURCE_COUNT == 1, asserted above); the constexpr guard lets
-    // the compiler drop the packed branches, as the dense reader does.
-    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
-    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
-    const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
         // This pass's blocks: the core's [q_pass, q_pass + 1) share of [global_q_start, global_q_end).
         const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
@@ -350,30 +321,8 @@ void kernel_main() {
         auto ring_seq_replay = ring_seq_start;
         q_pushed = false;
         pooled_pending = true;
-        for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
-            uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
-            ring_joint::PackedKVSourceReadiness packed_readiness;
-            if (packed_sources) {
-                // Planning identities must not wait for every member. Compute and
-                // writer also derive this order without gather waits; this reader
-                // alone gates access to the corresponding gathered source data.
-                auto preview = fused_op_receiver.seq;
-                for (uint32_t source = 0; source < source_group_size; ++source) {
-                    packed_source_ids[source] =
-                        ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                            preview.get_next_ring_id([](uint32_t, uint32_t) {}),
-                            mesh_rows,
-                            mesh_cols,
-                            snake_orientation);
-                }
-            }
-            const auto wait_packed_source = [&](uint32_t source) {
-                const uint32_t ready_id =
-                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-                ASSERT(ready_id == packed_source_ids[source]);
-            };
-            const bool ring_iter_is_active = packed_sources || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            const bool ring_iter_is_active = ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
             const uint32_t ring_id = [&]() -> uint32_t {
                 if (q_pass > 0) {
                     // Every shard arrived (and was read) in the first pass: replay the ring order without waits.
@@ -383,13 +332,8 @@ void kernel_main() {
                         mesh_cols,
                         snake_orientation);
                 }
-                return packed_sources
-                           ? packed_source_ids[0]
-                           : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                                 fused_op_receiver.get_next_ring_id_and_sync(),
-                                 mesh_rows,
-                                 mesh_cols,
-                                 snake_orientation);
+                return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
             }();
             // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
             // still advances above so reader stays aligned with compute, writer, and all-gather.
@@ -398,18 +342,14 @@ void kernel_main() {
             }
 
             const uint32_t do_pooled = (pooled_route && pooled_pending) ? 1u : 0u;
-            // One pass of each K/V piece per ring iteration, applied by compute to every resident Q chunk
-            // (sdpa_ring_resident). This reader:
-            //   1. on the pass's first active iteration reads the pass's Q chunks into cb_q_in, once for the pass;
-            //   2. per head the core's chunks fall in: the piece union of the head group, then one plan record per
-            //      resident chunk [this shard's kept-block words, union piece bits lo, hi, do_pooled]; a piece is kept
-            //      by a chunk when the chunk keeps any block of it, and compute steps only on those blocks;
-            //   3. streams the shard's pieces once each, heads interleaved per k in head order, skipping a piece no
-            //      member of the head group needs (compute mirrors both rules);
-            //   4. on the pass's first active iteration the pooled K/V chunks once per head, then one bias row per
-            //   resident
-            //      chunk of that head -- K and V before the biases, so compute's first step on the entry never waits
-            //      for V behind a bias row the reader could not push yet.
+            // Per ring iteration:
+            //   1. on the pass's first active iteration, the pass's Q chunks into cb_q_in;
+            //   2. one plan record per resident chunk [this shard's kept-block words, head-group piece union lo, hi,
+            //      do_pooled]; a chunk keeps a piece when it keeps any block of it;
+            //   3. the shard's pieces once each, heads interleaved per k, skipping a piece no head-group member keeps
+            //      (compute mirrors both rules);
+            //   4. on the pass's first active iteration, the pooled K/V chunks once per head, then one bias row per
+            //      resident chunk of that head (K and V first, so compute never waits for V behind a bias row).
             constexpr uint32_t kResMax = 32;
             const uint32_t n_res = pass_q_end - pass_q_start;
             ASSERT(n_res <= resident_slots);
@@ -444,8 +384,8 @@ void kernel_main() {
                 }
                 q_pushed = true;
             }
-            // 2. Kept bits and plans. The plan page's scratch (past the 64-byte header) holds one chunk row at a time:
-            //    the whole block-form row (n_blocks_pad words, every shard), which the bias generator needs too.
+            // 2. Kept bits and plans. The plan page's scratch (past its 64-byte header) holds one mask read at a
+            //    time: a chunk's shard slice here, its whole row (n_blocks_pad words) for the pooled bias.
             CircularBuffer cb_plan(cb_sparse_plan);
             cb_plan.reserve_back(1);
             uint32_t scratch = cb_plan.get_write_ptr() + 64;
@@ -458,8 +398,7 @@ void kernel_main() {
                     {});
                 noc.async_read_barrier();
             };
-            // This shard's slice of a row (nb_pad words from block ring_id * nb_pad) into the scratch: all the bit
-            // extraction needs, and 8x less than the whole row for every member row on the chain's critical path.
+            // This shard's slice of a row (nb_pad words from block ring_id * nb_pad) into the scratch.
             const auto read_shard_slice = [&](uint32_t nq, uint32_t qc) {
                 noc.async_read(
                     mask_reader,
@@ -498,6 +437,7 @@ void kernel_main() {
                 }
             };
             // Piece k is kept when any of its blocks is: the streaming / chain-union granularity.
+            static_assert(num_local_k_chunks <= 64, "piece bits are two words");
             const auto piece_bits = [&](const uint32_t* words, uint32_t& lo, uint32_t& hi) {
                 lo = 0;
                 hi = 0;
@@ -516,40 +456,28 @@ void kernel_main() {
                     }
                 }
             };
-            const auto row_kept_bits = [&](uint32_t& lo, uint32_t& hi) {
-                uint32_t words[kBlockWords];
-                row_block_bits(words);
-                piece_bits(words, lo, hi);
-            };
             uint32_t res_lo[kResMax];
             uint32_t res_hi[kResMax];
             uint32_t seg_ulo[kResMax];
             uint32_t seg_uhi[kResMax];
-            // One-page plan (plan_rec_base != 0): every chunk's record [kept-block words][union lo, hi]
-            // [do_pooled] in the one plan page, from word rec_base (past the shard slice the scratch reads), pushed
-            // once per iteration. The per-chunk pages made the reader wait for compute to pop each one, so the next
-            // iteration's plan could not go out before compute had finished this iteration's pieces.
+            // One-page plan (plan_rec_base != 0): every chunk's record [kept-block words][union lo, hi][do_pooled]
+            // from word plan_rec_base (past the shard slice in the scratch), pushed once per iteration.
             constexpr uint32_t kPlanRec = kBlockWords + 3;
             [[maybe_unused]] const auto plan_rec = [&](uint32_t i) {
                 return CoreLocalMem<volatile uint32_t>(
                     cb_plan.get_write_ptr() + (plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
             };
-            {
-                for (uint32_t i = 0; i < n_res; ++i) {
-                    read_shard_slice(res_nq[i], res_qc[i]);
-                    if constexpr (plan_rec_base != 0) {
-                        // One read per chunk: the block words go straight into the chunk's record.
-                        uint32_t words[kBlockWords];
-                        row_block_bits(words);
-                        auto rec = plan_rec(i);
-                        for (uint32_t w = 0; w < kBlockWords; ++w) {
-                            rec[w] = words[w];
-                        }
-                        piece_bits(words, res_lo[i], res_hi[i]);
-                    } else {
-                        row_kept_bits(res_lo[i], res_hi[i]);
+            for (uint32_t i = 0; i < n_res; ++i) {
+                read_shard_slice(res_nq[i], res_qc[i]);
+                uint32_t words[kBlockWords];
+                row_block_bits(words);
+                if constexpr (plan_rec_base != 0) {
+                    auto rec = plan_rec(i);
+                    for (uint32_t w = 0; w < kBlockWords; ++w) {
+                        rec[w] = words[w];
                     }
                 }
+                piece_bits(words, res_lo[i], res_hi[i]);
             }
             // Head segments and their chain-wide unions. The chain members cover the head this core participates
             // in; a segment of another head is a non-participant there (it reads its own K/V), so union = own.
@@ -563,11 +491,9 @@ void kernel_main() {
                     ++i1;
                 }
                 if (group_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
-                    // Chain / group members stream every piece that holds a live block of this shard: a superset of the
-                    // members' union that needs no mask reads (the union read every member's row per ring iteration,
-                    // ~200 us while compute idled, and at these densities it is nearly every piece anyway). The same on
-                    // every member (it depends on the shard only) and inside every live piece, so compute agrees; it
-                    // skips a piece it keeps no block of.
+                    // Chain / group members stream every piece holding a live block of this shard: a superset of the
+                    // members' union that needs no mask reads and is the same on every member. Compute skips a piece
+                    // it keeps no block of.
                     uint32_t words[kBlockWords];
                     for (uint32_t w = 0; w < kBlockWords; ++w) {
                         words[w] = live_bits[w];
@@ -594,7 +520,7 @@ void kernel_main() {
                         cb_plan.reserve_back(1);  // one page: waits for compute to pop the previous plan
                         scratch = cb_plan.get_write_ptr() + 64;
                     }
-                    // The chunk's own block bits, from its slice again (the scratch held the members' since).
+                    // The chunk's own block bits, from its slice again (the scratch holds the last chunk's).
                     read_shard_slice(res_nq[i], res_qc[i]);
                     uint32_t words[kBlockWords];
                     row_block_bits(words);
@@ -615,37 +541,25 @@ void kernel_main() {
                 logical_nt > source_start_tile ? std::min(logical_nt - source_start_tile, kv_local_padded_Nt) : 0;
             const uint32_t end_seq_tile =
                 source_is_local ? source_valid_kv_tiles : source_start_tile + source_valid_kv_tiles;
-            // Chain overlap. The chain protocol allows one outstanding transfer per LINK: a member signals
-            // "ready", the upstream writes and flags valid. In MHA the K and V transfers of a piece go over the
-            // same link (k_chain and v_chain are the same head_chain, one semaphore set), so the link's handshakes
-            // form one sequence: K(p), V(p), K(p+1), ... Signalling each only when the previous forward was done
-            // made the chain a bucket brigade, every hop idle while its neighbours moved: a profile measured
-            // 25-28 us per piece against ~13 us for a core fetching from DRAM on its own. Now a member signals the
-            // link's NEXT handshake before forwarding the current chunk, whenever that chunk's page is already
-            // free: V(p)'s ready before forwarding K(p), K(p+1)'s ready before forwarding V(p). The upstream's
-            // write then overlaps this core's forward, and the link never has more than one transfer outstanding
-            // (the next signal always follows the wait for the previous data). An armed K page carries to the
-            // next stream_piece call; nothing is armed after the iteration's last piece (the pooled fetches
-            // reserve pages themselves). Fetchers (injectors, standalone two-head cores) signal
-            // nothing and only gain the early reserve.
+            // K and V share one chain link. Signal the link's next handshake (V(p), then K(p+1)) before forwarding
+            // the current chunk when its page is free, so the upstream write overlaps this forward; at most one
+            // transfer is outstanding per link. An armed K page carries to the next piece, never past the last.
             bool k_armed = false;
             uint32_t k_armed_addr = 0;
             const auto stream_piece = [&](uint32_t nb, uint32_t nq, uint32_t k, bool has_next) {
                 const uint32_t nk = nq / q_heads_per_k;
                 const uint32_t nv = nq / q_heads_per_v;
-                const uint32_t src_batch = nb;
                 const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
-                const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
-                // Chain scope keys: the query head for MHA chains, the KV head for grouped ones (as the dense loop).
+                const Slice k_slice(nb, nk, row0, row0 + Sk_chunk_t, 0, DHt);
+                // Chain scope keys: the query head for MHA chains, the KV head for grouped ones.
                 const uint32_t k_head = gqa_grouped_kv ? nk : nq;
                 const bool k_rx = k_chain.should_receive(k_head);
                 const bool v_rx = v_chain.should_receive(nv);
                 CircularBuffer cb_k(cb_k_in);
                 uint32_t k_addr;
                 if (k_armed) {
-                    // Armed pages are only created for chain-received pieces, and a chain member receives every
-                    // piece of its stream (cores whose chunks span two heads are kept off the chains), so an armed
-                    // page always meets a chain piece: its ready signal has already been sent.
+                    // Only chain-received pieces arm a page, and a chain member receives every piece of its stream
+                    // (cores whose chunks span two heads are kept off the chains): the ready signal is already sent.
                     ASSERT(k_rx);
                     k_addr = k_armed_addr;
                     k_armed = false;
@@ -666,14 +580,13 @@ void kernel_main() {
                 // Push before the forward: the forward only reads the page, its NoC write is flushed inside
                 // forward(), and the page is not reused before piece p+2's reserve.
                 cb_k.push_back(k_chunk_tiles);
-                // The link's next handshake is V(p)'s: arm it (reserve V's page, signal ready) before forwarding
-                // K(p) when the page is free now; otherwise reserve it after the forward, as before.
-                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
+                // Arm V(p) (reserve its page, signal ready) before forwarding K(p) when the page is free.
+                const Slice v_slice(nb, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
                 CircularBuffer cb_v(cb_v_in);
                 uint32_t v_addr = 0;
                 bool v_reserved = false;
-                if (v_rx && cb_v.pages_reservable_at_back(v_cb_entry_tiles)) {
-                    cb_v.reserve_back(v_cb_entry_tiles);
+                if (v_rx && cb_v.pages_reservable_at_back(v_chunk_tiles)) {
+                    cb_v.reserve_back(v_chunk_tiles);
                     v_addr = cb_v.get_write_ptr();
                     v_reserved = true;
                     v_chain.signal_ready(noc);
@@ -682,7 +595,7 @@ void kernel_main() {
                     k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 if (!v_reserved) {
-                    cb_v.reserve_back(v_cb_entry_tiles);
+                    cb_v.reserve_back(v_chunk_tiles);
                     v_addr = cb_v.get_write_ptr();
                     if (v_rx) {
                         v_chain.signal_ready(noc);
@@ -695,9 +608,8 @@ void kernel_main() {
                 } else {
                     fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
                 }
-                cb_v.push_back(v_cb_entry_tiles);
-                // The link's next handshake is K(p+1)'s: arm it before forwarding V(p) when there is a next piece
-                // and K's page is free now. The armed page is consumed by the next stream_piece call.
+                cb_v.push_back(v_chunk_tiles);
+                // Arm K(p+1) before forwarding V(p) when there is a next piece and its page is free.
                 if (k_rx && has_next && cb_k.pages_reservable_at_back(k_chunk_tiles)) {
                     cb_k.reserve_back(k_chunk_tiles);
                     k_armed_addr = cb_k.get_write_ptr();
@@ -740,22 +652,17 @@ void kernel_main() {
                 }
             };
             uint32_t n_pieces = 0;  // pieces streamed this iteration (the first pass counts them)
-            // Group delivery. Arguments (after the chain members): role (0 = not in a group: reads its own
-            // K/V; 1 = producer; 2 = consumer), producer NoC x, y, receiver count, rectangle count, then per
-            // rectangle (x_start, y_start, x_end, y_end, cores), producer only. Every member pushes the same page
-            // sequence into cb_k_in / cb_v_in (same pieces, same pooled pages), so
-            // the producer's write pointer for a piece is every consumer's page for it.
-            //   consumer: reserve the piece's K and V pages, credit the producer (+1), wait until the delivered
-            //     count reaches the piece, push. At most one credit is outstanding (the next piece's), and never
-            //     past the iteration's last piece (the pooled pages after it are this core's own).
-            //   producer: reserve its own pages, read K and V from DRAM, push them for its compute, wait for
-            //     receivers x (piece + 1) credits, multicast K and V to every rectangle, then the new count.
-            // The credits share one counter, so the sum says every consumer has freed its page only because no
-            // consumer can credit two pieces ahead: when the producer waits for piece p, every consumer has
-            // received at most p - 1 and so credited at most p, and the sum reaches receivers x p only if each one
-            // has. With a deeper lookahead, a fast consumer's extra credits would stand in for a slow one's and the
-            // multicast would overwrite a page the slow core's compute has not popped. The CB still holds
-            // kv_cb_pages pieces: the lookahead bounds only the producer's lead over the slowest receipt.
+            // Group delivery args (after the chain members): role (0 = none, reads its own K/V; 1 = producer;
+            // 2 = consumer), producer NoC x, y, receiver count, rectangle count, then per rectangle (x_start,
+            // y_start, x_end, y_end, cores), producer only. Every member pushes the same page sequence, so the
+            // producer's page for a piece is every consumer's.
+            //   consumer: reserve K/V pages, credit the producer (+1), wait for the delivered count, push; never
+            //     credit past the iteration's last piece (the pooled pages after it are this core's own).
+            //   producer: read K/V from DRAM, push, wait for receivers x (pieces so far) credits, multicast K, V,
+            //     then the new count.
+            // The credit lookahead must stay one piece: then the shared credit sum reaches receivers x p only if
+            // every consumer has credited p; a deeper lookahead lets a fast consumer's credits stand in for a slow
+            // one's and the multicast overwrites a page the slow core has not popped.
             [[maybe_unused]] const uint32_t g_base = group_members_base + 2 * group_n_members;
             [[maybe_unused]] const uint32_t g_role = group_mcast ? get_arg_val<uint32_t>(g_base) : 0;
             [[maybe_unused]] uint32_t g_granted = 0;  // pieces credited this iteration
@@ -767,7 +674,7 @@ void kernel_main() {
                 CircularBuffer cb_k(cb_k_in);
                 CircularBuffer cb_v(cb_v_in);
                 const uint32_t k_need = k_chunk_tiles * (g_ahead + 1);
-                const uint32_t v_need = v_cb_entry_tiles * (g_ahead + 1);
+                const uint32_t v_need = v_chunk_tiles * (g_ahead + 1);
                 if (!blocking &&
                     (g_ahead > 0 || !cb_k.pages_reservable_at_back(k_need) || !cb_v.pages_reservable_at_back(v_need))) {
                     return false;
@@ -795,7 +702,7 @@ void kernel_main() {
                         Semaphore<>(head_receiver_semaphore_id).wait_min(res_group_pieces + 1);
                     }
                     cb_k.push_back(k_chunk_tiles);
-                    cb_v.push_back(v_cb_entry_tiles);
+                    cb_v.push_back(v_chunk_tiles);
                     --g_ahead;
                     ++res_group_pieces;
                     g_grant_ahead();
@@ -804,12 +711,11 @@ void kernel_main() {
                 // Producer.
                 const uint32_t nk = nq / q_heads_per_k;
                 const uint32_t nv = nq / q_heads_per_v;
-                const uint32_t src_batch = nb;
                 const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
-                const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
-                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
+                const Slice k_slice(nb, nk, row0, row0 + Sk_chunk_t, 0, DHt);
+                const Slice v_slice(nb, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
                 cb_k.reserve_back(k_chunk_tiles);
-                cb_v.reserve_back(v_cb_entry_tiles);
+                cb_v.reserve_back(v_chunk_tiles);
                 const uint32_t k_addr = cb_k.get_write_ptr();
                 const uint32_t v_addr = cb_v.get_write_ptr();
                 {
@@ -824,7 +730,7 @@ void kernel_main() {
                 // Push first: the multicast only reads the pages, and they are not reserved again before this
                 // core's compute has popped them and the writes below are flushed.
                 cb_k.push_back(k_chunk_tiles);
-                cb_v.push_back(v_cb_entry_tiles);
+                cb_v.push_back(v_chunk_tiles);
                 ++res_group_pieces;
                 const uint32_t n_recv = get_arg_val<uint32_t>(g_base + 3);
                 const uint32_t n_rects = get_arg_val<uint32_t>(g_base + 4);
@@ -853,7 +759,7 @@ void kernel_main() {
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(v_addr),
                             MulticastEndpoint{},
-                            v_cb_entry_tiles * v_tile_bytes,
+                            v_chunk_tiles * v_tile_bytes,
                             n_dests,
                             {},
                             {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = v_addr},
@@ -875,6 +781,8 @@ void kernel_main() {
                         }
                     }
                     for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+                        // Compute uses kv_chunk_starts_before_logical_end<false, false, ...>: keep the two equal.
+                        static_assert(!chunked_enabled, "the sparse op is not chunked");
                         if (!chunked_kv_chunk_is_live<
                                 false,  // no KV-pad rotation
                                 chunked_enabled,
@@ -953,7 +861,7 @@ void kernel_main() {
                             noc.write_zeros_l1_barrier();
                             cb_k.push_back(k_chunk_tiles);
                             CircularBuffer cb_v(cb_v_in);
-                            cb_v.reserve_back(v_cb_entry_tiles);
+                            cb_v.reserve_back(v_chunk_tiles);
                             pooled_v_generator.issue_reads(
                                 Slice(0, nq, row0, row0 + tiles, 0, vDHt),
                                 pooled_rows_t,
@@ -964,7 +872,7 @@ void kernel_main() {
                                 0);
                             noc.async_read_barrier();
                             noc.write_zeros_l1_barrier();
-                            cb_v.push_back(v_cb_entry_tiles);
+                            cb_v.push_back(v_chunk_tiles);
                             for (uint32_t i = i0; i < i1; ++i) {
                                 // The chunk's own row back into the plan scratch: compute reads only the header
                                 // words of a plan page, and every page has been popped by now.
@@ -990,11 +898,6 @@ void kernel_main() {
             }
 
             pooled_pending = false;
-            if (packed_sources) {
-                // Cores without Q work still consume the group in sequencer order,
-                // so the next group and subsequent dispatches start at the right source.
-                packed_readiness.drain(source_group_size, wait_packed_source);
-            }
         }
     }
 }

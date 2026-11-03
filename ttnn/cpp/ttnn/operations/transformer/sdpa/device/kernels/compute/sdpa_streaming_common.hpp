@@ -203,9 +203,8 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
     return use_blocked_pack_width;
 }
 
-// kPackDoneMax: PACK_DONE's counter capacity. A SEMPOST at the maximum is lost (t6_semaphore_post does not stall
-// on it), so it must cover the most tokens a path ever has outstanding: 2 for the streaming paths, 15 (the 4-bit
-// field's limit) for the resident step, whose interleaved exp / P@V stages post one token per S5 batch.
+// kPackDoneMax: PACK_DONE's counter capacity. A post at the maximum is lost, so callers size it to the most tokens
+// they keep outstanding.
 template <uint32_t kPackDoneMax = 2>
 ALWI void init_sdpa_streaming_semaphores() {
     static_assert(kPackDoneMax >= 1 && kPackDoneMax <= 15, "SEMINIT's max value is a 4-bit field");

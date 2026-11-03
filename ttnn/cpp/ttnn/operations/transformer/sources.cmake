@@ -40,8 +40,8 @@ set(TTNN_OP_TRANSFORMER_SRCS
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_device_operation.cpp
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_program_factory.cpp
     fused_recurrent_gated_delta_rule/fused_recurrent_gated_delta_rule.cpp
-    # Appended last so the unity-build batches of the files above stay as on main (inserting earlier shifts the
-    # batch boundaries and puts the gated-delta-rule sources, which share file-scope names, into one batch).
+    # Keep last: inserting earlier shifts the unity-build batches and puts the gated-delta-rule sources, which share
+    # file-scope names, into one batch.
     sdpa/sparse_ring_sdpa.cpp
     sdpa/device/sparse_ring_sdpa_device_operation.cpp
     sdpa/device/sparse_ring_sdpa_program_factory.cpp

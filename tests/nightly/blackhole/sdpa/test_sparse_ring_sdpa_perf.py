@@ -4,20 +4,9 @@
 
 """Op-level timing of the block-sparse ring SDPA (`ttnn.transformer.sparse_ring_sdpa`) on Blackhole.
 
-Each case times one op as a captured trace: a compile call, one capture, then REPS replays, each replay timed with
-`ttnn.synchronize_device` (device time plus one synchronize, no per-call host dispatch). Modes:
-
-  dense     the dense `ring_joint_scaled_dot_product_attention` at its measured chunks
-  sparse    the sparse op with pooled K / V (every non-kept block one pooled entry)
-  kept      the sparse op without pooled K / V (kept blocks only)
-  gather    the fused ring K / V all-gather alone (`ring_attention_all_gather_async`): the communication floor
-
-Shapes are the MiniMax-H3 per-device rows at 5 / 10 / 15 s, 14 heads per device, D = 128, on the 4x8 Galaxy
-(TP=4 heads x SP=8 ring) or a single ring. Masks are synthetic (`make_mask`) at block densities 0.20 / 0.07 / 0.05,
-the measured 5 s densities at tau 1 / 2 / 3. The mask family (`test_mask_family_perf`) times the production k_chunk
-over mask structures (`make_structured_mask`: random, band, clustered, uneven) at densities 0.05 to 0.35, so a change
-is judged across mask shapes rather than on one model's masks. Every case logs one line and appends one JSON record to
-`<basetemp>/sparse_ring_sdpa_perf*/results.jsonl` (pass `--basetemp` to choose the directory). Skipped on CI.
+Each case times REPS replays of a captured trace (each followed by a synchronize) of the dense ring op, the sparse op
+with or without pooled K / V, or the K / V all-gather alone, on synthetic and frame masks. Every case appends one JSON
+record to `<basetemp>/sparse_ring_sdpa_perf*/results.jsonl`. Skipped on CI.
 """
 
 import json
@@ -55,13 +44,12 @@ pytestmark = pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performa
 REPS = 6
 TRACE_REGION_SIZE = 200_000_000
 WORKING_POINTS = {4736: "5s", 9184: "10s", 13664: "15s"}
-DENSE_CHUNKS = {4736: (320, 384), 9184: (256, 512), 13664: (256, 512)}  # measured (q_chunk, k_chunk)
+DENSE_CHUNKS = {4736: (320, 384), 9184: (256, 512), 13664: (256, 512)}  # dense op (q_chunk, k_chunk)
 DENSITIES = [0.20, 0.07, 0.05]  # 5 s block densities at tau 1 / 2 / 3
 K_CHUNKS = [256, 384, 512]
 FAMILY_DENSITIES = [0.05, 0.1, 0.2, 0.35]
 FAMILY_K_CHUNK = 256  # production at 5 / 10 / 15 s
-# The closed frame-sparse ring_joint path's video shapes (sosborne/sparse-ring-sdpa): 21 frames padded to 24, rows per
-# device on SP=8 for 3840 / 1920 tokens per frame, the dense op at that branch's chunks (320, 384).
+# Video frame shapes: 21 frames padded to 24, rows per device on SP=8 for 3840 / 1920 tokens per frame.
 FRAME_POINTS = {11520: ("720p", 3840), 5760: ("480p", 1920)}
 FRAMES_REAL, FRAMES_PADDED = 21, 24
 DENSE_CHUNKS.update({rows: (320, 384) for rows in FRAME_POINTS})
@@ -112,8 +100,7 @@ class Bench:
 
     def __init__(self, rt):
         self.rt, self.key, self.case, self.tensors, self.baselines = rt, None, None, (), {}
-        # The MiniMax-H3 attention module's SDPA compute config (attention_minimax_h3.py), not the dense ring test's,
-        # which also turns packer L1 accumulation off: timings should match the model's.
+        # The MiniMax-H3 attention module's SDPA compute config, so timings match the model's.
         self.ckc = ttnn.init_device_compute_kernel_config(
             rt.mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
         )
@@ -127,9 +114,9 @@ class Bench:
             case = Case(self.rt, geo)
             shape = (1, case.H, case.S * rows, D)
             g = torch.Generator().manual_seed(rows)
-            self.qkv = [torch.randn(shape, generator=g, dtype=torch.bfloat16) for _ in range(3)]
-            self.tensors = tuple(case._upload(x, case.seq_dims) for x in self.qkv)
-            self.pooled = tuple(case._upload(pool(x, geo, case.S), case.dims(None, 1)) for x in self.qkv[1:])
+            qkv = [torch.randn(shape, generator=g, dtype=torch.bfloat16) for _ in range(3)]
+            self.tensors = tuple(case._upload(x, case.seq_dims) for x in qkv)
+            self.pooled = tuple(case._upload(pool(x, geo, case.S), case.dims(None, 1)) for x in qkv[1:])
             self.key, self.case = (rows, logical_n), case
         return self.case
 
@@ -137,7 +124,7 @@ class Bench:
         if self.case is not None:
             for t in (*self.tensors, *self.pooled, self.case.buf_k, self.case.buf_v):
                 ttnn.deallocate(t)
-        self.key, self.case, self.tensors, self.pooled, self.qkv = None, None, (), (), ()
+        self.key, self.case, self.tensors, self.pooled = None, None, (), ()
 
     def dense(self):
         rt, case = self.rt, self.case
@@ -260,6 +247,32 @@ def record(results_file, rows, mode, times, *, k_chunk=None, density=None, dense
     return rec
 
 
+def time_mask(bench, results_file, rows, make, k_chunk, pooled, structure="random", logical_n=None):
+    """Time the sparse op on the mask `make(case)` builds and record it against the shape's baselines."""
+    dense, gather = bench.baseline(rows, logical_n)
+    case = bench.shape(rows, logical_n)
+    mask = make(case)
+    block_density = _density(mask, case.geo, case.S)
+    t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    del mask
+    try:
+        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, k_chunk, pooled))
+    finally:
+        ttnn.deallocate(t_mask)
+    mode = "sparse" if pooled else "kept"
+    return record(
+        results_file,
+        rows,
+        mode,
+        times,
+        k_chunk=k_chunk,
+        density=round(block_density, 4),
+        dense=dense,
+        gather=gather,
+        structure=structure,
+    )
+
+
 @pytest.mark.parametrize("rows", list(WORKING_POINTS), ids=list(WORKING_POINTS.values()))
 def test_dense_and_gather_perf(bench, results_file, rows):
     """The two baselines: the dense op and the gather it overlaps."""
@@ -274,26 +287,11 @@ def test_dense_and_gather_perf(bench, results_file, rows):
 @pytest.mark.parametrize("rows", list(WORKING_POINTS), ids=list(WORKING_POINTS.values()))
 def test_sparse_ring_sdpa_perf(bench, results_file, rows, k_chunk, density, pooled):
     """The sparse op on a synthetic mask, against the dense op and the gather floor of the same shape."""
-    dense, gather = bench.baseline(rows)
-    case = bench.shape(rows)
-    mask = make_mask(case.geo, case.S, case.H, density=density, seed=rows)
-    block_density = _density(mask, case.geo, case.S)
-    t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    del mask
-    try:
-        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, k_chunk, pooled))
-    finally:
-        ttnn.deallocate(t_mask)
-    record(
-        results_file,
-        rows,
-        "sparse" if pooled else "kept",
-        times,
-        k_chunk=k_chunk,
-        density=round(block_density, 4),
-        dense=dense,
-        gather=gather,
-    )
+
+    def make(case):
+        return make_mask(case.geo, case.S, case.H, density=density, seed=rows)
+
+    time_mask(bench, results_file, rows, make, k_chunk, pooled)
 
 
 @pytest.mark.parametrize("density", FAMILY_DENSITIES, ids=[f"d{d}" for d in FAMILY_DENSITIES])
@@ -301,55 +299,22 @@ def test_sparse_ring_sdpa_perf(bench, results_file, rows, k_chunk, density, pool
 @pytest.mark.parametrize("rows", list(WORKING_POINTS), ids=list(WORKING_POINTS.values()))
 def test_mask_family_perf(bench, results_file, rows, structure, density):
     """The sparse op at the production k_chunk over the mask family: how its time depends on mask structure."""
-    dense, gather = bench.baseline(rows)
-    case = bench.shape(rows)
-    mask = make_structured_mask(case.geo, case.S, case.H, structure=structure, density=density, seed=rows)
-    block_density = _density(mask, case.geo, case.S)
-    t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    del mask
-    try:
-        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, FAMILY_K_CHUNK, True))
-    finally:
-        ttnn.deallocate(t_mask)
-    record(
-        results_file,
-        rows,
-        "sparse",
-        times,
-        k_chunk=FAMILY_K_CHUNK,
-        density=round(block_density, 4),
-        dense=dense,
-        gather=gather,
-        structure=structure,
-    )
+
+    def make(case):
+        return make_structured_mask(case.geo, case.S, case.H, structure=structure, density=density, seed=rows)
+
+    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, True, structure=structure)
 
 
 @pytest.mark.skipif(MESH_CONFIG.sp_size != 8, reason="the frame-sparse video shapes are per device on SP=8")
 @pytest.mark.parametrize("rows", list(FRAME_POINTS), ids=[name for name, _ in FRAME_POINTS.values()])
 def test_frame_mask_perf(bench, results_file, rows):
-    """The old frame-sparse video shapes (window 5 and the last frame, kept blocks only) against the dense op on the
-    same shape: the frame-sparse ring_joint path measured about 2.8x over dense at its mask density."""
+    """Video frame shapes (window 5 and the last frame, kept blocks only) against the dense op."""
     tokens_per_frame = FRAME_POINTS[rows][1]
-    logical_n = FRAMES_REAL * tokens_per_frame
-    dense, gather = bench.baseline(rows, logical_n)
-    case = bench.shape(rows, logical_n)
     allow = window_allow(FRAMES_REAL, FRAMES_PADDED, window=5, add_last_frame=True)
-    mask = frame_block_mask(allow, tokens_per_frame, case.geo, case.S, case.H)
-    block_density = _density(mask, case.geo, case.S)
-    t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    del mask
-    try:
-        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, FAMILY_K_CHUNK, False))
-    finally:
-        ttnn.deallocate(t_mask)
-    record(
-        results_file,
-        rows,
-        "kept",
-        times,
-        k_chunk=FAMILY_K_CHUNK,
-        density=round(block_density, 4),
-        dense=dense,
-        gather=gather,
-        structure="frames",
-    )
+
+    def make(case):
+        return frame_block_mask(allow, tokens_per_frame, case.geo, case.S, case.H)
+
+    logical_n = FRAMES_REAL * tokens_per_frame
+    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, False, structure="frames", logical_n=logical_n)

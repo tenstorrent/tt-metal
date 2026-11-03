@@ -862,7 +862,7 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"sparse_ring_sdpa", "ttnn.transformer.">(
         mod,
         R"doc(
-        Block-sparse ring attention with the ring all-gather of K/V fused, non-causal, no joint tokens.
+        Block-sparse ring attention with the ring all-gather of K/V fused, non-causal, no joint tokens, batch 1.
 
         Blocks are square, block_size (B) tokens. Per head and local B-row Q block, `block_mask` names the global
         B-token K/V blocks computed exactly, and nothing else is added to it. A Q block whose softmax has no entry at
@@ -893,13 +893,13 @@ void bind_sdpa(nb::module_& mod) {
                 piece size and must be a multiple of block_size.
             scale (float, optional): defaults to D to the power of -0.5.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
-            dim (int): all-gather dimension (2).
+            dim (int): all-gather dimension; must be the sequence dimension (2 or -2).
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): all-gather semaphores.
             num_links (int), cluster_axis (int), mesh_device (ttnn.MeshDevice), topology (ttnn.Topology),
             subdevice_id (optional), ccl_core_grid_offset (ttnn.CoreCoord), use_column_major_ccl (bool):
                 as ring_joint_scaled_dot_product_attention.
-            block_size (int): mask block size in tokens (square blocks). A compile-time parameter of the kernels;
-                only 64 is supported for now. nb_pad = round_up(ceil(N/ring_size / block_size), 32). Defaults to 64.
+            block_size (int): mask block size in tokens (square blocks). Only 64 is supported.
+                nb_pad = round_up(ceil(N/ring_size / block_size), 32). Defaults to 64.
             q_blocks_per_pass (int, optional): at most this many Q blocks per core per pass (1 to 32). Every core
                 keeps its Q blocks and their softmax state in L1; when they do not fit, each core's blocks are split
                 into the same number of passes and each pass replays the ring over the K/V gathered once. Defaults

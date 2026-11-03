@@ -17,7 +17,6 @@
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/debug/kernel_profiler.hpp"
 
 // BH benefits from blocked pack at width 4; WH keeps the threshold at 8 because
 // width-4 blocked-pack reconfiguration costs more than it saves there.
@@ -32,8 +31,7 @@ ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width
 
 // ============ Resident Q: in-place slot state, lazy running max, fused per-piece steps ============
 
-// Helpers of the per-piece step, outlined: each is reached from several sites on every TRISC, and the kernel
-// config buffer at 5 s has only a few KB of margin.
+// Helpers of the per-piece step, reached from several sites on every TRISC: outlined to fit the kernel config buffer.
 
 // Packs a DEST batch of units into the compact score scratch: unit u = member unit_g[u], score column unit_c0[u],
 // width unit_cw[u]; row r of member g is at off[g] + r * W[g]. Blocked (one call per row) when the unit is at least
@@ -114,9 +112,8 @@ static __attribute__((noinline, noclone)) void res_run_groups(
     }
 }
 
-// Per-step state of the compact step's DEST-batch issue, shared with its outlined flushes (res_s1_flush,
-// res_s5_flush): one copy of each flush body per TRISC instead of one per call site. The 5 s build sits within
-// a few KB of the kernel config buffer (inlined flushes overflowed it).
+// Per-step state of the compact step's DEST-batch issue, shared with its flushes (res_s1_flush, res_s5_flush),
+// which are outlined to fit the kernel config buffer.
 template <uint32_t kDst, uint32_t kMaxMembers>
 struct ResidentStepState {
     // The step's member tables (set once per step).
@@ -126,7 +123,6 @@ struct ResidentStepState {
     const uint8_t* n_runs = nullptr;
     const uint8_t* W = nullptr;
     const uint16_t* off = nullptr;
-    uint32_t n_slots = 0;
     uint32_t initialized_mask = 0;
     // The open DEST batch: units (member, first score column, width) and the tiles they occupy.
     uint8_t unit_g[kDst];
@@ -153,14 +149,7 @@ struct ResidentStepState {
 // slot's rows of cb_prev_out and L1-accumulated for an initialized slot. The matmul MOP is (re)issued when the
 // stride in effect differs, the pack MOP when the width in effect differs (pk_w is shared with the S5 packs).
 // Outlined: it is reached from the S5 flush sites of the interleaved S5/S6 loop.
-template <
-    uint32_t Sq_chunk_t,
-    uint32_t vDHt,
-    uint32_t pv_w,
-    uint32_t kMaxRuns,
-    uint32_t cb_qkt_im,
-    uint32_t cb_v_in,
-    uint32_t cb_prev_out>
+template <uint32_t Sq_chunk_t, uint32_t vDHt, uint32_t pv_w, uint32_t cb_qkt_im, uint32_t cb_v_in, uint32_t cb_prev_out>
 static __attribute__((noinline, noclone)) void res_pv_member(
     const uint32_t slot,
     const bool acc,
@@ -244,7 +233,6 @@ template <
     uint32_t kMaxRuns,
     uint32_t kDst,
     uint32_t kMaxMembers,
-    uint32_t v_entry_tiles,
     uint32_t cb_qkt_im,
     uint32_t cb_v_in,
     uint32_t cb_prev_out>
@@ -287,7 +275,7 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
         }
         st.init_cw = 0;
         const uint32_t slot = st.slots[g];
-        res_pv_member<Sq_chunk_t, vDHt, pv_w, kMaxRuns, cb_qkt_im, cb_v_in, cb_prev_out>(
+        res_pv_member<Sq_chunk_t, vDHt, pv_w, cb_qkt_im, cb_v_in, cb_prev_out>(
             slot,
             ((st.initialized_mask >> slot) & 1u) != 0,
             st.W[g],
@@ -304,8 +292,7 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
 // ---- Per-piece step ----
 /**
  * One K/V piece (or pooled entry) applied to a group of resident Q chunks ("members"), in place on their slots.
- * How the work is issued (per-tile matmul calls, per-tile address-programmed packs and per-stage round trips cost
- * ~1 us per score tile against the dense kernel's 0.28 us, so the step batches all three):
+ * The step batches matmul calls, packs and per-stage round trips:
  *  1. Compact score layout. Member g's scores occupy Sq_chunk_t rows of exactly W_g tiles (its kept width) at
  *     offset off[g] = sum of the earlier members' Sq_chunk_t x W; the row stride is W_g, not the piece width. A
  *     step can then hold every chunk of the head that keeps a block of the piece (the capacity is the scratch's
@@ -321,8 +308,9 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
  *  4. The exp stage and the P@V are interleaved per member (see S5 + S6 below): the P@V of the members
  *     finished in one S5 batch runs under the exp and packs of the next, with one PACK_DONE token per S5 batch.
  * The running max is lazy (S2-S4: the state is rescaled only when some row's max grows past a threshold), the row
- * sum is P x I (one partial sum per column), and the pooled entries add their column bias before the max. run_cols /
- * run_ws / n_runs are per member; a pooled entry is one run of its active width from column 0 with apply_col_bias.
+ * sum is P x I (one partial sum per column, collapsed at normalization), and the pooled entries add their column
+ * bias before the max. run_cols / run_ws / n_runs are per member; a pooled entry is one run of its active width from
+ * column 0 with apply_col_bias.
  */
 template <
     uint32_t Sq_chunk_t,
@@ -428,7 +416,6 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     st.n_runs = n_runs;
     st.W = W;
     st.off = off;
-    st.n_slots = n_slots;
     st.initialized_mask = initialized_mask;
     {
         uint32_t mm_cw = 0;
@@ -513,7 +500,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     // Lazy rescale. S2 computes every member's new row max (this piece merged with the stored max) into the
     // scratch. The step rescales (S3 alpha + S4) only when some initialized row's max grew by more than
     // kLazyThrRaw raw logit units; otherwise the stored max stays and S5 subtracts it, so the exp's input
-    // (score - stored max) * scale is <= 0.5: inside the approximate exp's safe range (see the function comment)
+    // (score - stored max) * scale is <= 0.5: inside the approximate exp's safe range
     // and with bf16 resolution <= 1/256 of the argument. A slot's first step (uninitialized) only copies its new
     // max into the slot. Either way S5 subtracts cb_max_in, after the S3 packs are drained.
     constexpr float kScale = __builtin_bit_cast(float, scale_fp32);
@@ -737,34 +724,16 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         }
     }  // S2-S4
 
-    // ---- S5 + S6, interleaved per member. S5: in-place exp of the scores, per member over its W_g columns
-    //      in units of <= max_cols_per_acq (the broadcast subtract on MATH, the exp and the packs on PACK). S6: P@V
-    //      per member (res_pv_member). The two stages load complementary threads (S5 is pack-thread bound, S6
-    //      math/unpack bound), so instead of draining S5 for every member before the first P@V, the P@V of the
-    //      members whose last S5 unit was packed in batch k is issued right after S5 batch k+1: with the half-sync
-    //      DEST, MATH runs those matmuls while PACK is still on the exp and packs of batch k+1, and PACK's output
-    //      packs of the P@V overlap the subtracts of the next S5 batch. Ordering: a P@V reads its member's exp'd
-    //      scores from L1, so PACK posts one PACK_DONE token after every S5 batch that holds some member's last
-    //      unit, and UNPACK takes one before the first P@V of that batch's members (posts and takes are both in
-    //      batch order, one per completion batch). A member's P@V follows its completion batch by one S5 batch, so
-    //      only a few tokens are ever outstanding; PACK_DONE's capacity in resident mode is 15
-    //      (init_sdpa_streaming_semaphores<15>), so a post never saturates the counter. The MOPs are re-issued on
-    //      every stage switch (the broadcast subtract and the matmul share the unpacker/math configuration), as is
-    //      the unpacker's srcA format when V is block float (a compile-time no-op otherwise). ----
+    // ---- S5 + S6, interleaved per member. S5: in-place exp of each member's scores (broadcast subtract on MATH, exp
+    //      and packs on PACK). S6: P@V per member (res_pv_member), issued one S5 batch after the batch holding the
+    //      member's last unit, so it overlaps the next batch's exp. PACK posts one PACK_DONE token per such batch and
+    //      UNPACK takes it before that batch's first P@V, so few tokens are outstanding (capacity 15). The MOPs and
+    //      the unpacker's srcA format are re-issued on every stage switch. ----
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
     CircularBuffer(cb_sum_identity).wait_front(1);
     {
-        constexpr auto s5_flush = res_s5_flush<
-            Sq_chunk_t,
-            vDHt,
-            pv_w,
-            kMaxRuns,
-            kDst,
-            kMaxMembers,
-            v_entry_tiles,
-            cb_qkt_im,
-            cb_v_in,
-            cb_prev_out>;
+        constexpr auto s5_flush =
+            res_s5_flush<Sq_chunk_t, vDHt, pv_w, kMaxRuns, kDst, kMaxMembers, cb_qkt_im, cb_v_in, cb_prev_out>;
         st.pk_w = 0;  // S2/S3 packed at width 1 through configure_single_tile_pack: unknown to the shared tracker
         for (uint32_t g = 0; g < n_slots; ++g) {
             const uint32_t w = W[g];
@@ -806,11 +775,9 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         s5_flush(st, true);
     }
 
-    // ---- S6b: the row sums P@I in batches of stat_slots_per_acq members (the matmul takes the member's row
-    //      stride W_g, re-issued when it changes): the slot keeps one partial sum per column, as the dense op's
-    //      column-tile sum, and normalize_row_streaming collapses the 32 columns. A single column (P@e0) put every key
-    //      of the row in one bf16 accumulator, whose rounding error grows with the keys per row (MiniMax-H3 10 s
-    //      keep-all: ~73k). Every S5 token has been taken by now, so all exp'd scores are in L1. ----
+    // ---- S6b: the row sums P@I in batches of stat_slots_per_acq members (matmul row stride W_g, re-issued when it
+    //      changes). One partial sum per column, collapsed at normalization, bounds the bf16 accumulation error on
+    //      long rows. Every S5 token has been taken by now, so all exp'd scores are in L1. ----
     sdpa_maybe_reconfig_data_format<cb_v_in, cb_sum_identity, cb_qkt_im, cb_qkt_im>();
     configure_single_tile_pack(cb_sum_in);
     {
@@ -936,7 +903,6 @@ void sdpa_ring_resident(
     const uint32_t num_local_k_chunks,
     const uint32_t logical_nt,
     const bool ring_iter_needs_global_n_mask,
-    const bool local_n_needs_masking,
     const uint32_t global_n_mask_chunk_id,
     const uint32_t local_n_mask_chunk_id,
     const uint32_t global_n_padded_tiles,
@@ -946,8 +912,6 @@ void sdpa_ring_resident(
     const bool is_last_ring_iter,
     const bool is_first_active_iter,
     [[maybe_unused]] const volatile uint8_t* block_counts) {
-    // PACK_DONE capacity 15: the compact step's interleaved S5/S6 posts one token per S5 batch (see the step).
-    init_sdpa_streaming_semaphores<15>();
     static_assert(resident_slots >= 1 && resident_slots <= 32, "resident state is tracked in a 32-bit mask");
     // The step reconfigures the unpacker/packer only around the Q@K^T and P@V matmuls (whose inputs may be block
     // float) and otherwise assumes every state, scratch and scale CB carries the intermediate format.
@@ -1014,6 +978,10 @@ void sdpa_ring_resident(
     ASSERT(get_local_cb_interface(cb_max_in).fifo_num_pages == kStatsCap);
     ASSERT(get_local_cb_interface(cb_sum_in).fifo_num_pages == kStatsCap);
     ASSERT(get_local_cb_interface(cb_prev_out).fifo_num_pages == kOutCap);
+    if constexpr (key_bias_tiles > 0) {
+        // The key-bias dummy-page wrap assumes the CB holds exactly key_bias_tiles pages.
+        ASSERT(get_local_cb_interface(cb_key_bias).fifo_num_pages == key_bias_tiles);
+    }
 #endif
 
     // The pass's chunks (global_q_start / global_q_end bound the current pass).
@@ -1022,9 +990,9 @@ void sdpa_ring_resident(
 
     // Chunk i's plan record: [kBW kept-block words][union lo, hi][do_pooled]. With one plan page per ring iteration
     // (plan_rec_base != 0) the records are read in place, from L1, for the whole iteration: the page is popped at the
-    // end of this call, and the plan CB holds two pages so the reader fills the next iteration's meanwhile. Copying
-    // them to the stack (kBW + 3 words per slot) overflowed the unpack and pack threads' stack, which shares 4 KB with
-    // their globals, at 14 slots. With a page per chunk (plan_rec_base == 0: a one-shard ring) each record is copied
+    // end of this call, and the plan CB holds two pages so the reader fills the next iteration's meanwhile. A stack
+    // copy (kBW + 3 words per slot) would overflow the unpack and pack threads' stack (4 KB shared with their
+    // globals). With a page per chunk (plan_rec_base == 0: a one-shard ring) each record is copied
     // and its page popped at once.
     constexpr uint32_t kRec = kBW + 3;
     constexpr bool kPlanInL1 = plan_rec_base != 0;
@@ -1120,9 +1088,6 @@ void sdpa_ring_resident(
                               const uint8_t* run_ws,
                               const uint8_t* n_runs,
                               const bool apply_col_bias) {
-        // The step's first wait, taken before the zone opens (it returns at once inside): RING_STEP then measures
-        // compute only, and a late K/V entry shows as a gap between steps instead of as step time.
-        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles * step_entries);
         sdpa_resident_piece_step_compact<
             Sq_chunk_t,
             Sk_chunk_t,
@@ -1196,7 +1161,7 @@ void sdpa_ring_resident(
             }
         }
         if constexpr (local_n_mask_enabled) {
-            if (local_n_needs_masking && k == local_n_mask_chunk_id) {
+            if (k == local_n_mask_chunk_id) {
                 return Sk_chunk_t - local_n_padded_tiles;
             }
         }
@@ -1352,8 +1317,7 @@ void sdpa_ring_resident(
 
     // Pooled chunks (pooled route only, on the pass's first active ring iteration): full-width steps over the head's
     // resident chunks in groups of the scratch capacity, each member with its own bias row (the reader pushes them in
-    // Q-chunk order after the pooled K/V entry; the step consumes them one at a time). Without the pooled route the
-    // plan's do_pooled is always 0 and no step ever adds a column bias.
+    // Q-chunk order after the pooled K/V entry; the step consumes them one at a time).
     if constexpr (pooled_route) {
         if (do_pooled) {
             uint32_t heads_done = 0;

@@ -4,16 +4,14 @@
 
 #pragma once
 
-// On-device generation of the pooled-entry column-bias tiles (the skipped-block route of Sol-Attn)
-// (sparse_ring_reader.cpp).
+// On-device generation of the pooled-entry column-bias tiles (sparse_ring_reader.cpp).
 //
 // The pooled correction feeds the per-block mean K / mean V through the normal flash step with an
 // additive column bias on the QK^T tile: ln(len_j) / scale for a block the Q chunk approximates (so the
 // kernel's exp((QK + bias - max) * scale) weights the pooled column by its token count) and a large negative
-// for blocks it computes exactly (no double counting) or padding. The pre-pass used to upload these as a
-// [1, NH, nqc_pad*32, n_blocks_pad] bf16 tensor (~100 MB/layer at 15 s); every row of a Q chunk's tile row
-// is identical and fully determined by (mask row, block token counts), so the reader builds them in
-// L1 instead. Inputs: see ttnn::transformer::sparse_ring_sdpa (sparse_ring_sdpa.hpp).
+// for blocks it computes exactly (no double counting) or padding. Each Q chunk's bias row is determined by the
+// mask row and the block token counts, so the reader builds it in L1. Inputs: see
+// ttnn::transformer::sparse_ring_sdpa (sparse_ring_sdpa.hpp).
 //
 // Tile format: Float16_b, 4 row-major 16x16 faces (face 0: rows 0-15 x cols 0-15, face 1: rows 0-15 x
 // cols 16-31, faces 2/3 the same for rows 16-31). Faces 0/1 are written by the RISC (16 identical rows),
@@ -69,6 +67,31 @@ inline uint32_t block_bias(
     return (len == 0 || exact) ? table_entry(table_base_arg, 0) : table_entry(table_base_arg, len);
 }
 
+// Fill faces 0/1 of the tile at tile_addr with 16 copies of one tile row (vals: columns 0-15, then 16-31) and issue
+// the L1->L1 NoC copy of faces 0/1 onto faces 2/3. The caller waits with async_read_barrier.
+template <uint32_t tile_bytes>
+inline void fill_tile_rows(const Noc& noc, uint32_t tile_addr, const uint32_t (&vals)[2 * kFaceRowWords]) {
+    const uint8_t noc_id = noc.get_noc_id();
+    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
+    for (uint32_t r = 0; r < 16; ++r) {
+        volatile tt_l1_ptr uint32_t* row0 = p + r * kFaceRowWords;               // face 0
+        volatile tt_l1_ptr uint32_t* row1 = p + kFaceWords + r * kFaceRowWords;  // face 1
+        for (uint32_t w = 0; w < kFaceRowWords; ++w) {
+            row0[w] = vals[w];
+            row1[w] = vals[kFaceRowWords + w];
+        }
+    }
+    // Order the RISC stores before the NoC reads them back (volatile read of the last word written).
+    (void)p[2 * kFaceWords - 1];
+    UnicastEndpoint src;
+    noc.async_read(
+        src,
+        CoreLocalMem<uint32_t>(tile_addr + tile_bytes / 2),
+        tile_bytes / 2,
+        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = tile_addr},
+        {});
+}
+
 // Write `tiles` bias tiles for pooled tile rows [row0_t, row0_t + tiles) at L1 address dst (a reserved
 // cb_pooled_bias region of >= tiles * tile_bytes). count(s, b): real tokens of block b of shard s. Blocking: returns
 // after the face copies have landed.
@@ -83,7 +106,6 @@ inline void generate_tiles(
     uint32_t table_base_arg,
     const CountFn& count) {
     static_assert(tile_bytes == 4 * kFaceWords * 4, "pooled bias tiles are Float16_b 32x32");
-    const uint8_t noc_id = noc.get_noc_id();
     uint32_t g = row0_t * 32;  // global padded block index of column 0
     uint32_t s = g / geo.nb_pad;
     uint32_t b = g - s * geo.nb_pad;
@@ -102,25 +124,7 @@ inline void generate_tiles(
             }
             vals[w] = lo | (hi << 16);
         }
-        const uint32_t tile_addr = dst + t * tile_bytes;
-        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
-        for (uint32_t r = 0; r < 16; ++r) {
-            volatile tt_l1_ptr uint32_t* row0 = p + r * kFaceRowWords;               // face 0
-            volatile tt_l1_ptr uint32_t* row1 = p + kFaceWords + r * kFaceRowWords;  // face 1
-            for (uint32_t w = 0; w < kFaceRowWords; ++w) {
-                row0[w] = vals[w];
-                row1[w] = vals[kFaceRowWords + w];
-            }
-        }
-        // Order the RISC stores before the NoC reads them back (volatile read of the last word written).
-        (void)p[2 * kFaceWords - 1];
-        UnicastEndpoint src;
-        noc.async_read(
-            src,
-            CoreLocalMem<uint32_t>(tile_addr + tile_bytes / 2),
-            tile_bytes / 2,
-            {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = tile_addr},
-            {});
+        fill_tile_rows<tile_bytes>(noc, dst + t * tile_bytes, vals);
     }
     noc.async_read_barrier();
 }
@@ -131,7 +135,6 @@ inline void generate_tiles(
 template <uint32_t tile_bytes>
 inline void generate_key_bias_tile(const Noc& noc, uint32_t dst, uint32_t real_cols, uint32_t table_base_arg) {
     static_assert(tile_bytes == 4 * kFaceWords * 4, "key bias tiles are Float16_b 32x32");
-    const uint8_t noc_id = noc.get_noc_id();
     const uint32_t neg = table_entry(table_base_arg, 0);
     uint32_t vals[2 * kFaceRowWords];  // one tile row: columns 0-15 (face 0), then 16-31 (face 1)
     for (uint32_t w = 0; w < 2 * kFaceRowWords; ++w) {
@@ -139,23 +142,7 @@ inline void generate_key_bias_tile(const Noc& noc, uint32_t dst, uint32_t real_c
         const uint32_t hi = 2 * w + 1 < real_cols ? 0u : neg;
         vals[w] = lo | (hi << 16);
     }
-    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
-    for (uint32_t r = 0; r < 16; ++r) {
-        volatile tt_l1_ptr uint32_t* row0 = p + r * kFaceRowWords;               // face 0
-        volatile tt_l1_ptr uint32_t* row1 = p + kFaceWords + r * kFaceRowWords;  // face 1
-        for (uint32_t w = 0; w < kFaceRowWords; ++w) {
-            row0[w] = vals[w];
-            row1[w] = vals[kFaceRowWords + w];
-        }
-    }
-    (void)p[2 * kFaceWords - 1];
-    UnicastEndpoint src;
-    noc.async_read(
-        src,
-        CoreLocalMem<uint32_t>(dst + tile_bytes / 2),
-        tile_bytes / 2,
-        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = dst},
-        {});
+    fill_tile_rows<tile_bytes>(noc, dst, vals);
     noc.async_read_barrier();
 }
 

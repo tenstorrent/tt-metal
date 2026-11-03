@@ -16,30 +16,17 @@
 
 namespace ttnn::transformer {
 
-// Block-sparse ring attention, non-causal, no joint tokens. The ring all-gather of K/V is fused, as in
-// ring_joint_scaled_dot_product_attention. Blocks are square, `block_size` tokens (B): per (head, local B-row Q
-// block), `block_mask` names the global B-token K blocks computed exactly, and nothing else is added to it. A Q block
-// whose softmax has no entry at all (no kept block, and no pooled entry in kept-only mode) outputs zeros. Two modes:
-//   Sol-Attn: pass pooled_k / pooled_v. Every other block enters the same softmax through its pooled entry
-//             (score q * mean(k), value mean(v), weight = the block's token count).
-//   kept blocks only (e.g. the VSA fine branch): omit both; the softmax normalizes over the kept blocks. block_size is
-//   a
-// compile-time parameter of the kernels; only 64 is supported for now. q_chunk_size must equal block_size and
-// k_chunk_size (the K/V piece) must be a multiple of it. nb_pad = round_up(ceil(N/ring_size / B), 32).
-// Every core keeps its Q blocks and their softmax state in L1. When they do not all fit, each core's blocks are split
-// into passes (the same pass count on every core); each pass replays the ring over the K/V the all-gather delivered
-// once, during the first pass. q_blocks_per_pass caps the blocks per core per pass (nullopt: the most that fit L1).
-//   q, k, v    [1, H, N/ring_size, D]  TILE, bf16 / bf8 / bf4, one dtype (sequence-sharded along the ring axis)
-//   block_mask [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR; != 0 keeps global block s * nb_pad + b
-//   pooled_k   optional [1, H, ring_size * nb_pad, D]  TILE, q / k / v dtype; per-block mean K over the valid tokens
-//   pooled_v   optional [1, H, ring_size * nb_pad, D]  TILE, q / k / v dtype; per-block mean V (zero for padding)
-//   block_counts optional [1, 1, 1, ring_size * nb_pad]  uint32 ROW_MAJOR, replicated; real tokens of global block
-//              s * nb_pad + b (0..B, real tokens first in the block), for padding inside the sequence (e.g. VSA's
-//              ragged 4x4x4 tiles). Tokens past a block's count are never attended, and a block of count 0 never
-//              computed or pooled. Absent: every block is full except the shard tails and the logical_n tail.
-//   A block is computed exactly iff its mask entry is != 0 and it holds a real token; the pooled entry of a block
-//   weighs its real tokens and covers the blocks that are not computed exactly.
-// Returns the attention output, [1, H, N/ring_size, D], same layout as q.
+// Block-sparse ring attention with the K/V ring all-gather fused (as in ring_joint_scaled_dot_product_attention),
+// non-causal, no joint tokens, batch 1. Per (head, local Q block), block_mask names the global K blocks computed
+// exactly. With pooled_k / pooled_v (Sol-Attn) every other block enters the softmax as one pooled entry weighted by
+// its token count; without them the softmax covers the kept blocks only. See the Python docstring for details.
+// block_size: only 64; q_chunk_size == block_size; k_chunk_size a multiple of it; dim must be 2 (sequence).
+// nb_pad = round_up(ceil(N/ring_size / block_size), 32).
+//   q, k, v       [1, H, N/ring_size, D]  TILE, bf16 / bf8 / bf4, one dtype
+//   block_mask    [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR
+//   pooled_k / v  optional [1, H, ring_size * nb_pad, D]  TILE, q's dtype
+//   block_counts  optional [1, 1, 1, ring_size * nb_pad]  uint32 ROW_MAJOR, real tokens per block
+// Returns [1, H, N/ring_size, D], same layout as q.
 ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,

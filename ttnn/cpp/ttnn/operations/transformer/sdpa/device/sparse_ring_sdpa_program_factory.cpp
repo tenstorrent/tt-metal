@@ -4,12 +4,14 @@
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_program_factory.hpp"
 
-#include <cstdlib>
 #include <string>
-#include "kernels/dataflow/chunked_prefill_utils.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_kv_chains.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
@@ -22,7 +24,6 @@
 #include <map>
 #include <optional>
 #include <cmath>
-#include <deque>
 #include <limits>
 
 #include <tt-metalium/buffer.hpp>
@@ -30,6 +31,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -253,23 +255,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         "build_sparse_ring_sdpa_program_descriptor requires mesh_dispatch_coordinate");
     const auto& coord = mesh_dispatch_coordinate.value();
     /*
-    Q, K, V are sequence-sharded across the ring (local_N = padded_N / ring_size rows per device).
+        input_tensor_q / k / v: 1 x NH x local_N x DH (sequence-sharded across the ring)
+        gathered_k / gathered_v: 1 x NH x padded_N x DH (fused all-gather)
+        block_mask: 1 x NH x nqb_pad x n_blocks_pad (uint32); pooled_k / pooled_v (optional): 1 x NH x n_blocks_pad x DH
+        output_tensor: 1 x NH x local_N x DH
 
-        input_tensor_q: B x NH  x local_N x DH
-        input_tensor_k: B x NHK x local_N x DH
-        input_tensor_v: B x NHV x local_N x DH
-        gathered_k / gathered_v: B x NHK / NHV x padded_N x DH   (fused all-gather)
-        block_mask: 1 x NH x nb_pad x n_blocks_pad (uint32);  pooled_k / pooled_v (optional): 1 x NH x n_blocks_pad x DH
-        output_tensor: B x NH x local_N x DH
-
-    Every core holds the Q blocks (block_size rows) of its current pass in L1 (one accumulator set each); when a
-    core's blocks do not fit at once they are split evenly into passes, and every pass replays the ring over the K/V
-    the all-gather delivered during the first one. Each ring iteration, every K/V piece (k_chunk_size keys) that any
-    Q block of the core's head group keeps is delivered once to the group and applied to every resident Q block
-    that keeps one of its blocks. With pooled K / V (Sol-Attn), on a pass's first active ring iteration the pooled
-    entries (one per dropped block, weighted by its token count through a generated column bias) are applied too;
-    without them the softmax covers the kept blocks only. After a pass's last ring
-    iteration each of its Q blocks is normalized and written out.
+    Every core keeps the Q blocks of its current pass and their softmax state in L1; each pass replays the ring over
+    the K/V gathered once. Each K/V piece a head group keeps is delivered once to the group.
     */
 
     log_debug(tt::LogOp, "SparseRingSDPA create_descriptor");
@@ -297,10 +289,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     log_debug(tt::LogOp, "transport rank: {}", transport_rank);
 
-    auto scale = args.scale;
-    if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
-    }
+    const float scale_value =
+        args.scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
 
     std::optional<ttnn::prim::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = ttnn::prim::RingSDPAFusedOpSignaler();
 
@@ -333,9 +323,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     const bool use_head_chain =
         ring_joint::uses_v_head_chain(/*enable_kv_chains=*/true, gqa_grouped_kv, /*v_shares_k_buffer=*/false);
-    // The store-and-forward chains are scheduled per head, not per (batch, head), so multi-batch requests read K/V
-    // independently on each core.
-    const bool build_kv_chains = B == 1;
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
@@ -368,11 +355,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t pooled_last_tiles = pooled_chunks > 0 ? pooled_tiles - (pooled_chunks - 1) * Sk_chunk_t : 0u;
     // The reader reads whole mask rows.
     const uint32_t mask_row_bytes = tensor_args.block_mask.logical_shape()[3] * sizeof(uint32_t);
-    TT_FATAL(mask_nkc <= 64, "SparseRingSDPA: at most 64 K pieces per shard");
-    TT_FATAL(
-        mask_nb <= mask_nb_pad, "SparseRingSDPA: {} blocks per shard exceed the mask row's {}", mask_nb, mask_nb_pad);
-    TT_FATAL(Sk_chunk_t % block_tiles == 0, "SparseRingSDPA: k chunk must hold whole blocks");
-    TT_FATAL(Sq_chunk_t == block_tiles, "SparseRingSDPA: one Q block per mask row (q chunk == block)");
+    // Validated on the op.
+    TT_ASSERT(mask_nkc <= 64);
+    TT_ASSERT(mask_nb <= mask_nb_pad);
+    TT_ASSERT(Sk_chunk_t % block_tiles == 0);
+    TT_ASSERT(Sq_chunk_t == block_tiles);
 
     // Global chunk width the kernels divide by the ring size (one Q slab per device).
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
@@ -381,7 +368,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t compile_time_global_n_partial_col = compile_time_logical_n % tt::constants::TILE_HEIGHT;
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
-    const uint32_t num_q_chunks = num_local_q_chunks;
     const uint32_t num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
 
     log_debug(tt::LogOp, "B: {}, NH: {}, NHK: {}, NHV: {}, DH: {}, vDH: {}", B, NH, NHK, NHV, DH, vDH);
@@ -394,17 +380,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         num_local_q_chunks,
         num_local_k_chunks);
 
-    MeshDevice* device = input_tensor_q.device();
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
 
-    CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
-                                                          : mesh_device->compute_with_storage_grid_size();
-    bool exp_approx_mode =
-        args.program_config.has_value()
-            ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
-            : true;
+    const CoreCoord grid_size = args.program_config.compute_with_storage_grid_size;
+    const bool exp_approx_mode = args.program_config.exp_approx_mode.value_or(true);
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet core_grid_set(core_grid);
@@ -459,7 +439,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         mesh_device->compute_with_storage_grid_size().x * mesh_device->compute_with_storage_grid_size().y);
 
     // The (batch, head, Q block) units are divided evenly across the cores, in flat order.
-    const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
+    const uint32_t all_heads_num_q_chunks = B * NH * num_local_q_chunks;
     const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
@@ -470,11 +450,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         tt::div_up(mask_nb, 32u) + 3 <= 16,
         "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
         mask_nb);
-    // Group delivery: one producer per head group multicasts each piece (see group_mcast in the reader). The K/V CB
-    // depth (pieces) is 3 with group delivery, so the producer can send the next piece while every member computes on
-    // the previous ones; without it (B > 1, or no head chain) the K/V CBs are double-buffered. The kernels learn the
-    // depth only from the CB sizes.
-    const bool group_mcast = build_kv_chains && use_head_chain;
+    // Group delivery: one producer per head group multicasts each piece. The K/V CBs hold 3 pieces with it (the
+    // producer sends the next piece while members compute), 2 without.
+    const bool group_mcast = use_head_chain;
     const uint32_t k_piece_tiles = Sk_chunk_t * DHt;
     const uint32_t v_piece_tiles = Sk_chunk_t * vDHt;
     // Pair steps (one step over two consecutive pieces of a head, halving the per-step fixed cost) apply to small
@@ -517,7 +495,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     // Validated: fp32_dest_acc_en is off, so compute takes the streaming path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
-    TT_FATAL(use_streaming_compute, "SparseRingSDPA requires streaming compute (fp32_dest_acc_en=false)");
+    TT_ASSERT(use_streaming_compute);
 
     auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
         Sq_chunk_t,
@@ -582,7 +560,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
-    const float scale_value = scale.value_or(1.0f);
     const uint32_t scale_packed = std::bit_cast<uint32_t>(scale_value);
 
     log_debug(tt::LogOp, "scale: {}", scale_value);
@@ -619,7 +596,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         0,  // num_joint_q_chunks
         num_local_k_chunks,
         0,  // num_joint_k_chunks
-        num_q_chunks,
+        num_local_q_chunks,
         ring_size,
         qk_out_subblock_h,
         0,  // is_causal
@@ -762,7 +739,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         0,  // num_joint_q_chunks
         num_local_k_chunks,
         0,  // num_joint_k_chunks
-        num_q_chunks,
+        num_local_q_chunks,
         packed_identity_scalar,
         scale_packed,
         ring_size,
@@ -805,7 +782,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         num_local_q_chunks,
         num_local_k_chunks,
         0,  // num_joint_k_chunks
-        num_q_chunks,
+        num_local_q_chunks,
         ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
@@ -850,9 +827,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
+    if (args.program_config.matmul_math_fidelity.has_value()) {
         defines["SDPA_MATMUL_FIDELITY"] =
-            std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
+            std::to_string(static_cast<uint32_t>(*args.program_config.matmul_math_fidelity));
     }
     // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
     if (math_fidelity == MathFidelity::LoFi) {
@@ -870,8 +847,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // The pooled-column bias tiles are Float16_b: the step adds them into the scores by L1 accumulation.
     tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df =
-        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     // Intermediates stay in bf16 to save L1 (fp32 dest accumulation is off).
     tt::DataFormat im_df = tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
@@ -904,31 +880,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         return cb_index;
     };
 
-    // Every core keeps the Q blocks of its current pass and one accumulator set each in L1 ("slots"). The CBs whose
-    // size depends on the slot count are laid out by lay_out_cbs(slots, kv_pages, pairs, alloc), which the pass split
-    // below runs once per candidate with a byte counter and then once with the real allocator, so the fit check and
-    // the allocation cannot disagree.
-    // One step covers one piece for a group of resident Q blocks, each with its own kept blocks; member g's scores are
-    // stored compactly (row stride = its kept width), and members are grouped until the scores fill
-    // kResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles, twice that with pair steps (at least qk_tiles). The
-    // K/V CBs hold kv_cb_pages pieces. The new-max / alpha scratches
-    // hold one tile row per slot. The compute kernel derives the same capacity (sdpa_ring_resident, kGroupCap) and
-    // ASSERTs the page count.
-    // The staging CBs (max, out, sum) hold one accumulator set per slot, addressed by slot and updated in place:
-    // exactly `slots` entries, filled on the first active ring iteration of a pass and neither pushed nor popped
-    // until the pass's final normalization, so the unpacker's read index and the packer's write index name the same
-    // tile (the buffer is exactly full, the write pointer wrapped to its base).
-    // Plan pages: 16 summary words, then the Q block's full mask row (scratch the reader scans in place). The summary
-    // is [kept-block words (plan_block_words)][union piece bits lo, hi][do_pooled]. Two pages: compute reads an
-    // iteration's records in place until the iteration ends (keeping them off the compute threads' stack), while the
-    // reader fills the next one. Counted in the fit check like every slot-dependent CB. One pooled chunk of bias tiles
-    // in flight; 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
-    // With block_counts, one page of a byte per global block (the given count capped by the geometry), filled by the
-    // reader once and read in place by reader and compute for the whole op. The key bias: one column-bias tile per
-    // block of a streamed piece whose real tokens end inside a tile, a piece's tiles contiguous (never across the CB
-    // end: both sides skip to the base with dummy pages) and held by its step until it ends. Two pieces' worth, so
-    // the reader can fill the next piece's while a step holds one. Such blocks exist only with block_counts or a
-    // logical_n off a tile boundary; otherwise neither CB is allocated.
+    // Slot-dependent CBs ("slots" = Q blocks per core per pass) are laid out by lay_out_cbs, which the pass split runs
+    // with a byte counter per candidate and then with the real allocator, so the fit check and allocation agree.
+    // A step's scores (cb_qk_im) hold up to kResidentGroup Q blocks of Sq_chunk_t x Sk_chunk_t tiles, twice that with
+    // pair steps; the compute kernel derives the same capacity.
     constexpr uint32_t kResidentGroup = 4;
     const bool has_block_counts = tensor_args.block_counts.has_value();
     const uint32_t block_counts_bytes = tt::round_up(mask_n_blocks_pad, 32u);
@@ -955,6 +910,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             std::max(qk_tiles, std::min(slots, kResidentGroup) * Sq_chunk_t * Sk_chunk_t * (pairs ? 2u : 1u));
         const uint32_t res_stats_tiles = statistics_tiles * slots;
         l.qk_im = tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
+        // Staging CBs (max, out, sum): one accumulator set per slot, updated in place and never pushed or popped
+        // until the pass's final normalization, so read and write indices name the same tile.
         l.max_A = tile_cb(res_stats_tiles, stats_tile_size, stats_df);
         l.exp_max_diff = tile_cb(res_stats_tiles, stats_tile_size, stats_df);
         l.out = tile_cb(out0_t, out_tile_size, out_df);
@@ -962,12 +919,17 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.prev_out = tile_cb(out_im_tiles * slots, out_tile_size, out_df);
         l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for normalize_row_streaming
         l.sum_in = tile_cb(statistics_tiles * slots, stats_tile_size, stats_df);
+        // Plan pages: a 16-word summary [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's
+        // mask row. Two pages: compute reads one iteration's records while the reader fills the next.
         l.sparse_plan = alloc(64 + mask_row_bytes, 2, tt::DataFormat::UInt32);
-        // Without the pooled route nothing reads the bias CB; it is not allocated.
+        // One pooled chunk of bias tiles in flight; only with the pooled route.
         l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
                                      : std::numeric_limits<uint32_t>::max();  // inactive
+        // One byte per global block, filled once by the reader.
         l.block_counts = has_block_counts ? alloc(block_counts_bytes, 1, tt::DataFormat::UInt32)
                                           : std::numeric_limits<uint32_t>::max();  // inactive
+        // Key bias: one column-bias tile per block whose real tokens end inside a tile, two pieces' worth. Needed
+        // only with block_counts or a logical_n off a tile boundary.
         l.key_bias = key_bias_tiles > 0 ? tile_cb(key_bias_tiles, mask_tile_size, mask_df)
                                         : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
@@ -984,12 +946,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     // Pass split. S = slots per pass: the largest count (at most kResidentMaxSlots, the core's block count and
-    // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer (validate_circular_buffer_region enforces
-    // exactly this; in the pipeline, global semaphores and persistent buffers occupy the top of L1). P passes split
-    // every core's blocks evenly, so each working core needs at least P blocks: then no core has an empty pass, and
-    // every head-group member streams its group's pieces in every pass (pointer lockstep).
-    // S depends on the live L1 top, which is not in the program hash: a cached program keeps the S of the call that
-    // built it.
+    // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer. P passes split every core's blocks evenly, so
+    // each working core needs at least P blocks (no empty pass; group members stay in lockstep).
+    // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it.
     const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
     const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
                                                                : mesh_device->l1_size_per_core();
@@ -1009,8 +968,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto passes_for = [&](uint32_t slots) {
         return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
     };
-    // Single steps with group delivery: 3 K/V pages. 2 pages can save a Q pass (MiniMax-H3 10 s: 1 pass of 19 slots
-    // instead of 2 of 10) but measured no faster (traced 12.27 vs 12.32 ms, 2026-10-30) and rule out pair steps there.
+    // 3 K/V pages with group delivery.
     uint32_t fit_slots = fit_slots_for(kv_cb_pages, false);
     TT_FATAL(
         fit_slots > 0,
@@ -1045,7 +1003,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         NHK,
         NHV);
     const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
-    log_info(
+    log_debug(
         tt::LogOp,
         "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages, pair steps {} "
         "({} of {} B of L1 for CBs)",
@@ -1096,11 +1054,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t cb_sum_out = inactive_cb;
     const uint32_t cb_signal = inactive_cb;
     const uint32_t cb_kv_pad_derived = inactive_cb;
-    // Every Q block's plan record goes in one page per ring iteration, after the header (16 words) and the shard
-    // slice the reader scans (mask_nb_pad words), so the reader does not wait for compute to pop a page per block at
-    // each iteration boundary. The records fit in the scratch the whole-row reads already need; a short row (one
-    // shard: the slice is the whole row) leaves no room for them, and then each block gets its own page. No
-    // phase-alignment dummies: every chain / group member pushes the same sequence, so the pointers stay in step.
+    // All Q blocks' plan records go in one page per ring iteration, after the 16-word header and the shard slice
+    // (mask_nb_pad words), when they fit in the page; otherwise each block gets its own page (plan_rec_base = 0).
     const uint32_t plan_rec_words = tt::div_up(mask_nb, 32u) + 3;
     const bool plan_fits_one_page =
         (16 + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <= 64 + mask_row_bytes;
@@ -1160,35 +1115,35 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     std::vector<std::vector<HeadSegmentRef>> head_segments(use_head_chain ? NH : 0);
 
     // Evenly distribute flat global Q blocks across cores
-    const uint32_t total_q_chunks = B * NH * num_q_chunks;
-    const uint32_t cores_doing_extra_work = total_q_chunks % num_cores;
-    const uint32_t base_chunks_per_core = total_q_chunks / num_cores;
+    const uint32_t cores_doing_extra_work = all_heads_num_q_chunks % num_cores;
+    const uint32_t base_chunks_per_core = all_heads_num_q_chunks / num_cores;
     uint32_t next_global_chunk = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? 1 : 0);
-        if (next_global_chunk >= total_q_chunks) {
+        if (next_global_chunk >= all_heads_num_q_chunks) {
             chunk_count = 0;
-        } else if (chunk_count > total_q_chunks - next_global_chunk) {
-            chunk_count = total_q_chunks - next_global_chunk;
+        } else if (chunk_count > all_heads_num_q_chunks - next_global_chunk) {
+            chunk_count = all_heads_num_q_chunks - next_global_chunk;
         }
 
         auto& work = core_work.at(i);
-        work.physical_core = device->worker_core_from_logical_core(core);
+        work.physical_core = mesh_device->worker_core_from_logical_core(core);
         work.global_q_start = next_global_chunk;
         work.global_q_count = chunk_count;
-        ring_joint::append_head_work(core_work, head_segments, i, next_global_chunk, chunk_count, num_q_chunks, NH);
+        ring_joint::append_head_work(
+            core_work, head_segments, i, next_global_chunk, chunk_count, num_local_q_chunks, NH);
 
         next_global_chunk += chunk_count;
     }
 
     std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
     ring_joint::GqaKvChains gqa_chains;
-    if (gqa_grouped_kv && build_kv_chains) {
+    if (gqa_grouped_kv) {
         gqa_chains = ring_joint::build_gqa_kv_chains(
-            core_work, gqa_chain_configs, gqa_chain_max_q, NHK, q_heads_per_kv, grid_size, device);
+            core_work, gqa_chain_configs, gqa_chain_max_q, NHK, q_heads_per_kv, grid_size, mesh_device);
     }
-    if (k_uses_batch_chain && build_kv_chains) {
+    if (k_uses_batch_chain) {
         ring_joint::build_shared_k_chain(core_work, batch_chain_configs);
     }
     std::vector<uint32_t> k_chain_max_q(batch_chain_configs.size(), 0);  // per-core loop-padding count
@@ -1196,7 +1151,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const bool k_mcast_enabled =
         k_uses_batch_chain &&
         ring_joint::build_shared_k_mcast(
-            core_work, batch_chain_configs, k_chain_max_q, grid_size, device, k_mcast_fallback_reason);
+            core_work, batch_chain_configs, k_chain_max_q, grid_size, mesh_device, k_mcast_fallback_reason);
 
     // The kernels read rotated_max_slots (the dense op's rotated Q split) as their LAST compile-time arg. Resident Q
     // blocks never change owner, so it is 0.
@@ -1208,7 +1163,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
 
     // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
-    if (use_head_chain && build_kv_chains) {
+    if (use_head_chain) {
         for (uint32_t head_id = 0; head_id < static_cast<uint32_t>(head_segments.size()); ++head_id) {
             const auto& segs = head_segments[head_id];
             if (segs.size() < 2) {
@@ -1220,12 +1175,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 chain_segs.emplace_back(
                     seg.core_idx, core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
             }
-            // A core whose resident Q blocks span two heads streams the second head's pieces into the same K/V CBs
-            // between this head's pieces, so its CB write pointer drifts from the chain's. The chain forward writes to
-            // the sender's own CB address on the next core (ChainLink::forward), which needs every member's pointer in
-            // lockstep; a drifted sink receives the forward over the entry its compute is reading. Such cores read
-            // their own K/V for both heads instead: drop them from the chain's tail (the injector rule already skips
-            // them at the head).
+            // A core spanning two heads streams both into the same K/V CBs, so its CB pointer drifts from the chain's
+            // and a forward could overwrite an entry in use. Such cores read their own K/V: drop them from the tail.
             while (!chain_segs.empty() && core_work[chain_segs.back().first].head_work.size() > 1) {
                 chain_segs.pop_back();
             }
@@ -1315,15 +1266,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"kv_stripe_split", 1u},
         // Mask block size in tiles (square blocks: Q block rows == K block columns). Only 2 (64 tokens) for now.
         {"block_tiles", block_tiles},
-        // Resident Q blocks: the slot count (Q blocks per core per pass) every core sizes its state arrays by, the
-        // pass count (identical on every core; each core's blocks are split evenly over the passes), and the words of
-        // per-shard kept-block bits the reader puts in every plan page (block b: word b/32, bit b%32).
+        // Q blocks per core per pass, and the pass count (the same on every core).
         {"resident_slots", resident_slots},
         {"num_q_passes", num_q_passes},
-        // Pair steps (see pair_steps_eligible above) and the K/V CB depth in pieces, which keeps a pair from wrapping
-        // the CB end.
+        // Pair steps (see pair_steps_eligible above) and the K/V CB depth in pieces.
         {"pair_steps", pair_steps ? 1u : 0u},
         {"kv_cb_pages", kv_cb_pages},
+        // Words of per-shard kept-block bits in each plan page (block b: word b/32, bit b%32).
         {"plan_block_words", tt::div_up(mask_nb, 32u)},
         // Group delivery by multicast (see group_mcast above).
         {"group_mcast", group_mcast ? 1u : 0u},
@@ -1357,10 +1306,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
-    // The compute kernel builds at O2: at the default level the 5 s program sits at the 70,656 B kernel config buffer,
-    // and O2 cuts the three TRISC binaries by ~30 %. Profiled runs at O2 showed the same per-piece compute as the
-    // default-level timings: the step is bound by Tensix instruction throughput, not by RISC issue. This kernel file
-    // is only ever built at O2.
+    // Built at O2 to fit the kernel config buffer.
     compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -1368,10 +1314,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         .math_approx_mode = math_approx_mode,
     };
 
-    // On-device bias generator table (see the reader arg layout below). bf16 round-to-nearest-even of ln(len) / scale;
-    // -30000 for len 0.
-    // Bias per block token count, packed bf16, two per word: entries len = 0 .. block_tokens + 1 (the last unused),
-    // block_tiles * 16 + 1 words (33 at 64-token blocks). The reader derives the same count (pooled_bias_gen.hpp).
+    // Pooled-column bias per block token count: bf16 (round-to-nearest-even) ln(len) / scale, -30000 for len 0,
+    // two per word for len = 0 .. block_tokens + 1 (the last unused). The generator weights each pooled column by its
+    // count through exp((QK + ln(len)/scale - max) * scale) = len * exp(...). The reader derives the same word count.
     const uint32_t kPooledBiasTableWords = block_tiles * 16 + 1;
     std::vector<uint32_t> pooled_bias_table(kPooledBiasTableWords, 0u);
     {
@@ -1390,11 +1335,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     }
 
     // Group delivery: per core [role, producer x, producer y, receivers, rectangles, (x0, y0, x1, y1, cores)...].
-    // A group is a head chain's members (chains hold single-head cores only); the producer reads every piece from
-    // DRAM. The receivers are covered by rectangles of consecutive NoC x on one row each, so a multicast never lands
-    // on a core outside the group. The producer is the first member in core order (not the chain's injector): it
-    // starts its row, so it does not split a rectangle, and a group of consecutive cores spanning two rows needs two
-    // rectangles.
+    // A group is a head chain's members; the producer (first member in core order) reads every piece from DRAM and
+    // multicasts it to rectangles of consecutive NoC x on one row each, so no multicast lands outside the group.
     constexpr uint32_t kGroupMaxRects = 8;
     std::vector<std::vector<uint32_t>> group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
     if (group_mcast) {
@@ -1545,7 +1487,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 for (uint32_t s = 0; s < seg.head_work_index; ++s) {
                     flat += w.head_work[s].q_chunk_count;
                 }
-                const uint32_t start_in_head = flat % num_q_chunks;
+                const uint32_t start_in_head = flat % num_local_q_chunks;
                 const uint32_t count = w.head_work[seg.head_work_index].q_chunk_count;
                 if (seg.core_idx == i) {
                     sparse_my_start = start_in_head;
@@ -1559,9 +1501,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
         reader_args.push_back(static_cast<uint32_t>(group_members.size()));
         reader_args.push_back(sparse_my_start);
-        // Column-bias value per block token count, bf16, two per word: entry[len] for len in [0, block_tokens]
-        // (entry[0] = the "exact / padding" large negative). The generator weights each pooled column by its token
-        // count through exp((QK + ln(len)/scale - max) * scale) = len * exp(...).
         for (uint32_t w = 0; w < kPooledBiasTableWords; ++w) {
             reader_args.push_back(pooled_bias_table[w]);
         }
@@ -1706,9 +1645,11 @@ void SparseRingSDPAMeshWorkloadFactory::override_runtime_arguments(
     // all-gather op does the same); otherwise a cached program keeps signalling the ping-pong semaphore it was
     // created with.
     const auto& ag_semaphores = args.all_gather_operation_attributes.semaphore;
-    if (ag_semaphores.size() <= std::max(ag_dyn::kForwardSemaphoreIdx, ag_dyn::kBackwardSemaphoreIdx)) {
-        return;
-    }
+    TT_FATAL(
+        ag_semaphores.size() > std::max(ag_dyn::kForwardSemaphoreIdx, ag_dyn::kBackwardSemaphoreIdx),
+        "SparseRingSDPA needs {} all-gather semaphores (forward and backward), got {}",
+        std::max(ag_dyn::kForwardSemaphoreIdx, ag_dyn::kBackwardSemaphoreIdx) + 1,
+        ag_semaphores.size());
     const auto forward_sem_addr = static_cast<uint32_t>(ag_semaphores.at(ag_dyn::kForwardSemaphoreIdx).address());
     const auto backward_sem_addr = static_cast<uint32_t>(ag_semaphores.at(ag_dyn::kBackwardSemaphoreIdx).address());
 

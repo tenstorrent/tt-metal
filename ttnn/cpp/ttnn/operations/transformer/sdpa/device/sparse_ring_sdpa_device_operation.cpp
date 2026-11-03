@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <variant>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -19,7 +18,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
@@ -33,10 +32,9 @@ using namespace experimental::ccl;
 
 namespace {
 
-namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+namespace ag_dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
 
-// Block sizes the kernels support today (SparseRingSDPAParams::block_size). The kernels take the block size as a
-// compile-time parameter; other sizes need the work listed in sparse_ring_sdpa_refactor_plan.md.
+// The kernels take block_size as a compile-time arg; only 64 is implemented.
 constexpr uint32_t kSupportedBlockSize = 64;
 
 void validate_all_gather_on_program_cache_miss(
@@ -135,7 +133,6 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_k = tensor_args.gathered_k;
     const auto& gathered_v = tensor_args.gathered_v;
 
-    TT_FATAL(args.program_config.has_value(), "Program config must be provided");
     const uint32_t block_size = args.block_size;
     TT_FATAL(
         block_size == kSupportedBlockSize,
@@ -169,16 +166,22 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
 
     validate_all_gather_on_program_cache_miss(args.all_gather_operation_attributes, args.all_gather_tensor_args);
     TT_FATAL(!args.all_gather_operation_attributes.full_mesh, "SparseRingSDPA gathers along one mesh axis");
+    const size_t num_ag_semaphores = args.all_gather_operation_attributes.semaphore.size();
+    TT_FATAL(
+        num_ag_semaphores > std::max(ag_dyn::kForwardSemaphoreIdx, ag_dyn::kBackwardSemaphoreIdx),
+        "SparseRingSDPA needs {} all-gather semaphores (forward and backward), got {}",
+        std::max(ag_dyn::kForwardSemaphoreIdx, ag_dyn::kBackwardSemaphoreIdx) + 1,
+        num_ag_semaphores);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     const auto strategy = args.all_gather_operation_attributes.core_allocation_strategy;
     if (strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR) {
         TT_FATAL(
-            args.ccl_core_grid_offset.x >= args.program_config.value().compute_with_storage_grid_size.x,
+            args.ccl_core_grid_offset.x >= args.program_config.compute_with_storage_grid_size.x,
             "SDPA coregrid overlaps with AllGather coregrid (column-major)");
     } else {
         TT_FATAL(
-            args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
+            args.ccl_core_grid_offset.y >= args.program_config.compute_with_storage_grid_size.y,
             "SDPA coregrid overlaps with AllGather coregrid (row-major)");
     }
 
@@ -220,6 +223,7 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
     const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto N_global = k_shape[2];
 
+    TT_FATAL(B == 1, "SparseRingSDPA supports batch 1 only, got batch {}", B);
     TT_FATAL(NQH > 0 && NKH > 0, "Q and K num_heads must be greater than 0. Got Q: {}, K: {}", NQH, NKH);
     TT_FATAL(
         N_local_q == N_local_kv,
@@ -266,10 +270,8 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         args.logical_n,
         N_global);
 
-    // MHA only. A K/V chain or group must stream one piece schedule on every member: the head chains and head groups
-    // do (every member streams each piece of the shard that holds a live block, whatever its own mask), but the GQA
-    // chains and the shared-K chain span query heads whose masks differ and have no such schedule, so their members'
-    // transfers would not pair up.
+    // MHA only: a K/V chain must stream one piece schedule on every member, and GQA / shared-K chains span query
+    // heads whose masks differ.
     TT_FATAL(
         NQH == NKH && NKH == NVH,
         "SparseRingSDPA supports MHA only (NQH == NKH == NVH); GQA and shared-K heads are not supported. Got NQH: {}, "
@@ -278,7 +280,6 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         NKH,
         NVH);
 
-    // Block mask and (optional) pooled K / V.
     const auto& mask = tensor_args.block_mask;
     TT_FATAL(
         mask.layout() == Layout::ROW_MAJOR && mask.dtype() == DataType::UINT32, "block_mask must be uint32 row-major");
@@ -306,7 +307,8 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(pk.logical_shape() == pv.logical_shape(), "pooled_k and pooled_v shapes differ");
         TT_FATAL(
-            pk.logical_shape()[1] == NQH && pk.logical_shape()[2] == n_blocks_pad && pk.logical_shape()[3] == DH,
+            pk.logical_shape()[0] == 1 && pk.logical_shape()[1] == NQH && pk.logical_shape()[2] == n_blocks_pad &&
+                pk.logical_shape()[3] == DH,
             "pooled_k must be [1, NH, n_blocks_pad = block_mask width {}, DH], got {}",
             n_blocks_pad,
             pk.logical_shape());
@@ -333,7 +335,8 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(nb_pad >= tt::div_up(N_local_kv, block_size), "mask blocks per shard {} < blocks in the K shard", nb_pad);
     const uint32_t nqb = tt::div_up(N_local_q, block_size);
     TT_FATAL(
-        mask.logical_shape()[1] == NQH && mask.logical_shape()[2] >= nqb && mask.logical_shape()[3] == n_blocks_pad,
+        mask.logical_shape()[0] == 1 && mask.logical_shape()[1] == NQH && mask.logical_shape()[2] >= nqb &&
+            mask.logical_shape()[3] == n_blocks_pad,
         "block_mask must be [1, NH, >= {} q blocks, {} blocks], got {}",
         nqb,
         n_blocks_pad,
@@ -421,12 +424,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADevice
     const auto& q_shape = tensor_args.input_q.logical_shape();
     const auto& gathered_k_shape = tensor_args.gathered_k.logical_shape();
 
-    CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
-                                                     : output_tensor.device()->compute_with_storage_grid_size();
+    const CoreCoord grid = args.program_config.compute_with_storage_grid_size;
     // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
-    const auto matmul_fidelity =
-        args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
-    tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
+    const tt::tt_metal::MathFidelity fidelity =
+        args.program_config.matmul_math_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
 
     // Dense upper bound: the kept-block density is only known on device.
     int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
@@ -488,13 +489,14 @@ SparseRingSDPAResult sparse_ring_sdpa(
         mesh_view.is_mesh_2d(),
         "all-gather invoked with cluster_axis API without 2D mesh, which is currently unsupported");
     const int32_t rank = input_tensor_k.logical_shape().rank();
-    const int32_t gather_dim = (dim < 0) ? rank + dim : dim;
     TT_FATAL(
-        gather_dim >= -rank && gather_dim <= rank - 1,
+        dim >= -rank && dim <= rank - 1,
         "Dimension input should be in between -{} and {}, but has {}",
         rank,
         rank - 1,
         dim);
+    const int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+    TT_FATAL(gather_dim == 2, "SparseRingSDPA gathers K/V along the sequence dim: dim must be 2 or -2, got {}", dim);
     const auto& mesh_shape = mesh_device.shape();
     TT_FATAL(
         cluster_axis < mesh_shape.dims(),

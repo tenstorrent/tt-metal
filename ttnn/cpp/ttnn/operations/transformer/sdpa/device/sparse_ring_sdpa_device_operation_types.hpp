@@ -25,16 +25,14 @@ struct SparseRingSDPAParams {
     std::size_t logical_n = 0;
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
-    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
+    ttnn::operations::transformer::SDPAProgramConfig program_config;
     DeviceComputeKernelConfig compute_kernel_config;
     experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
     experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
-    // Square block of the mask, in tokens: one mask row per Q block of block_size rows, one mask column per K block
-    // of block_size tokens. A compile-time parameter of the kernels; only 64 is supported for now.
+    // Square mask block in tokens (one mask row per Q block, one column per K block). Only 64 is supported.
     uint32_t block_size = 64;
-    // Q blocks per core per pass (resident slots). nullopt: the largest count whose CBs fit L1. Each core's blocks
-    // are split into the same number of passes; the K/V all-gather runs once.
+    // Q blocks per core per pass. nullopt: the largest count whose CBs fit L1.
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
@@ -43,7 +41,7 @@ struct SparseRingSDPAParams {
         std::size_t logical_n,
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
-        std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+        ttnn::operations::transformer::SDPAProgramConfig program_config,
         DeviceComputeKernelConfig compute_kernel_config,
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
@@ -62,9 +60,9 @@ struct SparseRingSDPAParams {
         block_size(block_size),
         q_blocks_per_pass(q_blocks_per_pass) {}
 
-    std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
+    std::uint32_t get_q_chunk_size() const { return program_config.q_chunk_size; }
 
-    std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
+    std::uint32_t get_k_chunk_size() const { return program_config.k_chunk_size; }
 
     std::uint32_t block_tiles() const { return block_size / tt::constants::TILE_HEIGHT; }
 
@@ -94,17 +92,13 @@ struct SparseRingSDPAParams {
     }
 };
 
-// Q / K / V are sequence-sharded along the ring; the fused all-gather fills gathered_k / gathered_v. The block
-// mask and pooled K / V come from the routing pre-pass (see ttnn::transformer::sparse_ring_sdpa):
-//   block_mask  uint32 row-major [1, NH, nb_pad, n_blocks_pad]: != 0 computes (local block_size-row Q block, global
-//               block_size-token K block) exactly; global block s * nb_pad + b is block b of shard s.
-//   pooled_k/v  OPTIONAL tile, q / k / v dtype, [1, NH, n_blocks_pad, DH]: per-block mean K / mean V over the valid
-//   tokens, whole
-//               sequence. Present (Sol-Attn): every block the mask drops enters the softmax as one pooled entry
-//               weighted by its token count, through the column bias the reader generates (pooled_bias_gen.hpp).
-//               Absent (kept blocks only, e.g. the VSA fine branch): the softmax normalizes over the kept blocks.
-//   block_counts OPTIONAL uint32 row-major [1, 1, 1, n_blocks_pad]: real tokens of each global block (real tokens
-//               first). Absent: the geometric lengths (full blocks, the shard tails and the logical_n tail).
+// Q / K / V are sequence-sharded along the ring; the fused all-gather fills gathered_k / gathered_v.
+//   block_mask    uint32 row-major [1, NH, nqb_pad, n_blocks_pad]: != 0 computes (local Q block, global K block)
+//                 exactly; global block s * nb_pad + b is block b of shard s.
+//   pooled_k / v  optional, tile, [1, NH, n_blocks_pad, DH]: per-block mean K / V. Present: dropped blocks enter the
+//                 softmax as pooled entries. Absent: the softmax covers the kept blocks only.
+//   block_counts  optional, uint32 row-major [1, 1, 1, n_blocks_pad]: real tokens per global block. Absent: the
+//                 geometric lengths.
 struct SparseRingSDPAInputs {
     Tensor input_q;
     Tensor input_k;
