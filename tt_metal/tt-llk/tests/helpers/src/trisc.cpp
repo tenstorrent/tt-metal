@@ -148,12 +148,26 @@ extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_pr
         {
         }
     }
+    // RC experiment (warmup-agent): LLK_MUTEX_MODE (overlay stream 0 SCRATCH_1): 1 = the math thread takes and releases
+    // the REG_RMW mutex last, 2 = the pack thread does (before it wakes the math tail), 0 = nobody. Same ELFs.
+    if ((*reinterpret_cast<volatile std::uint32_t*>(host_signal::NOC_OVERLAY_START_ADDR + (host_signal::STREAM_SCRATCH_REG_INDEX + 1) * 4) & 0xFFU) == 1U)
+    {
+        ckernel::t6_mutex_acquire(ckernel::mutex::REG_RMW);
+        ckernel::t6_mutex_release(ckernel::mutex::REG_RMW);
+        ckernel::tensix_sync();
+    }
     const std::uint64_t settle_start = ckernel::read_wall_clock();
     while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
     {
     }
     (void)ckernel::load_blocking(pack_mailbox);
 #elif defined(LLK_TRISC_PACK)
+    if ((*reinterpret_cast<volatile std::uint32_t*>(host_signal::NOC_OVERLAY_START_ADDR + (host_signal::STREAM_SCRATCH_REG_INDEX + 1) * 4) & 0xFFU) == 2U)
+    {
+        ckernel::t6_mutex_acquire(ckernel::mutex::REG_RMW);
+        ckernel::t6_mutex_release(ckernel::mutex::REG_RMW);
+        ckernel::tensix_sync();
+    }
     // After main's completion store (its last L1 access): wake the math tail through the hardware mailbox (not L1).
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, ckernel::KERNEL_COMPLETE);
 #endif
