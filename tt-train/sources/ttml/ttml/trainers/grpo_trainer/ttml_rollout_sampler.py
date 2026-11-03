@@ -97,6 +97,7 @@ class TTMLRolloutSampler(RolloutSampler):
         self._num_layers = cfg.num_hidden_layers
         self._max_seq_len = cfg.max_position_embeddings
         self._num_kv_groups = cfg.num_key_value_heads if self._kind == "llama" else None
+        self._decode_query_rows = TILE_SIZE if self._kind == "llama" else 1
         self._head_dim = cfg.hidden_size // cfg.num_attention_heads if self._kind == "llama" else None
 
         self._pad_token = resolve_pad_token_id(tokenizer)
@@ -181,11 +182,10 @@ class TTMLRolloutSampler(RolloutSampler):
 
     def _unpadded_token_positions_decode(self, positions: np.ndarray) -> "ttml.autograd.Tensor":
         """``[B, query_rows]`` RoPE positions: row ``b`` starts at ``positions[b]``."""
-        query_rows = TILE_SIZE if self._kind == "llama" else 1
         assert (
             positions.max() < self._max_seq_len
         ), f"RoPE position {positions.max()} >= max_seq_len {self._max_seq_len}"
-        ids = positions[:, None] + np.arange(query_rows)[None, :]
+        ids = positions[:, None] + np.arange(self._decode_query_rows)[None, :]
         ids[:, 1:] = np.minimum(ids[:, 1:], self._max_seq_len - 1)
         return ttml.autograd.Tensor.from_numpy(
             ids.astype(np.uint32), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
@@ -239,7 +239,7 @@ class TTMLRolloutSampler(RolloutSampler):
         tokens ``[prefill_end, cur_pos]``) stays 1.
         """
         B = len(pad_positions)
-        padded_q = TILE_SIZE if self._kind == "llama" else 1
+        padded_q = self._decode_query_rows
 
         mask = np.zeros((B, 1, padded_q, cache_len), dtype=np.float32)
         # Row 0: allow positions [0, cur_pos] (causal cap by construction).
