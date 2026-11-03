@@ -63,7 +63,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -105,40 +108,70 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // hw_configure: the compute API intentionally swaps in0/in1 (see
-    // sdpa_custom_mm_reuse_dest_srcb_block_init), but for the reuse op only SrcA
-    // (V) is ever unpacked from L1, so configure SrcA with the V (buffer_A) format.
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* unpA_num_faces */,
-        4 /* unpB_num_faces */,
-        params.TILE_SIZE_UNPACK_A,
-        params.TILE_SIZE_UNPACK_B);
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
-    // -- P (=B) preload into DEST: the reuse matmul reads SrcB from DEST, so the
-    // math thread first datacopies P into DEST. That datacopy needs its own SrcA
-    // stream, unpacked here with the plain unpack_A LLK. One datacopy tile holds
-    // two 16-row P K-chunks, so ceil(KT_DIM/2) P tiles cover all KT_DIM chunks.
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
-    for (std::uint32_t k = 0; k < (KT_DIM + 1) / 2; ++k)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
-            L1_ADDRESS(params.buffer_B[k]), formats.unpack_A_src, formats.unpack_A_dst);
-    }
+        START_PERF_MEASURE("INIT")
+        // hw_configure: the compute API intentionally swaps in0/in1 (see
+        // sdpa_custom_mm_reuse_dest_srcb_block_init), but for the reuse op only SrcA
+        // (V) is ever unpacked from L1, so configure SrcA with the V (buffer_A) format.
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            4 /* unpA_num_faces */,
+            4 /* unpB_num_faces */,
+            params.TILE_SIZE_UNPACK_A,
+            params.TILE_SIZE_UNPACK_B);
 
-    // -- reuse matmul: unpack V (=SrcA, from buffer_A) via the reuse unpack LLK.
-    // The unpack sets a dummy SrcB valid (SrcB comes from DEST, not L1), then the
-    // single collapsed MOP walks all KT_DIM x NT_DIM SrcA tiles.
-    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(NT_DIM, FACE_R_DIM, 4 /* unpA_num_faces */);
-    _llk_unpack_A_sdpa_set_srcb_dummy_valid_();
-    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
-        L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index_a */, params.TILE_SIZE_UNPACK_A, KT_DIM, NT_DIM, 1 /* in1_k_stride: contiguous V tiles */);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // The P preload is a full-tile A2D datacopy: four face-level
+                // SrcA+SrcB publications per tile.
+                _perf_unpack_loop_set_valid<true, true>(4 * ((KT_DIM + 1) / 2));
+                // Reuse starts with one dummy SrcB token, then one SrcA tile
+                // for every (K, N) MVMUL replay.
+                _perf_unpack_loop_set_valid<false, true>(1);
+                _perf_unpack_loop_set_valid<true, false>(KT_DIM * NT_DIM);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // Preserve the verified operation ordering. The reuse init
+                // changes SrcA X_END from one face to a whole tile, so it must
+                // not run until the plain P-preload unpacks have retired.
+                _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+                    0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+                for (std::uint32_t k = 0; k < (KT_DIM + 1) / 2; ++k)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+                        L1_ADDRESS(params.buffer_B[k]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+
+                _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(NT_DIM, FACE_R_DIM, 4 /* unpA_num_faces */);
+                _llk_unpack_A_sdpa_set_srcb_dummy_valid_();
+                _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
+                    L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index_a */, params.TILE_SIZE_UNPACK_A, KT_DIM, NT_DIM, 1 /* in1_k_stride: contiguous V tiles */);
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -166,33 +199,71 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
     static_assert(SRC_TILE + (KT_DIM + 1) / 2 <= DST_TILE, "P preload would overlap the O accumulator at DST_TILE");
 
-    // -- P (=B) preload: datacopy the P stimulus into DEST at tile base SRC_TILE.
-    // dst_index here is a TILE index (datacopy writes 32x32 tiles), so ceil(KT_DIM/2)
-    // tiles hold all KT_DIM 16-row P chunks the matmul reads at (SRC_INDEX + i*16).
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
-    for (std::uint32_t k = 0; k < (KT_DIM + 1) / 2; ++k)
     {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
-            SRC_TILE + k, formats.math, formats.math);
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        PROFILER_SYNC();
     }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_math_loop_clear_valid<true, true>(4 * ((KT_DIM + 1) / 2));
+                _perf_math_loop_clear_valid<true, false>(KT_DIM * NT_DIM);
+                _perf_math_loop_clear_valid<false, true>(1);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
 
-    // -- reuse matmul: SrcB pulled from DEST at SRC_INDEX, SrcA (=V) from the
-    // reuse unpack, accumulating O into DEST at DST_INDEX. signal_output=false ->
-    // no FPU->SFPU handshake, so the op runs standalone. output_granularity=1,
-    // input_granularity=1 are the header defaults.
-    _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_<MATH_FIDELITY>(
-        TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, KT_DIM);
-    _llk_math_sdpa_custom_mm_reuse_dest_srcb_<1 /* output_granularity */, 1 /* input_granularity */>(
-        SRC_INDEX, DST_INDEX, false /* transpose */, KT_DIM, NT_DIM, false /* signal_output */);
+                // The reuse init overwrites the datacopy address modifiers, so
+                // restore the datacopy program at the start of every iteration.
+                _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                    DataCopyType::A2D,
+                    is_fp32_dest_acc_en,
+                    BroadcastType::NONE,
+                    false /* is_int_fpu_en */,
+                    PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+                for (std::uint32_t k = 0; k < (KT_DIM + 1) / 2; ++k)
+                {
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
+                        SRC_TILE + k, formats.math, formats.math);
+                }
 
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                // -- reuse matmul: SrcB pulled from DEST at SRC_INDEX, SrcA (=V) from the
+                // reuse unpack, accumulating O into DEST at DST_INDEX. signal_output=false ->
+                // no FPU->SFPU handshake, so the op runs standalone. output_granularity=1,
+                // input_granularity=1 are the header defaults.
+                _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_<MATH_FIDELITY>(
+                    TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, KT_DIM);
+                _llk_math_sdpa_custom_mm_reuse_dest_srcb_<1 /* output_granularity */, 1 /* input_granularity */>(
+                    SRC_INDEX, DST_INDEX, false /* transpose */, KT_DIM, NT_DIM, false /* signal_output */);
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -208,35 +279,65 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-    _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
-    // Producer half of the SFPU->FPU input handshake. The math header consumes
-    // UNPACK_MATH_DONE (aliased SFPU_FPU) once per K iteration -- a wait_on_zero +
-    // t6_semaphore_get pair gated only on input_granularity, NOT on signal_output.
-    // In a real SDPA chunk the SFPU exp producer posts this token to tell the FPU
-    // "P is ready in DEST for K-chunk i"; the reuse matmul is the CONSUMER half of a
-    // cross-layer handshake (see the semaphore-handshake-audit skill and the
-    // llk_unpack_AB_reduce_custom_runtime consumer). With no SFPU partner in this
-    // standalone test the math thread would wait_on_zero forever, so this spectator
-    // pack thread stands in for the SFPU producer and posts KT_DIM tokens up front --
-    // exactly the reduce_block_max_test.cpp pattern. Posting before wait_for_math_done
-    // (and before the math waits drain them) keeps the value >=1 until each get lands.
-    t6_semaphore_init(ckernel::semaphore::UNPACK_MATH_DONE, 0, KT_DIM);
-    for (std::uint32_t i = 0; i < KT_DIM; ++i)
     {
-        t6_semaphore_post<>(ckernel::semaphore::UNPACK_MATH_DONE);
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
+        _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Stand in for the production exp SFPU, one back-pressured token
+            // at a time so LOOP_FACTOR * KT_DIM need not fit the 4-bit counter.
+            t6_semaphore_init(ckernel::semaphore::UNPACK_MATH_DONE, 0, 1);
+        }
+        PROFILER_SYNC();
     }
 
-    _llk_packer_wait_for_math_done_();
-
-    // Pack the NT_DIM output tiles starting at tile base DST_TILE.
-    for (std::uint32_t i = 0; i < NT_DIM; ++i)
     {
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_TILE + i, L1_ADDRESS(params.buffer_Res[i]));
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t i = 0; i < LOOP_FACTOR * KT_DIM; ++i)
+            {
+                t6_semaphore_post<>(ckernel::semaphore::UNPACK_MATH_DONE);
+                t6_semaphore_wait_on_max<p_stall::STALL_SYNC>(ckernel::semaphore::UNPACK_MATH_DONE);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+        }
+        else
+        {
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (sync_with_math)
+                {
+                    for (std::uint32_t i = 0; i < KT_DIM; ++i)
+                    {
+                        t6_semaphore_post<>(ckernel::semaphore::UNPACK_MATH_DONE);
+                        t6_semaphore_wait_on_max<p_stall::STALL_SYNC>(ckernel::semaphore::UNPACK_MATH_DONE);
+                    }
+                    _llk_packer_wait_for_math_done_();
+                }
+
+                // Pack the NT_DIM output tiles starting at tile base DST_TILE.
+                for (std::uint32_t i = 0; i < NT_DIM; ++i)
+                {
+                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_TILE + i, L1_ADDRESS(params.buffer_Res[i]));
+                }
+                if constexpr (sync_with_math)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 
 #endif

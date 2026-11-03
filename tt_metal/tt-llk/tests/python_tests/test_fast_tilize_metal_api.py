@@ -11,9 +11,9 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
@@ -33,7 +33,16 @@ TILE_C = 32
     dest_acc=[DestAccumulation.No],
     dimensions=[(1, 2), (1, 4), (1, 8), (2, 4), (2, 8), (10, 12)],
 )
-def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
+def test_fast_tilize_metal_api(
+    formats,
+    dest_acc,
+    dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     rt, ct = dimensions
     input_dimensions = [rt * TILE_R, ct * TILE_C]
     tile_count = rt * ct
@@ -49,31 +58,39 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
         src_A, input_dimensions, formats.output_format
     )
 
-    cfg = TestConfig(
-        "sources/fast_tilize_metal_api_test.cpp",
-        formats,
-        templates=[],
-        runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(1),
-            NUM_FACES(4),
-            NUM_GUARD_TILES(0),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_count,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/fast_tilize_metal_api_test.cpp",
+            formats=formats,
+            templates=[],
+            runtimes=[
+                generate_input_dim(input_dimensions, input_dimensions),
+                TILE_COUNT(tile_count),
+                LOOP_FACTOR(1),
+                NUM_FACES(4),
+                NUM_GUARD_TILES(0),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_count,
+            ),
+            dest_acc=dest_acc,
+            compile_time_formats=True,
         ),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
     )
+    if is_perf:
+        return
 
-    res = cfg.run().result
+    res = outcome.result
     res_tensor = result_tensor(res, formats.output_format, golden)
     assert passed_test(golden, res_tensor, formats.output_format)

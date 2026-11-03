@@ -28,7 +28,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
+#include "perf.h"
+#include "profiler.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -66,6 +69,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
@@ -74,43 +80,64 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
-    // compute_kernel_hw_startup
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        DEFAULT_TENSOR_SHAPE.total_num_faces(),
-        DEFAULT_TENSOR_SHAPE.total_num_faces());
-
-    // Poison op (see the file header).
-    const std::uint32_t poison_tile_bytes = SCALE_DATUM_SIZE(formats.unpack_A_src, DEFAULT_TENSOR_SHAPE.total_tensor_size());
-    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
-    for (std::uint32_t i = 0; i < POISON_TILES; ++i)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * poison_tile_bytes), formats.unpack_A_src, formats.unpack_A_dst);
+        START_PERF_MEASURE("INIT")
+        // compute_kernel_hw_startup
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            DEFAULT_TENSOR_SHAPE.total_num_faces(),
+            DEFAULT_TENSOR_SHAPE.total_num_faces());
+
+        // Poison op (see the file header).
+        const std::uint32_t poison_tile_bytes = SCALE_DATUM_SIZE(formats.unpack_A_src, DEFAULT_TENSOR_SHAPE.total_tensor_size());
+        _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+        for (std::uint32_t i = 0; i < POISON_TILES; ++i)
+        {
+            _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * poison_tile_bytes), formats.unpack_A_src, formats.unpack_A_dst);
+        }
+        _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape.face_r_dim, num_faces);
+
+        // sum_reduce_scalar_init -> copy_init: unpack A only,
+        // no broadcast/transpose (datacopy A2D source path).
+        _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+        PROFILER_SYNC();
     }
-    _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape.face_r_dim, num_faces);
-
-    // sum_reduce_scalar_init -> copy_init: unpack A only,
-    // no broadcast/transpose (datacopy A2D source path).
-    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
-
-    // Copy phase: stream A[i] into SrcA for each tile (MATH moves it into DEST[i]).
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // Copy phase: generic unpack_A NONE posts SrcA + dummy SrcB per face.
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(params.TILE_CNT * num_faces);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(1); // switch_to_reduce dummy SrcA+SrcB
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+                _llk_unpack_mul_reduce_scalar_switch_to_reduce_();
+            }
+        }
+        PROFILER_SYNC();
     }
-
-    // Switch to the reduce phase: reset counters and re-arm SrcA/SrcB DVALID so
-    // MATH can reuse DEST as source operands. Shared with mul_reduce_scalar.
-    _llk_unpack_mul_reduce_scalar_switch_to_reduce_();
 }
 
 #endif
@@ -133,6 +160,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t tile_cnt            = params.TILE_CNT;
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
@@ -140,65 +170,85 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
 
-    // compute_kernel_hw_startup
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    // compute_kernel_hw_startup programs the SFPU config register once per
-    // kernel; this standalone harness bypasses it, so run the idempotent
-    // once-init before the reduce-phase _calculate_fill_ SFPU stores.
-    _llk_math_eltwise_unary_sfpu_init_once_();
-
-    // Poison op (see the file header).
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, formats.math);
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
-    for (std::uint32_t i = 0; i < POISON_TILES; ++i)
     {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math, DEFAULT_TENSOR_SHAPE);
+        START_PERF_MEASURE("INIT")
+        // compute_kernel_hw_startup
+        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_eltwise_unary_sfpu_init_once_();
+
+        // Poison op (see the file header).
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, formats.math);
+        _llk_math_wait_for_dest_available_<DST_SYNC>();
+        for (std::uint32_t i = 0; i < POISON_TILES; ++i)
+        {
+            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                i, formats.math, formats.math, DEFAULT_TENSOR_SHAPE);
+        }
+        _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+
+        // sum_reduce_scalar_init -> copy_init: datacopy A2D.
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
+        PROFILER_SYNC();
     }
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
-
-    // sum_reduce_scalar_init -> copy_init: datacopy A2D.
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
-
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
-
-    // Step 1 - copy phase: DEST[i] = A[i] via datacopy A2D.
-    for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
-        LLK_ASSERT((i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Copy tile index exceeds maximum destination tiles");
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math, tensor_shape);
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(tile_cnt * tensor_shape.total_num_faces());
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+
+                for (std::uint32_t i = 0; i < tile_cnt; ++i)
+                {
+                    LLK_ASSERT(
+                        (i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                        "Copy tile index exceeds maximum destination tiles");
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        i, formats.math, formats.math, tensor_shape);
+                }
+
+                _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
+
+                _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(DST_INDEX);
+                _llk_math_eltwise_unary_sfpu_params_(
+                    ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
+                _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
+                _llk_math_eltwise_unary_sfpu_params_(
+                    ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, 0.0f /* clear DEST[0] */);
+
+                _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+                for (std::uint32_t i = 1; i < tile_cnt; ++i)
+                {
+                    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
+                    _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+                }
+
+                _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
+                _llk_math_mul_reduce_scalar_clear_dvalid_();
+
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
-
-    // Step 3 - initialize the reduce phase (addr mods + counter reset).
-    // Shared reduce tail with mul_reduce_scalar.
-    _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
-
-    // Step 4 - stage tile 0 into SrcA, fill SrcB with the scaler, clear DEST[0].
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(DST_INDEX);
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, 0.0f /* clear DEST[0] */);
-
-    // Step 6 - column-reduce every tile, accumulating into DEST[0].
-    // (narrow_tile / num_faces are derived internally from the TensorShape.)
-    _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
-    for (std::uint32_t i = 1; i < tile_cnt; ++i)
-    {
-        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
-    }
-
-    // Step 7 - collapse DEST[0] to a single scalar.
-    _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
-
-    // Step 8 - clear DVALID flags.
-    _llk_math_mul_reduce_scalar_clear_dvalid_();
-
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -214,6 +264,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
@@ -224,31 +277,46 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
 
-    // Blackhole-only test: call the pack LLKs directly (the _wrapper_ helpers exist
-    // only to paper over the WH/BH signature split for dual-arch tests).
-    // compute_kernel_hw_startup
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face);
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face);
 
-    // No-src init: packer strides are owned by the hw-configure above, so skip re-programming them here.
-    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
-        formats.pack_src, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+        _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+            formats.pack_src, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 
-    // sum_reduce_scalar_tile: mask so only the reduced scalar [0] is packed.
-    _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_SCALAR>();
+        _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_SCALAR>();
 
-    _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    // Poison op (see the file header): release its DEST section without packing it.
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+        // Poison op (see the file header): release its DEST section without packing it.
+        _llk_packer_wait_for_math_done_();
+        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(params.buffer_Res[0]));
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 
-    // Single output tile: the scalar lives in DEST[0].
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
-
-    // mul_reduce_scalar_uninit
     _llk_pack_reduce_mask_clear_();
 }
 

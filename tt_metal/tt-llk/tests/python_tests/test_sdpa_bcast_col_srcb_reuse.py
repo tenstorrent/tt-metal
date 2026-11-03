@@ -53,6 +53,11 @@ def test_sdpa_bcast_col_srcb_reuse(
     mathop,
     num_tiles,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     run_sdpa_bcast_col_srcb_reuse(
         "sources/sdpa_bcast_col_srcb_reuse_test.cpp",
@@ -60,4 +65,8 @@ def test_sdpa_bcast_col_srcb_reuse(
         mathop,
         num_tiles=num_tiles,
         boot_mode=boot_mode,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )

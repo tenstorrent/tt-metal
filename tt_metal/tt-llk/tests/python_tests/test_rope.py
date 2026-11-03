@@ -29,11 +29,18 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import max_dest_tiles, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import ROPE, TILE_COUNT
+from helpers.test_variant_parameters import LOOP_FACTOR, ROPE, TILE_COUNT
 
 pytestmark = blackhole_only
+
+_ACTIVE_PERF = None
+
+
+class _PerfFinished(Exception):
+    pass
+
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 
@@ -125,7 +132,14 @@ def _run(
     tile_h=1,
     cos_sin_per_row=False,
     dest_acc=DestAccumulation.No,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
+    if _ACTIVE_PERF is not None:
+        is_perf, perf_report, run_types, loop_factor = _ACTIVE_PERF
     max_tiles = max_dest_tiles(dest_acc)
     assert tiles <= max_tiles, f"{tiles} tiles is past the Dest half"
     formats = InputOutputFormat(
@@ -137,36 +151,41 @@ def _run(
         ),
     )
 
-    configuration = TestConfig(
-        "sources/rope_test.cpp",
-        formats,
-        dest_acc=dest_acc,
-        templates=[
-            ROPE(
-                fused_cos_sin=fused_cos_sin,
-                tile_h=tile_h,
-                cos_sin_per_row=cos_sin_per_row,
-                has_scale=scale_fp32 is not None,
-                scale_fp32=0 if scale_fp32 is None else scale_fp32,
-                **geometry,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/rope_test.cpp",
+            formats=formats,
+            dest_acc=dest_acc,
+            templates=[
+                ROPE(
+                    fused_cos_sin=fused_cos_sin,
+                    tile_h=tile_h,
+                    cos_sin_per_row=cos_sin_per_row,
+                    has_scale=scale_fp32 is not None,
+                    scale_fp32=0 if scale_fp32 is None else scale_fp32,
+                    **geometry,
+                ),
+            ],
+            runtimes=[LOOP_FACTOR(1), TILE_COUNT(tiles)],
+            variant_stimuli=StimuliConfig(
+                dest.flatten(),
+                formats.input_format,
+                torch.zeros(ELEMENTS_PER_TILE, dtype=torch.bfloat16),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tiles,
+                tile_count_B=1,
+                tile_count_res=tiles,
             ),
-        ],
-        runtimes=[TILE_COUNT(tiles)],
-        variant_stimuli=StimuliConfig(
-            dest.flatten(),
-            formats.input_format,
-            torch.zeros(ELEMENTS_PER_TILE, dtype=torch.bfloat16),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tiles,
-            tile_count_B=1,
-            tile_count_res=tiles,
         ),
     )
-
-    result = torch.tensor(
-        configuration.run().result, dtype=format_dict[formats.output_format]
-    )
+    if is_perf:
+        raise _PerfFinished
+    result = torch.tensor(outcome.result, dtype=format_dict[formats.output_format])
     return result.reshape(-1, ROW_DATUMS)
 
 
@@ -398,3 +417,14 @@ def test_rope_fused_dest_precision(case, dest_acc):
         cs_base=cs_base,
         dest_acc=dest_acc,
     )
+
+
+def invoke_with_perf(fn, *args, is_perf, perf_report, run_types, loop_factor, **kwargs):
+    global _ACTIVE_PERF
+    _ACTIVE_PERF = (is_perf, perf_report, run_types, loop_factor)
+    try:
+        fn(*args, **kwargs)
+    except _PerfFinished:
+        return
+    finally:
+        _ACTIVE_PERF = None

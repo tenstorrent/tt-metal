@@ -7,9 +7,9 @@ from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict, format_tile_sizes
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
     LOOP_FACTOR,
@@ -43,6 +43,11 @@ def test_fast_tilize_tiny_tiles(
     formats,
     dest_acc,
     dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
 
     if (
@@ -77,41 +82,49 @@ def test_fast_tilize_tiny_tiles(
         .to(format_dict[formats.output])
     )
 
-    configuration = TestConfig(
-        "sources/fast_tilize_test.cpp",
-        formats,
-        templates=[],
-        runtimes=[
-            INPUT_DIMENSIONS(
-                full_rt_dim=input_height,
-                full_ct_dim=input_width,
-                block_ct_dim=input_width,
-                block_rt_dim=input_height,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/fast_tilize_test.cpp",
+            formats=formats,
+            templates=[],
+            runtimes=[
+                INPUT_DIMENSIONS(
+                    full_rt_dim=input_height,
+                    full_ct_dim=input_width,
+                    block_ct_dim=input_width,
+                    block_rt_dim=input_height,
+                ),
+                TILE_COUNT(tile_cnt_A),
+                LOOP_FACTOR(1),
+                NUM_FACES(num_faces),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                num_faces=num_faces,
+                face_r_dim=face_r_dim,
+                tile_dimensions=TILE_DIMENSIONS,
+                use_dense_tile_dimensions=True,
+                operand_res_tile_size=format_tile_sizes[formats.output_format],
             ),
-            TILE_COUNT(tile_cnt_A),
-            LOOP_FACTOR(1),
-            NUM_FACES(num_faces),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=TILE_DIMENSIONS,
-            use_dense_tile_dimensions=True,
-            operand_res_tile_size=format_tile_sizes[formats.output_format],
+            dest_acc=dest_acc,
+            compile_time_formats=True,
         ),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
     )
+    if is_perf:
+        return
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = outcome.result
 
     # Verify the kernel wrote a contiguous block of tiles to L1 (no gaps
     # from incorrect bank-switch addressing). This confirms the packer's

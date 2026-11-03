@@ -50,6 +50,7 @@ from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
 from helpers.pack import pack_bfp16
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -219,6 +220,11 @@ def _run(
     input_tile_offset=0,
     preserve_zero_flag=False,
     operands=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     """Run sdpa_custom_mm and check it against the golden; return the (M, N) result.
 
@@ -254,39 +260,48 @@ def _run(
         input_B_format=DataFormat.Float16_b,
     ).reshape(M, N)
 
-    configuration = TestConfig(
-        "sources/sdpa_custom_mm_test.cpp",
-        InputOutputFormat(
-            input_format=DataFormat.Float16_b,
-            output_format=DataFormat.Float16_b,
-        ),
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            SDPA_CUSTOM_MM_FLAGS(
-                signal_granularity=signal_granularity,
-                read_transposed=read_transposed,
-                mm_transpose=mm_transpose,
-                sdpa_row_stride=row_stride,
-                sdpa_input_tile_offset=input_tile_offset,
-                preserve_src_zero_flag=preserve_zero_flag,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sdpa_custom_mm_test.cpp",
+            formats=InputOutputFormat(
+                input_format=DataFormat.Float16_b,
+                output_format=DataFormat.Float16_b,
             ),
-        ],
-        runtimes=[
-            # in1 (SrcA) = [32,32] -> 4 faces of 16 rows; in0 (SrcB) = [M,32] -> 2 faces of M
-            # rows; result tile is [M,32] -> 2 faces. in1_face_r_dim stays at the 16 default.
-            NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=_SdpaCustomMMStimuli(
-            kt,
-            ct,
-            _pack_in1(torch_b, kt, ct, read_transposed, row_stride, input_tile_offset),
-            _pack_in0(torch_a, kt),
+            templates=[
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                SDPA_CUSTOM_MM_FLAGS(
+                    signal_granularity=signal_granularity,
+                    read_transposed=read_transposed,
+                    mm_transpose=mm_transpose,
+                    sdpa_row_stride=row_stride,
+                    sdpa_input_tile_offset=input_tile_offset,
+                    preserve_src_zero_flag=preserve_zero_flag,
+                ),
+            ],
+            runtimes=[
+                # in1 (SrcA) = [32,32] -> 4 faces of 16 rows; in0 (SrcB) = [M,32] -> 2 faces of M
+                # rows; result tile is [M,32] -> 2 faces. in1_face_r_dim stays at the 16 default.
+                NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
+                IN_FACE_DIMS(in0_face_r_dim=M),
+            ],
+            variant_stimuli=_SdpaCustomMMStimuli(
+                kt,
+                ct,
+                _pack_in1(
+                    torch_b, kt, ct, read_transposed, row_stride, input_tile_offset
+                ),
+                _pack_in0(torch_a, kt),
+            ),
+            dest_acc=DestAccumulation.No,
         ),
-        dest_acc=DestAccumulation.No,
     )
-
-    res = configuration.run().result
+    if is_perf:
+        return None
+    res = outcome.result
 
     # Device packs ct = N//32 result tiles; within each tile the two 16-col faces
     # (M x FACE_C_DIM, row-major) are contiguous, then padded to a full 32-row tile.
@@ -462,30 +477,36 @@ def test_sdpa_custom_mm_mask_extent_restore(
     # inputs keep both the mask-seeded and zero-seeded sums exactly representable.
     mask = ((torch.arange(N) % 4 - 1) * 2).to(torch.bfloat16)
     config = TestConfig(
-        "sources/sdpa_custom_mm_test.cpp",
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            SDPA_CUSTOM_MM_FLAGS(
-                signal_granularity=ct,
-                read_transposed=read_transposed,
-                sdpa_row_stride=row_stride,
-                sdpa_input_tile_offset=input_tile_offset,
-            ),
-            SDPA_MASK_REENTRY(),
-        ],
-        runtimes=[
-            NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=_SdpaCustomMMStimuli(
-            kt,
-            ct,
-            _pack_in1(rhs, kt, ct, read_transposed, row_stride, input_tile_offset),
-            _pack_in0(lhs, kt),
-            mask=mask,
-        ),
-        dest_acc=DestAccumulation.No,
+        **with_functional_defaults(
+            dict(
+                test_name="sources/sdpa_custom_mm_test.cpp",
+                formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+                templates=[
+                    CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                    SDPA_CUSTOM_MM_FLAGS(
+                        signal_granularity=ct,
+                        read_transposed=read_transposed,
+                        sdpa_row_stride=row_stride,
+                        sdpa_input_tile_offset=input_tile_offset,
+                    ),
+                    SDPA_MASK_REENTRY(),
+                ],
+                runtimes=[
+                    NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
+                    IN_FACE_DIMS(in0_face_r_dim=M),
+                ],
+                variant_stimuli=_SdpaCustomMMStimuli(
+                    kt,
+                    ct,
+                    _pack_in1(
+                        rhs, kt, ct, read_transposed, row_stride, input_tile_offset
+                    ),
+                    _pack_in0(lhs, kt),
+                    mask=mask,
+                ),
+                dest_acc=DestAccumulation.No,
+            )
+        )
     )
     packed = torch.as_tensor(config.run().result).reshape(2, ct, -1)
     result = (

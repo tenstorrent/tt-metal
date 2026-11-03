@@ -56,8 +56,11 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -103,49 +106,92 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-
-    // in1 -> SrcA (rhs, [32,32] tiles), in0 -> SrcB (lhs, [M,32] narrow tiles).
-    // _llk_unpack_hw_configure_ takes (unpA, unpB) pairs; unpA = SrcA = in1, unpB = SrcB = in0.
-    // Both inputs are Float16_b, so the src/dst formats are identical either way; the face
-    // geometry is what differs (in1: 16-row faces x4, in0: M-row faces x2).
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, // unpA_src : in1 (SrcA)
-        formats.unpack_B_src, // unpB_src : in0 (SrcB)
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        params.in1_face_r_dim,      // unpA_face_r_dim : in1 = FACE_R_DIM (16)
-        params.in0_face_r_dim,      // unpB_face_r_dim : in0 = M
-        params.num_faces_A,         // unpA_num_faces  : in1 = 4
-        params.num_faces_B,         // unpB_num_faces  : in0 = 2
-        params.TILE_SIZE_UNPACK_A,  // unpA_tile_size  : in1 [32,32]
-        params.TILE_SIZE_UNPACK_B); // unpB_tile_size  : in0 [M,32]
-
-    // init: unpB_face_r_dim = in0 row count (M), unpA_dst_format selects the profiling
-    // heuristic (post1) in the MOP config.
-    _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
-
-    // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
-    // The re-entry variant appends a mask to in1 and uses it only on the first pass.
-    // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
-    for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
-    {
-        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
-            L1_ADDRESS(params.buffer_A[0]),                                            // base_address_a : in1 (SrcA, rhs)
-            L1_ADDRESS(params.buffer_B[0]),                                            // base_address_b : in0 (SrcB, lhs)
-            SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[SDPA_MASK_TILE_INDEX]) : 0, // base_address_mask
-            SDPA_INPUT_TILE_OFFSET,                                                    // tile_index_a
-            0,                                                                         // tile_index_b
-            params.TILE_SIZE_UNPACK_A,                                                 // tile_size_a (in1 [32,32])
-            params.TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
-            KT_DIM,
-            CT_DIM,
-            SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only
-            params.in0_face_r_dim           // operandB_face_r_dim : in0 row count (M)
-#ifdef SDPA_ROW_STRIDE
-            ,
-            SDPA_ROW_STRIDE
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 #endif
-        );
+
+    {
+        START_PERF_MEASURE("INIT")
+        // in1 -> SrcA (rhs, [32,32] tiles), in0 -> SrcB (lhs, [M,32] narrow tiles).
+        // _llk_unpack_hw_configure_ takes (unpA, unpB) pairs; unpA = SrcA = in1, unpB = SrcB = in0.
+        // Both inputs are Float16_b, so the src/dst formats are identical either way; the face
+        // geometry is what differs (in1: 16-row faces x4, in0: M-row faces x2).
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, // unpA_src : in1 (SrcA)
+            formats.unpack_B_src, // unpB_src : in0 (SrcB)
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            params.in1_face_r_dim,      // unpA_face_r_dim : in1 = FACE_R_DIM (16)
+            params.in0_face_r_dim,      // unpB_face_r_dim : in0 = M
+            params.num_faces_A,         // unpA_num_faces  : in1 = 4
+            params.num_faces_B,         // unpB_num_faces  : in0 = 2
+            params.TILE_SIZE_UNPACK_A,  // unpA_tile_size  : in1 [32,32]
+            params.TILE_SIZE_UNPACK_B); // unpB_tile_size  : in0 [M,32]
+
+        // init: unpB_face_r_dim = in0 row count (M), unpA_dst_format selects the profiling
+        // heuristic (post1) in the MOP config.
+        _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Same MOP as custom_mm: one SrcA+SrcB, then CT_DIM-1 SrcA, per K.
+            // A mask chunk posts one extra SrcB before the first pass. Bulk
+            // all-A-then-all-B fills the depth-2 SrcA bank before math sees SrcB.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+                {
+                    if (SDPA_MASK_REENTRY && pass == 0)
+                    {
+                        _perf_unpack_loop_set_valid<false, true>(1);
+                    }
+                    for (std::uint32_t k = 0; k < KT_DIM; ++k)
+                    {
+                        _perf_unpack_loop_set_valid<true, true>(1);
+                        if constexpr (CT_DIM > 1)
+                        {
+                            _perf_unpack_loop_set_valid<true, false>(CT_DIM - 1);
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
+                // The re-entry variant appends a mask to in1 and uses it only on the first pass.
+                // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
+                for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+                {
+                    _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
+                        L1_ADDRESS(params.buffer_A[0]),                                            // base_address_a : in1 (SrcA, rhs)
+                        L1_ADDRESS(params.buffer_B[0]),                                            // base_address_b : in0 (SrcB, lhs)
+                        SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[SDPA_MASK_TILE_INDEX]) : 0, // base_address_mask
+                        SDPA_INPUT_TILE_OFFSET,                                                    // tile_index_a
+                        0,                                                                         // tile_index_b
+                        params.TILE_SIZE_UNPACK_A,                                                 // tile_size_a (in1 [32,32])
+                        params.TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
+                        KT_DIM,
+                        CT_DIM,
+                        SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only
+                        params.in0_face_r_dim           // operandB_face_r_dim : in0 row count (M)
+#ifdef SDPA_ROW_STRIDE
+                        ,
+                        SDPA_ROW_STRIDE
+#endif
+                    );
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -171,28 +217,75 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-
-    if constexpr (SDPA_PRESERVE_SRC_ZERO_FLAG)
     {
-        // Leave the Src zero flag at keep, as a preceding copy_init does. The init must restore the
-        // operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
-        math::_configure_preserve_zero_flag_state_();
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+        if constexpr (SDPA_PRESERVE_SRC_ZERO_FLAG)
+        {
+            // Leave the Src zero flag at keep, as a preceding copy_init does. The init must restore the
+            // operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
+            math::_configure_preserve_zero_flag_state_();
+        }
+
+        // init: operandB_face_r_dim = in0 row count (M), ct_dim programs the MVMUL template.
+        _llk_math_sdpa_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, CT_DIM);
+        PROFILER_SYNC();
     }
-
-    // init: operandB_face_r_dim = in0 row count (M), ct_dim programs the MVMUL template.
-    _llk_math_sdpa_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, CT_DIM);
-
-    for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
-        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-        // Seed DEST from the mask on the first re-entry pass, otherwise zero it,
-        // then accumulate the whole kt walk into ct_dim tiles.
-        _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(
-            params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM, SDPA_MASK_REENTRY && pass == 0 /* mask_chunk */);
-        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            // Mask chunk clears SrcB, then each K clears SrcA (CT_DIM-1) and SrcA+SrcB.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+                {
+                    if (SDPA_MASK_REENTRY && pass == 0)
+                    {
+                        _perf_math_loop_clear_valid<false, true>(1);
+                    }
+                    for (std::uint32_t k = 0; k < KT_DIM; ++k)
+                    {
+                        if constexpr (CT_DIM > 1)
+                        {
+                            _perf_math_loop_clear_valid<true, false>(CT_DIM - 1);
+                        }
+                        _perf_math_loop_clear_valid<true, true>(1);
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                    }
+                    // Seed DEST from the mask on the first re-entry pass, otherwise zero it,
+                    // then accumulate the whole kt walk into ct_dim tiles.
+                    _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(
+                        params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM, SDPA_MASK_REENTRY && pass == 0 /* mask_chunk */);
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -210,37 +303,62 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
-    // Mirror sdpa_custom_mm_block_init's PACK branch: standard pack hw_configure/init/dest
-    // for [M,32] tiles, then the sdpa_custom_mm_block_init_pack_short() Z/W-stride RMWs that
-    // pack the ct_dim result tiles densely (two half-tile faces per output).
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
-
-    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
-        formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
-
-    // sdpa_custom_mm_block_init_pack_short(): Z-stride = FACE_C_DIM * 8 * 2,
-    // W-stride = (TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2. Both are spelled here exactly
-    // as the compute API spells them.
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
-
-    for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
-        _llk_packer_wait_for_math_done_();
-        // Consume the FPU->SFPU notifications so subsequent passes cannot
-        // overflow the 4-bit semaphore. PACK is the consumer in fused SDPA.
-        for (std::uint32_t signal = 0; signal < CT_DIM / SIGNAL_GRANULARITY; ++signal)
+        START_PERF_MEASURE("INIT")
+        // Mirror sdpa_custom_mm_block_init's PACK branch: standard pack hw_configure/init/dest
+        // for [M,32] tiles, then the sdpa_custom_mm_block_init_pack_short() Z/W-stride RMWs that
+        // pack the ct_dim result tiles densely (two half-tile faces per output).
+        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
+
+        _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+            formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+
+        // sdpa_custom_mm_block_init_pack_short(): Z-stride = FACE_C_DIM * 8 * 2,
+        // W-stride = (TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2. Both are spelled here exactly
+        // as the compute API spells them.
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU);
         }
-        for (std::uint32_t i = 0; i < CT_DIM; ++i)
+        else
         {
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                        // Consume the FPU->SFPU notifications so subsequent passes cannot
+                        // overflow the 4-bit semaphore. PACK is the consumer in fused SDPA.
+                        for (std::uint32_t signal = 0; signal < CT_DIM / SIGNAL_GRANULARITY; ++signal)
+                        {
+                            t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU);
+                        }
+                    }
+                    for (std::uint32_t i = 0; i < CT_DIM; ++i)
+                    {
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
         }
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
     }
 
     // sdpa_custom_mm_block_uninit(): restore the default tile Z/W strides.

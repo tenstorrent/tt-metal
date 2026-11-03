@@ -31,8 +31,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -185,30 +188,51 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t src_format = formats.unpack_A_src;
     const std::uint32_t dst_format = formats.unpack_A_dst;
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES /* unpA_num_faces */, TILE_NUM_FACES /* unpB_num_faces */);
-    ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
-    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
-        for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES /* unpA_num_faces */, TILE_NUM_FACES /* unpB_num_faces */);
+        ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            unpack_copy_tile(params, r, c, src_format, dst_format); // chunk 0 -> slot0, the rest -> slot1
-            if constexpr (LOCAL_SORT_NEEDS_SRCB)
+        }
+        else
+        {
+            // Custom dest-feed unpack: MATH_ISOLATE still runs the real copy so SFPU has DEST/src.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_set_srcb_dummy_valid_(); // local_sort
-            }
-            if (c > 0 && !SORT_MODE_COLUMNS)
-            {
-                _llk_unpack_set_srcb_dummy_valid_(); // rebuild(slot0)
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+                    {
+                        unpack_copy_tile(params, r, c, src_format, dst_format); // chunk 0 -> slot0, the rest -> slot1
+                        if constexpr (LOCAL_SORT_NEEDS_SRCB)
+                        {
+                            _llk_unpack_set_srcb_dummy_valid_(); // local_sort
+                        }
+                        if (c > 0 && !SORT_MODE_COLUMNS)
+                        {
+                            _llk_unpack_set_srcb_dummy_valid_(); // rebuild(slot0)
+                        }
+                    }
+                    if constexpr (REBUILD_LONE_CHUNK)
+                    {
+                        _llk_unpack_set_srcb_dummy_valid_();
+                    }
+                }
             }
         }
-        if constexpr (REBUILD_LONE_CHUNK)
-        {
-            _llk_unpack_set_srcb_dummy_valid_();
-        }
+        PROFILER_SYNC();
     }
 }
 
@@ -498,97 +522,123 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t math_format = formats.math;
 
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
-    topk_xl_scrub_dest();
-
-    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
-        _llk_math_wait_for_dest_available_<dest_sync>();
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        topk_xl_scrub_dest();
+        PROFILER_SYNC();
+    }
 
-        if constexpr (SORT_MODE_COLUMNS)
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // Descending columns merge with ascending ones, so every merged column is bitonic.
-            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
-            for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
-            {
-                copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
-                topk_xl_merge<TOPK_XL_K, true /* fused */>(SLOT0);
-                topk_xl_rebuild_columns<TOPK_XL_K>(SLOT0, TOPK_XL_ASCENDING && c + 1 == TOPK_XL_NUM_CHUNKS);
-            }
-        }
-        else if constexpr (FUSED_E2E)
-        {
-            // Fused end-to-end: runtime chunk-id stamps, fused merge/rebuild,
-            // then ONE global split -- plain or with a segment base.
-            copy_sort_rt<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, 0, math_format);
-            for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
-            {
-                copy_sort_rt<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, c, math_format);
-                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format, TOPK_XL_ASCENDING && c + 1 == TOPK_XL_NUM_CHUNKS);
-            }
-            topk_xl_separate_indices_row_major_global_init();
-            if constexpr (TOPK_XL_SEG_BASE != 0)
-            {
-                topk_xl_separate_indices_row_major_global_base<TOPK_XL_K>(SLOT0, TOPK_XL_SEG_BASE);
-            }
-            else
-            {
-                topk_xl_separate_indices_row_major_global<TOPK_XL_K>(SLOT0);
-            }
-        }
-        else if constexpr (FUSED_REDUCE)
-        {
-            // Fused reduction: chunks stay in the fused [value|index] form all the
-            // way through merge/rebuild, and the index split happens once at the end.
-            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
-
-            for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
-            {
-                copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
-                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format);
-            }
-
-            topk_xl_separate_indices_init(TOPK_XL_GROUP_SHIFT);
-            topk_xl_separate_indices<TOPK_XL_K, TOPK_XL_GROUP_ID>(SLOT0);
-        }
-        else if constexpr (INDEX_OP_ROW_MAJOR)
-        {
-            topk_xl_chunk_base_init();
-
-            // chunk 0 -> slot0, local-sort descending.
-            process_chunk_math<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
-
-            for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
-            {
-                // chunk c -> slot1, local-sort ascending, then merge into slot0.
-                process_chunk_math<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
-                merge_and_rebuild<TOPK_XL_K, false /* fused */>(true /* do_merge */, math_format);
-            }
-            if constexpr (REBUILD_LONE_CHUNK)
-            {
-                merge_and_rebuild<TOPK_XL_K, false /* fused */>(false /* do_merge */, math_format);
-            }
         }
         else
         {
-            // Single-chunk terminal ops: copy_sort, then the index step. For separate
-            // the split is here (MATH). For remove_msb the value-half zero runs on
-            // PACK (as the op does), so MATH just leaves the fused [value|index] in slot0.
-            // Nothing rebuilds here, so TOPK_XL_ASCENDING drives the local sort instead.
-            static_assert(INDEX_OP_ROW_MAJOR || TOPK_XL_NUM_CHUNKS == 1, "terminal index ops (INDEX_OP 1/2) are single-chunk only");
-            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), TOPK_XL_ASCENDING, math_format);
-
-            if constexpr (INDEX_OP_SEPARATE)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                topk_xl_separate_indices_init(TOPK_XL_GROUP_SHIFT);
-                topk_xl_separate_indices<TOPK_XL_K, TOPK_XL_GROUP_ID>(SLOT0);
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<dest_sync>();
+                    }
+
+                    if constexpr (SORT_MODE_COLUMNS)
+                    {
+                        // Descending columns merge with ascending ones, so every merged column is bitonic.
+                        copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
+                        for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
+                        {
+                            copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
+                            topk_xl_merge<TOPK_XL_K, true /* fused */>(SLOT0);
+                            topk_xl_rebuild_columns<TOPK_XL_K>(SLOT0, TOPK_XL_ASCENDING && c + 1 == TOPK_XL_NUM_CHUNKS);
+                        }
+                    }
+                    else if constexpr (FUSED_E2E)
+                    {
+                        // Fused end-to-end: runtime chunk-id stamps, fused merge/rebuild,
+                        // then ONE global split -- plain or with a segment base.
+                        copy_sort_rt<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, 0, math_format);
+                        for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
+                        {
+                            copy_sort_rt<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, c, math_format);
+                            merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format, TOPK_XL_ASCENDING && c + 1 == TOPK_XL_NUM_CHUNKS);
+                        }
+                        topk_xl_separate_indices_row_major_global_init();
+                        if constexpr (TOPK_XL_SEG_BASE != 0)
+                        {
+                            topk_xl_separate_indices_row_major_global_base<TOPK_XL_K>(SLOT0, TOPK_XL_SEG_BASE);
+                        }
+                        else
+                        {
+                            topk_xl_separate_indices_row_major_global<TOPK_XL_K>(SLOT0);
+                        }
+                    }
+                    else if constexpr (FUSED_REDUCE)
+                    {
+                        // Fused reduction: chunks stay in the fused [value|index] form all the
+                        // way through merge/rebuild, and the index split happens once at the end.
+                        copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
+
+                        for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
+                        {
+                            copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
+                            merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format);
+                        }
+
+                        topk_xl_separate_indices_init(TOPK_XL_GROUP_SHIFT);
+                        topk_xl_separate_indices<TOPK_XL_K, TOPK_XL_GROUP_ID>(SLOT0);
+                    }
+                    else if constexpr (INDEX_OP_ROW_MAJOR)
+                    {
+                        topk_xl_chunk_base_init();
+
+                        // chunk 0 -> slot0, local-sort descending.
+                        process_chunk_math<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
+
+                        for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
+                        {
+                            // chunk c -> slot1, local-sort ascending, then merge into slot0.
+                            process_chunk_math<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
+                            merge_and_rebuild<TOPK_XL_K, false /* fused */>(true /* do_merge */, math_format);
+                        }
+                        if constexpr (REBUILD_LONE_CHUNK)
+                        {
+                            merge_and_rebuild<TOPK_XL_K, false /* fused */>(false /* do_merge */, math_format);
+                        }
+                    }
+                    else
+                    {
+                        // Single-chunk terminal ops: copy_sort, then the index step. For separate
+                        // the split is here (MATH). For remove_msb the value-half zero runs on
+                        // PACK (as the op does), so MATH just leaves the fused [value|index] in slot0.
+                        // Nothing rebuilds here, so TOPK_XL_ASCENDING drives the local sort instead.
+                        static_assert(INDEX_OP_ROW_MAJOR || TOPK_XL_NUM_CHUNKS == 1, "terminal index ops (INDEX_OP 1/2) are single-chunk only");
+                        copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), TOPK_XL_ASCENDING, math_format);
+
+                        if constexpr (INDEX_OP_SEPARATE)
+                        {
+                            topk_xl_separate_indices_init(TOPK_XL_GROUP_SHIFT);
+                            topk_xl_separate_indices<TOPK_XL_K, TOPK_XL_GROUP_ID>(SLOT0);
+                        }
+                    }
+
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
             }
         }
-
-        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
     }
 
     topk_xl_scrub_dest();
@@ -607,17 +657,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t pack_src_format = formats.pack_src;
     const std::uint32_t pack_dst_format = formats.pack_dst; // UInt32: raw 32-bit words.
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_dst_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-
-    if constexpr (INDEX_OP_REMOVE_MSB && !ckernel::sfpu::topk_xl_blaze_compat)
     {
-        ckernel::sfpu::_topk_xl_remove_msb_values_init_();
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_dst_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+
+        if constexpr (INDEX_OP_REMOVE_MSB && !ckernel::sfpu::topk_xl_blaze_compat)
+        {
+            ckernel::sfpu::_topk_xl_remove_msb_values_init_();
+        }
+        PROFILER_SYNC();
     }
 
     // remove_msb: the in-place fused region [0|index] (TILES_PER_SEQ). Otherwise the
@@ -625,33 +682,54 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool FUSED_REGION_ONLY             = INDEX_OP_REMOVE_MSB || SORT_MODE_COLUMNS;
     constexpr std::uint32_t RESULT_TILES_PER_ROW = FUSED_REGION_ONLY ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
 
-    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
-        _llk_packer_wait_for_math_done_();
-
-        if constexpr (INDEX_OP_REMOVE_MSB)
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Zero the value half on PACK, then pack the fused region as [0|index].
-            // Includes the trailing SFPU drain before the pack below.
-            ckernel::test::topk_xl_pack_remove_msb_values<TOPK_XL_K, dest_sync>(SLOT0);
         }
-
-        std::uint32_t res = r * RESULT_TILES_PER_ROW;
-        // Value / fused region of slot0: Dest tiles [SLOT0 .. SLOT0 + TILES_PER_SEQ - 1].
-        for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+        else
         {
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(params.buffer_Res[res++]));
-        }
-        if constexpr (!FUSED_REGION_ONLY)
-        {
-            // Index region of slot0: Dest tiles [SLOT0 + TILES_PER_SEQ .. +2*TILES_PER_SEQ - 1].
-            for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + TILES_PER_SEQ + t, L1_ADDRESS(params.buffer_Res[res++]));
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    if constexpr (sync_with_math)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
+
+                    if constexpr (INDEX_OP_REMOVE_MSB)
+                    {
+                        // Zero the value half on PACK, then pack the fused region as [0|index].
+                        // Includes the trailing SFPU drain before the pack below.
+                        ckernel::test::topk_xl_pack_remove_msb_values<TOPK_XL_K, dest_sync>(SLOT0);
+                    }
+
+                    std::uint32_t res = r * RESULT_TILES_PER_ROW;
+                    // Value / fused region of slot0: Dest tiles [SLOT0 .. SLOT0 + TILES_PER_SEQ - 1].
+                    for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+                    {
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(params.buffer_Res[res++]));
+                    }
+                    if constexpr (!FUSED_REGION_ONLY)
+                    {
+                        // Index region of slot0: Dest tiles [SLOT0 + TILES_PER_SEQ .. +2*TILES_PER_SEQ - 1].
+                        for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+                        {
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                                SLOT0 + TILES_PER_SEQ + t, L1_ADDRESS(params.buffer_Res[res++]));
+                        }
+                    }
+
+                    if constexpr (sync_with_math)
+                    {
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
             }
         }
-
-        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
     }
 }
 

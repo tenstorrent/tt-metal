@@ -26,9 +26,10 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, TOPK_XL
+from helpers.test_variant_parameters import DEST_SYNC, LOOP_FACTOR, TOPK_XL
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -206,7 +207,7 @@ def _build_input(K, num_chunks, tail_elements, num_rows, mode, as_float32):
     return (src if as_float32 else src.to(torch.bfloat16)), rows
 
 
-def _variant(
+def _variant_kwargs(
     K,
     num_chunks=1,
     tail_elements=None,
@@ -231,7 +232,7 @@ def _variant(
     extra_templates=(),
 ):
     """
-    Build the stimulus and the TestConfig for one variant. Returns (config, rows).
+    Build the stimulus and TestConfig kwargs for one variant. Returns (kwargs, rows).
 
     `tail_elements` defaults to K, i.e. full chunks with no -inf padding.
     RemoveMsb packs one region in place, every other index op packs two.
@@ -252,7 +253,7 @@ def _variant(
 
     src_A, rows = _build_input(K, num_chunks, tail_elements, num_rows, mode, is_32bit)
 
-    config = TestConfig(
+    config_kwargs = dict(
         test_name="sources/topk_xl_test.cpp",
         formats=formats,
         templates=[
@@ -279,6 +280,7 @@ def _variant(
             ),
             *extra_templates,
         ],
+        runtimes=[LOOP_FACTOR(1)],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -292,21 +294,63 @@ def _variant(
         dest_acc=DestAccumulation.Yes,  # 32-bit fused value|index words in Dest.
         unpack_to_dest=is_32bit,
     )
-    return config, rows
+    return config_kwargs, rows
 
 
-def _run(K, **kwargs):
+def _variant(*args, **kwargs):
+    """Build the stimulus and TestConfig for one variant. Returns (config, rows)."""
+    config_kwargs, rows = _variant_kwargs(*args, **kwargs)
+    return TestConfig(**with_functional_defaults(config_kwargs)), rows
+
+
+def _run(
+    K,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    **kwargs,
+):
     """Build and run one variant. Returns (result, rows)."""
-    config, rows = _variant(K, **kwargs)
-    return config.run().result, rows
+    config_kwargs, rows = _variant_kwargs(K, **kwargs)
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=config_kwargs,
+    )
+    if is_perf:
+        return None, rows
+    return outcome.result, rows
 
 
-def _run_test_topk(K, compare_index_set=True, index_offset=0, **kwargs):
+def _run_test_topk(
+    K,
+    compare_index_set=True,
+    index_offset=0,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    **kwargs,
+):
     """
     The whole flow for the variants that report a flat index: build the stimulus,
     run it, and check the result against the golden. `kwargs` go to `_variant`.
     """
-    result, rows = _run(K, **kwargs)
+    result, rows = _run(
+        K,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        **kwargs,
+    )
+    if is_perf:
+        return
     _check(
         result,
         K,

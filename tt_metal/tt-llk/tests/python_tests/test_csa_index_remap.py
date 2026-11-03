@@ -11,9 +11,14 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_INDEX, DEST_SYNC, TemplateParameter
+from helpers.test_variant_parameters import (
+    DEST_INDEX,
+    DEST_SYNC,
+    LOOP_FACTOR,
+    TemplateParameter,
+)
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
@@ -29,7 +34,16 @@ class CSA_REMAP(TemplateParameter):
 @parametrize(
     row_offset=[0, 1, 7, 8, 255, 256, 32768], dst_index=[0, 1], dest_sync=list(DestSync)
 )
-def test_csa_index_remap(row_offset, dst_index, dest_sync):
+def test_csa_index_remap(
+    row_offset,
+    dst_index,
+    dest_sync,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     # Enumerate every device/bank pair and both sides of local-row boundaries.
     # The golden uses arithmetic chunk coordinates, independently of the SFPU's masks.
     cases = list(
@@ -61,25 +75,33 @@ def test_csa_index_remap(row_offset, dst_index, dest_sync):
         goldens.append(golden.flatten())
 
     src = torch.cat(inputs).to(torch.uint32)
-    config = TestConfig(
-        "sources/csa_index_remap_test.cpp",
-        InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32),
-        templates=[CSA_REMAP(row_offset), DEST_SYNC(dest_sync)],
-        runtimes=[DEST_INDEX(dst_index)],
-        variant_stimuli=StimuliConfig(
-            src,
-            DataFormat.UInt32,
-            torch.zeros(1024, dtype=torch.uint32),
-            DataFormat.UInt32,
-            DataFormat.UInt32,
-            tile_count_A=9,
-            tile_count_B=1,
-            tile_count_res=9,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/csa_index_remap_test.cpp",
+            formats=InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32),
+            templates=[CSA_REMAP(row_offset), DEST_SYNC(dest_sync)],
+            runtimes=[LOOP_FACTOR(1), DEST_INDEX(dst_index)],
+            variant_stimuli=StimuliConfig(
+                src,
+                DataFormat.UInt32,
+                torch.zeros(1024, dtype=torch.uint32),
+                DataFormat.UInt32,
+                DataFormat.UInt32,
+                tile_count_A=9,
+                tile_count_B=1,
+                tile_count_res=9,
+            ),
+            dest_acc=DestAccumulation.Yes,
+            unpack_to_dest=True,
         ),
-        dest_acc=DestAccumulation.Yes,
-        unpack_to_dest=True,
     )
-    result = torch.as_tensor(config.run().result).to(torch.int64)
+    if is_perf:
+        return
+    result = torch.as_tensor(outcome.result).to(torch.int64)
     assert torch.equal(
         result.flatten(), torch.cat(goldens)
     ), "CSA remap or untouched DEST lanes differ"

@@ -44,9 +44,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize, runtime
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import MATH_FIDELITY, NUM_FACES, TILE_COUNT
 from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.utils import passed_test, result_tensor
@@ -72,6 +72,11 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
     math_fidelity,
     cancellation,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     torch_format = format_dict[formats.output_format]
     tile_cnt = 1
@@ -137,39 +142,46 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
         golden_tensor += a.to(torch.float32) * b.to(torch.float32)
     golden_tensor = golden_tensor.to(torch_format)
 
-    configuration = TestConfig(
-        "sources/sdpa_bcast_col_srca_srcb_reuse_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            # NUM_FACES is a TEMPLATE parameter, not a runtime one: it emits `constexpr num_faces`, and the
-            # SDPA addrmod config needs a compile-time face count (SETC16 "n" asm constraint). The mop's own
-            # inner-loop count is 2, not NUM_FACES_HOST -- that one is a fixed property of the primitive and
-            # is pinned in the .cpp (MATH_MOP_NUM_FACES).
-            NUM_FACES(NUM_FACES_HOST, NUM_FACES_HOST, NUM_FACES_HOST),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt,
-            num_faces=NUM_FACES_HOST,
-            face_r_dim=MAX_FACE_R_DIM,
-            tile_dimensions=TILE_DIMS,
-            use_dense_tile_dimensions=True,
-        ),
-        dest_acc=DestAccumulation.No,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
         boot_mode=boot_mode,
+        test_config_kwargs=dict(
+            test_name="sources/sdpa_bcast_col_srca_srcb_reuse_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(math_fidelity),
+                # NUM_FACES is a TEMPLATE parameter, not a runtime one: it emits `constexpr num_faces`, and the
+                # SDPA addrmod config needs a compile-time face count (SETC16 "n" asm constraint). The mop's own
+                # inner-loop count is 2, not NUM_FACES_HOST -- that one is a fixed property of the primitive and
+                # is pinned in the .cpp (MATH_MOP_NUM_FACES).
+                NUM_FACES(NUM_FACES_HOST, NUM_FACES_HOST, NUM_FACES_HOST),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt,
+                num_faces=NUM_FACES_HOST,
+                face_r_dim=MAX_FACE_R_DIM,
+                tile_dimensions=TILE_DIMS,
+                use_dense_tile_dimensions=True,
+            ),
+            dest_acc=DestAccumulation.No,
+        ),
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 

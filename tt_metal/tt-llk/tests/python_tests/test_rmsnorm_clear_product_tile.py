@@ -10,8 +10,8 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import DEST_SYNC, TemplateParameter
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -37,7 +37,15 @@ class RMSNORM_CLEAR_PRODUCT(TemplateParameter):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_rmsnorm_clear_product_tile(dest_acc, dest_sync):
+def test_rmsnorm_clear_product_tile(
+    dest_acc,
+    dest_sync,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     # The chunked API reserves the last slot and supports at most eight slots.
     # FP32 half sync fits four; FP32 full sync also exercises bank-relative
     # addressing for product slots 4..6 and the accumulator in slot 7.
@@ -63,25 +71,36 @@ def test_rmsnorm_clear_product_tile(dest_acc, dest_sync):
     seed = (magnitude * (1 - 2 * ((lane + tile) % 2))).to(dtype)
     output_tiles = CYCLES * (capacity - 1) * dest_tiles
 
-    config = TestConfig(
-        "sources/rmsnorm_clear_product_tile_test.cpp",
-        InputOutputFormat(data_format, data_format),
-        templates=[DEST_SYNC(dest_sync), RMSNORM_CLEAR_PRODUCT(capacity, dest_tiles)],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            seed.flatten(),
-            data_format,
-            seed[0],
-            data_format,
-            data_format,
-            tile_count_A=dest_tiles,
-            tile_count_B=1,
-            tile_count_res=output_tiles,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/rmsnorm_clear_product_tile_test.cpp",
+            formats=InputOutputFormat(data_format, data_format),
+            templates=[
+                DEST_SYNC(dest_sync),
+                RMSNORM_CLEAR_PRODUCT(capacity, dest_tiles),
+            ],
+            runtimes=[],
+            variant_stimuli=StimuliConfig(
+                seed.flatten(),
+                data_format,
+                seed[0],
+                data_format,
+                data_format,
+                tile_count_A=dest_tiles,
+                tile_count_B=1,
+                tile_count_res=output_tiles,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
     )
-    result = torch.tensor(config.run().result, dtype=dtype).reshape(
+    if is_perf:
+        return
+    result = torch.tensor(outcome.result, dtype=dtype).reshape(
         CYCLES, capacity - 1, dest_tiles, ELEMENTS_PER_TILE
     )
     expected = seed.reshape(1, 1, dest_tiles, ELEMENTS_PER_TILE).repeat(

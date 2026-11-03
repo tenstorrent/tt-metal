@@ -49,7 +49,10 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -83,6 +86,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
     // Only the datacopy-identity configuration the SDPA unpack path supports.
     constexpr BroadcastType bcast_type              = BroadcastType::NONE;
@@ -93,41 +99,63 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Drive one tile per MOP run so the execute below maps 1 run -> 1 tile.
     constexpr std::uint32_t sdpa_num_tiles = 1;
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        params.TEST_FACE_R_DIM,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        params.num_faces);
-    _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
-
-    // SDPA-specific unpack-A init. Note it takes scalar face_r_dim + num_faces
-    // (NOT a TensorShape like the generic _llk_unpack_A_init_). We pass
-    // transpose_of_faces=0 and within_face_16x16_transpose=0 (the identity path).
-    _llk_unpack_A_sdpa_init_<sdpa_num_tiles, bcast_type, acc_to_dest, reuse_dest, sdpa_unpack_to_dest>(
-        params.UNPACK_TRANSPOSE_FACES,
-        params.UNPACK_TRANSPOSE_WITHIN_FACE,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        formats.unpack_A_src,
-        formats.unpack_A_dst);
-
-    // The SDPA unpack path is a pure SrcA producer: _llk_unpack_A_sdpa_init_
-    // programs a MOP that streams only SrcA UNPACRs (each with Set-Dvalid) and
-    // deliberately DROPS the per-face SrcB dummy-DVALID that the generic
-    // llk_unpack_A.h NONE MOP publishes (llk_unpack_A.h:231-234, inner op
-    // unpack_srcb_set_dvalid). SrcB is never made valid on this thread — which is
-    // the SDPA design. The math thread below is therefore driven to consume SrcA
-    // only and to clear SrcA only (SETRWC CLR_A, not CLR_AB), so it never touches
-    // the never-valid SrcB bank. See the long note in the LLK_TRISC_MATH block.
-    for (std::uint32_t i = 0; i < num_tiles_in_block * num_blocks; ++i)
     {
-        // Execute reuses the generic single-operand-A unpack: it runs the MOP
-        // that the SDPA init programmed once, streaming one tile's SrcA UNPACRs.
-        _llk_unpack_A_<bcast_type, acc_to_dest, reuse_dest, sdpa_unpack_to_dest>(L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            params.TEST_FACE_R_DIM,
+            params.TEST_FACE_R_DIM,
+            params.num_faces,
+            params.num_faces);
+        _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
+
+        // SDPA-specific unpack-A init. Note it takes scalar face_r_dim + num_faces
+        // (NOT a TensorShape like the generic _llk_unpack_A_init_). We pass
+        // transpose_of_faces=0 and within_face_16x16_transpose=0 (the identity path).
+        _llk_unpack_A_sdpa_init_<sdpa_num_tiles, bcast_type, acc_to_dest, reuse_dest, sdpa_unpack_to_dest>(
+            params.UNPACK_TRANSPOSE_FACES,
+            params.UNPACK_TRANSPOSE_WITHIN_FACE,
+            params.TEST_FACE_R_DIM,
+            params.num_faces,
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // SrcA only: one Set-Dvalid per face, no SrcB dummy.
+            _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * num_tiles_in_block * num_blocks * params.num_faces);
+        }
+        else
+        {
+            // The SDPA unpack path is a pure SrcA producer: _llk_unpack_A_sdpa_init_
+            // programs a MOP that streams only SrcA UNPACRs (each with Set-Dvalid) and
+            // deliberately DROPS the per-face SrcB dummy-DVALID that the generic
+            // llk_unpack_A.h NONE MOP publishes (llk_unpack_A.h:231-234, inner op
+            // unpack_srcb_set_dvalid). SrcB is never made valid on this thread — which is
+            // the SDPA design. The math thread below is therefore driven to consume SrcA
+            // only and to clear SrcA only (SETRWC CLR_A, not CLR_AB), so it never touches
+            // the never-valid SrcB bank. See the long note in the LLK_TRISC_MATH block.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t i = 0; i < num_tiles_in_block * num_blocks; ++i)
+                {
+                    // Execute reuses the generic single-operand-A unpack: it runs the MOP
+                    // that the SDPA init programmed once, streaming one tile's SrcA UNPACRs.
+                    _llk_unpack_A_<bcast_type, acc_to_dest, reuse_dest, sdpa_unpack_to_dest>(
+                        L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
     _llk_unpack_A_uninit_<bcast_type>();
 }
@@ -154,6 +182,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
     // Test configuration constants
     constexpr DstSync sync_mode = DstSync::SyncHalf;
@@ -161,36 +192,64 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // SDPA unpack keeps data in SrcA (BType::NONE, unpack_to_dest=false) -> A2D copy.
     constexpr DataCopyType copy_type        = DataCopyType::A2D;
     const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces);
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
-        tensor_shape, formats.math);
 
-    // A2D datacopy MOP override: end-op clears ONLY SrcA (CLR_A, not the stock CLR_AB).
-    // llk_unpack_A_sdpa is SrcA-only and never validates SrcB, so the stock CLR_AB would
-    // clear a never-valid SrcB bank -- HW-tolerated but non-contractual (ttsim flags it).
-    // Otherwise bit-for-bit the stock MOVA2D MOP; valid only for the datacopy-identity
-    // path this test drives (bf16/fp32, MOVA2D branch -- not the ELWADD/MOVB2D branches).
     {
-        constexpr std::uint32_t innerloop = 16 >> 3; // MOV_8_ROWS -> 2 inner iterations per face
-        const std::uint32_t outerloop     = params.num_faces;
-        ckernel::ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(ckernel::p_mov::DEST_NORM, 0, ADDR_MOD_2, ckernel::p_mova2d::MOV_8_ROWS, 0));
-        tmp.set_end_op(TT_OP_SETRWC(ckernel::p_setrwc::CLR_A, 0, 0, 0, 0, ckernel::p_setrwc::SET_AB));
-        tmp.program();
-    }
+        START_PERF_MEASURE("INIT")
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
+            tensor_shape, formats.math);
 
-    _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    for (std::uint32_t block = 0; block < num_blocks; ++block)
-    {
-        _llk_math_wait_for_dest_available_<sync_mode>();
-        for (std::uint32_t tile_in_block = 0; tile_in_block < num_tiles_in_block; ++tile_in_block)
+        // A2D datacopy MOP override: end-op clears ONLY SrcA (CLR_A, not the stock CLR_AB).
+        // llk_unpack_A_sdpa is SrcA-only and never validates SrcB, so the stock CLR_AB would
+        // clear a never-valid SrcB bank -- HW-tolerated but non-contractual (ttsim flags it).
+        // Otherwise bit-for-bit the stock MOVA2D MOP; valid only for the datacopy-identity
+        // path this test drives (bf16/fp32, MOVA2D branch -- not the ELWADD/MOVB2D branches).
         {
-            LLK_ASSERT(
-                (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
-                tile_in_block, formats.math, formats.math, tensor_shape);
+            constexpr std::uint32_t innerloop = 16 >> 3; // MOV_8_ROWS -> 2 inner iterations per face
+            const std::uint32_t outerloop     = params.num_faces;
+            ckernel::ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(ckernel::p_mov::DEST_NORM, 0, ADDR_MOD_2, ckernel::p_mova2d::MOV_8_ROWS, 0));
+            tmp.set_end_op(TT_OP_SETRWC(ckernel::p_setrwc::CLR_A, 0, 0, 0, 0, ckernel::p_setrwc::SET_AB));
+            tmp.program();
         }
-        _llk_math_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
+
+        _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * num_tiles_in_block * num_blocks * params.num_faces);
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<sync_mode>();
+                    }
+                    for (std::uint32_t tile_in_block = 0; tile_in_block < num_tiles_in_block; ++tile_in_block)
+                    {
+                        LLK_ASSERT(
+                            (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
+                            tile_in_block, formats.math, formats.math, tensor_shape);
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, false>();
 }
@@ -210,27 +269,52 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
     // Test configuration constants
     constexpr DstSync sync_mode = DstSync::SyncHalf;
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
-
-    _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, PackMode::Default>();
-
-    for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
-        _llk_packer_wait_for_math_done_();
-        for (std::uint32_t tile_in_block = 0; tile_in_block < num_tiles_in_block; ++tile_in_block)
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
+
+        _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, PackMode::Default>();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            LLK_ASSERT(
-                (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
-            _llk_pack_<sync_mode, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                tile_in_block, L1_ADDRESS(params.buffer_Res[(block * num_tiles_in_block) + tile_in_block]));
         }
-        _llk_pack_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
+                    for (std::uint32_t tile_in_block = 0; tile_in_block < num_tiles_in_block; ++tile_in_block)
+                    {
+                        LLK_ASSERT(
+                            (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        _llk_pack_<sync_mode, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            tile_in_block, L1_ADDRESS(params.buffer_Res[(block * num_tiles_in_block) + tile_in_block]));
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_pack_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 #endif

@@ -18,9 +18,9 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE
 from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import TILE_COUNT, ZERO_PAD_ROWS
+from helpers.test_variant_parameters import LOOP_FACTOR, TILE_COUNT, ZERO_PAD_ROWS
 from helpers.utils import result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
@@ -63,7 +63,15 @@ def _build_input_tile(torch_format) -> torch.Tensor:
 
 
 def _run(
-    formats, dest_acc, valid_rows, total_rows
+    formats,
+    dest_acc,
+    valid_rows,
+    total_rows,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Run one variant, returning (result, golden) as flat tilized float32 tiles."""
     torch_format = format_dict[formats.input_format]
@@ -73,30 +81,39 @@ def _run(
 
     golden = _zero_pad_golden(src_A, valid_rows, total_rows)
 
-    configuration = TestConfig(
-        "sources/sfpu_zero_pad_test.cpp",
-        formats,
-        templates=[
-            ZERO_PAD_ROWS(valid_rows=valid_rows, total_rows=total_rows),
-        ],
-        runtimes=[
-            TILE_COUNT(1),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_zero_pad_test.cpp",
+            formats=formats,
+            templates=[
+                ZERO_PAD_ROWS(valid_rows=valid_rows, total_rows=total_rows),
+            ],
+            runtimes=[
+                LOOP_FACTOR(1),
+                TILE_COUNT(1),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=formats.input_format.is_32_bit(),
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
     )
+    if is_perf:
+        return
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = outcome.result
     res = result_tensor(res_from_L1, formats.output_format)
     return res.to(torch.float32), golden
 
@@ -107,8 +124,29 @@ def _run(
     dest_acc=get_valid_dest_accumulation_modes,
     row_range=ROW_RANGES,
 )
-def test_sfpu_zero_pad(formats, dest_acc, row_range):
+def test_sfpu_zero_pad(
+    formats,
+    dest_acc,
+    row_range,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     valid_rows, total_rows = row_range
+    if is_perf:
+        _run(
+            formats,
+            dest_acc,
+            valid_rows,
+            total_rows,
+            is_perf=is_perf,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+        )
+        return
     res, golden = _run(formats, dest_acc, valid_rows, total_rows)
 
     padded = res[SFPU_ROW_ELEMENTS * valid_rows : SFPU_ROW_ELEMENTS * total_rows]

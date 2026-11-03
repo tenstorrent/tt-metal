@@ -4,7 +4,7 @@
 
 from helpers.llk_params import PerfRunType
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
-from helpers.test_variant_parameters import LOOP_FACTOR
+from helpers.test_variant_parameters import LOOP_FACTOR, PERF_RUN_TYPE
 
 PERF_LOOP_FACTOR = 32
 
@@ -24,6 +24,21 @@ PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE = {
         ]
     ],
 }
+
+def with_functional_defaults(test_config_kwargs):
+    """Copy templates and runtimes, appending the functional perf symbols when absent.
+
+    Direct ``TestConfig`` construction skips ``create_test_or_perf_config``, which is
+    what injects ``PERF_RUN_TYPE`` and ``LOOP_FACTOR``. Kernels that branch on those
+    symbols then fail to compile. Callers that already pass either symbol keep it.
+    """
+    templates = list(test_config_kwargs.get("templates") or [])
+    if not any(isinstance(param, PERF_RUN_TYPE) for param in templates):
+        templates.append(PERF_RUN_TYPE(PerfRunType.L1_TO_L1))
+    runtimes = list(test_config_kwargs.get("runtimes") or [])
+    if not any(isinstance(param, LOOP_FACTOR) for param in runtimes):
+        runtimes.append(LOOP_FACTOR(1))
+    return {**test_config_kwargs, "templates": templates, "runtimes": runtimes}
 
 
 def execute_llk(

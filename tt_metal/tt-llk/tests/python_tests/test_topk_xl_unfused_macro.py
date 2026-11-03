@@ -49,7 +49,12 @@ from helpers.llk_params import (
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, TOPK_XL, TemplateParameter
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    LOOP_FACTOR,
+    TOPK_XL,
+    TemplateParameter,
+)
 from test_topk_xl import (
     ELEMENTS_PER_TILE,
     FORMATS,
@@ -124,6 +129,7 @@ def _variant(
             ),
             TOPK_XL_MACRO_KNOBS(opt_out=opt_out, mutate=mutate),
         ],
+        runtimes=[LOOP_FACTOR(1)],
         variant_stimuli=StimuliConfig(
             src_A,
             FORMATS.input_format,

@@ -26,11 +26,13 @@ from helpers.llk_params import (
     MathFidelity,
 )
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import StimuliMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     HADAMARD,
+    LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
     TILE_COUNT,
@@ -38,6 +40,13 @@ from helpers.test_variant_parameters import (
 from helpers.utils import tolerances
 
 pytestmark = blackhole_only
+
+_ACTIVE_PERF = None
+
+
+class _PerfFinished(Exception):
+    pass
+
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 
@@ -102,15 +111,15 @@ def _config(
         _h16_tile()
     ]
 
-    return TestConfig(
-        "sources/hadamard_test.cpp",
-        formats,
+    return dict(
+        test_name="sources/hadamard_test.cpp",
+        formats=formats,
         templates=[
             HADAMARD(hadamard_normalize=normalize, h16_tile_index=h16_tile_index),
             MATH_FIDELITY(fidelity),
             DEST_SYNC(dest_sync),
         ],
-        runtimes=[TILE_COUNT(num_tiles), NUM_FACES(1, 1, 1)],
+        runtimes=[LOOP_FACTOR(1), TILE_COUNT(num_tiles), NUM_FACES(1, 1, 1)],
         variant_stimuli=StimuliConfig(
             torch.cat(h16_tiles),
             formats.input_format,
@@ -132,13 +141,39 @@ def _run(*configurations):
     This exists for test_hadamard_h128_fidelity_precision, since it compares two variants
     against each other: every variant has to be built before any of them runs.
     """
-    if len(configurations) > 1 and TestConfig.STIMULI_MODE != StimuliMode.INLINE:
+    is_perf = False
+    perf_report = None
+    run_types = None
+    loop_factor = 1
+    if _ACTIVE_PERF is not None:
+        is_perf, perf_report, run_types, loop_factor = _ACTIVE_PERF
+    if is_perf:
+        for kwargs in configurations:
+            execute_llk(
+                is_perf=True,
+                perf_report=perf_report,
+                run_types=run_types,
+                loop_factor=loop_factor,
+                test_config_kwargs=kwargs,
+            )
+        raise _PerfFinished
+    if len(configurations) == 1:
+        outcome = execute_llk(
+            is_perf=False,
+            loop_factor=loop_factor,
+            test_config_kwargs=configurations[0],
+        )
+        return _transforms(outcome.result)
+    if TestConfig.STIMULI_MODE != StimuliMode.INLINE:
         # The stimuli cache keys on the pytest node id, one slot per test, so this would
         # collapse into comparing a stimulus with itself under that.
         pytest.skip("this test cannot use the stimuli cache")
-    for configuration in configurations:
+    configs = [
+        TestConfig(**with_functional_defaults(kwargs)) for kwargs in configurations
+    ]
+    for configuration in configs:
         configuration.prepare()
-    results = [_transforms(c.run().result) for c in configurations]
+    results = [_transforms(c.run().result) for c in configs]
     return results[0] if len(results) == 1 else results
 
 
@@ -289,3 +324,14 @@ def test_hadamard_h128_dest_acc(num_tiles):
     )
 
     _assert_exact(device, inputs)
+
+
+def invoke_with_perf(fn, *args, is_perf, perf_report, run_types, loop_factor, **kwargs):
+    global _ACTIVE_PERF
+    _ACTIVE_PERF = (is_perf, perf_report, run_types, loop_factor)
+    try:
+        fn(*args, **kwargs)
+    except _PerfFinished:
+        return
+    finally:
+        _ACTIVE_PERF = None

@@ -100,11 +100,22 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import MOE_GATE_NORMALIZE_PARAMS, MOE_GATE_TOPK
+from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
+    MOE_GATE_NORMALIZE_PARAMS,
+    MOE_GATE_TOPK,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test, result_tensor
+
+_ACTIVE_PERF = None
+
+
+class _PerfFinished(Exception):
+    pass
+
 
 FACE_DIM = 16
 NUM_TOTAL_EXPERTS = 256  # one face of a 32x32 tile
@@ -383,39 +394,53 @@ def _check_moe_gate(
     )
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
 
-    configuration = TestConfig(
-        "sources/sfpu_generic_moe_gate_topk_test.cpp",
-        formats,
-        templates=[
-            MOE_GATE_TOPK(
-                num_selected_experts=num_selected_experts,
-                num_total_experts=num_total_experts,
-                normalize=normalize,
-                zero_tail=zero_tail,
-                full_sort=full_sort,
-                generate_indices=generate_indices,
-                scores_include_bias=scores_include_bias,
-            ),
-            MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=2,
-            tile_count_B=1,
-            tile_count_res=NUM_RESULT_TILES,
-        ),
-        # Pinned, not swept: the kernel packs the expert id and the score into the LO16
-        # and HI16 of one DEST word, which only exists for a 16-bit DEST.
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
-    )
+    is_perf = False
+    perf_report = None
+    run_types = None
+    loop_factor = 1
+    if _ACTIVE_PERF is not None:
+        is_perf, perf_report, run_types, loop_factor = _ACTIVE_PERF
 
-    res_from_L1 = configuration.run().result
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_generic_moe_gate_topk_test.cpp",
+            formats=formats,
+            templates=[
+                MOE_GATE_TOPK(
+                    num_selected_experts=num_selected_experts,
+                    num_total_experts=num_total_experts,
+                    normalize=normalize,
+                    zero_tail=zero_tail,
+                    full_sort=full_sort,
+                    generate_indices=generate_indices,
+                    scores_include_bias=scores_include_bias,
+                ),
+                MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
+            ],
+            runtimes=[LOOP_FACTOR(1)],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=2,
+                tile_count_B=1,
+                tile_count_res=NUM_RESULT_TILES,
+            ),
+            # Pinned, not swept: the kernel packs the expert id and the score into the LO16
+            # and HI16 of one DEST word, which only exists for a 16-bit DEST.
+            dest_acc=DestAccumulation.No,
+            unpack_to_dest=False,
+        ),
+    )
+    if is_perf:
+        raise _PerfFinished
+    res_from_L1 = outcome.result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     score_words = res_tensor[:ELEMENTS_PER_TILE]
@@ -514,3 +539,14 @@ def _check_moe_gate(
         assert_odd_columns_untouched(
             result_indices, result_scores, payload, emitted_rows, generate_indices
         )
+
+
+def invoke_with_perf(fn, *args, is_perf, perf_report, run_types, loop_factor, **kwargs):
+    global _ACTIVE_PERF
+    _ACTIVE_PERF = (is_perf, perf_report, run_types, loop_factor)
+    try:
+        fn(*args, **kwargs)
+    except _PerfFinished:
+        return
+    finally:
+        _ACTIVE_PERF = None

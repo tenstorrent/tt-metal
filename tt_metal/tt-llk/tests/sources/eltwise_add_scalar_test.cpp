@@ -36,7 +36,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
+#include "perf.h"
+#include "profiler.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -68,52 +71,87 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
     const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
 
-    // compute_kernel_hw_startup
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        tensor_shape.face_r_dim,
-        tensor_shape.face_r_dim,
-        tensor_shape.total_num_faces(),
-        tensor_shape.total_num_faces());
-
-    _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
-
-    // Seed init: NONE-reuse AB feeds SrcA/SrcB for the first inner tile.
-    _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
-
-    // deepseek_binary_dest_reuse_add_tiles_init (unpack half): single-operand
-    // unpack with the DEST_TO_SRCA reuse path armed. cb feeds SrcB; SrcA is the
-    // reused DEST. Programmed once, reused for every fold.
-    _llk_unpack_A_init_<BroadcastType::NONE, true /* acc_to_dest */, REUSE_DEST_TYPE>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape);
-
     const std::uint32_t input_tiles_in_block  = params.INPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks            = params.INPUT_NUM_BLOCKS;
     const std::uint32_t inner_dim             = input_tiles_in_block / output_tiles_in_block;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
-    for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
-        for (std::uint32_t i = 0; i < inner_dim; ++i)
+        START_PERF_MEASURE("INIT")
+        // compute_kernel_hw_startup
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            tensor_shape.face_r_dim,
+            tensor_shape.face_r_dim,
+            tensor_shape.total_num_faces(),
+            tensor_shape.total_num_faces());
+
+        _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            const std::uint32_t num_faces = tensor_shape.total_num_faces();
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                const std::uint32_t input_tile_idx = block * input_tiles_in_block + i * output_tiles_in_block + tile;
-                if (i == 0)
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    // Seed: unpack A and B for the first inner tile.
-                    _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[input_tile_idx]), L1_ADDRESS(params.buffer_B[input_tile_idx]));
-                }
-                else
-                {
-                    // Fold: unpack only the cb tile (SrcB); SrcA is the reused DEST.
-                    _llk_unpack_A_<BroadcastType::NONE, true /* acc_to_dest */, REUSE_DEST_TYPE>(L1_ADDRESS(params.buffer_B[input_tile_idx]));
+                    for (std::uint32_t i = 0; i < inner_dim; ++i)
+                    {
+                        for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+                        {
+                            // Seed AB and DEST_TO_SRCA fold both publish SrcA+SrcB once per face
+                            // (fold SrcA is a dummy; do not treat dest-reuse as SrcB-only).
+                            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(num_faces);
+                        }
+                    }
                 }
             }
         }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    // One init per phase, and not until the previous phase's unpacks
+                    // have run. Programming DEST_TO_SRCA in INIT overwrites the seed
+                    // MOP before any seed tile is issued.
+                    _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+                    {
+                        const std::uint32_t input_tile_idx = block * input_tiles_in_block + tile;
+                        _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[input_tile_idx]), L1_ADDRESS(params.buffer_B[input_tile_idx]));
+                    }
+                    if (inner_dim > 1)
+                    {
+                        _llk_unpack_A_init_<BroadcastType::NONE, true /* acc_to_dest */, REUSE_DEST_TYPE>(
+                            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_B_src, formats.unpack_B_dst);
+                        for (std::uint32_t i = 1; i < inner_dim; ++i)
+                        {
+                            for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+                            {
+                                const std::uint32_t input_tile_idx = block * input_tiles_in_block + i * output_tiles_in_block + tile;
+                                _llk_unpack_A_<BroadcastType::NONE, true /* acc_to_dest */, REUSE_DEST_TYPE>(
+                                    L1_ADDRESS(params.buffer_B[input_tile_idx]), formats.unpack_B_src, formats.unpack_B_dst);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -139,56 +177,95 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const TensorShape tensor_shape     = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
     constexpr bool ACC_TO_DEST         = false;
 
-    // compute_kernel_hw_startup
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-
     const std::uint32_t input_tiles_in_block  = params.INPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks            = params.INPUT_NUM_BLOCKS;
     const std::uint32_t inner_dim             = input_tiles_in_block / output_tiles_in_block;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
-    for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
-        _llk_math_wait_for_dest_available_<dest_sync>();
-
-        // Seed init: plain NONE-reuse ELWADD to establish DEST[tile] = A_0 + B_0.
-        _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-            tensor_shape, ACC_TO_DEST);
-        for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+        START_PERF_MEASURE("INIT")
+        // compute_kernel_hw_startup
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            LLK_ASSERT(
-                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Seed tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_binary_<
-                EltwiseBinaryType::ELWADD,
-                BroadcastType::NONE,
-                dest_sync,
-                is_fp32_dest_acc_en,
-                MATH_FIDELITY,
-                EltwiseBinaryReuseDestType::NONE>(tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
         }
-
-        // deepseek_binary_dest_reuse_add_tiles_init (math half). Unlike the mul
-        // sibling, the add header (eltwise_add_scalar.h:27-34) uses a single
-        // shorthand init for every fidelity — there is no reverted HiFi
-        // DEFAULT_TENSOR_SHAPE branch. We mirror it with the general init on the
-        // real tensor_shape, which is the shorthand's expansion.
-        _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
-
-        // Fold: dest[tile] = dest[tile] + B_i for each remaining inner tile.
-        for (std::uint32_t i = 1; i < inner_dim; ++i)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+            const std::uint32_t num_faces = tensor_shape.total_num_faces();
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                LLK_ASSERT(
-                    (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                    "Fold tile index exceeds maximum destination tiles");
-                _llk_math_eltwise_binary_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
-                    tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(num_blocks * inner_dim * output_tiles_in_block * num_faces);
             }
         }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<dest_sync>();
+                    }
 
-        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    // Seed init: plain NONE-reuse ELWADD to establish DEST[tile] = A_0 + B_0.
+                    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+                        tensor_shape, ACC_TO_DEST);
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+                    {
+                        LLK_ASSERT(
+                            (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Seed tile index exceeds maximum destination tiles");
+                        _llk_math_eltwise_binary_<
+                            EltwiseBinaryType::ELWADD,
+                            BroadcastType::NONE,
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            MATH_FIDELITY,
+                            EltwiseBinaryReuseDestType::NONE>(tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
+                    }
+
+                    // deepseek_binary_dest_reuse_add_tiles_init (math half). Unlike the mul
+                    // sibling, the add header (eltwise_add_scalar.h:27-34) uses a single
+                    // shorthand init for every fidelity — there is no reverted HiFi
+                    // DEFAULT_TENSOR_SHAPE branch. We mirror it with the general init on the
+                    // real tensor_shape, which is the shorthand's expansion.
+                    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
+
+                    // Fold: dest[tile] = dest[tile] + B_i for each remaining inner tile.
+                    for (std::uint32_t i = 1; i < inner_dim; ++i)
+                    {
+                        for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+                        {
+                            LLK_ASSERT(
+                                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "Fold tile index exceeds maximum destination tiles");
+                            _llk_math_eltwise_binary_<
+                                EltwiseBinaryType::ELWADD,
+                                BroadcastType::NONE,
+                                dest_sync,
+                                is_fp32_dest_acc_en,
+                                MATH_FIDELITY,
+                                REUSE_DEST_TYPE>(tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
+                        }
+                    }
+
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -215,29 +292,54 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
     const bool narrow_tile        = (tensor_shape.num_faces_c_dim == 1);
-
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
-
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
-        formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
-
-    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
-
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
 
-    for (std::uint32_t block = 0; block < output_num_blocks; ++block)
     {
-        _llk_packer_wait_for_math_done_();
-        for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
+            formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+
+        _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            const std::uint32_t res_tile_idx = (block * output_tiles_in_block) + tile;
-            LLK_ASSERT(
-                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
         }
-        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < output_num_blocks; ++block)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+                    {
+                        const std::uint32_t res_tile_idx = (block * output_tiles_in_block) + tile;
+                        LLK_ASSERT(
+                            (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
