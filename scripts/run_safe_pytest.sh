@@ -30,7 +30,7 @@
 #                    on hang with full triage + watcher log dump.
 #   --run-all        Run all tests instead of stopping on first failure (-x).
 #                    Useful for eval scoring where you need full pass/fail counts.
-#   --profile        Run under the Tracy device profiler (python -m tracy -r). Emits
+#   --profile        Run under the Tracy device profiler (python -m tracy -r -p). Emits
 #                    a per-op CSV (generated/profiler/reports/<ts>/ops_perf_results*.csv)
 #                    and prints its path as "SAFE_PYTEST: PROFILER CSV: <path>" next to
 #                    the result line. Requires a Tracy-enabled build. NOTE: the tracy
@@ -607,11 +607,41 @@ trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 #   * User args last means an explicit `--maxfail=N` still wins over our -x, as it did before.
 # pytest options are order-independent, so leading -x / -n behave exactly as trailing ones did.
 #
-# --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
+# --profile: wrap pytest in the Tracy profiler. `python -m tracy -r -p` runs pytest
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
+#
+# Warm path (SAFE_PYTEST_WARM=1, hardware only): the pytest process is forked from a long-lived server
+# (scripts/safe_pytest_warm.py) that has already imported pytest/torch/numpy/pandas, instead of starting a
+# fresh interpreter (~1 s per call). The forked child takes this script's environment, cwd, rlimits and every
+# inheritable fd at the same number (incl. the device-lock fd 9), never inherits a ttnn import or an open
+# device, and exits normally, so the run is otherwise identical to the cold one. A server problem before the
+# run starts falls back to the cold command; once it has started, a lost server kills the run (never two runs
+# on the device). Killing this script kills the forked run. Under --profile both tracy processes (the outer
+# one that owns the capture tool and the report, and the inner workload via TT_TRACY_CHILD_PYTHON) are forked.
+WARM_MODE=false
+if [[ "${SAFE_PYTEST_WARM:-0}" == "1" && "$SIM_MODE" == false ]]; then
+    WARM_MODE=true
+fi
+WARM_CLIENT=(python3 "$REPO_DIR/scripts/safe_pytest_warm.py" run)
+# --profile records only explicitly enabled host zones (tracy -p). Without -p, tracy installs sys.setprofile and
+# emits a host zone for EVERY Python call in the session (pytest, torch, harness, the precompile collect pass),
+# which costs ~3-4 s per run and changes nothing in the reports: the ops CSV (OP CODE, call counts, attributes,
+# host/device durations) and profile_log_device.csv come from the C++ op/device instrumentation either way.
+# SAFE_PYTEST_TRACY_PY_ZONES=1 restores per-function Python zones (only visible in the Tracy GUI trace).
+TRACY_FLAGS=(-r -p)
+if [[ "${SAFE_PYTEST_TRACY_PY_ZONES:-0}" == "1" ]]; then
+    TRACY_FLAGS=(-r)
+fi
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest)
+    if [[ "$WARM_MODE" == true ]]; then
+        export TT_TRACY_CHILD_PYTHON="python3 $REPO_DIR/scripts/safe_pytest_warm.py run"
+        PYTEST_CMD=("${WARM_CLIENT[@]}" -m tracy "${TRACY_FLAGS[@]}" -m pytest)
+    else
+        PYTEST_CMD=(python -m tracy "${TRACY_FLAGS[@]}" -m pytest)
+    fi
+elif [[ "$WARM_MODE" == true ]]; then
+    PYTEST_CMD=("${WARM_CLIENT[@]}" --pytest)
 else
     PYTEST_CMD=(pytest)
 fi

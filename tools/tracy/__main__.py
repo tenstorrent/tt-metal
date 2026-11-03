@@ -377,7 +377,10 @@ def main():
             originalArgs = ["--no-capture-tool"] + originalArgs[1:]
             osCmd = " ".join(originalArgs)
 
-            testCommand = f"{sys.executable} -m tracy {osCmd}"
+            # TT_TRACY_CHILD_PYTHON: optional launcher that stands in for `python` when starting the workload
+            # process (run_safe_pytest.sh's warm path sets it to its fork-server client; argv is identical).
+            childPython = os.environ.get("TT_TRACY_CHILD_PYTHON") or sys.executable
+            testCommand = f"{childPython} -m tracy {osCmd}"
 
             envVars = dict(os.environ)
             if options.device:
