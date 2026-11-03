@@ -30,6 +30,29 @@
 namespace ttnn::h2d_stream_service {
 
 void py_module_types(nb::module_& mod) {
+    nb::class_<tt::tt_metal::StreamCounter>(mod, "StreamCounter", R"doc(
+        A 32-bit L1 word a stream service's kernels or workers bump: its logical core, its L1
+        address, and step, how far it moves per transfer.
+    )doc")
+        .def_ro("core", &tt::tt_metal::StreamCounter::core)
+        .def_ro("addr", &tt::tt_metal::StreamCounter::addr)
+        .def_ro("step", &tt::tt_metal::StreamCounter::step);
+
+    nb::class_<tt::tt_metal::StreamInputCounters>(mod, "StreamInputCounters", R"doc(
+        How a transfer moves into a device: arrived once it lands in the service's FIFO, consumed once
+        the consuming op has copied it out.
+    )doc")
+        .def_ro("arrived", &tt::tt_metal::StreamInputCounters::arrived)
+        .def_ro("consumed", &tt::tt_metal::StreamInputCounters::consumed);
+
+    nb::class_<tt::tt_metal::StreamOutputCounters>(mod, "StreamOutputCounters", R"doc(
+        How a transfer moves out of a device: produced once the producing op has written it, pushed once
+        the service has handed it to fabric, forwarded once the next stage's receiver has taken it.
+    )doc")
+        .def_ro("produced", &tt::tt_metal::StreamOutputCounters::produced)
+        .def_ro("pushed", &tt::tt_metal::StreamOutputCounters::pushed)
+        .def_ro("forwarded", &tt::tt_metal::StreamOutputCounters::forwarded);
+
     nb::class_<tt::tt_metal::H2DStreamService>(mod, "H2DStreamService")
         .def(
             "__init__",
@@ -339,15 +362,16 @@ void py_module_types(nb::module_& mod) {
                     CoreCoord: The logical service-core coordinate on that device.
             )doc")
         .def(
-            "get_socket_config_addr",
-            &tt::tt_metal::H2DStreamService::get_socket_config_addr,
+            "get_input_counters",
+            &tt::tt_metal::H2DStreamService::get_input_counters,
             nb::arg("coord"),
             R"doc(
-                L1 address of this coord's socket config buffer on its service
-                core. Its first word, bytes_sent, counts the bytes the host has
-                pushed: each transfer's data pages, plus one metadata page when
-                metadata is configured, plus any FIFO tail too short for a page
-                that a wrap skips.
+                This coord's input counters. arrived is the bytes_sent word on
+                its service core: the bytes the host has pushed, each
+                transfer's data pages plus one metadata page when metadata is
+                configured, plus any FIFO tail too short for a page that a
+                wrap skips. consumed is the consumed-counter: an inc from
+                every worker per transfer. Owner-only.
 
                 Args:
                     coord (MeshCoordinate): The mesh coordinate whose socket to
@@ -358,7 +382,7 @@ void py_module_types(nb::module_& mod) {
                         service.
 
                 Returns:
-                    int: The L1 address on the service core for this coord.
+                    StreamInputCounters: Each word, with how far it moves per transfer.
             )doc")
         .def(
             "get_metadata_addr",

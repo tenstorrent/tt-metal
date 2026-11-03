@@ -30,6 +30,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/services/stream_counter.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -174,10 +175,11 @@ public:
     // get_consumed_counter_addr to build the NoC destination workers inc into.
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
 
-    // L1 address of this coord's socket config buffer on its service core. The host advances its
-    // bytes_sent word for every page it pushes, data and metadata alike.
+    // This coord's input counters. arrived is the bytes_sent word on its service core: the host adds every page
+    // it pushes, data and metadata alike (one step per transfer), plus any tail a wrap skips when the FIFO isn't
+    // whole pages. consumed is the consumed-counter: one step is every worker's inc for a transfer.
     // Owner-only; TT_FATALs in connector mode.
-    DeviceAddr get_socket_config_addr(const distributed::MeshCoordinate& coord) const;
+    StreamInputCounters get_input_counters(const distributed::MeshCoordinate& coord) const;
 
     // L1 address of the metadata destination, uniform across every worker core.
     DeviceAddr get_metadata_addr() const;

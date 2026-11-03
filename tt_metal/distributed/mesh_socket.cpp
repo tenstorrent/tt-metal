@@ -439,6 +439,10 @@ DeviceAddr MeshSocket::get_config_buffer_address() const {
     return experimental::per_core_allocation::get_per_core_address(*config_buffer_, core.device_coord, core.core_coord);
 }
 
+uint32_t MeshSocket::sender_bytes_acked_offset(uint32_t l1_alignment) {
+    return SocketSenderSize(l1_alignment).md_size_bytes;
+}
+
 const SocketConfig& MeshSocket::get_config() const { return config_; }
 
 tt::tt_fabric::FabricNodeId MeshSocket::get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const {

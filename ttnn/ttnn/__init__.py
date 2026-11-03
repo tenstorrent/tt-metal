@@ -205,6 +205,9 @@ from ttnn._ttnn.hd_socket import (
 
 from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
+    StreamCounter,
+    StreamInputCounters,
+    StreamOutputCounters,
 )
 
 from ttnn._ttnn.d2h_stream_service import (

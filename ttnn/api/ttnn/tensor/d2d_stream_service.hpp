@@ -21,6 +21,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/services/stream_counter.hpp"
 #include "ttnn/tensor/d2d_stage_gate.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -221,9 +222,11 @@ public:
     // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
     tt::tt_metal::DeviceAddr get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
-    // Service-core L1 address of the socket config buffer, the same on every coord. The receiver
-    // atomic-incs its bytes_acked word once per consumed transfer.
-    tt::tt_metal::DeviceAddr get_socket_config_addr() const;
+    // This coord's output counters. produced is the data_ready counter: one step is every worker's inc for a
+    // transfer. pushed is consumed_sem on the first worker core: the service multicasts 1 per drained transfer.
+    // forwarded is the bytes_acked word in the socket config: the receiver adds 1 per consumed transfer.
+    tt::tt_metal::StreamOutputCounters get_output_counters(
+        const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Fabric-link lease (only meaningful when Config::share_fabric_links == true;
     // TT_FATALs otherwise). The two halves of a per-transfer handshake over fabric-
@@ -298,12 +301,9 @@ public:
     // metadata was not configured (Config::metadata_size_bytes == 0).
     tt::tt_metal::DeviceAddr get_metadata_addr() const;
 
-    // Service-core L1 address of the socket config buffer, the same on every coord. Each sender
-    // lane atomic-incs its bytes_sent word once per landed transfer.
-    tt::tt_metal::DeviceAddr get_socket_config_addr() const;
-
-    // Sender lanes feeding this coord: bytes_sent advances by this much per transfer.
-    uint32_t get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+    // This coord's input counters. arrived is the bytes_sent word in the socket config: each sender lane adds 1 per
+    // landed transfer. consumed is the consumed counter: one step is every worker's inc for a transfer.
+    tt::tt_metal::StreamInputCounters get_input_counters(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Fabric-link lease — receiver-side mirror of the sender's (only meaningful when
     // Config::share_fabric_links == true; TT_FATALs otherwise). The receiver kernel

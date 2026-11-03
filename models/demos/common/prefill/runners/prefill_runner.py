@@ -12,6 +12,7 @@ from typing import Optional
 
 import torch
 from loguru import logger
+from ttnn.stream_hang_detection import StreamHangDetector
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -26,7 +27,7 @@ from models.demos.common.prefill.prefill_chunk import (
     sentinel_words,
     validate_chunks,
 )
-from models.demos.common.prefill.runners.hang_detector import HangDetector
+from models.demos.common.prefill.runners.hang_detector import arm_hang_detector
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -775,7 +776,7 @@ def run_request_loop(
     idx_in=None,
     idx_out=None,
     sockets=None,
-    hang_detector: Optional[HangDetector] = None,
+    hang_detector: Optional[StreamHangDetector] = None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
@@ -1274,7 +1275,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
-    hang_detector = HangDetector.arm(
+    hang_detector = arm_hang_detector(
         mesh_device,
         rank,
         h2d=h2d_service,

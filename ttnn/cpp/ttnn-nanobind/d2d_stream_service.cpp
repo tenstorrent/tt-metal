@@ -151,11 +151,13 @@ void py_module_types(nb::module_& mod) {
             nb::arg("coord"),
             "L1 address of the metadata buffer on this coord's service core (metadata mode).")
         .def(
-            "get_socket_config_addr",
-            &D2DStreamServiceSender::get_socket_config_addr,
+            "get_output_counters",
+            &D2DStreamServiceSender::get_output_counters,
+            nb::arg("coord"),
             R"doc(
-                L1 address of the socket config buffer, the same on every sender service
-                core. Its bytes_acked word counts transfers the receiver has consumed.
+                This coord's output counters: produced is the data_ready counter (an inc from every worker per
+                transfer), pushed is consumed_sem on the first worker core (1 per drained transfer), forwarded is
+                the bytes_acked word in the socket config (1 per transfer the receiver consumed).
             )doc")
         .def(
             "wait_for_fabric_links",
@@ -220,17 +222,14 @@ void py_module_types(nb::module_& mod) {
             &D2DStreamServiceReceiver::get_metadata_addr,
             "L1 address of the metadata buffer on every worker core (metadata mode).")
         .def(
-            "get_socket_config_addr",
-            &D2DStreamServiceReceiver::get_socket_config_addr,
-            R"doc(
-                L1 address of the socket config buffer, the same on every receiver service
-                core. Its bytes_sent word advances by get_num_lanes(coord) per landed transfer.
-            )doc")
-        .def(
-            "get_num_lanes",
-            &D2DStreamServiceReceiver::get_num_lanes,
+            "get_input_counters",
+            &D2DStreamServiceReceiver::get_input_counters,
             nb::arg("coord"),
-            "Sender lanes (fabric links) feeding this coord; one data-landed increment each per transfer.")
+            R"doc(
+                This coord's input counters: arrived is the bytes_sent word in the socket config (1 per landed
+                transfer from each sender lane), consumed is the consumed counter (an inc from every worker per
+                transfer).
+            )doc")
         .def(
             "wait_for_fabric_links",
             &D2DStreamServiceReceiver::wait_for_fabric_links,

@@ -937,10 +937,19 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distrib
     return it->second;
 }
 
-DeviceAddr D2DStreamServiceSender::get_socket_config_addr() const {
-    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceSender::get_socket_config_addr: socket not built");
-    // The address build_sender_side hands the kernels.
-    return impl_->socket->get_config_buffer()->address();
+tt::tt_metal::StreamOutputCounters D2DStreamServiceSender::get_output_counters(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceSender::get_output_counters: socket not built");
+    const CoreCoord core = get_service_core(coord);
+    // The config address build_sender_side hands the kernels.
+    const DeviceAddr config_addr = impl_->socket->get_config_buffer()->address();
+    const uint32_t bytes_acked_offset =
+        tt::tt_metal::distributed::MeshSocket::sender_bytes_acked_offset(tt::tt_metal::hal::get_l1_alignment());
+    return {
+        .produced = {core, get_data_ready_counter_addr(coord), impl_->num_workers},
+        .pushed = {impl_->worker_cores.start_coord, get_consumed_sem_addr(), 1},
+        .forwarded = {core, config_addr + bytes_acked_offset, 1},
+    };
 }
 
 void D2DStreamServiceSender::wait_for_fabric_links() {
@@ -1093,16 +1102,18 @@ DeviceAddr D2DStreamServiceReceiver::get_metadata_addr() const {
     return impl_->metadata_l1_addr;
 }
 
-DeviceAddr D2DStreamServiceReceiver::get_socket_config_addr() const {
-    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceReceiver::get_socket_config_addr: socket not built");
-    // The address build_receiver_side hands the kernels.
-    return impl_->socket->get_config_buffer()->address();
-}
-
-uint32_t D2DStreamServiceReceiver::get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+tt::tt_metal::StreamInputCounters D2DStreamServiceReceiver::get_input_counters(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceReceiver::get_input_counters: socket not built");
     auto it = impl_->num_lanes.find(coord);
-    TT_FATAL(it != impl_->num_lanes.end(), "D2DStreamServiceReceiver::get_num_lanes: no receiver at coord {}", coord);
-    return it->second;
+    TT_FATAL(
+        it != impl_->num_lanes.end(), "D2DStreamServiceReceiver::get_input_counters: no receiver at coord {}", coord);
+    const CoreCoord core = get_service_core(coord);
+    // bytes_sent is the first word of the config address build_receiver_side hands the kernels.
+    return {
+        .arrived = {core, impl_->socket->get_config_buffer()->address(), it->second},
+        .consumed = {core, get_consumed_counter_addr(coord), impl_->num_workers},
+    };
 }
 
 void D2DStreamServiceReceiver::wait_for_fabric_links() {

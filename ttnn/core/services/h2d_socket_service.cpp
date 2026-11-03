@@ -1166,15 +1166,21 @@ CoreCoord H2DStreamService::get_service_core(const distributed::MeshCoordinate& 
     return it->second;
 }
 
-DeviceAddr H2DStreamService::get_socket_config_addr(const distributed::MeshCoordinate& coord) const {
-    require_owner(is_owner_, "H2DStreamService::get_socket_config_addr");
+StreamInputCounters H2DStreamService::get_input_counters(const distributed::MeshCoordinate& coord) const {
+    require_owner(is_owner_, "H2DStreamService::get_input_counters");
     for (const auto& s : sockets_) {
         if (s->get_active_cores()[0].device_coord == coord) {
-            return s->get_config_buffer_address();
+            const CoreCoord core = get_service_core(coord);
+            // bytes_sent is the first word of the receiver's socket config; metadata takes one page.
+            const uint32_t pages = num_socket_pages_ + (cfg_.metadata_size_bytes > 0 ? 1 : 0);
+            return {
+                .arrived = {core, s->get_config_buffer_address(), pages * socket_page_size_},
+                .consumed = {core, get_consumed_counter_addr(coord), num_workers_},
+            };
         }
     }
     TT_THROW(
-        "H2DStreamService::get_socket_config_addr: no socket at coord {} (does this coord participate in this "
+        "H2DStreamService::get_input_counters: no socket at coord {} (does this coord participate in this "
         "service?).",
         coord);
 }
