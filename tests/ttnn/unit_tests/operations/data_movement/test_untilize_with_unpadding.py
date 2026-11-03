@@ -4,6 +4,7 @@
 
 
 import math
+from contextlib import contextmanager
 
 import pytest
 import torch
@@ -25,6 +26,84 @@ def isolate_program_cache(device):
     device.enable_program_cache()
     yield
     device.disable_and_clear_program_cache()
+
+
+@contextmanager
+def no_dispatch():
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    try:
+        yield
+    finally:
+        ttnn.graph.end_graph_capture()
+
+
+@pytest.mark.parametrize("use_multicore", [False, True])
+@pytest.mark.parametrize(
+    "output_end",
+    [(1, 1, 64, 32), (1, 0, 63, 31), (0, 1, 63, 31), (0, 0, 64, 31), (0, 0, 63, 64)],
+    ids=["reported", "batch", "channel", "height", "width"],
+)
+def test_untilize_with_unpadding_rejects_end_past_input(
+    device, isolate_program_cache, expect_error, output_end, use_multicore
+):
+    torch_input = torch.arange(64 * 64).reshape(1, 1, 64, 64).to(torch.bfloat16)
+    tile_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    cache_entries = None
+    for _ in range(2):
+        valid = ttnn.untilize_with_unpadding(tile_tensor, (0, 0, 63, 31), use_multicore=use_multicore)
+        assert_equal(torch_input[..., :32], ttnn.to_torch(valid))
+        if cache_entries is not None:
+            assert device.num_program_cache_entries() == cache_entries
+        cache_entries = device.num_program_cache_entries()
+        assert cache_entries > 0
+    with expect_error(RuntimeError, "exceeds the padded input extent"):
+        # A missing bound must fail without dispatching an out-of-bounds read.
+        with no_dispatch():
+            ttnn.untilize_with_unpadding(tile_tensor, output_end, use_multicore=use_multicore)
+
+
+@pytest.mark.parametrize("output_end", [(2, 0, 0, 31, 31), (0, 2, 0, 31, 31)])
+def test_untilize_with_unpadding_rejects_grown_axis_before_squeeze(device, expect_error, output_end):
+    tile_tensor = ttnn.from_torch(
+        torch.zeros((2, 2, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "exceeds the padded input extent"):
+        with no_dispatch():
+            ttnn.untilize_with_unpadding(tile_tensor, output_end)
+
+
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_untilize_with_unpadding_accepts_end_in_tile_padding(device, use_multicore):
+    torch_input = torch.arange(33 * 33).reshape(1, 1, 33, 33).to(torch.bfloat16)
+    tile_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.untilize_with_unpadding(tile_tensor, (0, 0, 63, 63), use_multicore=use_multicore)
+    actual = ttnn.to_torch(output)
+    assert list(actual.shape) == [1, 1, 64, 64]
+    assert_equal(torch_input, actual[..., :33, :33])
+
+
+@pytest.mark.parametrize("output_end", [(0, 0, 63), (0, 0, 63, 31, 4294967295)])
+def test_untilize_with_unpadding_rejects_mismatched_end_rank(device, expect_error, output_end):
+    tilized = ttnn.from_torch(torch.zeros((1, 1, 64, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "output_tensor_end rank"), no_dispatch():
+        ttnn.untilize_with_unpadding(tilized, output_end)
+
+
+@pytest.mark.parametrize("end", [63, 64])
+def test_untilize_with_unpadding_rank_1_padded_bound(device, expect_error, end):
+    torch_input = torch.arange(64, dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    if end == 64:
+        with expect_error(RuntimeError, "exceeds the padded input extent"), no_dispatch():
+            ttnn.untilize_with_unpadding(tilized, (end,))
+    else:
+        assert_equal(torch_input, ttnn.to_torch(ttnn.untilize_with_unpadding(tilized, (end,))))
+
+
+def test_untilize_with_unpadding_empty_input_rejects_grown_axis(device, expect_error):
+    tilized = ttnn.from_torch(torch.zeros((0, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "exceeds the padded input extent"), no_dispatch():
+        ttnn.untilize_with_unpadding(tilized, (4294967295, 32))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
@@ -1135,9 +1214,7 @@ def test_untilize_with_unpadding_zero_volume_in_trace_capture(device):
     ttnn.release_trace(device, trace_id)
 
 
-# An empty input carries no element to unpad into a non-empty output. to_layout never asks for one
-# (it passes the wrapped sentinel for an empty dim), but a direct caller can, and the empty path
-# skips the device operation's validation - so the op has to reject it rather than invent zeros.
+# Even an output inside tile padding cannot contain elements when the input is empty.
 def test_untilize_with_unpadding_zero_volume_rejects_nonempty_output(device, expect_error):
     torch_input = torch.rand((0, 32), dtype=torch.bfloat16)
     tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1555,10 +1632,8 @@ def test_untilize_with_unpadding_rank_1_width_sharded(device, shape, end):
     assert list(output.shape) == list(shape)
 
 
-# The zero-extent fallback exists for empty inputs. A NON-empty input asked for an empty sharded
-# output must still be rejected on the zero shard extent, as it was before that fallback existed --
-# otherwise the spec is accepted and the writer targets storage that was never allocated.
-def test_untilize_with_unpadding_nonempty_input_rejects_empty_sharded_output(device, expect_error):
+# The empty-input sentinel must not wrap an out-of-bounds end to zero on a non-empty input.
+def test_untilize_with_unpadding_nonempty_input_rejects_sentinel_end(device, expect_error):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     height_sharded = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -1573,8 +1648,9 @@ def test_untilize_with_unpadding_nonempty_input_rejects_empty_sharded_output(dev
         memory_config=height_sharded,
     )
 
-    with expect_error(RuntimeError, "greater than 0 in each sharded dim"):
-        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]))
+    with expect_error(RuntimeError, "exceeds the padded input extent"):
+        with no_dispatch():
+            ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]))
 
 
 # sub_core_grids untilize is restricted to tensors one tile row tall, because the writer would

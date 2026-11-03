@@ -31,6 +31,8 @@ struct UntilizeWithUnpaddingDeviceOperation {
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const Tensor& input);
 
+    static void validate_output_tensor_end(const Shape& output_tensor_end, const Tensor& input);
+
     static void validate_on_program_cache_miss(const operation_attributes_t& operation_attributes, const Tensor& input);
 
     static spec_return_value_t compute_output_specs(

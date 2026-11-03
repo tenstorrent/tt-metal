@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <algorithm>
+#include <cstdint>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -46,18 +47,17 @@ uint32_t fused_height_of(const Shape& shape) {
     return height;
 }
 
-// A derived shard extent is 0 exactly when that axis of the output is empty, and no shard shape
-// can hold a 0 -- a zero-volume shard is rejected. Keep the base extent on such an axis, but only
-// for an empty input: a non-empty one asked to produce an empty sharded output must still be
-// rejected on the zero extent.
 // One core's share of `total`, rounded up to a whole tile.
 uint32_t per_core_extent(uint32_t total, uint32_t cores, uint32_t tile) {
     return tt::round_up(tt::div_up(total, cores), tile);
 }
 
+// Empty inputs retain a nonzero shard allocation extent.
 uint32_t shard_extent_or(uint32_t derived, uint32_t base, bool input_is_empty) {
     return (input_is_empty && derived == 0) ? base : derived;
 }
+
+TensorSpec compute_output_specs_impl(const UntilizeWithUnpaddingParams& attributes, const Tensor& input);
 
 }  // namespace
 
@@ -116,6 +116,32 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
         }
     }
     return UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
+}
+
+void UntilizeWithUnpaddingDeviceOperation::validate_output_tensor_end(
+    const Shape& output_tensor_end, const Tensor& input) {
+    const auto& input_shape = input.logical_shape();
+    const auto& padded_shape = input.padded_shape();
+    TT_FATAL(
+        output_tensor_end.rank() == input_shape.rank(),
+        "untilize_with_unpadding: output_tensor_end rank {} must match input rank {}",
+        output_tensor_end.rank(),
+        input_shape.rank());
+    const bool empty_input = input.logical_volume() == 0;
+    // Tile padding adds a leading dimension to rank-one tensors.
+    const auto padding_offset = padded_shape.rank() - input_shape.rank();
+    for (size_t index = 0; index < input_shape.rank(); ++index) {
+        // Preserve the empty-input sentinel without letting a non-empty input's end wrap to zero.
+        const uint64_t output_extent = empty_input && output_tensor_end[index] == UINT32_MAX
+                                           ? 0
+                                           : static_cast<uint64_t>(output_tensor_end[index]) + 1;
+        TT_FATAL(
+            output_extent <= padded_shape[index + padding_offset],
+            "untilize_with_unpadding: output extent {} exceeds the padded input extent {} in dimension {}",
+            output_extent,
+            padded_shape[index + padding_offset],
+            index);
+    }
 }
 
 void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
@@ -206,7 +232,8 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         // width) instead of the grid's configured capacity.
                         uint32_t input_kw = legacy_2d_shard_column_count(
                             input_tensor_a.shard_spec().value(), TensorMemoryLayout::BLOCK_SHARDED);
-                        uint32_t output_width = compute_output_specs(operation_attributes, input).padded_shape()[-1];
+                        uint32_t output_width =
+                            compute_output_specs_impl(operation_attributes, input).padded_shape()[-1];
                         uint32_t output_shard_width =
                             operation_attributes.output_mem_config.shard_spec().value().shape[1];
                         uint32_t effective_output_kw = tt::div_up(output_width, output_shard_width);
@@ -271,7 +298,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                 }
                 // What else?
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-                auto output_shape = compute_output_specs(operation_attributes, input).padded_shape();
+                auto output_shape = compute_output_specs_impl(operation_attributes, input).padded_shape();
                 // Batch dims only, so nothing to check below rank 3. The rank is unsigned, so
                 // i + 2 < rank rather than i < rank - 2, which underflows at rank 1.
                 for (uint32_t i = 0; i + 2 < output_shape.rank(); i++) {
@@ -325,7 +352,8 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         // 64 only effectively uses 2 of its 4 column shards).
                         uint32_t input_kw = legacy_2d_shard_column_count(
                             input_tensor_a.shard_spec().value(), TensorMemoryLayout::WIDTH_SHARDED);
-                        uint32_t output_width = compute_output_specs(operation_attributes, input).padded_shape()[-1];
+                        uint32_t output_width =
+                            compute_output_specs_impl(operation_attributes, input).padded_shape()[-1];
                         uint32_t output_shard_width =
                             operation_attributes.output_mem_config.shard_spec().value().shape[1];
                         uint32_t effective_output_kw = tt::div_up(output_width, output_shard_width);
@@ -438,6 +466,13 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 
 tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    // Output allocation precedes cache validation, so reject invalid ends before constructing the spec.
+    validate_output_tensor_end(operation_attributes.output_tensor_end, input);
+    return compute_output_specs_impl(operation_attributes, input);
+}
+
+namespace {
+TensorSpec compute_output_specs_impl(const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input) {
     ttsl::SmallVector<uint32_t> out_shape;
     const auto& input_tensor_a = input;
     size_t rank = input_tensor_a.logical_shape().rank();
@@ -576,6 +611,8 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
         output_shape,
         TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
 }
+
+}  // namespace
 
 Tensor UntilizeWithUnpaddingDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {

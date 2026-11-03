@@ -206,12 +206,13 @@ def test_untilize(device):
 
 
 def test_untilize_with_unpadding(device):
-    # Create a tilized tensor with padding
+    # Create a tile-aligned tensor
     tilized_tensor = ttnn.rand((1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
     # Untilize the tensor with unpadding
-    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(1, 1, 64, 32))
-    logger.info("Untilized Tensor with Unpadding Shape:", untilized_tensor.shape)
+    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(0, 0, 63, 31))
+    logger.info("Untilized Tensor Shape:", untilized_tensor.shape)
+    assert list(untilized_tensor.shape) == [1, 1, 64, 32]
 
 
 def test_indexed_fill(device):
