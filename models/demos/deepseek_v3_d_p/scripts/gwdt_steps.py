@@ -4,7 +4,9 @@
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -560,6 +562,8 @@ def write_ack_step(workload: str = "wkv_b1") -> Step:
         state.log = str(log)
         env = {"MATMUL_ITERS": str(WRITE_ACK_ITERS), "MATMUL_WORKLOAD": workload, **state.env}
         sh(ctx, cmd, log, env, timeout=1800)
+        for cache in (Path(tempfile.gettempdir()) / "mm_mcast_write_ack_failure").glob("chip*/cache"):
+            shutil.rmtree(cache, ignore_errors=True)
         save_smi(ctx, d, n)
         return write_ack_result(log.read_text(errors="replace"))
 
