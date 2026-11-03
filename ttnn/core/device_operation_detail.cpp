@@ -302,30 +302,30 @@ std::string rejection_reason(
     return {};
 }
 
-// The operations a warning was logged for, so that it is logged once per process per operation.
-class OncePerOperation {
+// The keys a warning was logged for, so that it is logged once per process per key.
+class LoggedOnce {
 public:
-    bool first_time(std::string_view op_name) {
+    bool first_time(std::string_view key) {
         std::lock_guard<std::mutex> guard(mutex_);
-        if (names_.contains(op_name)) {
+        if (keys_.contains(key)) {
             return false;
         }
-        names_.emplace(op_name);
+        keys_.emplace(key);
         return true;
     }
 
 private:
     std::mutex mutex_;
-    std::set<std::string, std::less<>> names_;
+    std::set<std::string, std::less<>> keys_;
 };
 
 void warn_once(std::string_view op_name, std::string_view reason) {
-    static OncePerOperation logged;
-    if (logged.first_time(op_name)) {
+    static LoggedOnce logged;
+    if (logged.first_time(fmt::format("{}: {}", op_name, reason))) {
         log_warning(
             tt::LogOp,
             "{}: the caller's tensor takes the union of the operand labels instead of its own: {} (logged once per "
-            "process for this op)",
+            "process for this op and reason)",
             op_name,
             reason);
     }
@@ -372,7 +372,7 @@ std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
 }
 
 void warn_ignored_compute_output_topologies(std::string_view op_name) {
-    static OncePerOperation logged;
+    static LoggedOnce logged;
     if (logged.first_time(op_name)) {
         log_warning(
             tt::LogOp,

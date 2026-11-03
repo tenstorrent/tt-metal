@@ -77,7 +77,7 @@ std::optional<ttsl::SmallVector<bool>> sharded_per_mesh_axis(
  * there), when a label cannot be read per mesh axis, or when an operand is distributed over different mesh
  * coordinates; the output then takes the union of the operand labels. `operands` may hold nullptr (an absent
  * optional) and the caller's tensor itself, under any handle that shares its device buffer; both are skipped. The
- * fallback is logged once per process per `op_name`.
+ * fallback is logged once per process per `op_name` and reason.
  */
 std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
     const ttnn::Tensor& caller_tensor, std::span<const ttnn::Tensor* const> operands, std::string_view op_name);
