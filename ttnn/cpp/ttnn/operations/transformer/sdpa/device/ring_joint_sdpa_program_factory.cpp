@@ -3910,7 +3910,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 // differs from the length the program last ran at (the memo is the reader's common runtime word).
 void apply_dynamic_local_n_runtime_args(
     Program& program, const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    const uint32_t n_local_tiles = tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+    // Logical rows, as q_local_padded_Nt at creation (validation rejects padding beyond them).
+    const uint32_t n_local_tiles = tensor_args.input_q.logical_shape()[2] / tt::constants::TILE_HEIGHT;
     const bool has_logical_length_tensor = tensor_args.has_logical_n_tensor() || tensor_args.has_logical_l_tensor();
     const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
     const bool has_joint_inputs = joint_input_params.L_local > 0;
