@@ -160,3 +160,61 @@
 | helper | kind | what was missing / hard | helper ns | raw ns | site |
 |---|---|---|---|---|---|
 | `GeluTanhActivation` / `ActivationInitHelper` + `ActivationApplyHelper` (`sfpu_activation_helpers.hpp`) -> `calculate_gelu_tanh_fast` | capability | The pack-thread activation slot of `matmul_block` takes a closed `KernelActivation` enum: there is no way to supply a custom SFPU body / init, so the op had to explicitly specialize the library templates on an unused param value (`kGeluLoadMacro = 2`). The library's sfpi GELU compiles to one serial chain per row (34 instr + ~10 MAD stall cycles, 1031 ns/tile); there is no 2-row-interleaved or SFPLOADMACRO variant, and the load-macro state (LReg11-14, macro templates / sequences, ADDR_MOD_6) has no ownership contract in the helper. | 136719 | 94660 (98270 with block_h 3) | `kernels/linear_gelu_gelu_sfpu.h:150-165`, used at `kernels/linear_gelu_compute.cpp:47` |
+
+## Perf 2
+- Date: 2026-11-03. Device: Blackhole p100a, 110 cores, AICLK 1350 MHz. Focus: LOOSE_CASES 8x512 (x / out L1, W / bias DRAM, bf16, HiFi2, fp32_dest_acc_en=True, math_approx_mode=False). Every number is DEVICE KERNEL DURATION. Precision knobs were never changed. Every graduated change is bitwise identical to the Perf 1 output.
+- Instrumentation: new permanent zone `compute_wait_x` (TRISC0, the x wait before row-block i >= 1, split out of `compute_matmul_gelu` occupancy). At most 26 markers per RISC.
+
+### Measured breakdown (8x512, Perf 1 HEAD, 94.76 us)
+- Cumulative ablation (us): full 94.8, no GELU 89.2, GELU only 80.3, DM only 46.4, + no W 38.4, + no x 38.4, sync floor 23.0, no writes only 94.8.
+- Critical core (13 x 9 tiles, row-blocks 4,4,4,1): fill 8.2, rb0 23.6, `compute_wait_x` before rb1 4.3, rb1 23.4, rb2 23.9, 1-row tail 9.0 (1.0 us/tile vs 0.66), pack drain 1.1.
+- Cause of the rb1 stall: the reader delivers all 9 W chunks (22.5 us, read -> barrier -> mcast strictly serial per round) before it issues x row-block 1 (6.8 us).
+- Steady state: math (~2.54 us per 4x1 subblock) and the pack-thread GELU (~2.66 us) co-bind within 4%.
+- Ranked: (1) x rb1 starvation 4.3 us, (2) 1-row tail ~3 us, (3) fill 8.2 us (Perf 1 NULL on many variants, not re-floated), (4) math/pack co-bind. DM alone is 46 us, so the DM ceiling is not the gate.
+
+### Portfolio and verdicts (artifacts in `perf_experiments/<slug>/`)
+| idea | verdict | 8x512 before -> after (ns) | domain / note |
+|---|---|---|---|
+| `w_delivery_pipeline`: each W owner reads chunk j+1 at the start of round j, per-chunk trid barrier | WIN, graduated | 94571 -> 92372 | everywhere; 2x512 -8.8%, 4x256 -9.6%. Lookahead 2 / 3 / all: 94.8 / 96.3 / 102.0 us; 2-8 chunks per mcast, NoC1 W reads, fixed sender, no-handshake: all slower |
+| `x_rb1_overlap`: issue x rb1 sender reads mid W delivery | WIN, superseded by the above (same stall) | 94821 -> 93291 | x mcast between W chunks moves the stall into rb0 (96.5-97.6 us) |
+| `balanced_row_blocks`: rb0 = block_h, rest balanced (4,4,4,1 -> 4,3,3,3) | WIN standalone; graduated for DRAM x only | 94708 -> 93214 standalone; after the other two graduations +0.8 us on L1 x | see carve-out below |
+| `pack_thread_cost`: drop the per-subblock `pack_reconfig_data_format` in `matmul_block` | WIN, graduated (helper change) | 94095 -> 92192 | everywhere. Options not taken (whole op flat once math binds): no per-tile STALLWAIT, C3 constant hoisted (isolated 2561 -> 2504 ns per 4x1 subblock); `noclamp0` incorrect (NaN on wide inputs) |
+| `bias_cheap`: half-K bias tile-op (skip the 8 zero-adding MVMULs) | NULL | 94320 -> 94284 | 0 ULP, saves 11 cycles/tile on math; GELU-ablated 88.97 -> 88.04 (noise). Removing the bias entirely saves only 2.3 us GELU-ablated |
+
+### What graduated
+1. **W read lookahead** (`kernels/linear_gelu_reader.cpp`). `W_PREFETCH_ROUNDS` is now the rolling lookahead depth (1). Each chunk's reads carry trid 1 + j % 15 and the owner waits on its own trid only (the plain barrier regressed 1x32 by 4.5%). The rb1 stall is gone (`compute_wait_x` 4.3 -> 0.03 us). Domain: every cell, no carve-out. The old code is deleted.
+2. **Pack reconfig skip** (`ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.inl`). With fp32 DEST and no L1 acc, the last-block `pack_reconfig_data_format(pack_target_id)` is skipped when the target is interm itself (the packer already holds that format). Untilize targets keep it. The in-tree callers are linear_gelu and two examples. `test_matmul_output_subblock` passes 7/7. The 3 `test_compute_block_size` failures are compile errors that fail the same way at HEAD.
+3. **Row-block split** (`kernels/linear_gelu_row_blocks.h`, all three kernels, host `ROW_SPLIT`). One kernel path: `num_full` block_h blocks, then the rest split evenly. Output-ring alignment pads replace the Refinement 3 tail-area-divides rule. Default "balanced" (one full block, then the even split).
+   - Carve-out: L1 x keeps "tail" (full blocks + one remainder). The reason is measured: with balanced, 8x512 L1 x went 89.8 -> 90.6 us (2 runs each; 16x256 / 32x128 / 8x500 the same). Once x lands early, the final 3-tile subblock's GELU drains unhidden.
+   - DRAM x 8x512 99.1 -> 95.5 us (2 runs each), 8x384 DRAM x 79.8 -> 77.0.
+   - Cost of the generalized kernel on the L1 "tail" split vs the old kernel: 8x512 89.6 -> 89.85 us (medians of 6), below the noise threshold.
+
+### Whole op, Perf 1 HEAD -> Perf 2 (us, guard sweep, one run each)
+| case | before | after |
+|---|---|---|
+| 8x512 (focus) | 94.3 | 89.7 (target 90.8: met) |
+| 16x256 | 94.6 | 89.8 |
+| 32x128 | 95.2 | 89.9 |
+| 8x384 | 76.1 | 72.5 |
+| 4x512 | 60.0 | 55.5 |
+| 8x256 | 60.4 | 55.6 |
+| 2x512 | 36.4 | 32.9 |
+| 4x256 | 36.3 | 33.0 |
+| 8x512 DRAM x | 103.7 | 95.3 |
+| 8x512 DRAM out | 138.9 | 141.1 (one run; 139.2 / 140.1 / 141.7 across this round's runs, writer-bound, noise) |
+| 8x500 | 94.9 | 90.0 |
+| 1x32 | 22.2 | 21.1 |
+
+- Step by step at 8x512: W lookahead 94.3 -> 92.3; + pack reconfig skip 89.4 (medians of 3); + row split (L1 tail) 89.7.
+- Correctness: golden `eval/golden_tests/linear_gelu/` 102 / 102 after every graduation; unit dir 50 passed / 84 skipped (perf probes); `probes/test_p2_split.py` PCC gate on both splits over every placement in it.
+
+### Bottleneck now (8x512)
+- Ablation (us): full 89.7, no GELU 85.8, GELU only 77.9, DM only 42.1, sync floor 23.5.
+- Critical core: fill 9.4 us (the lookahead read slows chunk 0's mcast by about 1 us), then 3 x 23.2 us row-blocks, at the math/pack co-bound rate with no x waits, then the 1-row tail 8.4 us.
+- Remaining levers:
+  - The fill.
+  - The tail drain. A smaller last subblock without the 3x1 drain cost would let the balanced split win on L1 x too.
+  - Overlapping the two first multicasts, which needs a `ttnn.Mcast` receiver that signals ready without data.
+
+### Helper bypasses — none
+No new raw-LLK path graduated this round. `pack_thread_cost` was graduated by fixing the helper (`matmul_block`) instead of bypassing it. Its bench showed the helper's pack stage offers no hook between the SFPU pass and the pack, so the per-tile STALLWAIT in `ActivationApplyHelper` cannot be dropped through it. That is recorded here as a gap but did not graduate (flat whole-op). The Perf 1 GELU bypass row (`GeluTanhActivation` -> load-macro body) still stands unchanged.
