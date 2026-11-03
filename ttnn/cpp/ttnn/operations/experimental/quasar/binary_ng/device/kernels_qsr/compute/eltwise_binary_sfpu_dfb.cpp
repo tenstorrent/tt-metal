@@ -13,7 +13,7 @@
 // place of the copy. A held operand (COL, SCALAR) is expanded once per page change into its held ring, and a VALUE
 // operand is one ring entry; each is copied from entry 0 for every tile. In fp32 the reader expands a ROW, COL or
 // SCALAR operand in software (A_FILLED, B_FILLED), and this kernel copies it where it would expand it. The native gate
-// runs bf16 multiply and divide on it, and fp32 add, subtract, multiply and divide.
+// runs bf16 multiply, divide, maximum and minimum on it, and fp32 add, subtract, multiply, divide, maximum and minimum.
 
 #include <cstdint>
 

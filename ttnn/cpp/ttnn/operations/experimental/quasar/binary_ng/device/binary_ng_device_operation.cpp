@@ -694,12 +694,12 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Subtile broadcast runs in bf16 and fp32. In bf16 the compute expands ROW, COL and SCALAR with unary_bcast. That
     // takes no 32-bit operand on Quasar, so in fp32 the reader expands them in software and the compute copies them.
 
-    // In bf16, add and subtract run the FPU kernel, multiply and divide run the SFPU kernel, and multiply runs the FPU
-    // kernel in fast and approximate mode. In fp32 all four run the SFPU kernel. The SFPU kernel runs no other op here:
-    // each needs its own validation on Quasar.
+    // In bf16, add and subtract run the FPU kernel; multiply, divide, maximum and minimum run the SFPU kernel; and
+    // multiply runs the FPU kernel in fast and approximate mode. In fp32 all six run the SFPU kernel. The SFPU kernel
+    // runs no other op here: each needs its own validation on Quasar.
     const BinaryOpType op_type = attributes.binary_op_type;
     if (op_type != BinaryOpType::ADD && op_type != BinaryOpType::SUB && op_type != BinaryOpType::MUL &&
-        op_type != BinaryOpType::DIV) {
+        op_type != BinaryOpType::DIV && op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM) {
         return false;
     }
     // a and b in one format, bf16 or fp32; the output's format is checked below. Mixed formats are not validated on
@@ -719,7 +719,8 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (fp32 && !attributes.is_sfpu) {
         return false;
     }
-    if (!fp32 && attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV) {
+    if (!fp32 && attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV &&
+        op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM) {
         return false;
     }
     // Divide in fast and approximate mode, a reciprocal pass on b before an FPU multiply, is not validated on Quasar.

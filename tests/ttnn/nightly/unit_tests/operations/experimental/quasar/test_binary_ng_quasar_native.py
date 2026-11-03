@@ -822,10 +822,10 @@ def _shard_cores(entry):
 
 
 def _runs_sfpu(entry):
-    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, divide, or any
-    op on fp32 operands."""
+    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, divide, maximum,
+    minimum, or any op on fp32 operands."""
     opts = entry[5] if len(entry) > 5 else {}
-    return opts.get("op") in ("multiply", "divide") or opts.get("dtype") == "float32"
+    return opts.get("op") in ("multiply", "divide", "maximum", "minimum") or opts.get("dtype") == "float32"
 
 
 def _expect_wrong(cases, knobs):
@@ -857,17 +857,19 @@ def _config_params(configs, cases):
 # "dram_block" shard it over all DRAM banks, and then the range is None. A shard entry may carry a sixth element, a dict
 # of options: "out" gives the output its own placement (otherwise it takes the inputs'), "b" does the same for b,
 # "output_tensor" supplies a preallocated output with its own placement, "in_place" adds b into a with add_, "grid" (x0,
-# y0, x1, y1) runs the op on that sub-core grid, "op" runs "subtract", "multiply", "divide" or "multiply_fast" (multiply
-# in fast and approximate mode) instead of add, "dtype": "float32" runs it on fp32 operands and output (with "op" add,
-# subtract, multiply or divide, and "act" None, "lhs", "rhs" or "relu"), and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or
-# on the result ("post"), a lone RELU on the result ("relu"), RELU on a ("relu_lhs"), or SQUARE on a and RELU on the
-# result ("relu_chain"). "out" may also be None, so that the op derives the output's memory config, or
+# y0, x1, y1) runs the op on that sub-core grid, "op" runs "subtract", "multiply", "divide", "maximum", "minimum" or
+# "multiply_fast" (multiply in fast and approximate mode) instead of add, "dtype": "float32" runs it on fp32 operands
+# and output (with "op" add, subtract, multiply, divide, maximum or minimum, and "act" None, "lhs", "rhs" or "relu"),
+# and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or on the result ("post"), a lone RELU on the
+# result ("relu"), RELU on a ("relu_lhs"), or SQUARE on a and RELU on the result ("relu_chain"). "out" may also be
+# None, so that the op derives the output's memory config, or
 # "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then "resolved_out" names
 # the placement the output must take. A placement in an option may add a fourth element, "col", for column-major shard
 # order. For a broadcast, "a_shape" and "b_shape" give a or b its own shape, and the entry's shape is the output's;
 # "modes" lists the [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] that the op's compute kernel must be built with,
 # all 0 for a dense program, read from the kernel's JIT defines. "scalar" runs tensor-scalar: b is that Python float,
-# which reaches the kernel in the operands' format. An entry's tensors stay alive until the last later entry that
+# which reaches the kernel in the operands' format. It takes no "maximum" or "minimum": the op sends a scalar to those
+# through the unary clamp, never to binary_ng. An entry's tensors stay alive until the last later entry that
 # repeats its spec has run, so the repeat lands at new addresses and must hit the program cache; the other entries'
 # tensors are freed, so that many cases fit in L1 one after another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the
 # device profiler on), every cluster must show that many Neos running the compute, or DM cores running a reader or
@@ -906,14 +908,17 @@ def truncate_to_bf16(x):
 
 # op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it matches
 # one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest even. The
-# SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even.
+# SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even. It runs maximum
+# and minimum too. They select an operand, so each result is one of the operands, exactly.
 OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
        "subtract": (ttnn.experimental.quasar.subtract, {},
                     tuple(lambda a, b, rounding=rounding: rounding(a, -b) for rounding in _FPU_ADD_ROUNDINGS)),
        "multiply": (ttnn.experimental.quasar.multiply, {}, (lambda a, b: truncate_to_bf16(torch.multiply(a, b)),)),
        "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True},
                          (lambda a, b: round_to_bf16(torch.multiply(a, b)),)),
-       "divide": (ttnn.experimental.quasar.divide, {}, (lambda a, b: round_to_bf16(torch.divide(a, b)),))}
+       "divide": (ttnn.experimental.quasar.divide, {}, (lambda a, b: round_to_bf16(torch.divide(a, b)),)),
+       "maximum": (ttnn.experimental.quasar.maximum, {}, (lambda a, b: round_to_bf16(torch.maximum(a, b)),)),
+       "minimum": (ttnn.experimental.quasar.minimum, {}, (lambda a, b: round_to_bf16(torch.minimum(a, b)),))}
 
 
 def square(x):
@@ -942,7 +947,9 @@ ACTS = {None: ({}, lambda a, b, op: op(a, b)),
 OPS_FP32 = {"add": (ttnn.experimental.quasar.add, {}, (torch.add,)),
             "subtract": (ttnn.experimental.quasar.subtract, {}, (torch.subtract,)),
             "multiply": (ttnn.experimental.quasar.multiply, {}, (torch.multiply,)),
-            "divide": (ttnn.experimental.quasar.divide, {}, (torch.divide,))}
+            "divide": (ttnn.experimental.quasar.divide, {}, (torch.divide,)),
+            "maximum": (ttnn.experimental.quasar.maximum, {}, (torch.maximum,)),
+            "minimum": (ttnn.experimental.quasar.minimum, {}, (torch.minimum,))}
 ACTS_FP32 = {None: ACTS[None],
              "lhs": ({"input_tensor_a_activations": [SQUARE]}, lambda a, b, op: op(a * a, b)),
              "rhs": ({"input_tensor_b_activations": [SQUARE]}, lambda a, b, op: op(a, b * b)),
@@ -1867,7 +1874,12 @@ def test_native_mixed_layouts_match_the_prediction(name, knobs):
 # three borrowed as slices with partial tiles, all three borrowed as shards with 4 tiles per compute thread, and the
 # NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so the SFPU kernel runs one full
 # batch per thread. Every output is exact.
+# maximum and minimum run the SFPU kernel too, in bf16 and in fp32, on two of those mixes: the NoC path with partial
+# tiles, and borrowed inputs beside an output that moves. A and b are two normal draws, so they differ in sign and size
+# at almost every element, and a swap of maximum and minimum fails every case.
 _OTHER_OPS = ("subtract", "multiply", "multiply_fast", "divide")
+_MINMAX_OPS = ("maximum", "minimum")
+_MINMAX_MIXES = ("I.I.I_partial", "B32.B32.I")
 _OP_MIXES = (
     "I.I.W32",
     "B32.B32.I",
@@ -1889,19 +1901,23 @@ def _with_op(entry, op):
 
 _OP_CASES = [
     (_with_op(entry, op), path, split)
-    for op in _OTHER_OPS
+    for ops, mixes in ((_OTHER_OPS, _OP_MIXES), (_MINMAX_OPS, _MINMAX_MIXES))
+    for op in ops
     for entry, path, split in _MIXED_CASES
-    if entry[0] in _OP_MIXES
+    if entry[0] in mixes
 ]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_MIXED_CONFIGS, _OP_CASES))
 def test_native_other_ops_match_the_prediction(name, knobs):
-    """subtract, multiply and divide must run native in every kind of mix and give the predicted output, exactly as
-    each kernel rounds (OPS in _SHARD_ARM_SRC), so a wrong op define or DST slot fails."""
+    """subtract, multiply and divide must run native in every kind of mix, and maximum and minimum in two of them, and
+    give the predicted output, exactly as each kernel rounds (OPS in _SHARD_ARM_SRC), so a wrong op define or DST slot
+    fails."""
     p = _run_shard_arm([case[0] for case in _OP_CASES], expect="qsr", timeout=1800, knobs=knobs)
-    _check_arm(p, f"subtract, multiply and divide, {name}", expect_wrong=_expect_wrong(_OP_CASES, knobs))
+    _check_arm(
+        p, f"subtract, multiply, divide, maximum and minimum, {name}", expect_wrong=_expect_wrong(_OP_CASES, knobs)
+    )
 
 
 # Borrowed shards that 4 does not divide, so that their last tiles go through the tail rings: block_6 has a borrowed
@@ -1986,6 +2002,7 @@ def test_native_activations_match_the_prediction(name, knobs):
 # fp32: add, subtract, multiply and divide all run the SFPU kernel, in a 32-bit DST, where the rule's compute batch is 2.
 # They run the op mixes, the shards whose last tiles go through the tail rings, and three activations: SQUARE on a and
 # SQUARE on b, which run the Float32 activation rings of a and of b, and a lone RELU on the result, in the packer.
+# maximum and minimum run the SFPU kernel too, on their two mixes (_MINMAX_MIXES), and nowhere else in this section.
 _FP32_OPS = ("add", "subtract", "multiply", "divide")
 
 
@@ -1997,9 +2014,10 @@ def _with_fp32(entry):
 
 _FP32_CASES = [
     (_with_fp32(_with_op(entry, op)), path, split)
-    for op in _FP32_OPS
+    for ops, mixes in ((_FP32_OPS, _OP_MIXES), (_MINMAX_OPS, _MINMAX_MIXES))
+    for op in ops
     for entry, path, split in _MIXED_CASES
-    if entry[0] in _OP_MIXES
+    if entry[0] in mixes
 ]
 _FP32_TAIL_SHARDS = [
     _with_fp32(_with_op(entry, op))
@@ -2023,7 +2041,8 @@ _FP32_TAIL_CONFIGS = {name: _BORROWED_CONFIGS_C2[name] for name in ("rule-n1", "
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_FP32_CONFIGS, _FP32_CASES))
 def test_native_fp32_ops_match_the_prediction(name, knobs):
-    """fp32 add, subtract, multiply and divide must run native in every kind of mix and give the predicted output.
+    """fp32 add, subtract, multiply and divide must run native in every kind of mix, and maximum and minimum in two of
+    them, and give the predicted output.
 
     The oracle is torch's fp32 result, within _ULP. A batch larger than a
     32-bit DST section holds overwrites the section the packer reads.
@@ -2244,13 +2263,15 @@ _H2_14 = ("height", [16 * 32, 14 * 32], (0, 0, 1, 0))  # on [1, 1, 1024, 448]: 2
 # ROW: a or b of one logical row. Its Map has no tile-row stride, so every tile of a column reads the same page, and
 # each kernel expands it: the FPU kernel into a staging ring per compute batch, the SFPU kernel straight into the
 # operand's DST slot. These cases run in bf16; the fp32 twins are in _FILLED. Add and subtract run the FPU kernel,
-# multiply and divide the SFPU kernel. In L1 the bank walk gives a cluster at most 2 tiles of _OUTER_SHAPE.
+# multiply, divide, maximum and minimum the SFPU kernel. In L1 the bank walk gives a cluster at most 2 tiles of
+# _OUTER_SHAPE.
 # Production borrows no shard beside a ROW operand, so row_b_full_batches runs on 32 clusters, 14 tiles each: FPU
 # add batches 8 at R1C1W1, and the SFPU kernel 4. SQUARE runs on the row tiles before the broadcast; a lone RELU
 # on the result runs in the SFPU post chain, as the factory keeps PACK_RELU off beside a broadcast.
 # row_b_uneven_shard has the pad rows and columns of 14 x 30 tiles in 4 x 4 shards. Multiply in fast mode runs
 # ELWMUL, the one FPU op with several fidelity phases, beside a ROW operand and, in
 # row_b_full_batches/multiply_fast, in batches of 8 at R1C1W1 through the staging ring.
+# row_b/maximum runs maximum beside a ROW b. A and b differ in sign and size, so a swap with minimum fails it.
 _ROW = [
     _bcast("row_b", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), walk=_NOC_WALK),
     _bcast("row_b_partial", _PARTIAL_SHAPE, [1, 3, 1, 70], _modes(b="ROW", b_outer=True), walk=_NOC_WALK),
@@ -2375,6 +2396,7 @@ _ROW = [
         op="multiply_fast",
         walk=_NOC_WALK,
     ),
+    _bcast("row_b/maximum", _OUTER_SHAPE, [2, 3, 1, 160], _modes(b="ROW"), op="maximum", walk=_NOC_WALK),
 ]
 
 
@@ -2402,7 +2424,8 @@ def test_native_row_broadcast_matches_the_oracle(name, knobs):
 # a, whose post ring holds one batch per Neo. SQUARE on the held operand runs once per change, in the expansion. Beside
 # a height-sharded a and output, production borrows a and the output, and so does the native anchor. An uneven shard
 # beside a held operand takes no anchor: everything moves over the NoC. With one output tile per cluster, three Neos
-# per cluster hold nothing. These cases run in bf16; the fp32 twins are in _FILLED.
+# per cluster hold nothing. These cases run in bf16; the fp32 twins are in _FILLED. col_b/minimum runs minimum on the
+# SFPU kernel beside a held COL b.
 _H8 = ("height", [4 * 32, 4 * 32], (0, 0, 7, 0))  # on [2, 1, 512, 128]: 8 shards of 4x4 tiles, Wt = 4
 _DH_COL = ("dram_height", [3 * 64, 32], None)  # on [2, 3, 64, 1]: 2 shards of 6 tiles, one per DRAM bank
 _HELD = [
@@ -2564,6 +2587,7 @@ _HELD = [
         op="multiply",
         walk=_NOC_WALK,
     ),
+    _bcast("col_b/minimum", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), op="minimum", walk=_NOC_WALK),
 ]
 
 # VALUE: a tensor whose every dim is 1 is one value for the whole op. The reader reads its page 0 once per tile counter
@@ -2647,14 +2671,14 @@ def test_native_value_broadcast_matches_the_oracle(name, knobs):
 # a and [H, 1] on b; ROW_B_COL_A swaps them. The op combines each row value with each column value, which is an outer
 # sum only for add. The ROW operand runs as ROW does and the COL operand is held, so a mix needs no code of its own.
 # These cases run in bf16; the fp32 twins are in _FILLED. Add, subtract and fast multiply run the FPU kernel, and
-# multiply and divide run the SFPU kernel. Only ROW_A_COL_B runs in L1 and beside a sharded output; ROW_B_COL_A runs in
-# DRAM only. Two DRAM cases, row_a_col_b and row_b_col_a/subtract, broadcast outer dims on both sides, and the others do
-# not. In row_a_col_b_split the output is sharded on 2 clusters. Production does not borrow it beside a ROW operand, so
-# the native path takes no anchor and walks 15 tiles per cluster, 2.5 rows, over 32 clusters. The case has two twins:
-# row_a_col_b_split/multiply_fast runs ELWMUL, the one FPU op with several fidelity phases, and
+# multiply, divide, maximum and minimum run the SFPU kernel. Only ROW_A_COL_B runs in L1 and beside a sharded output;
+# ROW_B_COL_A runs in DRAM only. Two DRAM cases, row_a_col_b and row_b_col_a/subtract, broadcast outer dims on both
+# sides, and the others do not. In row_a_col_b_split the output is sharded on 2 clusters. Production does not borrow it
+# beside a ROW operand, so the native path takes no anchor and walks 15 tiles per cluster, 2.5 rows, over 32 clusters.
+# The case has two twins: row_a_col_b_split/multiply_fast runs ELWMUL, the one FPU op with several fidelity phases, and
 # row_a_col_b_split/multiply runs the SFPU kernel. Across the three cases, the FPU kernel's batches of 8 at R1C1W1 and
 # the SFPU kernel's batches of 4 end early at COL changes. On the FPU kernel, a batch that crossed a multiple of 8 would
-# cross the end of the staging ring.
+# cross the end of the staging ring. row_a_col_b/maximum runs maximum beside a ROW a and a COL b.
 _H2_6 = ("height", [40 * 32, 6 * 32], (0, 0, 1, 0))  # on [1, 1, 2560, 192]: 2 shards of 40 x 6 tiles
 _MIXED_BCAST = [
     _bcast(
@@ -2728,6 +2752,9 @@ _MIXED_BCAST = [
         op="multiply",
         walk=_NOC_WALK,
     ),
+    _bcast(
+        "row_a_col_b/maximum", [2, 3, 1, 160], [2, 3, 64, 1], _modes(a="ROW", b="COL"), op="maximum", walk=_NOC_WALK
+    ),
 ]
 
 
@@ -2786,7 +2813,8 @@ def test_native_tensor_scalar_matches_the_oracle(name, knobs):
 
 # fp32 ROW, COL, SCALAR and mixed: unary_bcast takes no 32-bit operand on Quasar, so the reader expands the tile in
 # software and the SFPU kernel, at a batch of 2, copies it. col_b_split and the _full_batches and _slabs cases have a
-# fill at entry 1 of a batch, so a fill must step one ring stride per entry: more than one entry where C >= 2.
+# fill at entry 1 of a batch, so a fill must step one ring stride per entry: more than one entry where C >= 2. The last
+# three cases run maximum and minimum beside a filled operand.
 _FILLED = [
     _bcast(
         f"row_b/fp32/{op}",
@@ -2904,6 +2932,34 @@ _FILLED = [
         [1, 64, 64, 64],
         _modes(a="SCALAR"),
         op="subtract",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # maximum and minimum beside a filled ROW b, COL a and SCALAR b.
+    _bcast(
+        "row_b/fp32/minimum",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        op="minimum",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "col_a/fp32/maximum",
+        [2, 3, 64, 1],
+        _OUTER_SHAPE,
+        _modes(a="COL"),
+        op="maximum",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "scalar_b/fp32/minimum",
+        _OUTER_SHAPE,
+        [2, 3, 1, 1],
+        _modes(b="SCALAR"),
+        op="minimum",
         dtype="float32",
         walk=_NOC_WALK,
     ),

@@ -17,6 +17,98 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-11-02 — maximum and minimum run native, and the Metal 2.0 factory is deprecated on Quasar
+
+## 1. TL;DR
+
+- **`maximum` and `minimum` run native**, in bf16 and fp32, on the SFPU kernel, beside every broadcast type that the
+  other SFPU ops take. The change is in the gate alone. The op defines (`binary_max_tile`, `binary_min_tile`) and the
+  kernel's hooks (`BINARY_SFPU_INIT`, `BINARY_SFPU_OP`) are the ones that the Metal 2.0 SFPU kernels use.
+- **Both ops are exact.** They select an operand, so the tests compare with `torch.maximum` and `torch.minimum` on the
+  device's operands at 0 ULP, in bf16 and in fp32. Every case passes on craq-sim. A plant that gives `maximum` the
+  `minimum` define fails all 7 maximum cases, in every tile, and no minimum case.
+- **Tensor-scalar `maximum` and `minimum` do not reach binary_ng.** The op sends a Python scalar to the unary clamp
+  (`UnaryOpType::MAXIMUM`, `MINIMUM`). The gate admits no such program, and no test covers one. A probe run bound no
+  binary_ng kernel (`tM_scalar_probe`).
+- **Why now.** A census ran the six Quasar suites with the native factory on and the Metal 2.0 factory raising on
+  Quasar. 50 of the 404 cases still reached it: the 16 bf16 `maximum` and `minimum` cases of the bcast suite (they pass
+  on it), 24 activation-format cases with fp32 inputs and a bf16 output (they pass on it), and the 10 BFP8 and BFP4
+  cases (they fail on it too). The first group runs native now.
+- **Verified** on craq-sim `67b8926b`: the native module 210 passed, 1 skipped, with the same test ids as before,
+  because the new cases run inside existing tests. The bcast suite binds 402 native kernels and no Metal 2.0 kernel, and
+  its 134 cases pass. The five other suite files keep their counts. Slide 3 gives each run, and slide 4 the planted
+  defect.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): MAXIMUM and MINIMUM join ADD, SUB, MUL and DIV. In bf16 they run the SFPU
+  kernel, as multiply and divide do. In fp32 all six ops run it. The check that keeps an SFPU add or subtract out of
+  bf16 exempts them, and the comment above it names the kernel of each op.
+- **Tests** (`test_binary_ng_quasar_native.py`): the shard arm knows both ops. Its bf16 results are `torch.maximum` and
+  `torch.minimum`, and its fp32 results are the same torch calls, at the 0 ULP bound that `_ULP` holds. The dense tables
+  run each op in each format on two mixes: the NoC path with partial tiles, and borrowed inputs beside an output that
+  moves. The broadcast tables run bf16 ROW b (`row_b/maximum`), a held COL b (`col_b/minimum`) and a ROW a beside a COL
+  b (`row_a_col_b/maximum`), and, through the reader fill in fp32, ROW b, COL a and SCALAR b (`row_b/fp32/minimum`,
+  `col_a/fp32/maximum`, `scalar_b/fp32/minimum`). Each broadcast case declares its modes and its walk. All cases sit
+  inside existing tests, so the module has the same test ids. `_runs_sfpu` names the two ops. The inputs are normal
+  draws: `maximum` and `minimum` differ at 99.9% of the elements in bf16 and at all of them in fp32.
+- **Kernel comment**: the header of the SFPU kernel lists the ops that the gate runs on it. No kernel code changed.
+- **Docs**: the design doc states the two ops in the table of what native accepts, in the row of F2, and in the oracle
+  section (§6.1).
+
+---
+
+## 3. Verification
+
+The numbers below are lines of the untracked run log. Every run used craq-sim `67b8926b`, the default.
+
+- **Red, then green**, on the 29 ids that the change touches: the 5 dense, 3 fp32, 4 ROW, 5 held, 5 mixed and 5 filled
+  tests, and the 2 no-device table tests. Before the gate change, 27 failed and the 2 table tests passed (`tM_red`). In
+  the dense, ROW, held and mixed tests the new cases bound the Metal 2.0 kernels (`expected every op on kernels_qsr`,
+  `dfb=12` for the four cases of a dense test, `dfb=3` for the one case of a broadcast test), and a broadcast case ran
+  with no mode (`row_b/maximum`: [0, 0, 0, 0] where the case expects [0, 1, 0, 0]). In the 5 filled tests the op raised
+  "is not supported": the Metal 2.0 gate refuses an fp32 subtile broadcast. No case gave a wrong value. With the gate,
+  all 29 pass (`tM_green`), with the declared modes and walks and with exact bits.
+- **The plant** (slide 4): all 7 maximum cases fail, and the revert passes (`tM_plant_swap`: 22 failed, 7 passed;
+  `tM_plant_swap_revert`: 29 passed). The 7 that pass are the 5 held tests, which hold a minimum case only, and the 2
+  table tests.
+- **The whole module** (`tM_module`): 210 passed, 1 skipped, as `t7_module` before.
+- **The six suite files**, one process each (`tM_<suite>`): no_bcast 105 passed and 2 expected failures, resnet_add 10,
+  descriptor_cache_hit 4, bcast 134, scalar 27. The activation-format file: 112 passed and 10 failed, the same 10 BFP8
+  and BFP4 cases. Each count equals the one before this change. The inspector's kernel list shows where the cases ran.
+  The bcast run bound 402 native kernels (3 for each of its 134 cases) and no Metal 2.0 kernel, so its 16 `maximum` and
+  `minimum` cases run native. The activation-format run bound 72 Metal 2.0 kernels, which are the 24 cases with fp32
+  inputs and a bf16 output; the 10 BFP cases bind none, because the DFB validator refuses them first. (The other three
+  suite files open a device for each test, so their lists hold the last test only.)
+- **Also run, though this change does not need them**: the six suite files with `TTNN_QSR_NATIVE=0` keep their counts
+  (`tM_<suite>_off`), and the 30 listings of the pinned dense A/B are identical (`tM_ab_diff`; its planted-mnemonic
+  control fails, `tM_ab_control`). This change touches neither the native-off arm nor a dense program.
+- **Tensor-scalar.** `maximum(tensor, 0.5)` and `minimum(tensor, -0.5)`, in bf16 and fp32, bound no binary_ng kernel
+  (`tM_scalar_probe`). The unary kernels (`reader_unary.cpp`, `eltwise_sfpu_metal2.cpp`, `writer_unary.cpp`) ran them,
+  and all 4096 elements of each output matched torch.
+- **clang-tidy**: 0 findings in the gate (`tidy tM`). On scratch copies, a brace-less `if` in the edited check gives 1
+  finding, and the clean copy gives 0 (`tidy tM scratch`), so the instrument works.
+- **Format**: `git clang-format` is clean on the C++ edits. black and pyflakes are clean on the test module, and
+  pyflakes on the two child scripts that it embeds (`lint tM`).
+- **Not run**: `maximum` or `minimum` with an activation, with a VALUE operand (a tensor whose every dim is 1) or with
+  an outer-dim broadcast alone, which the gate admits as it admits the other SFPU ops, and which no case covers; a
+  Wormhole or Blackhole device; any performance measurement.
+
+---
+
+## 4. Planted defects
+
+The plant broke what the table names, and the named tests caught it. The revert built, and the tests passed again. It
+changed a host source, so each step rebuilt the library.
+
+| Commit | Plant | What it broke | Caught by | Result |
+|---|---|---|---|---|
+| maximum and minimum run native | `MAXIMUM`'s float SFPU define names `binary_min_tile` | all 7 maximum cases, in every tile: the dense `I.I.I_partial/maximum` 256 of 256 tiles and `B32.B32.I/maximum` 512 of 512, the same two in fp32, `row_b/maximum`, `row_a_col_b/maximum` and `col_a/fp32/maximum` 60 of 60; no minimum case | the dense, fp32, ROW, mixed and filled oracle tests at every configuration | 22 failed, 7 passed; 29 passed after the revert |
+
+---
+
 # ► Week of 2026-10-26 — broadcast runs native
 
 ## 1. TL;DR
