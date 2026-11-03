@@ -27,7 +27,7 @@ from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # Case 1 of the failing parametrize sweep -- the trigger that primes the
 # leaked TDMA SrcB state. This is `image_resolution1` from
