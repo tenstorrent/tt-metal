@@ -9,6 +9,9 @@ A dispatch group of one chip has no fabric peers: on a single-device mesh, or on
 cluster_axis=0 (Blackhole QB2 1x4 TP serving), every chip dispatches its own tokens to experts that
 all live on that chip. dispatch/combine then run with zero fabric links. The round trip must return
 each token unchanged in every top-k slot, and a second call must reuse the cached programs.
+
+The chip may also host only a share of the routed experts (expert parallelism over one-chip groups): the dispatch
+table maps the others to -1, their slots never leave the chip, and combine returns zeros for them.
 """
 
 import pytest
@@ -24,9 +27,11 @@ EMB_DIM = 2560
 METADATA_LEN = 3
 
 
-def _routing(indices):
-    """Tile-aligned expert regions in expert order, as a local-only caller builds them."""
+def _routing(indices, experts_per_chip):
+    """Tile-aligned expert regions in expert order, as a local-only caller builds them; experts past
+    experts_per_chip are not on the chip and count 0."""
     counts = torch.bincount(indices.flatten().long(), minlength=NUM_ROUTED_EXPERTS).to(torch.int32)
+    counts[experts_per_chip:] = 0
     aligned = (counts + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
     offsets = torch.cumsum(aligned, 0, dtype=torch.int32) - aligned
     return counts, offsets
@@ -43,22 +48,19 @@ def _upload(mesh_device, tensor, dtype, layout):
     )
 
 
-def _round_trip(mesh_device, x, indices, capacity):
+def _round_trip(mesh_device, x, indices, capacity, experts_per_chip):
     num_chips = x.shape[0]
-    routing = [_routing(indices[c]) for c in range(num_chips)]
+    routing = [_routing(indices[c], experts_per_chip) for c in range(num_chips)]
     counts = torch.stack([r[0] for r in routing])
     offsets = torch.stack([r[1] for r in routing])
 
     tt_x = _upload(mesh_device, x.unsqueeze(1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
     tt_indices = _upload(mesh_device, indices.unsqueeze(1).to(torch.int32), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT)
     tt_offsets = _upload(mesh_device, offsets.unsqueeze(1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-    # Every expert maps to chip 0 of its one-chip dispatch group.
-    tt_table = _upload(
-        mesh_device,
-        torch.zeros(num_chips, 1, NUM_ROUTED_EXPERTS, dtype=torch.int32),
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    # The chip's experts map to chip 0 of its one-chip dispatch group, the rest nowhere (-1).
+    table = torch.zeros(num_chips, 1, NUM_ROUTED_EXPERTS, dtype=torch.int32)
+    table[..., experts_per_chip:] = -1
+    tt_table = _upload(mesh_device, table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     routed, metadata = ttnn.experimental.deepseek_prefill.dispatch(
         ttnn.reshape(tt_x, (1, SEQ_LEN, EMB_DIM)),
@@ -66,7 +68,7 @@ def _round_trip(mesh_device, x, indices, capacity):
         ttnn.reshape(tt_offsets, (1, NUM_ROUTED_EXPERTS)),
         ttnn.reshape(tt_table, (1, NUM_ROUTED_EXPERTS)),
         dispatch_group_size=1,
-        experts_per_chip=NUM_ROUTED_EXPERTS,
+        experts_per_chip=experts_per_chip,
         num_routed_experts=NUM_ROUTED_EXPERTS,
         num_experts_per_tok=NUM_EXPERTS_PER_TOK,
         metadata_len=METADATA_LEN,
@@ -80,7 +82,7 @@ def _round_trip(mesh_device, x, indices, capacity):
         ttnn.reshape(_upload(mesh_device, counts.unsqueeze(1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), (1, 1, -1)),
         ttnn.reshape(tt_offsets, (1, 1, NUM_ROUTED_EXPERTS)),
         dispatch_group_size=1,
-        experts_per_chip=NUM_ROUTED_EXPERTS,
+        experts_per_chip=experts_per_chip,
         num_experts_per_tok=NUM_EXPERTS_PER_TOK,
         seq_len_per_chip=SEQ_LEN,
         cluster_axis=0,
@@ -110,7 +112,8 @@ def _round_trip(mesh_device, x, indices, capacity):
     ],
     indirect=True,
 )
-def test_dispatch_combine_local(mesh_device, device_params):
+@pytest.mark.parametrize("experts_per_chip", [NUM_ROUTED_EXPERTS, NUM_ROUTED_EXPERTS // 4], ids=["all", "quarter"])
+def test_dispatch_combine_local(mesh_device, device_params, experts_per_chip):
     num_chips = mesh_device.get_num_devices()
     raw = NUM_EXPERTS_PER_TOK * SEQ_LEN
     capacity = (raw + (ttnn.TILE_SIZE - 1) * NUM_ROUTED_EXPERTS + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
@@ -121,8 +124,9 @@ def test_dispatch_combine_local(mesh_device, device_params):
         scores = torch.rand(num_chips, SEQ_LEN, NUM_ROUTED_EXPERTS, generator=generator)
         indices = scores.topk(NUM_EXPERTS_PER_TOK, dim=-1).indices.to(torch.int32)
 
-        y = _round_trip(mesh_device, x, indices, capacity)
-        expected = x.unsqueeze(2).expand(-1, -1, NUM_EXPERTS_PER_TOK, -1)
+        y = _round_trip(mesh_device, x, indices, capacity, experts_per_chip)
+        expected = x.unsqueeze(2).expand(-1, -1, NUM_EXPERTS_PER_TOK, -1).clone()
+        expected[indices >= experts_per_chip] = 0  # slots of experts off the chip stay at combine's zeros
         assert torch.equal(y, expected), f"local round trip mismatch on call {seed}"
 
         if num_programs is None:
