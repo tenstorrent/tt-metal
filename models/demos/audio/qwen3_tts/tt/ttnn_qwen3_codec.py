@@ -377,6 +377,15 @@ class TtCodecDecoder:
         """What `decode` will actually run: `frames` rounded up to a bucket."""
         return frames if bucket <= 1 else -(-frames // bucket) * bucket
 
+    def pad_codes(self, codes, bucket=LENGTH_BUCKET):
+        """codes [1, 16, T] -> [1, 16, padded_frames(T)], the last frame repeated: a valid code,
+        in distribution, whose samples the caller trims off."""
+        frames = codes.shape[-1]
+        padded = self.padded_frames(frames, bucket)
+        if padded == frames:
+            return codes
+        return torch.cat([codes, codes[..., -1:].expand(-1, -1, padded - frames)], dim=-1)
+
     def program_room_needed(self, frames, bucket=LENGTH_BUCKET):
         """Does this decode need the device's program cache dropped before it runs?
 
@@ -402,13 +411,18 @@ class TtCodecDecoder:
         )
 
     def _trans_conv(self, x, params, key, stride):
-        """Transposed convolution, then upstream's right trim of `kernel - stride`."""
+        """Transposed convolution, then upstream's right trim of `kernel - stride`.
+
+        Its prepared weights are cached by name and length, as `causal_conv1d` caches its own.
+        """
         length = x.shape[1]
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        out, [_, width] = ttnn.conv_transpose2d(
+        cache_key = (key, length)
+        weight, bias = self._prepared.get(cache_key, (params["weight"], params["bias"]))
+        out, [_, width], (weight, bias) = ttnn.conv_transpose2d(
             input_tensor=ttnn.reshape(x, (1, 1, length, params["in_channels"])),
-            weight_tensor=params["weight"],
-            bias_tensor=params["bias"],
+            weight_tensor=weight,
+            bias_tensor=bias,
             device=self.device,
             in_channels=params["in_channels"],
             out_channels=params["out_channels"],
@@ -423,7 +437,9 @@ class TtCodecDecoder:
             groups=1,
             conv_config=self.trans_conv_config,
             return_output_dim=True,
+            return_weights_and_bias=True,
         )
+        self._prepared[cache_key] = (weight, bias)
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.reshape(out, (1, width, params["out_channels"]))
         trim = params["kernel"] - stride
@@ -590,11 +606,8 @@ class TtCodecDecoder:
         so their measurements are not reading padded audio.
         """
         frames = codes.shape[-1]
-        padded = self.padded_frames(frames, bucket)
-        self._compiled.add(padded)
-        if padded > frames:
-            # The last frame repeated: a valid code, in distribution, and thrown away after.
-            codes = torch.cat([codes, codes[..., -1:].expand(-1, -1, padded - frames)], dim=-1)
+        codes = self.pad_codes(codes, bucket)
+        self._compiled.add(codes.shape[-1])
 
         latents = self.latents(codes)
         cos, sin, mask = self.host_inputs(latents.shape[1])
@@ -607,3 +620,82 @@ class TtCodecDecoder:
             return samples[:, : frames * self.upsample].unsqueeze(1)
         finally:
             self._prepared.clear()
+
+
+# Frames one streamed chunk is decoded with: the chunk, behind as many of its request's
+# earlier frames as fit. Context this long makes a chunk close to, not equal to, its slice of
+# a one-shot decode, since the pre-transformer's 72-frame window stacks eight layers deep. On
+# the fp32 reference, two LibriTTS clips in vLLM-Omni's chunk schedule: 44-47 dB SNR at 100
+# frames of context, 65-71 dB at 144, against ~28 dB between this bf16 decoder and fp32.
+STREAM_WINDOW = 4 * LENGTH_BUCKET
+
+
+class StreamingCodecDecoder:
+    """Decodes one request's codes chunk by chunk, returning only each chunk's new samples.
+
+    A request's `state` dict keeps the last `window` frames it was given, and each chunk is
+    decoded behind them, so every decode runs at one of `window / LENGTH_BUCKET` bucketed
+    lengths. `warmup` captures one trace per length; a chunk is one latents write and one
+    replay. Eager, a decode costs at least ~0.19 s whatever its length, longer than a
+    two-frame chunk plays for.
+    """
+
+    def __init__(self, device, parameters=None, window=STREAM_WINDOW):
+        self.device = device
+        self.codec = TtCodecDecoder(device, parameters or preprocess_codec_parameters(device))
+        self.window = window
+        self.upsample = self.codec.upsample
+        self._traces = {}  # padded frames -> (trace id, latents input, waveform output)
+
+    def warmup(self):
+        """Compile every bucketed length, then capture a trace of each.
+
+        All are compiled before the first capture and captured before the first replay:
+        nothing eager may run beside a live trace, and capturing one after another had run
+        hung the card.
+        """
+        to_device = lambda tensor: ttnn.from_torch(
+            tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        inputs = {}
+        for frames in range(LENGTH_BUCKET, self.window + 1, LENGTH_BUCKET):
+            codes = torch.zeros(1, self.codec.config["num_quantizers"], frames, dtype=torch.long)
+            inputs[frames] = [to_device(self.codec.latents(codes)), *map(to_device, self.codec.host_inputs(frames))]
+            self.codec(*inputs[frames])
+        ttnn.synchronize_device(self.device)
+        for frames, tensors in inputs.items():
+            trace = ttnn.begin_trace_capture(self.device, cq_id=0)
+            waveform = self.codec(*tensors)
+            ttnn.end_trace_capture(self.device, trace, cq_id=0)
+            self._traces[frames] = (trace, tensors[0], waveform)
+
+    def decode(self, codes, state, skip=0):
+        """One chunk's codes [1, 16, F] -> its samples [1920 * (F - skip)] on host.
+
+        The first `skip` frames are context only: decoded, never returned. vLLM-Omni puts an
+        in-context clone's reference frames at the front of its first chunk.
+        """
+        frames = codes.shape[-1]
+        if not 0 <= skip <= frames or frames > self.window:
+            raise ValueError(
+                f"a streamed chunk takes 0 <= skip <= frames <= {self.window}; got {frames} frames, skip {skip}"
+            )
+        history = state.get("codes")
+        if history is not None:
+            codes = torch.cat([history, codes], dim=-1)[..., -self.window :]
+        state["codes"] = codes
+        decoded = codes.shape[-1]
+        codes = self.codec.pad_codes(codes)
+        trace, latents, waveform = self._traces[codes.shape[-1]]
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(self.codec.latents(codes), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), latents
+        )
+        ttnn.execute_trace(self.device, trace, cq_id=0, blocking=False)
+        samples = ttnn.to_torch(waveform).float().reshape(-1)[: decoded * self.upsample]
+        return samples[samples.numel() - (frames - skip) * self.upsample :]
+
+    def release(self):
+        """Drop the captured traces."""
+        for trace, _, _ in self._traces.values():
+            ttnn.release_trace(self.device, trace)
+        self._traces.clear()
