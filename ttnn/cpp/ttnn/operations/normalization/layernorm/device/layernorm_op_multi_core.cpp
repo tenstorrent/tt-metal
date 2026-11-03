@@ -73,6 +73,12 @@ constexpr bool uses_centred_values_buffer(
     return !compact_fp32_finalizer && (!rms_norm || fuse_pre_add || large_tensor);
 }
 
+constexpr bool uses_pre_add_buffer(bool rms_norm, bool fuse_pre_add, bool large_tensor, bool use_welford) {
+    // layernorm_large_tensor.cpp adds the residual in DEST, so only the other LayerNorm compute kernels stage
+    // x = a + b in X. RMSNorm never does.
+    return fuse_pre_add && !rms_norm && !(large_tensor && !use_welford);
+}
+
 // Blackhole measurements show that the affine multicast rendezvous is amortised at 20 active
 // cores for the fused pre-add replay path.
 constexpr std::uint32_t kLayerNormAffineMcastMinCores = 20;
@@ -307,7 +313,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
                 sfpu_statistics ? 0 : static_cast<std::uint64_t>(plan.squared_tiles) * intermediate_tile_size,
             .gamma = gamma.has_value() ? static_cast<std::uint64_t>(plan.gamma_tiles) * gamma_tile_size : 0,
             .beta = beta.has_value() ? static_cast<std::uint64_t>(plan.beta_tiles) * beta_tile_size : 0,
-            .residual_values = residual.has_value() && !rms_norm
+            .residual_values = uses_pre_add_buffer(rms_norm, residual.has_value(), plan.large_tensor, sfpu_statistics)
                                    ? static_cast<std::uint64_t>(plan.residual_value_tiles) * intermediate_tile_size
                                    : 0,
             .affine_intermediate = gamma.has_value() || beta.has_value()
@@ -753,7 +759,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (b) {
         // Fused: x = a + b. Compute writes the post-add result here, then the welford intake
         // reads it via transpose_tile.
-        if (!rms_norm) {
+        if (uses_pre_add_buffer(rms_norm, fuse_pre_add, large_tensor_needed, use_welford)) {
             add_dfb(X, im6_t, single_tile_size, interm_data_format);
         }
         add_dfb(INB, in1_t, inb_single_tile_size, inb_data_format);
@@ -1141,7 +1147,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (gamma.has_value() || beta.has_value()) {
         bind_self_loop(compute, FUSION, "fusion");
     }
-    if (b && !rms_norm) {
+    if (uses_pre_add_buffer(rms_norm, fuse_pre_add, large_tensor_needed, use_welford)) {
         bind_self_loop(compute, X, "x");
     }
     if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed, use_welford, compact_fp32_finalizer)) {
