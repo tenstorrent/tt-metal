@@ -357,50 +357,27 @@ def device_scalar(device: ttnn.Device | ttnn.MeshDevice, value: int) -> ttnn.Ten
     )
 
 
-def export_recurrent(
-    slab: ttnn.Tensor, recurrent: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
+def _copy_entry(
+    source: ttnn.Tensor,
+    destination: ttnn.Tensor,
+    slot: ttnn.Tensor,
+    num_layers: int,
+    position: int,
+    zero_fill_at_zero: ttnn.Tensor | None = None,
 ) -> None:
-    """Write one layer's native recurrent carry into slab batch ``slot * num_layers + position`` (captured).
+    """Copy one layer's state between a native carry and slab batch ``slot * num_layers + position`` (captured).
 
-    The native tiles land in the ND slab's segments through logical page ids, as ``fill_cache_for_user_`` put them.
+    Native recurrent tiles land in the ND slab's segments through logical page ids, as ``fill_cache_for_user_`` put
+    them; a native convolution page is one slab segment. When ``zero_fill_at_zero`` reads 0 on device the
+    destination is zero-filled and the source is not read; only loads pass it.
     """
-    ttnn.experimental.kda.indexed_entry_copy(recurrent, slab, slot, index_scale=num_layers, index_offset=position)
-
-
-def export_convolution(
-    slab: ttnn.Tensor, convolution: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
-) -> None:
-    """Write one layer's native convolution tail into slab batch ``slot * num_layers + position`` (captured)."""
-    ttnn.experimental.kda.indexed_entry_copy(convolution, slab, slot, index_scale=num_layers, index_offset=position)
-
-
-def import_recurrent(
-    slab: ttnn.Tensor,
-    recurrent: ttnn.Tensor,
-    slot: ttnn.Tensor,
-    num_layers: int,
-    position: int,
-    zero_fill_at_zero: ttnn.Tensor | None,
-) -> None:
-    """Read slab batch ``slot * num_layers + position`` into a native recurrent carry, or zeros when
-    ``zero_fill_at_zero`` reads 0 on device (captured)."""
     ttnn.experimental.kda.indexed_entry_copy(
-        slab, recurrent, slot, index_scale=num_layers, index_offset=position, zero_fill_at_zero=zero_fill_at_zero
-    )
-
-
-def import_convolution(
-    slab: ttnn.Tensor,
-    convolution: ttnn.Tensor,
-    slot: ttnn.Tensor,
-    num_layers: int,
-    position: int,
-    zero_fill_at_zero: ttnn.Tensor | None,
-) -> None:
-    """Read slab batch ``slot * num_layers + position`` into a native convolution tail, or zeros when
-    ``zero_fill_at_zero`` reads 0 on device (captured)."""
-    ttnn.experimental.kda.indexed_entry_copy(
-        slab, convolution, slot, index_scale=num_layers, index_offset=position, zero_fill_at_zero=zero_fill_at_zero
+        source,
+        destination,
+        slot,
+        index_scale=num_layers,
+        index_offset=position,
+        zero_fill_at_zero=zero_fill_at_zero,
     )
 
 
@@ -509,8 +486,8 @@ class KdaStates:
     def export_layer(self, state: KdaState, slot: ttnn.Tensor, layer_idx: int) -> None:
         """Write one layer's native state into its slot's batch; ``slot`` is read on device (see ``device_scalar``)."""
         position = self.layer_position(layer_idx)
-        export_recurrent(self.recurrent, state.recurrent, slot, self.num_layers, position)
-        export_convolution(self.convolution, state.convolution, slot, self.num_layers, position)
+        _copy_entry(state.recurrent, self.recurrent, slot, self.num_layers, position)
+        _copy_entry(state.convolution, self.convolution, slot, self.num_layers, position)
 
     def import_layer(
         self,
@@ -525,10 +502,8 @@ class KdaStates:
         ``zero_fill_at_zero``: device scalar; 0 loads zeros instead of the slot (K3 passes the chunk start).
         """
         position = self.layer_position(layer_idx)
-        import_recurrent(self.recurrent, destination.recurrent, slot, self.num_layers, position, zero_fill_at_zero)
-        import_convolution(
-            self.convolution, destination.convolution, slot, self.num_layers, position, zero_fill_at_zero
-        )
+        _copy_entry(self.recurrent, destination.recurrent, slot, self.num_layers, position, zero_fill_at_zero)
+        _copy_entry(self.convolution, destination.convolution, slot, self.num_layers, position, zero_fill_at_zero)
 
     def deallocate(self) -> None:
         ttnn.deallocate(self.recurrent)
