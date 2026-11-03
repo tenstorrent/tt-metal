@@ -1332,7 +1332,19 @@ _CHUNKED_SCENARIOS = (
         ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
         ("deep-2u", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
     ]
+    # A 4x4 stage's production chunk: 2560 tokens, 640 per chip on SP=4 as 5120 is on SP=8, and 160 rows per TP
+    # rank, so the TP-deduped KV stripes in whole tiles. Run on the 4x4 row only (see C2P5K_MESHES).
+    + [
+        ("c2p5k-production-55k", dict(iters_isl=[2560] * 22, chunk_size_global=2560)),
+        # maxedge at half scale: iter0 aligned partial, iter1 rotated mid-chip straddle, iter2 full.
+        ("c2p5k-maxedge", dict(iters_isl=[1280, 1312, 2560], chunk_size_global=2560)),
+        ("c2p5k-fullchunk-2u", dict(iters_isl=[2560] * 4, num_users=2, chunk_size_global=2560)),
+        ("c2p5k-deep", dict(iters_isl=[2560, 2560], prefill_len=50 * 1024, chunk_size_global=2560)),
+    ]
 )
+# The 2560-token scenarios are the 4x4 stage's chunk. On 8x4 a 2560 chunk is 320 rows per chip, a tiling the MLA
+# chunked SDPA has no config for here, and 80 rows per TP rank, which the TP-deduped KV cannot stripe (#63860).
+C2P5K_MESHES = {(4, 4)}
 
 
 @pytest.mark.parametrize(
@@ -1431,6 +1443,8 @@ def test_mla_chunked_prefill(
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
     if reference == "cpu" and os.environ.get(variant.env_var) and not kwargs.get("use_pretrained"):
         kwargs = {**kwargs, "use_pretrained": True}
+    if kwargs.get("chunk_size_global", 5120) != 5120 and tuple(mesh_device.shape) not in C2P5K_MESHES:
+        pytest.skip(f"{kwargs['chunk_size_global']}-token chunks are the 4x4 stage's; this mesh runs 5120")
     topology = per_axis_topology(device_params["fabric_config"])
     _run_chunked_prefill(
         request,
