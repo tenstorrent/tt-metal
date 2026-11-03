@@ -116,118 +116,8 @@ def _codegen_draw(earlier, shape, kwargs, dtype, layout, device, placement):
 
 
 _DEMOTED = [
-    (
-        [1, 4, 96, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [1, 4, 96, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [1, 4, 96, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [1, 4, 96, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
+    ([64, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+    ([64, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
     ([2, 32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
     (
         [2, 32, 32],
@@ -260,24 +150,26 @@ _DEMOTED = [
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     ),
+    ([64, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    ([64, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.L1_MEMORY_CONFIG},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+    ),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.L1_MEMORY_CONFIG},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+    ),
 ]
 _DEMOTED_IDS = [
-    "[1, 4, 96, 32]@L1|memory_config=BufferType.DRAM|bfloat16|row_major",
-    "[1, 4, 96, 32]@L1|memory_config=BufferType.L1|bfloat16|row_major",
-    "[1, 4, 96, 32]|memory_config=BufferType.DRAM|bfloat16|row_major",
-    "[1, 4, 96, 32]|memory_config=BufferType.L1|bfloat16|row_major",
-    "[2, 1, 96, 32]@L1|memory_config=BufferType.DRAM|int32|row_major",
-    "[2, 1, 96, 32]@L1|memory_config=BufferType.DRAM|uint16|row_major",
-    "[2, 1, 96, 32]@L1|memory_config=BufferType.DRAM|uint32|row_major",
-    "[2, 1, 96, 32]@L1|memory_config=BufferType.L1|int32|row_major",
-    "[2, 1, 96, 32]@L1|memory_config=BufferType.L1|uint16|row_major",
-    "[2, 1, 96, 32]@L1|memory_config=BufferType.L1|uint32|row_major",
-    "[2, 1, 96, 32]|memory_config=BufferType.DRAM|int32|row_major",
-    "[2, 1, 96, 32]|memory_config=BufferType.DRAM|uint16|row_major",
-    "[2, 1, 96, 32]|memory_config=BufferType.DRAM|uint32|row_major",
-    "[2, 1, 96, 32]|memory_config=BufferType.L1|int32|row_major",
-    "[2, 1, 96, 32]|memory_config=BufferType.L1|uint16|row_major",
-    "[2, 1, 96, 32]|memory_config=BufferType.L1|uint32|row_major",
+    "[64, 32]@L1|memory_config=BufferType.L1|int32|row_major",
+    "[64, 32]@L1|memory_config=BufferType.L1|uint32|row_major",
     "[2, 32, 32]@L1|memory_config=BufferType.DRAM|int32|row_major",
     "[2, 32, 32]@L1|memory_config=BufferType.DRAM|uint16|row_major",
     "[2, 32, 32]@L1|memory_config=BufferType.DRAM|uint32|row_major",
@@ -286,6 +178,10 @@ _DEMOTED_IDS = [
     "[2, 32, 32]@L1|memory_config=BufferType.L1|uint32|row_major",
     "[2, 32, 32]|memory_config=BufferType.DRAM|int32|row_major",
     "[2, 32, 32]|memory_config=BufferType.DRAM|uint16|row_major",
+    "[64, 32]|memory_config=BufferType.L1|int32|row_major",
+    "[64, 32]|memory_config=BufferType.L1|uint32|row_major",
+    "[2, 32, 32]|memory_config=BufferType.L1|uint16|row_major",
+    "[2, 32, 32]|memory_config=BufferType.L1|uint32|row_major",
 ]
 
 
@@ -557,24 +453,29 @@ def test_tilize_codegen_cb_plan_follows_live_l1(device, kwargs):
 
 
 # --- Perf demotion boundary ---
-# is_demoted() sends a non-converting, one-tile-wide input with at most 20 tile rows to native. One
-# more tile row, a second tile column, or a dtype conversion keeps the same call on codegen. Forced
-# codegen still serves the demoted case: only auto's choice changes.
+# is_demoted() sends a non-converting, one-tile-wide uint16/int32/uint32 input with at most 2 tile
+# rows to native. One more tile row, a second tile column, a dtype conversion, or a bf16 input
+# (native fast tilize) keeps the same call on codegen. Forced codegen still serves the demoted case:
+# only auto's choice changes.
 _DEMOTION_BOUNDARY = [
-    # shape, tilize kwargs, routed to native, id
-    ([1, 1, 20 * 32, 32], {}, True, "wt1_20_tile_rows"),
-    ([4, 5, 32, 32], {}, True, "wt1_20_tile_rows_from_batch"),
-    ([1, 1, 21 * 32, 32], {}, False, "wt1_21_tile_rows"),
-    ([1, 1, 20 * 32, 64], {}, False, "wt2_20_tile_rows"),
-    ([1, 1, 20 * 32, 32], {"dtype": ttnn.int32}, False, "wt1_20_tile_rows_to_int32"),
+    # shape, input dtype, tilize kwargs, routed to native, id
+    ([1, 1, 2 * 32, 32], ttnn.int32, {}, True, "wt1_2_tile_rows"),
+    ([2, 1, 32, 32], ttnn.uint16, {}, True, "wt1_2_tile_rows_from_batch"),
+    ([1, 1, 3 * 32, 32], ttnn.int32, {}, False, "wt1_3_tile_rows"),
+    ([1, 1, 6 * 32, 32], ttnn.int32, {}, False, "wt1_6_tile_rows"),
+    ([1, 1, 2 * 32, 64], ttnn.int32, {}, False, "wt2_2_tile_rows"),
+    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {"dtype": ttnn.int32}, False, "wt1_2_tile_rows_to_int32"),
+    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {}, False, "wt1_2_tile_rows_bf16"),
 ]
 
 
-@pytest.mark.parametrize("shape,kwargs,demoted,case_id", _DEMOTION_BOUNDARY, ids=[c[3] for c in _DEMOTION_BOUNDARY])
-def test_tilize_codegen_demotion_boundary(device, shape, kwargs, demoted, case_id):
+@pytest.mark.parametrize(
+    "shape,in_dtype,kwargs,demoted,case_id", _DEMOTION_BOUNDARY, ids=[c[4] for c in _DEMOTION_BOUNDARY]
+)
+def test_tilize_codegen_demotion_boundary(device, shape, in_dtype, kwargs, demoted, case_id):
     torch.manual_seed(0)
-    host = _make_input(shape, ttnn.bfloat16)
-    xt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    host = _make_input(shape, in_dtype)
+    xt = ttnn.from_torch(host, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     reference = _reference(host, **kwargs)
     expected = host if reference is None else reference
     device.clear_program_cache()

@@ -293,21 +293,19 @@ bool supported_execution_controls(
 }
 
 // One tile per row and at most two tile rows runs on at most two cores in about 1.7 us, so codegen's fixed
-// per-program cost is not amortized.
+// per-program cost is not amortized. Only the integer dtypes: bf16/fp32 take native's fast tilize, which this gap
+// was not measured against.
 bool is_demoted(const Tensor& input, DataType output_dtype) {
     using namespace tt::constants;
 
-    if (output_dtype != input.dtype()) {
+    const DataType dtype = input.dtype();
+    if (output_dtype != dtype) {
         return false;
     }
-    const auto& shape = input.padded_shape();
-    if (shape.rank() < kMinRank) {
+    if (dtype != DataType::UINT16 && dtype != DataType::INT32 && dtype != DataType::UINT32) {
         return false;
     }
-    const uint32_t width = shape[kWidthAxis];
-    if (width == 0) {
-        return false;
-    }
+    const uint32_t width = input.padded_shape()[kWidthAxis];
     const uint32_t wt = width / TILE_WIDTH;
     const uint32_t tile_rows = input.logical_shape().volume() / width / TILE_HEIGHT;
     return wt == 1 && tile_rows <= kDemoteMaxTileRows;
