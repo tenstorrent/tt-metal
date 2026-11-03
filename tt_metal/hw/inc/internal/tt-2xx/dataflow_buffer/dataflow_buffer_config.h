@@ -108,8 +108,6 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
 
     [dfb_config_base + DFB_DM1_REMAPPER_BLOB_OFFSET], only when DM1 has remapper slots:
       DM1 remapper blob — core-wide, read by DM1:
-        [ready flags: one byte per remapper pair (64B), host-zeroed; DM1 sets flags[pair] uncached once
-         it has programmed that pair, and producers (DM and TRISC) poll their pair's byte uncached]
         [dfb_dm1_remapper_slot_t x num_slots]  (offset and count in dm1_slots)
 
     [dfb_config_base + dfb_dm0_packed_blob_offset(dm0_packed)], only when has_dm0_isr:
@@ -512,20 +510,12 @@ static_assert(sizeof(dfb_dm1_remapper_slot_t) == 12, "dfb_dm1_remapper_slot_t mu
 // Where a blob's CACHED payload starts, relative to the blob base. The host emitter and both device
 // readers must use these.
 //
-// The DM1 blob opens with the ready flags, one byte per remapper pair, on their own line ahead of the
-// cached slot array. DM1 sets flags[pair] after programming that pair, and a producer (DM or TRISC
-// packer) polls its own pair's byte instead of the pair's ClientL register. Both sides use the
-// uncached alias, which is the fastest of the variants measured for DM producers (issue #55788). The
-// host serializes the line as zeros with every config write, so each launch starts with every flag
-// clear. The slot count and offset live in dfb_global_header_t::dm1_slots, so the blob has no header.
+// The DM1 blob is just the slot array: its count and offset live in dfb_global_header_t::dm1_slots.
+// A producer (DM or TRISC packer) polls its pair's ClientL valid bits, a non-posted read.
 //
 // The DM0 blob is just the descriptor pool: its masks and stride live in dm0_packed.
-constexpr uint32_t DFB_DM1_READY_FLAGS_OFFSET = 0u;
-constexpr uint32_t DFB_DM1_READY_FLAGS_BYTES = 64u;
-constexpr uint32_t DFB_DM1_CACHED_PAYLOAD_OFFSET = DFB_DM1_READY_FLAGS_OFFSET + DFB_DM1_READY_FLAGS_BYTES;
+constexpr uint32_t DFB_DM1_CACHED_PAYLOAD_OFFSET = 0u;
 constexpr uint32_t DFB_DM0_CACHED_PAYLOAD_OFFSET = 0u;
-static_assert(
-    DFB_DM1_READY_FLAGS_BYTES >= dfb::NUM_REMAPPER_PAIRINGS, "DM1 ready flags need one byte per remapper pair");
 static_assert(sizeof(dfb_dm0_txn_descriptor_image_t) == 32, "dfb_dm0_txn_descriptor_image_t must be 32 bytes");
 // Counters a compact (16 B) slot holds: everything between the counter array and the 16-bit threshold
 // in its last two bytes.
