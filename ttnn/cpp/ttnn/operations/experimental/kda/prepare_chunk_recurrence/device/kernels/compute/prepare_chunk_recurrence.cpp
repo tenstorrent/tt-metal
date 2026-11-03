@@ -541,8 +541,19 @@ void prepare_gate_factors(
     reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
     centered_inverse_decay.wait_front(chunk_key_tiles);
 
-    // exp(G_last/2) is row-replicated and the broadcasts read only row 0.
-    exponential_of_mask_products<Ct, Kt, MaskProductEpilogue::Exp, VectorMode::R, 2>(half_mask, g, anchor_decay);
+    // INVESTIGATION S: exp(G_last/2) * (1 + 0.005) (FP32 bits 0x3f80a3d7), kept in DST.
+    matmul_blocks<Ct, Ct, Kt, false>(half_mask, g, anchor_decay, [](uint32_t tiles) {
+        exp_tile_init();
+#pragma GCC unroll 1
+        for (uint32_t tile = 0; tile < tiles; ++tile) {
+            exp_tile<false, false, InputClamping::ClampToNegative>(tile);
+        }
+        binop_with_scalar_tile_init();
+#pragma GCC unroll 1
+        for (uint32_t tile = 0; tile < tiles; ++tile) {
+            mul_unary_tile(tile, 0x3f80a3d7u);
+        }
+    });
     anchor_decay.wait_front(chunk_key_tiles);
 }
 
