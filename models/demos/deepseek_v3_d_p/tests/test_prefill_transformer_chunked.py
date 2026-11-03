@@ -199,9 +199,11 @@ LAYER_PCC_THRESHOLD = 0.88
 # ~0.86 (glm_5_3 @L75); indexer-K nope 0.980 (glm_5_3 captures layers 0-2 + every 4th).
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
-# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.848, below the bf16 floor).
+# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.857, below the bf16 floor). Raised 0.82 -> 0.83
+# with the mean-centred gate bias (MOE_GATE_BIAS_CENTERED), which took that row from 0.849 to 0.857 and the
+# warm-cache 55k row from 0.9841 to 0.9850; the margin stays ~0.027.
 GLM_KV_CACHE_FORMAT = MlaKvCacheFormat.SCALED_FP8
-KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.82
+KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.83
 
 
 def _sparse_cache_format(has_indexer, kv_cache_format):
