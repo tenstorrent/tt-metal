@@ -258,6 +258,10 @@ jobs:
           # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
           # only reports "worker crashed"), re-run serially (drop -n 4 via the PYTEST_ADDOPTS override)
           # with --lf for actionable diagnostics.
+          # Cap host OpenMP threads, as ttnn-sanity-tests-impl.yaml does, so torch goldens don't starve ttsim.
+          export OMP_NUM_THREADS=2
+          export MKL_NUM_THREADS=2
+          export OMP_WAIT_POLICY=passive
           cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
           if eval "$cmd"; then
             exit 0
