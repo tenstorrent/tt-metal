@@ -1,6 +1,6 @@
 # Dynamic throttle harness: the emulation of matmul_block_math_dynamic_throttle on top of the tree's own perf_matmul configuration. sources/matmul_dyn_test.cpp is generated from the tree's sources/matmul_test.cpp: every math matmul call becomes
 # "read the FW word at L1 16; odd = throttled form (level 5, tile MOP as ttnn's throttled branch), re-init only when the status changes".
-# DYN mode: 0 the word as it stands, 1 forced odd, 2 toggled every call (re-init every call), 3 forced even, 5 only the regular init of the arm per call (for reading its instructions), 4 forced even with the regular
+# DYN mode: 0 the word as it stands, 1 forced odd, 2 toggled every call (re-init every call), 3 forced even, 4 forced even with the regular
 # init of the arm before every call (the init cost: mode 4 less mode 3).
 # A tree with _llk_math_matmul_init_switch_ re-inits through it, as matmul_block_math_dynamic_throttle does; main's tree takes main's template
 # arguments and its full init. Regenerate by importing the module without DYN_NOGEN; DYN_NOGEN keeps the committed source.
@@ -41,9 +41,6 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
 #define DYN_CALL_ARGS {call}
 #define DYN_TINIT_ARGS {tinit}
 #define DYN_TCALL_ARGS {tcall}
-#if DYN_MODE == 5
-#define DYN_MATMUL() _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM)
-#else
 #define DYN_MATMUL()                                                                                               \\
     do {{                                                                                                           \\
         std::uint32_t fw = *dyn_tp;                                                                                 \\
@@ -59,7 +56,6 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
             _llk_math_matmul_<DYN_CALL_ARGS>(0, CT_DIM, RT_DIM);                                                    \\
         }}                                                                                                          \\
     }} while (0)
-#endif
 """
     i = src.index("#ifdef LLK_TRISC_MATH")
     j = src.index("void run_kernel", i)

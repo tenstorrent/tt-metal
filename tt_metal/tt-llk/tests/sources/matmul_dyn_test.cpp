@@ -342,9 +342,6 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
 #define DYN_CALL_ARGS MATMUL_MATH_TEMPLATE_ARGS
 #define DYN_TINIT_ARGS MATMUL_FIDELITY, 5, false, true, 0, false, false, matmul_reuse_dir_k, false
 #define DYN_TCALL_ARGS MATMUL_FIDELITY, 5, false, true, matmul_reuse_dir_k
-#if DYN_MODE == 5
-#define DYN_MATMUL() _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM)
-#else
 #define DYN_MATMUL()                                                                                               \
     do {                                                                                                           \
         std::uint32_t fw = *dyn_tp;                                                                                 \
@@ -360,7 +357,6 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
             _llk_math_matmul_<DYN_CALL_ARGS>(0, CT_DIM, RT_DIM);                                                    \
         }                                                                                                          \
     } while (0)
-#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
