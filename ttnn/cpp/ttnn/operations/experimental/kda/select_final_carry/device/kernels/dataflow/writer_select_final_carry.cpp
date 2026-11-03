@@ -57,20 +57,39 @@ void kernel_main() {
     const uint8_t semaphore_route = unicast_peers ? 0 : PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric;
     open_connections(fabric, num_connections, arg);
-    // unicast_peers: one header per other rank, routed once, so a page goes to every peer before a single flush.
+    // unicast_peers: up to max_peer_headers headers in turn, so the sends to several peers leave before one flush. A
+    // header's route is rewritten only when it serves another peer, after the previous packet has left L1.
     const size_t peer_args = arg;
     constexpr size_t args_per_peer = 3;
-    constexpr uint32_t peer_headers = unicast_peers ? line_targets : 0;
+    constexpr uint32_t max_peer_headers = 8;
+    constexpr uint32_t peer_headers = !unicast_peers                    ? 0
+                                      : line_targets < max_peer_headers ? line_targets
+                                                                        : max_peer_headers;
     decltype(PacketHeaderPool::allocate_header()) peer_routes[peer_headers > 0 ? peer_headers : 1];
-    for (uint32_t peer = 0; peer < peer_headers; ++peer) {
-        peer_routes[peer] = PacketHeaderPool::allocate_header();
-#if defined(FABRIC_2D)
-        const size_t args = peer_args + peer * args_per_peer;
-        fabric_set_unicast_route(peer_routes[peer], get_arg_val<uint32_t>(args + 1), get_arg_val<uint32_t>(args + 2));
-#endif
+    for (uint32_t h = 0; h < peer_headers; ++h) {
+        peer_routes[h] = PacketHeaderPool::allocate_header();
     }
+    // With a header per peer, each is routed on its first send and keeps that route.
+    bool routed = false;
+    // The header that serves `peer`, routed to it (each header keeps its route while it serves one peer only).
+    const auto peer_route = [&](uint32_t peer) {
+        auto* header = peer_routes[peer % (peer_headers > 0 ? peer_headers : 1)];
+#if defined(FABRIC_2D)
+        if (peer_headers < line_targets || !routed) {
+            const size_t args = peer_args + peer * args_per_peer;
+            fabric_set_unicast_route(header, get_arg_val<uint32_t>(args + 1), get_arg_val<uint32_t>(args + 2));
+        }
+#endif
+        return header;
+    };
     const auto to_peer = [&](uint32_t peer) -> auto& {
         return fabric.get(get_arg_val<uint32_t>(peer_args + peer * args_per_peer)).sender;
+    };
+    // Flush after every peer_headers sends, before a header is reused, and once at the end.
+    const auto after_send = [&](uint32_t peer) {
+        if ((peer + 1) % (peer_headers > 0 ? peer_headers : 1) == 0 || peer + 1 == line_targets) {
+            noc_async_writes_flushed();
+        }
     };
     // Bump the semaphore at `address` on every other rank of the line.
     const auto increment_others = [&](uint64_t address) {
@@ -78,11 +97,12 @@ void kernel_main() {
             for (uint32_t peer = 0; peer < line_targets; ++peer) {
                 fabric_unicast_noc_unicast_atomic_inc(
                     &to_peer(peer),
-                    peer_routes[peer],
+                    peer_route(peer),
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{address, 1, true},
                     1);
+                after_send(peer);
             }
-            noc_async_writes_flushed();
+            routed = true;
             return;
         }
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
@@ -134,15 +154,14 @@ void kernel_main() {
                     for (uint32_t peer = 0; peer < line_targets; ++peer) {
                         fabric_unicast_noc_unicast_write(
                             &to_peer(peer),
-                            peer_routes[peer],
+                            peer_route(peer),
                             source,
                             page_size,
                             tt::tt_fabric::NocUnicastCommandHeader{
                                 linear::addrgen_detail::get_noc_address(output, page, 0)},
                             1);
+                        after_send(peer);
                     }
-                    // The next page reuses every peer's header.
-                    noc_async_writes_flushed();
                 }
             } else if (packet_end - tile == 1) {
                 noc_async_write_page(tile, output, l1_address);
