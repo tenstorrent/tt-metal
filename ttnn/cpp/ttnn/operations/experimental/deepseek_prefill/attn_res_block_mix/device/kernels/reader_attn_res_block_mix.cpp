@@ -118,7 +118,7 @@ void kernel_main() {
         cb_exp_obj.wait_front(num_candidates);
         const uint32_t exp_base = cb_exp_obj.get_read_ptr();
         auto write_group = [&](uint32_t group) {
-            write_partials_group<Ht, Wt, num_closed_sites>(
+            write_partials_group<Ht, Wt, num_closed_sites, sites_per_group>(
                 noc,
                 cb_partials_odd_obj,
                 partials_accessor,
@@ -131,7 +131,7 @@ void kernel_main() {
         for (uint32_t group = 0; group < num_groups; ++group) {
             const uint32_t first_site = group * sites_per_group;
             const uint32_t sites = sites_in_group(group, sites_per_group, num_sites);
-            cb_weights_obj.reserve_back(sites * num_candidates);
+            cb_weights_obj.reserve_back(sites_per_group * num_candidates);
             const uint32_t weights_base = cb_weights_obj.get_write_ptr();
             for (uint32_t s = 0; s < sites; ++s) {
                 for (uint32_t c = 0; c < num_candidates; ++c) {
@@ -146,7 +146,7 @@ void kernel_main() {
                 noc.async_read_barrier();
                 cb_values_obj.push_back(num_tiles);
             }
-            cb_weights_obj.push_back(sites * num_candidates);
+            cb_weights_obj.push_back(sites_per_group * num_candidates);
             if (group > 0 && reader_writes_group(group - 1)) {
                 write_group(group - 1);
             }

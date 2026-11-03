@@ -166,6 +166,7 @@ void kernel_main() {
     auto* arrival_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_sem_addr);
     noc_semaphore_wait_min(arrival_sem_ptr, num_arrivals);
     noc_semaphore_inc(get_noc_addr(arrival_sem_addr), uint32_t{0} - num_arrivals);
+    noc_async_atomic_barrier();
 
     fabric_connections.close();
 }

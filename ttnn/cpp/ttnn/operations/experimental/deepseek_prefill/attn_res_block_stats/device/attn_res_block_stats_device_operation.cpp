@@ -71,6 +71,7 @@ void AttnResBlockStatsDeviceOperation::validate_on_program_cache_miss(
         const auto view = queries.device()->get_view();
         TT_FATAL(view.is_mesh_2d() && *args.cluster_axis < 2, "AttnResBlockStats gathers across a 2D mesh axis");
         const uint32_t ring_size = *args.cluster_axis == 0 ? view.num_rows() : view.num_cols();
+        TT_FATAL(ring_size > 1, "AttnResBlockStats gathers across an axis of more than one device, got {}", ring_size);
         // A gather core per link, on the grid's last row; without one nothing is sent.
         const auto grid = queries.device()->compute_with_storage_grid_size();
         TT_FATAL(

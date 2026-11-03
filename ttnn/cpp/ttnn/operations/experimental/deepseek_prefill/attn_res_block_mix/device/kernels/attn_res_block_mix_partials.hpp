@@ -18,8 +18,9 @@
 
 // The group's sites as compute packs them, out of `cb_obj`. A site's tile at (row, w) is
 // page (r * Ht + row) * Wt + w of its tensor, r counted within it: the leading
-// `num_closed` sites go to the closed reads and the rest to the partials.
-template <uint32_t Ht, uint32_t Wt, uint32_t num_closed, typename Accessor>
+// `num_closed` sites go to the closed reads and the rest to the partials. A short last group
+// still takes a full group's slots (see sites_in_group).
+template <uint32_t Ht, uint32_t Wt, uint32_t num_closed, uint32_t sites_per_group, typename Accessor>
 inline void write_partials_group(
     Noc& noc,
     CircularBuffer& cb_obj,
@@ -31,7 +32,7 @@ inline void write_partials_group(
     uint32_t sites) {
     for (uint32_t i = 0; i < item.num_tiles(); ++i) {
         const uint32_t w = item.begin + i;
-        cb_obj.wait_front(sites);
+        cb_obj.wait_front(sites_per_group);
         for (uint32_t s = 0; s < sites; ++s) {
             const uint32_t site = first_site + s;
             const bool is_closed = site < num_closed;
@@ -44,6 +45,6 @@ inline void write_partials_group(
         }
         // Flushed rather than acknowledged: the buffer only has to be free to reuse.
         noc.async_writes_flushed();
-        cb_obj.pop_front(sites);
+        cb_obj.pop_front(sites_per_group);
     }
 }

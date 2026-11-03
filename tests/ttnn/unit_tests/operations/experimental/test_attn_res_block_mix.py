@@ -83,6 +83,11 @@ def test_attn_res_block_mix(device, planes, num_sites, num_partials, num_tokens)
     torch.testing.assert_close(out, partials, rtol=2e-2, atol=1e-1)
 
 
+def test_attn_res_block_mix_rows_per_core(device):
+    """More token rows than cores, so each core mixes several, with a short last site group."""
+    test_attn_res_block_mix(device, [2], num_sites=5, num_partials=4, num_tokens=8192)
+
+
 @pytest.mark.parametrize("planes", [[1], [6, 1]], ids=lambda p: "+".join(map(str, p)))
 @pytest.mark.parametrize("num_sites, num_closed", [(2, 1), (25, 1), (25, 3)])
 def test_attn_res_block_mix_closed_sites(device, planes, num_sites, num_closed):

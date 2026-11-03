@@ -16,7 +16,12 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*.cpp)
+# Headers too: JIT compiles the kernels from this installed file set.
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_deepseek_prefill_attn_res_block_mix

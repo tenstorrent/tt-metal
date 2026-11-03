@@ -280,7 +280,7 @@ void mix_run(uint32_t num_tiles) {
     cb_values_obj.wait_front(num_tiles * num_candidates);
     for (uint32_t group = 0; group < num_groups; ++group) {
         const uint32_t sites = sites_in_group(group, sites_per_group, num_sites);
-        cb_weights_obj.wait_front(sites * num_candidates);
+        cb_weights_obj.wait_front(sites_per_group * num_candidates);
         for (uint32_t w = 0; w < num_tiles; ++w) {
             tile_regs_acquire();
             for (uint32_t c = 0; c < num_candidates; ++c) {
@@ -293,15 +293,15 @@ void mix_run(uint32_t num_tiles) {
             const bool odd = reader_writes_group(group);
             CircularBuffer& out_obj = odd ? cb_partials_odd_obj : cb_partials_obj;
             const auto out = odd ? cb_partials_odd : cb_partials;
-            out_obj.reserve_back(sites);
+            out_obj.reserve_back(sites_per_group);
             tile_regs_wait();
             for (uint32_t s = 0; s < sites; ++s) {
                 pack_tile(s, out);
             }
             tile_regs_release();
-            out_obj.push_back(sites);
+            out_obj.push_back(sites_per_group);
         }
-        cb_weights_obj.pop_front(sites * num_candidates);
+        cb_weights_obj.pop_front(sites_per_group * num_candidates);
     }
     cb_values_obj.pop_front(num_tiles * num_candidates);
 }

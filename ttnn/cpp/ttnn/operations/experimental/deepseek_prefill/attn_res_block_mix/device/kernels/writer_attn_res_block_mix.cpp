@@ -93,7 +93,7 @@ void kernel_main() {
             if (reader_writes_group(group)) {
                 continue;
             }
-            write_partials_group<Ht, Wt, num_closed_sites>(
+            write_partials_group<Ht, Wt, num_closed_sites, sites_per_group>(
                 noc,
                 cb_partials_obj,
                 partials_accessor,

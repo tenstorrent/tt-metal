@@ -43,7 +43,8 @@ inline void for_each_attn_res_block_mix_item(Body body) {
 }
 
 // Sites in `group` when the sites are split into groups of `sites_per_group`: all but the
-// last group are full.
+// last group are full. A short last group still takes a full group's slots in every circular
+// buffer, so their pointers stay aligned from one item to the next.
 constexpr uint32_t sites_in_group(uint32_t group, uint32_t sites_per_group, uint32_t num_sites) {
     const uint32_t first_site = group * sites_per_group;
     return first_site + sites_per_group <= num_sites ? sites_per_group : num_sites - first_site;
