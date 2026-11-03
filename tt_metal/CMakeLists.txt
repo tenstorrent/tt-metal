@@ -112,6 +112,7 @@ target_link_libraries(
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
+        TT::Metalium::HostDevApi
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}

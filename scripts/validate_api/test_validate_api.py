@@ -38,9 +38,11 @@ class ApiValidationTests(unittest.TestCase):
 
     def populate_prefixes(self):
         includes = [
-            {"tt-umd": "tt-umd/types/arch.hpp", "tt-umd-utils": "tt-umd-utils/semver.hpp"}.get(
-                prefix, f"{prefix}/example.hpp"
-            )
+            {
+                "hostdev": "hostdev/api/example.h",
+                "tt-umd": "tt-umd/types/arch.hpp",
+                "tt-umd-utils": "tt-umd-utils/semver.hpp",
+            }.get(prefix, f"{prefix}/example.hpp")
             for prefix in ALLOWED_PREFIXES
         ]
         return self.header(
@@ -402,6 +404,12 @@ class ApiValidationTests(unittest.TestCase):
             with self.subTest(include=include):
                 self.header("tt-metalium/a.hpp", f"#pragma once\n#include <{include}>\n")
                 self.assertTrue(any("Include is not whitelisted" in error for error in self.errors()))
+
+    def test_only_hostdev_api_is_public(self):
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <hostdev/api/shared.h>\n")
+        self.assertEqual(self.errors(), [])
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <hostdev/dev_msgs.h>\n")
+        self.assertTrue(any("Only hostdev/api/ headers are public" in error for error in self.errors()))
 
     def test_heavyweight_header_bans_are_preserved(self):
         for include in BANNED_HEADERS:

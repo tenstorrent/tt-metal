@@ -9,7 +9,7 @@
 
 #include <stdint.h>
 
-#include "hostdev/observability_event_meta.h"
+#include "hostdev/api/observability_event_meta.h"
 
 namespace observability_event_meta_silicon {
 

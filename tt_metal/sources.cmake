@@ -111,6 +111,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/op_profiler_support.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/program_preparation.hpp
+    api/tt-metalium/experimental/observability_event_meta.hpp
     api/tt-metalium/experimental/streaming_profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp

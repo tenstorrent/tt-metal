@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Observability event metadata, layer 1b: the host loader's record walk (tt::llrt::parse_meta_records) on
-// .tt_event_descriptor_meta / .tt_event_descriptor_str bytes built here, with no ELF, no device and no device
-// compiler. Valid sections are written field by field the way emit_event() (hostdev/observability_event_meta.h) writes
+// .tt_event_descriptor_meta / .tt_event_descriptor_str bytes built here, with no ELF, no device and no device compiler.
+// Valid sections are written field by field the way emit_event() (hostdev/observability_event_descriptor.h) writes
 // them; damaged and stale ones are cut or hand-built from those. The walk must return exactly the records it can read,
 // never read outside the two sections, and stop at the first record it cannot size. The damage tests place every input
 // against an unreadable guard page, so a read past the end of either section crashes the test rather than passing
@@ -25,7 +25,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "hostdev/observability_event_meta.h"
+#include "hostdev/observability_event_descriptor.h"
 #include "llrt/observability_event_meta.hpp"
 
 namespace observability_event_loader_test {

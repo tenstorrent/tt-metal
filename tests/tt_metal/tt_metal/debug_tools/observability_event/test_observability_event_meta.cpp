@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Observability event metadata, layer 1a: the rules a metadata type must follow and the host's unmarshalling
-// (hostdev/observability_event_meta.h), checked on the host with no device and no device compiler. The rules are
-// static_asserts on the header's predicates, so breaking one fails this file's build. Round trips of every shape
-// through the loader are in test_observability_event_meta_loader.cpp.
+// Observability event metadata, layer 1a: the rules a metadata type must follow
+// (hostdev/api/observability_event_meta.h), the device's marshalling helpers (hostdev/observability_event_descriptor.h)
+// and the host's unmarshalling (tt-metalium/experimental/observability_event_meta.hpp), checked on the host with no
+// device and no device compiler. The rules are static_asserts on the header's predicates, so breaking one fails this
+// file's build. Round trips of every shape through the loader are in test_observability_event_meta_loader.cpp.
 // Not covered here: the device compiler's view (its spelling of type names, the asm it emits, the error text a
 // user sees) -- that is the offline-compile layer, test_observability_event_meta_compile.cpp.
 
@@ -17,7 +18,9 @@
 #include <string_view>
 #include <vector>
 
-#include "hostdev/observability_event_meta.h"
+#include <tt-metalium/experimental/observability_event_meta.hpp>
+
+#include "hostdev/observability_event_descriptor.h"
 
 // Named, not anonymous: a metadata type in an anonymous namespace is itself a rule violation.
 namespace observability_event_meta_test {

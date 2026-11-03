@@ -26,10 +26,10 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/observability_event_meta.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 #include <tt-metalium/host_api.hpp>
 
-#include "hostdev/observability_event_meta.h"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/tt_metal/test_kernels/misc/observability_event_meta_silicon.h"
 

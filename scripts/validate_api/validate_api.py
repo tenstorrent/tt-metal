@@ -52,6 +52,7 @@ ALLOWED_UMD_HEADERS = {
 }
 
 ALLOWED_PREFIXES = {
+    "hostdev",
     "hostdevcommon",
     "internal",
     "tt-metalium",
@@ -376,6 +377,10 @@ class Include(NamedTuple):
 
         if not (is_standard or has_valid_prefix):
             return f"{self.source_file}:{self.line_num}: Include is not whitelisted ({self})"
+
+        # Only hostdev/api is public; the rest of hostdev is the device's own.
+        if self.prefix == "hostdev" and not self.path.startswith("hostdev/api/"):
+            return f"{self.source_file}:{self.line_num}: Only hostdev/api/ headers are public ({self})"
 
         if has_valid_prefix:
             prefix_counts[self.prefix] += 1

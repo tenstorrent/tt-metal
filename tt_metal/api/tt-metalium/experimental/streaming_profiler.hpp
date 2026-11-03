@@ -20,6 +20,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/observability_event_meta.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // The streaming profiler's host API. A callback registered here receives the profiler records that device kernels emit.
@@ -34,9 +35,6 @@
 //         },
 //         "my-tool");
 //
-namespace tt::observability_event {
-struct Metadata;  // hostdev/observability_event_meta.h
-}
 namespace tt::tt_metal::experimental::streaming_profiler {
 
 enum class Processor : uint8_t { BRISC = 0, NCRISC = 1, TRISC0 = 2, TRISC1 = 3, TRISC2 = 4, ERISC0 = 5, ERISC1 = 6 };

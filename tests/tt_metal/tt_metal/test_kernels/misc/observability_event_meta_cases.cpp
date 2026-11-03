@@ -5,9 +5,9 @@
 // Observability event metadata events for
 // tests/tt_metal/tt_metal/debug_tools/observability_event/test_observability_event_meta_compile.cpp, one case per
 // OBSERVABILITY_EVENT_META_CASE. Case 0 is valid in every profiler mode; every other case breaks exactly one rule of
-// hostdev/observability_event_meta.h and must fail to compile under the streaming profiler, with its own message. The
-// zone macros take only their fixed library types, so a case with a metadata type of its own places its event through
-// the metadata API, TT_OBSERVABILITY_EVENT, directly.
+// hostdev/api/observability_event_meta.h and must fail to compile under the streaming profiler, with its own message.
+// The zone macros take only their fixed library types, so a case with a metadata type of its own places its event
+// through the metadata API, TT_OBSERVABILITY_EVENT, directly.
 
 #include <cstdint>
 

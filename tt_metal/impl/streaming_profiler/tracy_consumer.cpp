@@ -8,7 +8,7 @@
 
 #if defined(TRACY_ENABLE)
 
-#include "hostdev/observability_event_meta.h"
+#include <tt-metalium/experimental/observability_event_meta.hpp>
 
 #include <algorithm>
 

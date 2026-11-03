@@ -243,6 +243,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_structures.h
     inc/hostdev/profiler_common.h
     inc/hostdev/observability_event_descriptor.h
+    inc/hostdev/api/observability_event_meta.h
     inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h
@@ -439,3 +440,6 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
 )
+
+# The public host/device headers, relative to inc. They are also in HW_JIT_API_HEADERS, for the device compile.
+set(HOSTDEV_API_HEADERS hostdev/api/observability_event_meta.h)

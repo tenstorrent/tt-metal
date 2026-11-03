@@ -513,8 +513,8 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #include "perf_counters.hpp"
 #include "internal/profiler/synchronization_event_profiler.hpp"
 
-// Scoped zones. Each macro takes exactly the fields of its metadata type (hostdev/observability_event_meta.h), which is
-// what the host gets back for the zone; the device only ever sends the id. All arguments are compile-time
+// Scoped zones. Each macro takes exactly the fields of its metadata type (hostdev/api/observability_event_meta.h),
+// which is what the host gets back for the zone; the device only ever sends the id. All arguments are compile-time
 // constants.
 #define DeviceZoneScopedN(name)                                               \
     TT_OBSERVABILITY_EVENT(hash, ::tt::observability_event::EventMeta{name}); \

@@ -528,6 +528,31 @@ target_sources(
 
 target_link_libraries(hw INTERFACE TT::Metalium::HostDevCommon)
 
+# The public host/device headers, inc/hostdev/api. Device code reaches them through inc like any hw header; host code,
+# in this build and in an install, through this target. Its include root holds hostdev/api alone, as a link to the
+# source folder, so a host target that links it can include <hostdev/api/...> and none of the device-only rest of inc.
+set(HOSTDEV_API_ROOT "${CMAKE_CURRENT_BINARY_DIR}/hostdev_api_include")
+file(MAKE_DIRECTORY "${HOSTDEV_API_ROOT}/hostdev")
+file(
+    CREATE_LINK
+        "${CMAKE_CURRENT_SOURCE_DIR}/inc/hostdev/api"
+        "${HOSTDEV_API_ROOT}/hostdev/api"
+    SYMBOLIC
+)
+list(TRANSFORM HOSTDEV_API_HEADERS PREPEND "${HOSTDEV_API_ROOT}/" OUTPUT_VARIABLE HOSTDEV_API_FILES)
+
+add_library(ttmetalium_hostdev_api INTERFACE)
+add_library(TT::Metalium::HostDevApi ALIAS ttmetalium_hostdev_api)
+target_sources(
+    ttmetalium_hostdev_api
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${HOSTDEV_API_ROOT}
+        FILES ${HOSTDEV_API_FILES}
+)
+install(TARGETS ttmetalium_hostdev_api EXPORT Metalium FILE_SET api COMPONENT metalium-dev)
+
 add_subdirectory(firmware)
 
 install(
