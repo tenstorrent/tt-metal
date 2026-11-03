@@ -556,10 +556,9 @@ jobs:
   upload-perf-data:
     name: "Upload perf data to the warehouse"
     needs: [build-images, load-test-matrix, llk-perf-exec]
-    # always(): a night that lost shards still produced the ones that finished,
-    # and partial coverage is real data. Publishing it is safe because the
-    # merged run_id carries no attempt, so re-running the failed shards and
-    # re-uploading replays over the partial night instead of adding a second.
+    # always(): publish each architecture whose legs all completed. The merged
+    # run_id carries no attempt, so re-running the failed shards and
+    # re-uploading publishes the rest under the same run.
     if: ${{ always() && inputs.upload-to-warehouse }}
     runs-on: ubuntu-latest
     # The merge lives in helpers.perf.core, whose imports reach the device
@@ -595,9 +594,7 @@ jobs:
             --in-dir "$GITHUB_WORKSPACE/perf-data" \
             --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
           ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
-      # A baseline is what later runs compare against: publish an architecture only if every leg completed.
-      - name: Drop a short architecture from a baseline
-        if: inputs.pipeline == 'baseline' || inputs.pipeline == 'merge_baseline'
+      - name: Drop an architecture with an incomplete leg
         env:
           MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
         run: |
@@ -607,7 +604,7 @@ jobs:
             want=$(python3 -c 'import json, os, sys; print(sum(sys.argv[1] in t["runs_on"][0] for t in json.loads(os.environ["MATRIX"] or "[]")))' "$label")
             got=$(ls "$GITHUB_WORKSPACE"/perf-data/perf-data-"$arch"-*/leg-complete 2>/dev/null | wc -l)
             if (( want == 0 || got < want )); then
-              echo "::warning::$arch: $got of $want legs completed; not published as a baseline."
+              echo "::warning::$arch: $got of $want legs completed; not published."
               rm "$f"
             fi
           done
