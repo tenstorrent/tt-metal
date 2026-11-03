@@ -29,11 +29,7 @@
 // {const char* name; Style{u32, u8} style; u16 flags;} is "s{wb}h". Braces carry no bytes.
 #pragma once
 
-#include <stddef.h>
-#include <stdint.h>
-
-#include <type_traits>
-#include <utility>
+#include "hostdev/api/base.h"
 
 namespace tt::observability_event {
 

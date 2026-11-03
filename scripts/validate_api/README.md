@@ -47,6 +47,14 @@ and the frozen UMD header allowlist. Unused allowed prefixes are also reported.
 The legacy include-style skip list remains unchanged; it does not exempt headers
 from the new guard and stability-boundary checks.
 
+Public headers may include `<hostdev/api/...>`, the headers that the device and
+host compilers share, and no other `<hostdev/...>` header. Those headers have
+their own hook, `validate-hostdev-api` (`validate_hostdev_api.py`): a header in
+`tt_metal/hw/inc/hostdev/api/` includes only other headers of that folder, gets
+standard headers only through `hostdev/api/base.h`, whose short list is closed,
+and has no conditional on the side being compiled (`__riscv`, `COMPILE_FOR_*`,
+...). Every device kernel that includes such a header pays for what it pulls in.
+
 For all `.h`, `.hpp`, `.hh`, and `.hxx` files under `tt_metal/api/`, it also checks:
 
 - Unconditional `#pragma once` before declarations and other directives.

@@ -243,6 +243,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_structures.h
     inc/hostdev/profiler_common.h
     inc/hostdev/observability_event_descriptor.h
+    inc/hostdev/api/base.h
     inc/hostdev/api/observability_event_meta.h
     inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/remote_dfb_constants.h
@@ -442,4 +443,7 @@ set(HW_JIT_API_HEADERS
 )
 
 # The public host/device headers, relative to inc. They are also in HW_JIT_API_HEADERS, for the device compile.
-set(HOSTDEV_API_HEADERS hostdev/api/observability_event_meta.h)
+set(HOSTDEV_API_HEADERS
+    hostdev/api/base.h
+    hostdev/api/observability_event_meta.h
+)
