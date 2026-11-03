@@ -127,9 +127,9 @@ environment silently wins over both. Leave them unset.
 Set only what is specific to the deployment:
 
 - `PREFILL_H2D_SERVICE_ID`, matching the producer.
-- Migration: `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1`,
-  `PREFILL_MIGRATION_TABLE_PATH` on storage all hosts share, and
-  `PREFILL_MIGRATION_DEVICE_MAP_PATH` on host-local storage.
+- Migration: `PREFILL_MIGRATION_TABLE_PATH` on storage all hosts share, and
+  `PREFILL_MIGRATION_DEVICE_MAP_PATH` on host-local storage. The runner always
+  writes both files.
 - `PREFILL_HF_MODEL` / `PREFILL_TTNN_CACHE`, when the weights are not at the
   adapter defaults. For an MTP variant, also `TT_GLM53_MTP_TTNN_CACHE`; the
   manifest pins the MTP cache to the weka path.
@@ -143,8 +143,6 @@ global_env:
   PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/${GLM53_VARIANT}.json"
   LOGURU_LEVEL: "ERROR"
   PREFILL_H2D_SERVICE_ID: "glm53-prefill"
-  PREFILL_ENABLE_MIGRATION: "1"
-  PREFILL_MIGRATION_EXPORT_TO_FILE: "1"
   PREFILL_MIGRATION_TABLE_PATH: "/shared/glm53/migration_table"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/glm53_device_map"
 ```
@@ -153,7 +151,7 @@ global_env:
 `TT_*`, `TTNN_*` and a few other prefixes from the launching shell
 (`ENV_PASSTHROUGH_PREFIXES` in `ttrun.py`), so a `PREFILL_*` export reaches
 rank 0 only, and so does `--mpi-args "-x ..."`. Do not write
-`"${PREFILL_ENABLE_MIGRATION}"` into `global_env` either: an unset variable
+`"${PREFILL_MIGRATION_TABLE_PATH}"` into `global_env` either: an unset variable
 expands to an empty string, which then shadows the manifest and the runner
 default.
 
