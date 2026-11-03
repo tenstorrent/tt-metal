@@ -30,7 +30,7 @@ K chunks are ``k_chunk`` tokens inside each shard; global K chunk index = shard 
 
 Geometry constants are built on host once per geometry (cached per mesh) together with the program descriptors;
 per call only the buffer addresses are patched (generic_op re-applies runtime args on a program-cache hit).
-``torch_reference(...)`` is the same arithmetic in fp32 torch on host (for unit tests).
+The fp32 torch mirror of this arithmetic lives next to the unit test (test_sol_prepass_minimax_h3.py).
 """
 
 from __future__ import annotations
@@ -42,6 +42,8 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+
+from ....layers.module import Module
 
 LOG2E = 1.4426950408889634
 VAR_EPS = 1.0e-6
@@ -215,7 +217,7 @@ def build_route_constants(
 
     const_or [S,1,nqc_pad,n_blocks_pad]: the threshold-independent part of block01 (band | sink | dense-prefix rows,
       OR-ed over the Q blocks of each chunk, | forced block 0 per shard) & full blocks -- exactly what
-      torch_reference produces when no score passes the threshold.
+      the routing rule produces when no score passes the threshold.
     colconst [1,1,S*32,nb_pad]: per shard s, 32 identical rows of its full-block column constant (a tile operand
       for the compute kernel).
     qsel [1,1,nqc_pad,nb_pad]: 1 where the Q block belongs to the Q chunk. ksel [1,1,nb_pad,nkcl]: 1 where the
@@ -267,70 +269,17 @@ def build_route_constants(
     }
 
 
-# ----------------------------------------------------------------------------- torch reference
-
-
-def torch_reference(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scale: float):
-    """Host fp32 mirror of the device pre-pass (diag threshold). q/k/v: [S, H, rows, D] (one shard per leading index).
-
-    Returns block_mask [S, H, nqc_pad(local), n_blocks_pad], pooled k/v [H, nbg, D], bias [S, H, nqc_pad, nbg]
-    (one row per Q chunk; the device version repeats it 32x), q_bar and the per-Q-block threshold.
-    """
-    S, H, R, D = q.shape
-    log2_scale = scale * LOG2E
-    pool_t = consts["pool_t"]  # [S,1,R,nbp]
-    q_bar = torch.stack([q[s].float().transpose(1, 2) @ pool_t[s, 0] for s in range(S)])  # [S,H,D,nbp]
-    q_bar = q_bar.transpose(2, 3)  # [S,H,nbp,D]
-    kc = torch.cat(
-        [(k[s].float().transpose(1, 2) @ pool_t[s, 0]).transpose(1, 2) for s in range(S)], dim=1
-    )  # [H,nbg,D]
-    vc = torch.cat([(v[s].float().transpose(1, 2) @ pool_t[s, 0]).transpose(1, 2) for s in range(S)], dim=1)
-    nv = consts["n_valid_blocks"]
-    mean = kc.sum(dim=1, keepdim=True) / nv  # [H,1,D]
-    var = ((kc * kc).sum(dim=1, keepdim=True) / nv - mean * mean).clamp(min=0)
-    q_raw_mean = (q_bar * mean[None]).sum(-1, keepdim=True)  # [S,H,nbp,1]
-    q_var = (q_bar * q_bar * var[None]).sum(-1, keepdim=True)
-    thr = q_raw_mean * log2_scale + tau * torch.sqrt(q_var * log2_scale * log2_scale + VAR_EPS)
-    scores = (q_bar @ kc[None].transpose(2, 3)) * log2_scale  # [S,H,nbp,nbg]
-    exact = (scores > thr).float()
-    exact = exact + consts["band"] + consts["sink_row"]
-    exact = (exact > 0.5).float() * consts["full_row"]
-    m2 = (exact.transpose(2, 3) @ consts["qc_pool_t"]).transpose(2, 3)  # [S,H,nqc_pad,nbg]: any Q block of the chunk
-    block_mask = ((m2 + consts["force_row"]) > 0.5).float() * consts["full_row"]
-    bias = consts["len_bias_row"] + block_mask * NEG
-    return {"block_mask": block_mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "q_bar": q_bar, "threshold": thr}
-
-
-def torch_reference_chunk(ref: dict, consts: dict) -> dict:
-    """Chunk-mode outputs from torch_reference's block mask: any kept block keeps its K chunk."""
-    block01 = ref["block_mask"]  # [S,H,nqc_pad,nbg]
-    chunk01 = ((block01 @ consts["kc_pool"]) > 0.5).float()  # [S,H,nqc_pad,nkc_pad]
-    kept = ((chunk01 @ consts["kc_pool_t"]) > 0.5).float() * consts["valid_row"]
-    bias = consts["len_bias_row"] + kept * NEG
-    return {"block_mask": chunk01, "bias": bias, "kept_blk": kept}
-
 
 # ----------------------------------------------------------------------------- device pre-pass
 
 
-class SolPrepass:
-    """Device-side routing pre-pass: pool program, two pooled all-gathers, route program."""
+class SolPrepass(Module):
+    """Device-side routing pre-pass: pool program, two pooled all-gathers, route program.
 
-    # Per-geometry state (uploaded constants, program descriptors, persistent pool outputs) shared by every
-    # instance on the same mesh: all layers use identical geometry, sink and scale, so one upload per process.
-    _shared: dict = {}
-    _generation: int = 0
-
-    @classmethod
-    def new_generation(cls) -> None:
-        """Drop the shared per-geometry state so the next call re-uploads it.
-
-        The device contents of constants uploaded once are not preserved across generations (other models, such as
-        the VAE decoder and the prompt encoder, run in between), so the constants are re-uploaded per generation.
-        Called by MiniMaxH3Attention when the caller sets `sol_logical_n` for a request.
-        """
-        cls._shared.clear()
-        cls._generation += 1
+    No weights. The constants of a geometry are built on host and uploaded by `prepare()`; the attention module
+    creates one instance per layer and per request (the logical sequence length is set per request), so that is
+    one upload per layer and request.
+    """
 
     def __init__(
         self,
@@ -354,6 +303,7 @@ class SolPrepass:
         #          each core's kept blocks in L1. "pack" is compact plus the op's cross-chunk packing: same output.
         assert mode in ("gather", "chunk", "compact", "pack"), mode
         assert thresh_type == "diag", "the pre-pass implements the diag threshold (H3 policy)"
+        super().__init__()
         self.mode = mode
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -397,65 +347,60 @@ class SolPrepass:
         return ttnn.from_torch(t, dtype=dtype, layout=layout, device=self.mesh_device, mesh_mapper=mapper)
 
     def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
+        """Build and upload the constants of a geometry; a no-op while geometry, sink and scale are unchanged."""
         key = (geo, sink_tokens, scale)
         if key == self._key:
             return
-        shared_key = (
-            id(self.mesh_device),
-            self.sp_axis,
-            self.mode,
-            self.band,
-            self.force_first_chunk,
-            self.dense_prefix_queries,
-            self.tau,
-            key,
+        self._release_state()
+        c = build_route_constants(
+            geo,
+            band=self.band,
+            sink_tokens=sink_tokens,
+            force_first_chunk=self.force_first_chunk,
+            scale=scale,
+            dense_prefix_queries=self.dense_prefix_queries,
         )
-        st = SolPrepass._shared.get(shared_key)
-        if st is None:
-            c = build_route_constants(
-                geo,
-                band=self.band,
-                sink_tokens=sink_tokens,
-                force_first_chunk=self.force_first_chunk,
-                scale=scale,
-                dense_prefix_queries=self.dense_prefix_queries,
-            )
-            st = {
-                "scale": scale,
-                "n_valid_blocks": c["n_valid_blocks"],
-                "nkcl": c["nkcl"],
-                "const_or": self._upload(c["const_or"], shard=True),
-                "colconst": self._upload(c["colconst"], shard=False),
-                "qsel": self._upload(c["qsel"], shard=False),
-                "ksel": self._upload(c["ksel"], shard=False),
-                "ones": self._upload(c["ones"], shard=False),
-                "shsel": self._upload(c["shsel"], shard=False),
-                "geo": self._upload(
-                    torch.tensor(
-                        [
-                            [[[max(0, min(geo.rows, geo.logical_n - s * geo.rows))] + [0] * 31]]
-                            for s in range(geo.shards)
-                        ],
-                        dtype=torch.int32,
-                    ),
-                    shard=True,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+        self._state = {
+            "scale": scale,
+            "n_valid_blocks": c["n_valid_blocks"],
+            "nkcl": c["nkcl"],
+            "const_or": self._upload(c["const_or"], shard=True),
+            "colconst": self._upload(c["colconst"], shard=False),
+            "qsel": self._upload(c["qsel"], shard=False),
+            "ksel": self._upload(c["ksel"], shard=False),
+            "ones": self._upload(c["ones"], shard=False),
+            "shsel": self._upload(c["shsel"], shard=False),
+            "geo": self._upload(
+                torch.tensor(
+                    [
+                        [[[max(0, min(geo.rows, geo.logical_n - s * geo.rows))] + [0] * 31]]
+                        for s in range(geo.shards)
+                    ],
+                    dtype=torch.int32,
                 ),
-                "pool_prog": None,
-                "route_prog": None,
-                "pool_outs": None,
-            }
-            SolPrepass._shared[shared_key] = st
-        old = self._state
-        if old is not None and old is not st and old.get("pool_outs"):  # the state is shared per geometry key
-            for t in {id(t): t for t in old["pool_outs"]}.values():
-                ttnn.deallocate(t)
-            old["pool_outs"] = None
-        self._state = st
+                shard=True,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            ),
+            "pool_prog": None,
+            "route_prog": None,
+            "pool_outs": None,
+        }
         self.geo = geo
         self._key = key
         self.reset_mask_reuse()  # a held mask belongs to the previous geometry
+
+    def _release_state(self) -> None:
+        """Free the uploaded constants and the persistent pool outputs of the current geometry."""
+        st = self._state
+        if st is None:
+            return
+        for name in ("const_or", "colconst", "qsel", "ksel", "ones", "shsel", "geo"):
+            ttnn.deallocate(st[name])
+        for t in st["pool_outs"] or []:
+            ttnn.deallocate(t)
+        self._state = None
+        self._key = None
 
     def reset_mask_reuse(self) -> None:
         """Drop the held mask: the next call routes afresh (call at the start of every generation)."""
@@ -662,25 +607,8 @@ class SolPrepass:
 
     def _core_noc_xy(self, nx: int, ny: int) -> list[int]:
         """NoC coordinates (x | y << 8) of every logical worker core, index y*nx + x. One program with common runtime
-        args runs on every chip of the mesh, so the coordinates must agree across chips (virtual worker coordinates do);
-        verified against every mesh coordinate when the experimental per-chip query is available."""
-        md = self.mesh_device
-        logical = [(x, y) for y in range(ny) for x in range(nx)]
-        xy = [md.worker_core_from_logical_core(ttnn.CoreCoord(x, y)) for x, y in logical]
-        per_chip = getattr(getattr(getattr(ttnn, "_ttnn", None), "multi_device", None), "experimental", None)
-        per_chip = getattr(per_chip, "worker_core_from_logical_core", None)
-        if per_chip is not None:
-            rows, cols = tuple(md.shape)
-            for r in range(rows):
-                for c in range(cols):
-                    mc = ttnn.MeshCoordinate(r, c)
-                    for (x, y), w0 in zip(logical, xy):
-                        w = per_chip(md, mc, ttnn.CoreCoord(x, y))
-                        if (w.x, w.y) != (w0.x, w0.y):
-                            raise ValueError(
-                                f"worker core ({x},{y}) maps to NoC ({w.x},{w.y}) on chip {mc} but ({w0.x},{w0.y}) on "
-                                "chip (0,0): the route program's common core coordinates would be wrong"
-                            )
+        args runs on every chip of the mesh; the virtual worker coordinates are the same on every chip."""
+        xy = [self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y)) for y in range(ny) for x in range(nx)]
         return [w.x | (w.y << 8) for w in xy]
 
     def _run_route(self, q_bar: ttnn.Tensor, kc: ttnn.Tensor) -> ttnn.Tensor:
@@ -732,12 +660,7 @@ class SolPrepass:
 
     # ------------------------------------------------------------------ forward
 
-    def pool(self, q, k, v) -> dict:
-        """Block means only (q_bar, kc_local, vc_local), freshly allocated, for unit tests."""
-        qb, kcl, vcl = self._run_pool(q, k, v, persistent=False)
-        return {"q_bar": qb, "kc_local": kcl, "vc_local": vcl}
-
-    def __call__(
+    def forward(
         self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, *, scale: float, report_density: bool = False
     ) -> dict:
         assert abs(scale - self._state["scale"]) < 1e-12, "scale is baked into the prepared constants"

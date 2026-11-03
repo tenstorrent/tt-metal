@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sol-Attn pre-pass (sol_prepass.SolPrepass: pool program, two gathers, route program) vs the torch mirror
-(sol_prepass.torch_reference), and a timing breakdown.
+"""Sol-Attn pre-pass (sol_prepass.SolPrepass: pool program, two gathers, route program) vs its fp32 torch mirror
+(torch_reference below), and a timing breakdown.
 
 Run (Galaxy):
   pytest models/tt_dit/tests/models/minimax_h3/test_sol_prepass_minimax_h3.py -k 4x8 -s --tb=short
@@ -25,12 +25,13 @@ import ttnn
 
 from ....models.transformers.minimax_h3.sol_prepass import (
     KERNEL_DIR,
+    LOG2E,
+    NEG,
+    VAR_EPS,
     SolGeometry,
     SolPrepass,
     _f32_bits,
     build_constants,
-    torch_reference,
-    torch_reference_chunk,
 )
 from ....parallel.manager import CCLManager
 from ....utils.tensor import from_torch
@@ -38,6 +39,49 @@ from .common import GALAXY_RING
 
 H = 14
 D = 128
+
+
+# ----------------------------------------------------------------------------- torch reference
+
+
+def torch_reference(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scale: float):
+    """Host fp32 mirror of the device pre-pass (diag threshold). q/k/v: [S, H, rows, D] (one shard per leading index).
+
+    Returns block_mask [S, H, nqc_pad(local), n_blocks_pad], pooled k/v [H, nbg, D], bias [S, H, nqc_pad, nbg]
+    (one row per Q chunk; the device version repeats it 32x), q_bar and the per-Q-block threshold.
+    """
+    S, H, R, D = q.shape
+    log2_scale = scale * LOG2E
+    pool_t = consts["pool_t"]  # [S,1,R,nbp]
+    q_bar = torch.stack([q[s].float().transpose(1, 2) @ pool_t[s, 0] for s in range(S)])  # [S,H,D,nbp]
+    q_bar = q_bar.transpose(2, 3)  # [S,H,nbp,D]
+    kc = torch.cat(
+        [(k[s].float().transpose(1, 2) @ pool_t[s, 0]).transpose(1, 2) for s in range(S)], dim=1
+    )  # [H,nbg,D]
+    vc = torch.cat([(v[s].float().transpose(1, 2) @ pool_t[s, 0]).transpose(1, 2) for s in range(S)], dim=1)
+    nv = consts["n_valid_blocks"]
+    mean = kc.sum(dim=1, keepdim=True) / nv  # [H,1,D]
+    var = ((kc * kc).sum(dim=1, keepdim=True) / nv - mean * mean).clamp(min=0)
+    q_raw_mean = (q_bar * mean[None]).sum(-1, keepdim=True)  # [S,H,nbp,1]
+    q_var = (q_bar * q_bar * var[None]).sum(-1, keepdim=True)
+    thr = q_raw_mean * log2_scale + tau * torch.sqrt(q_var * log2_scale * log2_scale + VAR_EPS)
+    scores = (q_bar @ kc[None].transpose(2, 3)) * log2_scale  # [S,H,nbp,nbg]
+    exact = (scores > thr).float()
+    exact = exact + consts["band"] + consts["sink_row"]
+    exact = (exact > 0.5).float() * consts["full_row"]
+    m2 = (exact.transpose(2, 3) @ consts["qc_pool_t"]).transpose(2, 3)  # [S,H,nqc_pad,nbg]: any Q block of the chunk
+    block_mask = ((m2 + consts["force_row"]) > 0.5).float() * consts["full_row"]
+    bias = consts["len_bias_row"] + block_mask * NEG
+    return {"block_mask": block_mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "q_bar": q_bar, "threshold": thr}
+
+
+def torch_reference_chunk(ref: dict, consts: dict) -> dict:
+    """Chunk-mode outputs from torch_reference's block mask: any kept block keeps its K chunk."""
+    block01 = ref["block_mask"]  # [S,H,nqc_pad,nbg]
+    chunk01 = ((block01 @ consts["kc_pool"]) > 0.5).float()  # [S,H,nqc_pad,nkc_pad]
+    kept = ((chunk01 @ consts["kc_pool_t"]) > 0.5).float() * consts["valid_row"]
+    bias = consts["len_bias_row"] + kept * NEG
+    return {"block_mask": chunk01, "bias": bias, "kept_blk": kept}
 
 
 def _structured_qkv(S: int, rows: int, seed: int = 1):
@@ -90,7 +134,7 @@ def _check(mesh_device, sp_axis, tp_axis, ccl_manager, *, geo, tau, mode, sink_t
     out = pre(tq, tk, tv, scale=scale, report_density=True)
     ttnn.synchronize_device(mesh_device)
     # ---- the pool program alone (fresh outputs): block means of the local shards
-    pooled = pre.pool(tq, tk, tv)
+    pooled = dict(zip(("q_bar", "kc_local", "vc_local"), pre._run_pool(tq, tk, tv, persistent=False)))
     ttnn.synchronize_device(mesh_device)
     qb = _to_host(mesh_device, sp_axis, tp_axis, pooled["q_bar"])[:, :H].float()  # [S,H,nbp,D]
     torch.testing.assert_close(qb, ref["q_bar"].bfloat16().float(), atol=3e-2, rtol=3e-2)
