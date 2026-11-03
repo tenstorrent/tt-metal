@@ -26,6 +26,13 @@ inline void llk_math_ema_sfpu_clear_previous_output() {
     sfpu::_clear_previous_output_();
 }
 
+inline void llk_math_ema_sfpu_seed_previous_output(std::uint32_t input_dst_index) {
+    SAN_HOOK(unsupported());
+    _llk_math_eltwise_sfpu_start_(input_dst_index);
+    sfpu::_seed_previous_output_();
+    _llk_math_eltwise_sfpu_done_();
+}
+
 inline void llk_math_ema_sfpu_tile(std::uint32_t input_dst_index) {
     SAN_HOOK(unsupported());
     _llk_math_eltwise_sfpu_start_(input_dst_index);

@@ -34,6 +34,11 @@ inline void llk_math_ema_sfpu_load_alpha_beta(const std::uint32_t alpha, const s
  */
 inline void llk_math_ema_sfpu_clear_previous_output() { sfpu::ema_clear_previous_output(); }
 
+inline void llk_math_ema_sfpu_seed_previous_output(const std::uint32_t input_dst_index) {
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, ema_seed_previous_output, input_dst_index, VectorMode::RC_custom);
+}
+
 /**
  * @brief Column-wise EMA of Dest tile input_dst_index into tile input_dst_index + 1.
  *
