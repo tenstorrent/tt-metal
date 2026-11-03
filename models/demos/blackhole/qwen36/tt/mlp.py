@@ -207,10 +207,39 @@ class Qwen36MLP:
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
         # decode (T<=1): gate/up outputs one step down to bfloat8_b; prefill keeps the default bfloat16
         gu_dtype = ttnn.bfloat8_b if T <= 1 else None
-        w1_out = ttnn.linear(
-            x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype
-        )
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype)
+        if T > 512 and x.shape[-2] == 2048 and x.shape[-1] == 5120 and w.w1.shape[-1] == 17408:
+            # prefill 2048 tokens: auto config picks 2D 13x10 with in0_block_w=1 (160 K-steps);
+            # same geometry with in0_block_w=4 cuts the per-block sync overhead.
+            def _gu_pc(act):
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                    in0_block_w=4,
+                    out_subblock_h=1,
+                    out_subblock_w=3,
+                    out_block_h=7,
+                    out_block_w=21,
+                    per_core_M=7,
+                    per_core_N=42,
+                    transpose_mcast=False,
+                    fused_activation=act,
+                )
+
+            w1_out = ttnn.linear(
+                x,
+                w.w1,
+                program_config=_gu_pc(ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+                compute_kernel_config=ckc,
+                memory_config=mc,
+                dtype=gu_dtype,
+            )
+            w3_out = ttnn.linear(
+                x, w.w3, program_config=_gu_pc(None), compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype
+            )
+        else:
+            w1_out = ttnn.linear(
+                x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype
+            )
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype)
         if T <= 1:
             hidden = ttnn.mul(w1_out, w3_out, memory_config=mc, dtype=ttnn.bfloat16)
         else:
