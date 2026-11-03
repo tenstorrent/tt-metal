@@ -13,10 +13,12 @@
 #include <cstdlib>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <set>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -201,6 +203,23 @@ inline const std::vector<uint32_t>& dram_view_indices() {
 
 inline const metal_SocDescriptor& soc_desc_of(const IDevice* device) {
     return MetalContext::instance().get_cluster().get_soc_desc(device->id());
+}
+
+// Same open as the Wormhole/Blackhole DRISC tests: one MeshDevice over chip 0. Host reads and writes
+// use the physical device, because a MeshDevice id is a mesh id. Run with TT_METAL_SLOW_DISPATCH_MODE=1
+// so the mesh command queue takes the slow-dispatch path.
+inline std::shared_ptr<distributed::MeshDevice> open_unit_mesh() {
+    return distributed::MeshDevice::create_unit_mesh(0);
+}
+
+inline IDevice* physical_device(distributed::MeshDevice& mesh) {
+    return mesh.get_device(distributed::MeshCoordinate::zero_coordinate(mesh.shape().dims()));
+}
+
+inline void LaunchProgram(distributed::MeshDevice& mesh, Program& program) {
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh.shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh.mesh_command_queue(), workload, /*blocking=*/true);
 }
 
 inline uint32_t num_cces_on(const IDevice* device) { return num_cces_from_soc(soc_desc_of(device)); }

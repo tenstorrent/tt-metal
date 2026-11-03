@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -20,6 +21,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "dev_mem_map.h"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
@@ -468,5 +471,120 @@ TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
 }
 
 INSTANTIATE_TEST_SUITE_P(MM8, MimirDmRuntimeArgs, ::testing::Values(0u), cce_param_name);
+
+namespace {
+
+using namespace mimir_contract;
+
+static_assert(MEM_L1_UNCACHED_BASE == MEM_L1_SIZE);
+
+class HartZeroRunsDramKernel : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(HartZeroRunsDramKernel, WritesMagic) {
+    skip_unless_programmable_dram_package();
+
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t cce_index = GetParam();
+
+    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const uint32_t magic = 0xC0FFEE04 + cce_index;
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t result_dev_addr =
+        MEM_L1_UNCACHED_BASE + hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t result_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
+        logical_dram_core,
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {result_dev_addr, magic}});
+
+    // Nothing else writes UNRESERVED, so without the poison a kernel that never runs reads the last run's magic.
+    const uint32_t poison = 0xDEADBEEFu;
+    uint32_t result = 0;
+    write_cce_sram(device, logical_dram_core, result_noc_addr, &poison, sizeof(poison));
+    read_cce_sram(device, logical_dram_core, result_noc_addr, &result, sizeof(result));
+    ASSERT_EQ(result, poison);
+
+    LaunchProgram(*mesh_device, program);
+
+    read_cce_sram(device, logical_dram_core, result_noc_addr, &result, sizeof(result));
+    EXPECT_EQ(result, magic);
+}
+
+INSTANTIATE_TEST_SUITE_P(MimirEmu, HartZeroRunsDramKernel, ::testing::ValuesIn(cce_indices()), cce_param_name);
+
+class AllHartsRunDramKernel : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(AllHartsRunDramKernel, WritesMagic) {
+    skip_unless_programmable_dram_package();
+
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t cce_index = GetParam();
+
+    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
+    ASSERT_EQ(num_harts, static_cast<uint32_t>(MEM_CCE_LOCAL_HARTS));
+
+    const uint32_t echo_dev_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t echo_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    // The echo kernel writes {magic, mhartid, marker} to the slot its mhartid picks, so a hart that runs another
+    // hart's kernel leaves the wrong marker. The fourth word is never written and must keep the poison.
+    constexpr uint32_t slot_words = 4;
+    const uint32_t poison = 0xDEADBEEFu;
+    const uint32_t echo_magic = 0xC0FFEE10 + (cce_index << 8);
+    const uint32_t echo_bytes = num_harts * slot_words * sizeof(uint32_t);
+
+    Program program = CreateProgram();
+    std::vector<uint32_t> expected(num_harts * slot_words, poison);
+    for (uint32_t hart = 0; hart < num_harts; hart++) {
+        const uint32_t marker = 0xC0DE0000 + (cce_index << 8) + hart;
+        expected[hart * slot_words] = echo_magic;
+        expected[hart * slot_words + 1] = hart;
+        expected[hart * slot_words + 2] = marker;
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/cce/cce_args_echo.cpp",
+            logical_dram_core,
+            DramConfig{
+                .processor = static_cast<DataMovementProcessor>(hart),
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    echo_dev_base,
+                    marker,
+                    echo_magic,
+                    slot_words * static_cast<uint32_t>(sizeof(uint32_t)),
+                    0,
+                    0,
+                    0,
+                    0}});
+    }
+
+    // Nothing else writes UNRESERVED, so without the poison a launch where no hart runs reads the last run's slots.
+    const std::vector<uint32_t> poison_words(num_harts * slot_words, poison);
+    std::vector<uint32_t> result(poison_words.size(), 0);
+    write_cce_sram(device, logical_dram_core, echo_noc_base, poison_words.data(), echo_bytes);
+    read_cce_sram(device, logical_dram_core, echo_noc_base, result.data(), echo_bytes);
+    ASSERT_EQ(result, poison_words);
+
+    LaunchProgram(*mesh_device, program);
+
+    read_cce_sram(device, logical_dram_core, echo_noc_base, result.data(), echo_bytes);
+    EXPECT_EQ(result, expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(MimirEmu, AllHartsRunDramKernel, ::testing::ValuesIn(cce_indices()), cce_param_name);
+
+}  // namespace
 
 }  // namespace tt::tt_metal::mimir_test::kernel_load

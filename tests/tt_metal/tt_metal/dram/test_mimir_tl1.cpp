@@ -12,12 +12,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "llrt/hal.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
@@ -682,5 +686,156 @@ TEST_F(MimirRemoteMixed, FanOutFanIn) {
     };
     run_remote_transfers(device, transfers, /*read_back=*/true, "MimirRemoteMixed.FanOutFanIn");
 }
+
+namespace {
+
+using namespace mimir_contract;
+
+class WritesCrossMimirCceSram : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(WritesCrossMimirCceSram, WritesMagic) {
+    skip_unless_programmable_dram_package();
+
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t src_cce = GetParam();
+    const uint32_t num_cces = num_cces_on(device);
+    if (num_mimirs_on(device) < 2) {
+        GTEST_SKIP() << "Configured descriptor does not expose a remote Mimir CCE.";
+    }
+
+    const uint32_t local_mimir = mimir_index_for_cce(src_cce);
+    std::vector<uint32_t> dest_cces;
+    for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
+        if (mimir_index_for_cce(cce_index) != local_mimir) {
+            dest_cces.push_back(cce_index);
+        }
+    }
+    if (dest_cces.size() < 2) {
+        GTEST_SKIP() << "Remote Mimir does not expose two CCEs.";
+    }
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t sram_offset = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint32_t magic_base = 0xC0CE0000u | (src_cce << 8);
+    const uint32_t zero = 0;
+
+    for (uint32_t dest_cce : dest_cces) {
+        const CoreCoord dest_core = logical_cce_core(soc_desc_of(device), dest_cce);
+        write_cce_sram(device, dest_core, noc_addr, &zero, sizeof(zero));
+    }
+
+    const CoreCoord logical_src = logical_cce_core(soc_desc_of(device), src_cce);
+    Program program = CreateProgram();
+    const KernelHandle kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/cce_write_cross_mimir_sram.cpp",
+        logical_src,
+        DramConfig{.noc = NOC::NOC_0});
+    SetRuntimeArgs(program, kernel, logical_src, {dest_cces[0], dest_cces[1], sram_offset, magic_base});
+
+    LaunchProgram(*mesh_device, program);
+
+    for (uint32_t dest_cce : dest_cces) {
+        uint32_t result = 0;
+        const CoreCoord dest_core = logical_cce_core(soc_desc_of(device), dest_cce);
+        read_cce_sram(device, dest_core, noc_addr, &result, sizeof(result));
+        EXPECT_EQ(result, magic_base | dest_cce) << "src cce " << src_cce << " dest cce " << dest_cce;
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(MimirEmu, WritesCrossMimirCceSram, ::testing::ValuesIn(cce_indices()), cce_param_name);
+
+class PrefetchesLocalGddrToRemoteCceSram : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
+    skip_unless_programmable_dram_package();
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t src_cce = GetParam();
+    const uint32_t num_cces = num_cces_on(device);
+    const uint32_t local_mimir = mimir_index_for_cce(src_cce);
+    if (num_mimirs_on(device) < 2) {
+        GTEST_SKIP() << "Configured descriptor does not expose a remote Mimir CCE.";
+    }
+
+    std::vector<uint32_t> dest_cces;
+    for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
+        if (mimir_index_for_cce(cce_index) != local_mimir) {
+            dest_cces.push_back(cce_index);
+        }
+    }
+    if (dest_cces.size() < 2) {
+        GTEST_SKIP() << "Remote Mimir does not expose two CCEs.";
+    }
+
+    GddrBackingScope gddr_backing;
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t src_gddr_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint32_t sram_offset = staging_dev_addr;
+    const uint64_t noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint32_t num_words = transfer_size / sizeof(uint32_t);
+
+    std::vector<uint32_t> input(num_words);
+    std::vector<uint32_t> cleared(num_words, 0);
+    for (uint32_t i = 0; i < num_words; ++i) {
+        input[i] = 0xD2D10000u | (src_cce << 8) | i;
+    }
+    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const uint32_t local_view = local_dram_view_for_cce(soc_desc, src_cce);
+    const uint64_t local_address_offset = soc_desc.get_address_offset(static_cast<int>(local_view));
+    ASSERT_EQ(local_address_offset % kGddrSlotStride, 0ull);
+    const uint32_t local_base_slots = static_cast<uint32_t>(local_address_offset / kGddrSlotStride);
+    write_gddr_view(*mesh_device, local_view, src_gddr_offset, input);
+
+    for (uint32_t dest_cce : dest_cces) {
+        const CoreCoord dest_core = logical_cce_core(soc_desc_of(device), dest_cce);
+        write_cce_sram(device, dest_core, noc_addr, cleared.data(), transfer_size);
+    }
+
+    const CoreCoord logical_src = logical_cce_core(soc_desc_of(device), src_cce);
+    Program program = CreateProgram();
+    const KernelHandle kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/cce_prefetch_local_gddr_to_remote_sram.cpp",
+        logical_src,
+        DramConfig{.noc = NOC::NOC_0});
+    SetRuntimeArgs(
+        program,
+        kernel,
+        logical_src,
+        {src_gddr_offset,
+         local_mimir,
+         staging_dev_addr,
+         num_words,
+         dest_cces[0],
+         dest_cces[1],
+         sram_offset,
+         local_base_slots,
+         static_cast<uint32_t>(kGddrSlotStride)});
+
+    LaunchProgram(*mesh_device, program);
+
+    for (uint32_t dest_cce : dest_cces) {
+        std::vector<uint32_t> output(num_words, 0);
+        const CoreCoord dest_core = logical_cce_core(soc_desc_of(device), dest_cce);
+        read_cce_sram(device, dest_core, noc_addr, output.data(), transfer_size);
+        EXPECT_EQ(output, input) << "src cce " << src_cce << " dest cce " << dest_cce;
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu, PrefetchesLocalGddrToRemoteCceSram, ::testing::ValuesIn(cce_indices()), cce_param_name);
+
+}  // namespace
 
 }  // namespace tt::tt_metal::mimir_test::tl1

@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/tt_metal/context/mimir_contract.hpp"
+#include "tt_metal/tt_metal/dram/mimir_contract.hpp"
 #include "umd/device/types/core_coordinates.hpp"
 
 namespace tt::tt_metal::mimir_test {
