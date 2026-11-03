@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "utils/gpr.h"
+#include "utils/helpers.h"
 
 /**
  * @brief Scalar-unit programming: GPR loads, arithmetic, bitwise, shift, and
@@ -136,6 +137,52 @@ inline constexpr bool all_static_operands = Destination != hal::detail::DynamicG
 
 inline constexpr std::uint32_t ImmediateLimit = 63u;
 
+/**
+ * @brief DMAREG instruction field domains.
+ */
+struct DMAReg
+{
+    /**
+     * @brief SETDMAREG Payload_SigSelSize field: payload width select.
+     *
+     * This header issues only the immediate (16-bit) payload.
+     */
+    struct Payload
+    {
+        static constexpr std::uint32_t IMMEDIATE    = 0;
+        static constexpr std::uint32_t WIDTH_32BIT  = 1;
+        static constexpr std::uint32_t WIDTH_128BIT = 2;
+        static constexpr std::uint32_t TILE_HEADER  = 3;
+    };
+
+    /**
+     * @brief SETDMAREG SetSignalsMode field: immediate value or
+     *        signal/semaphore write.
+     *
+     * This header issues only immediate values.
+     */
+    struct Mode
+    {
+        static constexpr std::uint32_t IMMEDIATE = 0;
+        static constexpr std::uint32_t SIGNAL    = 1;
+    };
+
+    /** @brief BITWOPDMAREG OpSel field: bitwise operation select. */
+    struct BitwiseOpSel
+    {
+        static constexpr std::uint32_t AND = 0;
+        static constexpr std::uint32_t OR  = 1;
+        static constexpr std::uint32_t XOR = 2;
+    };
+
+    /** @brief SHIFTDMAREG OpSel field: shift direction select. */
+    struct ShiftOpSel
+    {
+        static constexpr std::uint32_t LEFT  = 0;
+        static constexpr std::uint32_t RIGHT = 1;
+    };
+};
+
 template <BinaryOperation Operation>
 inline constexpr std::uint32_t encode(const std::uint32_t destination, const std::uint32_t lhs, const std::uint32_t rhs, const bool rhs_is_immediate)
 {
@@ -153,36 +200,36 @@ inline constexpr std::uint32_t encode(const std::uint32_t destination, const std
     }
     else if constexpr (Operation == BinaryOperation::BitAnd)
     {
-        return TT_OP_BITWOPDMAREG(rhs_is_immediate, 0, destination, rhs, lhs);
+        return TT_OP_BITWOPDMAREG(rhs_is_immediate, DMAReg::BitwiseOpSel::AND, destination, rhs, lhs);
     }
     else if constexpr (Operation == BinaryOperation::BitOr)
     {
-        return TT_OP_BITWOPDMAREG(rhs_is_immediate, 1, destination, rhs, lhs);
+        return TT_OP_BITWOPDMAREG(rhs_is_immediate, DMAReg::BitwiseOpSel::OR, destination, rhs, lhs);
     }
     else if constexpr (Operation == BinaryOperation::BitXor)
     {
-        return TT_OP_BITWOPDMAREG(rhs_is_immediate, 2, destination, rhs, lhs);
+        return TT_OP_BITWOPDMAREG(rhs_is_immediate, DMAReg::BitwiseOpSel::XOR, destination, rhs, lhs);
     }
     else if constexpr (Operation == BinaryOperation::ShiftLeft)
     {
-        return TT_OP_SHIFTDMAREG(rhs_is_immediate, 0, destination, rhs, lhs);
+        return TT_OP_SHIFTDMAREG(rhs_is_immediate, DMAReg::ShiftOpSel::LEFT, destination, rhs, lhs);
     }
     else if constexpr (Operation == BinaryOperation::ShiftRight)
     {
-        return TT_OP_SHIFTDMAREG(rhs_is_immediate, 1, destination, rhs, lhs);
+        return TT_OP_SHIFTDMAREG(rhs_is_immediate, DMAReg::ShiftOpSel::RIGHT, destination, rhs, lhs);
     }
     else if constexpr (Operation == BinaryOperation::CompareGreaterThan)
     {
-        return TT_OP_CMPDMAREG(rhs_is_immediate, 0, destination, rhs, lhs);
+        return TT_OP_CMPDMAREG(rhs_is_immediate, to_underlying(Compare::GreaterThan), destination, rhs, lhs);
     }
     else if constexpr (Operation == BinaryOperation::CompareLessThan)
     {
-        return TT_OP_CMPDMAREG(rhs_is_immediate, 1, destination, rhs, lhs);
+        return TT_OP_CMPDMAREG(rhs_is_immediate, to_underlying(Compare::LessThan), destination, rhs, lhs);
     }
     else
     {
         static_assert(Operation == BinaryOperation::CompareEqual);
-        return TT_OP_CMPDMAREG(rhs_is_immediate, 2, destination, rhs, lhs);
+        return TT_OP_CMPDMAREG(rhs_is_immediate, to_underlying(Compare::Equal), destination, rhs, lhs);
     }
 }
 
@@ -347,7 +394,7 @@ inline constexpr std::uint32_t set_half_operation(const hal::Gpr<Index> destinat
     if constexpr (Index != hal::detail::DynamicGprIndex && Value != DynamicImmediateValue)
     {
         static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
-        return TT_OP_SETDMAREG(0, Value, 0, half_index<Index>(High));
+        return TT_OP_SETDMAREG(DMAReg::Payload::IMMEDIATE, Value, DMAReg::Mode::IMMEDIATE, half_index<Index>(High));
     }
     else
     {
@@ -358,7 +405,7 @@ inline constexpr std::uint32_t set_half_operation(const hal::Gpr<Index> destinat
         validate_gpr(destination);
         const std::uint32_t half_value = OperandTraits<Immediate<Value>>::value(value);
         require_valid(half_value < (1u << 16), "GPR half value must fit in 16 bits");
-        return TT_OP_SETDMAREG(0, half_value, 0, OperandTraits<hal::Gpr<Index>>::value(destination) * 2u + High);
+        return TT_OP_SETDMAREG(DMAReg::Payload::IMMEDIATE, half_value, DMAReg::Mode::IMMEDIATE, OperandTraits<hal::Gpr<Index>>::value(destination) * 2u + High);
     }
 }
 
@@ -386,8 +433,8 @@ public:
 template <std::uint32_t Value, std::uint32_t Index>
 inline __attribute__((always_inline)) void set(const hal::Gpr<Index>)
 {
-    TTI_SETDMAREG(0, Value & 0xffffu, 0, detail::half_index<Index>(false));
-    TTI_SETDMAREG(0, Value >> 16, 0, detail::half_index<Index>(true));
+    TTI_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, Value & 0xffffu, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(false /*high*/));
+    TTI_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, Value >> 16, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(true /*high*/));
 }
 
 /** @brief Set a GPR to a runtime 32-bit value. */
@@ -396,8 +443,8 @@ inline __attribute__((always_inline)) void set(const hal::Gpr<Index> destination
 {
     detail::validate_gpr(destination);
     const std::uint32_t index = detail::OperandTraits<hal::Gpr<Index>>::value(destination);
-    TT_SETDMAREG(0, value & 0xffffu, 0, index * 2u);
-    TT_SETDMAREG(0, value >> 16, 0, index * 2u + 1u);
+    TT_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value & 0xffffu, detail::DMAReg::Mode::IMMEDIATE, index * 2u);
+    TT_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value >> 16, detail::DMAReg::Mode::IMMEDIATE, index * 2u + 1u);
 }
 
 /** @brief Set the low half of a GPR to a compile-time 16-bit value. */
@@ -405,14 +452,14 @@ template <std::uint32_t Value, std::uint32_t Index>
 inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index>)
 {
     static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
-    TTI_SETDMAREG(0, Value, 0, detail::half_index<Index>(false));
+    TTI_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, Value, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(false /*high*/));
 }
 
 /** @brief Set the low half of a GPR to a runtime 16-bit value. */
 template <std::uint32_t Index>
 inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index> destination, const std::uint32_t value)
 {
-    TT_INSN(detail::set_half_operation<false>(destination, immediate(value)));
+    TT_INSN(detail::set_half_operation<false /*High*/>(destination, immediate(value)));
 }
 
 /** @brief Set the high half of a GPR to a compile-time 16-bit value. */
@@ -420,14 +467,14 @@ template <std::uint32_t Value, std::uint32_t Index>
 inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index>)
 {
     static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
-    TTI_SETDMAREG(0, Value, 0, detail::half_index<Index>(true));
+    TTI_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, Value, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(true /*high*/));
 }
 
 /** @brief Set the high half of a GPR to a runtime 16-bit value. */
 template <std::uint32_t Index>
 inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index> destination, const std::uint32_t value)
 {
-    TT_INSN(detail::set_half_operation<true>(destination, immediate(value)));
+    TT_INSN(detail::set_half_operation<true /*High*/>(destination, immediate(value)));
 }
 
 /** @brief Add two operands with unsigned 32-bit wraparound. */
@@ -507,7 +554,7 @@ public:
 
     constexpr std::uint32_t operation() const
     {
-        return detail::set_half_operation<false>(destination, value);
+        return detail::set_half_operation<false /*High*/>(destination, value);
     }
 
     hal::Gpr<Index> destination;
@@ -525,7 +572,7 @@ public:
 
     constexpr std::uint32_t operation() const
     {
-        return detail::set_half_operation<true>(destination, value);
+        return detail::set_half_operation<true /*High*/>(destination, value);
     }
 
     hal::Gpr<Index> destination;
