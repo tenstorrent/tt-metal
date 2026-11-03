@@ -282,6 +282,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                  = params.RELU_CONFIG;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
+    // llk_pack_block takes the closed block without W here (llk_pack_tile_api.h), so the W base is not programmed
+    [[maybe_unused]] const bool closed_no_w_cell =
+        is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
@@ -303,7 +306,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_pack_block_fast_init_<false>();
             }
-            if constexpr (!pack_block_fast && !pack_block_plain)
+            if (!pack_block_fast && !pack_block_plain && (pack_block_w || !closed_no_w_cell))
             {
                 _llk_pack_block_w_init_(L1_ADDRESS(buffer_Res[0]), (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4);
             }
@@ -338,8 +341,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
                                     true,
                                     res_tile_idx,
-                                    is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 &&
-                                        formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b));
+                                    closed_no_w_cell);
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
@@ -383,8 +385,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
                                     true,
                                     res_tile_idx,
-                                    is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 &&
-                                        formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b));
+                                    closed_no_w_cell);
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
