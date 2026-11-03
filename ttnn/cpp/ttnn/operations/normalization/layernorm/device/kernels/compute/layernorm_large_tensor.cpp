@@ -142,15 +142,6 @@ void kernel_main() {
     constexpr bool do_fuse_pre_add = false;
 #endif
 
-#ifdef FUSE_PRE_ADD
-#ifdef RMSNORM
-    // The host binds x only for LayerNorm; RMSNorm's first pack target is xmm2.
-    constexpr auto dfb_x_id = dfb_xmm2_id;
-#else
-    constexpr auto dfb_x_id = dfb::x;
-#endif
-#endif
-
     constexpr auto in_input = ckl::input(
         dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
     constexpr auto inb_input = ckl::input(
@@ -214,7 +205,7 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_PRE_ADD
-    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
+    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_xmm2_id);
 #else
     // Always call compute_kernel_hw_startup regardless of TILIZE_IN.
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
