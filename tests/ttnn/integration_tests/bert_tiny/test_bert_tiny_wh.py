@@ -201,7 +201,10 @@ def test_bert_layer_inference(
         )
 
     input = (torch.rand(batch_size, 1, 128, hugging_face_reference_model.config.hidden_size) * 2) - 1
-    pytorch_out = pytorch_layer_model(input.squeeze(1))[0]
+    pytorch_out = pytorch_layer_model(input.squeeze(1))
+    # BertLayer returns a tuple in transformers 4.x and the hidden states alone from 5.
+    if isinstance(pytorch_out, tuple):
+        pytorch_out = pytorch_out[0]
 
     ttnn_input = ttnn.from_torch(
         input.squeeze(1),
@@ -252,12 +255,15 @@ def test_bert_for_question_answering(mesh_device, model_name, sequence_size, num
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
     torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+    # bert_for_question_answering adds its mask to the attention scores, so all zeros attends to
+    # every token. The torch model takes the Hugging Face convention instead (1 = attend), one row
+    # per batch entry: a [1, sequence_size] mask raises IndexError in transformers 5.
     torch_attention_mask = torch.zeros(1, sequence_size)
     torch_output = model(
         torch_input_ids,
         token_type_ids=torch_token_type_ids,
         position_ids=torch_position_ids,
-        attention_mask=torch_attention_mask,
+        attention_mask=torch.ones(batch_size, sequence_size),
     )
 
     ttnn_bert_inputs_ids = ttnn.from_torch(

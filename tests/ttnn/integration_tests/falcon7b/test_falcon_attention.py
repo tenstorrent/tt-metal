@@ -161,47 +161,15 @@ def test_torch_functional_falcon_attention(model_name, batch_size, sequence_leng
     config = transformers.FalconConfig.from_pretrained(model_name)
     model = transformers.models.falcon.modeling_falcon.FalconAttention(config).eval()
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-    )
-
     torch_hidden_states = (torch.rand(batch_size, sequence_length, config.hidden_size, dtype=torch.float32) * 2) - 1
-    torch_attention_mask = torch.ones(1, sequence_length)
-    torch_output, torch_present = model.forward(torch_hidden_states, alibi=None, attention_mask=torch_attention_mask)
-
-    hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    attention_mask = ttnn.from_torch(torch_attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-    output, present = torch_functional_falcon_attention(
-        hidden_states, attention_mask=attention_mask, parameters=parameters
-    )
-
-    assert_with_pcc(torch_output, output, 0.9999)
-
-
-@pytest.mark.parametrize("model_name", ["tiiuae/falcon-7b-instruct"])
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("sequence_length", [128])
-def test_torch_functional_falcon_attention(model_name, batch_size, sequence_length):
-    config = transformers.FalconConfig.from_pretrained(model_name)
-    model = transformers.models.falcon.modeling_falcon.FalconAttention(config).eval()
-
-    torch_hidden_states = (torch.rand(batch_size, sequence_length, config.hidden_size, dtype=torch.float32) * 2) - 1
-    torch_attention_mask = torch.ones(1, sequence_length)
-    # 2D to 4D
-    torch_attention_mask = (
-        transformers.models.falcon.modeling_falcon.FalconModel._prepare_4d_causal_attention_mask_with_cache_position(
-            torch_attention_mask,
-            sequence_length=sequence_length,
-            target_length=sequence_length,
-            dtype=torch_hidden_states.dtype,
-            device=torch_hidden_states.device,
-            cache_position=torch.arange(sequence_length),
-            batch_size=batch_size,
-        )
-    )
-    torch_position_embeddings = model.rotary_emb(torch_hidden_states, torch.arange(sequence_length).unsqueeze(0))
+    # Additive 4D causal mask: 0 on and below the diagonal, the dtype's minimum above it. Built here
+    # rather than with a transformers helper, whose private mask builders change between releases.
+    torch_attention_mask = torch.triu(
+        torch.full((sequence_length, sequence_length), torch.finfo(torch_hidden_states.dtype).min), diagonal=1
+    ).expand(batch_size, 1, sequence_length, sequence_length)
+    # FalconModel owns the rotary embedding; FalconAttention only consumes it.
+    rotary_emb = transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding(config)
+    torch_position_embeddings = rotary_emb(torch_hidden_states, torch.arange(sequence_length).unsqueeze(0))
     torch_output, torch_present = model.forward(
         torch_hidden_states,
         alibi=None,
