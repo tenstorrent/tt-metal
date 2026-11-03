@@ -6,14 +6,6 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-// COMMON_ARGS (decode lane gather, paged_qsa.transfer): one rectangle of GRID_X-wide
-// workers shares a single argument list; each worker derives its cyclic job slice.
-#ifdef COMMON_ARGS
-#define ARG(i) get_common_arg_val<uint32_t>(i)
-#else
-#define ARG(i) get_arg_val<uint32_t>(i)
-#endif
-
 static uint32_t face_index(uint32_t row, uint32_t col) {
     return (row / 16) * 512 + (col / 16) * 256 + (row % 16) * 16 + col % 16;
 }
@@ -28,16 +20,11 @@ void kernel_main() {
     constexpr auto oa = TensorAccessorArgs<sa.next_compile_time_args_offset()>();
     constexpr auto pa = TensorAccessorArgs<oa.next_compile_time_args_offset()>();
     constexpr auto ta = TensorAccessorArgs<pa.next_compile_time_args_offset()>();
-    const auto source = TensorAccessor(sa, ARG(0));
-    const auto output = TensorAccessor(oa, ARG(1));
-    const auto positions = TensorAccessor(pa, ARG(2));
-    const auto table = TensorAccessor(ta, ARG(3));
-#ifdef COMMON_ARGS
-    const uint32_t begin = get_absolute_logical_y() * GRID_X + get_absolute_logical_x();
-    const uint32_t count = (WORK + WORKERS - 1 - begin) / WORKERS;
-#else
+    const auto source = TensorAccessor(sa, get_arg_val<uint32_t>(0));
+    const auto output = TensorAccessor(oa, get_arg_val<uint32_t>(1));
+    const auto positions = TensorAccessor(pa, get_arg_val<uint32_t>(2));
+    const auto table = TensorAccessor(ta, get_arg_val<uint32_t>(3));
     const uint32_t begin = get_arg_val<uint32_t>(4), count = get_arg_val<uint32_t>(5);
-#endif
     CircularBuffer cb(0);
     cb.reserve_back(1);
     const uint32_t base = cb.get_write_ptr(), rowaddr = base + 2048;
@@ -48,11 +35,7 @@ void kernel_main() {
     auto pages = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tableaddr);
     Noc noc;
     uint32_t loaded = 0xffffffff, start = 0;
-#ifdef COMMON_ARGS
-    constexpr uint32_t stride = WORKERS;
-#else
     const uint32_t stride = get_arg_val<uint32_t>(6);
-#endif
     for (uint32_t item = 0; item < count; ++item) {
         const uint32_t job = begin + item * stride;
         const uint32_t b = gather ? lane : job / 4;
@@ -123,28 +106,6 @@ void kernel_main() {
             for (uint32_t i = 0; i < 1024; ++i) {
                 tile[i] = 0;
             }
-#ifdef COMMON_ARGS
-            // Issue every row read of this tile before one barrier (staging after the table).
-            auto rows = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tableaddr + tablebytes);
-            uint32_t live = 0;
-            for (uint32_t r = 0; r < 32 && first + r < complete; ++r, ++live) {
-                const uint32_t group = first + r;
-                const uint32_t physical = pages[group / 8];
-                ASSERT(physical < physical_pages);
-                noc.async_read(
-                    source,
-                    CoreLocalMem<uint32_t>(tableaddr + tablebytes + r * 64),
-                    64,
-                    {.page_id = physical * 8 + group % 8, .offset_bytes = col * 64},
-                    {});
-            }
-            noc.async_read_barrier();
-            for (uint32_t r = 0; r < live; ++r) {
-                for (uint32_t c = 0; c < 32; ++c) {
-                    tile[face_index(r, c)] = rows[r * 32 + c];
-                }
-            }
-#else
             for (uint32_t r = 0; r < 32 && first + r < complete; ++r) {
                 const uint32_t group = first + r;
                 const uint32_t physical = pages[group / 8];
@@ -157,7 +118,6 @@ void kernel_main() {
                     tile[face_index(r, c)] = row[c];
                 }
             }
-#endif
             noc.async_write(CoreLocalMem<uint32_t>(base), output, 2048, {}, {.page_id = job});
             noc.async_write_barrier();
         }
