@@ -281,8 +281,9 @@ struct DFBAdvancedOptions {
     // Rules for aliased DFBs:
     //   - Every DFB in the alias group must list every other member as an alias
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
-    //   - All members must target the same node set
-    //     (derived from their bound kernels' WorkUnitSpecs or provided via override_placement).
+    //   - All members must allocate backing memory on the same node set.
+    //     Each member can derive its placement from its bound kernels or specify
+    //     override_placement.
     //   - If any member overrides allocation, all members must use the same arena parameter and byte offset.
     Group<DFBSpecName> alias_with;
 
@@ -374,16 +375,21 @@ struct DFBAdvancedOptions {
     // Placement override
     ////////////////////////////////////////////////////////////////////////////////
 
-    // Replace backing-memory placement inferred from the endpoint kernels. Must be non-empty and within
-    // the logical worker grid; may omit endpoint nodes. Every reserved node must have both endpoint roles.
-    // Placement is fixed for the Program lifetime; per-node size and kernel placement are unchanged.
-    // Existing endpoint configuration and allow_instance_multi_binding restrictions still apply.
-    // Cannot be combined with borrowed_from or prefetcher_pipe_relays.
-    // Device configuration and slot reuse follow inferred endpoint placement, as when this field is unset.
+    // Select the nodes where the DFB's backing memory is allocated.
+    // When unset, placement is the union of all bound kernels' nodes.
     //
-    // Kernels can start on omitted nodes, but any DFB interaction there is undefined behavior.
-    // Kernel code must guard such interactions; the framework adds no device-side checks.
-    // Unset preserves inferred placement.
+    // Invariant: When set, the override is a non-empty subset of that union; equality is allowed.
+    // Invariant: Each selected node has at least one producer and one consumer bound to this DFB.
+    // Invariant: The override cannot be combined with borrowed_from or prefetcher_pipe_relays.
+    //
+    // Placement is fixed for the Program lifetime.
+    // All bindings use the same placement.
+    // Existing endpoint compatibility and allow_instance_multi_binding restrictions apply.
+    // DFBRunOverrides can change entry_size and num_entries without changing placement.
+    // Kernel placement, device configuration, and slot reuse follow the bound kernels' nodes.
+    //
+    // CAUTION: Any DFB interaction outside its placement is undefined behavior.
+    // Kernel code must prevent these interactions; the runtime adds no device-side checks.
     std::optional<CoreRangeSet> override_placement = std::nullopt;
 };
 
@@ -393,8 +399,9 @@ struct ScratchpadAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
 
     // By default, a scratchpad instance (i.e., a scratchpad on a particular node) is
-    // bound by exactly one kernel instance. A *ScratchpadSpec* may still be bound by
-    // more than one KernelSpec, as long as their node sets are disjoint.
+    // bound by exactly one kernel instance.
+    // A ScratchpadSpec may be bound by more than one KernelSpec, provided their
+    // node sets do not overlap within the scratchpad's placement.
     //
     // "Multi-binding" refers to a scratchpad instance bound by more than one kernel
     // instance. All binding kernel instances on a node access the same backing memory.
@@ -410,16 +417,21 @@ struct ScratchpadAdvancedOptions {
     // lacks ways to synchronize. See: #62551
     bool allow_instance_multi_binding = false;
 
-    // Select backing-memory placement from the union of all binding kernels' nodes.
-    // Invariant: When set, the override is a non-empty subset of that union; equality is allowed.
-    // Placement is fixed for the Program lifetime; size_per_node is unchanged.
-    // All bindings use one allocation over this set, with a uniform local L1 address.
-    // This does not enable sharing on overlapping nodes: allow_instance_multi_binding
-    // and its architecture restrictions still apply within the effective placement.
+    // Select the nodes where the scratchpad's backing memory is allocated.
+    // When unset, placement is the union of all bound kernels' nodes.
     //
-    // CAUTION: Access outside this set is undefined behavior. Kernel code must guard
-    // such accesses; the framework adds no device-side checks. Unset preserves default
-    // placement and allocation behavior.
+    // Invariant: When set, the override is a non-empty subset of that union; equality is allowed.
+    //
+    // Selected nodes can have gaps.
+    // Placement is fixed for the Program lifetime.
+    // The override leaves size_per_node and kernel placement unchanged.
+    // With an override, all bindings use the same placement and one local L1 address
+    // across the selected nodes.
+    // Sharing on a selected node requires allow_instance_multi_binding and must
+    // satisfy its architecture restrictions.
+    //
+    // CAUTION: Access outside the scratchpad's placement is undefined behavior.
+    // Kernel code must prevent these accesses; the runtime adds no device-side checks.
     std::optional<CoreRangeSet> override_placement = std::nullopt;
 
     ////////////////////////////////////////////////////////////////////////////////
