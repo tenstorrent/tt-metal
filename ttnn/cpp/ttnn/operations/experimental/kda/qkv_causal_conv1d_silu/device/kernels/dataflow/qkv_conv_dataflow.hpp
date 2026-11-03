@@ -23,8 +23,9 @@ inline uint32_t read_word(Noc& noc, const Accessor& accessor, uint32_t slot) {
 }
 
 // Row `row` of a convolution tail's channel tiles [ct_start, ct_start + ct_count) into `destination` at byte
-// `destination_offset`: one read per segment page the range touches.
-template <typename Tail, typename Destination>
+// `destination_offset`. The tail is in the op's history layout: ROWS reads page `row` once, SEGMENTS once per
+// segment page the range touches.
+template <uint32_t segment_history, typename Tail, typename Destination>
 inline void read_tail_row(
     Noc& noc,
     const Tail& tail,
@@ -33,6 +34,15 @@ inline void read_tail_row(
     uint32_t ct_start,
     uint32_t ct_count,
     uint32_t destination_offset) {
+    if constexpr (!segment_history) {
+        noc.async_read(
+            tail,
+            destination,
+            ct_count * tile_row_bytes,
+            {.page_id = row, .offset_bytes = ct_start * tile_row_bytes},
+            {.offset_bytes = destination_offset});
+        return;
+    }
     const uint32_t ct_end = ct_start + ct_count;
     for (uint32_t ct = ct_start; ct < ct_end;) {
         const uint32_t to_segment_end = tiles_per_segment - ct % tiles_per_segment;
@@ -44,6 +54,26 @@ inline void read_tail_row(
             {.page_id = tail_page(ct), .offset_bytes = tail_offset(row, ct)},
             {.offset_bytes = destination_offset + (ct - ct_start) * tile_row_bytes});
         ct += count;
+    }
+}
+
+// The mirror for a whole row: `channel_tiles` tiles' row from `source` at byte `source_offset` into tail row `row`.
+// SEGMENTS needs whole segments (channel_tiles % tiles_per_segment == 0).
+template <uint32_t segment_history, typename Source, typename Tail>
+inline void write_tail_row(
+    Noc& noc, const Source& source, const Tail& tail, uint32_t row, uint32_t channel_tiles, uint32_t source_offset) {
+    if constexpr (!segment_history) {
+        noc.async_write(
+            source, tail, channel_tiles * tile_row_bytes, {.offset_bytes = source_offset}, {.page_id = row});
+        return;
+    }
+    for (uint32_t ct = 0; ct < channel_tiles; ct += tiles_per_segment) {
+        noc.async_write(
+            source,
+            tail,
+            segment_row_bytes,
+            {.offset_bytes = source_offset + ct * tile_row_bytes},
+            {.page_id = tail_page(ct), .offset_bytes = tail_offset(row, ct)});
     }
 }
 

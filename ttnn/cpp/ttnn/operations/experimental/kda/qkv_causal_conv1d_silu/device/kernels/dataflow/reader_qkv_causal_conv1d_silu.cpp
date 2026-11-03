@@ -76,25 +76,23 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
 
-    // Read history_rows full-row pages from first_row on, this channel block's columns, into the rows staging area.
-    const auto read_rows = [&](const auto& source, uint32_t first_row, uint32_t ct_start) {
+    // Read the history_rows rows of this channel block's columns into the rows staging area: from a convolution tail
+    // (`history`, or the bare predecessor carry) in the op's history layout, or from the exchange buffer's full-row
+    // predecessor pages.
+    const auto read_tail = [&](const auto& source, uint32_t ct_start) {
         for (uint32_t row = 0; row < history_rows; ++row) {
-            noc.async_read(
-                source,
-                scratch,
-                block_row_bytes,
-                {.page_id = first_row + row, .offset_bytes = ct_start * tile_row_bytes},
-                {.offset_bytes = offset_of(rows) + row * block_row_bytes});
+            read_tail_row<segment_history>(
+                noc, source, scratch, row, ct_start, block_ct, offset_of(rows) + row * block_row_bytes);
         }
     };
-    // The same, from a convolution tail (`history`, or the bare predecessor carry) in the caller's history layout.
-    const auto read_tail = [&](const auto& source, uint32_t ct_start) {
-        if constexpr (segment_history) {
-            for (uint32_t row = 0; row < history_rows; ++row) {
-                read_tail_row(noc, source, scratch, row, ct_start, block_ct, offset_of(rows) + row * block_row_bytes);
-            }
-        } else {
-            read_rows(source, 0, ct_start);
+    const auto read_exchange_rows = [&](uint32_t ct_start) {
+        for (uint32_t row = 0; row < history_rows; ++row) {
+            noc.async_read(
+                predecessor,
+                scratch,
+                block_row_bytes,
+                {.page_id = predecessor_page + row, .offset_bytes = ct_start * tile_row_bytes},
+                {.offset_bytes = offset_of(rows) + row * block_row_bytes});
         }
     };
 
@@ -160,7 +158,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 predecessor_arrived = true;
             }
             if constexpr (exchange) {
-                read_rows(predecessor, predecessor_page, ct_start);
+                read_exchange_rows(ct_start);
             } else {
                 // Without the exchange, predecessor is a bare carry in the history's layout.
                 read_tail(predecessor, ct_start);

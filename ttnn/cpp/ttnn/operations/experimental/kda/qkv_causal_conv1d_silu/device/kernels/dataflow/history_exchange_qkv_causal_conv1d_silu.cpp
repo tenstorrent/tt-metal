@@ -94,10 +94,8 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
             const uint32_t position = carried + row;
             const bool from_layer_history = position < history_rows && interval.carry_continues_layer_history();
             const uint32_t destination = offset_of(carry) + row * row_bytes;
-            if (from_layer_history && segment_history) {
-                read_tail_row(noc, history, scratch, position, 0, channel_tiles, destination);
-            } else if (from_layer_history) {
-                noc.async_read(history, scratch, row_bytes, {.page_id = position}, {.offset_bytes = destination});
+            if (from_layer_history) {
+                read_tail_row<segment_history>(noc, history, scratch, position, 0, channel_tiles, destination);
             } else {
                 const uint32_t page =
                     position >= history_rows ? end_page + position - history_rows : predecessor_page + position;
@@ -242,28 +240,10 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         noc_async_atomic_barrier();
         close_connections(connections);
     }
-    // The replacement carry, three full rows in scratch, goes out in history's layout: one write per row, or per
-    // (segment, row).
-    if constexpr (segment_history) {
-        for (uint32_t ct = 0; ct < channel_tiles; ct += tiles_per_segment) {
-            for (uint32_t row = 0; row < history_rows; ++row) {
-                noc.async_write(
-                    scratch,
-                    final_history,
-                    segment_row_bytes,
-                    {.offset_bytes = offset_of(carry) + row * row_bytes + ct * tile_row_bytes},
-                    {.page_id = tail_page(ct), .offset_bytes = tail_offset(row, ct)});
-            }
-        }
-    } else {
-        for (uint32_t row = 0; row < history_rows; ++row) {
-            noc.async_write(
-                scratch,
-                final_history,
-                row_bytes,
-                {.offset_bytes = offset_of(carry) + row * row_bytes},
-                {.page_id = row});
-        }
+    // The replacement carry, three full rows in scratch, goes out in history's layout.
+    for (uint32_t row = 0; row < history_rows; ++row) {
+        write_tail_row<segment_history>(
+            noc, scratch, final_history, row, channel_tiles, offset_of(carry) + row * row_bytes);
     }
     noc.async_write_barrier();
 }
