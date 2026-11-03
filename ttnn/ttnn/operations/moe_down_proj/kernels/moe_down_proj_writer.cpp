@@ -23,6 +23,7 @@
 #include "moe_down_proj_plan.h"
 #include "moe_down_proj_store.h"
 #include "moe_down_proj_w_prefetch.h"
+#include "moe_split_recv.h"
 
 void kernel_main() {
     constexpr uint32_t cb_output_rows = get_compile_time_arg_val(0);
@@ -71,9 +72,7 @@ void kernel_main() {
 
     Noc noc;
     auto wa_sender = wa_mcast.optional_sender(noc);
-    auto wa_receiver = wa_mcast.optional_receiver(noc);
     auto wb_sender = wb_mcast.optional_sender(noc);
-    auto wb_receiver = wb_mcast.optional_receiver(noc);
     // Every core sits in exactly one n-line: a wa line (rect) or the wb strip line.
     const bool on_wa = wa_mcast.can_send() || wa_mcast.can_receive();
     auto owns = [&](uint32_t step) { return on_wa ? wa_mcast.should_send(step) : wb_mcast.should_send(step); };
@@ -117,6 +116,14 @@ void kernel_main() {
         decltype(w_accessor)>
         prefetch(plan, w_accessor, n_first, w_reader_share, w_share_den);
 
+    // w receivers ack step s, issue this RISC's staged w reads (the next owned step's remainder when that step is
+    // next), then wait, so the reads leave the ack -> data chain.
+    moe_split_recv::
+        ReceiverFor<get_named_compile_time_arg_val("wa_ct_offset"), get_named_compile_time_arg_val("wa_rt_offset")>
+            wa_split(noc);
+    moe_split_recv::
+        ReceiverFor<get_named_compile_time_arg_val("wb_ct_offset"), get_named_compile_time_arg_val("wb_rt_offset")>
+            wb_split(noc);
     prefetch.start(0, num_steps, owns);
     for (uint32_t wave = 0; wave < num_waves_active; ++wave) {
         uint32_t first_expert;
@@ -133,7 +140,9 @@ void kernel_main() {
             // deliver_w_round
             const uint32_t step = wave * num_k_rounds + round;
             const bool owned = owns(step);
-            prefetch.issue(stage_l1, owned ? prefetch.total : issue_quota);
+            if (owned) {
+                prefetch.issue(stage_l1, prefetch.total);
+            }
             {
                 MaybeDeviceZoneScope("w_reserve");
                 cb_reserve_back(cb_w_round, w_round_tiles);
@@ -158,12 +167,19 @@ void kernel_main() {
                     cb_pop_front(cb_w_stage, w_round_tiles);
                 }
                 prefetch.start(step + 1, num_steps, owns);
-            } else if (on_wa) {
-                MaybeDeviceZoneScope("w_receive");
-                wa_receiver->receive(step);
             } else {
                 MaybeDeviceZoneScope("w_receive");
-                wb_receiver->receive(step);
+                if (on_wa) {
+                    wa_split.ack(step);
+                } else {
+                    wb_split.ack(step);
+                }
+                prefetch.issue(stage_l1, step + 1 < num_steps && owns(step + 1) ? prefetch.total : issue_quota);
+                if (on_wa) {
+                    wa_split.wait();
+                } else {
+                    wb_split.wait();
+                }
             }
             cb_push_back(cb_w_round, w_round_tiles);
         }

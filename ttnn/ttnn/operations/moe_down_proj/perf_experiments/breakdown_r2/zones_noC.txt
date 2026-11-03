@@ -1,0 +1,36 @@
+run 1024, 1350.0 MHz; per-core totals in us (max / p50), exec per core (max)
+BRISC   BRISC-FW                     cores=108 exec=  1 max=  144.41 p50=  142.79
+BRISC   BRISC-KERNEL                 cores=108 exec=  1 max=  143.70 p50=  141.81
+BRISC   w_receive                    cores=108 exec= 29 max=   93.02 p50=   56.75
+BRISC   w_reserve                    cores=108 exec= 32 max=   35.35 p50=   29.54
+BRISC   w_send                       cores=108 exec=  4 max=   12.12 p50=    8.89
+BRISC   w_send_barrier               cores=108 exec=  4 max=    6.14 p50=    1.43
+BRISC   y_store                      cores=108 exec=  8 max=   17.85 p50=   15.22
+BRISC   y_store_tail                 cores=108 exec=  1 max=   14.77 p50=   14.02
+NCRISC  NCRISC-FW                    cores=108 exec=  1 max=  143.85 p50=  142.24
+NCRISC  NCRISC-KERNEL                cores=108 exec=  1 max=  143.41 p50=  141.49
+NCRISC  x_forward                    cores=  9 exec= 32 max=   47.03 p50=   44.65
+NCRISC  x_receive                    cores=108 exec= 32 max=  123.82 p50=  101.17
+NCRISC  x_reserve                    cores=108 exec= 32 max=   47.11 p50=    4.50
+NCRISC  x_send                       cores= 90 exec=  4 max=    8.76 p50=    6.40
+NCRISC  x_send_barrier               cores= 90 exec=  4 max=    0.57 p50=    0.38
+NCRISC  y_store_tail_helper          cores=108 exec=  1 max=    9.15 p50=    9.11
+TRISC_0 TRISC-FW                     cores=108 exec=  1 max=  137.43 p50=  135.81
+TRISC_0 TRISC-KERNEL                 cores=108 exec=  1 max=  136.86 p50=  134.93
+TRISC_0 compute_accumulate           cores=108 exec=  2 max=  129.70 p50=  127.64
+TRISC_0 compute_untilize             cores=108 exec=  2 max=    4.98 p50=    4.94
+TRISC_0 compute_wait_inputs          cores=108 exec= 32 max=  122.35 p50=  120.34
+TRISC_0 compute_wait_x               cores=108 exec= 32 max=  110.77 p50=   91.03
+TRISC_1 TRISC-FW                     cores=108 exec=  1 max=  137.43 p50=  135.80
+TRISC_1 TRISC-KERNEL                 cores=108 exec=  1 max=  136.89 p50=  134.76
+TRISC_1 compute_accumulate           cores=108 exec=  2 max=   70.90 p50=   70.57
+TRISC_1 compute_untilize             cores=108 exec=  2 max=   84.27 p50=   62.64
+TRISC_1 compute_wait_inputs          cores=108 exec= 32 max=    1.61 p50=    1.57
+TRISC_1 compute_wait_x               cores=108 exec= 32 max=    0.47 p50=    0.45
+TRISC_2 TRISC-FW                     cores=108 exec=  1 max=  137.89 p50=  136.26
+TRISC_2 TRISC-KERNEL                 cores=108 exec=  1 max=  137.48 p50=  135.57
+TRISC_2 compute_accumulate           cores=108 exec=  2 max=   72.15 p50=   71.84
+TRISC_2 compute_untilize             cores=108 exec=  2 max=   83.77 p50=   62.11
+TRISC_2 compute_wait_inputs          cores=108 exec= 32 max=    1.59 p50=    1.56
+TRISC_2 compute_wait_x               cores=108 exec= 32 max=    0.46 p50=    0.45
+max markers per (core,RISC): 198

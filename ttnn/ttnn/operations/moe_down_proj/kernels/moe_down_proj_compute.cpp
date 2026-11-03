@@ -130,7 +130,10 @@ void kernel_main() {
                 const bool seeded = round > 0;
                 if (my_rows > 0) {
                     MaybeDeviceZoneScope("compute_wait_inputs");
-                    x_buf.wait_front(my_rows * k_block_tiles);
+                    {
+                        MaybeDeviceZoneScope("compute_wait_x");
+                        x_buf.wait_front(my_rows * k_block_tiles);
+                    }
                     w_buf.wait_front(last_slot * w_chunk_tiles);
                 }
                 for (uint32_t e = 0; e < MOE_NUM_EXPERTS; ++e) {

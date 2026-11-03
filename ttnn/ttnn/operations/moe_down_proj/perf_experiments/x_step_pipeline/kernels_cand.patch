@@ -1,0 +1,263 @@
+diff -ruN kernels_base/moe_down_proj_reader.cpp kernels_cand/moe_down_proj_reader.cpp
+--- kernels_base/moe_down_proj_reader.cpp	2026-11-03 10:50:37.215772183 +0000
++++ kernels_cand/moe_down_proj_reader.cpp	2026-11-03 11:11:29.681241805 +0000
+@@ -28,6 +28,7 @@
+ #include "moe_down_proj_plan.h"
+ #include "moe_down_proj_store.h"
+ #include "moe_down_proj_w_prefetch.h"
++#include "moe_split_recv.h"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_x_round = get_compile_time_arg_val(0);
+@@ -110,7 +111,6 @@
+ 
+     Noc noc;
+     auto xa_sender = xa_mcast.optional_sender(noc);
+-    auto xa_receiver = xa_mcast.optional_receiver(noc);
+     auto xb_sender = xb_mcast.optional_sender(noc);
+     auto xb_receiver = xb_mcast.optional_receiver(noc);
+     // Rect cores own an xa seat (and send xb in the L layout); L strip cores only receive xb.
+@@ -212,6 +212,11 @@
+ 
+     // L layout: the xb fixed sender forwards the last received step (pending) before acking the next one.
+     const bool forwarder = xb_mcast.can_send();
++    // xa receivers ack step s, do their other NoC work for the step (forward step s - 1, staged x reads), then wait.
++    moe_split_recv::ReceiverFor<
++        get_named_compile_time_arg_val("xa_ct_offset"),
++        get_named_compile_time_arg_val("xa_rt_offset")>
++        xa_split(noc);
+     uint32_t pending_slot = 0;
+     uint32_t pending_bytes = 0;
+     auto forward_pending = [&]() {
+@@ -240,36 +245,51 @@
+         }
+         const uint32_t group_rows = plan.group_rows(step / x_steps_per_wave, group);
+         const bool owned = on_xa && xa_mcast.should_send(step);
+-        issue_prefetch(owned ? pf_total : issue_quota);
++        // The remainder of the next owned step's reads goes out one step early, between this step's ack and wait.
++        const bool next_owned = on_xa && step + 1 < num_steps && xa_mcast.should_send(step + 1);
++        const uint32_t pf_quota = next_owned ? pf_total : issue_quota;
++        if (owned) {
++            issue_prefetch(pf_total);
++        }
+         {
+             MaybeDeviceZoneScope("x_reserve");
+             cb_reserve_back(cb_x_round, x_step_tiles);
+         }
+-        if (forwarder) {
+-            MaybeDeviceZoneScope("x_forward");
+-            forward_pending();
+-        }
+-        if (group_rows > 0) {
+-            const uint32_t slot = get_write_ptr(cb_x_round);
+-            // Every round but the last spans its nominal slot; the last ends at the group's rows.
+-            const uint32_t bytes = ((x_step_rounds - 1) * x_round_tiles + group_rows * k_block_tiles) * tile_bytes;
+-            if (owned) {
+-                MaybeDeviceZoneScope("x_send");
+-                {
+-                    MaybeDeviceZoneScope("x_send_barrier");
+-                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
+-                }
+-                xa_sender->send(stage_l1, slot, bytes);
+-            } else if (on_xa) {
+-                {
+-                    MaybeDeviceZoneScope("x_receive");
+-                    xa_receiver->receive(step);
+-                }
+-                if (forwarder) {
+-                    pending_slot = slot;
+-                    pending_bytes = bytes;
+-                }
+-            } else {
++        const uint32_t slot = get_write_ptr(cb_x_round);
++        // Every round but the last spans its nominal slot; the last ends at the group's rows.
++        const uint32_t bytes = ((x_step_rounds - 1) * x_round_tiles + group_rows * k_block_tiles) * tile_bytes;
++        if (group_rows > 0 && owned) {
++            MaybeDeviceZoneScope("x_send");
++            {
++                MaybeDeviceZoneScope("x_send_barrier");
++                dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
++            }
++            xa_sender->send(stage_l1, slot, bytes);
++        } else if (group_rows > 0 && on_xa) {
++            // Ack step s, then do this core's other NoC work (forward step s - 1, prefetch issue) while it lands.
++            MaybeDeviceZoneScope("x_receive");
++            xa_split.ack(step);
++            if (forwarder) {
++                MaybeDeviceZoneScope("x_forward");
++                forward_pending();
++            }
++            if (!owned) {
++                issue_prefetch(pf_quota);
++            }
++            xa_split.wait();
++            if (forwarder) {
++                pending_slot = slot;
++                pending_bytes = bytes;
++            }
++        } else {
++            if (forwarder) {
++                MaybeDeviceZoneScope("x_forward");
++                forward_pending();
++            }
++            if (!owned) {
++                issue_prefetch(pf_quota);
++            }
++            if (group_rows > 0) {
+                 MaybeDeviceZoneScope("x_receive");
+                 xb_receiver->receive(step);
+             }
+diff -ruN kernels_base/moe_down_proj_writer.cpp kernels_cand/moe_down_proj_writer.cpp
+--- kernels_base/moe_down_proj_writer.cpp	2026-11-03 10:50:37.223772140 +0000
++++ kernels_cand/moe_down_proj_writer.cpp	2026-11-03 11:11:29.681241805 +0000
+@@ -23,6 +23,7 @@
+ #include "moe_down_proj_plan.h"
+ #include "moe_down_proj_store.h"
+ #include "moe_down_proj_w_prefetch.h"
++#include "moe_split_recv.h"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_output_rows = get_compile_time_arg_val(0);
+@@ -71,9 +72,7 @@
+ 
+     Noc noc;
+     auto wa_sender = wa_mcast.optional_sender(noc);
+-    auto wa_receiver = wa_mcast.optional_receiver(noc);
+     auto wb_sender = wb_mcast.optional_sender(noc);
+-    auto wb_receiver = wb_mcast.optional_receiver(noc);
+     // Every core sits in exactly one n-line: a wa line (rect) or the wb strip line.
+     const bool on_wa = wa_mcast.can_send() || wa_mcast.can_receive();
+     auto owns = [&](uint32_t step) { return on_wa ? wa_mcast.should_send(step) : wb_mcast.should_send(step); };
+@@ -117,6 +116,16 @@
+         decltype(w_accessor)>
+         prefetch(plan, w_accessor, n_first, w_reader_share, w_share_den);
+ 
++    // w receivers ack step s, issue this RISC's staged w reads (the next owned step's remainder when that step is
++    // next), then wait, so the reads leave the ack -> data chain.
++    moe_split_recv::ReceiverFor<
++        get_named_compile_time_arg_val("wa_ct_offset"),
++        get_named_compile_time_arg_val("wa_rt_offset")>
++        wa_split(noc);
++    moe_split_recv::ReceiverFor<
++        get_named_compile_time_arg_val("wb_ct_offset"),
++        get_named_compile_time_arg_val("wb_rt_offset")>
++        wb_split(noc);
+     prefetch.start(0, num_steps, owns);
+     for (uint32_t wave = 0; wave < num_waves_active; ++wave) {
+         uint32_t first_expert;
+@@ -133,7 +142,9 @@
+             // deliver_w_round
+             const uint32_t step = wave * num_k_rounds + round;
+             const bool owned = owns(step);
+-            prefetch.issue(stage_l1, owned ? prefetch.total : issue_quota);
++            if (owned) {
++                prefetch.issue(stage_l1, prefetch.total);
++            }
+             {
+                 MaybeDeviceZoneScope("w_reserve");
+                 cb_reserve_back(cb_w_round, w_round_tiles);
+@@ -158,12 +169,19 @@
+                     cb_pop_front(cb_w_stage, w_round_tiles);
+                 }
+                 prefetch.start(step + 1, num_steps, owns);
+-            } else if (on_wa) {
+-                MaybeDeviceZoneScope("w_receive");
+-                wa_receiver->receive(step);
+             } else {
+                 MaybeDeviceZoneScope("w_receive");
+-                wb_receiver->receive(step);
++                if (on_wa) {
++                    wa_split.ack(step);
++                } else {
++                    wb_split.ack(step);
++                }
++                prefetch.issue(stage_l1, step + 1 < num_steps && owns(step + 1) ? prefetch.total : issue_quota);
++                if (on_wa) {
++                    wa_split.wait();
++                } else {
++                    wb_split.wait();
++                }
+             }
+             cb_push_back(cb_w_round, w_round_tiles);
+         }
+diff -ruN kernels_base/moe_split_recv.h kernels_cand/moe_split_recv.h
+--- kernels_base/moe_split_recv.h	1970-01-01 00:00:00.000000000 +0000
++++ kernels_cand/moe_split_recv.h	2026-11-03 11:11:29.653241953 +0000
+@@ -0,0 +1,77 @@
++// SPDX-FileCopyrightText: 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Split receive for a ttnn.Mcast(handshake=True, Flag data-ready) channel: ack(round) and wait() as two calls, on the
++// same wire as ReceiverPipe::receive(round) (which fuses them). A core may do other NoC work between the ack and the
++// wait (the x forwarder forwards the previous step there). One round in flight, so the single data-ready cell holds.
++// Bypasses dataflow_kernel_lib ReceiverPipe::receive(): the helper has no ack-only / wait-only entry points.
++
++#pragma once
++
++#include <cstdint>
++#include <optional>
++
++#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
++
++namespace moe_split_recv {
++
++namespace dkl = dataflow_kernel_lib;
++namespace wire = dataflow_kernel_lib::mcast_wire;
++
++template <bool PRESENT, uint32_t CT, uint32_t RT>
++struct Receiver {
++    explicit Receiver(const Noc&) {}
++    void ack(uint32_t) {}
++    void wait() {}
++};
++
++template <uint32_t CT, uint32_t RT>
++struct Receiver<true, CT, RT> {
++    using Args = dkl::McastArgs<CT, RT>;
++    using Runtime = dkl::detail::PositionalMcastRuntime<RT>;
++    static constexpr uint32_t DR_ID = dkl::detail::positional_mcast_semaphore<CT, wire::DATA_READY>();
++    static constexpr uint32_t CR_ID = dkl::detail::positional_mcast_semaphore<CT, wire::CONSUMER_READY>();
++    static_assert(Args::transfer_mode == dkl::TransferMode::Multicast, "hardware multicast only");
++    static_assert(Args::pre_handshake && Args::signal == dkl::DataReadySignal::Flag, "handshake + Flag only");
++    using Sem = Semaphore<ProgrammableCoreType::TENSIX>;
++    using Dr = dkl::detail::McastSemaphoreToken<dkl::McastSemaphoreBinding{DR_ID}>;
++    using Cr = dkl::detail::McastSemaphoreToken<dkl::McastSemaphoreBinding{CR_ID}>;
++
++    explicit Receiver(const Noc& noc) :
++        noc_(noc),
++        dr_(dkl::detail::make_mcast_semaphore<Dr{}>()),
++        cr_(dkl::detail::make_mcast_semaphore<Cr{}>()) {
++        if constexpr (Args::receiver_available) {
++            if (args_.can_receive()) {
++                coords_.emplace(Runtime::coordinates(Args::runtime_layout.sender_coordinates));
++            }
++        }
++    }
++    void ack(uint32_t round) {
++        if constexpr (Args::receiver_available) {
++            const uint32_t idx = round % Args::num_senders;
++            const auto& c = *coords_;
++            cr_.up(
++                noc_,
++                c[wire::SENDER_COORD_WORDS * idx + wire::SENDER_X],
++                c[wire::SENDER_COORD_WORDS * idx + wire::SENDER_Y],
++                1);
++        }
++    }
++    void wait() {
++        dr_.wait(VALID);
++        dr_.set(INVALID);
++    }
++
++private:
++    static constexpr Args args_{};
++    Noc noc_;
++    Sem dr_;
++    Sem cr_;
++    std::optional<typename Args::SenderCoordinates> coords_;
++};
++
++template <uint32_t CT, uint32_t RT>
++using ReceiverFor = Receiver<get_compile_time_arg_val(CT) != wire::ABSENT, CT, RT>;
++
++}  // namespace moe_split_recv

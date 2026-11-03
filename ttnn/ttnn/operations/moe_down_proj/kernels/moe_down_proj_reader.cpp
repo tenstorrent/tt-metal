@@ -7,9 +7,10 @@
 // deliver_x_round, x step s = (wave s / x_steps_per_wave, x K block s % x_steps_per_wave) over the non-empty waves:
 //   the step's rotating sender of the m-group multicasts its rows' K block of x from its private staging buffer
 //   into the round slot along the m-group (xa). In the L layout a fixed forwarder of the rect row (never an x
-//   sender) copies each step to the group's strip core (xb) one step behind, from its own round slot, before it
-//   acks the next step, so the sender injects each step once. After a send the sender starts the reads of its
-//   next owned step into staging, a quota per step, so a step's L1 reads overlap the steps in between. Nominal
+//   sender) copies each step to the group's strip core (xb) one step behind, from its own round slot, so the sender
+//   injects each step once. xa receivers ack a step, then forward / issue staged reads, then wait for its data
+//   (moe_split_recv.h), which keeps that NoC work off the ack -> data chain. After a send the sender starts the reads
+//   of its next owned step into staging, a quota per step, so a step's L1 reads overlap the steps in between. Nominal
 //   x_step_rounds * core_row_tiles_max * k_block_tiles pages pushed per step; an empty m-group moves no data.
 // x_step_rounds: one x step carries that many consecutive compute K rounds (x K block = x_step_rounds *
 //   k_block_tiles), laid out round-major ([round][row][k]) so compute pops them as separate rounds. Fewer, larger x
@@ -28,6 +29,7 @@
 #include "moe_down_proj_plan.h"
 #include "moe_down_proj_store.h"
 #include "moe_down_proj_w_prefetch.h"
+#include "moe_split_recv.h"
 
 void kernel_main() {
     constexpr uint32_t cb_x_round = get_compile_time_arg_val(0);
@@ -110,7 +112,6 @@ void kernel_main() {
 
     Noc noc;
     auto xa_sender = xa_mcast.optional_sender(noc);
-    auto xa_receiver = xa_mcast.optional_receiver(noc);
     auto xb_sender = xb_mcast.optional_sender(noc);
     auto xb_receiver = xb_mcast.optional_receiver(noc);
     // Rect cores own an xa seat (and send xb in the L layout); L strip cores only receive xb.
@@ -210,8 +211,12 @@ void kernel_main() {
         w_prefetch.start(0, num_steps, w_owns);
     }
 
-    // L layout: the xb fixed sender forwards the last received step (pending) before acking the next one.
+    // L layout: the xb fixed sender forwards the last received step (pending) between the next step's ack and wait.
     const bool forwarder = xb_mcast.can_send();
+    // xa receivers ack step s, do their other NoC work for the step (forward step s - 1, staged x reads), then wait.
+    moe_split_recv::
+        ReceiverFor<get_named_compile_time_arg_val("xa_ct_offset"), get_named_compile_time_arg_val("xa_rt_offset")>
+            xa_split(noc);
     uint32_t pending_slot = 0;
     uint32_t pending_bytes = 0;
     auto forward_pending = [&]() {
@@ -240,36 +245,51 @@ void kernel_main() {
         }
         const uint32_t group_rows = plan.group_rows(step / x_steps_per_wave, group);
         const bool owned = on_xa && xa_mcast.should_send(step);
-        issue_prefetch(owned ? pf_total : issue_quota);
+        // The remainder of the next owned step's reads goes out one step early, between this step's ack and wait.
+        const bool next_owned = on_xa && step + 1 < num_steps && xa_mcast.should_send(step + 1);
+        const uint32_t pf_quota = next_owned ? pf_total : issue_quota;
+        if (owned) {
+            issue_prefetch(pf_total);
+        }
         {
             MaybeDeviceZoneScope("x_reserve");
             cb_reserve_back(cb_x_round, x_step_tiles);
         }
-        if (forwarder) {
-            MaybeDeviceZoneScope("x_forward");
-            forward_pending();
-        }
-        if (group_rows > 0) {
-            const uint32_t slot = get_write_ptr(cb_x_round);
-            // Every round but the last spans its nominal slot; the last ends at the group's rows.
-            const uint32_t bytes = ((x_step_rounds - 1) * x_round_tiles + group_rows * k_block_tiles) * tile_bytes;
-            if (owned) {
-                MaybeDeviceZoneScope("x_send");
-                {
-                    MaybeDeviceZoneScope("x_send_barrier");
-                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
-                }
-                xa_sender->send(stage_l1, slot, bytes);
-            } else if (on_xa) {
-                {
-                    MaybeDeviceZoneScope("x_receive");
-                    xa_receiver->receive(step);
-                }
-                if (forwarder) {
-                    pending_slot = slot;
-                    pending_bytes = bytes;
-                }
-            } else {
+        const uint32_t slot = get_write_ptr(cb_x_round);
+        // Every round but the last spans its nominal slot; the last ends at the group's rows.
+        const uint32_t bytes = ((x_step_rounds - 1) * x_round_tiles + group_rows * k_block_tiles) * tile_bytes;
+        if (group_rows > 0 && owned) {
+            MaybeDeviceZoneScope("x_send");
+            {
+                MaybeDeviceZoneScope("x_send_barrier");
+                dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
+            }
+            xa_sender->send(stage_l1, slot, bytes);
+        } else if (group_rows > 0 && on_xa) {
+            // Ack step s, then do this core's other NoC work (forward step s - 1, prefetch issue) while it lands.
+            MaybeDeviceZoneScope("x_receive");
+            xa_split.ack(step);
+            if (forwarder) {
+                MaybeDeviceZoneScope("x_forward");
+                forward_pending();
+            }
+            if (!owned) {
+                issue_prefetch(pf_quota);
+            }
+            xa_split.wait();
+            if (forwarder) {
+                pending_slot = slot;
+                pending_bytes = bytes;
+            }
+        } else {
+            if (forwarder) {
+                MaybeDeviceZoneScope("x_forward");
+                forward_pending();
+            }
+            if (!owned) {
+                issue_prefetch(pf_quota);
+            }
+            if (group_rows > 0) {
                 MaybeDeviceZoneScope("x_receive");
                 xb_receiver->receive(step);
             }
