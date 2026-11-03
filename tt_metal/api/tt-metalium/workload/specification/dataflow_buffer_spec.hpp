@@ -49,8 +49,9 @@
 //   in that node's local SRAM. That instance serves the same-node
 //   producer and consumer kernel instances.
 //
-// PLACEMENT: The DFB's effective node set is advanced_options.override_placement when set,
-//   or the union of its bound kernels' WorkUnitSpec target_nodes otherwise.
+// PLACEMENT: Derived — the DFB's effective node set is the union of its bound
+//   kernels' WorkUnitSpec target_nodes. Note that the default placement can be override,
+//   see advanced_options.hpp for more infomation.
 //
 // HW RESOURCES: 1st-gen architectures (1xx; Wormhole and Blackhole) support a fixed
 //   number of DFBs per node. On 2nd-gen (2xx), the DFB-per-node-limit depends on the
