@@ -81,6 +81,21 @@ inline uint32_t worker_index() { return get_absolute_logical_y() * 10 + get_abso
 inline uint32_t table_entry(uint32_t meta, uint32_t index) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta + TABLE_OFF)[index];
 }
+// The shared expert (5 x 32 columns per rank, BF16 weights) runs as SH extra items;
+// its per-row weight is sigmoid(shared gate logit), column 0 of each gate row.
+#ifndef SHARED_ITEMS
+#define SHARED_ITEMS 5
+#endif
+// SH items run; the weight layout always holds 5 gate then 5 up column tiles per K row.
+constexpr uint32_t SH = SHARED_ITEMS, SHARED_COLS = 5, GATE_OFF = TABLE_OFF + 1536;
+template <typename G>
+void shared_gate(const Noc& noc, const G& gate, uint32_t meta, uint16_t* weight) {
+    for (uint32_t t = 0; t < ROWS; ++t) {
+        noc.async_read(gate, CoreLocalMem<uint32_t>(meta + GATE_OFF + t * 64), 64, {.page_id=t}, {});
+    }
+    noc.async_read_barrier();
+    for (uint32_t t = 0; t < ROWS; ++t) weight[t] = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(meta + GATE_OFF + t * 64)[0];
+}
 """
 
 # ---------------------------------------------------------------- phase 1
@@ -93,26 +108,34 @@ void kernel_main() {
     constexpr auto sa = TensorAccessorArgs<ia.next_compile_time_args_offset()>();
     constexpr auto ra = TensorAccessorArgs<sa.next_compile_time_args_offset()>();
     constexpr auto ta = TensorAccessorArgs<ra.next_compile_time_args_offset()>();
-    constexpr auto wa = TensorAccessorArgs<ta.next_compile_time_args_offset()>();
+    constexpr auto ga = TensorAccessorArgs<ta.next_compile_time_args_offset()>();
+    constexpr auto wa = TensorAccessorArgs<ga.next_compile_time_args_offset()>();
+    constexpr auto qa = TensorAccessorArgs<wa.next_compile_time_args_offset()>();
     const auto x = TensorAccessor(xa, get_common_arg_val<uint32_t>(0));
     const auto ids = TensorAccessor(ia, get_common_arg_val<uint32_t>(1));
     const auto scores = TensorAccessor(sa, get_common_arg_val<uint32_t>(2));
     const auto rank_tensor = TensorAccessor(ra, get_common_arg_val<uint32_t>(3));
     const auto table = TensorAccessor(ta, get_common_arg_val<uint32_t>(4));
+    const auto gate_logit = TensorAccessor(ga, get_common_arg_val<uint32_t>(5));
+    const auto shared_gu = TensorAccessor(qa, get_common_arg_val<uint32_t>(6));
     const uint32_t worker = worker_index();
     Noc noc;
-    CircularBuffer cx(0), cw(1), cs(2), cc(3), cm(6);
+    CircularBuffer cx(0), cw(1), cs(2), cc(3), cm(6), cq(8);
     cm.reserve_back(1);
     const uint32_t meta = cm.get_write_ptr();
     uint32_t expert[MAXE];
     uint16_t score[MAXE][ROWS];
     const uint32_t count = local_slots(noc, ids, scores, rank_tensor, table, meta, expert, score);
-    uint32_t items = 0;
-    for (uint32_t i = worker; i < count * NT; i += W) ++items;
+    uint16_t shared_weight[ROWS];
+    if constexpr (SH > 0) shared_gate(noc, gate_logit, meta, shared_weight);
+    uint32_t items[2] = {0, 0};  // routed items, then shared-expert items
+    for (uint32_t i = worker; i < count * NT + SH; i += W) ++items[i >= count * NT];
     cc.reserve_back(1);
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cc.get_write_ptr()) = items;
+    auto ctrl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cc.get_write_ptr());
+    ctrl[0] = items[0];
+    ctrl[1] = items[1];
     cc.push_back(1);
-    if (!items) return;
+    if (!items[0] && !items[1]) return;
     // Token rows of every activation tile (faces 0 and 1); padding rows are never consumed.
     cx.reserve_back(KT);
     const uint32_t xb = cx.get_write_ptr();
@@ -122,14 +145,27 @@ void kernel_main() {
     }
     noc.async_read_barrier();
     cx.push_back(KT);
-    for (uint32_t i = worker; i < count * NT; i += W) {
-        const uint32_t slot = i / NT, column = i % NT;
+    for (uint32_t i = worker; i < count * NT + SH; i += W) {
+        const bool shared = i >= count * NT;
+        const uint32_t slot = i / NT, column = shared ? i - count * NT : i % NT;
         cs.reserve_back(1);
         auto st = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cs.get_write_ptr());
         for (uint32_t r = 0; r < ROWS; ++r) {
-            for (uint32_t c = 0; c < 16; ++c) { st[r * 16 + c] = score[slot][r]; st[256 + r * 16 + c] = score[slot][r]; }
+            const uint16_t v = shared ? shared_weight[r] : score[slot][r];
+            for (uint32_t c = 0; c < 16; ++c) { st[r * 16 + c] = v; st[256 + r * 16 + c] = v; }
         }
         cs.push_back(1);
+        if (shared) {
+            // Shared gate/up: BF16 [2560, 320] per rank, gate columns 0..4, up 5..9.
+            cq.reserve_back(KT);
+            const uint32_t qb = cq.get_write_ptr();
+            for (uint32_t k = 0; k < KT; ++k) {
+                noc.async_read(shared_gu, CoreLocalMem<uint32_t>(qb + k * 2048), 2048, {.page_id=k * 2 * SHARED_COLS + column}, {});
+            }
+            noc.async_read_barrier();
+            cq.push_back(KT);
+            continue;
+        }
         // Gate pages on this RISC, up pages on the writer RISC: two independent
         // request streams; one barrier per item.
         const auto gate = TensorAccessor(wa, table_entry(meta, expert[slot]));
@@ -161,9 +197,11 @@ void kernel_main() {
     const auto table = TensorAccessor(ta, get_common_arg_val<uint32_t>(3));
     const auto hidden = TensorAccessor(ha, get_common_arg_val<uint32_t>(4));
     constexpr auto wa = TensorAccessorArgs<ha.next_compile_time_args_offset()>();
+    constexpr auto qa = TensorAccessorArgs<wa.next_compile_time_args_offset()>();
+    const auto shared_gu = TensorAccessor(qa, get_common_arg_val<uint32_t>(5));
     const uint32_t worker = worker_index();
     Noc noc;
-    CircularBuffer cu(5), co(4), cm(7);
+    CircularBuffer cu(5), co(4), cm(7), cr(9);
     cm.reserve_back(1);
     const uint32_t meta = cm.get_write_ptr();
     uint32_t expert[MAXE];
@@ -171,25 +209,36 @@ void kernel_main() {
     const uint32_t count = local_slots(noc, ids, scores, rank_tensor, table, meta, expert, score);
     constexpr uint32_t NONE = 0xFFFFFFFF;
     uint32_t pending = NONE;  // previous item's output page, written after the next item's up reads
-    for (uint32_t i = worker; i < count * NT; i += W) {
-        const uint32_t slot = i / NT, column = i % NT;
-        const auto up = TensorAccessor(wa, table_entry(meta, 128 + expert[slot]));
-        cu.reserve_back(KT);
-        const uint32_t ub = cu.get_write_ptr();
+    for (uint32_t i = worker; i < count * NT + SH; i += W) {
+        const bool shared = i >= count * NT;
+        const uint32_t slot = i / NT, column = shared ? i - count * NT : i % NT;
+        if (shared) {
+            cr.reserve_back(KT);
+            const uint32_t rb = cr.get_write_ptr();
+            for (uint32_t k = 0; k < KT; ++k) {
+                noc.async_read(shared_gu, CoreLocalMem<uint32_t>(rb + k * 2048), 2048, {.page_id=k * 2 * SHARED_COLS + SHARED_COLS + column}, {});
+            }
+            noc.async_read_barrier();
+            cr.push_back(KT);
+        } else {
+            const auto up = TensorAccessor(wa, table_entry(meta, 128 + expert[slot]));
+            cu.reserve_back(KT);
+            const uint32_t ub = cu.get_write_ptr();
 #ifndef EXP_NOREAD
-        for (uint32_t k = 0; k < KT; ++k) {
-            noc.async_read(up, CoreLocalMem<uint32_t>(ub + k * 576), 576, {.page_id=k * NT + column}, {});
-        }
+            for (uint32_t k = 0; k < KT; ++k) {
+                noc.async_read(up, CoreLocalMem<uint32_t>(ub + k * 576), 576, {.page_id=k * NT + column}, {});
+            }
 #endif
-        noc.async_read_barrier();
-        cu.push_back(KT);
+            noc.async_read_barrier();
+            cu.push_back(KT);
+        }
         if (pending != NONE) {
             co.wait_front(1);
             noc.async_write(co, hidden, 2048, {}, {.page_id=pending});
             noc.async_write_barrier();
             co.pop_front(1);
         }
-        pending = i;
+        pending = shared ? MAXE * NT + column : i;
     }
     if (pending != NONE) {
         co.wait_front(1);
@@ -212,30 +261,35 @@ _COMPUTE_HEADER = r"""
 
 // The trip count is device data: UNPACK reads the reader's control page and
 // forwards it so MATH and PACK run the identical loop.
-inline uint32_t trip_count(uint32_t cb) {
-    uint32_t n = 0;
+template <uint32_t N>
+inline void trip_counts(uint32_t cb, uint32_t* n) {
     UNPACK(({
         cb_wait_front(cb, 1);
-        n = *reinterpret_cast<volatile uint32_t*>(get_local_cb_interface(cb).fifo_rd_ptr << 4);
-        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, n);
-        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, n);
+        auto ctrl = reinterpret_cast<volatile uint32_t*>(get_local_cb_interface(cb).fifo_rd_ptr << 4);
+        for (uint32_t i = 0; i < N; ++i) {
+            n[i] = ctrl[i];
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, n[i]);
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, n[i]);
+        }
         cb_pop_front(cb, 1);
     }));
-    MATH(({ n = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId); }));
-    PACK(({ n = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId); }));
-    return n;
+    MATH(({ for (uint32_t i = 0; i < N; ++i) n[i] = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId); }));
+    PACK(({ for (uint32_t i = 0; i < N; ++i) n[i] = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId); }));
 }
 """
 
 _GU_COMPUTE = _COMPUTE_HEADER + r"""
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
-    constexpr uint32_t cx = 0, cw = 1, cs = 2, cc = 3, co = 4, cu = 5;
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cx, cw, co);
-    const uint32_t items = trip_count(cc);
-    if (!items) return;
+    constexpr uint32_t cx = 0, cs = 2, cc = 3, co = 4;
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cx, 1, co);
+    uint32_t items[2];
+    trip_counts<2>(cc, items);
+    if (!items[0] && !items[1]) return;
     cb_wait_front(cx, KT);
-    for (uint32_t item = 0; item < items; ++item) {
+    for (uint32_t item = 0; item < items[0] + items[1]; ++item) {
+        // Routed items use the BF4 gate/up CBs 1/5, shared items the BF16 CBs 8/9.
+        const uint32_t cw = item < items[0] ? 1 : 8, cu = item < items[0] ? 5 : 9;
         reconfig_data_format_srca(cw);
         matmul_init(cx, cw);
         tile_regs_acquire();
@@ -279,14 +333,16 @@ void kernel_main() {
     constexpr auto ra = TensorAccessorArgs<sa.next_compile_time_args_offset()>();
     constexpr auto ta = TensorAccessorArgs<ra.next_compile_time_args_offset()>();
     constexpr auto wa = TensorAccessorArgs<ta.next_compile_time_args_offset()>();
+    constexpr auto qa = TensorAccessorArgs<wa.next_compile_time_args_offset()>();
     const auto hidden = TensorAccessor(ha, get_common_arg_val<uint32_t>(0));
+    const auto shared_down = TensorAccessor(qa, get_common_arg_val<uint32_t>(5));
     const auto ids = TensorAccessor(ia, get_common_arg_val<uint32_t>(1));
     const auto scores = TensorAccessor(sa, get_common_arg_val<uint32_t>(2));
     const auto rank_tensor = TensorAccessor(ra, get_common_arg_val<uint32_t>(3));
     const auto table = TensorAccessor(ta, get_common_arg_val<uint32_t>(4));
     const uint32_t column = worker_index();
     Noc noc;
-    CircularBuffer ch(0), cw(1), cc(3), cm(6);
+    CircularBuffer ch(0), cw(1), cc(3), cm(6), cq(8), cz(9);
     cm.reserve_back(1);
     const uint32_t meta = cm.get_write_ptr();
     uint32_t expert[MAXE];
@@ -295,11 +351,18 @@ void kernel_main() {
     cc.reserve_back(1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cc.get_write_ptr()) = count;
     cc.push_back(1);
-    if (!count) return;
+    // Shared-expert down weights (BF16 [160, 2560] per rank) and its zero-padded rows.
+    if constexpr (SH > 0) {
+        cq.reserve_back(SH);
+        const uint32_t qb = cq.get_write_ptr();
+        for (uint32_t k = 0; k < SH; ++k) {
+            noc.async_read(shared_down, CoreLocalMem<uint32_t>(qb + k * 2048), 2048, {.page_id=k * NT + column}, {});
+        }
+    }
     // This RISC streams K tiles [0, KT/2) of every slot's down weights, the writer
     // RISC the rest (into its own CB); all DRAM reads are issued up front.
     constexpr uint32_t HALF = KT / 2;
-    cw.reserve_back(count * HALF);
+    if (count) cw.reserve_back(count * HALF);
     const uint32_t wb = cw.get_write_ptr();
     for (uint32_t slot = 0; slot < count; ++slot) {
         const auto down = TensorAccessor(wa, table_entry(meta, 256 + expert[slot]));
@@ -312,6 +375,7 @@ void kernel_main() {
     // The hidden CB holds exactly 2*KT pages (double buffered), so reservations
     // alternate between two fixed L1 regions: zero both once; only row 0 is rewritten.
     noc.async_write_zeros(ch, 2 * KT * 2048);
+    if constexpr (SH > 0) noc.async_write_zeros(cz, SH * 2048);
     noc.write_zeros_l1_barrier();
     for (uint32_t slot = 0; slot < count; ++slot) {
         ch.reserve_back(KT);
@@ -324,6 +388,18 @@ void kernel_main() {
         noc.async_read_barrier();
         if (slot == 0) cw.push_back(count * HALF);
         ch.push_back(KT);
+    }
+    if constexpr (SH > 0) {
+        cz.reserve_back(SH);
+        const uint32_t zb = cz.get_write_ptr();
+        for (uint32_t k = 0; k < SH; ++k) {
+            const uint32_t page = MAXE * KT + k;
+            noc.async_read(hidden, CoreLocalMem<uint32_t>(zb + k * 2048), 32 * ROWS, {.page_id=page, .offset_bytes=0}, {});
+            noc.async_read(hidden, CoreLocalMem<uint32_t>(zb + k * 2048 + 512), 32 * ROWS, {.page_id=page, .offset_bytes=512}, {});
+        }
+        noc.async_read_barrier();
+        cq.push_back(SH);
+        cz.push_back(SH);
     }
 }
 """
@@ -375,9 +451,10 @@ void kernel_main() {
 _DOWN_COMPUTE = _COMPUTE_HEADER + r"""
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
-    constexpr uint32_t ch = 0, cw = 1, cc = 3, co = 4, cv = 5;
+    constexpr uint32_t ch = 0, cw = 1, cc = 3, co = 4, cv = 5, cq = 8, cz = 9, SH = SHARED_ITEMS;
     compute_kernel_hw_startup<SrcOrder::Reverse>(ch, cw, co);
-    const uint32_t slots = trip_count(cc);
+    uint32_t slots;
+    trip_counts<1>(cc, &slots);
     matmul_init(ch, cw);
     tile_regs_acquire();
     for (uint32_t slot = 0; slot < slots; ++slot) {
@@ -392,6 +469,16 @@ void kernel_main() {
         cb_pop_front(cw, KT / 2);
         cb_pop_front(cv, KT - KT / 2);
     }
+    if constexpr (SH > 0) {
+        // Shared expert: BF16 weights, accumulated into the same DST tile.
+        reconfig_data_format_srca(cq);
+        matmul_init(cz, cq);
+        cb_wait_front(cz, SH);
+        cb_wait_front(cq, SH);
+        for (uint32_t k = 0; k < SH; ++k) matmul_tiles(cz, cq, k, k, 0);
+        cb_pop_front(cz, SH);
+        cb_pop_front(cq, SH);
+    }
     tile_regs_commit();
     cb_reserve_back(co, 1);
     tile_regs_wait();
@@ -405,8 +492,8 @@ void kernel_main() {
 _EXP = "".join(f"#define EXP_{flag.upper()}\n" for flag in os.environ.get("MOE_EXP", "").split(",") if flag)
 
 
-def _prelude(rows):
-    return _EXP + f"#define ROWS {rows}\n"
+def _prelude(rows, shared):
+    return _EXP + f"#define ROWS {rows}\n#define SHARED_ITEMS {5 if shared else 0}\n"
 
 
 def _cb(index, pages, page_size, data_format, cores):
@@ -427,7 +514,7 @@ def _accessor_args(tensors):
 class SingleTokenExperts:
     """Replaces dispatch + prefill expert op + compact + weighting for one token."""
 
-    def __init__(self, moe, *, gate_up_workers=100, fidelity=ttnn.MathFidelity.LoFi):
+    def __init__(self, moe, *, gate_up_workers=100, fidelity=ttnn.MathFidelity.HiFi2):
         self.moe, self.mesh = moe, moe.ops.mesh
         self.max_rows = MAX_ROWS
         grid = self.mesh.compute_with_storage_grid_size()
@@ -447,21 +534,24 @@ class SingleTokenExperts:
             math_fidelity=fidelity, fp32_dest_acc_en=True, math_approx_mode=False
         )
 
-    def __call__(self, x, ids, scores):
+    def __call__(self, x, ids, scores, gate=None):
         """x [1,1,B,2560] BF16 TILE, ids [1,1,B,32] UINT32 RM, scores [1,1,B,32] BF16 RM, B <= MAX_ROWS.
 
-        Returns this rank's routed partial sums [1,1,B,2560] BF16 TILE.
+        gate [1,1,B,32] BF16 RM (column 0 = sigmoid shared-gate logit) also folds in the
+        rank's shared-expert slice. Returns this rank's partial sums [1,1,B,2560] BF16 TILE.
         """
         moe = self.moe
         rows = x.shape[-2]
         if tuple(x.shape) != (1, 1, rows, 2560) or not 1 <= rows <= MAX_ROWS:
             raise ValueError("Few-token experts take [1,1,B<=4,2560] activations")
-        prelude = _prelude(rows)
+        shared = gate is not None
+        prelude = _prelude(rows, shared)
+        gate = gate if shared else scores  # never read without shared items
         # Every core reads the token rows of every x/hidden tile: keep both L1-interleaved
         # so those small reads spread over many cores instead of a few DRAM pages.
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         hidden = ttnn.empty(
-            (1, 10 * rows, 32, 640),
+            (1, 10 * rows + 1, 32, 640),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh,
@@ -481,16 +571,16 @@ class SingleTokenExperts:
             kernel_source=prelude + _GU_READER,
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
             core_ranges=cores,
-            compile_time_args=[workers, 80, 20, 0] + _accessor_args([x, *meta, moe.gates[0]]),
-            common_runtime_args=[t.buffer_address() for t in (x, *meta)],
+            compile_time_args=[workers, 80, 20, 0] + _accessor_args([x, *meta, gate, moe.gates[0], moe.shared_gu]),
+            common_runtime_args=[t.buffer_address() for t in (x, *meta, gate, moe.shared_gu)],
             config=ttnn.ReaderConfigDescriptor(),
         )
         writer = ttnn.KernelDescriptor(
             kernel_source=prelude + _GU_WRITER,
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
             core_ranges=cores,
-            compile_time_args=[workers, 80, 20, 0] + _accessor_args([*meta, hidden, moe.ups[0]]),
-            common_runtime_args=[t.buffer_address() for t in (*meta, hidden)],
+            compile_time_args=[workers, 80, 20, 0] + _accessor_args([*meta, hidden, moe.ups[0], moe.shared_gu]),
+            common_runtime_args=[t.buffer_address() for t in (*meta, hidden, moe.shared_gu)],
             config=ttnn.WriterConfigDescriptor(),
         )
         compute = ttnn.KernelDescriptor(
@@ -509,16 +599,18 @@ class SingleTokenExperts:
             _cb(4, 2, _TILE_BF16, ttnn.bfloat16, cores),
             _cb(6, 1, _META, ttnn.uint32, cores),
             _cb(7, 1, _META, ttnn.uint32, cores),
+            _cb(8, 80, _TILE_BF16, ttnn.bfloat16, cores),
+            _cb(9, 80, _TILE_BF16, ttnn.bfloat16, cores),
         ]
-        ttnn.generic_op([x, *meta, hidden], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs))
+        ttnn.generic_op([x, *meta, gate, hidden], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs))
         # Phase 2: down projection, one output column tile per core.
         cores = self.down_cores
         reader = ttnn.KernelDescriptor(
             kernel_source=prelude + _DOWN_READER,
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
             core_ranges=cores,
-            compile_time_args=[20, 80] + _accessor_args([hidden, *meta, moe.downs[0]]),
-            common_runtime_args=[t.buffer_address() for t in (hidden, *meta)],
+            compile_time_args=[20, 80] + _accessor_args([hidden, *meta, moe.downs[0], moe.shared_down]),
+            common_runtime_args=[t.buffer_address() for t in (hidden, *meta, moe.shared_down)],
             config=ttnn.ReaderConfigDescriptor(),
         )
         writer = ttnn.KernelDescriptor(
@@ -544,6 +636,8 @@ class SingleTokenExperts:
             _cb(4, 1, _TILE_BF16, ttnn.bfloat16, cores),
             _cb(6, 1, _META, ttnn.uint32, cores),
             _cb(7, 1, _META, ttnn.uint32, cores),
+            _cb(8, 5, _TILE_BF16, ttnn.bfloat16, cores),
+            _cb(9, 5, _TILE_BF16, ttnn.bfloat16, cores),
         ]
         ttnn.generic_op([hidden, *meta, output], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs))
         return output
@@ -562,6 +656,10 @@ def group_single(moe, x):
     mask = getattr(moe, "row_mask", None)
     # A zero score drops the expert for that row, so masked rows read no weights.
     scores = ttnn.to_layout(selected if mask is None else ttnn.multiply(selected, mask), ttnn.ROW_MAJOR_LAYOUT)
+    if os.environ.get("QWEN_FLASH_DECODE_MOE_SHARED", "1") != "0":
+        # Shared expert as five extra BF16 items of the same programs, gated per row.
+        gate = ttnn.to_layout(ttnn.sigmoid(router[..., 512:544]), ttnn.ROW_MAJOR_LAYOUT)
+        return moe.single_token(x, ids, scores, gate)
     result = moe.single_token(x, ids, scores)
     shared = moe.ops.linear(x, moe.shared_gu, compute_kernel_config=moe.shared_compute)
     shared = moe.ops.linear(

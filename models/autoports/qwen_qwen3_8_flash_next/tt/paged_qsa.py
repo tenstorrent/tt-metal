@@ -86,13 +86,38 @@ def transfer(attention, source, output, positions, page_table, *, seq, lane=None
             offset += count
         runtime.append(((core.x, core.y), [*[t.buffer_address() for t in tensors], begin, count, stride]))
     scratch = 2048 + 128 + 128 + attention.max_context // 32 * 4
+    source = Path(__file__).with_name("kernels") / "qsa_pooled_paged.cpp"
+    if gather and seq == 1 and os.environ.get("QWEN_FLASH_QSA_RECT_GATHER", "1") == "1":
+        # Decode lane gather: one grid rectangle sharing one argument list (the
+        # kernel derives its cyclic slice), so dispatch multicasts instead of
+        # writing per-core ranges/arguments. Same jobs per worker: bit-identical.
+        rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        workers = grid.x * grid.y
+        attention._pooled_gather_partition = dict(kind="cyclic", work=work, workers=workers)
+        defines = f"#define COMMON_ARGS 1\n#define GRID_X {grid.x}\n#define WORKERS {workers}\n#define WORK {work}\n"
+        scratch += 32 * 64  # row staging for one tile
+        cb = ttnn.CBDescriptor(
+            total_size=scratch,
+            core_ranges=rect,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)],
+        )
+        kernel = ttnn.KernelDescriptor(
+            kernel_source=defines + source.read_text(),
+            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+            core_ranges=rect,
+            compile_time_args=args,
+            common_runtime_args=[t.buffer_address() for t in tensors],
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
+        return
     cb = ttnn.CBDescriptor(
         total_size=scratch,
         core_ranges=cores,
         format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)],
     )
     kernel = ttnn.KernelDescriptor(
-        kernel_source=str(Path(__file__).with_name("kernels") / "qsa_pooled_paged.cpp"),
+        kernel_source=str(source),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cores,
         compile_time_args=args,
