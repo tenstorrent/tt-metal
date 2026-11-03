@@ -1294,3 +1294,69 @@ TEST_F(TestScopedGraphCapture, ReportMetadataContainsCaptureTimeGitIdentity) {
     EXPECT_NE(metadata.at(ttnn::graph::kReportBuildType).get<std::string>(), "Unknown");
     EXPECT_TRUE(metadata.at(ttnn::graph::kReportGitDirty).is_boolean());
 }
+
+namespace {
+
+// A capture whose end_capture() throws, as finalizing a capture can.
+class ThrowingGraphProcessor : public ttnn::graph::GraphProcessor {
+public:
+    using ttnn::graph::GraphProcessor::GraphProcessor;
+    nlohmann::json end_capture() override { throw std::runtime_error("end_capture failed"); }
+};
+
+// Not a capture, like the memory tracker that the first device open in a process leaves on the stack.
+class NonCaptureProcessor : public tt::tt_metal::IGraphProcessor {
+public:
+    bool is_capture_processor() const override { return false; }
+};
+
+std::filesystem::path graph_capture_end_test_report_path() {
+    return std::filesystem::temp_directory_path() / "graph_capture_end_test_report.json";
+}
+
+}  // namespace
+
+TEST(GraphCaptureEnd, EndingWithNoActiveCaptureThrowsAndPopsNothing) {
+    auto& tracker = tt::tt_metal::GraphTracker::instance();
+    ASSERT_FALSE(tracker.is_enabled());
+    auto bystander = std::make_shared<NonCaptureProcessor>();
+    tracker.push_processor(bystander);
+    const auto depth = tracker.get_processors().size();
+
+    EXPECT_THROW(ttnn::graph::GraphProcessor::end_graph_capture(), std::exception);
+    EXPECT_THROW(
+        ttnn::graph::GraphProcessor::end_graph_capture_to_file(graph_capture_end_test_report_path()), std::exception);
+
+    EXPECT_EQ(tracker.get_processors().size(), depth);
+    EXPECT_EQ(tracker.get_processors().back(), bystander);
+    tracker.pop_processor();
+}
+
+TEST(GraphCaptureEnd, CaptureEndsWhenFinalizingItThrows) {
+    auto& tracker = tt::tt_metal::GraphTracker::instance();
+    const auto depth = tracker.get_processors().size();
+    tracker.push_processor(std::make_shared<ThrowingGraphProcessor>(tt::tt_metal::IGraphProcessor::RunMode::NORMAL));
+
+    EXPECT_THROW(ttnn::graph::GraphProcessor::end_graph_capture(), std::runtime_error);
+
+    EXPECT_EQ(tracker.get_processors().size(), depth);
+    EXPECT_FALSE(tracker.is_enabled());
+}
+
+TEST(GraphCaptureEnd, CaptureUnderAnotherProcessorIsNotEndedAndNothingIsPopped) {
+    auto& tracker = tt::tt_metal::GraphTracker::instance();
+    const auto report_path = graph_capture_end_test_report_path();
+    std::filesystem::remove(report_path);
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
+    auto above = std::make_shared<NonCaptureProcessor>();
+    tracker.push_processor(above);
+
+    EXPECT_THROW(ttnn::graph::GraphProcessor::end_graph_capture_to_file(report_path), std::exception);
+
+    EXPECT_EQ(tracker.get_processors().back(), above);
+    EXPECT_TRUE(tracker.is_enabled());
+    EXPECT_FALSE(std::filesystem::exists(report_path));
+    tracker.pop_processor();
+    ttnn::graph::GraphProcessor::end_graph_capture();
+    EXPECT_FALSE(tracker.is_enabled());
+}
