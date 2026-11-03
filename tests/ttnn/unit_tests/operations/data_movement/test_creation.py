@@ -215,6 +215,110 @@ def test_full_like_bf8b(device, input_shape, fill_value):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1048576}], indirect=True)
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("fill_value", [0.0, -2.5])
+@pytest.mark.parametrize("preallocated", [False, True])
+def test_full_like_bf4b_trace(device, memory_config, fill_value, preallocated):
+    """BFP4 creation must fill on device, including sparse-matmul's optional-output path."""
+    source = ttnn.from_torch(
+        torch.ones((1, 2, 32, 64)),
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.empty_like(source) if preallocated else None
+
+    def run():
+        return ttnn.full_like(source, fill_value, optional_tensor=output)
+
+    warm_output = run()
+    ttnn.fill(warm_output, 7.0, output_tensor=warm_output)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        traced_output = run()
+    finally:
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        for _ in range(3):
+            # Poison the destination so the assertion proves replay performed the fill.
+            ttnn.fill(traced_output, 7.0, output_tensor=traced_output)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            assert traced_output.dtype == ttnn.bfloat4_b
+            assert torch.all(ttnn.to_torch(traced_output) == fill_value)
+    finally:
+        ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
+def test_full_like_destination_device(mesh_device, dtype):
+    source_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 0))
+    destination = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 1))
+    source = ttnn.from_torch(torch.ones((1, 1, 32, 32)), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=source_device)
+    output = ttnn.full_like(source, -2.5, device=destination)
+    assert output.device() == destination
+    assert output.dtype == dtype
+    assert torch.all(ttnn.to_torch(output) == -2.5)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("explicit_source_device", [False, True])
+def test_full_like_optional_destination(mesh_device, dtype, explicit_source_device):
+    source_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 0))
+    destination = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 1))
+    source = ttnn.from_torch(torch.ones((1, 1, 32, 32)), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=source_device)
+    target = ttnn.from_torch(torch.ones((1, 1, 32, 32)), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=destination)
+    kwargs = {"device": source_device} if explicit_source_device else {}
+    output = ttnn.full_like(source, -2.5, optional_tensor=target, **kwargs)
+    assert output.device() == destination
+    assert output.buffer_address() == target.buffer_address()
+    assert torch.all(ttnn.to_torch(output) == -2.5)
+    assert torch.all(ttnn.to_torch(source) == 1)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1048576}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_full_like_optional_destination_precedence_trace(mesh_device):
+    source_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 0))
+    other_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 1))
+    source = ttnn.from_torch(
+        torch.ones((1, 1, 32, 32)), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=source_device
+    )
+    target = ttnn.empty_like(source)
+
+    def run():
+        return ttnn.full_like(source, -2.5, device=other_device, optional_tensor=target)
+
+    run()
+    ttnn.fill(target, 7.0, output_tensor=target)
+    trace_id = ttnn.begin_trace_capture(source_device, cq_id=0)
+    try:
+        output = run()
+    finally:
+        ttnn.end_trace_capture(source_device, trace_id, cq_id=0)
+    try:
+        for _ in range(3):
+            ttnn.fill(target, 7.0, output_tensor=target)
+            ttnn.execute_trace(source_device, trace_id, cq_id=0, blocking=True)
+            assert output.device() == source_device
+            assert output.buffer_address() == target.buffer_address()
+            assert torch.all(ttnn.to_torch(output) == -2.5)
+    finally:
+        ttnn.release_trace(source_device, trace_id)
+
+
+def test_full_like_bf4b_optional_shape(device):
+    source = ttnn.from_torch(torch.ones((1, 1, 32, 32)), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    target = ttnn.from_torch(torch.ones((1, 1, 64, 32)), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.full_like(source, -2.5, optional_tensor=target)
+    assert list(output.shape) == [1, 1, 64, 32]
+    assert output.buffer_address() == target.buffer_address()
+    assert torch.all(ttnn.to_torch(output) == -2.5)
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [

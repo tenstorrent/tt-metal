@@ -238,13 +238,18 @@ Tensor full_like_impl(
         optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
     const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (ttnn::is_device_tensor(tensor)) {
+        MeshDevice* output_device =
+            optional_output_tensor.has_value() ? optional_output_tensor->device() : (device ? device : tensor.device());
         // Fast on-device fill via SFPU kernel: only valid when the output dtype matches the input
-        // tensor's dtype. If the caller requested a dtype override, fall through to the host-side
-        // full_impl so that dtype conversion is applied correctly.
+        // tensor's dtype, shape and effective destination device. A preallocated output takes
+        // precedence over explicit construction arguments, matching full_impl below.
         if (is_tile_layout &&
-            (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
-             dtype_value == DataType::FLOAT32) &&
-            tensor.storage_type() == StorageType::DEVICE && dtype_value == tensor.dtype()) {
+            (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B ||
+             dtype_value == DataType::BFLOAT16 || dtype_value == DataType::FLOAT32) &&
+            tensor.storage_type() == StorageType::DEVICE && dtype_value == tensor.dtype() &&
+            output_device == tensor.device() &&
+            (!optional_output_tensor.has_value() ||
+             optional_output_tensor->logical_shape() == tensor.logical_shape())) {
             return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
         }
         return full_impl(
