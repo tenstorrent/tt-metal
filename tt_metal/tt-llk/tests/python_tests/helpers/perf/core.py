@@ -1093,6 +1093,11 @@ class PerfConfig(TestConfig):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
+                if (
+                    TestConfig.BRISC_JUST_BOOTED
+                    and os.environ.get("LLK_RC_NO_RERUN") == "1"
+                ):
+                    TestConfig.BRISC_JUST_BOOTED = False  # RC experiment: skip the first-kernel rerun (Versim time)
                 if TestConfig.BRISC_JUST_BOOTED:
                     TestConfig.BRISC_JUST_BOOTED = False
                     self.write_runtimes_to_L1()
