@@ -99,7 +99,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     bool skip_in0_mcast,
     bool skip_write_back,
     bool row_broadcast_bias,
-    const tt::tt_metal::distributed::MeshCoordinate* coord) {
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     using namespace tt;
 
     ttsl::optional_reference<const tt::tt_metal::MeshTensor> bias;
@@ -1297,7 +1297,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
-    const tt::tt_metal::distributed::MeshCoordinate* coord) {
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     const auto arch = device.arch();
     // Blackhole: both data-movement RISCs read the weight. Wormhole: one NOC_0 stream (a second stream
     // over NOC_1 from the same core lowers the bank's bandwidth there).
@@ -1322,12 +1322,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         Kt * in1_tile.get_tile_shape()[0],
         in1_shard_spec.shape[0]);
     const uint32_t num_dram_banks =
-        device
-            .get_optimal_dram_bank_to_logical_worker_assignment(
-                tt::tt_metal::NOC::NOC_0,
-                coord != nullptr ? *coord
-                                 : tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()))
-            .size();
+        device.get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0, coord).size();
     TT_FATAL(
         in1_shard_spec.grid.num_cores() == num_dram_banks,
         "num_workers_per_dram_bank: the weight must be width-sharded over all {} DRAM banks, got {} shards",
@@ -1739,7 +1734,7 @@ ttnn::device_operation::ProgramArtifacts create_dram_sharded_artifacts(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
-    const tt::tt_metal::distributed::MeshCoordinate* coord) {
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
@@ -1959,7 +1954,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_art
     if (same_dram_bank_workers(device, tensor_coords)) {
         for (const auto& range : tensor_coords.ranges()) {
             const auto& coord = range.start_coord();
-            auto shared = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, &coord);
+            auto shared = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, coord);
             artifacts.programs.push_back({
                 .range = range,
                 .spec = std::move(shared.spec),
@@ -1969,7 +1964,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_art
         return artifacts;
     }
     for (const auto& coord : tensor_coords.coords()) {
-        auto per_coord = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, &coord);
+        auto per_coord = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, coord);
         artifacts.programs.push_back({
             .range = ttnn::MeshCoordinateRange(coord),
             .spec = std::move(per_coord.spec),
