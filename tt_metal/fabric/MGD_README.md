@@ -9,7 +9,7 @@ A Mesh Graph Descriptor is the input to the Fabric Control Plane to specify a pa
 ### Where to look
 - Schema: [`tt_metal/fabric/protobuf/mesh_graph_descriptor.proto`](protobuf/mesh_graph_descriptor.proto)
 - Example textproto: [`tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto`](../../tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto)
-- C++ API: [`tt_metal/api/tt-metalium/mesh_graph_descriptor.hpp`](../../tt_metal/api/tt-metalium/mesh_graph_descriptor.hpp)
+- C++ API: [`tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp`](../api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp)
 
 ## Usage
 
