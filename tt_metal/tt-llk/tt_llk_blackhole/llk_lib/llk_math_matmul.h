@@ -690,9 +690,10 @@ inline void matmul_configure_mop_throttled(
  * - in0 columns != in1 rows (the contraction dims must match);
  * - in1 shorter than a full 16-row face (MVMUL reads 16 SrcA rows per face);
  * - in1 16x16: no MOP path, it falls into the 32x32 one (32x16 x 16x16 gives wrong results on
- *   Wormhole; also covers the existing 16x16 x 16x16 assert);
+ *   Wormhole and on Blackhole; also covers the existing 16x16 x 16x16 assert);
  * - in0 with 16 columns and fewer than 16 rows (1/2/4/8x16): the recorded MOP does not match
- *   the replay length; on Wormhole the math thread hangs.
+ *   the replay length; the math thread hangs on Wormhole, and it gives wrong results on
+ *   Blackhole. Both checked on Blackhole ttsim with the assert off.
  *
  * @param in0_tensor_shape: Tile shape of in0 (loaded to SrcB).
  * @param in1_tensor_shape: Tile shape of in1 (loaded to SrcA).
@@ -754,6 +755,10 @@ inline void _llk_math_matmul_init_(
 
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
+    // in1=16x32 NOT supported with transpose either: under transpose K is in1 columns, so the pair
+    // passes matmul_supports_tensor_shapes (16 == 16), but a 16x32 in1 fills only SrcA rows 0-31
+    // while the full-path addr mods step SrcA by 32 -- the MVMULs read stale SrcA.
+    LLK_ASSERT(!(transpose && (in1_tile_r_dim == FACE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM)), "Transpose with input 1 dimensions 16x32 not supported");
 
     matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 

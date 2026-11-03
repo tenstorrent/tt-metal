@@ -71,8 +71,10 @@ inline void llk_unpack_AB_matmul_init_impl(
     const bool partial_face_b) {
     const auto shape_from_legacy =
         [](const std::uint32_t face_r_dim, const std::uint32_t num_faces, const bool partial_face) {
-            const std::uint8_t num_faces_r_dim = (num_faces == 4 || (num_faces == 2 && !partial_face)) ? 2 : 1;
-            const std::uint8_t num_faces_c_dim = (num_faces == 4 || (num_faces == 2 && partial_face)) ? 2 : 1;
+            const std::uint8_t num_faces_r_dim = (num_faces == ckernel::MAX_NUM_FACES || (num_faces == 2 && !partial_face))
+                ? ckernel::MAX_NUM_FACES_R_DIM : 1;
+            const std::uint8_t num_faces_c_dim = (num_faces == ckernel::MAX_NUM_FACES || (num_faces == 2 && partial_face))
+                ? ckernel::MAX_NUM_FACES_C_DIM : 1;
             return ckernel::make_tensor_shape(
                 static_cast<std::uint8_t>(face_r_dim),
                 static_cast<std::uint8_t>(FACE_C_DIM),
@@ -103,7 +105,8 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
-    constexpr ckernel::TensorShape partial_shape = ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, 1, 2);  // 16x32
+    constexpr ckernel::TensorShape partial_shape =
+        ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, 1, ckernel::MAX_NUM_FACES_C_DIM);  // 16x32
     llk_unpack_AB_matmul_impl(
         base_address_a,
         base_address_b,

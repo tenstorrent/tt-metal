@@ -859,6 +859,11 @@ inline void _llk_math_matmul_init_(
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(
         !(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "in1=32x16 not supported with transpose (no addr_mod handling)");
+    // in1=16x32 NOT supported with transpose either: under transpose K is in1 columns, so the pair
+    // passes matmul_supports_tensor_shapes (16 == 16), but a 16x32 in1 fills only SrcA rows 0-31
+    // while the full-path addr mods step SrcA by 32 -- the MVMULs read stale SrcA.
+    LLK_ASSERT(
+        !(transpose && (in1_tile_r_dim == FACE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM)), "in1=16x32 not supported with transpose (stale SrcA)");
 
     matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     const bool reuse_a        = ct_dim >= rt_dim;

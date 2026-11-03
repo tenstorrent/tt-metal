@@ -44,8 +44,8 @@ inline void llk_math_matmul_init_impl(
         return ckernel::make_tensor_shape(
             static_cast<std::uint8_t>(tile_r_dim < FACE_R_DIM ? tile_r_dim : FACE_R_DIM),
             static_cast<std::uint8_t>(FACE_C_DIM),
-            static_cast<std::uint8_t>(tile_r_dim > FACE_R_DIM ? 2 : 1),
-            static_cast<std::uint8_t>(tile_c_dim > FACE_C_DIM ? 2 : 1));
+            static_cast<std::uint8_t>(tile_r_dim > FACE_R_DIM ? ckernel::MAX_NUM_FACES_R_DIM : 1),
+            static_cast<std::uint8_t>(tile_c_dim > FACE_C_DIM ? ckernel::MAX_NUM_FACES_C_DIM : 1));
     };
     const ckernel::TensorShape in0_tensor_shape = shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
     const ckernel::TensorShape in1_tensor_shape = shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
