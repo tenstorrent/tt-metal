@@ -1506,7 +1506,7 @@ def _local_recurrence(self, q, k, v, g, beta, *, flat_scalars=False, slots=None,
         math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False, dst_full_sync_en=False
     )
     config.unpack_to_dest_mode = [ttnn.UnpackToDestMode.UnpackToDestFp32] * 64
-    broadcast = self.recurrence_broadcast
+    broadcast = self.recurrence_broadcast or (length == 1 and os.environ.get("QWEN_FLASH_GDN_BCAST", "1") == "1")
     reader = (
         (_BROADCAST_GDN_READER if length == 1 else _BROADCAST_PREFILL_READER)
         if broadcast
@@ -1535,7 +1535,7 @@ def _local_recurrence(self, q, k, v, g, beta, *, flat_scalars=False, slots=None,
         ttnn.KernelDescriptor(
             kernel_source=(
                 (_BROADCAST_DECODE_COMPUTE_FUSED if broadcast else _LOCAL_DECODE_COMPUTE_FUSED)
-                if os.environ.get("QWEN_FLASH_GDN_FUSED_COMPUTE", "0") == "1"
+                if os.environ.get("QWEN_FLASH_GDN_FUSED_COMPUTE", "1") == "1"
                 else (_BROADCAST_DECODE_COMPUTE if broadcast else _LOCAL_DECODE_COMPUTE)
             ),
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
