@@ -8,8 +8,8 @@ read and four tile reads. Here a mode 0/2 job is one destination tile (read once
 patched, written once) and a mode 1 job is one source tile (read once; the up to 8 group tiles it holds
 are built once and written to every query of the group behind one barrier). Page addressing, row
 placement and bytes are unchanged. Toggle: QWEN_PREFILL_QSA_TRANSFER=0 restores the bounded kernel (default on).
-Also the prefill score slice + mask (prefill_slice_mask_scores): live columns below the top-k bound only.
-Toggle: QWEN_PREFILL_QSA_MASK=1 enables it (default OFF: the fused variant hung the device twice in text-mode runs, under investigation).
+Also the prefill score mask (prefill_mask_scores): -inf only below the top-k search bound.
+Toggle: QWEN_PREFILL_QSA_MASK=1 enables it (default OFF until the 48-layer check).
 """
 
 import os
@@ -257,74 +257,19 @@ void kernel_main() {
 """
 
 
-# Fused prefill score post-processing: indexer_score_dsa already returns ROW_MAJOR bf16 [1, 1, P, K]
-# (P = 31 prefix rows + chunk + pad), so the original slice -> typecast(bf16 -> bf16) -> to_layout(RM)
-# copies the full-capacity matrix twice before the mask. This kernel reads row 31 + r of the indexer
-# output and writes row r of a [1, 1, S, K] score tensor, only for 256-column chunks below the top-k
-# search bound: completed columns copied, the rest -inf, i.e. exactly the values the mask kernel left
-# there; columns at or beyond the bound are never read by topk_large_indices.
-SLICE_MASK_SOURCE = (
-    MASK_SOURCE.replace(
-        "    constexpr auto sa=TensorAccessorArgs<4>();\n",
-        "    constexpr auto ia=TensorAccessorArgs<4>();\n    constexpr auto sa=TensorAccessorArgs<ia.next_compile_time_args_offset()>();\n",
-    )
-    .replace(
-        "    const auto scores=TensorAccessor(sa,get_arg_val<uint32_t>(0));\n"
-        "    const auto positions=TensorAccessor(pa,get_arg_val<uint32_t>(1));\n"
-        "    const auto bound=TensorAccessor(ba,get_arg_val<uint32_t>(2));\n"
-        "    const uint32_t worker=get_arg_val<uint32_t>(3);",
-        "    const auto source=TensorAccessor(ia,get_arg_val<uint32_t>(0));\n"
-        "    const auto scores=TensorAccessor(sa,get_arg_val<uint32_t>(1));\n"
-        "    const auto positions=TensorAccessor(pa,get_arg_val<uint32_t>(2));\n"
-        "    const auto bound=TensorAccessor(ba,get_arg_val<uint32_t>(3));\n"
-        "    const uint32_t worker=get_arg_val<uint32_t>(4);",
-    )
-    .replace(
-        "        if(col+count<=complete)continue;\n"
-        "        uint32_t first=0;\n"
-        "        if(col<complete) {\n"
-        "            noc.async_read(scores,CoreLocalMem<uint32_t>(base+128),count*2,{.page_id=row,.offset_bytes=col*2},{});\n"
-        "            noc.async_read_barrier();first=complete-col;\n"
-        "        }\n",
-        "        uint32_t first=0;\n"
-        "        if(col<complete) {\n"
-        "            noc.async_read(source,CoreLocalMem<uint32_t>(base+128),count*2,{.page_id=(row/S)*(S+32)+31+row%S,.offset_bytes=col*2},{});\n"
-        "            noc.async_read_barrier();first=complete<col+count?complete-col:count;\n"
-        "        }\n",
-    )
-)
-for fragment in ("constexpr auto ia=", "const auto source=", "page_id=(row/S)*(S+32)+31+row%S"):
-    if fragment not in SLICE_MASK_SOURCE:
-        raise ValueError(f"Slice-mask kernel derivation failed: {fragment}")
-
-
-def prefill_slice_mask_scores(attention, full_scores, positions, seq):
-    """Sliced, masked bf16 scores [1, 1, seq, K] (live columns only) and the top-k bound."""
-    if full_scores.dtype != ttnn.bfloat16 or full_scores.layout != ttnn.ROW_MAJOR_LAYOUT:
-        raise ValueError("Fused score slice expects the indexer's ROW_MAJOR bf16 output")
-    if attention.batch_size != 1:
-        raise ValueError("Fused score slice runs per serial lane")
-    if tuple(full_scores.shape)[2] < seq + 31:
-        raise ValueError("Indexer output must hold 31 prefix rows plus the chunk")
-    blocks = attention.blocks
-    scores = ttnn.empty(
-        (1, 1, seq, blocks),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=attention.device,
-        memory_config=full_scores.memory_config(),
-    )
+def prefill_mask_scores(attention, scores, positions, seq):
+    """Bound and live-column mask of OptimizedQSA._mask_scores for a multi-token chunk."""
     bound = ttnn.empty((1,), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=attention.device)
     grid = attention.device.compute_with_storage_grid_size()
     workers = grid.x * grid.y
     coords = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(workers)]
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
-    tensors = [full_scores, scores, positions, bound]
-    args = [attention.batch_size, seq, blocks, workers]
+    tensors = [scores, positions, bound]
+    args = [attention.batch_size, seq, attention.blocks, workers]
     for t in tensors:
         args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     kernel = ttnn.KernelDescriptor(
-        kernel_source=SLICE_MASK_SOURCE,
+        kernel_source=MASK_SOURCE,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=cores,
         compile_time_args=args,
@@ -337,4 +282,4 @@ def prefill_slice_mask_scores(attention, full_scores, positions, seq):
         format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=768)],
     )
     ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
-    return scores, bound
+    return bound

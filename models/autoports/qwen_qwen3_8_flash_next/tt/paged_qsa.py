@@ -8,7 +8,7 @@ import ttnn
 
 from .indexer_prefix import prepare_indexer_prefix
 from .optimized_decoder import OptimizedQSA
-from .prefill_qsa_transfer import prefill_mask_enabled, prefill_slice_mask_scores
+from .prefill_qsa_transfer import prefill_mask_enabled, prefill_mask_scores
 
 
 def mask_scores_per_row(attention, scores, positions, seq):
@@ -247,16 +247,16 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
             compute_kernel_config=attention.indexer_compute,
             **prefix_args,
         )
-        if seq > 1 and not batched_selection and prefill_mask_enabled():
-            # Fused slice + mask of the ROW_MAJOR bf16 indexer output, live columns only.
-            scores, bound = prefill_slice_mask_scores(mask_context, scores, positions[lane : lane + 1], seq)
-        else:
-            scores = scores[:, :, 31 : 31 + seq, :]
+        scores = scores[:, :, 31 : 31 + seq, :]
+        prefill_mask = seq > 1 and not batched_selection and prefill_mask_enabled()
+        # The indexer already returns ROW_MAJOR bf16; the prefill path skips the identity typecast copy.
+        if not (prefill_mask and scores.dtype == ttnn.bfloat16 and scores.layout == ttnn.ROW_MAJOR_LAYOUT):
             scores = ttnn.to_layout(ttnn.typecast(scores, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
-            if batched_selection:
-                selected_rows.append(scores)
-                continue
-            bound = OptimizedQSA._mask_scores(mask_context, scores, positions[lane : lane + 1], seq)
+        if batched_selection:
+            selected_rows.append(scores)
+            continue
+        mask = prefill_mask_scores if prefill_mask else OptimizedQSA._mask_scores
+        bound = mask(mask_context, scores, positions[lane : lane + 1], seq)
         selected_rows.append(ttnn.experimental.topk_large_indices(scores, k=512, valid_length_tensor=bound))
         # Only small logical-ID selections survive the lane. Never concatenate
         # B dense score matrices or return physical pooled row IDs to expansion.
