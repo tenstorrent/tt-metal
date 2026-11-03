@@ -1,3 +1,14 @@
 # Server-only packages on top of tt-metal's python env (tested with fastapi 0.162.0).
 fastapi>=0.115
 uvicorn[standard]>=0.30
+# The image imports ttnn from the mounted tt-metal without installing the package, so it needs ttnn's own
+# dependencies ([project] dependencies in tt-metal's pyproject.toml; keep in sync).
+numpy>=1.24.4,<2
+loguru>=0.6.0
+networkx>=3.1
+graphviz>=0.20.3
+pyyaml>=5.4
+click>=8.1.7
+pandas>=2.0.3
+seaborn>=0.13.2
+ml_dtypes
