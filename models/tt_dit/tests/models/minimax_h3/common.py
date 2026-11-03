@@ -19,6 +19,7 @@ from models.common.utility_functions import is_blackhole
 from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 from ....utils.tensor import from_torch
 from ....utils.test import (
+    line_params_8k_req_exact_devices,
     ring_params_4k_req_exact_devices,
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
@@ -125,6 +126,11 @@ _L1_SMALL = 65536
 _ring = {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 1_175_000_000, "l1_small_size": _L1_SMALL}
+# Opt-in: both 4x8 rows match a 32-device Blackhole cluster; the line row is a comparison point.
+_line_8k = {**line_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
+_LINE_OPT_IN = pytest.mark.skipif(
+    os.environ.get("MINIMAX_H3_LINE_FABRIC") != "1", reason="set MINIMAX_H3_LINE_FABRIC=1 to run the line-fabric row"
+)
 
 # Wormhole has 1.5 MB L1/core against Blackhole's larger budget, so the 64 KB reservation the
 # Blackhole meshes use leaves too little for the DiT's static circular buffers. Its fabric also caps
@@ -139,11 +145,17 @@ _BH_ONLY = pytest.mark.skipif(not is_blackhole(), reason="Blackhole-only mesh co
 _WH_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole-only mesh configuration")
 
 MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8", marks=_BH_ONLY)
+MESH_4X8_LINE = pytest.param((4, 8), _line_8k, id="4x8_line", marks=[_BH_ONLY, _LINE_OPT_IN])
 MESH_4X32_RING_TRACED = pytest.param((4, 32), _ring_8k_trace, id="4x32_TRACED", marks=_BH_ONLY)
 # Links and residency come from the pipeline's `_PRESETS_WH`, so the row carries only device params.
 MESH_4X8_RING_WH = pytest.param((4, 8), _ring_4k, id="4x8_WH", marks=_WH_ONLY)
 
-GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING_TRACED, MESH_4X8_RING_WH]
+GALAXY_MESHES = [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING_TRACED, MESH_4X8_RING_WH]
+
+
+def fabric_topology() -> ttnn.Topology:
+    """CCL topology for the open fabric: a ring collective on a `FABRIC_1D` line has no forwarding direction."""
+    return ttnn.Topology.Linear if ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D else ttnn.Topology.Ring
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:

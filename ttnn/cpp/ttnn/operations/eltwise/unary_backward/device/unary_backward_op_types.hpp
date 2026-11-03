@@ -17,9 +17,12 @@ namespace ttnn::operations::unary_backward {
 enum class UnaryBackwardOpType : uint8_t {
     SIGMOID_BW,
     TANH_BW,
-    TANH_BW_BF16,
     GELU_BW,
     GELU_TANH_BW,
+// One per device/ops/<op>_bw.def.
+#define UNARY_BW_OP(name, kernel) name,
+#include "unary_bw_ops.def.inc"
+#undef UNARY_BW_OP
 };
 
 }  // namespace ttnn::operations::unary_backward

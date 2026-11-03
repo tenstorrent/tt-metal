@@ -46,6 +46,7 @@
 
 #include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -90,6 +91,7 @@ const char* kRawWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/ha
 const char* kMultiKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_multi_rw.cpp";
 const char* kPathsKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_paths.cpp";
 const char* kUnresolvedSlotKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_unresolved_slot.cpp";
+const char* kShardedPagesKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_sharded_pages.cpp";
 const char* kRawFamilyKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_raw_family_coverage.cpp";
 
 MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
@@ -302,9 +304,7 @@ void expect_all(const std::vector<uint32_t>& v, uint32_t val) {
 }
 
 // Gen1 (WH/BH) only, mirroring test_scratchpad_hw.cpp's guard.
-bool skip_if_not_gen1(IDevice* device) {
-    return device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE;
-}
+bool skip_if_not_gen1(tt::ARCH arch) { return arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE; }
 
 // Confirm a kernel's ELF buffer-R/W info (op-to-op R/W inference). This reads what the loader harvested
 // from the compiled .tt.BUF_RW section (see Kernel::query_buf_rw), keyed off the KernelSpec name, so it
@@ -321,7 +321,7 @@ void expect_buf_rw(
     const std::string& kernel_name) {
     auto kernel = wl.get_programs()[range].impl().get_kernel_by_spec_name(kernel_name);
     ASSERT_NE(kernel, nullptr) << "no kernel '" << kernel_name << "' in workload";
-    const ll_api::BufRwInfo rw = kernel->query_buf_rw(*md.get_devices()[0]);
+    const ll_api::BufRwInfo rw = kernel->query_buf_rw(*md.impl().get_devices()[0]);
     if (kernel_name == "writer") {
         EXPECT_FALSE(rw.opaque) << "writer is analyzable";
         EXPECT_TRUE(rw.reads.empty()) << "writer reads nothing";
@@ -347,7 +347,7 @@ void expect_buf_rw(
 // RAW hazard, DRAM: producer writes W to DRAM X (stalled); consumer reads X -> Y; barrier => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -370,7 +370,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
 // RAW hazard, L1: producer writes W to L1 X (stalled); consumer reads X -> Y; barrier => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -394,7 +394,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
 // serial/overlap timing probe (long stalls on two different nodes) used later to confirm concurrency.
 TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -421,7 +421,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
 // WAR hazard: consumer reads X (stalled) -> Y; producer then writes W to X; barrier => Y == D (original).
 TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -446,7 +446,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
 // WAR-free (disjoint): consumer reads Z (doped W) -> Y; producer writes a DISJOINT X => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -471,7 +471,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
 // WAW: two producers write X (W1 then W2); consumer reads X -> Y; barrier => Y == W2 (last write wins).
 TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -493,7 +493,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
 // Transitive N/N+1/N+2: N writes X=W (stalled), N+1 touches a disjoint buffer, N+2 reads X -> Z => Z == W.
 TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -522,7 +522,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
 // buffer usage, so a future detector must conservatively KEEP the barrier. Passes today.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -550,8 +550,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
 // the bound-but-unaccessed tensor absent. This is what a single-tensor test cannot catch.
 TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
-    if (skip_if_not_gen1(dev)) {
+    auto* dev = md->impl().get_devices()[0];
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -604,12 +604,23 @@ TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEndpoint) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
+    auto* dev = md->impl().get_devices()[0];
     const exp::NodeCoord node{0, 0};
 
     // DRAM interleaved unless the path needs otherwise: LocalTensorAccessor needs L1, ShardView a sharded tensor.
     const std::vector<std::string> dram_names = {
-        "view", "iter", "state", "zero", "legacy_r", "legacy_w", "wrap", "escape", "unused"};
+        "view",
+        "iter",
+        "bank_r",
+        "bank_state",
+        "bank_w",
+        "state",
+        "zero",
+        "legacy_r",
+        "legacy_w",
+        "wrap",
+        "escape",
+        "unused"};
     std::vector<MeshTensor> tensors;
     std::vector<std::pair<std::string, const MeshTensor*>> bound;
     tensors.reserve(dram_names.size() + 3);
@@ -674,8 +685,11 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     // Typed endpoints and paths are exact; the binding-erasing / address-escaping ones are both read and written.
     EXPECT_EQ(
         names(rw.reads),
-        (std::set<std::string_view>{"view", "iter", "shard_iter", "shard", "legacy_r", "wrap", "escape", "local"}));
-    EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"state", "zero", "legacy_w", "wrap", "escape", "local"}));
+        (std::set<std::string_view>{
+            "view", "iter", "shard_iter", "shard", "bank_r", "bank_state", "legacy_r", "wrap", "escape", "local"}));
+    EXPECT_EQ(
+        names(rw.writes),
+        (std::set<std::string_view>{"bank_w", "state", "zero", "legacy_w", "wrap", "escape", "local"}));
 }
 
 // Every public raw-address API family, independently: each FAMILY_* build of hazard_raw_family_coverage.cpp
@@ -686,7 +700,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
 // family here instead names exactly which wrapper regressed.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwEveryRawFamilyIndependentlyOpaque) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
+    auto* dev = md->impl().get_devices()[0];
     const exp::NodeCoord node{0, 0};
 
     // Non-loopback multicast must not target self alone (see e.g. noc_async_write_multicast's own doc:
@@ -763,12 +777,74 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwEveryRawFamilyIndependentlyO
     }
 }
 
+// The sharded pages() iterator's pages, used as NoC endpoints (hazard_buf_rw_sharded_pages.cpp), must resolve
+// exactly: src READ only, dst WRITE only. The pages carry their accessor and the iterator computes addresses without a
+// note, so a regression to the public get_noc_addr adds a WRITE on src, and one to a plain Page drops the READ.
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwShardedPagesIteratorIsExact) {
+    auto md = devices_.at(0);
+    auto* dev = md->impl().get_devices()[0];
+    const exp::NodeCoord node{0, 0};
+
+    // Four one-page rows in one L1 shard, so the iterator walks a multi-page contiguous run.
+    const Shape shape{4, 32};
+    ShardSpec shard_spec(CoreRangeSet(CoreRange(CoreCoord{0, 0})), {4, 32}, ShardOrientation::ROW_MAJOR);
+    MemoryConfig sharded_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+    MeshTensor src = MeshTensor::allocate_on_device(
+        *md, TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), sharded_config)));
+    MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    MeshTensor dst = MeshTensor::allocate_on_device(
+        *md, TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), interleaved_config)));
+
+    exp::KernelSpec k{
+        .unique_id = exp::KernelSpecName{"sharded_pages"},
+        .source = kShardedPagesKernel,
+        .num_threads = 1,
+        .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
+    };
+    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    BindTensorParameterToKernel(k, "src", "src");
+    BindTensorParameterToKernel(k, "dst", "dst");
+    exp::ProgramSpec spec{
+        .name = "hazard_buf_rw_sharded_pages",
+        .kernels = {k},
+        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
+            .name = "wu", .kernels = {exp::KernelSpecName{"sharded_pages"}}, .target_nodes = node}},
+    };
+    spec.tensor_parameters = {
+        exp::TensorParameter{.unique_id = exp::TensorParamName{"src"}, .spec = src.tensor_spec()},
+        exp::TensorParameter{.unique_id = exp::TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
+    Program program = exp::MakeProgramFromSpec(*md, spec);
+    exp::ProgramRunArgs params;
+    params.tensor_args = {
+        {exp::TensorParamName{"src"}, exp::TensorArgument{src}},
+        {exp::TensorParamName{"dst"}, exp::TensorArgument{dst}}};
+    exp::SetProgramRunArgs(program, params);
+    distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
+
+    const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
+    auto kernel = program_impl.get_kernel_by_spec_name("sharded_pages");
+    ASSERT_NE(kernel, nullptr);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev, program_impl);
+    auto names = [](const auto& accesses) {
+        std::set<std::string_view> s;
+        for (const auto& a : accesses) {
+            s.insert(a.param_name);
+        }
+        return s;
+    };
+    EXPECT_FALSE(rw.opaque);
+    EXPECT_EQ(names(rw.reads), (std::set<std::string_view>{"src"}));
+    EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"dst"}));
+}
+
 // A record whose slot names none of the kernel's bindings (stale or foreign metadata) can't be attributed:
 // resolve_buf_rw must mark the kernel opaque and drop it, not report an access at a made-up address. The kernel's
 // real read still resolves.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwUnresolvedSlotIsOpaque) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
+    auto* dev = md->impl().get_devices()[0];
     auto in = alloc(*md, BufferType::DRAM);
 
     exp::KernelSpec k{

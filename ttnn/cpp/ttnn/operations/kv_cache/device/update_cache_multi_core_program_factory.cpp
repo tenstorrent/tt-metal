@@ -62,8 +62,8 @@ UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
     result.Wbytes = Wbytes;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     bool row_major;
     std::uint32_t num_cores, num_batched_heads_per_core_group_1, num_batched_heads_per_core_group_2;
@@ -80,9 +80,6 @@ UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
         core_group_2 = CoreRangeSet();
         num_batched_heads_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_batched_heads_per_core_group_2 = 0;
-        auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end_coord.x + 1;
-        num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
         std::tie(
@@ -96,7 +93,8 @@ UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
     }
 
     std::uint32_t g1_numcores = core_group_1.num_cores();
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto cores = shard_spec.has_value() ? corerange_to_cores(all_cores, num_cores, row_major)
+                                              : grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     std::uint32_t cache_tile_idx = update_idx / tt::constants::TILE_HEIGHT * Wt;
     std::uint32_t total_batched_heads = 0;
@@ -180,8 +178,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     std::uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     bool row_major;
     std::uint32_t num_cores, num_batched_heads_per_core_group_1, num_batched_heads_per_core_group_2;
@@ -200,9 +198,6 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
         num_batched_heads_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_batched_heads_per_core_group_2 = 0;
         num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
-        auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end_coord.x + 1;
-        num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
         std::tie(
@@ -438,7 +433,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     // so it must carry Bcache (cache batch), NOT the input's padded height B. B is used only for the
     // input-side work-split math (num_batched_heads, batch_start_id).
     std::uint32_t g1_numcores = core_group_1.num_cores();
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto cores = shard_spec.has_value() ? corerange_to_cores(all_cores, num_cores, row_major)
+                                              : grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
     const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
 
     KernelRunArgs reader_run_args{.kernel = READER};

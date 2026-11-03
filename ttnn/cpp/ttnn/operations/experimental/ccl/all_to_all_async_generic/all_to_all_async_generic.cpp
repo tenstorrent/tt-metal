@@ -25,7 +25,7 @@ ttnn::Tensor all_to_all_async_generic(
         out_dim,
         num_links,
         memory_config,
-        topology.value_or(tt::tt_fabric::get_fabric_topology()),
+        topology.has_value() ? *topology : tt::tt_fabric::get_fabric_topology(*input_tensor.device()),
         subdevice_id,
         cluster_axis);
 }

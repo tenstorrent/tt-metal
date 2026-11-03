@@ -21,6 +21,9 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
+#if !defined(ARCH_QUASAR)
+#include "ckernel.h"
+#endif
 #include "experimental/kernel_args.h"
 
 // Pad-value fill helpers (moved here from the writer; identical logic). The reader produces cb_pad so a
@@ -35,6 +38,13 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     }
 
     uint32_t pad_val_addr = cb.get_write_ptr();
+    // The loop-back reads below source the words just stored, so the stores must reach L1 first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(pad_val_addr), static_cast<size_t>(num_bytes_risc / 2 * sizeof(uint32_t)));
+#else
+    (void)ckernel::load_blocking(ptr + (num_bytes_risc / 2) - 1);
+#endif
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {

@@ -65,6 +65,7 @@ void kernel_main() {
     constexpr uint32_t HtWt = get_arg(args::HtWt);
     uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks);
 
+    DataflowBuffer cb_in_buf(dfb::cb_in0);
     DataflowBuffer cb_tilize_buf(dfb::cb_tilize);
     DataflowBuffer cb_out(dfb::cb_out0);
 
@@ -82,7 +83,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(Ht);
+            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(cb_in_buf, cb_tilize_buf, Ht);
 
         // transpose
         cb_tilize_buf.wait_front(HtWt);
