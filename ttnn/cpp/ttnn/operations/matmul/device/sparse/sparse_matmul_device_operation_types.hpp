@@ -41,6 +41,9 @@ struct SparseMatmulParams {
     // selector. Empty means none. As with MatmulParams::prefetcher_pipes, the pipes must outlive any
     // cached program built against them.
     ttnn::PrefetcherPipeList prefetcher_pipes;
+    // false: leave the output's skipped batches uninitialized instead of zero-filling the whole output first. Only
+    // valid when the consumer never reads them (e.g. a following is_input_a_sparse matmul with the same sparsity).
+    bool zero_init_output = true;
 };
 
 struct SparseMatmulInputs {
