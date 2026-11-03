@@ -206,8 +206,9 @@ TT_ALWAYS_INLINE void device_setup()
 #endif
 }
 
-constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
-constexpr std::uint32_t BRISC_SOFT_RESET_MASK = 0x0800;
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK  = 0x7000;
+constexpr std::uint32_t TRISC1_SOFT_RESET_MASK = 0x2000;
+constexpr std::uint32_t BRISC_SOFT_RESET_MASK  = 0x0800;
 
 #ifndef ARCH_QUASAR
 
