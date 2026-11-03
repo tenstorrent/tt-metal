@@ -11,6 +11,7 @@ from tt_py_test_utils_common.utility_functions import (
     is_blackhole,
 )
 import ttnn
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import (
     run_conv_transpose2d,
@@ -574,3 +575,102 @@ def test_conv_transpose2d_with_groups(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         auto_shard=True,
     )
+
+
+# l1_small_size is part of what the slicer sees: the L1 it can allocate from is the core's L1 minus the circular-buffer
+# base and this value. With 32768 on Blackhole the single-slice plan for lengths 384 and 396 needs about 13 KB per core
+# more than that pool, so the slicer has to choose two slices there. With 16384 the pool is 16 KB larger. The
+# single-slice plan then fits by 3 KB if the op frees its own 8 KB sharded copy of the input after the halo op, and
+# does not fit if it keeps that copy; the auto_slice_config case runs conv_transpose2d_L1 with the caller's config and
+# so checks the release.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768}, {"l1_small_size": 16384}],
+    ids=["l1_small_32k", "l1_small_16k"],
+    indirect=True,
+)
+@pytest.mark.parametrize("auto_slice", [False, True], ids=["default_slicing", "auto_slice_config"])
+@pytest.mark.parametrize("input_width", [352, 384, 396, 416])
+def test_conv_transpose2d_1d_upsampler_dram_input(device, input_width, auto_slice):
+    """
+    ConvTranspose1d 512 -> 256 (kernel 16, stride 8, padding 4) as conv_transpose2d at H=1, bfloat16 tiled DRAM
+    input, default Conv2dConfig, prepared weights. Every length must run and match torch.
+
+    The DRAM slicer picks the number of slices from an L1 estimate, so the estimate has to size what the op
+    allocates. With a single slice the op shards the DRAM input for an unsliced conv (on Blackhole 64 channels per
+    core on 8 columns). Sizing the halo output for a sliced input (40 channels per core on 13 columns) gives 26.8 KB
+    per core instead of 42.9 KB; the single-slice plan then looks like it fits at lengths 384 and 396, and the op
+    raises "Statically allocated circular buffers ... clash with L1 buffers".
+    """
+    in_channels, out_channels, kernel, stride, padding = 512, 256, 16, 8, 4
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, input_width, in_channels).bfloat16().float()
+    torch_weight = (torch.randn(in_channels, out_channels, kernel) / (in_channels * kernel) ** 0.5).bfloat16().float()
+    torch_bias = (0.1 * torch.randn(out_channels)).bfloat16().float()
+    expected = torch.nn.functional.conv_transpose1d(
+        torch_input.permute(0, 2, 1), torch_weight, torch_bias, stride=stride, padding=padding
+    )
+    output_length = (input_width - 1) * stride - 2 * padding + kernel
+    assert expected.shape == (1, out_channels, output_length)
+
+    conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)
+    slice_config = ttnn.Conv2dSliceConfig(slice_type=SliceWidth, num_slices=0) if auto_slice else None
+    tt_input = ttnn.reshape(
+        ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        (1, 1, input_width, in_channels),
+    )
+    prepare_args = dict(
+        input_memory_config=tt_input.memory_config(),
+        input_layout=tt_input.layout,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=1,
+        input_height=1,
+        input_width=input_width,
+        kernel_size=(1, kernel),
+        stride=(1, stride),
+        padding=(0, padding),
+        dilation=(1, 1),
+        groups=1,
+        device=device,
+        input_dtype=ttnn.bfloat16,
+        conv_config=conv_config,
+        dram_slice_config=slice_config,
+    )
+    tt_weight = ttnn.prepare_conv_transpose2d_weights(
+        weight_tensor=ttnn.from_torch(torch_weight.unsqueeze(2), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        weights_format="IOHW",
+        has_bias=True,
+        **prepare_args,
+    )
+    tt_bias = ttnn.prepare_conv_transpose2d_bias(
+        bias_tensor=ttnn.from_torch(torch_bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        **prepare_args,
+    )
+
+    tt_output = ttnn.conv_transpose2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        device=device,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=1,
+        input_height=1,
+        input_width=input_width,
+        kernel_size=(1, kernel),
+        stride=(1, stride),
+        padding=(0, padding),
+        dilation=(1, 1),
+        groups=1,
+        conv_config=conv_config,
+        dram_slice_config=slice_config,
+        dtype=ttnn.bfloat16,
+    )
+
+    actual = ttnn.to_torch(tt_output).float()
+    assert actual.numel() == output_length * out_channels
+    actual = actual.reshape(1, output_length, out_channels).permute(0, 2, 1)
+    passing, pcc_message = check_with_pcc_without_tensor_printout(expected, actual, pcc=0.999)
+    logger.info(f"input_width={input_width} auto_slice={auto_slice}: {pcc_message}")
+    assert passing, pcc_message

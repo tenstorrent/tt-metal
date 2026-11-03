@@ -319,6 +319,11 @@ ConvTranspose2dResult conv_transpose2d_L1(
             input_tensor_post_tm.deallocate(/*force*/ true);
             log_debug(tt::LogOp, "Deallocate Input Tensor");
         }
+        // Drop this reference to the sharded input, as conv2d_L1 does when it takes over the halo output. If this op
+        // made the sharded copy (input in DRAM or resharded) nothing else holds it and it is freed here, before the
+        // halo output is reallocated and the conv program is created, which is what the L1 estimate of the DRAM
+        // slicer assumes. A sharded tensor passed in by the caller keeps the caller's reference.
+        input_tensor_post_tm = ttnn::Tensor();
 
         if (conv_config.reallocate_halo_output) {
             halo_output = ttnn::move(halo_output);
@@ -808,7 +813,10 @@ public:
             false,
             compute_grid_size,
             input_layout,
-            BufferType::DRAM));
+            // With a single slice the op takes the DRAM input as it is and conv_transpose2d_L1 shards it itself, with
+            // the channel alignment of an unsliced input. Only the output of padded_slice (two or more slices) has the
+            // alignment of a sliced input. The L1 estimate has to use the shard shape the op will use.
+            single_slice ? BufferType::L1 : BufferType::DRAM));
         return sliced_input_tensor_memory_config;
     }
 
