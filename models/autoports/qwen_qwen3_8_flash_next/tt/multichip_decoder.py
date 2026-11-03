@@ -2714,7 +2714,21 @@ class MultichipDecoder(OptimizedDecoder):
         """
         b = self.batch_size
         flat = _to_flat(x)
-        mixed, inject = self.attn_hyper.read_flat(flat)
+
+        # Precision bisection switches: route one HC half through the per-lane implementation via exact
+        # layout conversions (QWEN_FLASH_FLAT_HC_READ=0 / QWEN_FLASH_FLAT_HC_WRITE=0).
+        def read(hyper, value):
+            if os.environ.get("QWEN_FLASH_FLAT_HC_READ", "1") == "1":
+                return hyper.read_flat(value)
+            m, inj = hyper.read(_from_flat(value, b), decode=True)
+            return _to_flat(m), _to_flat(inj)
+
+        def write(hyper, value, update, inj):
+            if os.environ.get("QWEN_FLASH_FLAT_HC_WRITE", "1") == "1":
+                return hyper.write_flat(value, update, inj)
+            return _to_flat(hyper.write(_from_flat(value, b), _from_flat(update, b), _from_flat(inj, b)))
+
+        mixed, inject = read(self.attn_hyper, flat)
         if (
             self.kind == "linear_attention"
             and self.attention.conv_decode_history_enabled
@@ -2730,9 +2744,9 @@ class MultichipDecoder(OptimizedDecoder):
             update = _to_flat(
                 self.attention.decode_forward(mixed, current_pos=positions, page_table=page_table, slots=slots)
             )
-        flat = self.attn_hyper.write_flat(flat, update, inject)
-        mixed, inject = self.mlp_hyper.read_flat(flat)
-        flat = self.mlp_hyper.write_flat(flat, self.mlp.forward_flat(mixed), inject)
+        flat = write(self.attn_hyper, flat, update, inject)
+        mixed, inject = read(self.mlp_hyper, flat)
+        flat = write(self.mlp_hyper, flat, self.mlp.forward_flat(mixed), inject)
         return _from_flat(flat, b)
 
     def prefill_forward(self, hidden_states, *, current_positions, slots=None, tokens=None, page_table=None):
