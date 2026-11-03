@@ -1,0 +1,70 @@
+diff --git a/ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.inl b/ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.inl
+index ec06f80debe..d6de242e8dc 100644
+--- a/ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.inl
++++ b/ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.inl
+@@ -306,6 +306,18 @@ ALWI void matmul_block(
+                 for (uint32_t in1_subblock = 0; in1_subblock < shape.in1_num_subblocks; in1_subblock++) {
+                     tile_regs_acquire();
+ 
++                    // Packer data-format / L1-acc reconfig: neither the pack target nor the
++                    // accumulate mode changes between the subblocks of one K-block, and each
++                    // reconfig stalls the packer pipeline, so program it on the K-block's first
++                    // subblock only (measured: 150k -> 101k cycles on a pack-bound 13x2-tile,
++                    // bk=3, 60-K-block fp32 L1-acc matmul; conv2d_nhwc Perf 2). Paths that
++                    // re-program the packer per subblock (pack_untilize init/uninit, packer-thread
++                    // SFPU activation) keep the per-subblock reconfig.
++                    const bool pack_reconfig_needed =
++                        (in0_subblock == 0 && in1_subblock == 0) ||
++                        last_block_target == LastBlockTarget::OutWithUntilize ||
++                        Activation::activation != KernelActivation::NONE;
++
+                     // last_in1_subblock_w_valid: narrow the last in1 subblock's FMA ct_dim to the
+                     // columns actually pushed. DST/pack stays full-width. Inert when 0.
+                     const uint32_t effective_subblock_w =
+@@ -404,17 +416,21 @@ ALWI void matmul_block(
+                         }
+ 
+                         if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
+-                            PACK((pack_reconfig_data_format(pack_target_id)));
++                            if (pack_reconfig_needed) {
++                                PACK((pack_reconfig_data_format(pack_target_id)));
++                            }
+                         }
+ 
+                         if constexpr (packer_l1_acc) {
+-                            if constexpr (pack_last_to_interm) {
+-                                // Interm target: L1 accumulates across all blocks in the same region.
+-                                PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+-                            } else {
+-                                // Out target: the last block's partial was reloaded into DST, so the
+-                                // pack must NOT re-accumulate.
+-                                PACK((llk_pack_reconfig_l1_acc(0)));
++                            if (pack_reconfig_needed) {
++                                if constexpr (pack_last_to_interm) {
++                                    // Interm target: L1 accumulates across all blocks in the same region.
++                                    PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
++                                } else {
++                                    // Out target: the last block's partial was reloaded into DST, so
++                                    // the pack must NOT re-accumulate.
++                                    PACK((llk_pack_reconfig_l1_acc(0)));
++                                }
+                             }
+                         }
+ 
+@@ -460,10 +476,14 @@ ALWI void matmul_block(
+                         if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
+                             // Pack-DF must match interm's format for non-last spills, else spills
+                             // land in whatever format the previous op left (typically out's).
+-                            PACK((pack_reconfig_data_format(interm_cb_id)));
++                            if (pack_reconfig_needed) {
++                                PACK((pack_reconfig_data_format(interm_cb_id)));
++                            }
+                         }
+                         if constexpr (packer_l1_acc) {
+-                            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
++                            if (pack_reconfig_needed) {
++                                PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
++                            }
+                         }
+ 
+                         if constexpr (spill_row_grouped) {

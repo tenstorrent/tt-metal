@@ -456,3 +456,95 @@ Reading:
 |---|---|---|---|---|---|
 | `noc_async_read_with_state` (dataflow_api stateful read; no kernel_lib helper covers it) | capability | No API issues a run of fixed-length local reads over two cmd buffers. The stateful read is tied to `read_cmd_buf` and rewrites the length register on every read, so each issue is a poll plus 4 writes on one buffer, with no overlap of one buffer's poll with the other's request. Also, a second-buffer read is not counted by `noc_async_read_barrier_with_trid` even when tagged, and the trid API (`noc_async_read_set_trid`) only tags `read_cmd_buf`. | 171.2k (231.1k cyc, padding fix only, one buffer) | 169.9k (229.3k cyc) | `kernels/conv2d_nhwc_gather.hpp:181` (`run_issue` / `local_read_run`) |
 | `dataflow_kernel_lib` Mcast pipes (`SenderPipe::send` / `ReceiverPipe::wait_delivery` / `acknowledge`) | capability | No non-blocking readiness query: no `acks_ready()` / `poll_delivery()` / `try_send()`. A weight ring polled from inside another stage's loop has to peek the channel's DATA_READY / CONSUMER_READY semaphores through `detail::make_mcast_semaphore` and the positional bindings, then call the blocking pipe with its condition already met. | 170.1k (229.7k cyc, ring on the writer with blocking pipes) | 159.5k (215.3k cyc) | `kernels/conv2d_nhwc_reader.cpp:90` (peeks at :137 / :176) |
+
+## Perf 2 — tournament round 2 (in-place act ring, split first-block gather)
+- Date: 2026-11-03. No SUPPORTED change. BH p150b, AICLK 1350 MHz. Numbers are per-core max TRISC_1 KERNEL cycles from `profile_log_device.csv` (ns = cycles / 1.35), one fresh run each.
+- Focus case unchanged: SDXL level-1 3×3 BLOCK 10×10, bf16 × bf8b, bias; precision contract LoFi / fp32 DEST / fp32 partials untouched. Brief: `perf_experiments/BRIEF_R2.md`.
+
+### Measured breakdown (round start, 215.4k cycles ≈ 159.6 µs)
+Cumulative payload peel, sync kept (`perf_experiments/r2_breakdown/`, stub defines):
+| step | cycles |
+|---|---|
+| full | 215.4k |
+| − act payload | 193.4k |
+| − weights | ~192k |
+| − gather | 177.6k |
+| − tilize | 174.3k |
+| − matmul (everything stubbed) | 62.6k |
+
+Solo: − matmul 165.1k; − gather 198.8k. Zones: compute_matmul 208k, writer_act_wait 169k (54 rounds), reader_rm_reserve 61k.
+
+Reading:
+- The handshake floor fell from 85k to 62.6k now that the weights are off the writer.
+- The matmul, peeled last, added 112k over the floor (math floor ≈ 75k): compute and the act exchange were serialising per K-block.
+- Then act payload 22k, gather startup 15k.
+- DM ceiling: 4.3 MB act ingest per core ≈ 67k at 64 B/cycle, so the exchange is not at its roofline.
+
+### Portfolio and verdicts (artifacts in `perf_experiments/<slug>/`)
+| idea | verdict | focus (cycles) | domain / notes |
+|---|---|---|---|
+| `exchange_compute_overlap`: owner tilizes its own K-block in place into its landing slot and multicasts from there; the freed send buffer becomes a third ring slot | **WIN** | 214.0k → 198.1k (bench) | Diagnosis (per-round trace, 100 cores): the next owner's send waited on its own compute popping round r−2, which was late because its 2.0k own tilize sits just before it. Depth 3 absorbs it. L1 unchanged. Round 1's "depth 3 flat" was an artefact: raising the depth made the planner drop bk to 2. |
+| `gather_startup`: split m-block 0's first own K-block gather across NCRISC and the idle writer BRISC; defer the first weight-ring step past the halo barrier | **WIN** | 215.5k → 205.3k (bench) | Round 0 lands at 14.9k instead of 24.5k. Guards −5…−10%. |
+| `matmul_kblock_cost`: program the packer data format / L1-acc once per K-block instead of per subblock (kernel_lib `matmul_block`) | WIN in isolation, **not graduated** | 215.4k → 203.7k alone; flat on top of the other two (198.3k → 198.3k; 188.6k → 188.4k) | Compute-only bench 150k → 101k. After the other two graduations the act exchange is the bound again (writer_act_wait 141k), so this is not on the critical path. A shared-helper edit with no measured whole-op gain was not forced in. Patch: `perf_experiments/matmul_kblock_cost/kernel_lib_hoist.patch`. Nulls inside: 2-K-block DEST accumulation (202.0k, +80–160 KB L1), init once (flat), 2×2 / 4×1 subblocks (flat). |
+| `act_payload_bw`: half of each act round on NOC_0 from the writer RISC; single-multicast tuning | NULL | NOC_0 share 1/8: 317k; 1/4: 427k; posted / linked: hang; loopback-flag completion: 214.4k (noise) | NOC_0 carries the weight column multicasts since Perf 1; row multicasts collide with them. Posted multicast hangs on BH. |
+
+### What graduated
+1. **In-place own act block** (commit e1b18698094)
+   - `ACT_RECV_DEPTH` 2 → 3. `cb_act_send` is now an alias index over the `cb_act_tiles` ring; no separate send CB.
+   - Compute (`TilizeKBlock`) tilizes own round R into slot R % D at hook R − lead, with skip pushes to keep the alias FIFO aligned. The writer pops the skips and multicasts from the slot (src == dst, self excluded).
+   - Deleted: `ACT_SEND_DEPTH`, `send_depth()`, the up-front own-block tilize, and the send-buffer term of the footprint.
+   - Domain: every act-multicast path (BLOCK and WIDTH, RM and TILE input). Carve-out (cannot): R9 direct_in0, which has no own tilize and sends from the shard. It keeps the legacy send and send-ahead.
+2. **Split first K-block gather** (commit 065a9baa66d)
+   - `GS_SPLIT` defines, a 64 B mailbox CB (15) and two local semaphores. NCRISC gathers rows [0, ~5/13·bm); BRISC gathers the rest into first-pass `cb_act_rm` slots; NCRISC pushes them.
+   - The reader's first weight-ring step now runs right after the first halo barrier, on every polled path (the old initial `step()` is deleted).
+   - Carve-outs (cannot):
+     - Writer-side weights (not `wr_on`): the BRISC is busy with the weight fill, and WIDTH sink cores run no reader to hand it a window.
+     - TILE input: the gather reads the compute-untilized window, whose readiness only the reader sees.
+     - R9 / depthwise: no own gather.
+     - R3 split gather: the BRISC already gathers odd m-blocks.
+- Instrumentation: zones kept on every path (`writer_act_send` on the in-place send). New: `reader_gs_wait`, `writer_gs_gather`.
+
+### Whole-op before → after (cycles)
+| case | Perf 1 end | + in-place | + split gather (final) | achievable |
+|---|---|---|---|---|
+| **SDXL L1 BLOCK (focus)** | 215.4k (159.6 µs) | 198.3k | **188.6k (139.7 µs), −12.4%** | 201.2k (149.0 µs) |
+| ResNet layer3 ds BLOCK | 84.1k | 82.4k | 73.4k | 66.5k |
+| ResNet layer3 3×3 BLOCK | 74.3k | 72.9k | 65.2k | 64.6k |
+| ResNet layer4 3×3 BLOCK | 66.0k | 67.0k | 58.4k | 48.2k |
+| SDXL L0 ds BLOCK | 106.7k | 101.3k | 92.4k | 94.2k |
+| guard BLOCK bf16 no-bias | 27.9k | 27.4k | 24.9k | — |
+| BLOCK 28×28×256 fp32 | 48.9k | 47.0k | 44.5k | — |
+| guard WIDTH strided | 94.6k | 94.0k | 93.2k / 94.4k (one 99.6k outlier; kernels unchanged) | — |
+| guard interleaved bf16 relu | 99.3k | 99.0k | 99.0k | — |
+| ResNet layer2 ds HEIGHT | 35.6k | 36.9k | 36.9k | 41.0k |
+| ResNet layer1 3×3 HEIGHT | 38.5k | 38.5k | 38.5k | 38.0k |
+
+- The focus case now beats the production reference (139.7 µs vs 149.0 µs). So does SDXL L0 ds (92.4k vs 94.2k cycles).
+- Precision is bit-identical before and after on every case (focus PCC 0.999776, rel-RMS 0.02017).
+- L1 peak: +64 B (mailbox) everywhere. Focus 590,400 B (target 618,992 B); ResNet BLOCK 413,760 / 352,448 / 392,128 B, previously 413,696 / 352,384 / 392,064.
+
+### No-regression / correctness
+- Guard set (one per kernel path × layout × placement): no regression beyond noise. The HEIGHT and interleaved paths are untouched.
+- `--dev` (watcher + asserts): 11/11 BLOCK perf probes pass.
+- Unit directory: 197 passed.
+- Golden, scoped to the changed code paths:
+  - `test_golden.py -k "WIDTH or BLOCK or loose"`: 242 passed, 72 skipped (after each graduation).
+  - `test_translated.py` BLOCK/WIDTH + `test_regression.py`: 199 passed.
+  - One sampled interleaved / HEIGHT slice (`--splits 16 --group 7`): 148 passed.
+  - The full 5.7k-case directory was not re-run. Both changes are compiled out of the R0 / R3 paths: act-multicast and `wr_on` only.
+
+### Bottleneck now (for a round 3)
+- The act exchange again: writer_act_wait is 141k of 182k on the focus case.
+- Compute has slack. The parked packer-reconfig hoist (−49k compute-only) becomes relevant once the exchange is cheaper.
+- Fewer, larger rounds (bk 6) are still blocked on L1, though in-place frees one block's worth.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this (dataflow CB producer family: a CB filled by two RISCs of one core) | capability | Every kernel_lib producer contract assumes one producer per CB. Here the BRISC fills `cb_act_rm` slots that the NCRISC then pushes, which takes a raw "rows < t done" local semaphore plus a mailbox CB to hand over the window state (ShardSource, t0/t1). There is no co-producer / "reserve here, fill elsewhere, push here" primitive. | 146.9 µs (198.3k cyc, NCRISC gathers alone) | 139.7 µs (188.6k cyc) | `kernels/conv2d_nhwc_gather.hpp:1011` (NCRISC wait/push), `:1085` (`gs_brisc_gather_first_kblock`) |
+
+Helper feedback from nulls and not-graduated ideas (no bypass shipped):
+- `compute_kernel_lib::matmul_block`: re-programs the packer data format and L1-acc before every subblock pack. On a pack-bound fp32 L1-acc matmul that costs about 49k of 150k cycles. Patch in `perf_experiments/matmul_kblock_cost/kernel_lib_hoist.patch`.
+- `matmul_block` also cannot take subblocks that don't divide bm (bm = 13 is prime), or accumulate across 2 K-blocks that wrap the in0 ring.
+- Mcast `SenderPipe`: has no loopback-flag completion mode and no public `sender_runtime_arguments()` (`act_payload_bw`).
+- Mcast `SenderPipe`: its data-only `send_data_` is private, which blocks pipelining the first send with the tilize (`gather_startup`).
