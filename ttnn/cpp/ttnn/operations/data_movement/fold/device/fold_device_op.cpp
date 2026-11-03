@@ -22,6 +22,14 @@ bool is_fast_path_input(const Tensor& t) {
            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && t.layout() == Layout::ROW_MAJOR;
 }
 
+namespace CMAKE_UNIQUE_NAMESPACE {
+// The fast-path kernel moves whole shard-width pixels, so it needs a shard as wide as the logical channels. Wider
+// shards pad every pixel, and MultiCoreDRAMFold copies only the logical channels.
+bool takes_fast_path(const Tensor& t) {
+    return is_fast_path_input(t) && t.shard_spec()->shape[1] == t.logical_shape()[-1];
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
 tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
     const Tensor& input_tensor, tt::tt_metal::TensorMemoryLayout layout, uint32_t rows, uint32_t cols) {
     // COL_MAJOR input now yields column-wise H/W CoreRangeSet (documented via fold COL_MAJOR H/W shrink test).
@@ -40,8 +48,8 @@ tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
 
 Fold::program_factory_t Fold::select_program_factory(
     const operation_attributes_t& /*op_attr*/, const tensor_args_t& tensors) {
-    return is_fast_path_input(tensors.input_tensor) ? program_factory_t{MultiCore{}}
-                                                    : program_factory_t{MultiCoreDRAMFold{}};
+    return CMAKE_UNIQUE_NAMESPACE::takes_fast_path(tensors.input_tensor) ? program_factory_t{MultiCore{}}
+                                                                         : program_factory_t{MultiCoreDRAMFold{}};
 }
 
 void validate_fold(const std::vector<Tensor>& input_tensors, uint32_t stride_h, uint32_t stride_w) {
@@ -82,7 +90,7 @@ void validate_fold(const std::vector<Tensor>& input_tensors, uint32_t stride_h, 
             reason.value_or(""));
     }
 
-    if (is_fast_path_input(input_tensor)) {
+    if (CMAKE_UNIQUE_NAMESPACE::takes_fast_path(input_tensor)) {
         auto shard_shape = input_tensor.shard_spec().value().shape;
         TT_FATAL(
             shard_shape[0] % (logical_shape[2] * stride_h) == 0,
