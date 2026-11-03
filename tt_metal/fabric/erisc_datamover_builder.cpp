@@ -1085,6 +1085,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
+    TT_FATAL(
+        !(this->udm_mode && final_enable_deadlock_avoidance),
+        "The fabric router does not support UDM (FabricTensixConfig::UDM) with deadlock avoidance (a torus or ring "
+        "axis): router at fabric node {}, Ethernet channel {}",
+        this->local_fabric_node_id,
+        this->my_eth_channel);
 
     // Bubble flow control requires the downstream receiver to hold at least two slots: an injection
     // channel only sends when it sees that many free, so a single-slot receiver stalls it forever.
@@ -1174,8 +1180,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["ETH_TXQ_SEQ_UPDATE_TIMEOUT"] = this->eth_txq_seq_update_timeout;
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
-    // NoC transaction IDs per receiver channel; the receiver channels take consecutive ranges of them.
-    named_args["NUM_TRANSACTION_IDS"] = final_enable_deadlock_avoidance ? 8 : 4;
+    // NoC transaction IDs per receiver channel; the receiver channels take consecutive ranges of them. A lone receiver
+    // channel without bubble flow control takes 16, one per completion group of its slots.
+    named_args["NUM_TRANSACTION_IDS"] = (!final_enable_deadlock_avoidance && num_receiver_channels == 1)
+                                            ? 16
+                                            : (final_enable_deadlock_avoidance ? 8 : 4);
     named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
@@ -1828,10 +1837,11 @@ tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_le
     if (opt_level_override.has_value()) {
         return opt_level_override.value();
     }
-    // Use Os (optimize for size) when VC1 is active to fit in code space
-    // Use O3 (optimize for performance) otherwise
-    bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
-    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+    // Os (optimize for size) where the router would not fit in code space at O3, with VC1 and VC2 both active; O3
+    // (optimize for performance) otherwise.
+    const bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
+    const bool vc2_active = this->config.num_used_receiver_channels_per_vc[2] > 0;
+    return vc1_active && vc2_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
 }
 
 void FabricEriscDatamoverBuilder::teardown_from_host(

@@ -964,9 +964,6 @@ constexpr bool disable_rx_ch1_forwarding = get_named_compile_time_arg_val("DISAB
 constexpr bool disable_rx_ch2_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH2_FORWARDING") != 0;
 constexpr std::array<bool, MAX_NUM_VCS> is_vc_forwarding_disabled = {
     disable_rx_ch0_forwarding, disable_rx_ch1_forwarding, disable_rx_ch2_forwarding};
-// The same flags under their earlier name.
-constexpr const auto& is_receiver_channel_forwarding_disabled = is_vc_forwarding_disabled;
-static_assert(MAX_NUM_VCS == MAX_NUM_RECEIVER_CHANNELS);
 
 constexpr bool ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE =
     get_named_compile_time_arg_val("ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE");
