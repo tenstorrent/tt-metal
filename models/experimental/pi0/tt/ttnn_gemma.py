@@ -285,24 +285,19 @@ class GemmaAttentionTTNN:
         )
 
         # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern)
-        # Slice cos/sin to match actual sequence length
-        cos_sliced = ttnn.slice(
-            self.cos_meta,
-            [0, 0, 0, 0],
-            [1, 1, seq_len, self.head_dim],
-        )
-        sin_sliced = ttnn.slice(
-            self.sin_meta,
-            [0, 0, 0, 0],
-            [1, 1, seq_len, self.head_dim],
-        )
+        # cos/sin from the caller are already gathered for this call's positions; otherwise positions are 0..seq_len-1.
+        own_rope = cos is None
+        if own_rope:
+            cos = ttnn.slice(self.cos_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+            sin = ttnn.slice(self.sin_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
 
         # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma
-        q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
-        k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
+        q_rope_padded = ttnn.experimental.rotary_embedding(q, cos, sin)
+        k_rope_padded = ttnn.experimental.rotary_embedding(k, cos, sin)
 
-        ttnn.deallocate(cos_sliced)
-        ttnn.deallocate(sin_sliced)
+        if own_rope:
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
 
         # rotary_embedding pads output to tile boundary, slice back to original seq_len
         q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
