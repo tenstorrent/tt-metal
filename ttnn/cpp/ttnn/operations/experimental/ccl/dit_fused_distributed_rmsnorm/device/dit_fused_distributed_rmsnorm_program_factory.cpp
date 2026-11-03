@@ -301,17 +301,29 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     // (get_tt_fabric_max_payload_size_bytes), which reaches the fabric context — null when
     // the op runs on a single device with fabric uninitialized (TP=1). is_tp_1 takes one
     // worker per tile-row up to the whole grid, so short-circuit before touching fabric.
-    const auto grid_size = input.device()->compute_with_storage_grid_size();
-    s.num_workers = s.is_tp_1 ? std::min<uint32_t>(grid_size.x * grid_size.y, s.num_tile_rows)
-                              : pick_num_workers_tp_gt_1(
-                                    s.num_tile_rows,
-                                    derive_worker_cap(
-                                        grid_size,
-                                        args.num_links,
-                                        input.device()->arch(),
-                                        s.stick_bytes,
-                                        args.ring_size,
-                                        s.num_tile_rows));
+    // create_stats_buffer may pass a host input on the is_tp_1 path, where there is no device
+    // grid; it only consumes use_mux, so num_workers stays 0 there.
+    auto* device = input.device();
+    if (s.is_tp_1) {
+        if (device != nullptr) {
+            const auto grid_size = device->compute_with_storage_grid_size();
+            s.num_workers = std::min<uint32_t>(grid_size.x * grid_size.y, s.num_tile_rows);
+        }
+    } else {
+        TT_FATAL(
+            device != nullptr,
+            "dit_fused_distributed_rmsnorm all-gather sizing (ring_size {} > 1) requires a device input",
+            args.ring_size);
+        s.num_workers = pick_num_workers_tp_gt_1(
+            s.num_tile_rows,
+            derive_worker_cap(
+                device->compute_with_storage_grid_size(),
+                args.num_links,
+                device->arch(),
+                s.stick_bytes,
+                args.ring_size,
+                s.num_tile_rows));
+    }
     // use_mux selects the fabric-forwarder all-gather path (+ DRAM scratch);
     // !use_mux (is_tp_1) reduces locally with no fabric.
     s.use_mux = !s.is_tp_1;
@@ -360,6 +372,18 @@ namespace dyn = dit_fused_distributed_rmsnorm_dynamic;
 // Shared by the descriptor builder and override_runtime_arguments() so both resolve the same core.
 CoreCoord placed_core(const CoreCoord& grid_size, uint32_t index) {
     return CoreCoord(index % grid_size.x, index / grid_size.x);
+}
+
+// override_runtime_arguments() patches kernels by the dit_fused_distributed_rmsnorm_dynamic indices, so a push-order
+// change must fail here on the cache miss instead of patching the wrong kernel on every hit.
+void check_kernel_index(size_t pushed_idx, uint32_t expected_idx, const char* kernel_name) {
+    TT_FATAL(
+        pushed_idx == expected_idx,
+        "dit_fused_distributed_rmsnorm {} kernel was pushed at index {}, but override_runtime_arguments() patches "
+        "index {}",
+        kernel_name,
+        pushed_idx,
+        expected_idx);
 }
 
 bool fuses_rope(const DitFusedDistributedRmsnormInputs& tensor_args) {
@@ -1214,14 +1238,15 @@ ProgramDescriptor build_program_descriptor(
         TensorAccessorArgs(tile_row_map->buffer()).append_to(reader_compile_args);
     }
 
-    // Kernels are pushed in creation order (reader, writer, forwarders, compute), which
-    // dit_fused_distributed_rmsnorm_dynamic pins for override_runtime_arguments().
-    ttnn::experimental::ccl::add_kernel_descriptor(
+    // Kernels are pushed in the order pinned by dit_fused_distributed_rmsnorm_dynamic (reader, writer,
+    // forwarders, compute); check_kernel_index() enforces it.
+    const size_t reader_kernel_idx = ttnn::experimental::ccl::add_kernel_descriptor(
         desc,
         "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
         "dit_rmsnorm_fused_reader.cpp",
         worker_core_set,
         ReaderDataMovementConfig(reader_compile_args, reader_defines));
+    check_kernel_index(reader_kernel_idx, dyn::kReaderKernelIdx, "reader");
 
     // ------------------------------------------------------------------------
     // Writer kernel (on worker cores). Two variants:
@@ -1230,6 +1255,7 @@ ProgramDescriptor build_program_descriptor(
     //   AG path (ring>1, !per_head_norm)   → forwarder-model worker writer; the
     //                                         per-link forwarder cores hold the fabric.
     // ------------------------------------------------------------------------
+    size_t writer_kernel_idx = 0;
     if (!use_mux) {
         // Drain-only writer for the is_tp_1 (no-AG) path.
         std::vector<uint32_t> writer_compile_args = {
@@ -1264,7 +1290,7 @@ ProgramDescriptor build_program_descriptor(
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
 
-        ttnn::experimental::ccl::add_kernel_descriptor(
+        writer_kernel_idx = ttnn::experimental::ccl::add_kernel_descriptor(
             desc,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "dit_rmsnorm_fused_writer.cpp",
@@ -1306,13 +1332,14 @@ ProgramDescriptor build_program_descriptor(
         } else {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
-        ttnn::experimental::ccl::add_kernel_descriptor(
+        writer_kernel_idx = ttnn::experimental::ccl::add_kernel_descriptor(
             desc,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "dit_rmsnorm_fused_worker_writer.cpp",
             worker_core_set,
             WriterDataMovementConfig(writer_compile_args));
     }
+    check_kernel_index(writer_kernel_idx, dyn::kWriterKernelIdx, "writer");
 
     // ------------------------------------------------------------------------
     // Forwarder kernels (AG path): one per forwarder core (per-core CT args).
@@ -1347,12 +1374,13 @@ ProgramDescriptor build_program_descriptor(
             mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
         fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
         fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
-        ttnn::experimental::ccl::add_kernel_descriptor(
+        const size_t forwarder_kernel_idx = ttnn::experimental::ccl::add_kernel_descriptor(
             desc,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
             "dit_fused_norm_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
             WriterDataMovementConfig(fwd_ct));
+        check_kernel_index(forwarder_kernel_idx, dyn::kFirstForwarderKernelIdx + f, "forwarder");
     }
 
     // ------------------------------------------------------------------------
@@ -1454,8 +1482,8 @@ ProgramDescriptor build_program_descriptor(
         });
 
     // All kernels are pushed; references into desc.kernels stay valid from here on.
-    KernelDescriptor& reader_kernel = desc.kernels[dyn::kReaderKernelIdx];
-    KernelDescriptor& writer_kernel = desc.kernels[dyn::kWriterKernelIdx];
+    KernelDescriptor& reader_kernel = desc.kernels[reader_kernel_idx];
+    KernelDescriptor& writer_kernel = desc.kernels[writer_kernel_idx];
     KernelDescriptor& compute_kernel = desc.kernels[compute_kernel_idx];
 
     // Virtual (NoC) coords: workers write sticks / inc arrival on their forwarder;

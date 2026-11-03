@@ -28,6 +28,7 @@ Tests
 * ``test_rmsnorm_module_corr`` — ``DistributedRMSNorm`` module (static weight) e2e.
 * ``test_layernorm_module_corr``— ``DistributedLayerNorm`` module (adaLN) e2e.
 * ``test_dit_per_head_rmsnorm_mesh_cache_rebinding`` — per-chip data, cache rebinding, and trace replay.
+* ``test_create_stats_buffer_host_input_local_norm`` — host inputs on the local-norm path need no stats buffer.
 * ``test_rmsnorm_ag_cache_hit_rebinding`` / ``test_layernorm_ag_cache_hit_rebinding`` /
   ``test_rmsnorm_ag_cache_hit_aliased_miss`` — all-gather cache hits on new tensors,
   semaphores and stats buffers (T3K / LoudBox).
@@ -1448,6 +1449,31 @@ def test_dit_per_head_rmsnorm_mesh_cache_rebinding(mesh_device):
     # trace capture/release, including when the next launch binds other tensors.
     check(run(0), 0)
     assert mesh_device.num_program_cache_entries() == cache_entries
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_create_stats_buffer_host_input_local_norm(mesh_device):
+    # Local normalization needs no stats scratch, so a host input must return None
+    # without touching the (absent) device of the input tensor.
+    heads = 2
+    x = torch.randn(1, 1, 64, heads * 128, dtype=torch.bfloat16)
+    host_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn.SetDefaultDevice(mesh_device)
+    try:
+        assert (
+            ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(host_input, None, mesh_device) is None
+        )
+        assert (
+            ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                host_input, 1, mesh_device, num_heads_per_device=heads, per_head_norm=True
+            )
+            is None
+        )
+        assert (
+            ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(host_input, None, mesh_device) is None
+        )
+    finally:
+        ttnn.SetDefaultDevice(None)
 
 
 # ---------------------------------------------------------------------------

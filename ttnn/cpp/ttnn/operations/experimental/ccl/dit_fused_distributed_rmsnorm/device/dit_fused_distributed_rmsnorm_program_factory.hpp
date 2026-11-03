@@ -20,7 +20,8 @@
 namespace ttnn::experimental::prim {
 
 // Kernel indices follow the push order in the per-coordinate descriptor builder (reader, writer, forwarders,
-// compute); forwarder arg slots follow the forwarder runtime-arg layout. override_runtime_arguments() patches these.
+// compute), which TT_FATALs on a cache miss if a pushed index differs from these; forwarder arg slots follow the
+// forwarder runtime-arg layout. override_runtime_arguments() patches these.
 // The reader and writer common-arg slot order is owned by the factory's address tables.
 namespace dit_fused_distributed_rmsnorm_dynamic {
 inline constexpr uint32_t kReaderKernelIdx = 0;
