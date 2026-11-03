@@ -14,6 +14,7 @@ from typing import Optional
 
 import ttnn
 import ttml
+from ttml.common.utils import build_rope_params_from_config
 from ttml.modules import (
     AbstractModuleBase,
     ColumnParallelLinear,
@@ -269,21 +270,7 @@ class Llama(AbstractModuleBase):
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
 
-        head_dim = config.hidden_size // config.num_attention_heads
-
-        rope_scaling_params = ttml.ops.rope.RopeScalingParams()
-        if config.rope_scaling.scaling_factor != 0.0 and config.rope_scaling.original_context_length != 0:
-            rope_scaling_params.scaling_factor = config.rope_scaling.scaling_factor
-            rope_scaling_params.high_freq_factor = config.rope_scaling.high_freq_factor
-            rope_scaling_params.low_freq_factor = config.rope_scaling.low_freq_factor
-            rope_scaling_params.original_context_length = config.rope_scaling.original_context_length
-
-        rope_params = ttml.ops.rope.build_rope_params(
-            config.max_position_embeddings,
-            head_dim,
-            config.rope_theta,
-            rope_scaling_params,
-        )
+        rope_params = build_rope_params_from_config(config, config.hidden_size // config.num_attention_heads)
 
         # Depth-scaled init for the residual-writing projections (attention out-proj, MLP
         # down-proj): each of them adds its output into the residual stream, so the stream's

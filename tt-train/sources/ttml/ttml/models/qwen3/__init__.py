@@ -19,6 +19,7 @@ from typing import Optional
 
 import ttnn
 import ttml
+from ttml.common.utils import build_rope_params_from_config
 from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
@@ -133,19 +134,7 @@ class Qwen3(AbstractModuleBase):
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
 
-        rope_scaling_params = ttml.ops.rope.RopeScalingParams()
-        rs = config.rope_scaling
-        if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
-            rope_scaling_params.scaling_factor = rs.scaling_factor
-            rope_scaling_params.high_freq_factor = rs.high_freq_factor
-            rope_scaling_params.low_freq_factor = rs.low_freq_factor
-            rope_scaling_params.original_context_length = rs.original_context_length
-        rope_params = ttml.ops.rope.build_rope_params(
-            config.max_position_embeddings,
-            config.head_dim,
-            config.rope_theta,
-            rope_scaling_params,
-        )
+        rope_params = build_rope_params_from_config(config, config.head_dim)
 
         self.blocks = ModuleList(
             [Qwen3Block(config, layer_idx, rope_params) for layer_idx in range(config.num_hidden_layers)]

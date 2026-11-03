@@ -78,7 +78,11 @@ from ttml.models.qwen3.weights import (
     unpermute_norm_weights,
     expected_fused_load_shape,
 )
-from ttml.common.utils import resolve_padded_load_shape, scaled_dot_product_attention_auto
+from ttml.common.utils import (
+    build_rope_params_from_config,
+    resolve_padded_load_shape,
+    scaled_dot_product_attention_auto,
+)
 from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
@@ -241,20 +245,7 @@ class DistributedQwen3Attention(AbstractModuleBase):
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
-        rope_scaling = ttml.ops.rope.RopeScalingParams()
-        rs = config.rope_scaling
-        if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
-            rope_scaling.original_context_length = rs.original_context_length
-            rope_scaling.scaling_factor = rs.scaling_factor
-            rope_scaling.high_freq_factor = rs.high_freq_factor
-            rope_scaling.low_freq_factor = rs.low_freq_factor
-
-        self.rope_params = ttml.ops.rope.build_rope_params(
-            sequence_length=config.max_position_embeddings,
-            head_dim=self.head_dim,
-            theta=config.rope_theta,
-            rope_scaling_params=rope_scaling,
-        )
+        self.rope_params = build_rope_params_from_config(config, self.head_dim)
 
     def forward(
         self,
