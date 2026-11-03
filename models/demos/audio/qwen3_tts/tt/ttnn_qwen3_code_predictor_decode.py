@@ -46,16 +46,19 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     NORM_NAMES,
     NORM_SHARD_HEIGHT,
     TILE_ROWS,
-    decode_matmul_config,
+    decode_mlp,
+    linear_plans,
     sharded_norm_plan,
 )
 
 
 def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloat16, mlp_dtype=MLP_WEIGHT_DTYPE):
-    """Predictor weights with Q, K and V fused, mirroring the talker's repacking."""
+    """Predictor weights with Q, K and V fused, mirroring the talker's repacking, and the
+    layer linears DRAM-sharded."""
     talker_cfg = dict(config or checkpoint.talker_config())
     cfg = dict(talker_cfg["code_predictor_config"])
     state = checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX)
+    plans = linear_plans(device, cfg)
 
     def to_device(tensor, as_dtype=None):
         return ttnn.from_torch(
@@ -79,6 +82,9 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
     def linear(name, as_dtype=None):
         return to_device(state[f"{name}.weight"].t(), as_dtype=as_dtype)
 
+    def sharded(key, name, as_dtype=None):
+        return plans[key].weight(state[f"{name}.weight"].t(), device, as_dtype or dtype)
+
     def norm(name):
         return to_device(state[f"{name}.weight"].reshape(1, 1, 1, -1))
 
@@ -93,13 +99,13 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
             {
                 "input_layernorm": norm(f"model.layers.{index}.input_layernorm"),
                 "post_attention_layernorm": norm(f"model.layers.{index}.post_attention_layernorm"),
-                "qkv": to_device(fused.t()),
-                "o_proj": linear(f"{prefix}.o_proj"),
+                "qkv": plans["qkv"].weight(fused.t(), device, dtype),
+                "o_proj": sharded("o_proj", f"{prefix}.o_proj"),
                 "q_norm": norm(f"{prefix}.q_norm"),
                 "k_norm": norm(f"{prefix}.k_norm"),
-                "gate_proj": linear(f"model.layers.{index}.mlp.gate_proj", mlp_dtype),
-                "up_proj": linear(f"model.layers.{index}.mlp.up_proj", mlp_dtype),
-                "down_proj": linear(f"model.layers.{index}.mlp.down_proj", mlp_dtype),
+                "gate_proj": sharded("gate_proj", f"model.layers.{index}.mlp.gate_proj", mlp_dtype),
+                "up_proj": sharded("up_proj", f"model.layers.{index}.mlp.up_proj", mlp_dtype),
+                "down_proj": sharded("down_proj", f"model.layers.{index}.mlp.down_proj", mlp_dtype),
             }
         )
 
@@ -191,12 +197,7 @@ class TtCodePredictorCachedDecoder:
         self._v_shard = self._row_shard(1)
         self._zero_cache = ttnn.from_torch(empty, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        silu = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-        first = parameters["layers"][0]
-        self._matmul = {
-            name: decode_matmul_config(device, *tuple(first[name].shape)[-2:], silu if name == "gate_proj" else None)
-            for name in ("qkv", "o_proj", "gate_proj", "up_proj", "down_proj")
-        }
+        self._linear = linear_plans(device, self.config)
         self._norm_plan = sharded_norm_plan(device, self.hidden)
         if self._norm_plan is not None:
             state = parameters["norm_weights"]
@@ -262,21 +263,9 @@ class TtCodePredictorCachedDecoder:
             x, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_config
         )
 
-    def _mlp(self, x, layer):
-        gate = ttnn.linear(
-            x, layer["gate_proj"], compute_kernel_config=self.compute_config, program_config=self._matmul["gate_proj"]
-        )
-        if self._matmul["gate_proj"] is None or self._matmul["gate_proj"].fused_activation is None:
-            gate = ttnn.silu(gate)
-        up = ttnn.linear(
-            x, layer["up_proj"], compute_kernel_config=self.compute_config, program_config=self._matmul["up_proj"]
-        )
-        return ttnn.linear(
-            ttnn.multiply(gate, up),
-            layer["down_proj"],
-            compute_kernel_config=self.compute_config,
-            program_config=self._matmul["down_proj"],
-        )
+    def _project(self, x, layer, name):
+        """One layer linear, DRAM-sharded; the output is width-sharded in L1."""
+        return self._linear[name](x, layer[name])
 
     def _rotary(self, length, offset=0):
         inverse = 1.0 / (
@@ -321,10 +310,12 @@ class TtCodePredictorCachedDecoder:
         x = to_device(embeddings)
         cos_tt, sin_tt, mask_tt = to_device(cos), to_device(sin), to_device(causal_mask(length))
 
+        if length > TILE_ROWS:
+            raise ValueError(f"a {length}-position prompt: the predictor's linears take up to {TILE_ROWS} rows")
         x = project(x, self.p, self.compute_config)
         for index, layer in enumerate(self.p["layers"]):
             normed = ttnn.rms_norm(x, weight=layer["input_layernorm"], epsilon=self.eps)
-            qkv = ttnn.linear(normed, layer["qkv"], compute_kernel_config=self.compute_config)
+            qkv = ttnn.sharded_to_interleaved(self._project(normed, layer, "qkv"))
 
             def split(start, heads, width):
                 piece = ttnn.slice(qkv, [0, 0, start], [1, length, start + width])
@@ -354,9 +345,9 @@ class TtCodePredictorCachedDecoder:
                 scores, ttnn.repeat_interleave(value, repeats, dim=1), compute_kernel_config=self.compute_config
             )
             attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (1, length, self.heads * self.head_dim))
-            x = ttnn.add(x, ttnn.linear(attended, layer["o_proj"], compute_kernel_config=self.compute_config))
+            x = ttnn.add(x, ttnn.sharded_to_interleaved(self._project(attended, layer, "o_proj")))
             normed = ttnn.rms_norm(x, weight=layer["post_attention_layernorm"], epsilon=self.eps)
-            x = ttnn.add(x, self._mlp(normed, layer))
+            x = ttnn.add(x, decode_mlp(normed, layer, self._linear))
 
         hidden = ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.eps)
         return ttnn.slice(hidden, [0, length - 1, 0], [1, length, self.hidden])
@@ -371,9 +362,7 @@ class TtCodePredictorCachedDecoder:
         x = project(x, self.p, self.compute_config)
         for index, layer in enumerate(self.p["layers"]):
             normed = self._norm(x, layer, "input_layernorm")
-            qkv = ttnn.linear(
-                normed, layer["qkv"], compute_kernel_config=self.compute_config, program_config=self._matmul["qkv"]
-            )
+            qkv = ttnn.sharded_to_interleaved(self._project(normed, layer, "qkv"))
             query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
                 ttnn.reshape(qkv, (1, 1, self.batch, qkv.shape[-1])),
                 num_heads=self.heads,
@@ -401,17 +390,9 @@ class TtCodePredictorCachedDecoder:
                 compute_kernel_config=self.compute_config,
             )
             attended = ttnn.reshape(attended, (1, self.batch, self.heads * self.head_dim))
-            x = ttnn.add(
-                x,
-                ttnn.linear(
-                    attended,
-                    layer["o_proj"],
-                    compute_kernel_config=self.compute_config,
-                    program_config=self._matmul["o_proj"],
-                ),
-            )
+            x = ttnn.add(x, ttnn.sharded_to_interleaved(self._project(attended, layer, "o_proj")))
             normed = self._norm(x, layer, "post_attention_layernorm")
-            x = ttnn.add(x, self._mlp(normed, layer))
+            x = ttnn.add(x, decode_mlp(normed, layer, self._linear))
         return self._norm(x, {"norm": self.p["norm"], "norm_wide": getattr(self, "_final_norm_wide", None)}, "norm")
 
     def warmup(self):
