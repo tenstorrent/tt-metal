@@ -95,6 +95,7 @@ out = ttnn.experimental.fused_msda_from_offsets(
     align_corners=False,
     memory_config=None,
     num_valid_queries=None,     # optional per-batch row count, see below
+    num_valid_queries_tensor=None,  # the same counts on device, see below
 )
 # -> (B, Q, H*D) ROW_MAJOR bf16
 ```
@@ -129,6 +130,15 @@ counts are left out of the program hash and rewritten on every cache hit (§5),
 so changing them per call does not recompile; a captured trace replays the
 counts it was captured with.
 
+`num_valid_queries_tensor` passes the counts as a uint32 ROW_MAJOR INTERLEAVED
+device tensor instead, all `B` in its last dim so they form one unpadded page;
+`(B,)` is the natural shape. The kernels read it on every run (§5), so a
+captured trace computes whatever the captured tensor holds at replay. Write new
+counts into that tensor, e.g. with `ttnn.copy_host_to_device_tensor`: the trace
+keeps its address. A device read cannot fail, so the tensor's rules differ from
+the list's: a count above `Q` is treated as `Q`, and all-zero counts compute
+nothing. The two forms build separate programs; pass at most one.
+
 ### 2.3 Output shape
 
 `(B, Q, H*D)` ROW_MAJOR bf16 — chosen, not accidental. Every consumer in this
@@ -144,7 +154,7 @@ default and is one `ttnn.reshape` away for anyone who wants it.
 ```python
 fits = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
     value, reference_points, sampling_offsets, attention_weights, spatial_shapes,
-    *, reference_mode="level", align_corners=False,
+    *, reference_mode="level", align_corners=False, device_valid_counts=False,
 )
 # -> bool
 ```
@@ -153,7 +163,8 @@ True when `value`, staged as ROW_MAJOR interleaved L1, and the bf16 output fit
 below the L1 frontier together with this op's circular buffers, under
 `usable_program_l1_capacity` (95%). Per-bank sizes are rounded up to the
 allocator's DRAM-alignment granule; a `value` already in ROW_MAJOR L1 is not
-counted again. `value` may still be TILE or in DRAM. The answer reflects the
+counted again. Pass `device_valid_counts=True` when the op will get
+`num_valid_queries_tensor`, whose staging adds circular buffers (§6). `value` may still be TILE or in DRAM. The answer reflects the
 allocator's current state, so call it right before the op and do not cache it.
 
 ---
@@ -231,7 +242,7 @@ The program and the tiles it runs are sized separately:
 ```text
 slots per core = ceil(B * H * ceil(Q / 32) / cores)       fixed per program
 active tiles   = sum_b H * ceil(q_end_b / 32)            per call
-q_end_b        = num_valid_queries[b], or Q when not given
+q_end_b        = num_valid_queries[b], min(tensor[b], Q), or Q when not given
 ```
 
 `split_work_to_cores` over `compute_with_storage_grid_size()` picks the cores
@@ -251,6 +262,15 @@ per query block rather than once per tile.
 All runtime args, buffer addresses included, are plain values that
 `ProgramFactory::override_runtime_arguments` rebuilds on every cache hit. That
 is what lets `num_valid_queries` stay out of the program hash.
+
+The tile order and the per-core runs are `kernels/msda_work_list.hpp`, plain
+arithmetic over the per-batch counts that both the factory and the kernels
+include. With `num_valid_queries_tensor` the factory lists no tiles and
+allocates no slots: each core gets its index and the core count, and the reader
+and the writer each read the counts into their own CB and derive the core's run
+from that header (`dataflow/msda_device_counts.hpp`). The reader hands its tile
+count to compute through `tile_count`. Nothing that depends on the counts is a
+runtime arg, which is what a trace needs.
 
 A partial block is supported wherever a batch's rows end: at `Q % 32`, or at
 `num_valid_queries[b] % 32`. That tile carries `v_rows` below 32. Rows `>= v_rows`
@@ -287,7 +307,8 @@ output block instead of once per point.
 With the split gather (§8) a fourth, reader <-> writer, runs beside them:
 `gather_mailbox` plus the `ready` / `done` semaphores, one point at a time. The
 writer then also decodes the corner word at the reader's CB front, so the
-reader pops the corner tile only after `done`.
+reader pops a point's corner tile, or a tiled block's corner tiles, only after
+`done`.
 
 | CB | Role | Pages | Page size |
 | --- | --- | --- | --- |
@@ -297,21 +318,26 @@ reader pops the corner tile only after `done`.
 | `c_3` `input_tile` | reader → compute, the `V_corner` values: tiles, or a row-major `[NW \| NE \| SW \| SE]` block per point when `D % 32 == 0` | `8 * n_d_tiles` | 2048 |
 | `c_4` `scalar_tile` | compute → compute, `attn * bilinear_coeff` per row | 8 | 2048 |
 | `c_5` `output_scratch` | writer-only assembly of one head's `D`-stick | 1 | `align(D*2)` |
-| `c_6` `ref_scratch` | **V2 only** — reference points arena, in the tensor's dtype. float32 builds a separate program, which keeps the point float32 through `geom_x` / `geom_y` | 32*R | `align(2*sizeof(ref))` (raw stick 4 B bf16, 8 B fp32) |
+| `c_6` `ref_scratch` | **V2 only** — reference points arena, in the tensor's dtype. float32 builds a separate program, which keeps the point float32 through `geom_x` / `geom_y`, or `ref_tile` and its exact three-way bf16 split | 32*R | `align(2*sizeof(ref))` (raw stick 4 B bf16, 8 B fp32) |
 | `c_7` `geom_x`, `c_8` `geom_y` | reader → compute, the primary operand (location, or reference point for V2) in column 0 and, on V2, the raw sampling offset in column 16 (per-point geometry) | 4 | 2048, or 4096 when the reference point is float32 |
 | `c_11` `attn_tile` | reader → compute, the attention weight (per-point geometry) | 4 | 2048 |
-| `c_12` `corner` | compute → reader (and writer), the corner word: column 16 per point, or column 16 + j for point j of a tiled block | 3, or 2 tiled | 4096 (float32) |
-| `c_9` `geom_rm` | reader → compute, one block's row-major `[offsets \| attn]` rows (tiled geometry) | 2 | 2048 |
-| `c_10` `geom_operand` | compute scratch, `geom_rm` tilized (tiled geometry) | 2 | 2048 |
-| `c_14` `ref_tile` | reader → compute, the block's reference points (tiled geometry) | 1 | 2048 |
-| `c_15` `const` | reader → compute once, `M_off`, `M_ref`, `M_extent` and the 16 `E_j` (tiled geometry) | 19 | 2048 |
-| `c_19` `weight` | compute → compute, a block's four weight tiles (tiled geometry) | 8 | 2048 |
+| `c_12` `corner` | compute → reader (and writer), the corner word: column 16 per point, or column 16 + J % 16 of tile J / 16 for point J of a tiled block | 3, or `2 * G` tiled | 4096 (float32) |
+| `c_9` `geom_rm` | reader → compute, one block's row-major `[offsets \| attn]` rows (tiled geometry) | `G + 1` | 2048 |
+| `c_10` `geom_operand` | compute scratch, `geom_rm` tilized (tiled geometry) | `G + 1` | 2048 |
+| `c_14` `ref_tile` | reader → compute, the block's reference points (tiled geometry) | 1 | 2048, or 4096 when the reference point is float32 |
+| `c_13` `ref_parts` | compute scratch, a float32 `ref_tile` as three bf16 tiles that sum to it (tiled geometry, float32 reference points) | 3 | 2048 |
+| `c_15` `const` | reader → compute once, `M_off`, `M_ref`, `M_extent` per group and one `E_j` per lane in use (tiled geometry) | `3 * G + min(L * P, 16)` | 2048 |
+| `c_19` `weight` | compute → compute, a block's four weight tiles per group (tiled geometry) | `8 * G` | 2048 |
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
 | `c_17` `tiled_input` | compute → compute, the tilized corners (only when `D % 32 == 0`) | `8 * n_d_tiles` | 2048 |
 | `c_18` `gather_mailbox` | reader → writer, one point's split-gather arguments (split gather only: `D % 32 == 0` on Blackhole) | 1 | 64 |
+| `c_20` `reader_counts`, `c_21` `writer_counts` | reader-only and writer-only L1 scratch, never pushed: each kernel's copy of the valid query counts (`num_valid_queries_tensor` only) | 1 | `align(B*4)` |
+| `c_22` `tile_count` | reader → compute, the core's tile count, read with `read_tile_value` (`num_valid_queries_tensor` only) | 1 | L1 alignment, UInt32 |
 
-`n_d_tiles = ceil(D / 32)`. The tiled geometry replaces `c_1`, `c_2`, `c_7`,
-`c_8` and `c_11` with `c_9`, `c_10`, `c_14`, `c_15` and `c_19`.
+`n_d_tiles = ceil(D / 32)`; `G = ceil(L * P / 16)`, the tiled geometry's groups
+of points. The tiled geometry replaces `c_1`, `c_2`, `c_7`, `c_8` and `c_11`
+with `c_9`, `c_10`, `c_14`, `c_15`, `c_19` and, for float32 reference points,
+`c_13`.
 `derive_circular_buffer_plan` is the source of truth for the sizes, and
 `circular_buffer_bytes_per_core` sums them for §2.4.
 
@@ -365,20 +391,25 @@ and collapse bilinear sampling to nearest-neighbour.
 
 ### Tiled geometry
 
-On Blackhole, V2 with `L * P == 16`, at most 15 bf16 reference points and
+On Blackhole, V2 with `2 <= L * P <= 32`, at most 15 reference points and
 packed offsets and weights hands the geometry over once per output block instead
-of once per point (`kernels/msda_tiled_geometry.hpp` holds the layout). The
-reader NoC-reads the block's offsets and attention rows into one row-major page
-and rewrites the reference tile only when the query block changes. Compute
-tilizes them and, in one window, solves `px | py` and the extents for all 16
-points with matmuls against per-level constant matrices, then floors them and
-builds the corner words and weights on the SFPU. It returns one corner tile per
-block with point `j`'s word in column `16 + j`. Each
-point's four scalar tiles are then moved to column 0 by a matmul against `E_j`.
-The constants enter the FPU as bf16 matrix entries, so the factory falls back
-to the per-point geometry when any is not bf16-exact, and the matmuls run at
-HiFi4 because lower fidelities drop mantissa bits of SrcB, which holds the
-data.
+of once per point (`kernels/msda_tiled_geometry.hpp` holds the layout). This
+covers both attentions of every upstream BEVFormer encoder: spatial
+cross-attention at `L * P = 32` (base) and 8 (small, tiny), temporal
+self-attention at 4. The reader NoC-reads the block's offsets and attention rows
+into one row-major page and rewrites the reference tile only when the query
+block changes. Compute tilizes them and, in one window per group of 16 points,
+solves `px | py` and the extents with matmuls against per-level constant
+matrices, then floors them and builds the corner words and weights on the SFPU.
+It returns one corner tile per group, point `J`'s word in column `16 + J % 16`
+of tile `J / 16`. Each point's four scalar tiles are then moved to column 0 by a
+matmul against `E_j`. The constants enter the FPU as bf16 matrix entries, so the
+factory falls back to the per-point geometry when any is not bf16-exact, and the
+matmuls run at HiFi4 because lower fidelities drop mantissa bits of SrcB, which
+holds the data. A float32 reference point would lose bits in the FPU's 19-bit
+source registers, so compute first splits the float32 reference tile on the
+SFPU into three bf16 tiles that sum to it exactly, and the matmuls read all
+three.
 
 ### Tile packing
 
@@ -388,7 +419,8 @@ offsets. The compute kernel uses `mul_tiles_bcast<COL>`, which reads only column
 0 of the `TL`/`BL` faces of the scalar tile. A query occupies one SFPU lane of a
 32x32 tile throughout: column 0, with column 16 (the same lane, one face to the
 right) carrying a second operand: the V2 offset, or the corner word. The tiled
-geometry puts point `j` of a block in column `j` and `16 + j`.
+geometry puts point `J` of a block in column `j` and `16 + j` of its group's
+tiles, `j = J % 16`.
 
 ### Zero-fill contract
 
@@ -469,7 +501,8 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (geometry, reduc
    unless the previous tile staged the same query block) for all `v_rows` rows
    into L1 arenas — one `noc.async_read` per page;
 2. for each `(l, p)`: write the operands into column 0 (and the V2 offset into
-   column 16) of the geometry tiles and push them (tiled geometry: one row-major page per block). No
+   column 16) of the geometry tiles and push them (tiled geometry: one row-major staging of
+   `G + 1` tiles per block). No
    arithmetic — the reader moves bit patterns;
 3. take the corner word back from compute and split it into the NW index and
    the four in-bounds flags (a subtract, a mask and a shift);
@@ -486,8 +519,8 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (geometry, reduc
 
 The two readers differ only in which staged pair step 2 ships as the primary
 and which as the secondary (column 16 of the geometry tiles on V2), and only V2
-can take the tiled geometry. The primary pair is float32 when
-`reference_points` are float32.
+can take the tiled geometry. The primary pair, or the reference tile, is
+float32 when `reference_points` are float32.
 
 **Compute** (shared), per sampling point, one point ahead of the reduction:
 
@@ -543,7 +576,7 @@ Wormhole keeps the reader-only gather; the split has not been measured there.
 
 | Property | Value | Why |
 | --- | --- | --- |
-| dtype | `bfloat16` (all tensors); `reference_points` may be `float32` | tile format of the FPU path; a float32 reference point stays float32 into the SFPU multiply, where a bf16 point in [0, 1] would move in steps of up to 0.8 px at `W = 200` |
+| dtype | `bfloat16` (all tensors); `reference_points` may be `float32` | tile format of the FPU path; a float32 reference point keeps all 24 significant bits into `px` (whole into the SFPU per point, split exactly into three bf16 tiles for the FPU when tiled), where a bf16 point in [0, 1] would move in steps of up to 0.8 px at `W = 200` |
 | layout | `ROW_MAJOR` (all tensors) | reader/writer address by stick |
 | memory | `INTERLEAVED` only | `TensorAccessor` page indexing |
 | `D` | positive multiple of 16, and `D*2` a multiple of the device's buffer alignment when `H > 1` | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves, and the writer's per-head byte offset `h*D*2` must be a legal NoC destination. `D = 16` gives a 32-B stride, which is fine where the alignment is 32 B but is rejected where it is 64 B; `D = 32` and up are unconstrained. Validated in the program factory, not assumed. |
@@ -551,6 +584,7 @@ Wormhole keeps the reader-only gather; the split has not been measured there.
 | `H_l`, `W_l` | `<= 256` | the largest extent the op is tested at. The corner word's index field holds extents up to 361, and the tiled geometry falls back to the per-point path for an extent that is not bf16-exact. Rejected in `derive_shapes`, pinned by `test_fused_msda_rejects_spatial_shape_beyond_extent_limit` |
 | `Q`, `P`, `H`, `B` | any positive value | `Q % 32 != 0` handled by `v_rows` |
 | `num_valid_queries` | `None`, or `B` counts in `[0, Q]` with at least one nonzero | rows past a count are unwritten; the caller drops them with a select |
+| `num_valid_queries_tensor` | `None`, or a uint32 ROW_MAJOR INTERLEAVED device tensor with its `B` counts in the last dim; counts above `Q` act as `Q`, all zeros compute nothing; not with `num_valid_queries` | read on device so a trace follows it; one unpadded page, read with a single NoC read |
 | `S` | must equal `sum_l H_l * W_l` | validated |
 | padding | zeros | |
 
@@ -588,6 +622,8 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
         ├── msda_tile_layout.hpp                tile face-row byte offsets
         ├── msda_corner_word.hpp                the corner word compute hands the gathers
         ├── msda_tiled_geometry.hpp             tiled geometry layout, shared with the factory
+        ├── msda_work_list.hpp                  tile order and per-core runs, shared with the factory
+        ├── dataflow/msda_device_counts.hpp     device valid query counts: staging and the core's run
         ├── dataflow/fused_msda_reader_common.hpp
         ├── dataflow/reader_msda_v1.cpp
         ├── dataflow/reader_msda_v2.cpp
@@ -611,10 +647,11 @@ module. The decoder passes float32 reference points: on its 200x200 BEV map a bf
 point in [0, 1] moves in steps of up to 0.8 px, and each layer's refined points feed
 the next.
 
-Spatial cross-attention pads every camera to the longest camera's query count.
-It passes each camera's valid count as `num_valid_queries`, so MSDA skips the
-padding, and drops the unwritten rows with `ttnn.where(row_mask, ...)`. That
-select has to stay a select: the dropped rows are undefined, not zero.
+Spatial cross-attention pads every camera to the planner's capacity. It passes
+each camera's valid count as `num_valid_queries_tensor`, a uint32 tensor the
+planner builds on device, so MSDA skips the padding and a traced frame follows
+each frame's counts. It drops the unwritten rows with `ttnn.where(row_mask, ...)`.
+That select has to stay a select: the dropped rows are undefined, not zero.
 
 It feeds the op the **packed** rank-4 forms. The `sampling_offsets` Linear emits
 channels ordered `(head, level, point, xy)` and the joint softmax produces
@@ -625,12 +662,14 @@ The module passes raw pixel offsets; the op's per-level constants account for
 `scale_l`.
 
 Before each call the module asks `can_use_fused_msda_from_offsets_l1_value`
-(§2.4) and stages `value`, and the op's output with it, in L1 when they fit,
+(§2.4), with `device_valid_counts` when it passes the counts tensor, and stages
+`value`, and the op's output with it, in L1 when they fit,
 interleaved DRAM otherwise. The gather is bound by the DRAM endpoints' request
 rate, so L1 is the fast path.
 
 Numerics are pinned by
 `models/experimental/bevformer/tests/pcc/test_fused_msda.py` plus
 `test_ms_deformable_attention.py`, `test_spatial_cross_attention.py`,
-`test_temporal_self_attention.py`, `test_encoder.py` and `test_decoder.py`. The float32 reference-point path is pinned by
-`test_fused_msda_v2_float32_reference_points`.
+`test_temporal_self_attention.py`, `test_encoder.py` and `test_decoder.py`. The float32 reference-point paths are pinned by
+`test_fused_msda_v2_float32_reference_points`, `test_fused_msda_v2_float32_reference_point_sub_ulp`
+and the `ref_fp32` cases of the tiled tests.
