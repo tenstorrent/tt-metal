@@ -137,7 +137,7 @@ def upload_run_sftp(local_path: pathlib.Path) -> bool:
 
             if result.returncode != 0:
                 logger.error(
-                    "SFTP upload failed (non-zero exit). Stdout: %s Stderr: %s",
+                    "SFTP upload failed (non-zero exit). Stdout: {} Stderr: {}",
                     result.stdout,
                     result.stderr,
                 )
