@@ -380,17 +380,26 @@ KernelCompileDescriptor build_kernel_descriptor(
                     tt::jit_build::utils::GppAction::Preprocess,
                     tmp_ii,
                     tmp_d);
-                if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                const auto remove_temps = [&] {
                     std::error_code ec;
                     std::filesystem::remove(tmp_ii, ec);
                     std::filesystem::remove(tmp_d, ec);
+                };
+                if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                    remove_temps();
                     TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
                 }
                 // Read this process's own output before the rename: the final path may be replaced
                 // by another process's (identical) .ii at any time.
-                const auto bytes = tt::jit_build::utils::read_file_bytes(tmp_ii);
-                std::filesystem::rename(tmp_ii, ii_path);
-                std::filesystem::rename(tmp_d, d_path);
+                std::vector<std::uint8_t> bytes;
+                try {
+                    bytes = tt::jit_build::utils::read_file_bytes(tmp_ii);
+                    std::filesystem::rename(tmp_ii, ii_path);
+                    std::filesystem::rename(tmp_d, d_path);
+                } catch (...) {
+                    remove_temps();
+                    throw;
+                }
                 tt::jit_build::GeneratedFile gf;
                 gf.name = ii_name;
                 gf.content.assign(bytes.begin(), bytes.end());
