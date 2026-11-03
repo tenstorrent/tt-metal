@@ -8,9 +8,8 @@
 it. It keeps its label unless another input is sharded along a mesh axis on which that label is replicated; every
 device then holds a different result, and the output takes the union of the labels, on the caller's handle too.
 
-  * kept: output ``{2},[Shard(0)]`` (``moe_padding_config``'s config row in production, on a 1x2 mesh), the other
-    input ``{1,2},[Replicate, Shard(0)]`` along the same mesh axis. The output keeps its collapsed label, where the
-    union is the other input's N-D label (the ``!=`` assertions).
+  * kept: output ``{2},[Shard(0)]``, the other input ``{1,2},[Replicate, Shard(0)]`` along the same mesh axis. The
+    output keeps its collapsed label, where the union is the other input's N-D label (the ``!=`` assertions).
   * follows the data: output ``{2},[Replicate]``, the other input N-D-sharded with a different value on every
     device. Both handles carry that input's label, and each device's data is checked against its own input.
 
@@ -89,7 +88,7 @@ def _per_device(tensor):
 
 def _insert_case(mesh_device, *, global_label):
     """global_tensor replicated (``{2},[Replicate]``) or collapsed-sharded on dim 0 (``{2},[Shard(0)]``); a replicated
-    local_a (production labelling) and an N-D-sharded local_b whose two halves differ.
+    local_a and an N-D-sharded local_b whose two halves differ.
     """
     torch.manual_seed(0)
     global_rows, local_rows, hidden_dim = 128, 64, 64
@@ -165,7 +164,7 @@ def test_prefill_insert_sharded_global_keeps_own_label(mesh_device):
     mesh_device.enable_program_cache()
     mesh_device.clear_program_cache()
     try:
-        out = _run_insert(mesh_device, c, c["l_a"])  # production labelling first: union == own either way
+        out = _run_insert(mesh_device, c, c["l_a"])  # replicated local_tensor first: the label is kept either way
         entries = mesh_device.num_program_cache_entries()
         assert entries > 0
         _assert_insert_rows(c, out, [c["local_a_q"]] * mesh_device.get_num_devices())
@@ -189,8 +188,9 @@ def test_prefill_insert_sharded_global_keeps_own_label(mesh_device):
 def test_prefill_insert_label_follows_the_data(mesh_device):
     """global_tensor is 1-D ``Replicate``; local_tensor is 2-D-sharded with a different half per device, so after
     the insert every device's global_tensor differs: both handles carry local_tensor's label (the union). A kept
-    ``Replicate`` would make the serialiser save one device's rows as everyone's. A replicated local_tensor (the
-    production labelling) keeps the label, and the relabelled call is still a program-cache hit.
+    ``Replicate`` would call the devices' rows copies of each other: dumping the tensor would raise, or save one
+    device's rows as everyone's with ``verify_replicated_shards_on_dump`` off. A replicated local_tensor keeps the
+    label, and the relabelled call is still a program-cache hit.
     """
     c = _insert_case(mesh_device, global_label="replicate")
     topology_before = repr(c["g"].tensor_topology())
@@ -262,7 +262,8 @@ def _config_tensor(mesh_device, config_mapper, sp_factor):
             mesh_device, torch.zeros((sp_factor, 2), dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
     assert config_mapper == "shard_1d"
-    # One row per chip along the SP axis (the production labelling, collapsed to 1-D on a 1x2 mesh).
+    # One row per chip along the SP axis, under the collapsed 1-D label. Production splits the rows the same way under
+    # one placement per mesh axis (ShardTensor2dMesh(dims=(0, None)), SP on mesh axis 0): shard_2d on this mesh.
     return _sharded_1d(
         mesh_device,
         torch.zeros((sp_factor, 2), dtype=torch.int32),
@@ -281,7 +282,7 @@ def _read_rows(config):
 @pytest.mark.parametrize("config_mapper", ["replicate_1d", "shard_1d", "shard_2d"])
 def test_moe_padding_config_topology(mesh_device, config_mapper):
     """config carries a collapsed 1-D label; the first call uses replicated metadata (production), the second
-    2-D-sharded metadata with a different ``actual_end`` per device. ``shard_1d`` (the production labelling): the
+    2-D-sharded metadata with a different ``actual_end`` per device. ``shard_1d``: the
     metadata is sharded only where the config already is, so the config keeps its 1-D label although the union
     would be the 2-D one; ``shard_2d``, the same split with one placement per mesh axis, keeps its label too.
     ``replicate_1d``: every device computes a different row, so the config takes the
