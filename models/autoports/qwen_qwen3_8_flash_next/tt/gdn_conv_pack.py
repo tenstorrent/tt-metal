@@ -7,15 +7,30 @@ zero predecessor is prepared by the B32 owner before trace capture and shared
 by its compact decode views.
 """
 
+import os
+
 import ttnn
 
 WIDTHS = (512, 512, 1536)
 
 
-def history_convolution(model, projected):
-    batch, seq, width = projected.shape
+def flat_gdn_batches():
+    """Row counts that use the packed history convolution (and the flat GDN decode path).
+
+    QWEN_FLASH_GDN_FLAT_B4=1 adds the 4-row view (one to four users).
+    """
+    return (4, 8, 16, 32) if os.environ.get("QWEN_FLASH_GDN_FLAT_B4", "0") == "1" else (8, 16, 32)
+
+
+def history_convolution(model, projected, *, flat=False):
+    """projected: [B,1,2560] per-lane tiles, or with flat=True the [1,1,B,2560] row block."""
+    if flat:
+        batch, width = projected.shape[-2], projected.shape[-1]
+        seq = 1
+    else:
+        batch, seq, width = projected.shape
     if (
-        batch not in (8, 16, 32)
+        batch not in flat_gdn_batches()
         or seq != 1
         or width != 2560
         or projected.dtype != ttnn.bfloat16
@@ -24,6 +39,8 @@ def history_convolution(model, projected):
         raise ValueError("History convolution requires prepared BF16 B8/16/32 decode")
     history = ttnn.to_layout(model.conv_state, ttnn.ROW_MAJOR_LAYOUT)
     current = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
+    if flat:
+        current = ttnn.reshape(current, (batch, 1, width))
     joined = ttnn.concat([history, current], dim=1)
     sequence = ttnn.reshape(joined, (1, 4 * batch, width))
     outputs = ttnn.experimental.kda.qkv_causal_conv1d_silu(

@@ -15,6 +15,7 @@ output. A caller may stream chunks with absolute positions to bound input and
 output storage at the full advertised context. Runtime never reads host data.
 """
 
+import os
 from collections.abc import Mapping
 
 import ttnn
@@ -876,6 +877,8 @@ class FusedQSA(QSA):
         )
         cos = ttnn.reshape(ttnn.embedding(indices, self.cos, layout=ttnn.TILE_LAYOUT), (batch, 1, seq, 64))
         sin = ttnn.reshape(ttnn.embedding(indices, self.sin, layout=ttnn.TILE_LAYOUT), (batch, 1, seq, 64))
+        if seq == 1 and batch > 1 and os.environ.get("QWEN_FLASH_BATCHED_ROPE", "0") == "1":
+            return _batched_rope(self, x, cos, sin)
         lanes = [
             ttnn.experimental.rotary_embedding(
                 x[b : b + 1, :, :, :64], cos[b : b + 1], sin[b : b + 1], compute_kernel_config=self.compute
@@ -1518,8 +1521,43 @@ def _shared_rope_tables(self, positions, batch, seq):
     return cos, sin
 
 
+def _rope_rotation(self):
+    """Rotate-half of a 64-wide head slice as a signed permutation matrix [64,64]; allocated once
+    per attention object and shared by its decode views."""
+    m = getattr(self, "_rope_rotation_matrix", None)
+    if m is None:
+        import torch  # Setup only.
+
+        m = torch.zeros(64, 64)
+        m[32:64, :32] = -torch.eye(32)
+        m[:32, 32:64] = torch.eye(32)
+        kwargs = {}
+        if isinstance(self.device, ttnn.MeshDevice):
+            kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+        m = self._rope_rotation_matrix = ttnn.from_torch(
+            m.reshape(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, **kwargs
+        )
+    return m
+
+
+def _batched_rope(self, x, cos, sin):
+    """All lanes at once: x*cos + rotate_half(x)*sin on the first 64 columns, the rest passed through.
+
+    The products and the sum each round to BF16 once, which is the per-lane kernel's arithmetic
+    (BF16 intermediates), so results agree with the per-lane loop to within one BF16 ulp.
+    """
+    head = x[..., :64]
+    rotated = ttnn.matmul(head, _rope_rotation(self), compute_kernel_config=self.compute)
+    rotary = ttnn.add(ttnn.multiply(head, cos), ttnn.multiply(rotated, sin))
+    return ttnn.concat((rotary, x[..., 64:]), dim=-1)
+
+
 def _shared_apply_rope(self, x, cos, sin):
     batch, _, seq, _ = x.shape
+    if seq == 1 and batch > 1 and os.environ.get("QWEN_FLASH_BATCHED_ROPE", "0") == "1":
+        return _batched_rope(self, x, cos, sin)
+    if seq == 1 and batch > 1 and os.environ.get("QWEN_FLASH_ROPE_ALLOC_ONLY") == "1":
+        _rope_rotation(self)  # allocation-perturbation experiment only
     lanes = [
         ttnn.experimental.rotary_embedding(
             x[b : b + 1, :, :, :64], cos[b : b + 1], sin[b : b + 1], compute_kernel_config=self.compute

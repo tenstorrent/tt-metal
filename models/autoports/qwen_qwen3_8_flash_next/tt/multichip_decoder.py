@@ -8,12 +8,14 @@ Configure FABRIC_1D before opening the fixed 1x4 mesh.
 """
 
 import math
+import os
 from dataclasses import dataclass
 
 import ttnn
 from models.common.modules.tt_ccl import TT_CCL
 
 from .fused_decoder import FusedQSA, _PrefixView
+from .gdn_conv_pack import flat_gdn_batches
 from .optimized_decoder import OptimizedDecoder, OptimizedGatedDeltaNet, OptimizedQSA
 
 
@@ -201,6 +203,20 @@ class MeshOps:
         # leading dimension needs no replication of logical tile padding.
         return ttnn.sum(self.gather(value, 0), dim=0, keepdim=True)
 
+    @property
+    def exact_compute(self):
+        """HiFi4 with FP32 accumulation and no L1 packing: one-hot/0.25 matmuls stay exact."""
+        config = getattr(self, "_exact_compute", None)
+        if config is None:
+            config = self._exact_compute = ttnn.init_device_compute_kernel_config(
+                self.mesh.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        return config
+
     def scatter_reduce(self, value):
         original_dtype = value.dtype
         transfer = self.precision_ccl == "bfloat8_b" and value.dtype == ttnn.bfloat16 and value.shape[-1] >= 128
@@ -296,14 +312,49 @@ def _hidden_parts(value):
     ]
 
 
+def _to_flat(x):
+    """[1,B,1,N] (one padded tile row per lane) -> [1,1,B,N] (lanes as rows of one tile block)."""
+    b, n = x.shape[1], x.shape[-1]
+    return ttnn.to_layout(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, 1, b, n)), ttnn.TILE_LAYOUT)
+
+
+def _from_flat(x, b):
+    """[1,1,B,N] -> [1,B,1,N], the attention modules' per-lane contract."""
+    n = x.shape[-1]
+    return ttnn.to_layout(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, b, 1, n)), ttnn.TILE_LAYOUT)
+
+
+def _to_sm(x, memory_config=None):
+    """Flat [1,1,B,2560] -> stream-major [1,4,B,640]: stream j's 640 local columns become batch j."""
+    return ttnn.concat([x[..., j * 640 : (j + 1) * 640] for j in range(4)], dim=1, memory_config=memory_config)
+
+
+def _from_sm(x, memory_config=None):
+    """Stream-major [1,4,B,640] -> flat [1,1,B,2560]."""
+    return ttnn.concat([x[:, j : j + 1] for j in range(4)], dim=-1, memory_config=memory_config)
+
+
+def _sm_prefill(x):
+    """Single-request prefill rows ([1,1,S,2560], S > 1) take the stream-major HC implementation."""
+    shape = tuple(x.shape)
+    return shape[1] == 1 and shape[2] > 1 and os.environ.get("QWEN_FLASH_HC_SM_PREFILL", "1") == "1"
+
+
 class ParallelHyperConnection:
     def __init__(self, state, prefix, cfg, ops):
         import torch
 
         self.ops, self.eps = ops, cfg.rms_norm_eps
-        self.norm = ops.shards(
-            [x.reshape(1, 1, 4, 640) for x in _hidden_parts(1 + state[prefix + ".hc_norm.weight"].float())]
-        )
+        norm_parts = _hidden_parts(1 + state[prefix + ".hc_norm.weight"].float())
+        self.norm = ops.shards([x.reshape(1, 1, 4, 640) for x in norm_parts])
+        # Flat decode: rows of [1,1,4B,640] cycle through the four streams, so the
+        # gamma rows do too (sliced to 4B rows for the compact views).
+        self.norm_rows = ops.shards([x.reshape(1, 1, 4, 640).repeat(1, 1, 32, 1) for x in norm_parts])
+        # Exact one-hot expansion of a per-stream scalar over the flat [1,1,B,2560] stream layout.
+        inject_expand = torch.zeros(4, 2560)
+        for j in range(4):
+            inject_expand[j, j * 640 : (j + 1) * 640] = 1.0
+        self.inject_expand = ops.upload(inject_expand.reshape(1, 1, 4, 2560))
         packed = torch.cat(
             (
                 state[prefix + ".input_mix_weight_down.weight"].T / 4,
@@ -313,6 +364,16 @@ class ParallelHyperConnection:
         )
         self.read_weight = ops.shards([x.T for x in _hidden_parts(packed.T)], ttnn.bfloat8_b)
         self.up = ops.shards(_hidden_parts(state[prefix + ".input_mix_weight_up.weight"].T), ttnn.bfloat8_b)
+        # Stream-major decode (QWEN_FLASH_HC_SM): gamma as [1,4,1,640] and the up projection split per
+        # stream as [1,4,320,640], so norm, mix and mean run on the [1,4,B,640] residual directly.
+        self.norm_sm = ops.shards([x.reshape(1, 4, 1, 640) for x in norm_parts])
+        self.up_sm = ops.shards(
+            [
+                x.reshape(320, 4, 640).permute(1, 0, 2).reshape(1, 4, 320, 640)
+                for x in _hidden_parts(state[prefix + ".input_mix_weight_up.weight"].T)
+            ],
+            ttnn.bfloat8_b,
+        )
         self.compute = ttnn.init_device_compute_kernel_config(
             ops.mesh.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
@@ -320,6 +381,9 @@ class ParallelHyperConnection:
     def read(self, x, *, decode=False):
         if tuple(x.shape) == (1, 1, 1, 2560) or self.ops.l1_prefill:
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        if not decode and _sm_prefill(x):
+            # Bit-identical; the returned inject is stream-major [1,4,S,1], which write() recognises.
+            return self.read_sm_prefill(_to_sm(x, ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None))
         b, s = tuple(x.shape)[1:3]
         streams = self.ops.norm(ttnn.reshape(x, (1, b * s, 4, 640)), self.norm, self.eps)
         normalized = ttnn.reshape(streams, (1, b, s, 2560))
@@ -344,6 +408,9 @@ class ParallelHyperConnection:
         return self.ops.gather(mixed), inject
 
     def write(self, x, update, inject):
+        if tuple(inject.shape)[1] == 4 and inject.shape[-1] == 1 and _sm_prefill(x):
+            mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None
+            return _from_sm(self.write_sm_prefill(_to_sm(x, mem), update, inject), mem)
         if tuple(x.shape) == (1, 1, 1, 2560) or self.ops.l1_prefill:
             # Keep the local four-stream residual in L1 through the next HC
             # consumer. Mesh ownership remains four 640-wide hidden shards.
@@ -361,6 +428,143 @@ class ParallelHyperConnection:
             ttnn.multiply(ttnn.reshape(update, (1, b * s, 1, 640)), ttnn.reshape(inject, (1, b * s, 4, 1))),
         )
         return ttnn.reshape(result, x.shape)
+
+    def _norm_flat(self, x, b):
+        """Per-stream RMS norm of a flat [1,1,B,2560] residual (four 640-wide stream shards per row).
+
+        The rows are regrouped as [1,1,4B,640] so the same pre/post all-gather norm kernels
+        run per stream row; the per-row statistics do not depend on the tile grouping.
+        """
+        rows = ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, 1, 4 * b, 640)), ttnn.TILE_LAYOUT
+        )
+        weight = self.norm_rows if 4 * b == self.norm_rows.shape[-2] else self.norm_rows[:, :, : 4 * b, :]
+        streams = self.ops.norm(rows, weight, self.eps)
+        return ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(streams, ttnn.ROW_MAJOR_LAYOUT), (1, 1, b, 2560)), ttnn.TILE_LAYOUT
+        )
+
+    def read_flat(self, x):
+        """Decode read on a flat [1,1,B,2560] residual: read()'s math on compact tensors."""
+        b = x.shape[-2]
+        streams = self._norm_flat(x, b)
+        partial = self.ops.linear(
+            streams, self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
+        )
+        packed = ttnn.typecast(self.ops.reduce(partial), ttnn.bfloat16)
+        mix = ttnn.sigmoid(
+            self.ops.linear(ttnn.silu(packed[..., :320]), self.up, compute_kernel_config=self.compute, max_cores=5)
+        )
+        # Stack the four 640-wide stream columns as [1,4,B,640] and reduce with ttnn.mean: the same
+        # FPU reduction as read()'s mean over [1,B,4,640] (bit-identical). The exact one-hot matmul
+        # rounds differently (~8% of values by 1 ulp), which compounds over 96 reads (KL ~0.05).
+        prod = ttnn.multiply(mix, streams)
+        stacked = ttnn.concat([prod[..., j * 640 : (j + 1) * 640] for j in range(4)], dim=1)
+        mixed = ttnn.mean(stacked, dim=1, keepdim=True)
+        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
+        return self.ops.gather(mixed), inject
+
+    def write_flat(self, x, update, inject):
+        """x [1,1,B,2560] + (update [1,1,B,640] repeated per stream) * (inject [1,1,B,4] per stream)."""
+        scale = ttnn.matmul(inject, self.inject_expand, compute_kernel_config=self.ops.exact_compute)
+        if update.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            # The MoE shard arrives as bfloat8_b; write() sees it as BF16 (its layout round trip), so the
+            # product must not be rounded to bfloat8_b here.
+            update = ttnn.typecast(update, ttnn.bfloat16)
+        return ttnn.add(x, ttnn.multiply(ttnn.concat([update] * 4, dim=-1), scale))
+
+    def read_sm(self, x):
+        """Decode read on a stream-major [1,4,B,640] residual; bit-identical to read() per lane.
+
+        Returns the gathered [1,1,B,2560] mixed input and the per-stream inject as [1,4,B,1].
+        """
+        b = x.shape[-2]
+        streams = self.ops.norm(x, self.norm_sm, self.eps)
+        # The default program's K blocking (in0_block_w=2) is required: wider blocks accumulate in the FPU dest
+        # differently and change the result on real (heavy-tailed) activations.
+        partial = self.ops.linear(
+            _from_sm(streams), self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
+        )
+        packed = ttnn.typecast(self.ops.reduce(partial), ttnn.bfloat16)
+        # One K=320 product per stream (same sequential accumulation as the flat projection); the explicit
+        # 4x row batch lets the matmul spread over 20 cores (a broadcast in0 runs single-core).
+        mix = ttnn.sigmoid(
+            ttnn.matmul(
+                ttnn.concat([ttnn.silu(packed[..., :320])] * 4, dim=1),
+                self.up_sm,
+                compute_kernel_config=self.compute,
+                core_grid=ttnn.CoreGrid(y=4, x=5),
+            )
+        )
+        mixed = ttnn.mean(ttnn.multiply(mix, streams), dim=1, keepdim=True)
+        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
+        return self.ops.gather(mixed), ttnn.transpose(inject, 1, 3)
+
+    def _lane_mean(self, prod):
+        """Mean over the four streams of a flat [1,1,S,2560] product, bit-identical to read()'s ttnn.mean.
+
+        Rows are regrouped lane-major ([4S,640], row 4t+j: a dense row-major reinterpretation) and reduced
+        with a one-hot 0.25 matmul whose data operand holds each token's four stream values in adjacent
+        K rows; that reproduces the FPU reduce's rounding (the column-block/j-major forms do not).
+        """
+        s = prod.shape[-2]
+        mem = prod.memory_config()
+        groups = math.ceil(s / 32)
+        lanes = ttnn.reshape(ttnn.to_layout(prod, ttnn.ROW_MAJOR_LAYOUT), (1, 1, 4 * s, 640))
+        if 4 * s != groups * 128:
+            lanes = ttnn.pad(lanes, [(0, 0), (0, 0), (0, groups * 128 - 4 * s), (0, 0)], 0.0)
+        lanes = ttnn.view(ttnn.to_layout(lanes, ttnn.TILE_LAYOUT, memory_config=mem), (1, groups, 128, 640))
+        selector = self._lane_selector(groups)
+        mean = ttnn.matmul(
+            selector,
+            lanes,
+            compute_kernel_config=self.ops.exact_compute,
+            memory_config=mem,
+            core_grid=ttnn.CoreGrid(y=min(8, groups), x=10),
+        )
+        mean = ttnn.view(mean, (1, 1, groups * 32, 640))
+        return mean if groups * 32 == s else mean[:, :, :s, :]
+
+    def _lane_selector(self, groups):
+        cache = self.__dict__.setdefault("_selectors", {})
+        if groups not in cache:
+            import torch  # Setup only.
+
+            m = torch.zeros(32, 128)
+            for t in range(32):
+                m[t, 4 * t : 4 * t + 4] = 0.25
+            cache[groups] = self.ops.upload(m.reshape(1, 1, 32, 128).repeat(1, groups, 1, 1))
+        return cache[groups]
+
+    def read_sm_prefill(self, x):
+        """Prefill read (B=1, S>1) on a stream-major [1,4,S,640] residual; bit-identical to read().
+
+        Returns the gathered [1,1,S,2560] mixed input and the per-stream inject as [1,4,S,1].
+        """
+        mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else ttnn.DRAM_MEMORY_CONFIG
+        streams = self.ops.norm(x, self.norm_sm, self.eps)
+        flat = ttnn.concat([streams[:, j : j + 1] for j in range(4)], dim=-1, memory_config=mem)
+        partial = self.ops.linear(
+            flat, self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
+        )
+        packed = ttnn.typecast(self.ops.reduce(partial), ttnn.bfloat16)
+        mix = ttnn.sigmoid(
+            self.ops.linear(ttnn.silu(packed[..., :320]), self.up, compute_kernel_config=self.compute, max_cores=5)
+        )
+        mixed = self._lane_mean(ttnn.multiply(mix, flat, memory_config=mem))
+        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
+        return self.ops.gather(mixed), ttnn.transpose(inject, 1, 3)
+
+    def write_sm_prefill(self, x, update, inject):
+        """Prefill write on [1,4,S,640]; like write(), the update keeps its dtype through the product."""
+        mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None
+        return ttnn.add(x, ttnn.multiply(update, inject, memory_config=mem), memory_config=mem)
+
+    def write_sm(self, x, update, inject):
+        """x [1,4,B,640] + update [1,1,B,640] (broadcast over streams) * inject [1,4,B,1]."""
+        if update.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            update = ttnn.typecast(update, ttnn.bfloat16)
+        return ttnn.add(x, ttnn.multiply(update, inject))
 
 
 class ParallelMoE:
@@ -575,6 +779,10 @@ class ParallelMoE:
             result, ttnn.multiply(shared, router[..., 512:513], input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID])
         )
 
+    def forward_flat(self, x):
+        """Decode rows already packed as [1,1,B,2560]; returns the [1,1,B,640] hidden shard."""
+        return self.ops.scatter_reduce(self.group_packed(x))
+
     def __call__(self, x):
         b, s = tuple(x.shape)[1:3]
         if s == 1 and 1 < b <= 128:
@@ -584,10 +792,18 @@ class ParallelMoE:
             flat = ttnn.to_layout(
                 ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, 1, b, 2560)), ttnn.TILE_LAYOUT
             )
-            result = self.ops.scatter_reduce(self.group_packed(flat))
+            few = getattr(self, "single_token", None) is not None and b <= self.single_token.max_rows
+            if few:
+                from .moe_decode import group_single
+
+            result = self.ops.scatter_reduce(group_single(self, flat) if few else self.group_packed(flat))
             return ttnn.to_layout(
                 ttnn.reshape(ttnn.to_layout(result, ttnn.ROW_MAJOR_LAYOUT), (1, b, 1, 640)), ttnn.TILE_LAYOUT
             )
+        if s == 1 and b == 1 and getattr(self, "single_token", None) is not None:
+            from .moe_decode import group_single
+
+            return self.ops.scatter_reduce(group_single(self, x))
         if s == 1:
             lanes = [self.group_native(x[:, lane : lane + 1, :, :]) for lane in range(b)]
             return self.ops.scatter_reduce(lanes[0] if len(lanes) == 1 else ttnn.concat(lanes, dim=1))
@@ -898,6 +1114,10 @@ class AttentionOutputProjection:
             allowed_worker_cores=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 0))]),
         )
 
+    def flat(self, x):
+        """Rows already packed as [1,1,B,1536]: row-parallel projection, reduce-scattered."""
+        return self.ops.scatter_reduce(self.ops.linear(x, self.row_weight, compute_kernel_config=self.compute))
+
     def __call__(self, x, *, concatenated=False):
         shape = tuple(x.shape)
         if shape[-2:] != (1, 1536) or math.prod(shape[:-2]) != 1:
@@ -1060,14 +1280,15 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             workers = max(1, len(coords) // self.batch_size)
             coords = coords[: workers * self.batch_size]
             cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
-            args = [tiles, tile_bytes, self.max_requests, int(store), workers]
+            depth = -(-tiles // workers) if os.environ.get("QWEN_FLASH_STATE_DEPTH", "max") == "max" else 1
+            args = [tiles, tile_bytes, self.max_requests, int(store), workers, depth]
             for tensor in tensors:
                 args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
             cb = ttnn.CBDescriptor(
-                total_size=tile_bytes + 256,
+                total_size=depth * tile_bytes + 256,
                 core_ranges=cores,
                 format_descriptors=[
-                    ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=tile_bytes + 256)
+                    ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=depth * tile_bytes + 256)
                 ],
             )
             kernel = ttnn.KernelDescriptor(
@@ -1083,18 +1304,44 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             )
             ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
 
+    def decode_forward_flat(self, flat, *, current_positions=None, slots=None):
+        """One token per lane from a flat [1,1,B,2560] input; returns the flat [1,1,B,640] shard.
+
+        Same state routing and arithmetic as decode_forward; the projection runs on the
+        compact row block and only the kernels that index per-lane tiles see that layout.
+        """
+        if tuple(flat.shape) != (1, 1, self.batch_size, 2560):
+            raise ValueError("decode_forward_flat expects [1,1,B,2560]")
+        self._conv_decode_phase = True
+        self.output_sequence = 1
+        if slots is not None:
+            if current_positions is None:
+                raise ValueError("Slot routing requires device current_positions")
+            self._route_state(slots, current_positions, store=False)
+        else:
+            self._reset_fresh_lanes(current_positions)
+        projections = self.ops.linear(flat, self.packed_weight, compute_kernel_config=self.projection_compute)
+        out = self._chunk_body(projections, self.batch_size, 1, flat=True)
+        if slots is not None:
+            self._route_state(slots, current_positions, store=True)
+        return out
+
     def _chunk(self, x):
         b, s, _ = x.shape
+        return self._chunk_body(self._linear(x, self.packed_weight), b, s)
+
+    def _chunk_body(self, projections, b, s, *, flat=False):
         padded = (s + 31) // 32 * 32
-        projections = self._linear(x, self.packed_weight)
         projected = projections[..., :2560]
         self._decode_conv_history_packed = (
-            self._conv_decode_phase and b in (8, 16, 32) and s == 1 and self.conv_decode_history_enabled
+            self._conv_decode_phase and b in flat_gdn_batches() and s == 1 and self.conv_decode_history_enabled
         )
+        if flat and not self._decode_conv_history_packed:
+            raise ValueError("Flat decode requires the packed history convolution")
         if self._decode_conv_history_packed:
             from .gdn_conv_pack import history_convolution
 
-            q, k, v = history_convolution(self, projected)
+            q, k, v = history_convolution(self, projected, flat=flat)
         else:
             proj = ttnn.pad(projected, [(0, 0), (0, padded - s), (0, 0)], 0) if padded != s else projected
             lanes = []
@@ -1116,7 +1363,7 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
                 )
             q, k, v = [ttnn.concat([row[i] for row in lanes], dim=0) if b > 1 else lanes[0][i] for i in range(3)]
             q, k, v = [ttnn.to_layout(t[:, :s, :], ttnn.TILE_LAYOUT) for t in (q, k, v)]
-        self._roll_conv(projected)
+        self._roll_conv(projected, flat=flat)
         a = ttnn.typecast(ttnn.to_layout(projections[..., 4096:4108], ttnn.TILE_LAYOUT), ttnn.float32)
         # Chunked prefill consumes log-space decay; every other recurrence takes exp(g).
         g = ttnn.multiply(
@@ -1125,9 +1372,14 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             activations=[] if getattr(self, "prefill_log_decay", False) else [ttnn.UnaryOpType.EXP],
         )
         beta = ttnn.typecast(ttnn.sigmoid(ttnn.to_layout(projections[..., 4128:4140], ttnn.TILE_LAYOUT)), ttnn.float32)
-        o, new_state = self._recurrence(q, k, v, g, beta)
+        o, new_state = self._recurrence(q, k, v, g, beta, **({"flat_scalars": True} if flat else {}))
         o = ttnn.typecast(o, ttnn.bfloat16)
         gate = projections[..., 2560:4096]
+        if flat:
+            # The gated norm indexes per-lane tiles.
+            gate = ttnn.to_layout(
+                ttnn.reshape(ttnn.to_layout(gate, ttnn.ROW_MAJOR_LAYOUT), (b, 1, 1536)), ttnn.TILE_LAYOUT
+            )
         if padded != s:
             o = ttnn.pad(o, [(0, 0), (0, 0), (0, padded - s), (0, 0)], 0)
             gate = ttnn.pad(gate, [(0, 0), (0, padded - s), (0, 0)], 0)
@@ -1142,9 +1394,14 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             output_dtype=ttnn.bfloat16,
         )
         gated = ttnn.to_layout(gated[:, :s, :], ttnn.TILE_LAYOUT)
+        if flat:
+            gated = ttnn.to_layout(
+                ttnn.reshape(ttnn.to_layout(gated, ttnn.ROW_MAJOR_LAYOUT), (1, 1, b, 1536)), ttnn.TILE_LAYOUT
+            )
+            return self.output_projection.flat(gated)
         return self.output_projection(gated, concatenated=self.output_sequence > 1)
 
-    def _recurrence(self, q, k, v, g, beta):
+    def _recurrence(self, q, k, v, g, beta, *, flat_scalars=False):
         b, s, _ = q.shape
         q = self._heads(q, b, s, 4)
         k = self._heads(k, b, s, 4)
@@ -1155,15 +1412,15 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             ttnn.typecast(k, ttnn.float32), weight=self.kscale, epsilon=1e-06 / 128, compute_kernel_config=self.compute
         )
         v = ttnn.typecast(self._heads(v, b, s, 12), ttnn.float32)
-        return _local_recurrence(self, q, k, v, g, beta)
+        return _local_recurrence(self, q, k, v, g, beta, flat_scalars=flat_scalars)
 
-    def _roll_conv(self, projected):
-        b, s, _ = projected.shape
+    def _roll_conv(self, projected, *, flat=False):
+        b, s = (self.batch_size, 1) if flat else tuple(projected.shape)[:2]
         workers = 80
         coords = [ttnn.CoreCoord(i % 10, i // 10) for i in range(workers)]
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
         tensors = [self.conv_state, projected]
-        args = [b, s, workers]
+        args = [b, s, workers, int(flat)]
         for t in tensors:
             args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
         k = ttnn.KernelDescriptor(
@@ -1182,8 +1439,11 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
         ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[k], cbs=[cb]))
 
 
-def _local_recurrence(self, q, k, v, g, beta):
-    """Exact token recurrence; prefill keeps FP32 state in aliased local buffers."""
+def _local_recurrence(self, q, k, v, g, beta, *, flat_scalars=False):
+    """Exact token recurrence; prefill keeps FP32 state in aliased local buffers.
+
+    flat_scalars: decay/beta are [1,1,B,12] (lane rows) instead of [B,1,12] (lane tiles).
+    """
     batch, length = q.shape[0], q.shape[1]
     # Query normalization already applied the scale as its output activation.
     decay = g  # Already exponentiated by the multiply output activation.
@@ -1201,7 +1461,7 @@ def _local_recurrence(self, q, k, v, g, beta):
     workers = min(jobs, grid.x * grid.y)
     coords = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(workers)]
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
-    args = []
+    args = [int(flat_scalars)]
     for tensor in tensors:
         args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
     assignments = [(i * jobs // workers, (i + 1) * jobs // workers - i * jobs // workers) for i in range(workers)]
@@ -1342,7 +1602,8 @@ uint32_t off(uint32_t r, uint32_t c) {
     return (r/16)*512 + (c/16)*256 + (r%16)*16 + c%16;
 }
 void kernel_main() {
-    constexpr auto qa = TensorAccessorArgs<0>();
+    constexpr bool flat_scalars = get_compile_time_arg_val(0) != 0;
+    constexpr auto qa = TensorAccessorArgs<1>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
     constexpr auto da = TensorAccessorArgs<va.next_compile_time_args_offset()>();
@@ -1400,10 +1661,11 @@ void kernel_main() {
         }
         for(uint32_t which=4;which<=5;++which) {
             cb_reserve_back(which,1);
-            if(which==4) noc.async_read(decay,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=b+h/32},{});
-            else noc.async_read(beta,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=b+h/32},{});
+            const uint32_t spage = flat_scalars ? b/32 : b+h/32;
+            if(which==4) noc.async_read(decay,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=spage},{});
+            else noc.async_read(beta,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=spage},{});
             noc.async_read_barrier();
-            const uint32_t value=src[off(0,h%32)];
+            const uint32_t value=flat_scalars ? src[off(b%32,h)] : src[off(0,h%32)];
             auto dst=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(which));
             for(uint32_t i=0;i<1024;++i) dst[i]=value;
             cb_push_back(which,1);
@@ -1440,7 +1702,8 @@ uint32_t off(uint32_t r, uint32_t c) {
     return (r/16)*512 + (c/16)*256 + (r%16)*16 + c%16;
 }
 void kernel_main() {
-    constexpr auto qa = TensorAccessorArgs<0>();
+    constexpr bool flat_scalars = get_compile_time_arg_val(0) != 0;
+    constexpr auto qa = TensorAccessorArgs<1>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
     constexpr auto da = TensorAccessorArgs<va.next_compile_time_args_offset()>();
@@ -1587,7 +1850,8 @@ _LOCAL_ROLL_SOURCE = r"""
 #include "api/tensor/noc_traits.h"
 void kernel_main() {
     constexpr uint32_t B=get_compile_time_arg_val(0), S=get_compile_time_arg_val(1), W=get_compile_time_arg_val(2);
-    constexpr auto ca=TensorAccessorArgs<3>();
+    constexpr bool FLAT=get_compile_time_arg_val(3)!=0;  // proj is [1,1,B*S,2560]: lane-major rows
+    constexpr auto ca=TensorAccessorArgs<4>();
     constexpr auto pa=TensorAccessorArgs<ca.next_compile_time_args_offset()>();
     const auto cache=TensorAccessor(ca,get_arg_val<uint32_t>(0));
     const auto proj=TensorAccessor(pa,get_arg_val<uint32_t>(1));
@@ -1604,12 +1868,15 @@ void kernel_main() {
             const uint32_t history=S+r;
             const bool from_old=history<3;
             const uint32_t row=from_old?history:history-3;
-            if(!from_old && loaded!=row/32) {
-                noc.async_read(proj,CoreLocalMem<uint32_t>(base+2048),2048,{.page_id=(b*((S+31)/32)+row/32)*80+c},{});
-                noc.async_read_barrier();loaded=row/32;
+            const uint32_t prow=FLAT?b*S+row:row;
+            const uint32_t ptile=FLAT?prow/32:b*((S+31)/32)+row/32;
+            if(!from_old && loaded!=ptile) {
+                noc.async_read(proj,CoreLocalMem<uint32_t>(base+2048),2048,{.page_id=ptile*80+c},{});
+                noc.async_read_barrier();loaded=ptile;
             }
+            const uint32_t srow=from_old?row:prow;  // old history rows are per-lane tiles in both layouts
             for(uint32_t side=0;side<2;++side)for(uint32_t j=0;j<16;++j) {
-                const uint32_t offset=(row%32/16)*512+side*256+(row%16)*16+j;
+                const uint32_t offset=(srow%32/16)*512+side*256+(srow%16)*16+j;
                 out[side*256+r*16+j]=from_old?old[offset]:src[offset];
             }
         }
@@ -1723,6 +1990,15 @@ class ParallelQSA(OptimizedQSA):
         )
         obj.packed_cache = ttnn.empty(
             (1, 1, obj.pool_tokens, 512), dtype=obj.cache_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=ops.mesh
+        )
+        # Serving decode gathers every lane's pooled-key prefix into one lane-major dense
+        # buffer in a single program; the per-lane scorer then selects its slot by index.
+        # The compact decode views reuse the owner's buffer (they gather only their lanes).
+        obj.pooled_keys_all = (
+            ttnn.empty((batch_size, 1, obj.blocks, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=ops.mesh)
+            # 512 MB per attention layer at 262K context: only with batched selection (off by default).
+            if obj.paged_pooled and batch_size == 32 and os.environ.get("QWEN_FLASH_BATCHED_SELECT", "0") == "1"
+            else None
         )
         return obj
 
@@ -2563,6 +2839,10 @@ class MultichipDecoder(OptimizedDecoder):
                     cache=self.ple_cache,
                 ),
             )
+        if decode and self.batch_size > 1 and size == 1 and os.environ.get("QWEN_FLASH_FLAT_HC", "1") == "1":
+            return self._decode_flat(x, positions=positions, slots=slots, page_table=page_table)
+        if not decode and x.shape[1] == 1 and size > 1 and os.environ.get("QWEN_FLASH_HC_SM_PREFILL", "1") == "1":
+            return self._prefill_sm(x, positions=positions, slots=slots, page_table=page_table)
         mixed, inject = self.attn_hyper.read(x, decode=decode)
         forward = self.attention.decode_forward if decode else self.attention.prefill_forward
         if self.kind == "linear_attention":
@@ -2572,6 +2852,107 @@ class MultichipDecoder(OptimizedDecoder):
         x = self.attn_hyper.write(x, update, inject)
         mixed, inject = self.mlp_hyper.read(x, decode=decode)
         return self.mlp_hyper.write(x, self.mlp(mixed), inject)
+
+    def decode_forward_sm(self, x, *, current_positions, slots=None, tokens=None, page_table=None):
+        """Multi-lane decode on a stream-major [1,4,B,640] residual (kept across layers by the model)."""
+        b = self.batch_size
+        if self.ple is not None:
+            lane = _from_flat(_from_sm(x), b)
+            ple = self.ple.forward(
+                lane,
+                tokens=tokens,
+                positions=current_positions,
+                slots=slots,
+                valid_lengths=self.lengths[1],
+                cache=self.ple_cache,
+            )
+            x = ttnn.add(x, _to_sm(_to_flat(ple)))
+        return self._decode_sm(x, positions=current_positions, slots=slots, page_table=page_table)
+
+    def _prefill_sm(self, x, *, positions, slots, page_table):
+        """One-request prefill chunk with stream-major hyper-connections (bit-identical to the per-token path)."""
+        mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None
+        stream = ttnn.concat([x[..., j * 640 : (j + 1) * 640] for j in range(4)], dim=1, memory_config=mem)
+        mixed, inject = self.attn_hyper.read_sm_prefill(stream)
+        if self.kind == "linear_attention":
+            update = self.attention.prefill_forward(mixed, current_positions=positions, slots=slots)
+        else:
+            update = self.attention.prefill_forward(mixed, current_pos=positions, page_table=page_table, slots=slots)
+        stream = self.attn_hyper.write_sm_prefill(stream, update, inject)
+        mixed, inject = self.mlp_hyper.read_sm_prefill(stream)
+        stream = self.mlp_hyper.write_sm_prefill(stream, self.mlp(mixed), inject)
+        return ttnn.concat([stream[:, j : j + 1] for j in range(4)], dim=-1, memory_config=mem)
+
+    def _decode_sm(self, x, *, positions, slots, page_table):
+        b = self.batch_size
+        mixed, inject = self.attn_hyper.read_sm(x)
+        if (
+            self.kind == "linear_attention"
+            and self.attention.conv_decode_history_enabled
+            and b in flat_gdn_batches()
+            and os.environ.get("QWEN_FLASH_FLAT_GDN", "1") == "1"
+        ):
+            update = self.attention.decode_forward_flat(mixed, current_positions=positions, slots=slots)
+        elif self.kind == "linear_attention":
+            update = _to_flat(
+                self.attention.decode_forward(_from_flat(mixed, b), current_positions=positions, slots=slots)
+            )
+        else:
+            update = _to_flat(
+                self.attention.decode_forward(
+                    _from_flat(mixed, b), current_pos=positions, page_table=page_table, slots=slots
+                )
+            )
+        x = self.attn_hyper.write_sm(x, update, inject)
+        mixed, inject = self.mlp_hyper.read_sm(x)
+        return self.mlp_hyper.write_sm(x, self.mlp.forward_flat(mixed), inject)
+
+    def _decode_flat(self, x, *, positions, slots, page_table):
+        """Multi-lane decode with the residual as one [1,1,B,2560] row block through HC and MoE.
+
+        The attention modules keep their per-lane [1,B,1,2560] contract at their boundary.
+        """
+        b = self.batch_size
+        if os.environ.get("QWEN_FLASH_HC_SM", "1") == "1":
+            return _from_flat(
+                _from_sm(self._decode_sm(_to_sm(_to_flat(x)), positions=positions, slots=slots, page_table=page_table)),
+                b,
+            )
+        flat = _to_flat(x)
+
+        # Precision bisection switches: route one HC half through the per-lane implementation via exact
+        # layout conversions (QWEN_FLASH_FLAT_HC_READ=0 / QWEN_FLASH_FLAT_HC_WRITE=0).
+        def read(hyper, value):
+            if os.environ.get("QWEN_FLASH_FLAT_HC_READ", "1") == "1":
+                return hyper.read_flat(value)
+            m, inj = hyper.read(_from_flat(value, b), decode=True)
+            return _to_flat(m), _to_flat(inj)
+
+        def write(hyper, value, update, inj):
+            if os.environ.get("QWEN_FLASH_FLAT_HC_WRITE", "1") == "1":
+                return hyper.write_flat(value, update, inj)
+            return _to_flat(hyper.write(_from_flat(value, b), _from_flat(update, b), _from_flat(inj, b)))
+
+        mixed, inject = read(self.attn_hyper, flat)
+        if (
+            self.kind == "linear_attention"
+            and self.attention.conv_decode_history_enabled
+            and b in flat_gdn_batches()
+            and os.environ.get("QWEN_FLASH_FLAT_GDN", "1") == "1"
+        ):
+            update = self.attention.decode_forward_flat(mixed, current_positions=positions, slots=slots)
+        elif self.kind == "linear_attention":
+            mixed = _from_flat(mixed, b)
+            update = _to_flat(self.attention.decode_forward(mixed, current_positions=positions, slots=slots))
+        else:
+            mixed = _from_flat(mixed, b)
+            update = _to_flat(
+                self.attention.decode_forward(mixed, current_pos=positions, page_table=page_table, slots=slots)
+            )
+        flat = write(self.attn_hyper, flat, update, inject)
+        mixed, inject = read(self.mlp_hyper, flat)
+        flat = write(self.mlp_hyper, flat, self.mlp.forward_flat(mixed), inject)
+        return _from_flat(flat, b)
 
     def prefill_forward(self, hidden_states, *, current_positions, slots=None, tokens=None, page_table=None):
         if tuple(hidden_states.shape)[:2] != (1, self.batch_size) or hidden_states.shape[-1] != 2560:
