@@ -1920,12 +1920,13 @@ ttnn::device_operation::ProgramArtifacts create_dram_sharded_artifacts(
 namespace {
 // Whether every chip of the workload gets the same reader placement (one chip, a mesh of identically harvested
 // chips): one program then serves them all. The primary readers (each bank's NOC-optimal worker, on both NoCs) must
-// agree, and with several readers per bank so must the secondary ones: those are picked by each chip's own NoC hop
-// distances, which can differ between chips whose primary readers agree. The multi-core pipeline's cores depend only
-// on the primary readers.
+// agree. With several readers per bank on the multicast pipeline so must the secondary ones: those are picked by
+// each chip's own NoC hop distances, which can differ between chips whose primary readers agree (compare_secondary).
+// The multi-core pipeline's cores depend only on the primary readers.
 bool same_dram_bank_workers(
     tt::tt_metal::distributed::MeshDevice& device,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    bool compare_secondary,
     uint32_t workers_per_bank,
     const CoreRangeSet& input_storage_cores) {
     const auto coords = tensor_coords.coords();
@@ -1940,7 +1941,7 @@ bool same_dram_bank_workers(
             }
         }
     }
-    if (workers_per_bank > 1 && device.arch() != tt::ARCH::QUASAR) {
+    if (compare_secondary && workers_per_bank > 1 && device.arch() != tt::ARCH::QUASAR) {
         const tt::tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
         const auto readers = [&](const tt::tt_metal::distributed::MeshCoordinate& coord) {
             std::vector<CoreCoord> cores;
@@ -1977,8 +1978,20 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_art
     auto& device = *a.device();
     const auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
         operation_attributes.program_config.value());
+    // the multi-core pipeline places its cores from the primary readers only (the same predicate the factory uses)
+    const bool multicore = dram_sharded_helpers::use_dram_sharded_multicore(
+        program_config.use_multicore_pipeline,
+        program_config.num_workers_per_dram_bank,
+        tensor_args.optional_input_tensors.at(0).has_value(),
+        program_config.fused_activation.has_value(),
+        operation_attributes.untilize_out,
+        a.tensor_spec().tile(),
+        tensor_args.input_tensors.at(1).tensor_spec().tile(),
+        a.logical_shape()[-1],
+        a.memory_config().buffer_type(),
+        tensor_return_value.at(0).memory_config());
     if (same_dram_bank_workers(
-            device, tensor_coords, program_config.num_workers_per_dram_bank, a.shard_spec().value().grid)) {
+            device, tensor_coords, !multicore, program_config.num_workers_per_dram_bank, a.shard_spec().value().grid)) {
         for (const auto& range : tensor_coords.ranges()) {
             const auto& coord = range.start_coord();
             auto shared = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, coord);
