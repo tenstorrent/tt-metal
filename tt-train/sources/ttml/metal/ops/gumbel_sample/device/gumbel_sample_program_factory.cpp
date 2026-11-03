@@ -222,7 +222,7 @@ tt::tt_metal::Program build_program(
     const GumbelSampleLayout& layout,
     uint32_t device_index,
     GumbelSampleSharedVariables& shared_vars) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*tensor_args.logits.device());
 
     const auto& logits = tensor_args.logits;
     const bool has_mask = tensor_args.logits_mask.has_value();
