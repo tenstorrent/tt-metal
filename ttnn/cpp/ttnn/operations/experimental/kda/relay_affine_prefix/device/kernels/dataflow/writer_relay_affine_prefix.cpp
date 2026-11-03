@@ -23,9 +23,9 @@ void kernel_main() {
     size_t arg = 0;
     const uint32_t entry_address = get_common_arg_val<uint32_t>(0);
     const uint32_t final_address = get_common_arg_val<uint32_t>(1);
-    // The landing buffer's slots: this head's entry state (cb_ein storage), staging, the last rank's final state.
+    // The landing buffer's slots: this head's entry state (cb_ein storage), the last rank's final state.
     const uint32_t ein_address = get_common_arg_val<uint32_t>(2);
-    const uint32_t final_landing = ein_address + 2 * state_tiles * get_tile_size(cb_eout);
+    const uint32_t final_landing = ein_address + state_tiles * get_tile_size(cb_eout);
     const uint32_t head = get_arg_val<uint32_t>(arg++);
     const uint32_t final_semaphore = get_arg_val<uint32_t>(arg++);
     const uint32_t notify_semaphore_id = get_arg_val<uint32_t>(arg++);  // this head's column count on its sender

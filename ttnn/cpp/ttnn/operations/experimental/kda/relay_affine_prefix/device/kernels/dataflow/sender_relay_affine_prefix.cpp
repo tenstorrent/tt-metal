@@ -13,21 +13,19 @@
 using namespace tt::tt_fabric;
 
 constexpr uint32_t cb_stage = get_compile_time_arg_val(0);
-constexpr uint32_t sp_rank = get_compile_time_arg_val(1);
-constexpr uint32_t sp_size = get_compile_time_arg_val(2);
-constexpr uint32_t local_rows = get_compile_time_arg_val(3);
-constexpr uint32_t unit_bytes = get_compile_time_arg_val(4);        // one tile column of a head's state
-constexpr uint32_t chunk_bytes = get_compile_time_arg_val(5);       // one fabric packet
-constexpr uint32_t kt = get_compile_time_arg_val(6);                // tile columns per state
-constexpr uint32_t slots = get_compile_time_arg_val(7);             // unit buffers
-constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(8);  // on the head cores
+constexpr uint32_t cb_eout = get_compile_time_arg_val(1);  // at the same address on the head cores
+constexpr uint32_t sp_rank = get_compile_time_arg_val(2);
+constexpr uint32_t sp_size = get_compile_time_arg_val(3);
+constexpr uint32_t local_rows = get_compile_time_arg_val(4);
+constexpr uint32_t unit_bytes = get_compile_time_arg_val(5);        // one tile column of a head's state
+constexpr uint32_t chunk_bytes = get_compile_time_arg_val(6);       // one fabric packet
+constexpr uint32_t kt = get_compile_time_arg_val(7);                // tile columns per state
+constexpr uint32_t slots = get_compile_time_arg_val(8);             // unit buffers
+constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(9);  // on the head cores
 // 1D routing: hops to the successor, 1 forward, or sp_size - 1 backward from the last rank of a line.
-constexpr uint32_t successor_hops = get_compile_time_arg_val(9);
-constexpr auto start_args = TensorAccessorArgs<10>();
+constexpr uint32_t successor_hops = get_compile_time_arg_val(10);
+constexpr auto start_args = TensorAccessorArgs<11>();
 constexpr uint32_t chunks = (unit_bytes + chunk_bytes - 1) / chunk_bytes;
-#if defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)
-#define RELAY_ROUTES_2D 1
-#endif
 // One packet header per packet of each slot, out of this RISC's share of the pool.
 static_assert(
     slots * chunks <= MEM_PACKET_HEADER_POOL_SIZE / MaxDMProcessorsPerCoreType / PACKET_HEADER_MAX_SIZE,
@@ -38,11 +36,10 @@ static_assert(
 void kernel_main() {
     size_t arg = 0;
     const uint32_t start_address = get_common_arg_val<uint32_t>(0);
-    // The landing buffer's slots (same on every head core): the successor's entry state, a head's finished state, the
-    // first rank's final state.
+    // The landing buffer's slots (same on every head core): the successor's entry state, the first rank's final state.
     const uint32_t ein_landing = get_common_arg_val<uint32_t>(1);
-    const uint32_t eout_address = ein_landing + kt * unit_bytes;
-    const uint32_t final_landing = ein_landing + 2 * kt * unit_bytes;
+    const uint32_t final_landing = ein_landing + kt * unit_bytes;
+    const uint32_t eout_address = get_write_ptr(cb_eout);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint32_t arrival_semaphore = get_arg_val<uint32_t>(arg++);
@@ -75,7 +72,7 @@ void kernel_main() {
     for (uint32_t b = 0; b < slots; ++b) {
         for (uint32_t c = 0; c < chunks; ++c) {
             hdrs[b][c] = PacketHeaderPool::allocate_header();
-#if defined(RELAY_ROUTES_2D)
+#if defined(FABRIC_2D)
             // 2D routing: the hand-off from the last rank to the first crosses the mesh when the fabric does not wrap
             // the SP axis.
             (void)fabric_set_unicast_route(hdrs[b][c], dst_chip_id, dst_mesh_id);
@@ -90,8 +87,10 @@ void kernel_main() {
     conn.open();
     const uint32_t units = num_heads * kt;
     const auto head_xy = [&](uint32_t u) { return get_arg_val<uint32_t>(head_args + u / kt); };
-    // Head k's writer counts its finished columns into its count semaphore on this core.
+    // Head k's writer counts its finished columns into its count semaphore on this core. Blackhole's data-movement
+    // RISCs cache L1: invalidate before each poll, as noc_semaphore_wait_min does.
     const auto ready = [&](uint32_t u) {
+        invalidate_l1_cache();
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                    get_semaphore(get_arg_val<uint32_t>(notify_args + u / kt)))[0] >= u % kt + 1;
     };

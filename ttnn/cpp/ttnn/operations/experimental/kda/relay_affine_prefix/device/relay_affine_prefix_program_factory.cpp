@@ -66,6 +66,9 @@ tt::tt_metal::ProgramDescriptor build_program(
         attrs.cores.begin() + batch_heads, attrs.cores.begin() + batch_heads + attrs.num_links);
     const auto head_set = kda_factory_detail::merged_core_set(head_cores);
     const auto sender_set = kda_factory_detail::merged_core_set(sender_cores);
+    // The next state stages in a program CB at one address on every head and sender core: a sender reads a head's
+    // columns at its own cb_eout address.
+    const auto eout_set = head_set.merge(sender_set);
 
     const uint32_t sender_slots = relay_affine_prefix_sender_slots(kt, mesh->arch());
     // A K x K slot of the landing buffer on each head core, in place.
@@ -79,7 +82,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         kda_factory_detail::cb_descriptor(cb_a, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
         kda_factory_detail::cb_descriptor(cb_b, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
         landing_slot_cb(cb_ein, 0),
-        landing_slot_cb(cb_eout, 1),
+        kda_factory_detail::cb_descriptor(cb_eout, state_tiles, state_tile, tt::DataFormat::Float32, eout_set),
         kda_factory_detail::cb_descriptor(cb_chron, 1, 64, tt::DataFormat::UInt32, head_set),
         // One page: the sender addresses its slots itself.
         kda_factory_detail::cb_descriptor(
@@ -106,7 +109,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (const auto* tensor : {&entry, &final_state}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(writer_ct);
     }
-    std::vector<uint32_t> sender_ct = {cb_stage};
+    std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
         sender_ct.end(),
@@ -141,6 +144,9 @@ tt::tt_metal::ProgramDescriptor build_program(
             tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0},
     };
+    if (fabric_2d) {
+        sender.defines.emplace_back("FABRIC_2D", "1");
+    }
 
     const auto [arrival_address, final_address] = attrs.semaphore_addresses;
     // Every core reads the same buffers, so they are bound once per kernel.
