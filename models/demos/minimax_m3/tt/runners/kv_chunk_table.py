@@ -31,8 +31,6 @@ user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_
 repeated per config with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and column set.
 """
 
-import socket
-
 from loguru import logger
 
 import ttnn
@@ -161,6 +159,8 @@ def build_and_serialize_kv_chunk_table(
         )
 
     if stage_layouts is None:
+        from models.demos.common.prefill.runners.migration import _host_tag_int
+
         # Single-rank: synthesize one one-stage layout per cache from the local mesh so both paths
         # share the build loop below. base_addr identical on every chip of the mesh (each cache is
         # allocated mesh-wide).
@@ -174,7 +174,7 @@ def build_and_serialize_kv_chunk_table(
                     "count": num_layers,
                     "base_addr": int(t.buffer_address()),
                     "num_banks": BH_NUM_DRAM_BANKS,
-                    "host_name": socket.gethostname(),
+                    "host_tag": _host_tag_int(),
                     "fnids": local_fnids,
                 }
             ]
@@ -223,8 +223,7 @@ def build_and_serialize_kv_chunk_table(
         for stage in stage_layouts[tensor_idx]:
             base_addr = stage["base_addr"]
             num_banks = stage["num_banks"]
-            # The gathered layout carries a per-host crc32 tag (allgather_int can't move strings); the
-            # single-rank synthesized stage carries the real local hostname instead.
+            # Both gathered and local layouts use the same crc32 identity as the KV manager.
             host_name = stage.get("host_name") or f"host-{stage['host_tag']:08x}"
             first = stage["first_layer"]
             filter_layers = label == "index_k" and index_k_layers is not None

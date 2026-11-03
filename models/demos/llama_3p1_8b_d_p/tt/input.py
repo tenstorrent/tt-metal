@@ -56,7 +56,7 @@ def upload_token_chunk(mesh_device, token_ids, *, actual_start, actual_end, pad_
     import ttnn
 
     if tuple(mesh_device.shape) != layout.mesh_shape or mesh_device.get_num_devices() != layout.num_devices:
-        raise ValueError("token upload requires the full SP4/TP8 Galaxy")
+        raise ValueError(f"token upload requires the {layout.mesh_shape} prefill mesh")
     packed = pack_token_ids(
         token_ids, actual_start=actual_start, actual_end=actual_end, pad_id=pad_id, max_seq_len=max_seq_len
     )

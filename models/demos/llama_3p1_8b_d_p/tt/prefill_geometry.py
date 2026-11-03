@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only sequence geometry for the fixed SP4/TP8 Llama prefill layout."""
+"""Host-only sequence geometry for the SP4 Llama prefill layout: TP8 on a whole galaxy (4x8), or TP4 on half of
+one (4x4, ``PREFILL_TP=4``), where the TP axis has no wrap link and its collectives run as a line."""
 
+import os
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -13,6 +15,9 @@ MAX_CONTEXT_LENGTH = Model.MAX_POSITION_EMBEDDINGS
 CHUNK_SIZE = 1024
 CACHE_PAGE_SIZE = 32
 DEFAULT_NUM_USERS = 2
+TP = int(os.environ.get("PREFILL_TP", "8"))
+if TP not in (4, 8):
+    raise ValueError(f"PREFILL_TP must be 4 or 8 for Llama prefill, got {TP}")
 
 
 @dataclass(frozen=True)
@@ -26,9 +31,11 @@ class PrefillGeometry:
 
     # Fixed execution layout. Only the allocated context capacity and slot count vary between
     # instances.
-    mesh_shape: ClassVar[tuple[int, int]] = (4, 8)
+    mesh_shape: ClassVar[tuple[int, int]] = (4, TP)
     sp_axis: ClassVar[int] = 0
     tp_axis: ClassVar[int] = 1
+    #: The 8-wide TP axis of a whole galaxy wraps; the 4-wide one of a half galaxy does not.
+    tp_ring: ClassVar[bool] = TP == 8
     chunk_size: ClassVar[int] = CHUNK_SIZE
     cache_page_size: ClassVar[int] = CACHE_PAGE_SIZE
 
@@ -75,7 +82,8 @@ class PrefillGeometry:
 
     @property
     def cache_shape(self):
-        return (self.num_users * Model.NUM_LAYERS, self.local_kv_heads, self.local_cache_sequence, Model.HEAD_DIM)
+        # One head per batch row: row (slot * NUM_LAYERS + layer) * local_kv_heads + head.
+        return (self.num_users * Model.NUM_LAYERS * self.local_kv_heads, 1, self.local_cache_sequence, Model.HEAD_DIM)
 
     @property
     def rope_local_sequence(self):
@@ -145,6 +153,14 @@ class PrefillGeometry:
 # Share the fixed layout without importing TTNN. Capacity-dependent callers construct their own geometry.
 PREFILL_LAYOUT = PrefillGeometry()
 SP_BLOCK_SIZE = PREFILL_LAYOUT.local_sequence
+
+
+def tp_neighbors(tp_coord):
+    """The TP-axis neighbours a collective's edges run to: both wrap neighbours on a ring, the in-range ones on a line."""
+    tp = PREFILL_LAYOUT.tp
+    if PREFILL_LAYOUT.tp_ring:
+        return ((tp_coord - 1) % tp, (tp_coord + 1) % tp)
+    return tuple(n for n in (tp_coord - 1, tp_coord + 1) if 0 <= n < tp)
 
 
 def validate_mesh(mesh_device, mesh_config, owner):

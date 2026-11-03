@@ -12,6 +12,7 @@ from models.demos.llama_3p1_8b_d_p.tt.attention import (
     FullCausalAttention,
     _validate_device_tensor,
 )
+from models.demos.llama_3p1_8b_d_p.tt.config import tp_topology
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import write_kv_chunk
 from models.demos.llama_3p1_8b_d_p.tt.mlp import MLP
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
@@ -107,9 +108,9 @@ class DecoderLayer:
             actual_start=actual_start,
             actual_end=actual_end,
         )
-        topology = ttnn.get_usable_topology(x, topology=ttnn.Topology.Ring, cluster_axis=layout.tp_axis)
-        if topology != ttnn.Topology.Ring:
-            raise RuntimeError(f"decoder requires a live TP ring, but TTNN selected {topology}")
+        topology = ttnn.get_usable_topology(x, topology=tp_topology(), cluster_axis=layout.tp_axis)
+        if topology != tp_topology():
+            raise RuntimeError(f"decoder requires a live TP {tp_topology()}, but TTNN selected {topology}")
 
         # Track only owned activations. Inputs, weights, tables, attention buffers and the cache
         # never enter this collection. A queued last use permits the usual TTNN explicit release.
