@@ -15,6 +15,8 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    compute_kernel_hw_startup(dfb::in_a, dfb::out);
+
     uint32_t num_tiles = get_arg(args::num_tiles);
     const uint32_t scalar_value = get_arg(args::scalar_arg);
 
@@ -25,7 +27,6 @@ void kernel_main() {
     DataflowBuffer dfb_pre_in2(dfb::in_b);
     DataflowBuffer dfb_out(dfb::out);
 
-    compute_kernel_hw_startup(dfb::in_a, dfb::out);
     copy_init(dfb::in_a);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {

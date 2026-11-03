@@ -102,6 +102,9 @@ ALWI void process_tile(uint32_t freq, uint32_t tile_start, uint32_t num_tiles_pe
 }
 
 void kernel_main() {
+    // in_a: input_a, in_b: input_b, in_c: input_c, out: output
+    compute_kernel_hw_startup(dfb::in_a, dfb::out);
+
     uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t tile_freq = get_arg(args::tile_freq);
     uint32_t tile_start = get_arg(args::tile_start);
@@ -113,8 +116,6 @@ void kernel_main() {
         return;
     }
 
-    // in_a: input_a, in_b: input_b, in_c: input_c, out: output
-    compute_kernel_hw_startup(dfb::in_a, dfb::out);
     copy_init(dfb::in_a);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

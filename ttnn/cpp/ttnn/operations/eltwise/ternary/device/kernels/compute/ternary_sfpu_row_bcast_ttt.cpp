@@ -26,44 +26,54 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    // eff_a / eff_b / eff_c name the same DFB as dfb_eff_a / dfb_eff_b / dfb_eff_c, for the LLK calls.
+#if BCAST_A
+    constexpr auto eff_a = dfb::bcast_a;
+#else
+    constexpr auto eff_a = dfb::in_a;
+#endif
+#if BCAST_B
+    constexpr auto eff_b = dfb::bcast_b;
+#else
+    constexpr auto eff_b = dfb::in_b;
+#endif
+#if BCAST_C
+    constexpr auto eff_c = dfb::bcast_c;
+#else
+    constexpr auto eff_c = dfb::in_c;
+#endif
+
+    compute_kernel_hw_startup(eff_a, dfb::out);
+
     uint32_t num_tiles = get_arg(args::num_tiles);
 
     constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);  // typically 1
 
     // Pre-DFBs for inputs A, B, C and output DFB
-    // eff_a / eff_b / eff_c name the same DFB as dfb_eff_a / dfb_eff_b / dfb_eff_c, for the LLK calls.
     // The host binds bcast_a / bcast_b / bcast_c only when BCAST_A / BCAST_B / BCAST_C is set.
     DataflowBuffer dfb_out(dfb::out);
 #if BCAST_A
     DataflowBuffer dfb_pre_a(dfb::in_a);
     DataflowBuffer dfb_bcast_a(dfb::bcast_a);
     DataflowBuffer dfb_eff_a = dfb_bcast_a;
-    constexpr auto eff_a = dfb::bcast_a;
 #else
     DataflowBuffer dfb_eff_a(dfb::in_a);
-    constexpr auto eff_a = dfb::in_a;
 #endif
 #if BCAST_B
     DataflowBuffer dfb_pre_b(dfb::in_b);
     DataflowBuffer dfb_bcast_b(dfb::bcast_b);
     DataflowBuffer dfb_eff_b = dfb_bcast_b;
-    constexpr auto eff_b = dfb::bcast_b;
 #else
     DataflowBuffer dfb_eff_b(dfb::in_b);
-    constexpr auto eff_b = dfb::in_b;
 #endif
 #if BCAST_C
     DataflowBuffer dfb_pre_c(dfb::in_c);
     DataflowBuffer dfb_bcast_c(dfb::bcast_c);
     DataflowBuffer dfb_eff_c = dfb_bcast_c;
-    constexpr auto eff_c = dfb::bcast_c;
 #else
     DataflowBuffer dfb_eff_c(dfb::in_c);
-    constexpr auto eff_c = dfb::in_c;
 #endif
 
-    // Initialize pack/format for SFPU-style ternary kernels (matches existing ternary SFPU kernels)
-    compute_kernel_hw_startup(eff_a, dfb::out);
     copy_init(eff_a);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {

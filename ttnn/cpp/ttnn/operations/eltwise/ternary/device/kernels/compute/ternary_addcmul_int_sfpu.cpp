@@ -13,6 +13,8 @@
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
+    compute_kernel_hw_startup(dfb::in_a, dfb::out);
+
     uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t scalar_arg = get_arg(args::scalar_arg);
     constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);  // set to 1
@@ -21,8 +23,6 @@ void kernel_main() {
     DataflowBuffer dfb_in1(dfb::in_b);
     DataflowBuffer dfb_in2(dfb::in_c);
     DataflowBuffer dfb_out(dfb::out);
-
-    compute_kernel_hw_startup(dfb::in_a, dfb::out);
 
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles).block_size(num_tiles_per_cycle),

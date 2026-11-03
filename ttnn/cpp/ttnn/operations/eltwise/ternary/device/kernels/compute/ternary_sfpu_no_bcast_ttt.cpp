@@ -15,6 +15,8 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    compute_kernel_hw_startup(dfb::in_a, dfb::out);
+
     uint32_t num_tiles = get_arg(args::num_tiles);
 
     constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);  // set to 1
@@ -24,7 +26,6 @@ void kernel_main() {
     DataflowBuffer dfb_pre_in3(dfb::in_c);
     DataflowBuffer dfb_out(dfb::out);
 
-    compute_kernel_hw_startup(dfb::in_a, dfb::out);
     copy_init(dfb::in_a);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {

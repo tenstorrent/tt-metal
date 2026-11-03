@@ -15,6 +15,26 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+// Effective DFBs chosen at compile-time depending on broadcast flags
+// eff_a / eff_b / eff_c name the same DFB as dfb_eff_a / dfb_eff_b / dfb_eff_c, for the LLK calls.
+#if BCAST_A
+    constexpr auto eff_a = dfb::bcast_a;
+#else
+    constexpr auto eff_a = dfb::in_a;
+#endif
+#if BCAST_B
+    constexpr auto eff_b = dfb::bcast_b;
+#else
+    constexpr auto eff_b = dfb::in_b;
+#endif
+#if BCAST_C
+    constexpr auto eff_c = dfb::bcast_c;
+#else
+    constexpr auto eff_c = dfb::in_c;
+#endif
+
+    compute_kernel_hw_startup(eff_b, eff_c, dfb::out);
+
     uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t scalar_arg = get_arg(args::scalar_arg);
 
@@ -38,32 +58,22 @@ void kernel_main() {
     DataflowBuffer dfb_llk_c(dfb::bcast_c);  // broadcasted C (if used)
 #endif
 
-// Effective DFBs chosen at compile-time depending on broadcast flags
-// eff_a / eff_b / eff_c name the same DFB as dfb_eff_a / dfb_eff_b / dfb_eff_c, for the LLK calls.
+    // DataflowBuffer objects for the effective DFBs chosen by the same flags.
 #if BCAST_A
     auto& dfb_eff_a = dfb_llk_a;
-    constexpr auto eff_a = dfb::bcast_a;
 #else
     auto& dfb_eff_a = dfb_in0;
-    constexpr auto eff_a = dfb::in_a;
 #endif
 #if BCAST_B
     auto& dfb_eff_b = dfb_llk_b;
-    constexpr auto eff_b = dfb::bcast_b;
 #else
     auto& dfb_eff_b = dfb_in1;
-    constexpr auto eff_b = dfb::in_b;
 #endif
 #if BCAST_C
     auto& dfb_eff_c = dfb_llk_c;
-    constexpr auto eff_c = dfb::bcast_c;
 #else
     auto& dfb_eff_c = dfb_in2;
-    constexpr auto eff_c = dfb::in_c;
 #endif
-
-    // Initialize binary unit for B*C path; output packer initialized with dfb_out
-    compute_kernel_hw_startup(eff_b, eff_c, dfb::out);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
 // 1) Prepare B and C (broadcast if required), then compute mul(B, C) -> DST[0]

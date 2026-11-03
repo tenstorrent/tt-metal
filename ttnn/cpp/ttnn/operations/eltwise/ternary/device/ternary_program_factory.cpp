@@ -1480,7 +1480,7 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
     };
 
     // ---- Compute Kernel ----
-    // Any 32-bit operand needs a 32-bit Dest: a Float32 input DFB is unpacked with UnpackToDest below,
+    // Any 32-bit operand needs a 32-bit Dest: a 32-bit input DFB is unpacked with UnpackToDest below,
     // and that lands corrupted in a Dest configured for 16-bit datums.
     auto is_32bit_format = [](tt::DataFormat format) {
         return format == tt::DataFormat::UInt32 || format == tt::DataFormat::Int32 || format == tt::DataFormat::Float32;
@@ -1488,38 +1488,41 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
     bool fp32_dest_acc_en = is_32bit_format(output_data_format) || is_32bit_format(predicate_data_format) ||
                             is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format);
 
-    // A Float32 DFB unpacks straight to Dest (UnpackToDest).  Every other DFB has no entry and takes
-    // the default path through SrcA / SrcB.
+    // A 32-bit DFB (Float32, Int32 or UInt32) unpacks straight to Dest (UnpackToDest).  Every other DFB
+    // has no entry and takes the default path through SrcA / SrcB.
+    auto is_32bit_dtype = [](DataType dtype) {
+        return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
+    };
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
 
     // in_a is always predicate
-    if (predicate_tensor.dtype() == DataType::FLOAT32) {
+    if (is_32bit_dtype(predicate_tensor.dtype())) {
         unpack_modes.emplace(IN_A_DFB, UnpackMode::UnpackToDest);
     }
 
     // in_b assignment depends on variant
     if (variant == TernaryVariant::TTS) {
         // TTS: in_b = value_true tensor
-        if (value_true_tensor.value().dtype() == DataType::FLOAT32) {
+        if (is_32bit_dtype(value_true_tensor.value().dtype())) {
             unpack_modes.emplace(IN_B_DFB, UnpackMode::UnpackToDest);
         }
     } else if (variant == TernaryVariant::TST) {
         // TST: in_b = value_false tensor
-        if (value_false_tensor.value().dtype() == DataType::FLOAT32) {
+        if (is_32bit_dtype(value_false_tensor.value().dtype())) {
             unpack_modes.emplace(IN_B_DFB, UnpackMode::UnpackToDest);
         }
     } else {
         // TTT: in_b = value_true tensor, in_c = value_false tensor (including column broadcast)
-        if (value_true_tensor.value().dtype() == DataType::FLOAT32) {
+        if (is_32bit_dtype(value_true_tensor.value().dtype())) {
             unpack_modes.emplace(IN_B_DFB, UnpackMode::UnpackToDest);
         }
-        if (value_false_tensor.value().dtype() == DataType::FLOAT32) {
+        if (is_32bit_dtype(value_false_tensor.value().dtype())) {
             unpack_modes.emplace(IN_C_DFB, UnpackMode::UnpackToDest);
         }
     }
 
     // Output DFB
-    if (output.dtype() == DataType::FLOAT32) {
+    if (is_32bit_dtype(output.dtype())) {
         unpack_modes.emplace(OUT_DFB, UnpackMode::UnpackToDest);
     }
 
