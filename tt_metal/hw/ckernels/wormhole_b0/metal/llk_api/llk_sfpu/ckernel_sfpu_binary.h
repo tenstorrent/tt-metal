@@ -293,7 +293,7 @@ inline void calculate_sfpu_binary_mul(
                 TTI_SFPIADD(0, 7, 0, 4);
                 TTI_SFPIADD(0, 1, 0, 4);
                 TTI_SFPAND(0, 5, 0, 0);
-                TT_SFPSTORE(0, 0, 0, ao);
+                TT_SFPSTORE(0, 0, 2, ao);
 #pragma GCC unroll 1
                 for (int d = 1; d < ITERATIONS; d++) {
                     TTI_REPLAY(0, 15, 0, 0);
@@ -306,9 +306,9 @@ inline void calculate_sfpu_binary_mul(
                     TTI_SFPCONFIG(0x030, 8, 1);
                     TTI_REPLAY(0, 4, 1, 1);
                     TT_SFPLOAD(1, 0, 3, a1);
-                    TT_SFPLOADMACRO((0 << 2) | 0, 0, 0, a0);
+                    TT_SFPLOADMACRO((0 << 2) | 0, 0, 2, a0);
                     TT_SFPLOAD(1, 0, 3, a1);
-                    TT_SFPLOADMACRO((0 << 2) | 3, 0, 0, a0);
+                    TT_SFPLOADMACRO((0 << 2) | 3, 0, 2, a0);
                     TTI_REPLAY(0, 4, 0, 0);
                     TTI_REPLAY(0, 4, 0, 0);
                     TTI_REPLAY(0, 4, 0, 0);
@@ -323,8 +323,8 @@ inline void calculate_sfpu_binary_mul(
                 TT_SFPLOAD(3, 0, 3, a1 + 2);
                 TTI_SFPMUL(0, 1, 9, 0, 0);
                 TTI_SFPMUL(2, 3, 9, 2, 0);
-                TT_SFPSTORE(0, 0, 0, ao);
-                TT_SFPSTORE(2, 0, 0, ao);
+                TT_SFPSTORE(0, 0, 2, ao);
+                TT_SFPSTORE(2, 0, 2, ao);
                 TTI_REPLAY(0, 8, 0, 0);
                 TTI_REPLAY(0, 8, 0, 0);
                 TTI_REPLAY(0, 8, 0, 0);
@@ -438,7 +438,7 @@ inline void sfpu_binary_init() {
         // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::MUL) {
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_4);
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 #ifndef DISABLE_SFPLOADMACRO
         TTI_SFPMUL(p_sfpu::LREG1, 0, p_sfpu::LCONST_0, 12, 0);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x8400);
