@@ -44,11 +44,29 @@ def num_tokens(grid_thw: Union[torch.Tensor, Sequence[int]]) -> int:
     return h * w // MERGE_SIZE**2
 
 
+def check_image_grid(grid_thw: torch.Tensor) -> int:
+    """Raise ValueError unless grid_thw is the grid of one image, an integer tensor (1, 3) [[1, h, w]] with h and w
+    positive multiples of 2. Returns its patch count, h * w.
+
+    check_image_input checks the grid with it, and so does M3VLVisionModel.forward_device, which then compares the patch
+    count with the rows of the pixel values already on the device.
+    """
+    if not isinstance(grid_thw, torch.Tensor):
+        raise ValueError(f"grid_thw must be a torch tensor, got {type(grid_thw).__name__}")
+    if not _holds_integers(grid_thw) or grid_thw.shape != (1, 3):
+        raise ValueError(
+            "grid_thw must be the grid of one image, an integer tensor (1, 3),"
+            f" got {grid_thw.dtype} {tuple(grid_thw.shape)}"
+        )
+    return num_tokens(grid_thw) * MERGE_SIZE**2  # num_tokens checks t, h and w
+
+
 def check_image_input(pixel_values: torch.Tensor, grid_thw: torch.Tensor, patch_dim: int) -> None:
-    """Raise ValueError unless pixel_values and grid_thw are the input of one image, as the image processor gives it:
-    pixel_values float patch rows (h * w, patch_dim) with no NaN or Inf value (their sum in fp32 must be finite), and
-    grid_thw an integer tensor (1, 3) [[1, h, w]] with h and w positive multiples of 2. patch_dim is the number of
-    values per patch in the model's vision config (MiniMaxM3VisionConfig.patch_dim, 1176).
+    """Raise ValueError unless pixel_values and grid_thw are the input of one image in the form the image processor
+    gives it: pixel_values float patch rows (h * w, patch_dim) with no NaN or Inf value (their sum in fp32 must be
+    finite), and grid_thw a grid that check_image_grid accepts. patch_dim is the number of values per patch in the
+    model's vision config (MiniMaxM3VisionConfig.patch_dim, 1176). It does not bound the image's size: any such grid
+    passes, also one outside the 16 to 2304 patches that the processor gives by default.
 
     M3VLVisionModel.push_pixel_values runs it before any device work, as the device checks neither that the rows match
     the grid nor that the values are finite.
@@ -58,12 +76,7 @@ def check_image_input(pixel_values: torch.Tensor, grid_thw: torch.Tensor, patch_
             "pixel_values and grid_thw must be torch tensors,"
             f" got {type(pixel_values).__name__} and {type(grid_thw).__name__}"
         )
-    if not _holds_integers(grid_thw) or grid_thw.shape != (1, 3):
-        raise ValueError(
-            "grid_thw must be the grid of one image, an integer tensor (1, 3),"
-            f" got {grid_thw.dtype} {tuple(grid_thw.shape)}"
-        )
-    patches = num_tokens(grid_thw) * MERGE_SIZE**2  # num_tokens checks t, h and w
+    patches = check_image_grid(grid_thw)
     if not pixel_values.is_floating_point() or pixel_values.ndim != 2 or pixel_values.shape[1] != patch_dim:
         raise ValueError(
             f"pixel_values must be float patch rows (num_patches, {patch_dim}),"
