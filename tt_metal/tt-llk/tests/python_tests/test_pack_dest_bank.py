@@ -61,6 +61,14 @@ def create_pack_dest_bank_config(
     """Build the shared functional/performance destination-bank configuration."""
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
+    if not is_perf and run_types != [PerfRunType.L1_TO_L1]:
+        raise ValueError("Functional pack destination-bank runs only support L1_TO_L1")
+    if is_perf and tilize == Tilize.Yes:
+        raise ValueError("Pack destination-bank perf runs do not support tilize")
+    if tilize == Tilize.Yes and input_dimensions is None:
+        raise ValueError("Pack destination-bank tilize requires input_dimensions")
+    if is_perf and dest_index != 0:
+        raise ValueError("Pack destination-bank perf runs require dest_index=0")
 
     runtimes = [
         DEST_INDEX(dest_index),
@@ -95,7 +103,7 @@ def create_pack_dest_bank_config(
 def run_functional_pack_dest_bank(
     configuration, formats, tile_count, num_faces, golden_tensor
 ):
-    """Run the sparse functional test after zeroing every declared result tile."""
+    """Run after zero-filling every result tile so L1 accumulation starts from a known state."""
     configuration.generate_variant_hash()
     if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
         configuration.build_elfs()
