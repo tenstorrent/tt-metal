@@ -671,14 +671,21 @@ class SolPrepass(Module):
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
         kc = self._gather(kc_local)
         vc = self._gather(vc_local)
-        reuse = self.mask_reuse > 1 and self._held_mask is not None and self._reuse_left > 0
+        # deallocate() defaults to force=True, so a caller freeing the returned mask also releases
+        # _held_mask. Reuse only while that allocation is still live; otherwise route again.
+        reuse = (
+            self.mask_reuse > 1
+            and self._held_mask is not None
+            and self._held_mask.is_allocated()
+            and self._reuse_left > 0
+        )
         if reuse:
             mask = self._held_mask
             self._reuse_left -= 1
         else:
             mask = self._run_route(q_bar, kc)
             if self.mask_reuse > 1:
-                self._held_mask = mask  # the reference keeps the DRAM buffer alive across calls
+                self._held_mask = mask
                 self._reuse_left = self.mask_reuse - 1
         self.last_mask_reused = reuse
         if report_density:
