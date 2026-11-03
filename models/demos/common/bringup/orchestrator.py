@@ -1612,7 +1612,14 @@ class Orchestrator:
         sides = ([("old", old)] if old or before else []) + [("new", on)]
         if before:
             rec["before"] = True
-        if not owned and (task.get("ab") or {}).get("flip") and old and on:
+        # F245: a keep_default pick is switch-only too (DeepSeek-V4.1 P.29: P.27 had built the value, the agent changed
+        # nothing, and the A/B was skipped although the agent had measured its side)
+        if (
+            not owned
+            and ((task.get("ab") or {}).get("flip") or (task.get("ab") or {}).get("keep_default"))
+            and old
+            and on
+        ):
             # F233 (DeepSeek-V4.1 P.19, owner 2026-10-30: SP=8 again after the MoE drop): the pick flips switches the
             # code already has; the agent only checks that both paths still run, so an unchanged tree is measured
             rec["note"] = "no code change: the A/B flips switches the code already has (ab.flip)"
