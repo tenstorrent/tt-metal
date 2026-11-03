@@ -40,8 +40,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
     const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
-    const std::uint32_t num_faces_A        = params.num_faces_A;
-    const std::uint32_t num_faces_B        = params.num_faces_B;
 
     const std::uint32_t CT_DIM        = params.CT_DIM;
     const std::uint32_t RT_DIM        = params.RT_DIM;
@@ -62,8 +60,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            ckernel::make_tensor_shape_from_legacy(in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM, num_faces_B),
-            ckernel::make_tensor_shape_from_legacy(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces_A), // in0
+            in1_tensor_shape,
+            in0_tensor_shape, // in0
             TILE_SIZE_UNPACK_B,
             TILE_SIZE_UNPACK_A);
         _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, in0_tensor_shape, in1_tensor_shape);

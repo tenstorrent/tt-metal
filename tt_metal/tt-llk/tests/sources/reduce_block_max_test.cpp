@@ -101,8 +101,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, tensor_shape.total_num_faces()),
-            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, tensor_shape.total_num_faces()),
+            tensor_shape,
+            tensor_shape,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
 
