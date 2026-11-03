@@ -152,12 +152,21 @@ class ExpertWeightCache:
         self.root.mkdir(parents=True, exist_ok=True)
         sources = seal_sources(checkpoint, self.root, mode)
         native = [ROOT / "build_Release/lib/_ttnncpp.so", ROOT / "ttnn/ttnn/_ttnn.so"]
-        transform = [Path(__file__), MODEL / "tt/multichip_decoder.py", MODEL / "tt/precision.py"]
+        # The cached tensors depend on this module's producer, MeshOps.shards and the precision policy, not on
+        # the rest of multichip_decoder.py; hashing that whole file invalidated the cache on every unrelated edit.
+        import inspect
+
+        from .multichip_decoder import MeshOps
+
+        transform = [Path(__file__), MODEL / "tt/precision.py"]
         self.identity = {
             "schema": 1,
             "source_seal": sources,
             "source_seal_sha256": digest_object(sources),
-            "transform_sha256": {str(p.resolve()): digest_file(p) for p in transform},
+            "transform_sha256": {
+                **{str(p.resolve()): digest_file(p) for p in transform},
+                "MeshOps.shards": hashlib.sha256(inspect.getsource(MeshOps.shards).encode()).hexdigest(),
+            },
             "native_sha256": {str(p.resolve()): digest_file(p) for p in native},
             "precision_sha256": digest_file(MODEL / "doc/datatype_sweep/selected_precision_config.json"),
             "mesh": [1, 4],
