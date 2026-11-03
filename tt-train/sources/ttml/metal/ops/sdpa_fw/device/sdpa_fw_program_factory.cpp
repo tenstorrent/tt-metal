@@ -266,7 +266,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_cur_max_value = create_circular_buffer(
         program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.stat);
 
-    // fp32 for the running sums and the rescale factors; the max stays bf16 like the scores it came from.
+    // fp32 for the running sums and the rescale factors. The max can stay bf16 although the scores are fp32:
+    // P, the rescale factor alpha and the LSE all use the same rounded max, so its rounding cancels in O / sum
+    // and in the LSE.
     [[maybe_unused]] auto cb_exp_max_diff = create_circular_buffer(
         program, all_cores, kExpMaxDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.stat);
 
