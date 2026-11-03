@@ -76,11 +76,16 @@ def _round_trip(mesh_device, x, indices, capacity, experts_per_chip):
         cluster_axis=0,
     )
     routed = ttnn.to_layout(ttnn.reshape(routed, (1, 1, capacity, EMB_DIM)), ttnn.TILE_LAYOUT)
+    # combine reads the chip's own experts (0 .. experts_per_chip - 1): their counts and region offsets only
+    local_counts = _upload(mesh_device, counts[:, :experts_per_chip].unsqueeze(1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    local_offsets = _upload(
+        mesh_device, offsets[:, :experts_per_chip].contiguous().unsqueeze(1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+    )
     combined = ttnn.experimental.deepseek_prefill.combine(
         routed,
         ttnn.reshape(metadata, (1, 1, capacity, METADATA_LEN)),
-        ttnn.reshape(_upload(mesh_device, counts.unsqueeze(1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), (1, 1, -1)),
-        ttnn.reshape(tt_offsets, (1, 1, NUM_ROUTED_EXPERTS)),
+        ttnn.reshape(local_counts, (1, 1, experts_per_chip)),
+        ttnn.reshape(local_offsets, (1, 1, experts_per_chip)),
         dispatch_group_size=1,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=NUM_EXPERTS_PER_TOK,
