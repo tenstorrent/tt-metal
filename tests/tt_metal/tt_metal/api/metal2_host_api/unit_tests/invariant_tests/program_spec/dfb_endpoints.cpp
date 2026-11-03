@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ProgramSpec structural invariants on DataflowBufferSpec endpoints (program_spec.hpp): every bound DFB has
-// a producer and a consumer; same-role bindings agree on access pattern, num_threads, kind and (Gen1)
-// processor; self-loop sides match; Gen2 DM sides agree on implicit sync.
+// a producer and a consumer; same-role bindings agree on access pattern, use_trisc3, num_threads, kind and
+// (Gen1) processor; self-loop sides match; Gen2 DM sides agree on implicit sync.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -418,6 +418,40 @@ TEST_F(ProgramSpecTestQuasar, CPU_DisableImplicitSyncForAllAgreesWithExplicitLis
     auto program = MakeProgramFromSpec(*mesh_device_, spec);
     const uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
     EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingUseTrisc3MismatchFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // Two compute producers on disjoint nodes, one on trisc2 and one on trisc3. The DFB's hardware
+    // config names one producer thread per role, so same-role bindings must agree on use_trisc3.
+    auto producer_t2 = MakeMinimalGen2ComputeKernel("producer_t2");
+    auto producer_t3 = MakeMinimalGen2ComputeKernel("producer_t3");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer_t2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    auto trisc3_binding = ProducerOf(DFBSpecName{"dfb"}, "out");
+    trisc3_binding.use_trisc3 = true;
+    producer_t3.dfb_bindings.push_back(trisc3_binding);
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer_t2, producer_t3, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer_t2", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer_t3", "consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mismatched use_trisc3")));
 }
 
 }  // namespace
