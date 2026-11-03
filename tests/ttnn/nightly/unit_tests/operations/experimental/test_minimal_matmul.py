@@ -840,6 +840,36 @@ def test_program_cache_hit_fused_concat(device):
     _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_concat")
 
 
+def test_program_cache_hit_fused_concat_refuses_logical_row_mismatch(device, expect_error):
+    """The row-free hash drops both logical row counts, so a prefix and a suffix that only agree once padded
+    (255 and 225 rows, both eight tile rows) reach the cached program; the hit validator must refuse them as
+    the miss validator does, instead of feeding the suffix's padding to live activation rows."""
+    M, Ka, Kb, N = 256, 96, 160, 128
+    compute_config, matmul_config = _cache_hit_config(device, block_size=4, subblock=2)
+
+    def to_device(shape):
+        return ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    def dispatch(rows_a, rows_b):
+        return ttnn.experimental.minimal_matmul(
+            [to_device((rows_a, Ka)), to_device((rows_b, Kb))],
+            to_device((Ka + Kb, N)),
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    dispatch(M, M)
+    assert device.num_program_cache_entries() == 1
+    with expect_error(
+        RuntimeError,
+        r"minimal_matmul fused concat: second-input rows \(225 logical, 256 folded\) must match the activation rows",
+    ):
+        dispatch(M - 1, M - 31)
+    device.clear_program_cache()
+
+
 @pytest.mark.parametrize("chunks", [2, 4])
 def test_program_cache_hit_split_outputs(device, chunks):
     """Split outputs put N output addresses at the tail of every in0/in1 arg list."""

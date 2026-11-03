@@ -41,7 +41,7 @@
 #include <cstdint>
 #include "strided_ring_reduce_scatter_common.hpp"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
-#include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/strided_reduce_scatter_runtime_args.hpp"
+#include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/kernels/strided_reduce_scatter_runtime_args.hpp"
 #include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;

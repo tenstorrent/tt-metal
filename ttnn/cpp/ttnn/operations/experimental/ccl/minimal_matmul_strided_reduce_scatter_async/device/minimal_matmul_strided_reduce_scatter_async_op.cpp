@@ -19,17 +19,22 @@ namespace {
 
 constexpr uint64_t kMmrsProgramHashSalt = 0x4d4d52535f763100ULL;  // "MMRS_v1"
 
-// Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash.
-template <typename OptionalTensor>
-ttsl::hash::hash_t spec_without_rows(const OptionalTensor& tensor) {
-    return tensor.has_value() ? operations::common::hash_spec_without_rows(tensor->tensor_spec(), kMmrsProgramHashSalt)
-                              : ttsl::hash::hash_objects_with_default_seed(kMmrsProgramHashSalt);
-}
-
 template <typename OptionalTensor>
 ttsl::hash::hash_t full_spec(const OptionalTensor& tensor) {
     return tensor.has_value() ? ttsl::hash::hash_objects_with_default_seed(tensor->tensor_spec())
                               : ttsl::hash::hash_objects_with_default_seed(kMmrsProgramHashSalt);
+}
+
+// Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash. A sharded
+// tensor keeps its full spec: its accessor / shard args compile the page count and the grid in.
+template <typename OptionalTensor>
+ttsl::hash::hash_t spec_without_rows(const OptionalTensor& tensor) {
+    if (!tensor.has_value()) {
+        return ttsl::hash::hash_objects_with_default_seed(kMmrsProgramHashSalt);
+    }
+    return tensor->is_sharded()
+               ? full_spec(tensor)
+               : operations::common::hash_spec_without_rows(tensor->tensor_spec(), kMmrsProgramHashSalt);
 }
 
 // Shared by the miss and hit validators so a call that built the program is never refused on a
@@ -59,6 +64,32 @@ void validate_addcmul_rows(uint32_t M, const Tensor& a, const Tensor& b) {
     }
 }
 
+// Every supplied tensor the kernels address must sit on the input's device: the hash carries no device
+// identity, so the miss and the hit validator both run this.
+void validate_operands_on_device(const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const auto check = [&input](const Tensor& tensor, const char* name) {
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "MMRS {} must be on device", name);
+        TT_FATAL(tensor.is_allocated(), "MMRS {} must be allocated in a device buffer", name);
+        TT_FATAL(tensor.device() == input.device(), "MMRS {} must be on the same device as the input tensor", name);
+    };
+    const auto check_optional = [&check](const auto& tensor, const char* name) {
+        if (tensor.has_value()) {
+            check(*tensor, name);
+        }
+    };
+    check(input, "input_tensor");
+    check(tensor_args.weight_tensor, "weight_tensor");
+    check_optional(tensor_args.bias, "bias");
+    check_optional(tensor_args.mm_optional_input_tensor, "mm_optional_input_tensor");
+    check_optional(tensor_args.addcmul_input_tensor1, "addcmul_input_tensor1");
+    check_optional(tensor_args.addcmul_input_tensor2, "addcmul_input_tensor2");
+    check_optional(tensor_args.optional_rs_intermediate_tensor, "optional_rs_intermediate_tensor");
+    check_optional(tensor_args.optional_rs_output_tensor, "optional_rs_output_tensor");
+    check_optional(tensor_args.mm_progress_counters, "mm_progress_counters");
+    check_optional(tensor_args.mm_credit_counters, "mm_credit_counters");
+}
+
 }  // namespace
 
 MinimalMatmulStridedReduceScatterAsync::program_factory_t
@@ -70,15 +101,23 @@ MinimalMatmulStridedReduceScatterAsync::select_program_factory(
 ttsl::hash::hash_t MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // The default worker count is sized from the input bytes, so only an explicit count lets the
-    // program be shared across row counts; otherwise keep the rows in the key.
-    const bool workers_pinned = attributes.num_workers_per_link.has_value();
+    // program be shared across row counts. A sharded tensor's accessor / shard args compile its page count
+    // and grid in, so a sharded input, or a sharded op-created buffer (MM output, RS intermediate, RS
+    // output) whose shape follows M, keeps the rows in the key too.
+    const auto& input = tensor_args.input_tensor;
+    const bool created_buffer_sharded =
+        attributes.matmul_struct.output_mem_config.value_or(input.memory_config()).is_sharded() ||
+        (attributes.rs_intermediate_mem_config.has_value() && attributes.rs_intermediate_mem_config->is_sharded()) ||
+        attributes.rs_output_mem_config.is_sharded();
+    const bool rows_free =
+        attributes.num_workers_per_link.has_value() && !input.is_sharded() && !created_buffer_sharded;
     const auto& b = tensor_args.addcmul_input_tensor2;
     const bool b_broadcast = b.has_value() && b->logical_shape()[-2] <= 1;
     return ttsl::hash::hash_objects_with_default_seed(
         kMmrsProgramHashSalt,
         attributes,
-        workers_pinned ? operations::common::hash_spec_without_rows(tensor_args.input_tensor, kMmrsProgramHashSalt)
-                       : ttsl::hash::hash_objects_with_default_seed(tensor_args.input_tensor.tensor_spec()),
+        rows_free ? operations::common::hash_spec_without_rows(input, kMmrsProgramHashSalt)
+                  : ttsl::hash::hash_objects_with_default_seed(input.tensor_spec()),
         tensor_args.weight_tensor.tensor_spec(),
         spec_without_rows(tensor_args.optional_rs_intermediate_tensor),
         spec_without_rows(tensor_args.optional_rs_output_tensor),
@@ -92,17 +131,25 @@ ttsl::hash::hash_t MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
         full_spec(tensor_args.mm_credit_counters));
 }
 
-// Only the row-dependent invariants the hash does not cover; everything else was checked on the
-// miss that built the program.
+// The invariants the hash does not cover: device affinity and the row-dependent checks; everything else
+// was checked on the miss that built the program.
 void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const uint32_t M = tensor_args.input_tensor.padded_shape()[-2];
+    validate_operands_on_device(tensor_args);
+    const auto& input = tensor_args.input_tensor;
+    const uint32_t M = input.padded_shape()[-2];
     TT_FATAL(M > 0 && M % tt::constants::TILE_HEIGHT == 0, "MMRS activation rows ({}) must be a multiple of 32", M);
     if (tensor_args.mm_optional_input_tensor.has_value()) {
+        // Logical rows as on the miss path: two sources that only agree once padded would feed the
+        // suffix's padding to live activation rows.
+        const auto& second_input = *tensor_args.mm_optional_input_tensor;
         TT_FATAL(
-            tensor_args.mm_optional_input_tensor->padded_shape()[-2] == M,
-            "MMRS fused-concat second input rows ({}) must match the activation rows ({})",
-            tensor_args.mm_optional_input_tensor->padded_shape()[-2],
+            second_input.logical_shape()[-2] == input.logical_shape()[-2] && second_input.padded_shape()[-2] == M,
+            "MMRS fused-concat second input rows ({} logical, {} padded) must match the activation rows ({} logical, "
+            "{} padded)",
+            second_input.logical_shape()[-2],
+            second_input.padded_shape()[-2],
+            input.logical_shape()[-2],
             M);
     }
     if (tensor_args.optional_rs_intermediate_tensor.has_value()) {
@@ -134,6 +181,7 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.topology == ttnn::ccl::Topology::Ring,
         "MinimalMatmulStridedReduceScatterAsync only supports Ring topology.");
+    validate_operands_on_device(tensor_args);
 
     // Delegate matmul validation (dtype, layout, shape, tile alignment, config/subblock
     // constraints, etc.) — but NOT the ternary checks, because the ternary inputs belong to
@@ -176,14 +224,6 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
                    dt == DataType::FLOAT32;
         };
 
-        TT_FATAL(ta.storage_type() == StorageType::DEVICE, "addcmul_input_tensor1 must be on device");
-        TT_FATAL(tb.storage_type() == StorageType::DEVICE, "addcmul_input_tensor2 must be on device");
-        TT_FATAL(
-            ta.device() == tensor_args.input_tensor.device(), "addcmul_input_tensor1 must be on same device as input");
-        TT_FATAL(
-            tb.device() == tensor_args.input_tensor.device(), "addcmul_input_tensor2 must be on same device as input");
-        TT_FATAL(ta.is_allocated(), "addcmul_input_tensor1 must be allocated");
-        TT_FATAL(tb.is_allocated(), "addcmul_input_tensor2 must be allocated");
         TT_FATAL(ta.layout() == Layout::TILE, "addcmul_input_tensor1 must be TILE layout");
         TT_FATAL(tb.layout() == Layout::TILE, "addcmul_input_tensor2 must be TILE layout");
         TT_FATAL(
