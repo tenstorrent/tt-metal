@@ -177,6 +177,8 @@ def test_gpu_bench_match(*, mesh_device) -> None:
     start = time.perf_counter()
     pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=size, width=size)
     load_s = time.perf_counter() - start
+    if traced:
+        pipe.warmup(sizes=[(size, size)])
 
     prompt_tokens = pipe.count_text_tokens(caption())
     logger.info(f"load {load_s:.1f}s | caption {len(caption())} chars, {prompt_tokens} tokens incl. chat template")
