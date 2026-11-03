@@ -627,25 +627,19 @@ void fill_sliding_window_edge_tiles(Noc noc, uint32_t start_tile_idx) {
 }
 
 /**
- * Generate lightweight mask tiles into a single DFB for ring joint SDPA.
- * Layout without sliding: [neginf_tile(0)] [causal_diag_tile?] [global_n_partial_tile?] [joint_l_partial_tile?]
+ * Generate lightweight mask tiles into a single DFB for streaming SDPA.
+ * Layout without sliding: [neginf_tile(0)] [causal_diag_tile?] [k_partial_tile?]
  * Layout with sliding:    [neginf_tile(0)] [trailing_primary(1)] [leading_prev(2)]
- *                         [leading_current(3)] [trailing_next(4)] [partial tiles...]
+ *                         [leading_current(3)] [trailing_next(4)] [k_partial_tile?]
  * Tiles are pushed once and stay permanently fronted for the entire kernel lifetime.
  *
- * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no partial)
- * @tparam joint_l_partial_col   Column within tile where joint_l padding starts (0 = tile-aligned, no partial)
- * @tparam dfb_mask_in            DFB to generate mask tiles into (must be constexpr for get_tile_size)
- * @tparam is_causal_lw          Whether to include the causal diagonal tile
+ * @tparam k_partial_col  Column within tile where K padding starts (0 = tile-aligned, no partial tile)
+ * @tparam dfb_mask_in    DFB to generate mask tiles into (must be constexpr for get_tile_size)
+ * @tparam is_causal_lw   Whether to include the causal diagonal tile
  */
-template <
-    uint32_t global_n_partial_col,
-    uint32_t joint_l_partial_col,
-    uint32_t dfb_mask_in,
-    bool is_causal_lw = false,
-    uint32_t sliding_window_size = 0>
+template <uint32_t k_partial_col, uint32_t dfb_mask_in, bool is_causal_lw = false, uint32_t sliding_window_size = 0>
 void generate_lightweight_mask_tiles(Noc noc) {
-    constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+    constexpr uint32_t partial_mask_tiles = k_partial_col > 0 ? 1 : 0;
     constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
     constexpr uint32_t causal_diag_tiles = (!has_sliding_window && is_causal_lw) ? 1 : 0;
@@ -668,14 +662,9 @@ void generate_lightweight_mask_tiles(Noc noc) {
         fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(noc, dfb_mask_in, tile_idx++);
     }
 
-    // Subsequent tiles: partial mask tiles for boundary conditions
+    // Last tile: partial K mask tile for the boundary column
     if constexpr (partial_mask_tiles > 0) {
-        if constexpr (global_n_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, dfb_mask_in, tile_idx++, global_n_partial_col);
-        }
-        if constexpr (joint_l_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, dfb_mask_in, tile_idx++, joint_l_partial_col);
-        }
+        fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, dfb_mask_in, tile_idx++, k_partial_col);
     }
 
     dfb.push_back(total_mask_tiles);
@@ -1494,7 +1483,7 @@ PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<R
 //
 // Dispatches to the generator's issue_reads. PaddedAddrGenerator's overload hoists id_of
 // (4 muls + 3 adds) and the row-only validity check out of the inner col loop;
-// CatAddrGenerator keeps per-tile dispatch (off the ring SDPA hot path).
+// CatAddrGenerator keeps per-tile dispatch.
 //
 // noinline: reader (NCRISC) has 3+ call sites and the issue_reads body is large enough that
 // inlining at every site overflows the TENSIX kernel-config ringbuffer. Function-call

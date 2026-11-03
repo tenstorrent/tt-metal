@@ -5,7 +5,6 @@ set(TTNN_OP_TRANSFORMER_SRCS
     concatenate_heads/concatenate_heads.cpp
     sdpa/device/joint_sdpa_device_operation.cpp
     sdpa/device/joint_sdpa_program_factory.cpp
-    sdpa/device/sliding_halo_layout.cpp
     sdpa/device/ring_distributed_sdpa_device_operation.cpp
     sdpa/device/ring_distributed_sdpa_program_factory.cpp
     sdpa/device/sdpa_device_operation.cpp

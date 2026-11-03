@@ -66,7 +66,6 @@ SKIPPED_OPS = [
     "ttnn.pearson_correlation_coefficient",  # Internal operation only.
     "ttnn.plus_one",  # Experimental operation, but wrongly registered without ttnn.experimental.
     "ttnn.test_hang_device_operation",  # Internal test-only operation; intentionally not in public docs.
-    "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",  # Experimental variant of ring_joint_sdpa; API unstable.
     "ttnn.tosa_gather",  # TOSA operation omitted for docs.
     "ttnn.tosa_scatter",  # TOSA operation omitted for docs.
 ]

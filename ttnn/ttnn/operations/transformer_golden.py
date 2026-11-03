@@ -1013,7 +1013,7 @@ def sparse_sdpa_msa_golden(
 
 def torch_sdpa_reference(q, k, v, is_causal=False, attention_sink=None):
     """
-    Memory-efficient PyTorch reference for ring joint attention.
+    Memory-efficient PyTorch reference for (joint) scaled dot-product attention.
 
     Chunks over heads and the combined Q sequence so the [B, H, Sq, Sk]
     attention matrix never materializes at full size — CPU SDPA's math
@@ -1093,291 +1093,6 @@ def torch_sdpa_reference(q, k, v, is_causal=False, attention_sink=None):
                 attn_out[:, h_start:h_end, seq_start:seq_end] = out
 
     return attn_out
-
-
-def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
-    """Ring-merge reference migrated from ``test_ring_joint_attention.py``."""
-    import torch
-
-    scale = k.size(-1) ** -0.5
-    seq_len = k.size(2)
-    slice_seq_len = seq_len // num_devices
-    out = None
-    lse = None
-    lse_list = []
-    Q = torch.cat([q, joint_q], dim=2)
-    for ring_id in range(num_devices):
-        k_slice = k[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
-        v_slice = v[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
-        if ring_id == num_devices - 1:
-            k_slice = torch.cat([k_slice, joint_k], dim=2)
-            v_slice = torch.cat([v_slice, joint_v], dim=2)
-        attn_weights = torch.matmul(Q, k_slice.transpose(-2, -1)) * scale
-        cur_max, _ = torch.max(attn_weights, dim=-1, keepdim=True)
-        attn_weights = torch.exp(attn_weights - cur_max)
-        cur_sum = torch.sum(attn_weights, dim=-1, keepdim=True)
-        cur_out = torch.matmul(attn_weights, v_slice) / cur_sum
-        cur_lse = cur_max + torch.log(cur_sum)
-        if ring_id == 0:
-            out = cur_out
-            lse = cur_lse
-        else:
-            sig = torch.nn.functional.sigmoid(cur_lse - lse)
-            out = out - sig * (out - cur_out)
-            lse = lse - torch.nn.functional.logsigmoid(lse - cur_lse)
-        lse_list.append(lse)
-    return out, lse_list
-
-
-def _ring_runtime_cache_selection(
-    input_tensor_k,
-    input_tensor_v,
-    input_tensor_q,
-    *,
-    kv_cache_batch_idx,
-    kv_actual_isl,
-    slot_id,
-    kv_actual_isl_tensor,
-    kv_cache_num_layers,
-    kv_cache_layer_idx,
-):
-    metadata_supplied = slot_id is not None or kv_actual_isl_tensor is not None
-    if metadata_supplied and (slot_id is None or kv_actual_isl_tensor is None):
-        raise ValueError("slot_id and kv_actual_isl_tensor must be supplied together")
-    if metadata_supplied and (kv_cache_batch_idx is not None or kv_actual_isl is not None):
-        raise ValueError(
-            "slot_id/kv_actual_isl_tensor replace kv_cache_batch_idx/kv_actual_isl; pass one form, not both"
-        )
-
-    if metadata_supplied:
-        num_layers = int(_scalar(kv_cache_num_layers, 1))
-        layer_idx = int(_scalar(kv_cache_layer_idx, 0))
-        if num_layers <= 0 or not 0 <= layer_idx < num_layers:
-            raise ValueError(f"Invalid cache layer {layer_idx} for {num_layers} layers")
-        cache_batch_idx = int(_scalar(slot_id, 0)) * num_layers + layer_idx
-        actual_kv_length = int(_scalar(kv_actual_isl_tensor, 0))
-    else:
-        cache_batch_idx = int(_scalar(kv_cache_batch_idx, 0))
-        actual_kv_length = None if kv_actual_isl is None else int(_scalar(kv_actual_isl))
-
-    indexed_cache = metadata_supplied or kv_cache_batch_idx is not None
-    if indexed_cache or input_tensor_k.shape[0] != input_tensor_q.shape[0]:
-        if not 0 <= cache_batch_idx < input_tensor_k.shape[0]:
-            raise ValueError(
-                f"KV cache batch index {cache_batch_idx} is outside cache batch size {input_tensor_k.shape[0]}"
-            )
-        input_tensor_k = input_tensor_k[cache_batch_idx : cache_batch_idx + 1]
-        input_tensor_v = input_tensor_v[cache_batch_idx : cache_batch_idx + 1]
-
-    return input_tensor_k, input_tensor_v, actual_kv_length
-
-
-def _ring_attention_with_lse(
-    query,
-    key,
-    value,
-    *,
-    is_causal,
-    scale,
-    attention_sink,
-    sliding_window_size,
-    query_start,
-):
-    import torch
-
-    num_query_heads = query.shape[1]
-    key = _repeat_kv_heads(key, num_query_heads)
-    value = _repeat_kv_heads(value, num_query_heads)
-    query_length = query.shape[-2]
-    key_length = key.shape[-2]
-    scale = query.shape[-1] ** -0.5 if scale is None else scale
-
-    scores = torch.matmul(query.float(), key.transpose(-2, -1).float()) * scale
-    if is_causal or sliding_window_size is not None:
-        mask = _window_mask(
-            query_length,
-            key_length,
-            is_causal=is_causal,
-            sliding_window_size=sliding_window_size,
-            query_start=query_start,
-            device=query.device,
-        )
-        scores = scores.masked_fill(~mask.reshape(1, 1, query_length, key_length), float("-inf"))
-
-    logits = scores
-    if attention_sink is not None:
-        sink = attention_sink.float()
-        if sink.ndim == 1:
-            sink = sink.reshape(1, -1, 1, 1)
-        elif sink.shape[-1] == num_query_heads and sink.shape[1] != num_query_heads:
-            sink = sink.permute(0, 3, 1, 2)
-        sink = sink.expand(scores.shape[0], num_query_heads, query_length, 1) * scale
-        logits = torch.cat([scores, sink], dim=-1)
-
-    probabilities = torch.softmax(logits, dim=-1)[..., :key_length]
-    output = torch.matmul(probabilities, value.float()).to(query.dtype)
-    return output, torch.logsumexp(logits, dim=-1, keepdim=True)
-
-
-def _ring_stats_scratch(input_tensor_q, joint_tensor_q=None):
-    """Return a shape-correct placeholder for the device's private running-max/running-sum scratch output."""
-    tile_width = 32
-    padded_query_length = math.ceil(input_tensor_q.shape[-2] / tile_width) * tile_width
-    padded_joint_length = (
-        math.ceil(joint_tensor_q.shape[-2] / tile_width) * tile_width if joint_tensor_q is not None else 0
-    )
-    stats = input_tensor_q.new_zeros((*input_tensor_q.shape[:2], 2 * (padded_query_length + padded_joint_length), 1))
-    return set_golden_comparison_config(stats, method="skip", scope="all")
-
-
-def _ring_joint_golden(
-    input_tensor_q,
-    input_tensor_k,
-    input_tensor_v,
-    joint_tensor_q=None,
-    joint_tensor_k=None,
-    joint_tensor_v=None,
-    *,
-    joint_strategy="rear",
-    logical_n=None,
-    logical_l=0,
-    is_causal=False,
-    scale=None,
-    attention_sink=None,
-    sliding_window_size=None,
-    kv_cache_batch_idx=None,
-    kv_actual_isl=None,
-    is_cross=False,
-    circular_kv_cache=False,
-    slot_id=None,
-    kv_actual_isl_tensor=None,
-    kv_cache_num_layers=None,
-    kv_cache_layer_idx=None,
-    **_execution_options,
-):
-    import torch
-
-    if joint_strategy != "rear":
-        raise ValueError(f"Only joint_strategy='rear' is supported, got {joint_strategy!r}")
-    if is_cross and is_causal:
-        raise ValueError("is_cross=True requires non-causal attention")
-    if circular_kv_cache:
-        raise NotImplementedError(
-            "The ring golden does not model the device's block-cyclic circular KV layout; "
-            "use a logically ordered cache or omit comparison for this mode"
-        )
-
-    stats = _ring_stats_scratch(input_tensor_q, joint_tensor_q)
-    input_tensor_k, input_tensor_v, actual_kv_length = _ring_runtime_cache_selection(
-        input_tensor_k,
-        input_tensor_v,
-        input_tensor_q,
-        kv_cache_batch_idx=kv_cache_batch_idx,
-        kv_actual_isl=kv_actual_isl,
-        slot_id=slot_id,
-        kv_actual_isl_tensor=kv_actual_isl_tensor,
-        kv_cache_num_layers=kv_cache_num_layers,
-        kv_cache_layer_idx=kv_cache_layer_idx,
-    )
-
-    logical_n = int(_scalar(logical_n, input_tensor_k.shape[-2]))
-    if logical_n < 0:
-        raise ValueError(f"logical_n must be non-negative, got {logical_n}")
-    input_tensor_k = input_tensor_k[..., :logical_n, :]
-    input_tensor_v = input_tensor_v[..., :logical_n, :]
-    input_length = input_tensor_q.shape[-2]
-    has_joint = joint_tensor_q is not None and joint_tensor_q.shape[-2] > 0
-    if has_joint:
-        logical_l = int(_scalar(logical_l, joint_tensor_q.shape[-2])) or joint_tensor_q.shape[-2]
-        joint_tensor_q = joint_tensor_q[..., :logical_l, :]
-        joint_tensor_k = joint_tensor_k[..., :logical_l, :]
-        joint_tensor_v = joint_tensor_v[..., :logical_l, :]
-        query = torch.cat([input_tensor_q, joint_tensor_q], dim=-2)
-        key = torch.cat([input_tensor_k, joint_tensor_k], dim=-2)
-        value = torch.cat([input_tensor_v, joint_tensor_v], dim=-2)
-    else:
-        query, key, value = input_tensor_q, input_tensor_k, input_tensor_v
-
-    query_start = actual_kv_length
-    if query_start is not None and query_start + input_length > logical_n:
-        raise ValueError(
-            f"kv_actual_isl ({query_start}) plus query length ({input_length}) exceeds logical_n ({logical_n})"
-        )
-    if has_joint and query_start is not None:
-        raise NotImplementedError("kv_actual_isl with joint tensors is not modeled by the ring golden")
-
-    output, _ = _ring_attention_with_lse(
-        query,
-        key,
-        value,
-        is_causal=is_causal,
-        scale=scale,
-        attention_sink=attention_sink,
-        sliding_window_size=sliding_window_size,
-        query_start=query_start,
-    )
-    joint_output = output[..., input_length:, :] if has_joint else output[..., :0, :]
-    return output[..., :input_length, :], joint_output, stats
-
-
-def ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
-    return _ring_joint_golden(*args, **kwargs)
-
-
-def exp_ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
-    return _ring_joint_golden(*args, **kwargs)
-
-
-def ring_mla_golden(
-    input_tensor_q,
-    input_tensor_kv,
-    *,
-    head_dim_v,
-    logical_n,
-    scale=None,
-    kv_cache_batch_idx=None,
-    kv_actual_isl=None,
-    slot_id=None,
-    kv_actual_isl_tensor=None,
-    kv_cache_num_layers=None,
-    kv_cache_layer_idx=None,
-    **_,
-):
-    input_tensor_kv, _, actual_kv_length = _ring_runtime_cache_selection(
-        input_tensor_kv,
-        input_tensor_kv,
-        input_tensor_q,
-        kv_cache_batch_idx=kv_cache_batch_idx,
-        kv_actual_isl=kv_actual_isl,
-        slot_id=slot_id,
-        kv_actual_isl_tensor=kv_actual_isl_tensor,
-        kv_cache_num_layers=kv_cache_num_layers,
-        kv_cache_layer_idx=kv_cache_layer_idx,
-    )
-    query_length = input_tensor_q.shape[-2]
-    if actual_kv_length is not None:
-        inferred = actual_kv_length + query_length
-        logical_n = int(_scalar(logical_n, inferred))
-        # A host logical_n that still names the allocated capacity includes the unread tail.
-        if logical_n > inferred:
-            logical_n = inferred
-        if actual_kv_length + query_length > logical_n:
-            raise ValueError(
-                f"kv_actual_isl ({actual_kv_length}) plus query length ({query_length}) exceeds logical_n ({logical_n})"
-            )
-    else:
-        logical_n = int(_scalar(logical_n, input_tensor_kv.shape[-2]))
-    key = input_tensor_kv[..., :logical_n, :]
-    value = key[..., : int(head_dim_v)]
-    output = _scaled_attention(
-        input_tensor_q,
-        key,
-        value,
-        is_causal=True,
-        scale=scale,
-        query_start=actual_kv_length,
-    )
-    return output, _ring_stats_scratch(input_tensor_q)
 
 
 def ring_distributed_scaled_dot_product_attention_golden(
@@ -1744,7 +1459,6 @@ __all__ = [
     "chunk_gated_delta_rule_golden",
     "chunked_flash_mla_prefill_golden",
     "chunked_scaled_dot_product_attention_golden",
-    "exp_ring_joint_scaled_dot_product_attention_golden",
     "flash_mla_prefill_golden",
     "flash_multi_latent_attention_decode_golden",
     "gated_delta_attn_seq_golden",
@@ -1754,8 +1468,6 @@ __all__ = [
     "paged_scaled_dot_product_attention_decode_golden",
     "recurrent_gated_delta_rule",
     "ring_distributed_scaled_dot_product_attention_golden",
-    "ring_joint_scaled_dot_product_attention_golden",
-    "ring_mla_golden",
     "scaled_dot_product_attention_decode_golden",
     "scaled_dot_product_attention_golden",
     "scaled_dot_product_attention_reference",
@@ -1764,6 +1476,5 @@ __all__ = [
     "sparse_mla",
     "sparse_sdpa_golden",
     "sparse_sdpa_msa_golden",
-    "torch_sdpa",
     "torch_sdpa_reference",
 ]

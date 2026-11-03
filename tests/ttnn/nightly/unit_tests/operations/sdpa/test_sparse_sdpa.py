@@ -283,7 +283,7 @@ def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
         # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
-        # sprint / ring-joint perf checks.
+        # sprint perf checks.
         pytest.fail("Real-time profiler must be active for sparse_sdpa perf checks (needs IOMMU)")
 
     # Profile the op with the real-time device profiler (one dispatch -> one device program record), same as

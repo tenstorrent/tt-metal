@@ -40,7 +40,7 @@ def _assert_msa_duration(device, run_fn, expected_ms, label):
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
         # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
-        # sprint / ring-joint perf checks.
+        # sprint perf checks.
         pytest.fail("Real-time profiler must be active for sparse_sdpa_msa perf checks (needs IOMMU)")
 
     out, perf_record = profile_realtime_program(device, run_fn)

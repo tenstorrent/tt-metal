@@ -316,7 +316,7 @@ void kernel_main() {
         }
         uint32_t valid_Skt_bound;
         if (chunk_start_idx_addr != 0) {
-            // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
+            // Flexible chunk start: cap at valid_Skt so we never read past K/V extent.
             valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
         } else {
             // Legacy: extend by offset so one program can serve all chunks (valid_Skt is chunk 0's).

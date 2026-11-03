@@ -13,15 +13,12 @@ from ttnn.operations.transformer_golden import sparse_mla
 SDPA_GOLDEN_OPERATIONS = (
     ttnn.transformer.chunked_flash_mla_prefill,
     ttnn.transformer.chunked_scaled_dot_product_attention,
-    ttnn.transformer.exp_ring_joint_scaled_dot_product_attention,
     ttnn.transformer.flash_mla_prefill,
     ttnn.transformer.flash_multi_latent_attention_decode,
     ttnn.transformer.joint_scaled_dot_product_attention,
     ttnn.transformer.paged_flash_multi_latent_attention_decode,
     ttnn.transformer.paged_scaled_dot_product_attention_decode,
     ttnn.transformer.ring_distributed_scaled_dot_product_attention,
-    ttnn.transformer.ring_joint_scaled_dot_product_attention,
-    ttnn.transformer.ring_mla,
     ttnn.transformer.scaled_dot_product_attention,
     ttnn.transformer.scaled_dot_product_attention_decode,
     ttnn.transformer.sparse_sdpa,
@@ -411,160 +408,6 @@ def test_joint_sdpa_golden_splits_combined_output():
     torch.testing.assert_close(joint_output, expected[..., 3:, :])
 
 
-@pytest.mark.parametrize(
-    "operation",
-    [
-        ttnn.transformer.ring_joint_scaled_dot_product_attention,
-        ttnn.transformer.exp_ring_joint_scaled_dot_product_attention,
-    ],
-    ids=["ring-joint", "experimental-ring-joint"],
-)
-def test_ring_joint_golden_uses_sink_logits_and_marks_stats_as_scratch(operation):
-    # Keep validating sink-aware attention numerics while asserting that the non-semantic device stats output is
-    # represented by a correctly shaped, explicitly skipped scratch tensor.
-    query = torch.tensor([[[[1.0, 0.0], [0.0, 1.0]], [[0.5, 0.5], [1.0, -1.0]]]])
-    key = torch.tensor([[[[1.0, 0.0], [0.0, 1.0]], [[1.0, 1.0], [1.0, -1.0]]]])
-    value = torch.tensor([[[[2.0, 1.0], [4.0, 3.0]], [[1.0, 5.0], [2.0, 6.0]]]])
-    sink = torch.tensor([[[[0.25]], [[-0.5]]]])
-    scale = 0.75
-
-    golden = ttnn.get_golden_function(operation)
-    output, joint_output, stats = golden(
-        query,
-        key,
-        value,
-        logical_n=2,
-        is_causal=True,
-        attention_sink=sink,
-        scale=scale,
-    )
-
-    scores = torch.matmul(query, key.transpose(-2, -1)) * scale
-    causal_mask = torch.tril(torch.ones(2, 2, dtype=torch.bool)).reshape(1, 1, 2, 2)
-    scores = scores.masked_fill(~causal_mask, float("-inf"))
-    sink_logits = sink.expand(1, 2, 2, 1) * scale
-    logits = torch.cat([scores, sink_logits], dim=-1)
-    expected_probabilities = torch.softmax(logits, dim=-1)[..., :2]
-    expected_output = torch.matmul(expected_probabilities, value)
-
-    torch.testing.assert_close(output, expected_output)
-    assert joint_output.shape[-2] == 0
-    assert stats.shape == (1, 2, 64, 1)
-    assert stats._ttnn_comparison_config.method == "skip"
-    assert stats._ttnn_comparison_config.scope == "all"
-
-
-def test_ring_joint_stats_scratch_uses_padded_query_and_joint_lengths():
-    # The device allocates running-max/running-sum scratch from tile-padded Q and joint lengths; comparison must
-    # skip only that leaf while continuing to check both semantic outputs.
-    torch.manual_seed(17)
-    query = torch.randn(1, 2, 3, 4)
-    key = torch.randn(1, 2, 3, 4)
-    value = torch.randn(1, 2, 3, 4)
-    joint_query = torch.randn(1, 2, 5, 4)
-    joint_key = torch.randn(1, 2, 5, 4)
-    joint_value = torch.randn(1, 2, 5, 4)
-
-    golden = ttnn.get_golden_function(ttnn.transformer.ring_joint_scaled_dot_product_attention)
-    output, joint_output, stats = golden(
-        query,
-        key,
-        value,
-        joint_query,
-        joint_key,
-        joint_value,
-        logical_n=3,
-        logical_l=5,
-    )
-
-    assert output.shape[-2] == 3
-    assert joint_output.shape[-2] == 5
-    assert stats.shape == (1, 2, 128, 1)
-    golden_outputs = (output, joint_output, stats)
-    runtime_outputs = (output.clone(), joint_output.clone(), torch.ones(1, 2, 1, 1))
-    ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(golden_outputs), force=True)
-    ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(runtime_outputs), force=True)
-    records = ttnn.decorators.compare_tensors_using_pcc(
-        "ttnn.transformer.ring_joint_scaled_dot_product_attention",
-        golden_outputs,
-        runtime_outputs,
-        desired_pcc=0.99,
-        level="locally",
-        fail_on_bad_comparison=True,
-    )
-    assert len(records) == 2
-
-
-def test_ring_joint_golden_resolves_indexed_layer_metadata():
-    query = torch.tensor([[[[1.0, 0.0]]]])
-    key = torch.randn(4, 1, 2, 2)
-    value = torch.randn(4, 1, 2, 3)
-    slot_id = torch.tensor([1])
-    actual_kv_length = torch.tensor([0])
-
-    golden = ttnn.get_golden_function(ttnn.transformer.ring_joint_scaled_dot_product_attention)
-    output, _, _ = golden(
-        query,
-        key,
-        value,
-        logical_n=2,
-        slot_id=slot_id,
-        kv_actual_isl_tensor=actual_kv_length,
-        kv_cache_num_layers=2,
-        kv_cache_layer_idx=0,
-    )
-
-    expected = torch.nn.functional.scaled_dot_product_attention(query, key[2:3], value[2:3])
-    torch.testing.assert_close(output, expected)
-
-
-def test_ring_joint_golden_uses_actual_kv_length_as_causal_query_offset():
-    torch.manual_seed(4)
-    query = torch.randn(1, 1, 2, 3)
-    key = torch.randn(1, 1, 4, 3)
-    value = torch.randn(1, 1, 4, 2)
-
-    golden = ttnn.get_golden_function(ttnn.transformer.ring_joint_scaled_dot_product_attention)
-    output, _, _ = golden(
-        query,
-        key,
-        value,
-        logical_n=4,
-        kv_actual_isl=2,
-        is_causal=True,
-    )
-
-    query_positions = torch.arange(2, 4).unsqueeze(1)
-    key_positions = torch.arange(4).unsqueeze(0)
-    causal_mask = (key_positions <= query_positions).reshape(1, 1, 2, 4)
-    expected = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_mask=causal_mask)
-    torch.testing.assert_close(output, expected)
-
-
-def test_ring_joint_golden_cross_attention_uses_only_logical_keys():
-    torch.manual_seed(5)
-    query = torch.randn(1, 2, 2, 4)
-    key = torch.randn(1, 1, 5, 4)
-    value = torch.randn(1, 1, 5, 3)
-
-    golden = ttnn.get_golden_function(ttnn.transformer.ring_joint_scaled_dot_product_attention)
-    output, _, _ = golden(
-        query,
-        key,
-        value,
-        logical_n=3,
-        is_causal=False,
-        is_cross=True,
-    )
-
-    expected = torch.nn.functional.scaled_dot_product_attention(
-        query,
-        key[..., :3, :].repeat_interleave(2, dim=1),
-        value[..., :3, :].repeat_interleave(2, dim=1),
-    )
-    torch.testing.assert_close(output, expected)
-
-
 def test_sdpa_decode_golden_uses_padded_per_head_sink():
     torch.manual_seed(7)
     batch, heads, dim, seq = 2, 2, 4, 3
@@ -767,60 +610,6 @@ def test_paged_decode_golden_converts_circular_mask_layout():
     torch.testing.assert_close(actual, expected)
 
 
-def test_ring_mla_golden_selects_cache_slot_when_batch_sizes_match():
-    # Validate indexed cache-slot selection and ensure ring MLA exposes its second output as skipped device scratch
-    # rather than a fabricated final LSE.
-    torch.manual_seed(3)
-    query = torch.randn(4, 2, 3, 6)
-    kv = torch.randn(4, 1, 3, 6)
-
-    golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
-    output, stats = golden(query, kv, head_dim_v=3, logical_n=3, kv_cache_batch_idx=2)
-
-    key = kv[2:3, :, :3, :]
-    value = key[..., :3]
-    expected = torch.nn.functional.scaled_dot_product_attention(
-        query,
-        key.repeat_interleave(2, dim=1),
-        value.repeat_interleave(2, dim=1),
-        is_causal=True,
-    )
-    torch.testing.assert_close(output, expected)
-    assert stats.shape == (4, 2, 64, 1)
-    assert stats._ttnn_comparison_config.method == "skip"
-
-
-def test_ring_mla_golden_uses_runtime_slot_and_logical_prefix():
-    torch.manual_seed(9)
-    query = torch.randn(1, 2, 2, 6)
-    kv = torch.randn(4, 1, 8, 6)
-
-    golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
-    output, _ = golden(
-        query,
-        kv,
-        head_dim_v=3,
-        logical_n=8,
-        slot_id=torch.tensor([1]),
-        kv_actual_isl_tensor=torch.tensor([2]),
-        kv_cache_num_layers=2,
-        kv_cache_layer_idx=0,
-    )
-
-    key = kv[2:3, :, :4, :]
-    value = key[..., :3]
-    query_positions = torch.arange(2, 4).unsqueeze(1)
-    key_positions = torch.arange(4).unsqueeze(0)
-    causal_mask = (key_positions <= query_positions).reshape(1, 1, 2, 4)
-    expected = torch.nn.functional.scaled_dot_product_attention(
-        query,
-        key.repeat_interleave(2, dim=1),
-        value.repeat_interleave(2, dim=1),
-        attn_mask=causal_mask,
-    )
-    torch.testing.assert_close(output, expected)
-
-
 def test_flash_mla_prefill_golden_casts_kv_to_query_dtype():
     torch.manual_seed(11)
     query = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
@@ -848,17 +637,3 @@ def test_sparse_sdpa_msa_golden_treats_unsigned_masked_index_as_sentinel():
     signed_output = golden(query, key, value, signed, block_size=2, scale=1.0)
     unsigned_output = golden(query, key, value, unsigned, block_size=2, scale=1.0)
     torch.testing.assert_close(unsigned_output, signed_output)
-
-
-def test_ring_ops_register_persistent_buffers_as_inplace_outputs():
-    exp_ring = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention
-    ring_joint = ttnn.transformer.ring_joint_scaled_dot_product_attention
-    ring_mla = ttnn.transformer.ring_mla
-
-    assert "persistent_output_buffer_k" in exp_ring.output_tensor_kwarg_names
-    assert "persistent_output_buffer_v" in exp_ring.output_tensor_kwarg_names
-    assert "persistent_output_buffer_k" in ring_joint.output_tensor_kwarg_names
-    assert "persistent_output_buffer_v" in ring_joint.output_tensor_kwarg_names
-    assert "persistent_output_buffer_joint_k" in ring_joint.output_tensor_kwarg_names
-    assert "persistent_output_buffer_joint_v" in ring_joint.output_tensor_kwarg_names
-    assert "persistent_output_buffer_kv" in ring_mla.output_tensor_kwarg_names

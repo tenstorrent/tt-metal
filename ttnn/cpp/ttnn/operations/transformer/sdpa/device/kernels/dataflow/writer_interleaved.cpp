@@ -118,12 +118,7 @@ void kernel_main() {
     if constexpr (use_lightweight_mask) {
         // is_causal handles K-partial via causal stamp; skip emitting partial tile in causal mode.
         constexpr uint32_t writer_partial_col = is_causal ? 0u : k_partial_col;
-        generate_lightweight_mask_tiles<
-            writer_partial_col,
-            /*joint_l*/ 0u,
-            cb_mask_in,
-            is_causal,
-            sliding_window_size>(noc);
+        generate_lightweight_mask_tiles<writer_partial_col, cb_mask_in, is_causal, sliding_window_size>(noc);
     }
 
     // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per

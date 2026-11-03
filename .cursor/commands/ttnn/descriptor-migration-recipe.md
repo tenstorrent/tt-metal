@@ -164,8 +164,7 @@ The contract:
    the first miss. If the op also has a hash-excluded scalar, wrap the descriptor adapter in
    a hand-written `<Op>MeshWorkloadFactory` whose override takes the whole cached workload:
    delegate to `descriptor_adapter_t::apply_descriptor(...)` first (binding behavior stays
-   bit-identical), then patch the extra slots per coordinate. See
-   `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp`.
+   bit-identical), then patch the extra slots per coordinate.
 
 > Single-device ops without workload-scoped state continue to use just `create_descriptor`
 > (no workload concept). An op whose program merely *differs per mesh coordinate* (no shared
@@ -573,7 +572,7 @@ Rules specific to this path (they differ from the per-`Program` flow, see §1.2/
    declared bindings are patched. Anything varying that isn't a binding is frozen at first
    miss. If a hash-excluded scalar survives the port, you need the hand-written
    `<Op>MeshWorkloadFactory` wrapper (delegate to `descriptor_adapter_t::apply_descriptor`,
-   then patch) — `ring_joint_sdpa_program_factory.hpp`.
+   then patch).
 2. **Workload-scoped `GlobalSemaphore` addresses are stable** for the cache entry's lifetime,
    so they may be baked as raw args — suppress the guard with
    `// smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)`.
@@ -672,8 +671,6 @@ Declarative `WorkloadDescriptor` examples:
 - Op-owned device buffers (halo lookup table, avg-pool scalar config):
   `ttnn/cpp/ttnn/operations/pool/generic/device/pool_op.hpp` +
   `pool_multi_core_program_factory.cpp`
-- Workload-scoped override for a hash-excluded scalar:
-  `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp`
 
 Per-coordinate program (4-arg `create_descriptor`):
 - `ttnn/cpp/ttnn/operations/debug/device/apply_device_delay_device_operation.cpp`

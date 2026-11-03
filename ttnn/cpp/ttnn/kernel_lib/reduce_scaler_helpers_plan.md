@@ -69,7 +69,6 @@ Face layout (each face is 16x16 elements):
 
 **Transformer/SDPA:**
 - ✅ `joint_writer.cpp` - `transformer/sdpa/device/kernels/dataflow/`
-- ✅ `ring_joint_writer.cpp` - `transformer/sdpa/device/kernels/dataflow/`
 - ✅ `writer_interleaved.cpp` - `transformer/sdpa/device/kernels/dataflow/`
 - ✅ `writer_windowed.cpp` - `transformer/sdpa_windowed/device/kernels/dataflow/`
 - ✅ `writer_decode_all.cpp` - `transformer/sdpa_decode/device/kernels/dataflow/`
@@ -270,7 +269,6 @@ void kernel_main() {
 
 4. **Migrated SDPA kernels**
    - `joint_writer.cpp`
-   - `ring_joint_writer.cpp`
    - `writer_interleaved.cpp`
 
 5. **Migrated softmax kernels**

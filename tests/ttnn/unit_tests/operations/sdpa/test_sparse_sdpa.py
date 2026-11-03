@@ -290,7 +290,7 @@ def test_sparse_sdpa_kv_len_no_recompile(device):
     assert n == 1, f"changing kv length recompiled: {n} program-cache entries (expected 1)"
 
 
-# ---- oversized persistent kv buffer (same idea as ring_mla's reuse_max): one max-size K cache, allocated
+# ---- oversized persistent kv buffer: one max-size K cache, allocated
 # ---- once and reused across calls. The cache is far larger than the keys any query attends to (T >> TOPK)
 # ---- and reads are index-driven, so the unpopulated suffix is simply never addressed. ----
 @run_for_blackhole()
