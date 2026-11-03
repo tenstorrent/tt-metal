@@ -107,7 +107,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     auto* device = query.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     TT_FATAL(
         query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
