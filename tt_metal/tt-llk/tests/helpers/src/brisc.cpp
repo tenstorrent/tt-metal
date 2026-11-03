@@ -81,6 +81,7 @@ int main()
 #endif
 
         ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) | TRISC_SOFT_RESET_MASK);
+        commit_store(versim_go, 2U); // idle: the TRISCs are in reset, the host may reset the mailboxes and write 1
         do
         {
             ckernel::invalidate_data_cache();

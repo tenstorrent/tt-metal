@@ -2093,6 +2093,11 @@ class TestConfig:
                         TestConfig.TENSIX_LOCATION, launch_done, [0], safe_mode=False
                     )
                 if versim_loop:
+                    # Wait until BRISC has put the TRISCs in reset (a TRISC may still be in its end-of-kernel tail).
+                    while (
+                        read_word_from_device(TestConfig.TENSIX_LOCATION, 0x16DFFC) != 2
+                    ):
+                        time.sleep(1)
                     reset_mailboxes(TestConfig.TENSIX_LOCATION)
                     write_words_to_device(TestConfig.TENSIX_LOCATION, 0x16DFFC, [1])
                 else:
