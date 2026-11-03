@@ -144,6 +144,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/2_0/internal/llk_descriptor.h
     inc/api/compute/experimental/add_rsqrt.h
     inc/api/compute/experimental/block_max8.h
+    inc/api/compute/experimental/cluster_semaphore.h
     inc/api/compute/experimental/compressed_custom_mm.h
     inc/api/compute/experimental/compute_kernel_hw_cleanup.h
     inc/api/compute/experimental/csa_index_remap.h
@@ -240,7 +241,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/profiler_common.h
-    inc/hostdev/profiler_zone_id.h
+    inc/hostdev/observability_event_descriptor.h
     inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h
