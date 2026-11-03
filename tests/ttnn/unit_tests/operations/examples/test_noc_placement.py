@@ -26,6 +26,12 @@ See ttnn/ttnn/operations/examples/noc_placement/README.md for what this illustra
         tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_write_split_correctness
     scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_write_split_perf
+
+    # swap_columns: reads NoC1 / writes NoC0 on the N DRAM-nearest worker columns only (correctness, then the sweep)
+    scripts/run_safe_pytest.sh --run-all \\
+        tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_swap_columns_correctness
+    scripts/run_safe_pytest.sh --run-all \\
+        tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_swap_columns_perf
 """
 
 import json
@@ -181,16 +187,17 @@ _REGIME_ITERS = 2  # in-kernel repeats of the page range
 _LINE_SETUP = (_REGIME_SHAPE, _REGIME_ITERS, "dram", "dram")  # (shape, kernel_iters, input mem, output mem)
 
 
-def _c(placement, noc, write_split=0, noc_mode=None):
-    """A copy cell: placement, read NoC (writes on the other one), write split, NOC_MODE."""
-    return (placement, noc, write_split, noc_mode or ("dynamic" if write_split else "dedicated"))
+def _c(placement, noc, write_split=0, noc_mode=None, swap_columns=0):
+    """A copy cell: placement, read NoC (writes on the other one), write split, NOC_MODE, and the number
+    of DRAM-nearest worker columns (ranked from the DRAM column next to bank 0) that swap the pairing."""
+    return (placement, noc, write_split, noc_mode or ("dynamic" if write_split else "dedicated"), swap_columns)
 
 
 # id: (num_cores (None = whole grid), block, base cell, lever cell, kind, threshold, setup)
 #   kind "helps"         -> assert speedup >= threshold  (T_help = 1 + 0.5 * (measured - 1), >= 1.05)
 #   kind "does_not_help" -> assert speedup <= threshold  (1.05 for "flat", 1.0 for a measured loss)
-# Thresholds hold on every measured board (the line regimes: WH B0 n150, BH p150b; the grid and write-split
-# regimes: BH p150b only); numbers per board in README.md.
+# Thresholds hold on every measured board (the line regimes: WH B0 n150, BH p150b; the grid, write-split and
+# swap_columns regimes: BH p150b only); numbers per board in README.md.
 _NP_REGIMES = {
     # 8 cores x 16 pages in flight = 128 outstanding 2 KB reads: column saturates its shared links.
     # WH 2.91x, BH 2.24x
@@ -248,6 +255,60 @@ _NP_REGIMES = {
     ),
     # 8-core row, DRAM -> DRAM: far from the DRAM ceiling, half the writes join the reads on NoC0. BH 0.78-0.81x
     "write_split_loses_row8_half": (8, 16, _c("row", "noc0"), _c("row", "noc0", 2), "does_not_help", 1.0, _LINE_SETUP),
+    # swap_columns=3: the 3 worker columns nearest the DRAM column next to bank 0 (queried from the device)
+    # read on NoC1 / write on NoC0, the rest keep reads NoC0 / writes NoC1. Whole grid, 8 MB read+write stream,
+    # 15 tiles per Tensix core: the usual pairing runs at 341 GB/s, below the DRAM ceiling. BH 1.15x
+    "swap3_helps_grid_8mb": (
+        None,
+        16,
+        _c(GRID, "noc0"),
+        _c(GRID, "noc0", swap_columns=3),
+        "helps",
+        1.07,
+        ((1024, 2048), 1, "dram", "dram"),
+    ),
+    # Same lever, partial grid: 65 Tensix cores (the first 5 rows), 64 MB read+write, 357 GB/s unswapped. BH 1.11x
+    "swap3_helps_grid65_64mb": (
+        65,
+        16,
+        _c(GRID, "noc0"),
+        _c(GRID, "noc0", swap_columns=3),
+        "helps",
+        1.05,
+        ((4096, 4096), 1, "dram", "dram"),
+    ),
+    # Same lever, whole grid, 34 MB read+write, 64 pages per barrier (the deep-issue form of the 34 MB copy;
+    # at 16 pages per barrier the same copy only gains 1.03x). BH 1.07x; bound at the 1.05 floor.
+    "swap3_helps_grid_34mb_block64": (
+        None,
+        64,
+        _c(GRID, "noc0"),
+        _c(GRID, "noc0", swap_columns=3),
+        "helps",
+        1.05,
+        ((2048, 4096), 1, "dram", "dram"),
+    ),
+    # Same lever, whole grid, 176 MB read+write at 16 pages per barrier: the copy sits at the DRAM ceiling
+    # (407 GB/s unswapped). BH 1.01x
+    "swap3_flat_grid_176mb": (
+        None,
+        16,
+        _c(GRID, "noc0"),
+        _c(GRID, "noc0", swap_columns=3),
+        "does_not_help",
+        1.05,
+        ((10752, 4096), 1, "dram", "dram"),
+    ),
+    # Same lever, whole grid, 34 MB read+write, 1 page per barrier: latency-bound. BH 1.00x
+    "swap3_flat_grid_34mb_block1": (
+        None,
+        1,
+        _c(GRID, "noc0"),
+        _c(GRID, "noc0", swap_columns=3),
+        "does_not_help",
+        1.05,
+        ((2048, 4096), 1, "dram", "dram"),
+    ),
 }
 
 
@@ -270,8 +331,8 @@ def _interleaved_trials(device, run_a, run_b, trials, per_trial):
 
 
 def _cell_str(cell):
-    pl, noc, split, mode = cell
-    return f"{pl}, reads {noc}, write_split={split}, {mode}"
+    pl, noc, split, mode, swap = cell
+    return f"{pl}, reads {noc}, write_split={split}, {mode}, swap_columns={swap}"
 
 
 @pytest.mark.parametrize("regime", list(_NP_REGIMES), ids=list(_NP_REGIMES))
@@ -286,7 +347,7 @@ def test_noc_placement_regimes(device, regime):
         num_cores = grid.x * grid.y
 
     def run(cell, iters=kernel_iters):
-        pl, noc, split, mode = cell
+        pl, noc, split, mode, swap = cell
         return noc_placement(
             tt_input,
             op="copy",
@@ -298,6 +359,7 @@ def test_noc_placement_regimes(device, regime):
             memory_config=_MEM[out_mem],
             write_split=split,
             noc_mode=mode,
+            swap_columns=swap,
         )
 
     # Correctness: both cells are the identical identity copy.
@@ -509,4 +571,133 @@ def test_noc_placement_write_split_perf(device, case):
     logger.info(
         f"\n=== noc_placement write split  box={socket.gethostname()}  arch={device.arch()} ===\n"
         + "\n\n".join(_WS_REPORT)
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# Swap the pairing on the DRAM-adjacent columns only (swap_columns=N): the Tensix cores in the N
+# worker-grid columns nearest a DRAM column read on NoC1 / write on NoC0; every other column keeps
+# reads on NoC0 / writes on NoC1. The columns come from the device (the logical worker columns it names
+# as closest to each DRAM bank), ranked by distance from the DRAM column next to bank 0 ("first", f<N>)
+# or from the nearest DRAM column ("every", e<N>). Same kernels, same per-core pages, NOC_MODE dedicated.
+# ---------------------------------------------------------------------------------------------
+def _swap_methods():
+    methods = {"base": dict(swap_columns=0)}
+    for n in (1, 2, 3, 4, 6):
+        methods[f"f{n}"] = dict(swap_columns=n, swap_anchor="first")
+    for n in (2, 3, 4, 6):  # e1 == f1 (both start at the column next to bank 0)
+        methods[f"e{n}"] = dict(swap_columns=n, swap_anchor="every")
+    methods["all"] = dict(swap_columns="all")
+    return methods
+
+
+_SW_METHODS = _swap_methods()
+
+# id: (placement, num_cores (None = whole grid), shape, block, kernel_iters, input mem, output mem)
+# The id's size is the whole stream: read + write bytes per launch.
+_SW_CASES = {
+    "grid_8mb": (GRID, None, (1024, 2048), 16, 1, _DRAM, _DRAM),
+    "grid_32mb": (GRID, None, (2048, 4096), 16, 1, _DRAM, _DRAM),
+    "grid_64mb": (GRID, None, (4096, 4096), 16, 1, _DRAM, _DRAM),
+    "grid_168mb": (GRID, None, (10752, 4096), 16, 1, _DRAM, _DRAM),
+    "grid_168mb_block4": (GRID, None, (10752, 4096), 4, 1, _DRAM, _DRAM),
+    "grid_168mb_block32": (GRID, None, (10752, 4096), 32, 1, _DRAM, _DRAM),
+    "grid_32mb_block1": (GRID, None, (2048, 4096), 1, 1, _DRAM, _DRAM),
+    "grid65_64mb": (GRID, 65, (4096, 4096), 16, 1, _DRAM, _DRAM),
+    "grid_dram_to_l1_32mb": (GRID, None, (2048, 4096), 16, 1, _DRAM, _L1),
+}
+if os.environ.get("NP_SWAP_CUSTOM"):  # the CLI's --swap-columns path: one case from the caller's params
+    _SW_CASES = {
+        "custom": (
+            os.environ.get("NP_PLACEMENT", GRID),
+            int(os.environ["NP_CORES"]) if os.environ.get("NP_CORES") else None,
+            SHAPE,
+            BLOCK,
+            KERNEL_ITERS,
+            os.environ.get("NP_IN_MEM", _DRAM),
+            os.environ.get("NP_OUT_MEM", _DRAM),
+        )
+    }
+_SW_TRIALS = int(os.environ.get("NP_SW_TRIALS", "5"))
+_SW_REPORT = []
+
+
+@pytest.mark.parametrize("swap_anchor", ["first", "every"])
+@pytest.mark.parametrize("swap_columns", [1, 3, 6, "all"])
+@pytest.mark.parametrize("placement,num_cores,out_mem", [(GRID, None, _DRAM), (GRID, 65, _DRAM), ("row", 8, _L1)])
+def test_noc_placement_swap_columns_correctness(device, placement, num_cores, out_mem, swap_columns, swap_anchor):
+    """Swapping the pairing on some columns is still the identical identity copy (bitwise)."""
+    tt_input = _make_tensor(device, (1024, 2048), _DRAM)
+    expected = ttnn.to_torch(tt_input)
+    out = noc_placement(
+        tt_input,
+        op="copy",
+        placement=placement,
+        num_cores=num_cores,
+        memory_config=_MEM[out_mem],
+        swap_columns=swap_columns,
+        swap_anchor=swap_anchor,
+    )
+    assert torch.equal(ttnn.to_torch(out), expected), f"copy swap_columns={swap_columns} ({swap_anchor}) differs"
+
+
+@pytest.mark.parametrize("case", list(_SW_CASES), ids=list(_SW_CASES))
+def test_noc_placement_swap_columns_perf(device, case):
+    """Measure swap_columns=N against the usual pairing. Correctness of every method is asserted; the
+    timings are reported, never asserted (see the regimes test)."""
+    import socket
+    import statistics
+
+    from ttnn.operations.examples.noc_placement import dram_adjacent_columns
+
+    placement, num_cores, shape, block, kernel_iters, in_mem, out_mem = _SW_CASES[case]
+    tt_input = _make_tensor(device, shape, in_mem)
+    expected = ttnn.to_torch(tt_input)
+    grid = device.compute_with_storage_grid_size()
+    cores = num_cores if num_cores is not None else (grid.x * grid.y if placement == GRID else min(grid.x, grid.y))
+
+    def runner(method):
+        kw = _SW_METHODS[method]
+        return lambda: noc_placement(
+            tt_input,
+            op="copy",
+            noc="noc0",
+            placement=placement,
+            num_cores=cores,
+            block=block,
+            kernel_iters=kernel_iters,
+            memory_config=_MEM[out_mem],
+            **kw,
+        )
+
+    runs = {m: runner(m) for m in _SW_METHODS}
+    for m, run in runs.items():
+        assert torch.equal(ttnn.to_torch(run()), expected), f"{case}: method {m} is not an identity copy"
+
+    samples = _rotated_trials(device, runs, _SW_TRIALS, _WS_PER_TRIAL)
+    med = {m: statistics.median(v) for m, v in samples.items()}
+    tiles = (shape[0] // TILE) * (shape[1] // TILE)
+    nbytes = tiles * 2048 * kernel_iters * 2  # read + write bytes per launch
+    order = {a: dram_adjacent_columns(device, a) for a in ("first", "every")}
+    head = (
+        f"{case}: placement={placement} cores={cores} (grid {grid.x}x{grid.y}) shape={shape} ({tiles} tiles, "
+        f"{tiles // cores} tiles/core, {nbytes / 1e6:.0f} MB read+write) block={block} kernel_iters={kernel_iters} "
+        f"{in_mem}->{out_mem}  N={_SW_TRIALS} rotated trials x {_WS_PER_TRIAL} launches (median)  "
+        f"CHIP_FREQ={_chip_freq_mhz()} MHz\n    column order nearest-DRAM first: first={order['first']} every={order['every']}"
+    )
+    lines = [
+        head,
+        f"    {'method':<6} {'swapped cols':<24} {'median ns':>11} {'min-max ns':>21} {'GB/s':>7} {'vs base':>8}",
+    ]
+    for m, kw in _SW_METHODS.items():
+        n = kw["swap_columns"]
+        cols = "-" if n == 0 else ("all" if n == "all" else str(sorted(order[kw.get("swap_anchor", "first")][:n])))
+        lines.append(
+            f"    {m:<6} {cols:<24} {med[m]:>11.0f} {min(samples[m]):>10.0f}-{max(samples[m]):<10.0f} "
+            f"{nbytes / med[m]:>7.1f} {med['base'] / med[m]:>7.3f}x"
+        )
+    _SW_REPORT.append("\n".join(lines))
+    logger.info(
+        f"\n=== noc_placement swap_columns  box={socket.gethostname()}  arch={device.arch()} ===\n"
+        + "\n\n".join(_SW_REPORT)
     )

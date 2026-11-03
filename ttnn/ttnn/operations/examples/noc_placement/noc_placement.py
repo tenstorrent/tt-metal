@@ -23,6 +23,15 @@ One more knob applies to "copy" only:
                   NOC_MODE::DM_DYNAMIC_NOC; noc_mode="dynamic" with write_split=0 is the matching
                   control (same mode, no split) so the mode's own cost is measured separately.
 
+    swap_columns : 0 = every Tensix core reads on `noc` and writes on the other NoC (the usual pairing).
+                   N >= 1 = the N worker-grid columns nearest a DRAM column swap the pairing (reads on the
+                   other NoC, writes on `noc`); every other column keeps it. "all" = every column swaps.
+                   Which columns are nearest DRAM is queried from the device (the logical worker columns the
+                   device names as closest to each DRAM bank), never hard-coded. swap_anchor picks the
+                   reference: "first" = only the DRAM column next to bank 0 (columns ranked by distance from
+                   it), "every" = every DRAM column (ranked by distance from the nearest one). Each core still
+                   uses one NoC per kernel (NOC_MODE dedicated); the swapped cores just get the other config.
+
 The kernels are byte-identical across placements; only the physical cores and the chosen
 NoC(s) change, so any measured difference is pure NoC routing. `read`/`write` isolate a
 single stream (no CB handshake, no partner kernel) so the NoC-for-reads vs NoC-for-writes
@@ -49,6 +58,7 @@ ALL_PLACEMENTS = PLACEMENTS + (GRID,)
 OPS = ("read", "write", "copy")
 NOCS = ("noc0", "noc1")
 NOC_MODES = ("dedicated", "dynamic")
+SWAP_ANCHORS = ("first", "every")
 
 _NOC = {"noc0": ttnn.NOC.NOC_0, "noc1": ttnn.NOC.NOC_1}
 _OTHER = {"noc0": "noc1", "noc1": "noc0"}
@@ -116,6 +126,30 @@ def _resolve_num_cores(device, num_cores, placement):
     return num_cores
 
 
+def dram_adjacent_columns(device, anchor="first"):
+    """Logical worker-grid columns ordered nearest-DRAM first (the order swap_columns consumes).
+
+    Queried from the device, not hard-coded: the device names, per DRAM bank, the logical worker core
+    closest to that bank; the columns of those cores are the DRAM-adjacent columns ("anchors").
+    anchor="first": rank by distance from the column next to bank 0 only; "every": by distance from
+    the nearest anchor column. Ties go to the lower column index."""
+    if anchor not in SWAP_ANCHORS:
+        raise ValueError(f"noc_placement example: swap_anchor must be one of {SWAP_ANCHORS}, got {anchor!r}")
+    grid = device.compute_with_storage_grid_size()
+    nearest = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
+    anchors = [nearest[0].x] if anchor == "first" else sorted({c.x for c in nearest})
+    return sorted(range(grid.x), key=lambda col: (min(abs(col - a) for a in anchors), col))
+
+
+def _swapped_columns(device, swap_columns, anchor):
+    """The set of logical worker columns whose Tensix cores run the swapped NoC pairing."""
+    order = dram_adjacent_columns(device, anchor)
+    n = len(order) if swap_columns == "all" else swap_columns
+    if not 0 <= n <= len(order):
+        raise ValueError(f"noc_placement example: swap_columns must be in [0, {len(order)}] or 'all', got {n}")
+    return set(order[:n])
+
+
 def _dm_config(processor, noc, noc_mode="dedicated"):
     return ttnn.DataMovementConfigDescriptor(processor=processor, noc=_NOC[noc], noc_mode=_NOC_MODE[noc_mode])
 
@@ -174,10 +208,24 @@ def _bench(input_tensor, *, op, noc, placement, num_cores, kernel_iters, block):
     return ttnn.generic_op([input_tensor, output_tensor], program)
 
 
-def _copy(input_tensor, *, noc, placement, num_cores, kernel_iters, block, memory_config, write_split, noc_mode):
+def _copy(
+    input_tensor,
+    *,
+    noc,
+    placement,
+    num_cores,
+    kernel_iters,
+    block,
+    memory_config,
+    write_split,
+    noc_mode,
+    swap_columns=0,
+    swap_anchor="first",
+):
     """Identity DRAM->DRAM copy: reader on `noc`, writer on the other NoC (so the read
     and write streams never share links). Output equals input for every placement/NoC.
-    write_split=k moves every k-th output page's write onto the read NoC (see module doc)."""
+    write_split=k moves every k-th output page's write onto the read NoC (see module doc).
+    swap_columns=N gives the Tensix cores in the N DRAM-nearest columns the reversed pairing."""
     device = input_tensor.device()
     out_mem = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
     output_tensor = ttnn.allocate_tensor_on_device(
@@ -201,29 +249,45 @@ def _copy(input_tensor, *, noc, placement, num_cores, kernel_iters, block, memor
         ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
     )
 
-    reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     in_addr, out_addr = input_tensor.buffer_address(), output_tensor.buffer_address()
-    for core, (start_page, count) in zip(cores, assignment):
-        reader_rt[core.x][core.y] = [in_addr, start_page, count]
-        writer_rt[core.x][core.y] = [out_addr, start_page, count]
+    page_range = {(c.x, c.y): a for c, a in zip(cores, assignment)}
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "copy_reader.cpp"),
-        core_ranges=core_ranges,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, noc, noc_mode),  # reads on `noc`
-    )
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "copy_writer.cpp"),
-        core_ranges=core_ranges,
-        compile_time_args=writer_ct,
-        runtime_args=writer_rt,
-        # writes on the other NoC (every write_split-th page on `noc`); both kernels on a Tensix core
-        # must share one NOC_MODE, so the reader follows the writer into dynamic mode
-        config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, _OTHER[noc], noc_mode),
-    )
-    program = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb])
+    # swap_columns: split the cores into the usual-pairing group and the swapped group (same kernels,
+    # same per-core page ranges; only the NoC each kernel issues on differs between the groups)
+    swapped = _swapped_columns(device, swap_columns, swap_anchor) if swap_columns else set()
+    groups = [(noc, [c for c in cores if c.x not in swapped]), (_OTHER[noc], [c for c in cores if c.x in swapped])]
+
+    kernels = []
+    for read_noc, group in groups:
+        if not group:
+            continue
+        group_ranges = _core_range_set(group)
+        reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for core in group:
+            start_page, count = page_range[(core.x, core.y)]
+            reader_rt[core.x][core.y] = [in_addr, start_page, count]
+            writer_rt[core.x][core.y] = [out_addr, start_page, count]
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "copy_reader.cpp"),
+                core_ranges=group_ranges,
+                compile_time_args=reader_ct,
+                runtime_args=reader_rt,
+                config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, read_noc, noc_mode),  # reads on `read_noc`
+            )
+        )
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "copy_writer.cpp"),
+                core_ranges=group_ranges,
+                compile_time_args=writer_ct,
+                runtime_args=writer_rt,
+                # writes on the other NoC (every write_split-th page on the read NoC); both kernels on a
+                # Tensix core must share one NOC_MODE, so the reader follows the writer into dynamic mode
+                config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, _OTHER[read_noc], noc_mode),
+            )
+        )
+    program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb])
     return ttnn.generic_op([input_tensor, output_tensor], program)
 
 
@@ -239,6 +303,8 @@ def noc_placement(
     memory_config: ttnn.MemoryConfig = None,
     write_split: int = 0,
     noc_mode: str = None,
+    swap_columns=0,
+    swap_anchor: str = "first",
 ) -> ttnn.Tensor:
     """Run one cell of the placement × NoC × operation matrix.
 
@@ -258,6 +324,11 @@ def noc_placement(
             page is written on the read NoC instead (1/k of the writes move NoC).
         noc_mode: "dedicated" (default when write_split == 0) or "dynamic" (required, and the
             default, when write_split > 0). Applies to both copy kernels.
+        swap_columns: op="copy" only. 0 = the usual pairing everywhere; N = the Tensix cores in the N
+            worker-grid columns nearest DRAM (queried from the device) read on the other NoC and write
+            on `noc`; "all" = every column (the fully swapped pairing).
+        swap_anchor: "first" (rank columns by distance from the DRAM column next to bank 0) or "every"
+            (by distance from the nearest DRAM column).
 
     Returns the copy output for op="copy" (== input); for the benches the returned tensor's
     contents are meaningless -- the point is the isolated read/write NoC traffic.
@@ -282,6 +353,12 @@ def noc_placement(
         raise ValueError("noc_placement example: write_split > 0 issues on both NoCs and needs noc_mode='dynamic'")
     if noc_mode != "dedicated" and op != "copy":
         raise ValueError("noc_placement example: noc_mode applies to op='copy' only")
+    if swap_columns != "all" and (not isinstance(swap_columns, int) or swap_columns < 0):
+        raise ValueError(f"noc_placement example: swap_columns must be an int >= 0 or 'all', got {swap_columns!r}")
+    if swap_columns and op != "copy":
+        raise ValueError("noc_placement example: swap_columns applies to op='copy' only")
+    if swap_anchor not in SWAP_ANCHORS:
+        raise ValueError(f"noc_placement example: swap_anchor must be one of {SWAP_ANCHORS}, got {swap_anchor!r}")
     validate(input_tensor)
 
     if op == "copy":
@@ -295,6 +372,8 @@ def noc_placement(
             memory_config=memory_config,
             write_split=write_split,
             noc_mode=noc_mode,
+            swap_columns=swap_columns,
+            swap_anchor=swap_anchor,
         )
     return _bench(
         input_tensor,

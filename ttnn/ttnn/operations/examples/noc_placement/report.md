@@ -278,3 +278,66 @@ moved from ≤ 1.05 to ≤ 1.08. The same copy in the write-split sweep: 1 Tensi
 - **Dynamic NoC mode alone costs 9–27% on 1–2 Tensix cores** and nothing on ≥ 8 — part of the lever's price.
 - **Swapped pairing:** full grid 32 MB 0.83×, 64–128 MB 0.92–0.94×, L1 on one side 0.56–0.62×, 8-core row 0.50×,
   1 Tensix core 0.94–1.00×.
+
+## Blackhole p150b — bh-50-special-adamjanovic-for-reservation-143315 (2026-10-30): swap the pairing on the DRAM-adjacent columns
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 13×10 = 130 Tensix cores, 8 DRAM banks, CHIP_FREQ 1350 MHz (profiler log header) |
+| commit | `30351ce33f5` + this example's `swap_columns` change, Release build |
+| metric / method | `DEVICE KERNEL DURATION [ns]`, in-process profiler. `test_noc_placement_swap_columns_perf`: per case all 11 methods once per trial, starting method rotated per trial, one sample = mean of 3 launches, median of 5 trials. `test_noc_placement_regimes`: interleaved A,B, median of 12 trials × 3 launches |
+| lever | `swap_columns=N`: the Tensix cores in the N logical worker columns nearest DRAM read on NoC1 / write on NoC0; every other column keeps reads NoC0 / writes NoC1. Same kernels, same per-core pages, `NOC_MODE::DM_DEDICATED_NOC`. "Nearest DRAM" comes from the device: the logical worker cores it names as closest to each DRAM bank sit in columns 0 (banks 0–3) and 7 (banks 4–7) on this board |
+| methods | `base` N=0 · `f<N>` columns ranked by distance from the column next to bank 0 (f3 = columns 0,1,2, the three westmost) · `e<N>` ranked from the nearest of both DRAM-adjacent columns (e4 = 0,1,6,7) · `all` every column swapped |
+
+### Sweep (`test_noc_placement_swap_columns_perf`; size = read + write bytes per launch; "vs base" = base ns / method ns)
+
+```
+case (whole grid unless stated)        base ns (GB/s)     f1     f2     f3     f4     f6     e2     e3     e4     e6    all
+8 MB,   15 tiles/core, block=16         24623 (341)     1.048  1.081  1.150  1.169  1.140  1.088  1.124  1.174  1.134  0.714
+8 MB,   15 tiles/core, block=64         24355 (344)     1.033  1.084  1.140  1.149  1.129  1.068  1.121  1.164  1.112  0.710
+34 MB,  63 tiles/core, block=1          91439 (367)     1.005  1.005  0.991  1.031  1.004  0.996  1.000  1.027  1.011  0.823
+34 MB,  63 tiles/core, block=2          86933 (386)     1.006  1.016  1.015  1.011  1.005  1.014  1.020  1.025  1.002  0.807
+34 MB,  63 tiles/core, block=8          82586 (406)     1.005  1.010  1.005  1.012  0.983  1.014  1.008  1.024  1.009  0.787
+34 MB,  63 tiles/core, block=16         83774 (400)     1.010  1.021  1.028  1.030  0.986  1.027  1.037  1.040  1.015  0.757
+34 MB,  63 tiles/core, block=64         83755 (401)     1.022  1.044  1.070  1.051  0.995  1.044  1.069  1.075  1.030  0.738
+34 MB,  63 tiles/core, block=128        83802 (400)     1.026  1.050  1.066  1.051  1.000  1.046  1.069  1.074  1.029  0.736
+67 MB, 126 tiles/core, block=16        173869 (386)     1.024  1.036  1.047  1.060  1.025  1.046  1.051  1.074  1.051  0.834
+176 MB, 330 tiles/core, block=4        435571 (404)     1.004  1.005  1.008  1.000  0.987  1.005  1.007  1.006  1.006  0.831
+176 MB, 330 tiles/core, block=16       432265 (408)     1.006  1.006  1.004  1.009  0.967  1.005  1.004  1.015  0.993  0.815
+176 MB, 330 tiles/core, block=32       437333 (403)     1.015  1.010  1.012  1.019  0.971  1.018  1.015  1.029  0.993  0.811
+176 MB, 330 tiles/core, block=64       439761 (401)     1.029  1.018  1.013  1.020  0.975  1.039  1.024  1.040  0.995  0.803
+65 Tensix cores, 67 MB, block=16       187819 (357)     1.039  1.071  1.112  1.143  1.085  1.075  1.105  1.133  1.106  0.855
+DRAM->L1, 34 MB, block=16               42648 (787)     1.031  1.059  1.090  1.103  0.981  1.048  1.081  1.124  1.005  0.621
+```
+The 176 MB copy at `block=128` aborted inside the profiler ("End marker found without a corresponding start marker"), not
+in the copy; that cell is not measured.
+
+### Regimes (`test_noc_placement_regimes`, swap_columns=3 = the three westmost columns)
+
+```
+regime                           setup                                         base / lever (ns)     speedup  asserted
+swap3_helps_grid_8mb             130 cores, 8 MB, block=16                      24675 /  21474        1.149    >= 1.07
+swap3_helps_grid65_64mb          65 cores, 67 MB, block=16                     186766 / 169068        1.105    >= 1.05
+swap3_helps_grid_34mb_block64    130 cores, 34 MB, block=64                     84134 /  78665        1.070    >= 1.05
+swap3_flat_grid_176mb            130 cores, 176 MB, block=16                   432281 / 429853        1.006    <= 1.05
+swap3_flat_grid_34mb_block1      130 cores, 34 MB, block=1                      91253 /  91147        1.001    <= 1.05
+```
+A second full `test_noc_placement_regimes` run (all 14 regimes passed) gave 1.143 / 1.100 / 1.065 / 1.005 / 0.997× for
+the five swap regimes; the earlier regimes reproduced the 2026-10-26 numbers within 0.02×.
+
+### Reading it
+- **Field evidence vs this reconstruction.** The field report (same board type): 3 westmost columns swapped, 33 MB
+  stream 83.5 → 75.3 µs (1.11×), 168 MB 390.1 → 375.0 µs (1.04×). Here the 34 MB baseline matches (83.8 µs) and the
+  lever gains 1.03× at 16 pages per barrier, 1.07× at 64–128. The 176 MB baseline is slower than the field's (432 vs
+  390 µs scaled to 168 MB ≈ 412 µs) and gains 1.00–1.04× (1.04× only with `e2`/`e4` at 64 pages per barrier).
+  The field kernel is not available; the gap is not explained.
+- **It pays where the usual pairing sits below the DRAM ceiling (~405–430 GB/s read+write) and the stream is
+  bandwidth-bound.** Short whole-grid streams (8 MB: 341 GB/s → 1.15×), a partial grid (65 Tensix cores: 357 GB/s →
+  1.11×), and the NoC-bound DRAM→L1 copy (1.10–1.12×). A long whole-grid stream already at ~405 GB/s is flat.
+- **More pages per barrier raise it** on the 34 MB copy (1.00× at 1 page, 1.03× at 16, 1.07× at 64–128).
+- **2–4 columns, not more.** The best N is 3–4 (f3/f4) or 2 per DRAM-adjacent column (e4 = 0,1,6,7, best or within 0.01× of it in
+  every case). Six columns (46% of the grid) is flat to 0.97× on the long stream; every column (the full swap)
+  loses 0.62–0.86×. So "reads on NoC0 / writes on NoC1" stays right for most of the grid.
+- **Mechanism:** not isolated. Consistent with the columns next to DRAM being the slowest cores under the usual
+  pairing (the gain is largest when the grid finishes unevenly — short streams, partial grids — and vanishes when
+  every core is held to the DRAM ceiling); per-column times were not measured.
