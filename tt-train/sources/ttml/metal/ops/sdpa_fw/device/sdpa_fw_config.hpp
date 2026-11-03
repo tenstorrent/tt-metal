@@ -130,11 +130,13 @@ std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t num_available_cores);
 
 // Cheap knob checks for validate: each set knob must divide its axis, and the config must fit l1_budget_bytes
-// with every unset chunk size at its one-tile floor (the smallest chunking the pick can reach). Throws otherwise.
+// with every unset knob at its floor of one (the smallest config the pick can reach). Throws otherwise.
 void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes);
 
-// check_chunks, then picks the unset knobs by a shape rule, shrinking them until they fit l1_budget_bytes
-// and give num_available_cores a causal pair (or an item) each. Throws when even the smallest chunks do not fit.
+// check_chunks, then picks the unset knobs by a shape rule (four rows per item; up to four heads of a K/V
+// group stacked when there is a mask tensor, one otherwise; four or eight K/V tiles per step), shrinking them
+// until they fit l1_budget_bytes and give num_available_cores a causal pair (or an item) each. Throws when even
+// the smallest config does not fit.
 SDPAForwardChunks resolve_chunks(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,

@@ -54,13 +54,15 @@ struct Scenario {
 };
 
 // TinyLlama 1.1B (32/4 heads, D=64), Llama-3-8B style (32/8, D=128), then the other modes of the shared
-// kernel on the TinyLlama shape: no mask, an explicit (causal) mask tensor, and the output gate.
+// kernel on the TinyLlama shape: no mask, an explicit (causal) mask tensor (also on the Llama-3-8B shape),
+// and the output gate.
 const std::vector<Scenario> kScenarios = {
     {"tinyllama_s2048_causal", 1U, 32U, 4U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal},
     {"tinyllama_s4096_causal", 1U, 32U, 4U, 4096U, 64U, ttml::metal::AttentionMaskType::Causal},
     {"llama8b_s2048_causal", 1U, 32U, 8U, 2048U, 128U, ttml::metal::AttentionMaskType::Causal},
     {"tinyllama_s2048_nomask", 1U, 32U, 4U, 2048U, 64U, ttml::metal::AttentionMaskType::None},
     {"tinyllama_s2048_arbitrary", 1U, 32U, 4U, 2048U, 64U, ttml::metal::AttentionMaskType::Arbitrary},
+    {"llama8b_s2048_arbitrary", 1U, 32U, 8U, 2048U, 128U, ttml::metal::AttentionMaskType::Arbitrary},
     {"tinyllama_s2048_causal_gate", 1U, 32U, 4U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal, true},
 };
 

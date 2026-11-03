@@ -15,9 +15,10 @@ namespace ttml::metal {
  * q_chunk_size:   query rows that share one pass over K/V (fewer K/V reads, more L1); elements, a
  *                 multiple of 32 that divides S.
  * k_chunk_size:   K/V rows per inner-loop step (fewer softmax corrections, more L1); same rule.
- * heads_per_item: query heads of one K/V group processed together, so one K/V read serves all of
- *                 them (GQA reuse, more L1); must divide the group size q_heads / kv_heads. The pick
- *                 is 1: more rows per item only pay off with cost-based scheduling.
+ * heads_per_item: query heads of one K/V group processed together, so one K/V (and mask) read serves
+ *                 all of them (GQA reuse, more L1); must divide the group size q_heads / kv_heads. The
+ *                 pick stacks up to four heads with a mask tensor, where the shared mask read pays, and
+ *                 one otherwise: more rows per causal item only pay off with cost-based scheduling.
  *
  * TODO: this runs parallel to ttnn's SDPAProgramConfig (ttnn/operations/transformer/sdpa_config.hpp),
  * which already carries q_chunk_size / k_chunk_size, and the causal light/heavy pairing in
