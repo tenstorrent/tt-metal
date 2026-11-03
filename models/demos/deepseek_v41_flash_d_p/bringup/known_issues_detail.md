@@ -739,3 +739,88 @@ paths; a `wdtype=` argument there would replace the environment hand-off. More i
 
 DS41-198 (P.27): numbers and the per-value table in "P.27 EXPERTS_BFP8: routed-expert formats on the block MoE, and
 DRAM per chip at 1M" above (tt/experts.py:_bfp4_mse_round; tests/test_experts_bfp4_mse.py, tests/test_experts_formats.py).
+
+## P.28 EXPERTS_BFP4_MSE: wiring check, cache warm, change-on ladder
+
+Perf pick P.28 (galaxy 8x4, 2026-11-03; DS41-198, DS41-199, DS41-200). No re-implementation: P.27's value checked.
+(BREADCRUMBS.md is at the 500 KB hook limit, DS41-194: this is P.28's section; the file has only a merged heading.)
+
+Checked, works as built by P.27:
+- Cache names: `L<layer>.bfp4_mse.<hash>.flat.bf4.lay<layout>.{w_gu,w_d}.tensorbin` + `.done.json` with the stats,
+  next to the bfp4 files with the same layout hash and sizes (2.55 + 5.10 GB a layer a box); no collision with bfp4.
+- Load log: `EXPERTS_BFP4 layer=N impl=bfp4_mse matrices=w1,w3,w2 ...` and `EXPERTS_LOAD ... impl=bfp4_mse`,
+  `MOE_BLOCK ... experts_impl=bfp4_mse`; `_bf4_mse_lossless` asserted on every matrix of all 40 layers (no failure).
+- CPU emulation: `tt/experts.py:expert_weight_round` follows the value; bringup/hooks.py:devfmt_component and
+  reference/ds41_ref.py's experts_w site do not (DS41-200; both outside P.28's paths, never gated).
+
+Fixed: EXPERTS_IMPL's default was committed as bfp8 by P.27 (the perf template's "make the change the default"),
+against the owner's "default stays bfp4" (F241). tt/settings.py: back to bfp4. The A/B sets the switch on both sides.
+
+Added: tests/perf/test_experts_cache_warm.py (DS41-199): the first measure (cold) hit pytest's 3600 s at layer 19.
+
+Load-time stats, all 40 layers (from the cache markers; bfp4 = the same layers' existing bfp4 markers):
+
+| layer | bfp4_mse changed % | worst rel (expert, matrix) | bfp4 changed % | bfp4 worst rel |
+|---|---|---|---|---|
+| 0 | 7.75 | 0.0672 (79, w1) | 16.65 | 0.1196 |
+| 1 | 7.67 | 0.0705 (9, w3) | 16.41 | 0.1179 |
+| 2 | 7.30 | 0.0659 (163, w1) | 16.37 | 0.1181 |
+| 3 | 7.16 | 0.0662 (154, w1) | 16.39 | 0.1198 |
+| 4 | 7.21 | 0.0654 (244, w1) | 16.39 | 0.1190 |
+| 5 | 7.26 | 0.0650 (23, w1) | 16.38 | 0.1183 |
+| 6 | 7.28 | 0.0656 (111, w1) | 16.38 | 0.1193 |
+| 7 | 7.23 | 0.0658 (171, w1) | 16.38 | 0.1189 |
+| 8 | 7.28 | 0.0658 (0, w1) | 16.39 | 0.1200 |
+| 9 | 7.32 | 0.0651 (75, w1) | 16.37 | 0.1183 |
+| 10 | 7.43 | 0.0665 (219, w1) | 16.41 | 0.1191 |
+| 11 | 7.46 | 0.0685 (295, w1) | 16.42 | 0.1199 |
+| 12 | 7.53 | 0.0680 (70, w1) | 16.49 | 0.1215 |
+| 13 | 7.59 | 0.0698 (193, w1) | 16.61 | 0.1235 |
+| 14 | 7.56 | 0.0693 (146, w2) | 16.60 | 0.1226 |
+| 15 | 7.12 | 0.0793 (48, w2) | 16.65 | 0.1313 |
+| 16 | 7.61 | 0.0717 (189, w3) | 16.62 | 0.1261 |
+| 17 | 7.61 | 0.0751 (27, w2) | 16.68 | 0.1277 |
+| 18 | 7.53 | 0.0748 (161, w2) | 16.71 | 0.1290 |
+| 19 | 7.39 | 0.0744 (289, w1) | 16.66 | 0.1288 |
+| 20 | 7.49 | 0.0726 (367, w3) | 16.52 | 0.1253 |
+| 21 | 7.45 | 0.0720 (215, w1) | 16.49 | 0.1230 |
+| 22 | 7.38 | 0.0727 (184, w1) | 16.56 | 0.1247 |
+| 23 | 7.19 | 0.0736 (196, w1) | 16.53 | 0.1259 |
+| 24 | 7.38 | 0.0726 (80, w3) | 16.51 | 0.1246 |
+| 25 | 7.24 | 0.0699 (135, w2) | 16.41 | 0.1249 |
+| 26 | 7.17 | 0.0720 (31, w2) | 16.40 | 0.1258 |
+| 27 | 7.16 | 0.0698 (305, w2) | 16.38 | 0.1252 |
+| 28 | 7.10 | 0.0685 (7, w2) | 16.38 | 0.1233 |
+| 29 | 7.08 | 0.0694 (69, w2) | 16.37 | 0.1244 |
+| 30 | 7.08 | 0.0679 (127, w2) | 16.36 | 0.1241 |
+| 31 | 7.24 | 0.0693 (18, w1) | 16.44 | 0.1243 |
+| 32 | 7.08 | 0.0757 (111, w2) | 16.41 | 0.1255 |
+| 33 | 7.08 | 0.0724 (19, w2) | 16.42 | 0.1295 |
+| 34 | 7.13 | 0.0675 (31, w3) | 16.46 | 0.1213 |
+| 35 | 7.43 | 0.0750 (55, w3) | 16.76 | 0.1287 |
+| 36 | 7.21 | 0.0759 (7, w2) | 16.62 | 0.1324 |
+| 37 | 7.08 | 0.0984 (123, w2) | 16.76 | 0.1676 |
+| 38 | 6.81 | 0.0999 (250, w2) | 17.17 | 0.1702 |
+| 39 | 6.81 | 0.1068 (7, w2) | 17.73 | 0.1781 |
+
+Range: bfp4_mse 6.81-7.75 % changed, worst 0.065-0.107; bfp4 16.36-17.73 %, worst 0.118-0.178 (~0.58 x).
+
+Change-on ladder, rung last (orchestrator measure --part last; err = rel to the golden, limit = the noise floor;
+bfp4 / bfp8 = P.27's off / on sides of the same rung):
+
+| metric | bfp4_mse | bfp4 | bfp8 | limit |
+|---|---|---|---|---|
+| err_final_hidden | 0.140 | 0.190 | 0.101 | 0.242 |
+| err_layer_L09 | 0.101 | 0.126 | 0.081 | 0.157 |
+| err_layer_L29 | 0.111 | 0.149 | 0.084 | 0.189 |
+| err_layer_L38 | 0.126 | 0.165 | 0.096 | 0.220 |
+| err_state_window_kv_L28 | 0.115 | 0.159 | 0.088 | 0.175 |
+| top5_overlap | 1.0 | 1.0 | 1.0 | >= 0.994 |
+| worst share of its limit | 0.89 (topk_idx_L08) | 0.91 (window_kv_L28) | | |
+
+Host memory during the cold load: the pytest's anon RSS ~235 GiB between layers, ~297 GiB at a layer's peak, ~1 GiB
+growth a layer (MemAvailable >= 167 GiB).
+
+Re-run: `DS41_EXPERTS_IMPL=bfp4_mse PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+models/demos/deepseek_v41_flash_d_p/tests/perf/test_experts_cache_warm.py -s` (if the cache is cold), then
+`python -m models.demos.common.bringup.orchestrator measure --task P.28 --part last`.
