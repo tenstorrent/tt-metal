@@ -34,6 +34,13 @@ CONTAINERS = {"uint8": (ttnn.uint8, 1), "uint16": (ttnn.uint16, 2)}
 OUTPUT_DTYPES = {"bfloat16": ttnn.bfloat16, "float32": ttnn.float32}
 # (fp32_dest_acc_en, output dtype) combinations the operation supports.
 DEST_MODES = [(False, "bfloat16"), (True, "bfloat16"), (True, "float32")]
+# UINT8 datacopy produces Integer-32 in DEST, so UINT8 input requires FP32 DEST.
+CONFIGS = [
+    (container, fp32_dest_acc_en, dtype)
+    for container in CONTAINERS
+    for fp32_dest_acc_en, dtype in DEST_MODES
+    if container != "uint8" or fp32_dest_acc_en
+]
 
 
 def decode_e4m3(codes):
@@ -161,7 +168,7 @@ def run_decode(
     codes,
     scales,
     container="uint16",
-    fp32_dest_acc_en=False,
+    fp32_dest_acc_en=None,
     dtype="bfloat16",
     input_layout=ttnn.TILE_LAYOUT,
     output_layout=ttnn.TILE_LAYOUT,
@@ -170,6 +177,8 @@ def run_decode(
 ):
     """Pack, upload, decode, and download. Returns (actual float tensor, device tensors to keep alive)."""
     word_dtype, _ = CONTAINERS[container]
+    if fp32_dest_acc_en is None:
+        fp32_dest_acc_en = container == "uint8"
     packed, ordered_scales = ttnn.experimental.mxfp8.pack(codes, scales, dtype=word_dtype)
     if shape is not None:
         packed = packed.reshape(*shape[:-1], -1)

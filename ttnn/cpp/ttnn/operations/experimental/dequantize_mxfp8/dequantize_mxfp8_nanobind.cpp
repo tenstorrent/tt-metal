@@ -34,7 +34,8 @@ Numerical contract: E4M3 NaN codes (0x7F, 0xFF) and the E8M0 NaN code (0xFF)
 are not supported; their outputs are unspecified. Every other result is exact.
 Results with magnitude at or above 2^128 become signed infinity; results below
 the smallest normal FP32/BF16 magnitude (2^-126) may flush to zero. BF16 and
-FLOAT32 outputs represent the same values; FLOAT32 requires fp32_dest_acc_en=True.
+FLOAT32 outputs represent the same values; FLOAT32 output and UINT8 input
+require fp32_dest_acc_en=True.
 )doc",
         &dequantize_mxfp8,
         nb::arg("packed").noconvert(),

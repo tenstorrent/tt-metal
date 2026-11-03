@@ -10,8 +10,8 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.mxfp8_reference import (
+    CONFIGS,
     CONTAINERS,
-    DEST_MODES,
     assert_exact,
     reference,
     run_decode,
@@ -90,10 +90,9 @@ def test_mxfp8_reference_overflow_and_underflow():
 
 
 @requires_blackhole
-@pytest.mark.parametrize("container", list(CONTAINERS))
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("fp32_dest_acc_en,dtype", DEST_MODES)
+@pytest.mark.parametrize("container,fp32_dest_acc_en,dtype", CONFIGS)
 def test_mxfp8_layouts(device, container, input_layout, output_layout, fp32_dest_acc_en, dtype):
     # Several tile rows/columns catch tile-ID and face-order bugs in both layouts.
     codes, scales = _random_inputs(96, 256, seed=11)
@@ -123,8 +122,7 @@ def test_mxfp8_batched_rank(device, container, shape):
 
 
 @requires_blackhole
-@pytest.mark.parametrize("container", list(CONTAINERS))
-@pytest.mark.parametrize("fp32_dest_acc_en,dtype", DEST_MODES)
+@pytest.mark.parametrize("container,fp32_dest_acc_en,dtype", CONFIGS)
 def test_mxfp8_cache_and_l1(device, container, fp32_dest_acc_en, dtype):
     device.enable_program_cache()
     keep_alive = []
@@ -211,6 +209,11 @@ def test_mxfp8_validation(device, expect_error):
     block_data = ttnn.from_torch(blocks, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(RuntimeError, "FLOAT32 output requires fp32_dest_acc_en"):
         ttnn.experimental.dequantize_mxfp8(data, block_data, dtype=ttnn.float32)
+    byte_packed, byte_scales = ttnn.experimental.mxfp8.pack(codes, scales, dtype=ttnn.uint8)
+    byte_data = ttnn.from_torch(byte_packed, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    byte_blocks = ttnn.from_torch(byte_scales, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "UINT8 packed data requires fp32_dest_acc_en"):
+        ttnn.experimental.dequantize_mxfp8(byte_data, byte_blocks, fp32_dest_acc_en=False)
     with expect_error(RuntimeError, "output must be BFLOAT16 or FLOAT32"):
         ttnn.experimental.dequantize_mxfp8(data, block_data, dtype=ttnn.uint16)
     wrong_shape = ttnn.from_torch(

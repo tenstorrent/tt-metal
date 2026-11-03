@@ -12,8 +12,7 @@ import torch
 
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.mxfp8_reference import (
-    CONTAINERS,
-    DEST_MODES,
+    CONFIGS,
     E4M3_NAN,
     PRIMARY,
     corpus,
@@ -52,16 +51,15 @@ def test_mxfp8_accuracy_survey(device, tmp_path):
     codes, scales = corpus()
     exact = reference(codes, scales)
     cases, failures = [], []
-    for container in CONTAINERS:
-        for fp32_dest_acc_en, dtype in DEST_MODES:
-            config = dict(container=container, fp32_dest_acc_en=fp32_dest_acc_en, dtype=dtype)
-            actual, keep_alive = run_decode(device, codes, scales, **config)
-            for tensor in keep_alive:
-                ttnn.deallocate(tensor)
-            result = metrics(actual, exact, dtype, codes, scales)
-            cases.append(dict(config=config, primary=config == PRIMARY, metrics=result))
-            if result["mismatches"]:
-                failures.append(f"{config}: {result['mismatches']} mismatches, e.g. {result['mismatch_examples'][:2]}")
+    for container, fp32_dest_acc_en, dtype in CONFIGS:
+        config = dict(container=container, fp32_dest_acc_en=fp32_dest_acc_en, dtype=dtype)
+        actual, keep_alive = run_decode(device, codes, scales, **config)
+        for tensor in keep_alive:
+            ttnn.deallocate(tensor)
+        result = metrics(actual, exact, dtype, codes, scales)
+        cases.append(dict(config=config, primary=config == PRIMARY, metrics=result))
+        if result["mismatches"]:
+            failures.append(f"{config}: {result['mismatches']} mismatches, e.g. {result['mismatch_examples'][:2]}")
     report = dict(
         kernel_hashes=kernel_hashes(),
         torch_version=torch.__version__,

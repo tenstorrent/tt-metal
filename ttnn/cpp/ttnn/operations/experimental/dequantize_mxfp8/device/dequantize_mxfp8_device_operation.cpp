@@ -47,6 +47,10 @@ void Mxfp8DeviceOperation::validate_on_program_cache_miss(const Mxfp8Params& arg
         args.dtype == DataType::BFLOAT16 || args.dtype == DataType::FLOAT32,
         "MXFP8 output must be BFLOAT16 or FLOAT32");
     TT_FATAL(args.dtype != DataType::FLOAT32 || args.fp32_dest_acc_en, "FLOAT32 output requires fp32_dest_acc_en");
+    // UINT8 datacopy produces Integer-32 in DEST, which needs 32-bit DEST.
+    TT_FATAL(
+        packed.dtype() != DataType::UINT8 || args.fp32_dest_acc_en,
+        "UINT8 packed data requires fp32_dest_acc_en; use UINT16 for BF16 DEST");
     TT_FATAL(
         args.output_layout == Layout::TILE || args.output_layout == Layout::ROW_MAJOR, "Unsupported output layout");
     TT_FATAL(args.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "MXFP8 output must be interleaved");

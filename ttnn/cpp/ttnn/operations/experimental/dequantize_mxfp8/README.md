@@ -10,10 +10,11 @@ Each block of 32 horizontally adjacent values shares one E8M0 scale. Unlike
 NVFP4 there is no tensor-wide scale, and no rounding: an E4M3 value has at most
 four significant bits, so every product in the BF16/FP32 normal range is exact.
 
-> **Status:** host operation, dataflow kernels, tests and the optimization
-> harness are in place. `device/kernels/compute/dequantize.cpp` is a
-> **placeholder** that moves no data. Device tests that check values fail
-> until a decoder is written; validation and host-only tests pass.
+> **Status:** reference SFPU decoder (`device/kernels/compute/mxfp8_sfpu.hpp`).
+> It builds each FP32 result with integer exponent arithmetic: exact, with
+> overflow to ±inf and underflow flushed to zero. It is unoptimized: one
+> datacopy plus one SFPU pass per output tile. `UINT8` input requires
+> `fp32_dest_acc_en=True`, because its datacopy produces Integer-32 in DEST.
 
 ## Usage
 
@@ -31,7 +32,7 @@ H must be a multiple of 32. W must be a multiple of 32 for `uint8` and 64 for `u
 
 | | |
 |---|---|
-| Data | `UINT8` (1 E4M3 byte/word) or `UINT16` (2 bytes/word, least significant first), TILE or ROW_MAJOR, rank 2-4, H and W multiples of 32, interleaved DRAM/L1 |
+| Data | `UINT8` (1 E4M3 byte/word; requires `fp32_dest_acc_en=True`) or `UINT16` (2 bytes/word, least significant first), TILE or ROW_MAJOR, rank 2-4, H and W multiples of 32, interleaved DRAM/L1 |
 | Packing | Tile-plane packing as in NVFP4: byte *p* of every word of packed tile *k* is output tile `planes*k + p` of the same tile row. For `UINT8` this is the identity, so the tensor holds the E4M3 bytes in natural positions, byte-identical to an FP8_E4M3 tensor of the same layout. |
 | Scales | `UINT8` ROW_MAJOR, raw E8M0 codes, shape `[packed_tiles, 32 * planes]`; per packed tile: byte plane, then output-tile row |
 | Output | `BFLOAT16` (default) or `FLOAT32` (requires `fp32_dest_acc_en=True`), TILE (default) or ROW_MAJOR; last dim = packed last dim × planes |
