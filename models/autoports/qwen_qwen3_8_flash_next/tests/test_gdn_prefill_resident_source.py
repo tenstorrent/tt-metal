@@ -126,7 +126,7 @@ class ResidentProductionTests(unittest.TestCase):
             if isinstance(n, ast.If) and ast.unparse(n.test) == "owner.kind == 'linear_attention'"
         )
         assignments = {ast.unparse(n.targets[0]): n.value for n in branch.body if isinstance(n, ast.Assign)}
-        self.assertEqual(ast.unparse(assignments["attention.__class__"]), "PrefillResidentGDN")
+        self.assertEqual(ast.unparse(assignments["attention.__class__"]), "PrefillChunkGDN")
         self.assertEqual(ast.unparse(assignments["attention.prefill_resident_enabled"]), "owner.batch_size == 32")
         self.assertEqual(ast.literal_eval(assignments["attention.prefill_resident_signatures"]), {})
         self.assertTrue(ast.literal_eval(assignments["attention.prefill_qk_rm_enabled"]))

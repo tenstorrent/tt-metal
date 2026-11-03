@@ -52,7 +52,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    bool round_fp32_operands) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -72,7 +73,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         eye,
         tril,
         ones,
-        masks);
+        masks,
+        round_fp32_operands);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -373,6 +375,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 ChunkGdnMonoProgramConfig, optional): which device implementation runs and how it is
                 laid out on the chip — the alternative you pass selects the path, its fields the
                 geometry (see each class). None: the fused path or the phased path depending on the cost model.
+            round_fp32_operands (bool): default False. The FPU truncates fp32 operands to a 9-bit
+                mantissa (toward zero), biasing every re-read intermediate low; the carried state's bias
+                compounds per chunk. True rounds each fp32 intermediate to nearest on the SFPU before it
+                is packed (fused/phased paths; o and the final state stay unrounded).
             wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO. How each chunk's WY inverse is
                 computed: HORNER on the matrix engine (every architecture),
                 FORWARD_SUBSTITUTION (one solve on the SFPU, Blackhole and chunk_size 32 only, refused
@@ -423,7 +429,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("eye") = nb::none(),
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
-        nb::arg("masks") = nb::none());
+        nb::arg("masks") = nb::none(),
+        nb::arg("round_fp32_operands") = false);
 
     const auto* prep_doc =
         R"doc(

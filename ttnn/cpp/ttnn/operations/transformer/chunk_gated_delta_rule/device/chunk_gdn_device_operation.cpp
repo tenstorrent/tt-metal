@@ -68,6 +68,9 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
     validate_gdn_tinv(attrs.tinv, attrs.chunk_size, in.q);
+    TT_FATAL(
+        !attrs.round_operands || attrs.impl == ChunkGdnImpl::Fused,
+        "chunk_gdn: round_fp32_operands is implemented on the fused and phased paths, not the mono program");
 
     const auto grid = in.q.device()->compute_with_storage_grid_size();
     if (attrs.impl == ChunkGdnImpl::Mono) {
@@ -407,7 +410,8 @@ std::vector<Tensor> chunk_gdn(
     bool qk_norm,
     float scale,
     bool qk_flat,
-    uint32_t Hk) {
+    uint32_t Hk,
+    bool round_operands) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Dim derivation identical to chunk_gdn_prep (both factories consume prep's inputs; the flat forms
@@ -429,6 +433,7 @@ std::vector<Tensor> chunk_gdn(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
+        .round_operands = round_operands,
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,

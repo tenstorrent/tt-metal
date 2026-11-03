@@ -110,7 +110,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_flat,
     uint32_t Hk,
     bool prep_serial,
-    ttnn::transformer::ChunkGdnWyInverse wy_inverse) {
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse,
+    bool round_operands) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
@@ -133,6 +134,7 @@ std::vector<Tensor> chunk_gdn_prep(
         .scale = scale,
         .prep_serial = prep_serial,
         .tinv = gdn_tinv_resolve(wy_inverse, chunk_size, q),
+        .round_operands = round_operands,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
@@ -213,7 +215,8 @@ std::vector<Tensor> chunk_gdn_scan(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_mcast,
-    bool force_serial) {
+    bool force_serial,
+    bool round_operands) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& nkd_shape = nkd.logical_shape();    // [BH, NC, C, K]
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
@@ -225,6 +228,7 @@ std::vector<Tensor> chunk_gdn_scan(
         .output_final_state = output_final_state,
         .use_mcast = use_mcast,
         .force_serial = force_serial,
+        .round_operands = round_operands,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

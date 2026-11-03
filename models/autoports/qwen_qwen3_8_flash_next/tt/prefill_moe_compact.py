@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Pipelined expert-output compaction for the serial 1024-row prefill MoE group.
+
+Same pages, bytes and output as prefill_hybrid's COMPACT1024: for every (route, 32-row output
+tile) the BFP8 source tiles of all rows owned by this rank are read in one batch (one barrier per
+output tile instead of one per row), then the rows are assembled exactly as before. The output tile
+is cleared with word stores. Toggle: QWEN_PREFILL_COMPACT_PIPE=0 restores the serial kernel (default on).
+"""
+
+import os
+
+from .multichip_decoder import _EXPERT_HEADER
+
+SLOT_BYTES = 1088  # one BFP8 tile: 64 exponent bytes + 1024 mantissa bytes
+EXTRA_CB_BYTES = 32 * SLOT_BYTES + 64
+
+
+def compact_pipe_enabled():
+    return os.environ.get("QWEN_PREFILL_COMPACT_PIPE", "1") != "0"
+
+
+COMPACT1024_PIPE = (
+    _EXPERT_HEADER
+    + r"""
+void kernel_main() {
+    constexpr uint32_t N=get_compile_time_arg_val(0),T=(N+31)/32;
+    constexpr auto da=TensorAccessorArgs<2>();
+    constexpr auto ia=TensorAccessorArgs<da.next_compile_time_args_offset()>();
+    constexpr auto sa=TensorAccessorArgs<ia.next_compile_time_args_offset()>();
+    constexpr auto ra=TensorAccessorArgs<sa.next_compile_time_args_offset()>();
+    constexpr auto ma=TensorAccessorArgs<ra.next_compile_time_args_offset()>();
+    constexpr auto oa=TensorAccessorArgs<ma.next_compile_time_args_offset()>();
+    const auto down=TensorAccessor(da,get_arg_val<uint32_t>(0));
+    const auto ids=TensorAccessor(ia,get_arg_val<uint32_t>(1));
+    const auto scores=TensorAccessor(sa,get_arg_val<uint32_t>(2));
+    const auto rank_tensor=TensorAccessor(ra,get_arg_val<uint32_t>(3));
+    const auto mapping=TensorAccessor(ma,get_arg_val<uint32_t>(4));
+    const auto output=TensorAccessor(oa,get_arg_val<uint32_t>(5));
+    const uint32_t col=get_arg_val<uint32_t>(6);
+    CircularBuffer cb(0);cb.reserve_back(1);const uint32_t base=cb.get_write_ptr();Noc noc;
+    constexpr uint32_t ib=2176,sb=ib+N*128,mb=sb+N*64,rb=mb+N*128,slots=rb+64,SLOT=1088;
+    for(uint32_t row=0;row<N;++row) {
+        noc.async_read(ids,CoreLocalMem<uint32_t>(base+ib+row*128),128,{.page_id=row},{});
+        noc.async_read(scores,CoreLocalMem<uint32_t>(base+sb+row*64),64,{.page_id=row},{});
+        noc.async_read(mapping,CoreLocalMem<uint32_t>(base+mb+row*128),128,{.page_id=row},{});
+    }
+    noc.async_read(rank_tensor,CoreLocalMem<uint32_t>(base+rb),4,{.page_id=0},{});noc.async_read_barrier();
+    const uint32_t rank=*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+rb);
+    auto id=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+ib);
+    auto score=reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base+sb);
+    auto map=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+mb);
+    auto out=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+1088);
+    auto out_words=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+1088);
+    uint32_t rows[32],packs[32];
+    for(uint32_t route=0;route<10;++route)for(uint32_t tile=0;tile<T;++tile) {
+        uint32_t count=0;
+        for(uint32_t row=tile*32;row<N && row<(tile+1)*32;++row) {
+            const uint32_t e=id[row*32+route];ASSERT(e<512);
+            if(e/128!=rank || score[row*32+route]==0)continue;
+            const uint32_t packed=map[row*32+route];ASSERT(packed<1024);
+            noc.async_read(down,CoreLocalMem<uint32_t>(base+slots+count*SLOT),1088,{.page_id=((e%128)*32+packed/32)*80+col},{});
+            rows[count]=row;packs[count]=packed;++count;
+        }
+        for(uint32_t i=0;i<272;++i)out_words[i]=0;
+        noc.async_read_barrier();
+        for(uint32_t n=0;n<count;++n) {
+            const uint32_t row=rows[n],packed=packs[n];
+            auto src=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+slots+n*SLOT);
+            for(uint32_t side=0;side<2;++side) {
+                const uint32_t sf=(packed%32/16)*2+side,df=(row%32/16)*2+side;
+                out[df*16+row%16]=src[sf*16+packed%16];
+                for(uint32_t j=0;j<16;++j)out[64+df*256+(row%16)*16+j]=src[64+sf*256+(packed%16)*16+j];
+            }
+        }
+        noc.async_write(CoreLocalMem<uint32_t>(base+1088),output,1088,{}, {.page_id=(route*T+tile)*80+col});noc.async_write_barrier();
+    }
+}
+"""
+)
