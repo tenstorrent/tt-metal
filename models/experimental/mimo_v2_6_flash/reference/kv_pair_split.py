@@ -82,14 +82,11 @@ def sdpa_position(p, c):
 # ---------------------------------------------------------------------- decode positions (the device kernel's mirror)
 def positions_step(positions, c, serial_slots=0):
     """kernels/attn/pair_positions.cpp on chip parity ``c``: global positions [B] (-1 an idle slot) -> (write [B],
-    sdpa [B], serial: ``serial_slots`` lists [B], list j keeping only slot j's write position), Python ints."""
+    sdpa [B], serial: ``serial_slots`` lists [B], list k keeping the write positions of the slots j with j %
+    serial_slots == k: spec_decode.serial_positions' columns), Python ints."""
     write = [write_position(int(p), c) if int(p) >= 0 else -1 for p in positions]
     sdpa = [sdpa_position(int(p), c) for p in positions]
-    serial = []
-    for j in range(serial_slots):
-        one = [-1] * len(write)
-        one[j] = write[j]
-        serial.append(one)
+    serial = [[w if j % serial_slots == k else -1 for j, w in enumerate(write)] for k in range(serial_slots)]
     return write, sdpa, serial
 
 

@@ -4,7 +4,9 @@
 // BRISC (NOC 1) of the fused reduce + residual + RMSNorm: writes the residual sum back into rows 0-3 of ``out`` with
 // the residual's rows 4-31 (as moe_expand_residual.cpp), sends rows 0-3 of this core's partial sum of squares into
 // rows 4 * index.. of every core's gather tile and increments their semaphores, then writes the normalized tiles into
-// rows 0-3 of ``norm_out`` (a persistent buffer whose rows 4-31 stay zero).
+// rows 0-3 of ``norm_out`` (a persistent buffer whose rows 4-31 stay zero). A consumer of ``norm_out`` in the same
+// launch (ReduceExpand with ``consumer``): once those writes landed, semaphore ``signal_sem`` of each of its cores
+// gets one increment.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_stream_common.hpp"
@@ -34,7 +36,8 @@ void kernel_main() {
     const uint32_t res_addr = get_arg_val<uint32_t>(2);
     const uint32_t norm_addr = get_arg_val<uint32_t>(3);
     const uint32_t index = get_arg_val<uint32_t>(4);
-    // args 5.. : NoC x, y of every core of the program, in core-index order
+    // args 5.. : NoC x, y of every core of the program, in core-index order; then the consumer's core count,
+    // semaphore id and NoC x, y of each core
 
     // The residual tiles of every output tile column this core writes (their rows 4-31 pass through).
     const InterleavedAddrGen<true> res_gen = {.bank_base_address = res_addr, .page_size = tile_bytes};
@@ -108,5 +111,15 @@ void kernel_main() {
     noc_async_write_barrier();
     cb_pop_front(cb_h, tiles);
     cb_pop_front(cb_sum, tiles);
+    const uint32_t signal_arg = 5 + 2 * cores;
+    const uint32_t signals = get_arg_val<uint32_t>(signal_arg);
+    if (signals > 0) {
+        const uint32_t signal_addr = get_semaphore(get_arg_val<uint32_t>(signal_arg + 1));
+        for (uint32_t p = 0; p < signals; p++) {
+            const uint32_t px = get_arg_val<uint32_t>(signal_arg + 2 + 2 * p);
+            const uint32_t py = get_arg_val<uint32_t>(signal_arg + 3 + 2 * p);
+            noc_semaphore_inc(get_noc_addr(px, py, signal_addr), 1);
+        }
+    }
     noc_async_atomic_barrier();
 }

@@ -137,7 +137,7 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -190,7 +190,7 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -204,7 +204,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: ⬇️ Checkout vLLM TT plugin
         if: ${{ inputs.vllm-source != 'fork' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm-tt-plugin
@@ -214,7 +214,7 @@ jobs:
           persist-credentials: false
       - name: ⬇️ Checkout vLLM fork
         if: ${{ inputs.vllm-source == 'fork' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm

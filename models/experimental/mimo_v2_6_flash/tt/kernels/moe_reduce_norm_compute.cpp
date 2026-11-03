@@ -30,7 +30,7 @@ namespace {
 // dst[idst] <- cb[tile] (unpacked through srcA in cb's format).
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t idst) {
     reconfig_data_format_srca(cb);
-    copy_tile_to_dst_init_short(cb);
+    copy_init(cb);
     copy_tile(cb, tile, idst);
 }
 
@@ -74,20 +74,34 @@ void kernel_main() {
     constexpr uint32_t inv_hidden_bits = get_compile_time_arg_val(14);
     constexpr uint32_t eps_bits = get_compile_time_arg_val(15);
     constexpr uint32_t gather_tiles = get_compile_time_arg_val(16);
+    // cb_in order: tile-major (tile t's chips at t * chips, one tile's copies popped at a time), or chip-major (chip
+    // c's tiles at c * tiles: the fabric gather buffer with one packet per chip, all copies held until the end).
+    constexpr bool chip_major = get_compile_time_arg_val(17) == 1;
 
     // FPU adds: the chips' bf16 copies pairwise into fp32 Dest (A + B + Dest), then the bf16-rounded sum plus the
     // residual.
     compute_kernel_hw_startup(cb_in, cb_in, cb_out);
     cb_wait_front(cb_res, tiles);
+    if constexpr (chip_major) {
+        cb_wait_front(cb_in, tiles * chips);
+    }
     for (uint32_t t = 0; t < tiles; t++) {
-        cb_wait_front(cb_in, chips);
+        if constexpr (!chip_major) {
+            cb_wait_front(cb_in, chips);
+        }
         tile_regs_acquire();
         add_init(cb_in, cb_in, true);
         for (uint32_t c = 0; c < chips; c += 2) {
-            add_tiles(cb_in, cb_in, c, c + 1, 0);
+            if constexpr (chip_major) {
+                add_tiles(cb_in, cb_in, c * tiles + t, (c + 1) * tiles + t, 0);
+            } else {
+                add_tiles(cb_in, cb_in, c, c + 1, 0);
+            }
         }
         tile_regs_commit();
-        cb_pop_front(cb_in, chips);
+        if constexpr (!chip_major) {
+            cb_pop_front(cb_in, chips);
+        }
 
         cb_reserve_back(cb_mid, 1);
         tile_regs_wait();
@@ -110,6 +124,9 @@ void kernel_main() {
         tile_regs_release();
         cb_push_back(cb_out, 1);
         cb_push_back(cb_y, 1);
+    }
+    if constexpr (chip_major) {
+        cb_pop_front(cb_in, tiles * chips);
     }
     cb_pop_front(cb_res, tiles);
 

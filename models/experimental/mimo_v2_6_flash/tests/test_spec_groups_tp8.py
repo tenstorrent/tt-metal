@@ -36,6 +36,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     GROUP_SLOTS,
     MAX_DRAFTS,
     SPEC_SLOTS,
+    WIDTHS,
     DraftSource,
     draft_sources,
     plan_verify_passes,
@@ -87,34 +88,35 @@ def accept_words(groups):
     return words
 
 
-def pass_cases(rng):
-    """(verify pass, chain row sources, accept page) of passes with a row per group (rows 5, 6, .. in a shuffled
-    group each) and of one row in any group."""
+def pass_cases(rng, width=GROUP_SLOTS):
+    """(verify pass, chain row sources, accept page) of passes in draft groups of ``width`` slots with a row per group
+    (rows 5, 6, .. in a shuffled group each) and of one row in any group."""
     cases = []
     bases = [1, 300, 255, 257, 1023, 2000, MAX_SEQ_LEN - 1 - MAX_DRAFTS, 40, 500, MAX_SEQ_LEN - 2]
-    for k in range(5 * GROUP_SLOTS):
-        rows_ids = [5 + g for g in range(DRAFT_GROUPS)]
-        order = list(range(DRAFT_GROUPS))
-        for i in range(DRAFT_GROUPS - 1, 0, -1):  # Fisher-Yates (SeededRng has no shuffle)
+    count = SPEC_SLOTS // width
+    for k in range(5 * width):
+        rows_ids = [5 + g for g in range(count)]
+        order = list(range(count))
+        for i in range(count - 1, 0, -1):  # Fisher-Yates (SeededRng has no shuffle)
             j = rng.randrange(0, i + 1)
             order[i], order[j] = order[j], order[i]
         groups = dict(zip(rows_ids, order))
         rows, committed = [], {}
         for r in rows_ids:
-            m = (k % GROUP_SLOTS) + 1 if r == 5 else rng.randrange(1, GROUP_SLOTS + 1)
+            m = (k % width) + 1 if r == 5 else rng.randrange(1, width + 1)
             b = max(rng.choice(bases), m)
-            tokens = [rng.randrange(VOCAB) for _ in range(GROUP_SLOTS)]
-            rows.append((r, tokens, list(range(b - m, b - m + GROUP_SLOTS)), MAX_DRAFTS))
+            tokens = [rng.randrange(VOCAB) for _ in range(width)]
+            rows.append((r, tokens, list(range(b - m, b - m + width)), width - 1))
             committed[r] = (m, [rng.randrange(VOCAB) for _ in range(m)])
-        (vp,) = plan_verify_passes(rows, groups=groups)
-        sources = draft_sources([vp])
-        cases.append((vp, sources, accept_words([committed[groups_row(groups, g)] for g in range(DRAFT_GROUPS)])))
-    for g in range(DRAFT_GROUPS):
-        tokens, positions = list(range(11, 11 + GROUP_SLOTS)), list(range(700, 700 + GROUP_SLOTS))
-        (vp,) = plan_verify_passes([(7, tokens, positions, MAX_DRAFTS)], groups={7: g})
-        acc = [None] * DRAFT_GROUPS
-        acc[g] = (min(2, GROUP_SLOTS), [21, 22][: min(2, GROUP_SLOTS)])
-        cases.append((vp, draft_sources([vp]), accept_words(acc)))
+        (vp,) = plan_verify_passes(rows, groups=groups, group_slots=width)
+        sources = draft_sources([vp], group_slots=width)
+        cases.append((vp, sources, accept_words([committed[groups_row(groups, g)] for g in range(count)])))
+    for g in range(count):
+        tokens, positions = list(range(11, 11 + width)), list(range(700, 700 + width))
+        (vp,) = plan_verify_passes([(7, tokens, positions, width - 1)], groups={7: g}, group_slots=width)
+        acc = [None] * count
+        acc[g] = (min(2, width), [21, 22][: min(2, width)])
+        cases.append((vp, draft_sources([vp], group_slots=width), accept_words(acc)))
     return cases
 
 
@@ -149,7 +151,8 @@ def test_spec_chain_groups_tp8(mesh_device):
 
     replay = replayed(mesh, run_chain)
     pages = []
-    for k, (vp, sources, acc) in enumerate(pass_cases(rng)):
+    cases = [case for width in WIDTHS for case in pass_cases(rng, width)]
+    for k, (vp, sources, acc) in enumerate(cases):
         for limit in (MAX_SEQ_LEN - MAX_DRAFTS, rng.choice([p for p in vp.positions if p >= 0]) + 1):
             tok, pos, chain_t = verify_tensors(vp, sources, limit)
             ids = [rng.randrange(VOCAB) for _ in range(B)]
@@ -177,17 +180,19 @@ def test_spec_chain_groups_tp8(mesh_device):
     for k, (vp, sources, page) in enumerate(pages[::3]):
         rows = sorted({s.row for s in sources})
         groups = {s.row: s.group for s in sources}
+        width = vp.width
         nxt_rows = [
             (
                 r,
-                [rng.randrange(VOCAB) for _ in range(GROUP_SLOTS)],
-                list(range(3000 + 10 * r, 3000 + 10 * r + GROUP_SLOTS)),
-                MAX_DRAFTS,
+                [rng.randrange(VOCAB) for _ in range(width)],
+                list(range(3000 + 10 * r, 3000 + 10 * r + width)),
+                width - 1,
             )
             for r in rows
         ]
-        (nxt,) = plan_verify_passes(nxt_rows, groups=groups)
-        tok, pos, chain_t = verify_tensors(nxt, draft_sources([nxt]), MAX_SEQ_LEN - MAX_DRAFTS, relay=True)
+        (nxt,) = plan_verify_passes(nxt_rows, groups=groups, group_slots=width)
+        nxt_sources = draft_sources([nxt], group_slots=width)
+        tok, pos, chain_t = verify_tensors(nxt, nxt_sources, MAX_SEQ_LEN - MAX_DRAFTS, relay=True)
         ctrl_words = control_words(pass_inputs(nxt, None)[1])
         want_verify, want_ctrl = relay_step(pack_verify(tok, pos, chain_t).tolist(), page, ctrl_words)
         for runner in (run_relay, replay):
@@ -208,31 +213,32 @@ def test_spec_chain_groups_tp8(mesh_device):
 
     replay = replayed(mesh, run_plan)
     outs = {"pos": li.pos, "rope": li.rope, "hidden": li.hidden, "tokens0": li.tokens[0]}
-    for k in range(40):
+    for k in range(40 * len(WIDTHS)):
+        width = WIDTHS[k % len(WIDTHS)]
+        count = SPEC_SLOTS // width
         commits = []
-        for g in range(DRAFT_GROUPS):
+        for g in range(count):
             if rng.random() < 0.15:
                 continue  # an idle group
-            m = rng.randrange(1, GROUP_SLOTS + 1)
+            m = rng.randrange(1, width + 1)
             a = rng.choice([2, 255, 256, 3000, MAX_SEQ_LEN - 6])
-            slots = list(range(g * GROUP_SLOTS, g * GROUP_SLOTS + m)) if rng.random() < 0.7 else [g * GROUP_SLOTS + 1]
+            slots = list(range(g * width, g * width + m)) if rng.random() < 0.7 else [g * width + 1]
             m = min(m, len(slots))
             positions = [a + 1 + c for c in range(m)] + [-1] * (1 + MAX_DRAFTS - m)
-            commits.append(
-                (DraftSource(row=5 + g, slots=slots, group=g), [rng.randrange(VOCAB) for _ in range(m)], positions, m)
-            )
+            source = DraftSource(row=5 + g, slots=slots, group=g, width=width)
+            commits.append((source, [rng.randrange(VOCAB) for _ in range(m)], positions, m))
         mtp = pack_mtp_commits(B, commits).tolist()
         stash_positions = []
-        for g in range(DRAFT_GROUPS):
+        for g in range(count):
             a = next((c[2][0] - 1 for c in commits if c[0].group == g), 100)
-            r = rng.randrange(0, GROUP_SLOTS + 1)
-            stash_positions += [-1] * (GROUP_SLOTS - r) + [a - r + j for j in range(r)]
+            r = rng.randrange(0, width + 1)
+            stash_positions += [-1] * (width - r) + [a - r + j for j in range(r)]
         stash_positions = [p if p >= 0 else -1 for p in stash_positions]
         page = stash_page(B, stash_positions, [rng.randrange(VOCAB) if p >= 0 else 0 for p in stash_positions])
         head_rows = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
         want, new = plan_step(mtp, page, B)
         want_tokens = [want["tokens0"]] + [
-            tokens_step(want["tokens0"], head_rows, layer) for layer in range(1, MAX_DRAFTS)
+            tokens_step(want["tokens0"], head_rows, layer, mtp) for layer in range(1, MAX_DRAFTS)
         ]
         for runner in (run_plan, replay):
             upload_ints(plan, mtp, spec.mtp_packed)

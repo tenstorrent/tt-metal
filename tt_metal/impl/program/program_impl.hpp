@@ -566,6 +566,14 @@ public:
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
+    // True if any static CB region of this program covers a core claimed through ServiceCoreManager on
+    // any physical device behind `device`. False (and cheap) when nothing is claimed.
+    bool cb_regions_touch_service_cores(const IDevice* device) const;
+    // Records the lockstep fast-path state after a full validation (see simple_l1_validation_cached_).
+    void cache_simple_l1_validation(const IDevice* device);
+    // True if a cached compile_and_allocate on `device` may replace the full CB/DFB validation with the
+    // lockstep L1 frontier check.
+    bool simple_l1_validation_usable(const IDevice* device) const;
     void validate_dataflow_buffer_region(const IDevice* device);
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);
@@ -657,6 +665,16 @@ public:
         // host overhead on the inner re-enqueue loop.
         std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
         std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+
+        // Array arg name -> its slots in the dispatch buffer: [first_slot, first_slot + size).
+        // The arrays follow the scalars in the named section. (Copied from the kernel's ArrayArgLayouts:
+        // first_slot is their word_offset.)
+        struct ArraySlots {
+            size_t first_slot = 0;
+            size_t size = 0;
+        };
+        std::unordered_map<std::string, ArraySlots> runtime_array_arg_slots;
+        std::unordered_map<std::string, ArraySlots> common_runtime_array_arg_slots;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
@@ -787,11 +805,16 @@ private:
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
     const IDevice* compile_and_allocate_device_{nullptr};
-    // For lockstep allocation without service-core claims, a single live L1 frontier
-    // check covers every static CB and DFB region validated during layout.
+    // For lockstep allocation, a single live L1 frontier check covers every static CB and DFB
+    // region validated during layout. Service-core claims only add checks for CB regions that sit
+    // on a claimed core, so the shortcut also holds while services run, for any program whose CBs
+    // touch no claimed core. That answer depends only on which cores are claimed, so it is cached
+    // against the ServiceCoreManager claims generation and recomputed when the claims change.
     bool simple_l1_validation_cached_{false};
     SubDeviceManagerId simple_l1_validation_manager_id_;
     uint64_t simple_l1_validation_region_end_{0};
+    uint64_t simple_l1_validation_claims_gen_{0};
+    bool simple_l1_validation_touches_service_{false};
 
     // Scratchpads (Metal 2.0 only)
     // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.

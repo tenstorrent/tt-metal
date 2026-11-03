@@ -11,20 +11,25 @@ import pytest
 import torch
 from loguru import logger
 
-import ttnn
 from models.experimental.mimo_v2_6_flash.reference.checkpoint import MiMoCheckpoint, default_model_path
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
+from models.experimental.mimo_v2_6_flash.tt.common import fabric_config
 from models.experimental.mimo_v2_6_flash.tt.generator import create_dp_submeshes
 
 # CCL ops keep their semaphores for the program's lifetime. Without an L1_SMALL region they go in the
 # main L1 pool, and after enough distinct prefill shapes they fragment it badly enough to clash with
 # later ops' static circular buffers. all_gather places them in L1_SMALL when one exists.
 L1_SMALL_SIZE = 65536
+# The serving fabric (generator_vllm's model_capabilities): the ring with the model's packet payload, which the fabric
+# row gather sizes its packets by.
+_FABRIC = fabric_config()
 GALAXY_DEVICE_PARAMS = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "fabric_config": _FABRIC["config"],
     "trace_region_size": 0,
     "l1_small_size": L1_SMALL_SIZE,
 }
+if "router_config" in _FABRIC:
+    GALAXY_DEVICE_PARAMS["fabric_router_config"] = _FABRIC["router_config"]
 DP = 4
 TP = 8
 
@@ -87,6 +92,35 @@ def pcc(a, b):
     score = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
     assert math.isfinite(score), "PCC is not finite: an input holds NaN/Inf or is constant"
     return score
+
+
+# Two runs of the same prompt (one-shot vs chunked prefill, say) round their logits differently, so where the top two
+# logits tie to within bf16 rounding (a step is 2**-7 of the logit's power of two) either run may pick either token.
+TIE_STEPS = 2
+
+
+def tie_margin(logits, token):
+    """How far ``token`` scores below the best logit, in bf16 steps at the best logit's magnitude."""
+    best = float(logits.max())
+    step = 2.0 ** (math.floor(math.log2(abs(best))) - 7)
+    return (best - float(logits[token])) / step
+
+
+def near_top(logits, token):
+    """``token`` scores within TIE_STEPS bf16 steps of the best logit (ties from rounding the logits to bf16)."""
+    return tie_margin(logits, token) <= TIE_STEPS
+
+
+def first_divergence(tokens, logits, ref_tokens, ref_logits):
+    """Two greedy runs compared up to their first different token (``logits[k]`` is what picked ``tokens[k]``).
+
+    None if they agree throughout, else (k, near_tie) at the first difference k: near_tie when each run's pick is
+    near_top in the other run's logits there. Later tokens are not compared: the runs' histories fork at k.
+    """
+    for k, (t, ref) in enumerate(zip(tokens, ref_tokens)):
+        if t != ref:
+            return k, near_top(ref_logits[k], t) and near_top(logits[k], ref)
+    return None
 
 
 def dp_submeshes(mesh_device):

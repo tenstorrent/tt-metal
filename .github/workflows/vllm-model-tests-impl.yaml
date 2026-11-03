@@ -59,7 +59,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/vllm_model_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -68,12 +68,26 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         # vLLM entries have no `cmd` — the impl builds the command from structured
         # fields — so opt into the allow-missing-cmd relaxation. Other pipelines keep
         # the strict "every leg has a non-empty cmd" contract.
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"
@@ -180,7 +194,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -206,7 +220,7 @@ jobs:
 
       - name: ⬇️ Checkout vLLM TT plugin
         if: ${{ inputs.vllm-source != 'fork' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm-tt-plugin
@@ -216,7 +230,7 @@ jobs:
 
       - name: ⬇️ Checkout vLLM fork
         if: ${{ inputs.vllm-source == 'fork' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm
@@ -281,7 +295,7 @@ jobs:
           start=$(date +%s)
           python3 -c 'import sys; from huggingface_hub import snapshot_download; print(snapshot_download(sys.argv[1], max_workers=16))' "$HF_MODEL"
           echo "Checkpoint ready in $(( $(date +%s) - start )) s"
-          du -sh "$HF_HUB_CACHE/models--${HF_MODEL//\//--}" || true
+          du -sh --apparent-size "$HF_HUB_CACHE/models--${HF_MODEL//\//--}" || true
 
       - name: 🚀 Run server
         timeout-minutes: 1
@@ -613,7 +627,9 @@ jobs:
         timeout-minutes: 15
         run: |
           # Prefix-caching gate: a second request sharing a ~24K-token document with a completed one must
-          # answer from the cached blocks correctly and show the engine's prefix-cache counters engaged.
+          # answer from the cached blocks correctly and show the prefix cache engaged. The resume's own
+          # usage.prompt_tokens_details.cached_tokens is used when the server reports it
+          # (--enable-prompt-tokens-details); otherwise the engine's prefix-cache counters in /metrics.
           python3 - <<'EOF' 2>&1 | tee "${FILE_PREFIX_CACHING_LOG}"
           import json, sys, time, urllib.request
 
@@ -636,21 +652,26 @@ jobs:
                   "model": MODEL,
                   "messages": [{"role": "system", "content": doc}, {"role": "user", "content": question}],
                   "max_tokens": 32, "temperature": 0.0, "stream": True,
+                  "stream_options": {"include_usage": True},
                   "chat_template_kwargs": {"enable_thinking": False},
               }).encode()
               req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json", "X-User-ID": "vllm_test"})
               t0 = time.perf_counter()
-              ttft, text = None, ""
+              ttft, text, usage = None, "", None
               with urllib.request.urlopen(req, timeout=1800) as resp:
                   for raw in resp:
                       line = raw.decode("utf-8", "ignore").strip()
                       if not line.startswith("data:") or line.endswith("[DONE]"):
                           continue
-                      piece = (json.loads(line[5:])["choices"][0].get("delta") or {}).get("content") or ""
+                      chunk = json.loads(line[5:])
+                      usage = chunk.get("usage") or usage
+                      if not chunk.get("choices"):
+                          continue
+                      piece = (chunk["choices"][0].get("delta") or {}).get("content") or ""
                       if piece:
                           ttft = ttft if ttft is not None else time.perf_counter() - t0
                           text += piece
-              return ttft, text
+              return ttft, text, usage
 
           def cache_counters():
               # vLLM's prefix-cache counters (tokens queried / tokens served from cache)
@@ -663,21 +684,28 @@ jobs:
                       h += float(line.rsplit(" ", 1)[1])
               return q, h
 
-          cold_ttft, cold = ask("What is the vault passphrase recorded in the archive above? Answer with just the passphrase.")
+          qs, hs = cache_counters()
+          cold_ttft, cold, cold_usage = ask("What is the vault passphrase recorded in the archive above? Answer with just the passphrase.")
           q0, h0 = cache_counters()
-          warm_ttft, warm = ask("Quote the vault passphrase from the archive above, and nothing else.")
+          warm_ttft, warm, warm_usage = ask("Quote the vault passphrase from the archive above, and nothing else.")
           q1, h1 = cache_counters()
           queried, hits = q1 - q0, h1 - h0
-          print(f"cold request: ttft={cold_ttft:.2f}s answer={cold.strip()[:80]!r}")
-          print(f"cache-hit resume: ttft={warm_ttft:.2f}s answer={warm.strip()[:80]!r}")
+          print(f"cold request: ttft={cold_ttft:.2f}s answer={cold.strip()[:80]!r} usage={cold_usage}")
+          print(f"cache-hit resume: ttft={warm_ttft:.2f}s answer={warm.strip()[:80]!r} usage={warm_usage}")
+          print(f"/metrics vllm:prefix_cache_queries/hits: before cold {qs:.0f}/{hs:.0f}, after cold {q0:.0f}/{h0:.0f}, after resume {q1:.0f}/{h1:.0f}")
           print(f"resume prefix-cache counters: queried={queried:.0f} tokens, hits={hits:.0f} tokens")
+          cached = ((warm_usage or {}).get("prompt_tokens_details") or {}).get("cached_tokens")
+          if cached is not None:
+              # Per-request count: holds however the engine aggregates (or omits) its counters.
+              queried, hits = float(warm_usage["prompt_tokens"]), float(cached)
+              print(f"resume usage: {hits:.0f} of {queried:.0f} prompt tokens cached")
           ok = True
           if secret not in cold:
               print("❌ cold request did not recall the passphrase"); ok = False
           if secret not in warm:
               print("❌ cache-hit resume did not recall the passphrase (wrong prefix or window tail)"); ok = False
           # The prompts are identical up to the question, so nearly all of the resume should hit the cache.
-          # Gate on the engine's counters, not TTFT, which also carries queueing and the resume cost.
+          # Gate on the cache counts, not TTFT, which also carries queueing and the resume cost.
           if queried <= 0 or hits < 0.8 * queried:
               print(f"❌ prefix cache not engaged for the resume: {hits:.0f} of {queried:.0f} queried tokens were cache hits"); ok = False
           if ok:
@@ -890,7 +918,7 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - id: ai-run-summary
         continue-on-error: true

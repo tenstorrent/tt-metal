@@ -25,7 +25,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/math.hpp>
-#include "tt_align.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -255,7 +254,12 @@ public:
         }
 
         FabricConfig new_fabric_config;
-        if (topology == Topology::Torus) {
+        if (fabric_setup.fabric_config_from_mgd) {
+            // No topology -- the control plane resolves this rank's config from its mesh's dim_types. We pass
+            // MGD_DEFAULT straight through and read the resolved topology back from the control plane after init
+            // (below); the yaml's topology/torus_config are unused in this mode.
+            new_fabric_config = tt::tt_fabric::FabricConfig::MGD_DEFAULT;
+        } else if (topology == Topology::Torus) {
             const auto& torus_config = fabric_setup.torus_config.value();
             auto it = torus_topology_to_fabric_config_map.find({topology, torus_config});
             TT_FATAL(
@@ -336,7 +340,19 @@ public:
                     tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_trimming_profile_path());
             }
 
-            topology_ = topology;
+            if (fabric_setup.fabric_config_from_mgd) {
+                // open_devices_internal set MGD_DEFAULT and re-initialized the control plane, which resolved this
+                // rank's concrete config from its mesh's dim_types. Read it back (single source of truth) to drive
+                // the test's own traffic logic, rather than re-deriving it here.
+                const auto resolved = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
+                const bool is_torus = resolved == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+                                      resolved == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+                                      resolved == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+                topology_ = is_torus ? Topology::Torus : Topology::Mesh;
+                log_info(tt::LogTest, "MGD-default topology resolved to {} (topology_ = {})", resolved, topology_);
+            } else {
+                topology_ = topology;
+            }
             current_channel_trimming_ = trimming;
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
@@ -419,7 +435,9 @@ public:
         return mesh_device_->worker_core_from_logical_core(logical_core);
     }
 
-    tt::tt_metal::CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
+    tt::tt_metal::CoreCoord get_worker_grid_size() const override {
+        return mesh_device_->compute_with_storage_grid_size();
+    }
 
     std::vector<tt::tt_metal::CoreCoord> get_available_worker_cores() const override {
         std::vector<tt::tt_metal::CoreCoord> all_cores;
@@ -788,8 +806,13 @@ public:
     // ======================================================================================
     uint32_t get_num_mesh_dims() const override { return mesh_shape_.dims(); }
 
+    // Fabric type of THIS process's own mesh: the config this process opened the fabric with.
+    tt::tt_fabric::FabricType get_local_mesh_fabric_type() const {
+        return tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+    }
+
     bool is_degenerate_torus_axis(uint32_t dim) const override {
-        const auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        const auto fabric_type = get_local_mesh_fabric_type();
         return tt::tt_fabric::has_flag(fabric_type, tt::tt_fabric::torus_flag_for_axis(dim)) &&
                !tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, dim);
     }
@@ -952,10 +975,11 @@ public:
             hops[direction] = 0;
         }
 
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto src_coord = get_device_coord(src_node_id);
-        const auto mesh_shape = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(
-            src_node_id.mesh_id, MeshScope::GLOBAL);
-        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        const auto mesh_shape = control_plane.get_physical_mesh_shape(src_node_id.mesh_id, MeshScope::GLOBAL);
+        // Per-mesh config via the same helper the path walker uses, so generator and walker never disagree.
+        auto fabric_type = get_local_mesh_fabric_type();
 
         if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, EW_DIM)) {
             // EW dimension: need to cover (mesh_shape[EW_DIM] - 1) total hops
@@ -2088,6 +2112,7 @@ private:
             router_config.max_packet_payload_size_bytes = fabric_setup.max_packet_size.value();
         }
 
+        // When no topology is specified, fabric_config is MGD_DEFAULT and the control plane resolves it per rank.
         tt::tt_fabric::SetFabricConfig(
             fabric_config,
             reliability_mode,
@@ -2203,7 +2228,7 @@ private:
 
         // If toroidal wraparound connections have been enabled, we need to check whether going in an opposite direction
         // over the wraparound link is faster
-        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        auto fabric_type = get_local_mesh_fabric_type();
         // If the physical topology is a mesh, no wraparound links are present, so we can return the hops as is
         if (fabric_type == tt::tt_fabric::FabricType::MESH) {
             return hops;
@@ -2455,16 +2480,14 @@ private:
     }
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim, const MeshShape& mesh_shape) const {
-        if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
-            if (dim != NS_DIM && dim != EW_DIM) {
-                return MeshCoordinate::BoundaryMode::NONE;
-            }
-            const auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
-            return tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, static_cast<uint32_t>(dim))
-                       ? MeshCoordinate::BoundaryMode::WRAP
-                       : MeshCoordinate::BoundaryMode::NONE;
+        if (dim != NS_DIM && dim != EW_DIM) {
+            return MeshCoordinate::BoundaryMode::NONE;
         }
-        return MeshCoordinate::BoundaryMode::NONE;
+        // Follow this rank's local fabric config: the per-mesh config can differ per mesh.
+        const auto fabric_type = get_local_mesh_fabric_type();
+        return tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, static_cast<uint32_t>(dim))
+                   ? MeshCoordinate::BoundaryMode::WRAP
+                   : MeshCoordinate::BoundaryMode::NONE;
     }
 
     RoutingDirection get_trunk_direction(const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {

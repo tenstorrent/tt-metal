@@ -155,6 +155,9 @@ class AsyncLane(FakeLane):
     def set_vllm_page_tables(self, rows):
         self.table_slots.append(sorted(rows))
 
+    def chunk_traced(self, slot, start_pos, num_tokens, chunk_size=None):
+        return False  # every prefill on the fake is eager (prefill_enqueue)
+
     def prefill_enqueue(self, chunk, slot, start_pos=0, history_continues=False, draft_group=0, allow_trace=True):
         self.prefills.append((slot, start_pos, chunk.numel()))
         return {"logits": torch.nn.functional.one_hot(torch.tensor(SEQ[start_pos + chunk.numel()]), VOCAB).float()}
@@ -170,6 +173,14 @@ class AsyncLane(FakeLane):
     def decode_enqueue_resident(self, positions, sample=False):
         assert torch.equal(positions, self.resident[1]), "the adapter's positions are the device's"
         return self._decode(self.resident[1].clone())
+
+
+@pytest.fixture(autouse=True)
+def host_events(monkeypatch):
+    """The fake lanes have no command queue: a deferred verify's events (MiMoV2ForCausalLM.verify) record and wait as
+    no-ops."""
+    monkeypatch.setattr(ttnn, "record_event", lambda *args, **kwargs: object(), raising=False)
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: None, raising=False)
 
 
 @pytest.fixture(params=[1, MAX_DRAFTS], ids=["mtp1", "mtp3"])
@@ -518,6 +529,8 @@ def test_chained_greedy_equals_the_synchronous_path(adapter, defer):
     seq, counts = run_chained(adapter, 200)
     assert seq == SEQ[: len(seq)]
     assert lane.mtp.planned == 1, "only the first draft is host-planned: every other one chained on device"
+    # Only the verify the host built waits for an empty queue (VERIFY_DRAIN); the relayed ones queue behind it.
+    assert lane.drains == [generator_vllm.VERIFY_DRAIN] + [False] * (len(counts) - 1)
     assert adapter.chain_stats["uncovered"] == 0
     plans = lane.mtp.plans if lane.mtp.multi else None
     if plans is not None:

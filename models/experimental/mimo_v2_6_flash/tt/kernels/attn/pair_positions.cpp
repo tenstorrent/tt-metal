@@ -9,7 +9,8 @@
 //   skips it);
 // - sdpa [B]: the slot's decode SDPA position on the chip, its last local index at a global position <= p,
 //   64 (p >> 7) + clamp((p & 127) + 1 - 64 c, 0, 64) - 1 (-1: none);
-// - S serial rows [B], row j holding only slot j's write position (a verify writes K / V slot by slot).
+// - S serial rows [B], row k holding the write positions of the slots j with j % S == k (a verify writes K / V one
+//   column of its draft groups at a time, reference/spec_decode.py serial_positions).
 // Every buffer is a one-page row-major interleaved DRAM tensor, read and written whole.
 
 #include <cstdint>
@@ -72,7 +73,7 @@ void kernel_main() {
     for (uint32_t k = 0; k < S; ++k) {
         volatile tt_l1_ptr int32_t* row = reinterpret_cast<volatile tt_l1_ptr int32_t*>(out_l1 + (2 + k) * row_l1);
         for (uint32_t j = 0; j < B; ++j) {
-            row[j] = j == k ? write[j] : -1;
+            row[j] = j % S == k ? write[j] : -1;
         }
     }
 

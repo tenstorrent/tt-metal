@@ -297,9 +297,12 @@ class TtMiMoDecoderLayer:
         """The MoE streaming decode serves users in rows 0-3 only: both block reductions then move only those rows."""
         return self.is_moe and self.mlp.gate_up_stream is not None
 
-    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None, h=None, return_norm=False):
+    def forward_decode(
+        self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None, h=None, return_norm=False, next_attn=None
+    ):
         """``h``: input_norm(x) when the previous layer's reduction already computed it (see set_fused_norms).
-        ``return_norm``: return (y, the next norm of y or None)."""
+        ``return_norm``: return (y, the next norm of y or None). ``next_attn``: the next layer's attention, whose
+        compact qkv may run in this layer's MoE launch (moe.QKV_PREFETCH) on that next norm."""
         if not self._compact_decode():
             x2 = self.attention_decode(x, rot_mats, cur_pos, page_table, kv_cache)
             y = self._ffn(x2, token_mask, decode=True)
@@ -317,7 +320,7 @@ class TtMiMoDecoderLayer:
         if own_h:
             h.deallocate(True)
         if fused is not None and self.attn.fabric_gather:
-            x2, h2 = self.mlp.reduce_residual(None, x, norm=fused["post"], compact=gathered)
+            x2, h2 = self.mlp.reduce_residual(None, x, norm=fused["post"], compact=gathered, route=True)
         elif fused is not None:
             x2, h2 = self.mlp.reduce_residual(gathered, x, norm=fused["post"])
         else:
@@ -327,7 +330,7 @@ class TtMiMoDecoderLayer:
         if fused is None:
             h2 = self.post_norm(x2)
         nxt = fused["next"] if fused is not None and return_norm else None
-        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt)
+        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt, next_attn=next_attn if nxt else None)
         if fused is None:
             h2.deallocate(True)
         x2.deallocate(True)

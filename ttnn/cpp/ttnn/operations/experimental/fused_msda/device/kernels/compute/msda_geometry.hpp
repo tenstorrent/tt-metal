@@ -162,7 +162,7 @@ inline void floor_to() {
 // faces of slots 0..3. The template arguments are the dst_reg offsets of px,
 // floor(px), py, floor(py) and attn; every input is read before the first
 // output is written, so outputs may overwrite inputs. CLEAR_ATTN_RIGHT zeroes
-// the face to the right of attn, which the caller then packs as part of a tile.
+// the right face of attn's slot, which the caller then packs as part of a tile.
 template <uint32_t PX, uint32_t X0, uint32_t PY, uint32_t Y0, uint32_t ATTN, bool CLEAR_ATTN_RIGHT = false>
 inline void corner_weights() {
 #pragma GCC unroll 0
@@ -179,7 +179,7 @@ inline void corner_weights() {
         sfpi::dst_reg[DST_SW * TILE] = a_dy - se;    // (1 - dx) dy attn
         sfpi::dst_reg[DST_SE * TILE] = se;           // dx dy attn
         if constexpr (CLEAR_ATTN_RIGHT) {
-            sfpi::dst_reg[ATTN + FACE] = 0.0f;
+            sfpi::dst_reg[(ATTN / TILE) * TILE + FACE] = 0.0f;
         }
         sfpi::dst_reg++;
     }
@@ -261,11 +261,32 @@ inline void mask_corner_weights() {
     }
 }
 
+// Splits the float32 at slot 0 into hi, mid and lo, into slots 0, 1 and 2,
+// each exact in bf16 and, for a finite x, summing to it exactly: each part
+// keeps the next 8 significant bits, and each subtraction only clears leading
+// bits, so it does not round. An infinite x comes out NaN, which the corner
+// word clamps out of bounds all the same. Over the whole tile (VectorMode::RC).
+inline void split_bf16_parts() {
+    const sfpi::vInt top16(0xFFFF0000u);
+#pragma GCC unroll 0
+    for (uint32_t d = 0; d < FACE; ++d) {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat hi = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(x) & top16);
+        const sfpi::vFloat rest = x - hi;
+        const sfpi::vFloat mid = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(rest) & top16);
+        sfpi::dst_reg[0] = hi;
+        sfpi::dst_reg[TILE] = mid;
+        sfpi::dst_reg[2 * TILE] = rest - mid;
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 #endif
 
-// Points the unpacker and datacopy at `new_cb`. For float32 geom_x/geom_y the
-// program factory sets UnpackToDestFp32, so that copy bypasses SrcA and lands in
+// Points the unpacker and datacopy at `new_cb`. For float32 geom_x/geom_y, and
+// the tiled geometry's float32 reference tile, the program factory sets
+// UnpackToDestFp32, so that copy bypasses SrcA and lands in
 // DST with all 23 mantissa bits. `srca_cb` tracks what SrcA was last
 // configured for so the reconfiguration is skipped when nothing changed; it must
 // be seeded with whatever `compute_kernel_hw_startup` left SrcA on.
@@ -351,30 +372,34 @@ inline void point(const GeometryPipes& cb, const AxisConstants& kx, const AxisCo
 }
 
 // ---------------------------------------------------------------------------
-// Tiled geometry (msda_tiled_geometry.hpp): one window per output block.
+// Tiled geometry (msda_tiled_geometry.hpp): one window per group of a block,
+// j the lane of point J = 16 g + j of group g.
 //
 //   DST slot  in (cols 0..15 | 16..31)   out (cols 0..15 | 16..31)
 //   0         px_j | py_j                 w_NW_j | py_j
-//   1         attn_j | staging padding    w_NE_j | 0
+//   1         attn_J, J < 16 | J >= 16    w_NE_j | 0
 //   2         y0_j | x0_j (floored)       w_SW_j | x0_j
 //   3         H_j | W_j                   w_SE_j | corner word_j
 //
 // Slots 0 and 3 come out of matmuls that accumulate in the fp32 destination,
-// so px | py never pass through a 19-bit source register. The staging padding
-// is only copied, never multiplied: it may hold any bit pattern. Slots 2 and 3
-// put y on the left: the weights overwrite the left faces, and the corner word
-// must survive in the right face. Slot 3 goes to the reader as the block's
-// corner tile, and all four to the weights CB, from which `extract` moves one
-// point's column at a time to column 0. E_j's zeros cancel every other column
-// of a weight tile; Blackhole's FPU multiplies inf and NaN by zero to zero.
+// so px | py never pass through a 19-bit source register. Slot 1 is the whole
+// attn tile: group 0 reads its weights from the left face, group 1 from the
+// right one. It is only copied, never multiplied, so a column no point uses may
+// hold any bit pattern. Slots 2 and 3 put y on the left: the weights overwrite
+// the left faces, and the corner word must survive in the right face. Slot 3
+// goes to the reader as the group's corner tile, and all four to the weights
+// CB, from which `extract` moves one point's column at a time to column 0.
+// E_j's zeros cancel every other column of a weight tile; Blackhole's FPU
+// multiplies inf and NaN by zero to zero.
 // ---------------------------------------------------------------------------
 struct BlockPipes {
-    uint32_t rm;        // reader -> compute, row-major [offsets | attn] rows
-    uint32_t operands;  // compute scratch, OFF_TILE and ATTN_TILE tilized
-    uint32_t ref;       // reader -> compute, the reference tile
-    uint32_t consts;    // reader -> compute once, never popped
-    uint32_t weights;   // compute -> compute, w_NW w_NE w_SW w_SE
-    uint32_t corner;    // compute -> reader, float32, corner word_j in column 16 + j
+    uint32_t rm;         // reader -> compute, row-major [offsets | attn] rows
+    uint32_t operands;   // compute scratch, the row-major page tilized
+    uint32_t ref;        // reader -> compute, the reference tile
+    uint32_t ref_parts;  // the bf16 tiles the matmuls read: ref itself, or its split when float32
+    uint32_t consts;     // reader -> compute once, never popped
+    uint32_t weights;    // compute -> compute, w_NW w_NE w_SW w_SE per group
+    uint32_t corner;     // compute -> reader, float32, corner word_j in column 16 + j, per group
 };
 
 // Slot names for the table above. The outputs land where `corner_weights`
@@ -384,41 +409,11 @@ constexpr uint32_t BLK_ATTN = DST_NE;    // out: w_NE | 0
 constexpr uint32_t BLK_FLOOR = DST_SW;   // out: w_SW | x0
 constexpr uint32_t BLK_EXTENT = DST_SE;  // out: w_SE | corner word
 
-inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
-    namespace tg = fused_msda_tiled_geometry;
-    CircularBuffer rm(cb.rm);
-    CircularBuffer operands(cb.operands);
-    CircularBuffer ref(cb.ref);
-    CircularBuffer weights(cb.weights);
-    CircularBuffer corner_out(cb.corner);
-
-    rm.wait_front(tg::RM_TILES);
-    operands.reserve_back(tg::RM_TILES);
-    tilize_init(cb.rm, tg::RM_TILES, cb.operands);
-    tilize_block(cb.rm, tg::RM_TILES, cb.operands);
-    tilize_uninit(cb.rm, cb.operands);
-    operands.push_back(tg::RM_TILES);
-    rm.pop_front(tg::RM_TILES);
-
-    operands.wait_front(tg::RM_TILES);
-    ref.wait_front(1);
-    weights.reserve_back(tg::WEIGHT_TILES);
-    corner_out.reserve_back(1);
-
-    tile_regs_acquire();
-
-    // Every operand CB is bf16 32x32, so switching CBs needs no format
-    // reconfiguration (see the compute config in the program factory).
-    matmul_init(cb.operands, cb.consts);
-    matmul_tiles(cb.operands, cb.consts, tg::OFF_TILE, tg::CONST_M_OFF, BLK_PXPY);
-    matmul_init(cb.ref, cb.consts);
-    matmul_tiles(cb.ref, cb.consts, 0, tg::CONST_M_REF, BLK_PXPY);
-    matmul_tiles(cb.ref, cb.consts, 0, tg::CONST_M_EXTENT, BLK_EXTENT);
-    srca_cb = cb.consts;  // matmul unpacks in1 to SrcA
-
-    copy_from(cb.operands, srca_cb);
-    copy_tile(cb.operands, tg::ATTN_TILE, BLK_ATTN);
-
+// The SFPU half of one group's solve, on the slots the matmuls and the attn
+// copy filled. ATTN_FACE is the face of the attn tile holding the group's
+// weights; a template argument, because SFPI dst_reg offsets are immediates.
+template <uint32_t ATTN_FACE>
+inline void solve_group() {
     constexpr uint32_t T = sfpu::TILE;
     constexpr uint32_t F = sfpu::FACE;
     constexpr uint32_t PX = BLK_PXPY * T;
@@ -427,48 +422,135 @@ inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
     constexpr uint32_t Y0 = BLK_FLOOR * T;
     constexpr uint32_t W = BLK_EXTENT * T + F;
     constexpr uint32_t H = BLK_EXTENT * T;
+    constexpr uint32_t ATTN = BLK_ATTN * T + ATTN_FACE * F;
     rounding_op_tile_init();
     MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::floor_to<PX, X0>, 0, VectorMode::C)));
     MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::floor_to<PY, Y0>, 0, VectorMode::C)));
     // Before the weights, which overwrite H.
     MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::corner_word_lanes<X0, Y0, W, H, W>, 0, VectorMode::C)));
-    MATH((_llk_math_eltwise_unary_sfpu_params_(
-        sfpu::corner_weights<PX, X0, PY, Y0, BLK_ATTN * T, true>, 0, VectorMode::C)));
+    MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::corner_weights<PX, X0, PY, Y0, ATTN, true>, 0, VectorMode::C)));
     MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::mask_corner_weights<W>, 0, VectorMode::C)));
-
-    tile_regs_commit();
-    tile_regs_wait();
-    // The corner tile first: the reader is waiting on it, the reduction is not.
-    pack_reconfig_data_format(cb.weights, cb.corner);
-    pack_tile<true>(BLK_EXTENT, cb.corner, 0);
-    corner_out.push_back(1);
-    pack_reconfig_data_format(cb.corner, cb.weights);
-    pack_tile<true>(DST_NW, cb.weights, 0);
-    pack_tile<true>(DST_NE, cb.weights, 1);
-    pack_tile<true>(DST_SW, cb.weights, 2);
-    pack_tile<true>(DST_SE, cb.weights, 3);
-    tile_regs_release();
-    weights.push_back(tg::WEIGHT_TILES);
-
-    operands.pop_front(tg::RM_TILES);
-    ref.pop_front(1);
 }
 
-// Point j's four corner scalars, NW NE SW SE, into the scalar CB in the order
-// `point` produces them: column j of each weight tile, moved to column 0. The
-// block's weight tiles stay at the front until its last point, which pops
-// them; the next block's are pushed behind them meanwhile.
-inline void extract(const BlockPipes& cb, uint32_t scalar_cb_index, uint32_t j, uint32_t& srca_cb) {
+template <uint32_t POINTS, bool REF_FP32>
+inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
     namespace tg = fused_msda_tiled_geometry;
+    constexpr uint32_t GROUPS = tg::groups(POINTS);
+    constexpr uint32_t RM_TILES = tg::rm_tiles(POINTS);
+    constexpr uint32_t REF_PARTS = REF_FP32 ? tg::FP32_REF_PARTS : 1;
+    static_assert(GROUPS <= tg::MAX_GROUPS);
+    CircularBuffer rm(cb.rm);
+    CircularBuffer operands(cb.operands);
+    CircularBuffer ref(cb.ref);
+    CircularBuffer ref_parts(cb.ref_parts);
+    CircularBuffer weights(cb.weights);
+    CircularBuffer corner_out(cb.corner);
+
+    rm.wait_front(RM_TILES);
+    operands.reserve_back(RM_TILES);
+    tilize_init(cb.rm, RM_TILES, cb.operands);
+    tilize_block(cb.rm, RM_TILES, cb.operands);
+    tilize_uninit(cb.rm, cb.operands);
+    operands.push_back(RM_TILES);
+    rm.pop_front(RM_TILES);
+
+    if constexpr (REF_FP32) {
+        // The FPU's source registers hold 19 bits, too few for a float32
+        // point, so the matmuls read it as bf16 parts instead.
+        ref.wait_front(1);
+        ref_parts.reserve_back(REF_PARTS);
+        copy_from(cb.ref, srca_cb);
+        tile_regs_acquire();
+        copy_tile(cb.ref, 0, 0);
+        rounding_op_tile_init();  // the generic SFPU init; the split rounds nothing
+        MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::split_bf16_parts, 0, VectorMode::RC)));
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t p = 0; p < REF_PARTS; ++p) {
+            pack_tile<true>(p, cb.ref_parts, p);
+        }
+        tile_regs_release();
+        ref_parts.push_back(REF_PARTS);
+        ref.pop_front(1);
+        // copy_from left SrcA on the float32 tile; the matmuls unpack the
+        // bf16 constants there.
+        reconfig_data_format_srca(cb.ref, cb.consts);
+        srca_cb = cb.consts;
+    }
+
+    operands.wait_front(RM_TILES);
+    ref_parts.wait_front(REF_PARTS);
+
+    for (uint32_t g = 0; g < GROUPS; ++g) {
+        weights.reserve_back(tg::WEIGHTS_PER_GROUP);
+        corner_out.reserve_back(1);
+
+        tile_regs_acquire();
+
+        // Every matmul operand is bf16 32x32, so switching CBs needs no
+        // format reconfiguration (see the compute config in the program
+        // factory).
+        matmul_init(cb.operands, cb.consts);
+        matmul_tiles(cb.operands, cb.consts, tg::off_tile(g), tg::const_m_off(g), BLK_PXPY);
+        matmul_init(cb.ref_parts, cb.consts);
+        for (uint32_t p = 0; p < REF_PARTS; ++p) {
+            matmul_tiles(cb.ref_parts, cb.consts, p, tg::const_m_ref(g), BLK_PXPY);
+        }
+        // M_extent is zero outside row BIAS_COL, and the bias column is 1 in
+        // the first part and 0 in the others.
+        matmul_tiles(cb.ref_parts, cb.consts, 0, tg::const_m_extent(g), BLK_EXTENT);
+        srca_cb = cb.consts;  // matmul unpacks in1 to SrcA
+
+        copy_from(cb.operands, srca_cb);
+        copy_tile(cb.operands, tg::attn_tile(POINTS), BLK_ATTN);
+
+        if constexpr (GROUPS == 1) {
+            solve_group<0>();
+        } else if (g == 0) {
+            solve_group<0>();
+        } else {
+            solve_group<1>();
+        }
+
+        tile_regs_commit();
+        tile_regs_wait();
+        // The corner tile first: the reader is waiting on it, the reduction is not.
+        pack_reconfig_data_format(cb.weights, cb.corner);
+        pack_tile<true>(BLK_EXTENT, cb.corner, 0);
+        corner_out.push_back(1);
+        pack_reconfig_data_format(cb.corner, cb.weights);
+        pack_tile<true>(DST_NW, cb.weights, 0);
+        pack_tile<true>(DST_NE, cb.weights, 1);
+        pack_tile<true>(DST_SW, cb.weights, 2);
+        pack_tile<true>(DST_SE, cb.weights, 3);
+        tile_regs_release();
+        weights.push_back(tg::WEIGHTS_PER_GROUP);
+    }
+
+    operands.pop_front(RM_TILES);
+    // On bf16 reference points ref_parts is the reference tile itself.
+    ref_parts.pop_front(REF_PARTS);
+}
+
+// Point J's four corner scalars, NW NE SW SE, into the scalar CB in the order
+// `point` produces them: column J % LANES of its group's weight tiles, moved to
+// column 0. The block's weight tiles stay at the front until its last point,
+// which pops them; the next block's are pushed behind them meanwhile.
+template <uint32_t POINTS>
+inline void extract(const BlockPipes& cb, uint32_t scalar_cb_index, uint32_t point, uint32_t& srca_cb) {
+    namespace tg = fused_msda_tiled_geometry;
+    constexpr uint32_t WEIGHT_TILES = tg::weight_tiles(POINTS);
+    const uint32_t first = tg::group_of(point) * tg::WEIGHTS_PER_GROUP;
+    const uint32_t e = tg::const_e(POINTS, tg::lane_of(point));
     CircularBuffer weights(cb.weights);
     CircularBuffer scalar_out(scalar_cb_index);
-    weights.wait_front(tg::WEIGHT_TILES);
+    weights.wait_front(WEIGHT_TILES);
     scalar_out.reserve_back(4);
     matmul_init(cb.weights, cb.consts);
     srca_cb = cb.consts;
     tile_regs_acquire();
     for (uint32_t c = 0; c < 4; ++c) {
-        matmul_tiles(cb.weights, cb.consts, c, tg::CONST_E_FIRST + j, c);
+        matmul_tiles(cb.weights, cb.consts, first + c, e, c);
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -477,8 +559,8 @@ inline void extract(const BlockPipes& cb, uint32_t scalar_cb_index, uint32_t j, 
     }
     tile_regs_release();
     scalar_out.push_back(4);
-    if (j + 1 == tg::POINTS) {
-        weights.pop_front(tg::WEIGHT_TILES);
+    if (point + 1 == POINTS) {
+        weights.pop_front(WEIGHT_TILES);
     }
 }
 

@@ -47,6 +47,7 @@ void kernel_main() {
     const uint32_t scores_addr = get_arg_val<uint32_t>(4);
     const uint32_t mask_addr = get_arg_val<uint32_t>(5);
 
+    MOE_MARK(20);
     const InterleavedAddrGen<true> x_gen = {.bank_base_address = x_addr, .page_size = bf16_tile_bytes};
     cb_reserve_back(cb_x, kt);
     const uint32_t x_l1 = get_write_ptr(cb_x);
@@ -57,6 +58,7 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     cb_push_back(cb_x, kt);
+    MOE_MARK(21);
 
     uint32_t stage = 0;
     if constexpr (sel_users > 0) {
@@ -65,6 +67,7 @@ void kernel_main() {
         mimo_moe::stage_route_rows<expert_tiles, has_mask, rows>(biased_addr, scores_addr, mask_addr, stage);
         noc_async_read_barrier();
     }
+    MOE_MARK(22);
 
     // Every user's selection: ids, weight bits, active.
     uint32_t sel_ids[users][topk];
@@ -74,15 +77,23 @@ void kernel_main() {
     cb_reserve_back(cb_sel, 1);
     volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_sel));
     for (uint32_t u = first_user; u < users; u++) {
-        mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask, rows>(
-            stage, u, sel_ids[u], sel_w[u]);
         active[u] = mimo_moe::user_active<expert_tiles, has_mask, rows>(stage, u);
+        if (active[u]) {
+            mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask, rows>(
+                stage, u, sel_ids[u], sel_w[u]);
+        } else {
+            for (uint32_t i = 0; i < topk; i++) {
+                sel_ids[u][i] = 0;
+                sel_w[u][i] = 0;
+            }
+        }
         sel[u - first_user] = active[u] ? 1 : 0;
         for (uint32_t i = 0; i < topk; i++) {
             sel[sel_users + (u - first_user) * topk + i] = sel_ids[u][i];
         }
     }
     cb_push_back(cb_sel, 1);
+    MOE_MARK(23);
 
     // The reader's users: [active flag per local user | ids | weight bits].
     cb_wait_front(cb_local, 1);
@@ -95,6 +106,7 @@ void kernel_main() {
         }
     }
     cb_pop_front(cb_local, 1);
+    MOE_MARK(24);
 
     // The distinct experts, in the reader's order.
     uint32_t uniq[num_pairs];
@@ -110,6 +122,7 @@ void kernel_main() {
     cb_reserve_back(cb_cnt, 1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_cnt)) = n;
     cb_push_back(cb_cnt, 1);
+    MOE_MARK(25);
 
     // Weight tiles (bf16 32 x 32; only rows 0..rows-1 are packed, the rest is never read): row u of faces 0 and 1.
     for (uint32_t j = 0; j < n; j++) {
@@ -135,6 +148,7 @@ void kernel_main() {
         }
         cb_push_back(cb_wt, 1);
     }
+    MOE_MARK(26);
 
     constexpr uint32_t tiny_tile_bytes = 2 * tiny_face_bytes;
     const InterleavedAddrGen<false> out_gen = {
@@ -145,5 +159,9 @@ void kernel_main() {
         noc_async_write(get_read_ptr(cb_h), out_gen.get_noc_addr(j, col_base), tiny_tile_bytes);
         noc_async_write_barrier();
         cb_pop_front(cb_h, 1);
+        if (j == 0) {
+            MOE_MARK(27);
+        }
     }
+    MOE_MARK(28);
 }

@@ -58,24 +58,39 @@ void kernel_main() {
     for (uint32_t u = 0; u < max_batch; ++u) {
         tokens[u] = 0;
     }
+    // One pass over the (chip, core) rows in order, every user's running maximum at once (strict: the first maximum
+    // wins, the lowest global id on ties).
+    uint32_t best_key[users];
+    uint32_t best_id[users];
+    bool found[users];
     for (uint32_t u = 0; u < users; ++u) {
-        uint32_t best_key = 0;
-        uint32_t best_id = 0;
-        bool found = false;
-        for (uint32_t ch = 0; ch < tp; ++ch) {
-            for (uint32_t c = 0; c < num_cores; ++c) {
-                // row c lives in face 0 (c < 16) or face 2 (copied right after face 0): 16 uint32 per row
-                const volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    scratch + ch * 2 * kFaceBytesU32 + (c < 16 ? 0 : kFaceBytesU32) + (c % 16) * 64);
-                const uint32_t key = row[u * 2];
-                if (!found || key > best_key) {
-                    found = true;
-                    best_key = key;
-                    best_id = ch * vocab_local + row[u * 2 + 1];
+        best_key[u] = 0;
+        best_id[u] = 0;
+        found[u] = false;
+    }
+    for (uint32_t ch = 0; ch < tp; ++ch) {
+        for (uint32_t c = 0; c < num_cores; ++c) {
+            // row c lives in face 0 (c < 16) or face 2 (copied right after face 0): 16 uint32 per row
+            const volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                scratch + ch * 2 * kFaceBytesU32 + (c < 16 ? 0 : kFaceBytesU32) + (c % 16) * 64);
+            uint32_t vals[2 * users];
+#pragma GCC unroll 16
+            for (uint32_t i = 0; i < 2 * users; ++i) {
+                vals[i] = row[i];
+            }
+#pragma GCC unroll 8
+            for (uint32_t u = 0; u < users; ++u) {
+                const uint32_t key = vals[u * 2];
+                if (!found[u] || key > best_key[u]) {
+                    found[u] = true;
+                    best_key[u] = key;
+                    best_id[u] = ch * vocab_local + vals[u * 2 + 1];
                 }
             }
         }
-        tokens[u] = best_id;
+    }
+    for (uint32_t u = 0; u < users; ++u) {
+        tokens[u] = best_id[u];
     }
 
     const uint32_t bytes = max_batch * 4;

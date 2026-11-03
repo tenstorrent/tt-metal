@@ -7,11 +7,34 @@
 // user's cache tile row (the reader's list: the users whose positions share those cache tiles, this user's alone
 // when it is the lowest of them, none otherwise), row `member` of the new key (RoPE'd, cb_rot) or value (cb_x)
 // replaces row `row` of the bf16 copies of the cache tiles in place; compute packs them back to BFP8 and they are
-// written to the cache pages they came from (by the cores with members).
+// written to the cache pages they came from (by the cores with members). A new row is written finite (finite_pair: the
+// decode SDPA's mask does not cancel a non-finite row it masks, attention.py KV_SANITIZE).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
 constexpr uint32_t kRoleQ = 0, kRoleK = 1, kRoleV = 2;
+
+#ifndef SWA_KV_SANITIZE
+#define SWA_KV_SANITIZE 1
+#endif
+
+// One bf16 made finite for the cache (attention.py KV_SANITIZE): inf / NaN -> 0, |x| >= 2^16 -> +-65280 (0x477F).
+FORCE_INLINE uint32_t finite_bf16(uint32_t h) {
+    const uint32_t exponent = (h >> 7) & 0xFF;
+    if (exponent == 0xFF) {
+        return 0;
+    }
+    return exponent >= 127 + 16 ? (h & 0x8000) | 0x477F : h;
+}
+
+// Two packed bf16 (one 32-bit word of a face row).
+FORCE_INLINE uint32_t finite_pair(uint32_t w) {
+    if constexpr (SWA_KV_SANITIZE) {
+        return finite_bf16(w & 0xFFFF) | (finite_bf16(w >> 16) << 16);
+    } else {
+        return w;
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t role = get_compile_time_arg_val(0);
@@ -74,8 +97,8 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* dst =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1 + j * tile_bytes + dst_row);
             for (uint32_t w = 0; w < row_bytes / 4; w++) {
-                dst[w] = src[w];
-                dst[face_bytes / 4 + w] = src[face_bytes / 4 + w];
+                dst[w] = finite_pair(src[w]);
+                dst[face_bytes / 4 + w] = finite_pair(src[face_bytes / 4 + w]);
             }
         }
     }
