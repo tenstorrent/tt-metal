@@ -77,22 +77,21 @@ void kernel_main() {
     matmul_cb.reserve_back(block_num_tiles);
 #ifdef USE_CUSTOM_MM
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = true;
+    constexpr auto layout = CustomMmDestLayout::DenseSplitAcc;
 
     static_assert(M_tiles == 1, "custom_mm requires a single row of A");
     static_assert(Kc_tiles >= 2 && Kc_tiles <= 256 && Kc_tiles % 2 == 0);
     static_assert(N_tiles >= 1 && N_tiles <= 16);
 
-    custom_mm_block_init_short<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, matmul_cb_id, N_tiles);
+    custom_mm_block_init_short<transpose, layout>(in0_cb_id, in1_cb_id, matmul_cb_id, N_tiles);
     pack_block_contiguous_init(matmul_cb_id);
     tile_regs_acquire();
-    custom_mm_block<true, false>(in0_cb_id, in1_cb_id, 0, 0, 0, Kc_tiles, N_tiles);
+    custom_mm_block<layout, true>(in0_cb_id, in1_cb_id, 0, 0, 0, Kc_tiles, N_tiles);
     tile_regs_commit();
     tile_regs_wait();
     pack_block_contiguous(0, matmul_cb_id, N_tiles);
     tile_regs_release();
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<layout>(matmul_cb_id);
 #else
     // A is [M, Kc] row-major as 1x32 tiles, so row m's k-th tile is m * Kc_tiles + k -- the stride
     // matmul_block assumes for an rt_dim x kt_dim in0 block.

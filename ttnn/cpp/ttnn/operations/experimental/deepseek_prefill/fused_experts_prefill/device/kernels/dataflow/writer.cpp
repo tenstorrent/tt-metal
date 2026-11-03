@@ -13,7 +13,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/compile_time_args.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // Writer / group all-gather for fused_experts_prefill. One instance per worker core.
 //

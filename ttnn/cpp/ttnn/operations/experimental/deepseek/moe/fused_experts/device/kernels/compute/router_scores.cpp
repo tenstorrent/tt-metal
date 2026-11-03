@@ -11,7 +11,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // Router compute kernel (runs on the router cores, the row below the expert grid).
 //
@@ -54,9 +54,8 @@ void kernel_main() {
     CircularBuffer out_cb(cb_rout_id);
 
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
     // Standard 64-row DEST tile stride, so dst n is the same tile for the matmul, SFPU and packer.
-    constexpr bool dense_packing = false;
+    constexpr auto layout = CustomMmDestLayout::DefaultSplitAcc;
 
     // SrcOrder::Reverse: SrcA holds the weight (in1), SrcB the activation (in0).
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_rin_id, cb_rw_id, cb_rout_id);
@@ -75,7 +74,7 @@ void kernel_main() {
     }
     reconfig_full_operand_srca(cb_rw_id);
 
-    custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_rin_id, cb_rw_id, cb_rout_id, 1);
+    custom_mm_block_init_short<transpose, layout>(cb_rin_id, cb_rw_id, cb_rout_id, 1);
     in_cb.wait_front(k_tiles);
     {
         DeviceZoneScopedN("FE_R_MM");
@@ -86,14 +85,14 @@ void kernel_main() {
                 const uint32_t k0 = p * piece_tiles;
                 w_cb.wait_front(n * k_tiles + k0 + piece_tiles);
                 if (p + 1u == pieces_per_col) {
-                    custom_mm_block<true>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
+                    custom_mm_block<layout, true>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
                 } else {
-                    custom_mm_block<false>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
+                    custom_mm_block<layout, false>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
                 }
             }
         }
     }
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<layout>(cb_rout_id);
 
     softplus_tile_init();
     for (uint32_t n = 0; n < n_tiles; ++n) {

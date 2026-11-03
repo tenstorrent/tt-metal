@@ -32,7 +32,7 @@ void fused_sigmoid_with_bias_and_scale(
     cb_wait_front(cb_bias, 1);
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short(cb_w);
+    copy_init(cb_w);
     copy_tile(cb_w, 0, 0);
     mul_unary_tile(0, scale_bits);
     tile_regs_commit();

@@ -8,7 +8,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 namespace {
 

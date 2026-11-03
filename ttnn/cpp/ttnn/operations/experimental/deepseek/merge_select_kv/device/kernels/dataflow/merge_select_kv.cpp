@@ -28,7 +28,7 @@
 #include "api/tensor/noc_traits.h"
 #include "ckernel.h"
 #include "experimental/kernel_args.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "ttnn/operations/experimental/deepseek/fused_lightning_select_kv/device/kernels/dataflow/gather_kv_rows.hpp"
 
 // Adds the 8-bit bins (key >> shift) of keys[0, n) to hist. The keys of a top-k mostly share their

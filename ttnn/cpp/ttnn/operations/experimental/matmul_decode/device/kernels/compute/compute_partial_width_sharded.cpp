@@ -82,15 +82,14 @@ void kernel_main() {
     const uint32_t k_offset = k_idx * Kc_tiles;
 #ifdef USE_CUSTOM_MM
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = true;
+    constexpr auto layout = CustomMmDestLayout::DenseSplitAcc;
     constexpr bool finalize = true;
 
     static_assert(M_tiles == 1, "custom_mm partial path requires a single in0 tile row");
     static_assert(k_block_tiles >= 2 && k_block_tiles <= 256 && k_block_tiles % 2 == 0);
     static_assert(Nc_tiles >= 1 && Nc_tiles <= 16);
 
-    custom_mm_block_init_short<transpose, split_acc, dense_packing>(full_in0_cb_id, in1_cb_id, partial_cb_id, Nc_tiles);
+    custom_mm_block_init_short<transpose, layout>(full_in0_cb_id, in1_cb_id, partial_cb_id, Nc_tiles);
     pack_block_contiguous_init(partial_cb_id);
 
     partial_cb.reserve_back(block_num_tiles);
@@ -103,9 +102,9 @@ void kernel_main() {
         in1_cb.wait_front(in1_page_tiles);
         const uint32_t in0_tile = k_offset + kb * k_block_tiles;
         if (kb == num_k_blocks - 1) {
-            custom_mm_block<true, false>(full_in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, Nc_tiles);
+            custom_mm_block<layout, true>(full_in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, Nc_tiles);
         } else {
-            custom_mm_block<false, false>(full_in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, Nc_tiles);
+            custom_mm_block<layout, false>(full_in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, Nc_tiles);
         }
 #ifdef ENABLE_GLOBAL_CB
         // This page has been read in full; release the local alias and let the reader ack it.
@@ -118,7 +117,7 @@ void kernel_main() {
     tile_regs_wait();
     pack_block_contiguous(0, partial_cb_id, Nc_tiles);
     tile_regs_release();
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<layout>(partial_cb_id);
     partial_cb.push_back(block_num_tiles);
 #else
     matmul_block_init(full_in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);

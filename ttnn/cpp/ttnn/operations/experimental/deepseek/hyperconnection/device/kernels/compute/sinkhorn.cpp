@@ -40,11 +40,11 @@ void produce_logits(uint32_t cb_w, uint32_t cb_bias, uint32_t cb_comb, uint32_t 
     cb_wait_front(cb_bias, 1);
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short(cb_w);
+    copy_init(cb_w);
     copy_tile(cb_w, 0, 0);
     binop_with_scalar_tile_init();
     mul_unary_tile(0, scale_bits);
-    copy_tile_to_dst_init_short(cb_bias);
+    copy_init(cb_bias);
     copy_tile(cb_bias, 0, 1);
     add_binary_tile_init();
     add_binary_tile(0, 1, 0);
@@ -93,7 +93,7 @@ void sub_max_exp_mask(uint32_t cb_comb, uint32_t cb_red, uint32_t cb_mask) {
     sub_tiles_bcast_cols(cb_comb, cb_red, 0, 0, 0);
     exp_tile_init();
     exp_tile(0);
-    copy_tile_to_dst_init_short(cb_mask);
+    copy_init(cb_mask);
     copy_tile(cb_mask, 0, 1);
     mul_binary_tile_init();
     mul_binary_tile(0, 1, 0);
@@ -126,7 +126,7 @@ void mul_bcast_recip(uint32_t cb_comb, uint32_t cb_red, bool is_col, uint32_t cb
     }
     if (cb_eps_mask != 0xFFFFFFFF) {
         cb_wait_front(cb_eps_mask, 1);
-        copy_tile_to_dst_init_short(cb_eps_mask);
+        copy_init(cb_eps_mask);
         copy_tile(cb_eps_mask, 0, 1);
         add_binary_tile_init();
         add_binary_tile(0, 1, 0);
@@ -158,7 +158,7 @@ void sinkhorn_tail_in_dest(uint32_t cb_comb, uint32_t cb_out) {
     cb_wait_front(cb_comb, 1);
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short(cb_comb);
+    copy_init(cb_comb);
     copy_tile(cb_comb, 0, 0);
     ckernel::sinkhorn_4x4_init();
     ckernel::sinkhorn_4x4<
@@ -183,7 +183,7 @@ void sinkhorn_tail_in_dest(uint32_t cb_comb, uint32_t cb_out) {
 void copy_to_out(uint32_t cb_comb, uint32_t cb_out) {
     cb_wait_front(cb_comb, 1);
 
-    copy_tile_to_dst_init_short(cb_comb);
+    copy_init(cb_comb);
     tile_regs_acquire();
     copy_tile(cb_comb, 0, 0);
     tile_regs_commit();

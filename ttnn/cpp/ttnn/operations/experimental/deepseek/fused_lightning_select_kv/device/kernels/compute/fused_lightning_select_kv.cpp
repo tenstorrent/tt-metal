@@ -37,7 +37,7 @@ void kernel_main() {
     static_assert(d_tiles >= 2 && d_tiles <= 256 && d_tiles % 2 == 0, "custom_mm needs an even kt_dim in [2, 256]");
 
     constexpr bool kTransposeKey = true;
-    constexpr bool kSplitAcc = true;
+    constexpr auto kLayout = CustomMmDestLayout::DefaultSplitAcc;
 
     // ---- Dataflow buffers ----
     DataflowBuffer query_rm_dfb(dfb::query_rm);        // consumer <- reader, [Sq * Hi, D] as 8-row row-major strips
@@ -68,7 +68,10 @@ void kernel_main() {
     // Tilize reprogrammed unpack, math and pack; restore the full custom_mm configuration. The SFPU
     // passes below need no init of their own (they only use ADDR_MOD_7, which custom_mm leaves as a
     // no-increment mode), so this is the only init in the kernel after tilize.
-    custom_mm_block_init<kTransposeKey, kSplitAcc>(query_tiled_dfb.get_id(), key_dfb.get_id(), scores_dfb.get_id());
+    // clear_src must stay off: on some cores the SrcB clear corrupts the scores of tokens 0-3 of
+    // the chunk (same cores every run, never with it off).
+    custom_mm_block_init<kTransposeKey, kLayout, DST_ACCUM_MODE, /*clear_src=*/false>(
+        query_tiled_dfb.get_id(), key_dfb.get_id(), scores_dfb.get_id());
 
     // Head weights stay in their bf16 shard: query row j's head h is element j * Hi + h counted from
     // the first tile (the 1x32 tiles are contiguous), read by the SFPU pass as it needs it.
@@ -94,9 +97,7 @@ void kernel_main() {
                 for (uint32_t g = 0; g < num_head_groups; ++g) {
                     // One full D reduction: 8 heads' d_tiles 8x32 tiles against the chunk's d_tiles key
                     // tiles, each key tile transposed so the output columns are indexed by token.
-                    // clear_src must stay off: on some cores the SrcB clear corrupts the scores of
-                    // tokens 0-3 of the chunk (same cores every run, never with it off).
-                    custom_mm_block</*finalize=*/true, /*read_transposed=*/false, /*clear_src=*/false>(
+                    custom_mm_block<kLayout, /*finalize=*/true>(
                         query_tiled_dfb.get_id(),
                         key_dfb.get_id(),
                         first_group_tile + g * d_tiles,
@@ -120,7 +121,7 @@ void kernel_main() {
         }
         key_dfb.pop_front(key_tiles_per_block);
     }
-    custom_mm_block_uninit();
+    custom_mm_block_uninit<kLayout>(scores_dfb.get_id());
 
     indices_dfb.reserve_back(1);
     indices_dfb.push_back(1);
