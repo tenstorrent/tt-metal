@@ -90,6 +90,22 @@
   team: ttnn
   budget_type: e2e
 
+# The block statistics and mixture ops. The statistics' gather across the tensor-parallel
+# axis runs on each box's full mesh, 2x2 on QuietBox 2 and 2x4 on LoudBox; the other arms
+# run on one chip of it.
+- id: bh-ttnn-attn-res-block-unit
+  name: ttnn attn_res_block_stats and attn_res_block_mix unit tests
+  model-name: kimi_k3
+  cmd: pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_stats.py tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_mix.py
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: ttnn
+  budget_type: e2e
+
 # --- unit (fast) ---
 # Fast multi-card legs that the legacy blackhole-multi-card-unit-tests-impl.yaml
 # also runs in post-commit (fast-only: true). Kept in e2e to match the run-count
