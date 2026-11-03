@@ -21,12 +21,8 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
             F_g(S) = A_g @ S + B_g
 
         Transforms are read in complement form, ``E_g = A_g - I``, from packed
-        summaries, as produced by ``summarize_chunk_recurrence``; ``A_g = E_g + I``
-        is formed in FP32. The scan composes in this A form: A, B and the states enter
-        the matrix engine's source registers, which hold FP32 operands at TF32
-        precision, so entry states carry an absolute error of order 2^-11 per
-        composition near the identity, not the precision of E. The transform index is
-        flattened batch-head-group order:
+        summaries, as produced by ``summarize_chunk_recurrence``. The transform
+        index is flattened batch-head-group order:
 
             index = batch_head * groups_per_head + group
 
@@ -35,7 +31,12 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         groups:
 
             entry[0] = initial_state
-            entry[g] = A_{g-1} @ entry[g-1] + B_{g-1}
+            entry[g] = entry[g-1] + E_{g-1} @ entry[g-1] + B_{g-1}
+
+        Transforms compose in complement form, and only the products pass
+        through the matrix engine's source registers (TF32 precision): the state
+        and the B terms are added in FP32 from exact copies, so an entry state
+        keeps FP32 precision however close the transforms are to the identity.
 
         On the rank containing both the chronological beginning and end of the
         sequence, the tail restarts from ``tail_entry_states`` after the intervening

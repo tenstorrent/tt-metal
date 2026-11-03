@@ -23,15 +23,15 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
 
         It is read in complement form, ``E_g = A_g - I``, from slot 0 (head
         transforms) of packed summaries, as produced by
-        ``summarize_chunk_recurrence``; ``A_g = E_g + I`` is formed in FP32. The
-        transform index is flattened batch-head-group order:
+        ``summarize_chunk_recurrence``. The transform index is flattened
+        batch-head-group order:
 
             index = batch_head * groups_per_head + group
 
-        Groups are composed in sequence order:
+        Groups are composed in sequence order, in complement form:
 
-            A_total = A_g @ A_total
-            B_total = A_g @ B_total + B_g
+            E_total = E_g + E_total + E_g @ E_total
+            B_total = B_g + B_total + E_g @ B_total
 
         On the rank containing both the chronological beginning and end of the
         sequence, only the head groups are composed. Other ranks compose all
@@ -44,11 +44,11 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
 
             S_after = S_before + (E @ S_before + B),   E = A_total - I
 
-        Composition runs in A form, ``A = E + I``: A and B enter the matrix engine's
-        source registers, which hold FP32 operands at TF32 precision, so a composed
-        transition close to the identity carries an absolute error of order 2^-11 per
-        composition whatever the size of E. E = A_total - I is then formed in FP32 and
-        rounded once to BF16. A rank with one valid group publishes its summary unchanged.
+        Only the products pass through the matrix engine's source registers (TF32
+        precision); the sums are FP32 additions of exact copies, and the result is
+        rounded once to BF16. So the composed E keeps the precision of one BF16
+        rounding of E however close the transition is to the identity. A rank with
+        one valid group publishes its summary unchanged.
         A rank with no valid group writes the identity map, ``(0, 0)``.
 
         Optional ``actual_end`` is a replicated UINT32 row-major scalar, with

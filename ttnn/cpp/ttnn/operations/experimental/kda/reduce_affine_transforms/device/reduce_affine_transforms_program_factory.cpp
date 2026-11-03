@@ -35,7 +35,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const uint32_t Vt = attrs.value_dim / tt::constants::TILE_WIDTH;
     const uint32_t G = attrs.groups_per_head;
     const uint32_t group_heads = attrs.batch_heads * G;
-    const uint32_t a_tiles = Kt * Kt;
+    const uint32_t e_tiles = Kt * Kt;
     const uint32_t b_tiles = Kt * Vt;
 
     const auto grid = device.compute_with_storage_grid_size();
@@ -45,16 +45,17 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const tt::tt_metal::experimental::KernelSpecName dataflow_kernel_name{"dataflow"};
     const tt::tt_metal::experimental::KernelSpecName compute_kernel_name{"compute"};
 
-    const tt::tt_metal::experimental::DFBSpecName initial_a_dfb_name{"initial_a"};
+    const tt::tt_metal::experimental::DFBSpecName initial_e_dfb_name{"initial_e"};
     const tt::tt_metal::experimental::DFBSpecName initial_b_dfb_name{"initial_b"};
-    const tt::tt_metal::experimental::DFBSpecName stage_a_dfb_name{"stage_a"};
+    const tt::tt_metal::experimental::DFBSpecName stage_e_dfb_name{"stage_e"};
+    const tt::tt_metal::experimental::DFBSpecName stage_e_exact_dfb_name{"stage_e_exact"};
     const tt::tt_metal::experimental::DFBSpecName stage_b_dfb_name{"stage_b"};
-    const tt::tt_metal::experimental::DFBSpecName send_a_dfb_name{"send_a"};
+    const tt::tt_metal::experimental::DFBSpecName send_e_dfb_name{"send_e"};
     const tt::tt_metal::experimental::DFBSpecName send_b_dfb_name{"send_b"};
-    const tt::tt_metal::experimental::DFBSpecName remote_a_dfb_name{"remote_a"};
+    const tt::tt_metal::experimental::DFBSpecName remote_e_dfb_name{"remote_e"};
+    const tt::tt_metal::experimental::DFBSpecName remote_e_exact_dfb_name{"remote_e_exact"};
     const tt::tt_metal::experimental::DFBSpecName remote_b_dfb_name{"remote_b"};
-    const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
-    const tt::tt_metal::experimental::DFBSpecName identity_dfb_name{"identity"};
+    const tt::tt_metal::experimental::DFBSpecName remote_b_exact_dfb_name{"remote_b_exact"};
     const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
@@ -75,22 +76,25 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.summaries.dtype());
     constexpr auto internal_format = tt::DataFormat::Float32;
     const auto output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    // Per-core DFB storage is 6*Kt^2 + 7*Kt*Vt + 1 internal tiles plus 2*max(Kt, Vt) output tiles. Production uses
-    // K=V=128 (Kt=Vt=4); supporting larger shapes may require a separately designed chunked protocol rather than
-    // silently assuming this footprint fits every architecture's usable L1. Stage and send buffers are double-buffered
-    // so compute can produce the next prefix while the current one is used.
+    // Compute composes in complement form: E' = E2 + E1 + E2 @ E1 and B' = B2 + B1 + E2 @ B1. The product operands E2,
+    // E1 and B1 are read through source registers; the addends E2, E1, B2 and B1 unpack to DST from FP32 copies, so E
+    // and B have exact copies wherever both roles need them. Per-core DFB storage is 8*Kt^2 + 6*Kt*Vt internal tiles
+    // plus the Kt^2 + Kt*Vt summary tiles and 2*max(Kt, Vt) output tiles: 976 KiB with BF16 summaries at production
+    // K=V=128 (Kt=Vt=4). Larger shapes may require a separately designed chunked protocol rather than silently assuming
+    // this footprint fits every architecture's usable L1. Stage and send buffers are double-buffered so compute can
+    // produce the next prefix while the current one is used.
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
-        make_dfb(initial_a_dfb_name, a_tiles, summary_format),
+        make_dfb(initial_e_dfb_name, e_tiles, summary_format),
         make_dfb(initial_b_dfb_name, b_tiles, summary_format),
-        make_dfb(stage_a_dfb_name, 2 * a_tiles, internal_format),
+        make_dfb(stage_e_dfb_name, 2 * e_tiles, internal_format),
+        make_dfb(stage_e_exact_dfb_name, 2 * e_tiles, internal_format),
         make_dfb(stage_b_dfb_name, 2 * b_tiles, internal_format),
-        make_dfb(send_a_dfb_name, 2 * a_tiles, internal_format),
+        make_dfb(send_e_dfb_name, 2 * e_tiles, internal_format),
         make_dfb(send_b_dfb_name, 2 * b_tiles, internal_format),
-        make_dfb(remote_a_dfb_name, a_tiles, internal_format),
+        make_dfb(remote_e_dfb_name, e_tiles, internal_format),
+        make_dfb(remote_e_exact_dfb_name, e_tiles, internal_format),
         make_dfb(remote_b_dfb_name, b_tiles, internal_format),
-        make_dfb(scratch_dfb_name, b_tiles, internal_format),
-        // The FP32 identity tile the publishing group subtracts to form E = A - I, seeded by the dataflow kernel.
-        make_dfb(identity_dfb_name, 1, internal_format),
+        make_dfb(remote_b_exact_dfb_name, b_tiles, internal_format),
         // Published [E | B] tile rows (Kt or Vt tiles each), double-buffered toward the packed output.
         make_dfb(output_dfb_name, 2 * std::max(Kt, Vt), output_format),
     };
@@ -98,9 +102,11 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
     // receiver select different halves and silently corrupts the reduction.
     for (const auto& dfb : dfbs) {
-        if (dfb.unique_id == remote_a_dfb_name || dfb.unique_id == remote_b_dfb_name) {
+        const bool e_mailbox = dfb.unique_id == remote_e_dfb_name || dfb.unique_id == remote_e_exact_dfb_name;
+        const bool b_mailbox = dfb.unique_id == remote_b_dfb_name || dfb.unique_id == remote_b_exact_dfb_name;
+        if (e_mailbox || b_mailbox) {
             TT_FATAL(
-                dfb.num_entries == (dfb.unique_id == remote_a_dfb_name ? a_tiles : b_tiles),
+                dfb.num_entries == (e_mailbox ? e_tiles : b_tiles),
                 "reduce_affine_transforms: remotely addressed mailbox {} must hold exactly one block",
                 *dfb.unique_id);
         }
@@ -114,19 +120,21 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         .dfb_bindings =
             {
                 tt::tt_metal::experimental::DFBBinding{
-                    initial_a_dfb_name, "initial_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    initial_e_dfb_name, "initial_e", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     initial_b_dfb_name, "initial_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
-                    send_a_dfb_name, "send_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    send_e_dfb_name, "send_e", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     send_b_dfb_name, "send_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
-                    remote_a_dfb_name, "remote_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    remote_e_dfb_name, "remote_e", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    remote_e_exact_dfb_name, "remote_e_exact", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     remote_b_dfb_name, "remote_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
-                    identity_dfb_name, "identity", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    remote_b_exact_dfb_name, "remote_b_exact", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
             },
@@ -149,15 +157,18 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
 
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     auto& unpack_modes = compute_hw.unpack_modes;
-    for (const auto& name :
-         {stage_a_dfb_name, stage_b_dfb_name, remote_a_dfb_name, remote_b_dfb_name, scratch_dfb_name}) {
+    // Matmul operands go through source registers; addends, and FP32 summaries (only ever copied), enter DST
+    // losslessly.
+    for (const auto& name : {stage_e_dfb_name, remote_e_dfb_name, remote_b_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
-    // The identity enters DST losslessly for the FP32 subtraction.
-    unpack_modes[identity_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
+    for (const auto& name :
+         {stage_e_exact_dfb_name, stage_b_dfb_name, remote_e_exact_dfb_name, remote_b_exact_dfb_name}) {
+        unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToDest;
+    }
     if (summary_format == tt::DataFormat::Float32) {
-        unpack_modes[initial_a_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
-        unpack_modes[initial_b_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
+        unpack_modes[initial_e_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
+        unpack_modes[initial_b_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
     }
 
     tt::tt_metal::experimental::KernelSpec compute{
@@ -169,31 +180,33 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         .dfb_bindings =
             {
                 tt::tt_metal::experimental::DFBBinding{
-                    initial_a_dfb_name, "initial_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    initial_e_dfb_name, "initial_e", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     initial_b_dfb_name, "initial_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
-                    stage_a_dfb_name, "stage_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    stage_e_dfb_name, "stage_e", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
-                    stage_a_dfb_name, "stage_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    stage_e_dfb_name, "stage_e", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    stage_e_exact_dfb_name, "stage_e_exact", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    stage_e_exact_dfb_name, "stage_e_exact", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     stage_b_dfb_name, "stage_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     stage_b_dfb_name, "stage_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
-                    send_a_dfb_name, "send_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    send_e_dfb_name, "send_e", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     send_b_dfb_name, "send_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
-                    remote_a_dfb_name, "remote_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    remote_e_dfb_name, "remote_e", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    remote_e_exact_dfb_name, "remote_e_exact", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     remote_b_dfb_name, "remote_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
-                    scratch_dfb_name, "scratch", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    scratch_dfb_name, "scratch", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    identity_dfb_name, "identity", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    remote_b_exact_dfb_name, "remote_b_exact", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },

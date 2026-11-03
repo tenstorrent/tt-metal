@@ -45,7 +45,7 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     kda_factory_detail::check_fp32_dest_acc(
-        attrs.compute_kernel_config, operation_name, "A = E + I is formed in FP32 DST");
+        attrs.compute_kernel_config, operation_name, "complement-form states are summed in FP32 DST");
 
     TT_FATAL(
         summary.transforms == attrs.batch_heads * attrs.groups_per_head && summary.key_dim == attrs.key_dim &&
