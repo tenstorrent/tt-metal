@@ -31,8 +31,8 @@ struct EthTxqLinkTransport {
     static FORCE_INLINE bool is_busy() { return internal_::eth_txq_is_busy(TXQ_ID); }
 
     // Assumes !is_busy() -- PLEASE CHECK BEFORE CALLING
-    // The txq only sends whole 16B words and drops a partial trailing one, so round num_bytes up.
     static FORCE_INLINE void send_packet(uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+        // The txq drops a partial trailing 16B word.
         internal_::eth_send_packet_bytes_unsafe(
             TXQ_ID, src_addr, dest_addr, align_power_of_2(num_bytes, ETH_WORD_SIZE_BYTES));
     }
