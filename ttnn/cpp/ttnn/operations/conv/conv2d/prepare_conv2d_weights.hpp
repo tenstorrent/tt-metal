@@ -144,7 +144,8 @@ struct Conv2dWeightsBiasPrepConfig {
         bool full_inner_dim_ = false,
         bool enable_activation_reuse_ = false,
         bool coalesce_1d_depthwise_kw_reads_ = false,
-        std::array<uint32_t, 2> stride_ = {1, 1}) :
+        std::array<uint32_t, 2> stride_ = {1, 1},
+        uint32_t unfolded_input_channels_ = 0) :
         input_channels_alignment(input_channels_alignment_),
         weights_bias_dtype(weights_bias_dtype_),
         weight_block_h_ntiles(weight_block_h_ntiles_),
@@ -162,7 +163,8 @@ struct Conv2dWeightsBiasPrepConfig {
         coalesce_1d_depthwise_kw_reads(coalesce_1d_depthwise_kw_reads_),
         stride(stride_),
         interleaved_mm_conv(interleaved_mm_conv),
-        out_channels(out_channels_) {}
+        out_channels(out_channels_),
+        unfolded_input_channels(unfolded_input_channels_) {}
 
     // Common parameters
     const uint32_t input_channels_alignment;
@@ -190,6 +192,8 @@ struct Conv2dWeightsBiasPrepConfig {
     const bool interleaved_mm_conv;
     // Output channels (mandatory)
     const uint32_t out_channels;
+    // Activation input channels before kernel-stride folding (0 if unknown)
+    const uint32_t unfolded_input_channels;
 
     static constexpr auto attribute_names = std::make_tuple(
         "input_channels_alignment",
@@ -209,7 +213,8 @@ struct Conv2dWeightsBiasPrepConfig {
         "coalesce_1d_depthwise_kw_reads",
         "stride",
         "interleaved_mm_conv",
-        "out_channels");
+        "out_channels",
+        "unfolded_input_channels");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->input_channels_alignment),
@@ -229,7 +234,8 @@ struct Conv2dWeightsBiasPrepConfig {
             std::cref(this->coalesce_1d_depthwise_kw_reads),
             std::cref(this->stride),
             std::cref(this->interleaved_mm_conv),
-            std::cref(this->out_channels));
+            std::cref(this->out_channels),
+            std::cref(this->unfolded_input_channels));
     }
 };
 
