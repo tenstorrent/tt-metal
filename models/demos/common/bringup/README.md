@@ -141,6 +141,10 @@ falls back.
   ab_rungs: [last, s56320]   # optional
 ```
 
+On accept, ab.change becomes the setting's shipped default (F104). For a switch-only pick, an ablation whose value
+the owner picks later from several tables, set `ab.keep_default: true`: the accept commits the switch value and the
+defaults stay (F241).
+
 ## Steps TTNN has no op for (F46)
 
 An implement agent that finds no TTNN op, composition or fork for a component step may defer it to op-gen
