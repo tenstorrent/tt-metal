@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pipelined expert dispatch and output compaction for the serial 1024-row prefill MoE group.
 
-Same pages, bytes and output as prefill_hybrid's COMPACT1024: for every (route, 32-row output
-tile) the BFP8 source tiles of all rows owned by this rank are read in one batch (one barrier per
-output tile instead of one per row), then the rows are assembled exactly as before. The output tile
-is cleared with word stores. Dispatch: one pass over (row, route) instead of one per owned expert, and
-matched rows moved in batches behind one barrier. Toggles (default on): QWEN_PREFILL_COMPACT_PIPE=0 and
-QWEN_PREFILL_DISPATCH_PIPE=0 restore the serial kernels.
+Dispatch: one pass over (row, route) instead of one per owned expert, matched rows moved in batches
+behind one barrier, and an inverse map inverse[e][packed] = row * 16 + route written next to the
+mapping. Compaction (80 column workers): reads counts and the inverse map instead of every token's
+ids/scores/mapping (the per-row metadata reads of all 80 workers hit the same DRAM pages), reads each
+touched BFP8 expert-output tile once instead of once per row, places the rows exactly where the
+per-row kernel placed them (mantissa rows as word copies) into all 10*T output tiles held in L1, and
+writes them at the end. Output bytes are unchanged. Toggles (default on):
+QWEN_PREFILL_DISPATCH_PIPE=0 restores the serial dispatch (and with it the serial compaction);
+QWEN_PREFILL_COMPACT_PIPE=0 restores the serial compaction.
 """
 
 import os
@@ -14,7 +17,6 @@ import os
 from .multichip_decoder import _EXPERT_HEADER
 
 SLOT_BYTES = 1088  # one BFP8 tile: 64 exponent bytes + 1024 mantissa bytes
-EXTRA_CB_BYTES = 32 * SLOT_BYTES + 64
 
 
 def compact_pipe_enabled():
@@ -27,58 +29,73 @@ COMPACT1024_PIPE = (
 void kernel_main() {
     constexpr uint32_t N=get_compile_time_arg_val(0),T=(N+31)/32;
     constexpr auto da=TensorAccessorArgs<2>();
-    constexpr auto ia=TensorAccessorArgs<da.next_compile_time_args_offset()>();
-    constexpr auto sa=TensorAccessorArgs<ia.next_compile_time_args_offset()>();
-    constexpr auto ra=TensorAccessorArgs<sa.next_compile_time_args_offset()>();
-    constexpr auto ma=TensorAccessorArgs<ra.next_compile_time_args_offset()>();
-    constexpr auto oa=TensorAccessorArgs<ma.next_compile_time_args_offset()>();
+    constexpr auto ca=TensorAccessorArgs<da.next_compile_time_args_offset()>();
+    constexpr auto va=TensorAccessorArgs<ca.next_compile_time_args_offset()>();
+    constexpr auto ra=TensorAccessorArgs<va.next_compile_time_args_offset()>();
+    constexpr auto oa=TensorAccessorArgs<ra.next_compile_time_args_offset()>();
     const auto down=TensorAccessor(da,get_arg_val<uint32_t>(0));
-    const auto ids=TensorAccessor(ia,get_arg_val<uint32_t>(1));
-    const auto scores=TensorAccessor(sa,get_arg_val<uint32_t>(2));
+    const auto counts=TensorAccessor(ca,get_arg_val<uint32_t>(1));
+    const auto inverse=TensorAccessor(va,get_arg_val<uint32_t>(2));
     const auto rank_tensor=TensorAccessor(ra,get_arg_val<uint32_t>(3));
-    const auto mapping=TensorAccessor(ma,get_arg_val<uint32_t>(4));
-    const auto output=TensorAccessor(oa,get_arg_val<uint32_t>(5));
-    const uint32_t col=get_arg_val<uint32_t>(6);
+    const auto output=TensorAccessor(oa,get_arg_val<uint32_t>(4));
+    const uint32_t col=get_arg_val<uint32_t>(5);
     CircularBuffer cb(0);cb.reserve_back(1);const uint32_t base=cb.get_write_ptr();Noc noc;
-    constexpr uint32_t ib=2176,sb=ib+N*128,mb=sb+N*64,rb=mb+N*128,slots=rb+64,SLOT=1088;
-    for(uint32_t row=0;row<N;++row) {
-        noc.async_read(ids,CoreLocalMem<uint32_t>(base+ib+row*128),128,{.page_id=row},{});
-        noc.async_read(scores,CoreLocalMem<uint32_t>(base+sb+row*64),64,{.page_id=row},{});
-        noc.async_read(mapping,CoreLocalMem<uint32_t>(base+mb+row*128),128,{.page_id=row},{});
+    // [counts 512][offsets 512][inverse entries, each expert 64-byte aligned][ring R tiles][10*T output tiles]
+    constexpr uint32_t R=8,TILE=1088,cnt=0,offs=512,inv=1024,ring=inv+(10*N+128*16)*4,outs=ring+R*TILE;
+    noc.async_read(counts,CoreLocalMem<uint32_t>(base+cnt),512,{.page_id=0},{});noc.async_read_barrier();
+    auto count=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+cnt);
+    auto offset=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+offs);
+    uint32_t total=0;
+    for(uint32_t e=0;e<128;++e) {
+        offset[e]=total;
+        const uint32_t bytes=(count[e]*4+63)/64*64;
+        if(bytes)noc.async_read(inverse,CoreLocalMem<uint32_t>(base+inv+total*4),bytes,{.page_id=e},{});
+        total+=bytes/4;
     }
-    noc.async_read(rank_tensor,CoreLocalMem<uint32_t>(base+rb),4,{.page_id=0},{});noc.async_read_barrier();
-    const uint32_t rank=*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+rb);
-    auto id=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+ib);
-    auto score=reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base+sb);
-    auto map=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+mb);
-    auto out=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+1088);
-    auto out_words=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+1088);
-    uint32_t rows[32],packs[32];
-    for(uint32_t route=0;route<10;++route)for(uint32_t tile=0;tile<T;++tile) {
-        uint32_t count=0;
-        for(uint32_t row=tile*32;row<N && row<(tile+1)*32;++row) {
-            const uint32_t e=id[row*32+route];ASSERT(e<512);
-            if(e/128!=rank || score[row*32+route]==0)continue;
-            const uint32_t packed=map[row*32+route];ASSERT(packed<1024);
-            noc.async_read(down,CoreLocalMem<uint32_t>(base+slots+count*SLOT),1088,{.page_id=((e%128)*32+packed/32)*80+col},{});
-            rows[count]=row;packs[count]=packed;++count;
-        }
-        for(uint32_t i=0;i<272;++i)out_words[i]=0;
+    ASSERT(total<=10*N+128*16);
+    auto out_words=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs);
+    for(uint32_t i=0;i<10*T*TILE/4;++i)out_words[i]=0;
+    auto out=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+outs);
+    noc.async_read_barrier();
+    // inverse[e][packed] = token row * 16 + route, written by the dispatch kernel for exactly the
+    // (row, route) pairs the per-row kernel compacted. Every touched expert-output tile is read once.
+    uint32_t pe[R],pb[R],n=0;
+    auto drain=[&]() {
         noc.async_read_barrier();
-        for(uint32_t n=0;n<count;++n) {
-            const uint32_t row=rows[n],packed=packs[n];
-            auto src=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+slots+n*SLOT);
-            for(uint32_t side=0;side<2;++side) {
-                const uint32_t sf=(packed%32/16)*2+side,df=(row%32/16)*2+side;
-                out[df*16+row%16]=src[sf*16+packed%16];
-                for(uint32_t j=0;j<16;++j)out[64+df*256+(row%16)*16+j]=src[64+sf*256+(packed%16)*16+j];
+        for(uint32_t k=0;k<n;++k) {
+            auto src=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+ring+k*TILE);
+            auto entries=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+inv+offset[pe[k]]*4);
+            const uint32_t first=pb[k]*32,last=first+32<count[pe[k]]?first+32:count[pe[k]];
+            for(uint32_t packed=first;packed<last;++packed) {
+                const uint32_t v=entries[packed],row=v/16,route=v%16,tile=route*T+row/32;
+                for(uint32_t side=0;side<2;++side) {
+                    const uint32_t sf=(packed%32/16)*2+side,df=(row%32/16)*2+side;
+                    out[tile*TILE+df*16+row%16]=src[sf*16+packed%16];
+                    // 16 mantissa bytes, 16-byte aligned on both sides: four word copies.
+                    auto dw=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs+tile*TILE+64+df*256+(row%16)*16);
+                    auto sw=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+ring+k*TILE+64+sf*256+(packed%16)*16);
+                    dw[0]=sw[0];dw[1]=sw[1];dw[2]=sw[2];dw[3]=sw[3];
+                }
             }
         }
-        noc.async_write(CoreLocalMem<uint32_t>(base+1088),output,1088,{}, {.page_id=(route*T+tile)*80+col});noc.async_write_barrier();
+        n=0;
+    };
+    for(uint32_t e=0;e<128;++e)for(uint32_t block=0;block*32<count[e];++block) {
+        noc.async_read(down,CoreLocalMem<uint32_t>(base+ring+n*TILE),TILE,{.page_id=(e*32+block)*80+col},{});
+        pe[n]=e;pb[n]=block;
+        if(++n==R)drain();
     }
+    if(n)drain();
+    for(uint32_t route=0;route<10;++route)for(uint32_t tile=0;tile<T;++tile)
+        noc.async_write(CoreLocalMem<uint32_t>(base+outs+(route*T+tile)*TILE),output,TILE,{}, {.page_id=(route*T+tile)*80+col});
+    noc.async_write_barrier();
 }
 """
 )
+
+
+def compact_cb_bytes(n):
+    return 1024 + (10 * n + 128 * 16) * 4 + 8 * SLOT_BYTES + 10 * ((n + 31) // 32) * SLOT_BYTES
 
 
 def dispatch_pipe_enabled():
@@ -89,7 +106,7 @@ DISPATCH_SLOTS = 8
 
 
 def dispatch_cb_bytes(n):
-    return DISPATCH_SLOTS * 5120 + n * 192 + 64 + DISPATCH_SLOTS * 16 + 128 * 16
+    return DISPATCH_SLOTS * 5120 + n * 192 + 64 + DISPATCH_SLOTS * 16 + 128 * 16 + DISPATCH_SLOTS * 16
 
 
 # Same capacity rows, mapping words and counts as prefill_hybrid's DISPATCH1024. One pass over
@@ -107,6 +124,7 @@ void kernel_main() {
     constexpr auto ca=TensorAccessorArgs<ra.next_compile_time_args_offset()>();
     constexpr auto ma=TensorAccessorArgs<ca.next_compile_time_args_offset()>();
     constexpr auto oa=TensorAccessorArgs<ma.next_compile_time_args_offset()>();
+    constexpr auto va=TensorAccessorArgs<oa.next_compile_time_args_offset()>();
     const auto x=TensorAccessor(xa,get_arg_val<uint32_t>(0));
     const auto ids=TensorAccessor(ia,get_arg_val<uint32_t>(1));
     const auto scores=TensorAccessor(sa,get_arg_val<uint32_t>(2));
@@ -114,12 +132,14 @@ void kernel_main() {
     const auto counts=TensorAccessor(ca,get_arg_val<uint32_t>(4));
     const auto mapping=TensorAccessor(ma,get_arg_val<uint32_t>(5));
     const auto output=TensorAccessor(oa,get_arg_val<uint32_t>(6));
-    const uint32_t worker=get_arg_val<uint32_t>(7);
+    const auto inverse=TensorAccessor(va,get_arg_val<uint32_t>(7));
+    const uint32_t worker=get_arg_val<uint32_t>(8);
     CircularBuffer cb(0);cb.reserve_back(1);const uint32_t base=cb.get_write_ptr();Noc noc;
-    constexpr uint32_t SL=8,RB=SL*5120,scratch=RB+N*192,maps=scratch+64,cnts=maps+SL*16,E=(128+W-1)/W;
-    for(uint32_t row=0;row<N;++row) {
-        noc.async_read(ids,CoreLocalMem<uint32_t>(base+RB+row*128),128,{.page_id=row},{});
-        noc.async_read(scores,CoreLocalMem<uint32_t>(base+RB+N*128+row*64),64,{.page_id=row},{});
+    constexpr uint32_t SL=8,RB=SL*5120,scratch=RB+N*192,maps=scratch+64,cnts=maps+SL*16,invs=cnts+128*16,E=(128+W-1)/W;
+    // ids (uint32) and scores (bf16) arrive in TILE layout: one 32-row tile per page.
+    for(uint32_t t=0;t<(N+31)/32;++t) {
+        noc.async_read(ids,CoreLocalMem<uint32_t>(base+RB+t*4096),4096,{.page_id=t},{});
+        noc.async_read(scores,CoreLocalMem<uint32_t>(base+RB+N*128+t*2048),2048,{.page_id=t},{});
     }
     noc.async_read(rank_tensor,CoreLocalMem<uint32_t>(base+scratch),4,{.page_id=0},{});noc.async_read_barrier();
     const uint32_t rank=*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+scratch);
@@ -135,13 +155,18 @@ void kernel_main() {
             const uint32_t map_lane=(proute[i]*4)&15;
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+maps+i*16)[map_lane/4]=pcnt[i];
             noc.async_write(CoreLocalMem<uint32_t>(base+maps+i*16+map_lane),mapping,4,{}, {.page_id=prow[i],.offset_bytes=proute[i]*4});
+            // Inverse map for the compaction kernel: inverse[e][count] = row * 16 + route.
+            const uint32_t inv_lane=(pcnt[i]*4)&15;
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+invs+i*16)[inv_lane/4]=prow[i]*16+proute[i];
+            noc.async_write(CoreLocalMem<uint32_t>(base+invs+i*16+inv_lane),inverse,4,{}, {.page_id=pexp[i],.offset_bytes=pcnt[i]*4});
         }
         noc.async_write_barrier();
         n=0;
     };
     for(uint32_t row=0;row<N;++row)for(uint32_t route=0;route<10;++route) {
-        const uint32_t v=id[row*32+route];
-        if(v/128!=rank || score[row*32+route]==0)continue;
+        const uint32_t at=(row/32)*1024+(row%32/16)*512+(route/16)*256+(row%16)*16+route%16;
+        const uint32_t v=id[at];
+        if(v/128!=rank || score[at]==0)continue;
         const uint32_t e=v%128;
         if(e%W!=worker)continue;
         noc.async_read(x,CoreLocalMem<uint32_t>(base+n*5120),5120,{.page_id=row},{});
@@ -158,3 +183,150 @@ void kernel_main() {
 }
 """
 )
+
+
+def moe_packed_enabled():
+    return os.environ.get("QWEN_PREFILL_MOE_PACKED", "1") != "0"
+
+
+def packed_capacity_rows(n):
+    """Rows of the packed capacity buffer: every routed row once, each expert region 32-row aligned."""
+    return 10 * n + 128 * 32
+
+
+def _variant(source, pairs):
+    for old, new in pairs:
+        if source.count(old) != 1:
+            raise ValueError(f"Expected one kernel fragment: {old}")
+        source = source.replace(old, new)
+    return source
+
+
+# Packed capacity: expert e's rows start at region[e] = sum over e' < e of ceil32(count[e']) instead of
+# e * 1024. The unified FFN reads and writes each expert at its device-side region offset and never
+# touches rows past ceil32(count) (its writer guards row < count_tiles), so 32-row alignment is enough.
+DISPATCH1024_PACKED = _variant(
+    DISPATCH1024_PIPE,
+    [
+        (
+            "    const auto inverse=TensorAccessor(va,get_arg_val<uint32_t>(7));\n    const uint32_t worker=get_arg_val<uint32_t>(8);",
+            "    constexpr auto ga=TensorAccessorArgs<va.next_compile_time_args_offset()>();\n"
+            "    const auto inverse=TensorAccessor(va,get_arg_val<uint32_t>(7));\n"
+            "    const auto region=TensorAccessor(ga,get_arg_val<uint32_t>(8));\n"
+            "    const uint32_t worker=get_arg_val<uint32_t>(9);",
+        ),
+        (
+            "    uint32_t count[E];\n",
+            "    auto reg=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+invs+SL*16);\n"
+            "    for(uint32_t e=0;e<128;++e)reg[e]=0;\n"
+            "    for(uint32_t row=0;row<N;++row)for(uint32_t route=0;route<10;++route) {\n"
+            "        const uint32_t at=(row/32)*1024+(row%32/16)*512+(route/16)*256+(row%16)*16+route%16;\n"
+            "        const uint32_t v=id[at];\n"
+            "        if(v/128==rank && score[at]!=0)reg[v%128]+=1;\n"
+            "    }\n"
+            "    for(uint32_t e=0,acc=0;e<128;++e){const uint32_t c=reg[e];reg[e]=acc;acc+=(c+31)/32*32;}\n"
+            "    if(worker==0){noc.async_write(CoreLocalMem<uint32_t>(base+invs+SL*16),region,512,{}, {.page_id=0});noc.async_write_barrier();}\n"
+            "    uint32_t count[E];\n",
+        ),
+        ("{.page_id=pexp[i]*1024+pcnt[i]}", "{.page_id=reg[pexp[i]]+pcnt[i]}"),
+    ],
+)
+
+
+def dispatch_packed_cb_bytes(n):
+    return dispatch_cb_bytes(n) + 512 + 64
+
+
+COMPACT1024_PACKED = _variant(
+    COMPACT1024_PIPE,
+    [
+        (
+            "    constexpr auto oa=TensorAccessorArgs<ra.next_compile_time_args_offset()>();\n",
+            "    constexpr auto oa=TensorAccessorArgs<ra.next_compile_time_args_offset()>();\n"
+            "    constexpr auto ga=TensorAccessorArgs<oa.next_compile_time_args_offset()>();\n",
+        ),
+        (
+            "    const uint32_t col=get_arg_val<uint32_t>(5);",
+            "    const auto region=TensorAccessor(ga,get_arg_val<uint32_t>(5));\n    const uint32_t col=get_arg_val<uint32_t>(6);",
+        ),
+        (
+            "    noc.async_read(counts,CoreLocalMem<uint32_t>(base+cnt),512,{.page_id=0},{});noc.async_read_barrier();",
+            "    noc.async_read(counts,CoreLocalMem<uint32_t>(base+cnt),512,{.page_id=0},{});\n"
+            "    noc.async_read(region,CoreLocalMem<uint32_t>(base+outs+10*T*TILE),512,{.page_id=0},{});noc.async_read_barrier();\n"
+            "    auto reg=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs+10*T*TILE);",
+        ),
+        ("{.page_id=(e*32+block)*80+col}", "{.page_id=(reg[e]/32+block)*80+col}"),
+    ],
+)
+
+
+def compact_packed_cb_bytes(n):
+    return compact_cb_bytes(n) + 512
+
+
+def moe_group_sizes():
+    """Serial prefill MoE group sizes: 1024, plus 2048 when QWEN_PREFILL_MOE_GROUP=2048 (packed path only).
+
+    4096 is not supported yet: the router/shared-expert linears at 4096 rows exceed L1 (CB 1.78 MB).
+    """
+    largest = int(os.environ.get("QWEN_PREFILL_MOE_GROUP", "1024"))
+    if largest not in (1024, 2048):
+        raise ValueError("QWEN_PREFILL_MOE_GROUP must be 1024 or 2048")
+    if largest > 1024 and not (moe_packed_enabled() and dispatch_pipe_enabled() and compact_pipe_enabled()):
+        raise ValueError("QWEN_PREFILL_MOE_GROUP > 1024 requires the packed, pipelined MoE kernels")
+    return [g for g in (1024, 2048) if g <= largest]
+
+
+def compact_routes_per_pass(n):
+    return max(1, 320 // ((n + 31) // 32))
+
+
+# Larger groups: the L1 output block holds RP routes x T tiles (RP = 320 // T); each pass re-reads the
+# touched expert tiles and places only its routes' rows. Extra compile-time arg: RP (after N).
+COMPACT_GROUP_PACKED = _variant(
+    COMPACT1024_PACKED,
+    [
+        (
+            "    constexpr uint32_t N=get_compile_time_arg_val(0),T=(N+31)/32;\n    constexpr auto da=TensorAccessorArgs<2>();",
+            "    constexpr uint32_t N=get_compile_time_arg_val(0),T=(N+31)/32,RP=get_compile_time_arg_val(1);\n"
+            "    constexpr auto da=TensorAccessorArgs<3>();",
+        ),
+        (
+            "    auto out_words=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs);\n"
+            "    for(uint32_t i=0;i<10*T*TILE/4;++i)out_words[i]=0;\n"
+            "    auto out=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+outs);\n"
+            "    noc.async_read_barrier();",
+            "    auto out_words=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs);\n"
+            "    auto out=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+outs);\n"
+            "    noc.async_read_barrier();\n"
+            "    for(uint32_t r0=0;r0<10;r0+=RP) {\n"
+            "    for(uint32_t i=0;i<RP*T*TILE/4;++i)out_words[i]=0;",
+        ),
+        (
+            "                const uint32_t v=entries[packed],row=v/16,route=v%16,tile=route*T+row/32;",
+            "                const uint32_t v=entries[packed],row=v/16,route=v%16;\n"
+            "                if(route<r0||route>=r0+RP)continue;\n"
+            "                const uint32_t tile=(route-r0)*T+row/32;",
+        ),
+        (
+            "    for(uint32_t route=0;route<10;++route)for(uint32_t tile=0;tile<T;++tile)\n"
+            "        noc.async_write(CoreLocalMem<uint32_t>(base+outs+(route*T+tile)*TILE),output,TILE,{}, {.page_id=(route*T+tile)*80+col});\n"
+            "    noc.async_write_barrier();",
+            "    for(uint32_t route=r0;route<r0+RP&&route<10;++route)for(uint32_t tile=0;tile<T;++tile)\n"
+            "        noc.async_write(CoreLocalMem<uint32_t>(base+outs+((route-r0)*T+tile)*TILE),output,TILE,{}, {.page_id=(route*T+tile)*80+col});\n"
+            "    noc.async_write_barrier();\n"
+            "    }",
+        ),
+        (
+            "    noc.async_read(region,CoreLocalMem<uint32_t>(base+outs+10*T*TILE),512,{.page_id=0},{});noc.async_read_barrier();\n"
+            "    auto reg=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs+10*T*TILE);",
+            "    noc.async_read(region,CoreLocalMem<uint32_t>(base+outs+RP*T*TILE),512,{.page_id=0},{});noc.async_read_barrier();\n"
+            "    auto reg=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs+RP*T*TILE);",
+        ),
+    ],
+)
+
+
+def compact_group_cb_bytes(n):
+    t = (n + 31) // 32
+    return 1024 + (10 * n + 128 * 16) * 4 + 8 * SLOT_BYTES + compact_routes_per_pass(n) * t * SLOT_BYTES + 512

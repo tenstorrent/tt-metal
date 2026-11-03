@@ -16,6 +16,7 @@ import ttnn
 from .gdn_prefill_chunk import PrefillChunkGDN, chunk_prefill_enabled, const_tiles
 from .multichip_decoder import AttentionOutputProjection, MeshOps, MultichipDecoder
 from .prefill_hybrid import forward1024
+from .prefill_moe_compact import moe_group_sizes
 
 
 class _PrefillOps(MeshOps):
@@ -94,7 +95,7 @@ class _RowOutputProjection(AttentionOutputProjection):
 
 class _PrefillDecoder(MultichipDecoder):
     def prefill_forward(self, hidden_states, *, current_positions, slots=None, tokens=None, page_table=None):
-        if self.prefill_hybrid_enabled and hidden_states.shape[2] == 1024:
+        if self.prefill_hybrid_enabled and hidden_states.shape[2] in moe_group_sizes():
             if slots is None or (self.ple is not None and tokens is None):
                 raise ValueError("Hybrid serving prefill requires request slots and PLE token IDs")
             return forward1024(
@@ -252,7 +253,7 @@ class SerialPrefillView:
         self.owner, self.mesh, self.output = owner, owner.mesh, output
         self.buckets = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
         if owner.batch_size == 32:
-            self.buckets.append(1024)
+            self.buckets.extend(moe_group_sizes())
         self.model = _model(owner, self.buckets)
         self.inputs = {
             n: self.model.ops.upload(torch.zeros(1, n, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
@@ -359,7 +360,7 @@ class SerialPrefillView:
                     logical_row=row,
                     physical_slot=slots[row],
                 )
-                if n == 1024:
+                if n >= 1024:
                     physical_chunk.update(
                         non_moe_chunks=[
                             dict(

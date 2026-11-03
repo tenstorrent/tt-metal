@@ -334,6 +334,20 @@ def _from_sm(x, memory_config=None):
     return ttnn.concat([x[:, j : j + 1] for j in range(4)], dim=-1, memory_config=memory_config)
 
 
+def _fast_partial_program(b):
+    """1D multicast over the 11 output tiles of the HC down projection, 40-tile K blocks."""
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(11, 1),
+        in0_block_w=40,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=math.ceil(b / 32),
+        per_core_N=1,
+        fuse_batch=True,
+        mcast_in0=True,
+    )
+
+
 def _sm_prefill(x):
     """Single-request prefill rows ([1,1,S,2560], S > 1) take the stream-major HC implementation."""
     shape = tuple(x.shape)
@@ -480,12 +494,23 @@ class ParallelHyperConnection:
         """
         b = x.shape[-2]
         streams = self.ops.norm(x, self.norm_sm, self.eps)
-        # The default program's K blocking (in0_block_w=2) is required: wider blocks accumulate in the FPU dest
-        # differently and change the result on real (heavy-tailed) activations.
-        partial = self.ops.linear(
-            _from_sm(streams), self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
-        )
+        flat = _from_sm(streams)
+        # The default program's K blocking (in0_block_w=2) is bit-identical to read(); QWEN_FLASH_HC_FAST_PARTIAL
+        # uses 40-tile K blocks (~3x faster, different FPU dest accumulation order: not bit-identical).
+        if os.environ.get("QWEN_FLASH_HC_FAST_PARTIAL", "1") == "1":
+            partial = ttnn.linear(
+                flat,
+                self.read_weight,
+                program_config=_fast_partial_program(b),
+                compute_kernel_config=self.compute,
+                dtype=ttnn.float32,
+            )
+        else:
+            partial = self.ops.linear(
+                flat, self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
+            )
         packed = ttnn.typecast(self.ops.reduce(partial), ttnn.bfloat16)
+        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
         # One K=320 product per stream (same sequential accumulation as the flat projection); the explicit
         # 4x row batch lets the matmul spread over 20 cores (a broadcast in0 runs single-core).
         mix = ttnn.sigmoid(
@@ -497,7 +522,6 @@ class ParallelHyperConnection:
             )
         )
         mixed = ttnn.mean(ttnn.multiply(mix, streams), dim=1, keepdim=True)
-        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
         return self.ops.gather(mixed), ttnn.transpose(inject, 1, 3)
 
     def _lane_mean(self, prod):
@@ -1263,17 +1287,18 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             raise ValueError("decode_forward requires exactly one token per lane")
         return self.prefill_forward(hidden_states, current_positions=current_positions, slots=slots, _decode=True)
 
-    def _route_state(self, slots, positions, *, store):
+    def _route_state(self, slots, positions, *, store, banks=("recurrent", "conv")):
         """Gather/scatter complete raw tiles using device request IDs.
 
         Unique slot IDs within each batch are a caller precondition. Position
         zero initializes the selected lane on gather; scatter updates only the
         selected slot. Banks and work buffers are persistent across replay.
         """
-        for bank, work, tiles, tile_bytes in (
-            (self.recurrent_bank, self.recurrent_state, 12 * 4 * 4, 4096),
-            (self.conv_bank, self.conv_state, 80, 2048),
-        ):
+        routes = {
+            "recurrent": (self.recurrent_bank, self.recurrent_state, 12 * 4 * 4, 4096),
+            "conv": (self.conv_bank, self.conv_state, 80, 2048),
+        }
+        for bank, work, tiles, tile_bytes in (routes[name] for name in banks):
             grid = self.device.compute_with_storage_grid_size()
             coords = [
                 ttnn.CoreCoord(i % grid.x, i // grid.x)
@@ -1318,16 +1343,22 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             raise ValueError("decode_forward_flat expects [1,1,B,2560]")
         self._conv_decode_phase = True
         self.output_sequence = 1
-        if slots is not None:
-            if current_positions is None:
-                raise ValueError("Slot routing requires device current_positions")
-            self._route_state(slots, current_positions, store=False)
-        else:
-            self._reset_fresh_lanes(current_positions)
-        projections = self.ops.linear(flat, self.packed_weight, compute_kernel_config=self.projection_compute)
-        out = self._chunk_body(projections, self.batch_size, 1, flat=True)
-        if slots is not None:
-            self._route_state(slots, current_positions, store=True)
+        direct = slots is not None and os.environ.get("QWEN_FLASH_SLOT_RECURRENCE", "1") == "1"
+        banks = ("conv",) if direct else ("recurrent", "conv")
+        self._decode_slots, self._decode_positions = (slots, current_positions) if direct else (None, None)
+        try:
+            if slots is not None:
+                if current_positions is None:
+                    raise ValueError("Slot routing requires device current_positions")
+                self._route_state(slots, current_positions, store=False, banks=banks)
+            else:
+                self._reset_fresh_lanes(current_positions)
+            projections = self.ops.linear(flat, self.packed_weight, compute_kernel_config=self.projection_compute)
+            out = self._chunk_body(projections, self.batch_size, 1, flat=True)
+            if slots is not None:
+                self._route_state(slots, current_positions, store=True, banks=banks)
+        finally:
+            self._decode_slots = self._decode_positions = None
         return out
 
     def _chunk(self, x):
@@ -1376,8 +1407,17 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             activations=[] if getattr(self, "prefill_log_decay", False) else [ttnn.UnaryOpType.EXP],
         )
         beta = ttnn.typecast(ttnn.sigmoid(ttnn.to_layout(projections[..., 4128:4140], ttnn.TILE_LAYOUT)), ttnn.float32)
-        o, new_state = self._recurrence(q, k, v, g, beta, **({"flat_scalars": True} if flat else {}))
-        o = ttnn.typecast(o, ttnn.bfloat16)
+        direct = (
+            flat
+            and getattr(self, "_decode_slots", None) is not None
+            and os.environ.get("QWEN_FLASH_SLOT_RECURRENCE", "1") == "1"
+        )
+        recurrence_kwargs = {}
+        if flat:
+            recurrence_kwargs["flat_scalars"] = True
+        if direct:
+            recurrence_kwargs.update(slots=self._decode_slots, positions=self._decode_positions, out_bf16=True)
+        o, new_state = self._recurrence(q, k, v, g, beta, **recurrence_kwargs)
         gate = projections[..., 2560:4096]
         if flat:
             # The gated norm indexes per-lane tiles.
@@ -1385,9 +1425,12 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
                 ttnn.reshape(ttnn.to_layout(gate, ttnn.ROW_MAJOR_LAYOUT), (b, 1, 1536)), ttnn.TILE_LAYOUT
             )
         if padded != s:
-            o = ttnn.pad(o, [(0, 0), (0, 0), (0, padded - s), (0, 0)], 0)
             gate = ttnn.pad(gate, [(0, 0), (0, padded - s), (0, 0)], 0)
-        o = ttnn.reshape(o, (b * 12, padded, 128))
+        if not direct:
+            o = ttnn.typecast(o, ttnn.bfloat16)
+            if padded != s:
+                o = ttnn.pad(o, [(0, 0), (0, 0), (0, padded - s), (0, 0)], 0)
+            o = ttnn.reshape(o, (b * 12, padded, 128))
         gated = ttnn.experimental.kda.sigmoid_gated_rms_norm(
             o,
             gate,
@@ -1405,7 +1448,7 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             return self.output_projection.flat(gated)
         return self.output_projection(gated, concatenated=self.output_sequence > 1)
 
-    def _recurrence(self, q, k, v, g, beta, *, flat_scalars=False):
+    def _recurrence(self, q, k, v, g, beta, *, flat_scalars=False, **kwargs):
         b, s, _ = q.shape
         q = self._heads(q, b, s, 4)
         k = self._heads(k, b, s, 4)
@@ -1416,7 +1459,7 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             ttnn.typecast(k, ttnn.float32), weight=self.kscale, epsilon=1e-06 / 128, compute_kernel_config=self.compute
         )
         v = ttnn.typecast(self._heads(v, b, s, 12), ttnn.float32)
-        return _local_recurrence(self, q, k, v, g, beta, flat_scalars=flat_scalars)
+        return _local_recurrence(self, q, k, v, g, beta, flat_scalars=flat_scalars, **kwargs)
 
     def _roll_conv(self, projected, *, flat=False):
         b, s = (self.batch_size, 1) if flat else tuple(projected.shape)[:2]
@@ -1443,29 +1486,36 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
         ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[k], cbs=[cb]))
 
 
-def _local_recurrence(self, q, k, v, g, beta, *, flat_scalars=False):
+def _local_recurrence(self, q, k, v, g, beta, *, flat_scalars=False, slots=None, positions=None, out_bf16=False):
     """Exact token recurrence; prefill keeps FP32 state in aliased local buffers.
 
     flat_scalars: decay/beta are [1,1,B,12] (lane rows) instead of [B,1,12] (lane tiles).
+    slots/positions: decode reads and writes each lane's request slot of the bank directly (a
+    zero state at position 0) instead of the gathered work buffer.
+    out_bf16: decode output as the [B*12, 32, 128] BF16 block (rows 1..31 zero) for the gated norm.
     """
     batch, length = q.shape[0], q.shape[1]
+    slotted = slots is not None
+    if (slotted or out_bf16) and length != 1:
+        raise ValueError("Slot-indexed state and BF16 output are decode-only")
     # Query normalization already applied the scale as its output activation.
     decay = g  # Already exponentiated by the multiply output activation.
     output = ttnn.empty(
-        (batch, 12, length, 128),
-        dtype=ttnn.float32,
+        (batch * 12, 32, 128) if out_bf16 else (batch, 12, length, 128),
+        dtype=ttnn.bfloat16 if out_bf16 else ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=self.device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    final = self.recurrent_state
-    tensors = [q, k, v, decay, beta, self.recurrent_state, output, final]
+    state = self.recurrent_bank if slotted else self.recurrent_state
+    final = state
+    tensors = [q, k, v, decay, beta, state, output, final, slots if slotted else decay, positions if slotted else decay]
     grid = self.device.compute_with_storage_grid_size()
     jobs = batch * 48
     workers = min(jobs, grid.x * grid.y)
     coords = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(workers)]
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
-    args = [int(flat_scalars)]
+    args = [int(flat_scalars), int(slotted), int(out_bf16)]
     for tensor in tensors:
         args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
     assignments = [(i * jobs // workers, (i + 1) * jobs // workers - i * jobs // workers) for i in range(workers)]
@@ -1487,7 +1537,15 @@ def _local_recurrence(self, q, k, v, g, beta, *, flat_scalars=False):
             compile_time_args=args,
             config=ttnn.ReaderConfigDescriptor(),
             runtime_args=[
-                ((c.x, c.y), [*[t.buffer_address() for t in tensors], *job, length])
+                (
+                    (c.x, c.y),
+                    [
+                        *[t.buffer_address() for t in tensors[:8]],
+                        *job,
+                        length,
+                        *[t.buffer_address() for t in tensors[8:]],
+                    ],
+                )
                 for c, job in zip(coords, assignments)
             ],
         ),
@@ -1499,7 +1557,7 @@ def _local_recurrence(self, q, k, v, g, beta, *, flat_scalars=False):
             runtime_args=[((c.x, c.y), [job[1] * length]) for c, job in zip(coords, assignments)],
         ),
     ]
-    sizes = [4, 4, 4, 1, 1, 1, 1, 4, 4, 1, 1, 1, 4, 1, 1]
+    sizes = [4, 4, 4, 1, 1, 1, 1, 4, 4, 1, 1, 1, 4, 1, 2]
     if length > 1:
         sizes.append(1)
     cbs = [
@@ -1607,7 +1665,8 @@ uint32_t off(uint32_t r, uint32_t c) {
 }
 void kernel_main() {
     constexpr bool flat_scalars = get_compile_time_arg_val(0) != 0;
-    constexpr auto qa = TensorAccessorArgs<1>();
+    constexpr bool slotted = get_compile_time_arg_val(1) != 0, out_bf16 = get_compile_time_arg_val(2) != 0;
+    constexpr auto qa = TensorAccessorArgs<3>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
     constexpr auto da = TensorAccessorArgs<va.next_compile_time_args_offset()>();
@@ -1615,6 +1674,8 @@ void kernel_main() {
     constexpr auto sa = TensorAccessorArgs<ba.next_compile_time_args_offset()>();
     constexpr auto oa = TensorAccessorArgs<sa.next_compile_time_args_offset()>();
     constexpr auto fa = TensorAccessorArgs<oa.next_compile_time_args_offset()>();
+    constexpr auto la = TensorAccessorArgs<fa.next_compile_time_args_offset()>();
+    constexpr auto ra = TensorAccessorArgs<la.next_compile_time_args_offset()>();
     const auto q = TensorAccessor(qa, get_arg_val<uint32_t>(0));
     const auto k = TensorAccessor(ka, get_arg_val<uint32_t>(1));
     const auto v = TensorAccessor(va, get_arg_val<uint32_t>(2));
@@ -1624,20 +1685,39 @@ void kernel_main() {
     const auto output = TensorAccessor(oa, get_arg_val<uint32_t>(6));
     const auto final = TensorAccessor(fa, get_arg_val<uint32_t>(7));
     const uint32_t first = get_arg_val<uint32_t>(8), count = get_arg_val<uint32_t>(9);
+    const auto slotrows = TensorAccessor(la, get_arg_val<uint32_t>(11));
+    const auto posrows = TensorAccessor(ra, get_arg_val<uint32_t>(12));
     Noc noc;
     cb_reserve_back(14, 1);
     const uint32_t scratch = get_write_ptr(14);
     auto src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+    auto half = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + 4096);  // BF16 output tile
+    auto meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 6144);  // slot, position
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<6, ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_COL>();
     for (uint32_t job = first; job < first + count; ++job) {
         const uint32_t head=job/4, column=job%4;
         const uint32_t b = head/12, h = head%12;
+        // State tiles: the lane's work buffer, or directly its request slot in the bank.
+        uint32_t spage = head*16;
+        bool fresh = false;
+        if (slotted) {
+            noc.async_read(slotrows, CoreLocalMem<uint32_t>(scratch+6144),128,{.page_id=b},{});
+            noc.async_read(posrows, CoreLocalMem<uint32_t>(scratch+6144+128),128,{.page_id=b},{});
+            noc.async_read_barrier();
+            spage = (meta[0]*12+h)*16;
+            fresh = meta[32] == 0;
+        }
         cb_reserve_back(0,4);
-        for (uint32_t i=0;i<4;++i)
-            noc.async_read(state, CoreLocalMem<uint32_t>(get_write_ptr(0)+i*4096),4096,
-                {.page_id=head*16+i*4+column},{});
-        noc.async_read_barrier();
+        if (fresh) {
+            auto zero = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(0));
+            for (uint32_t i=0;i<4*1024;++i) zero[i]=0;
+        } else {
+            for (uint32_t i=0;i<4;++i)
+                noc.async_read(state, CoreLocalMem<uint32_t>(get_write_ptr(0)+i*4096),4096,
+                    {.page_id=spage+i*4+column},{});
+            noc.async_read_barrier();
+        }
         cb_push_back(0,4);
         // Raw 32-bit replication: no floating point conversion on dataflow RISCs.
         for (uint32_t which=1;which<=3;++which) {
@@ -1677,15 +1757,27 @@ void kernel_main() {
         cb_wait_front(12,4);
         for(uint32_t i=0;i<4;++i)
             noc.async_write(CoreLocalMem<uint32_t>(get_read_ptr(12)+i*4096),final,4096,{},
-                {.page_id=head*16+i*4+column});
+                {.page_id=spage+i*4+column});
         noc.async_write_barrier();
         // Final state is still read by compute until output has been published.
         cb_wait_front(13,1);
         auto out=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(13));
-        for(uint32_t t=0;t<1;++t) {
-            for(uint32_t r=1;r<32;++r) for(uint32_t c=0;c<32;++c) out[t*1024+off(r,c)]=0;
-            noc.async_write(CoreLocalMem<uint32_t>(get_read_ptr(13)+t*4096),output,4096,{},
-                {.page_id=head*4+column});
+        if (out_bf16) {
+            // Row 0 to BF16 (round to nearest even, as ttnn.typecast); rows 1..31 zero. Output
+            // is the [B*12, 32, 128] BF16 block the gated norm consumes: page head*4+column.
+            for(uint32_t i=0;i<1024;++i) half[i]=0;
+            for(uint32_t c=0;c<32;++c) {
+                const uint32_t v=out[off(0,c)];
+                const uint32_t lsb=(v>>16)&1u;
+                half[off(0,c)]=static_cast<uint16_t>((v+0x7fffu+lsb)>>16);
+            }
+            noc.async_write(CoreLocalMem<uint32_t>(scratch+4096),output,2048,{},{.page_id=head*4+column});
+        } else {
+            for(uint32_t t=0;t<1;++t) {
+                for(uint32_t r=1;r<32;++r) for(uint32_t c=0;c<32;++c) out[t*1024+off(r,c)]=0;
+                noc.async_write(CoreLocalMem<uint32_t>(get_read_ptr(13)+t*4096),output,4096,{},
+                    {.page_id=head*4+column});
+            }
         }
         noc.async_write_barrier();
         cb_pop_front(13,1);
@@ -1707,7 +1799,8 @@ uint32_t off(uint32_t r, uint32_t c) {
 }
 void kernel_main() {
     constexpr bool flat_scalars = get_compile_time_arg_val(0) != 0;
-    constexpr auto qa = TensorAccessorArgs<1>();
+    constexpr bool slotted = get_compile_time_arg_val(1) != 0, out_bf16 = get_compile_time_arg_val(2) != 0;
+    constexpr auto qa = TensorAccessorArgs<3>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
     constexpr auto da = TensorAccessorArgs<va.next_compile_time_args_offset()>();
@@ -1715,6 +1808,8 @@ void kernel_main() {
     constexpr auto sa = TensorAccessorArgs<ba.next_compile_time_args_offset()>();
     constexpr auto oa = TensorAccessorArgs<sa.next_compile_time_args_offset()>();
     constexpr auto fa = TensorAccessorArgs<oa.next_compile_time_args_offset()>();
+    constexpr auto la = TensorAccessorArgs<fa.next_compile_time_args_offset()>();
+    constexpr auto ra = TensorAccessorArgs<la.next_compile_time_args_offset()>();
     const auto q = TensorAccessor(qa, get_arg_val<uint32_t>(0));
     const auto k = TensorAccessor(ka, get_arg_val<uint32_t>(1));
     const auto v = TensorAccessor(va, get_arg_val<uint32_t>(2));
