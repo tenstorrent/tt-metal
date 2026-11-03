@@ -2236,16 +2236,15 @@ inline void _topk_xl_local_sort_generic_(std::uint32_t dst_index, bool ascending
 template <std::uint32_t K>
 inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascending)
 {
-    // The sort's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
-
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     if constexpr (K != 2048)
     {
+        // The generic sets and restores ADDR_MOD_6 itself.
         _topk_xl_local_sort_generic_<K>(dst_index, ascending);
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
         return;
     }
+    // The K == 2048 fused path's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
 #if TOPK_XL_FUSED_MACRO
     topk_xl_fused_macro::configure();
 #endif
@@ -2957,16 +2956,15 @@ inline void _topk_xl_rebuild_generic_(std::uint32_t dst_index, bool ascending);
 template <std::uint32_t K, bool fused>
 inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascending)
 {
-    // The sort's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
-
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     if constexpr (K != 2048)
     {
+        // The generic sets and restores ADDR_MOD_6 itself.
         _topk_xl_rebuild_generic_<K, fused>(dst_index, ascending);
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
         return;
     }
+    // The K == 2048 fused path's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
 #if TOPK_XL_FUSED_MACRO
     if constexpr (fused)
     {
@@ -3279,6 +3277,9 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 template <std::uint32_t K, bool fused>
 inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool ascending)
 {
+    // The rebuild's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
+
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     bool dir                                             = ascending;
     constexpr int num_tiles_per_sequence                 = K == 512 ? 1 : K == 1024 ? 1 : 2;
@@ -3538,6 +3539,9 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
 
     // Clear srcA and srcB valids — needed for DST transpose.
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 /**
