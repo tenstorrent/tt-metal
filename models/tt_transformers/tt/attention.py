@@ -927,7 +927,14 @@ class Attention(LightweightModule):
             )
         else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
-            if self.prefetcher is None:
+            # Phi-3.5-mini: the QKV matmul already writes bfloat16 width-sharded, which the op's
+            # sharded factory takes directly; the L1-interleaved copy left it on one core.
+            keep_sharded = (
+                self.args.base_model_name == "Phi-3.5-mini-instruct"
+                and xqkv_fused_sharded.dtype == ttnn.bfloat16
+                and xqkv_fused_sharded.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            )
+            if self.prefetcher is None and not keep_sharded:
                 xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
                 ttnn.deallocate(xqkv_fused_sharded)
             else:
