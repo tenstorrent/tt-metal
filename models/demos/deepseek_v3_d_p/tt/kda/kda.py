@@ -364,8 +364,8 @@ class ttKDA:
                 topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
             )
-            # The SP recurrence's L1 (the relay's landing buffer, the summary's emitted terms, the group scans) needs
-            # what a held staging would take: the fused op then stages per call.
+            # The SP recurrence's L1 (the relay's landing buffer and the summary's emitted terms) needs what a held
+            # staging would take: the fused op then stages per call.
             self._fused_output_staging = (
                 None
                 if self.recurrence.relays_prefix

@@ -79,8 +79,9 @@ _REDUCE_SCATTER_CALLS_PER_TRACE = 20
 _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
-# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 1.182
+# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
+# untraced call also pays its host dispatch, which a block of 10 calls does not fully hide.
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.180, "untraced": 1.208}
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
@@ -111,10 +112,10 @@ _LOUDBOX_ACTUAL_START = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 _L1_SMALL_SIZE = 1152
 
 
-def _perf_reference_ms(layout: str) -> float:
+def _perf_reference_ms(layout: str, traced: bool = True) -> float:
     """Return the wall-time reference for a gated layout on the KDA_PERF_SKU it opts in to."""
     if layout == "SP8xTP4":
-        return _GALAXY_PERF_REFERENCE_MS
+        return _GALAXY_PERF_REFERENCE_MS["traced" if traced else "untraced"]
     skus = sorted(sku for sku, references in _PERF_REFERENCE_MS.items() if layout in references)
     if not skus:
         raise ValueError(f"{layout} has no host wall-time reference")
@@ -380,7 +381,7 @@ def test_synthetic_kimi_k3_perf(
     if layout == "SP8xTP4":
         require_high_power(f"kimi_k3 KDA {layout} perf")
     device_reference_ms = None if report_only else _device_perf_reference_ms(layout)
-    reference_ms = None if report_only or device_reference_ms is not None else _perf_reference_ms(layout)
+    reference_ms = None if report_only or device_reference_ms is not None else _perf_reference_ms(layout, traced)
     sequence, num_heads, actual_start = {
         "SP8xTP4": (PREFILL_CHUNK_TOKENS, None, _GALAXY_ACTUAL_START),
         "SP4xTP2": (_LOUDBOX_SEQUENCE, _LOUDBOX_NUM_HEADS, _LOUDBOX_ACTUAL_START),
