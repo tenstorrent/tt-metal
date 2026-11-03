@@ -8,7 +8,6 @@ import json
 import math
 import os
 import random
-import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -21,8 +20,10 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotate_chunk_tokens
+from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.common.prefill.prefill_chunk import (
     SHUTDOWN_WORD,
+    MediaRef,
     PrefillChunk,
     check_packed_forward_support,
     metadata_size_bytes,
@@ -107,7 +108,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 def _load_env_config(check_budget: bool = True) -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
-    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES
+    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES, MEDIA_MAX_REFS, MEDIA
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
@@ -118,7 +119,11 @@ def _load_env_config(check_budget: bool = True) -> None:
         forward_tokens_budget >= CHUNK_SIZE and forward_tokens_budget % CHUNK_SIZE == 0
     ), f"PREFILL_FORWARD_TOKENS_BUDGET={forward_tokens_budget} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
     FORWARD_CHUNKS = max(forward_tokens_budget // CHUNK_SIZE, 1)
-    CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
+    # Must match the runner's. PREFILL_PRODUCER_MEDIA="start:num_tokens,..." places synthetic images at those prompt
+    # positions of every request; the runner reads them from the metadata as the engine would send them.
+    MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
+    CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
+    MEDIA = [tuple(int(x) for x in m.split(":")) for m in os.environ.get("PREFILL_PRODUCER_MEDIA", "").split(",") if m]
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
     MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
@@ -135,8 +140,18 @@ def _load_env_config(check_budget: bool = True) -> None:
 _load_env_config(check_budget=False)
 
 
-def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
-    return struct.pack("<3I", slot_id, actual_start, actual_end)
+def _media_refs(chunks) -> list:
+    return [
+        MediaRef(k, start, n, stub_media_key(n, i))
+        for k, c in enumerate(chunks)
+        if not c.is_empty
+        for i, (start, n) in enumerate(MEDIA)
+        if start < c.actual_end and start + n > c.actual_start
+    ]
+
+
+def _pack_metadata(chunks) -> bytes:
+    return pack_forward_metadata(chunks, FORWARD_CHUNKS, _media_refs(chunks), MEDIA_MAX_REFS)
 
 
 def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:
@@ -198,19 +213,19 @@ def _forward_payload(pushes: list, pool_of) -> tuple:
         return (
             _h2d_rows(_chunk_slice(pool, p.actual_start, p.actual_isl), p.actual_start),
             _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
-            _pack_metadata(p.slot_id, p.actual_start, p.actual_end),
+            _pack_metadata([PrefillChunk(p.slot_id, p.actual_start, p.actual_end)]),
         )
     chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
     tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
     tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
     rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
-    return rows, None, pack_forward_metadata(chunks, FORWARD_CHUNKS)
+    return rows, None, _pack_metadata(chunks)
 
 
 def _shutdown_payload() -> tuple:
     """(token rows, MTP rows, metadata) of the SHUTDOWN sentinel: every metadata word is SHUTDOWN_WORD."""
     rows = _h2d_forward_rows([[1] * CHUNK_SIZE] * FORWARD_CHUNKS, [0] * FORWARD_CHUNKS)
-    return rows, _mtp_rows([], 0), sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS)
+    return rows, _mtp_rows([], 0), sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS, MEDIA_MAX_REFS)
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
