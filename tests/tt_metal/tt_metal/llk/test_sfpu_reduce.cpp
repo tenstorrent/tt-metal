@@ -289,6 +289,7 @@ std::vector<double> gold_sfpu_reduce(
 
     if (config.axis == ReduceAxis::Scalar) {
         // One product per tile, in tile order.
+        golden.reserve(static_cast<size_t>(rows / kTileHeight) * (cols / kTileWidth));
         for (std::uint32_t tr = 0; tr < rows / kTileHeight; ++tr) {
             for (std::uint32_t tc = 0; tc < cols / kTileWidth; ++tc) {
                 double product = 1.0;
@@ -346,6 +347,7 @@ std::vector<double> extract_written_lane(
     const std::vector<double>& values, const SfpuReduceConfig& config, std::uint32_t rows, std::uint32_t cols) {
     std::vector<double> lane;
     if (config.axis == ReduceAxis::Scalar) {
+        lane.reserve(static_cast<size_t>(rows / kTileHeight) * (cols / kTileWidth));
         for (std::uint32_t tr = 0; tr < rows / kTileHeight; ++tr) {
             for (std::uint32_t tc = 0; tc < cols / kTileWidth; ++tc) {
                 lane.push_back(values[static_cast<size_t>(tr) * kTileHeight * cols + tc * kTileWidth]);

@@ -1865,9 +1865,8 @@ inline void calculate_reduce_max_min_int32_col() {
 // The tile is 8 slices (4 faces x even/odd columns) of 4 SFPLOAD row groups each. Every lane multiplies its share
 // of the tile into LREG0 / LREG4, the two accumulators fold into LREG0, SFPTRANSP brings LREG0's 4 rows onto row 0 of
 // LREG0-3 for a 3-multiply fold, and an SFPSHFT2 butterfly folds the 8 columns. All multiplies stay in the fp32 LREGs,
-// so only the final store narrows; into a 16-bit Dest SFPSTORE truncates toward zero rather than rounding. Each
-// consumer issues at least one instruction after its producer, which covers the 2-cycle SFPMAD latency for the
-// non-SFPMAD consumers that Blackhole does not interlock.
+// so only the final store narrows; into a 16-bit Dest SFPSTORE truncates toward zero rather than rounding. Blackhole
+// interlocks every dependency here except an SFPSHFT2 rotate reading an SFPMUL result, so only that pair has an SFPNOP.
 
 constexpr std::uint32_t SCALAR_PROD_COLUMN_PARITIES = 2;  // even and odd columns of a face, one slice each
 constexpr std::uint32_t SCALAR_PROD_SLICES = SCALAR_PROD_COLUMN_PARITIES * NUM_FACES;
@@ -1909,14 +1908,13 @@ inline void scalar_prod_accumulate_slice(const std::uint32_t slice_addr) {
  */
 inline void scalar_prod_fold_columns() {
     for (std::uint32_t shift = SCALAR_PROD_SFPU_COLUMNS / 2; shift > 0; shift >>= 1) {
+        // The auto-stall misses a rotate reading the SFPMUL that wrote LREG0 (tt-isa SFPMAD.md).
+        TTI_SFPNOP;
         TTI_SFPSHFT2(0 /* imm12 */, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
         for (std::uint32_t step = 1; step < shift; step++) {
-            TTI_SFPNOP;
             TTI_SFPSHFT2(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
         }
-        TTI_SFPNOP;
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
-        TTI_SFPNOP;
     }
 }
 
@@ -1933,17 +1931,13 @@ inline void perform_reduce_scalar_prod() {
     }
 
     // Each lane of LREG0 then holds the product of 32 values.
-    TTI_SFPNOP;
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
-    TTI_SFPNOP;
 
     // Spread LREG0's 4 rows across row 0 of LREG0-3 and fold them.
     TTI_SFPTRANSP(0 /* imm12 */, 0 /* lreg_c */, 0 /* lreg_dest */, 0 /* instr_mod1 */);
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
     TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG2, 0 /* instr_mod1: no negation */);
-    TTI_SFPNOP;
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
-    TTI_SFPNOP;
 
     scalar_prod_fold_columns();
     TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0 /* dest_reg_addr: element [0][0] */);
