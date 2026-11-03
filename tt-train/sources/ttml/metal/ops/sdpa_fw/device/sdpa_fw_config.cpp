@@ -135,16 +135,20 @@ std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t num_available_cores) {
     const uint32_t total_units = num_work_units(shape, chunks, num_available_cores);
     TT_FATAL(num_cores > 0 && num_cores <= total_units, "split_work: need 1..{} cores, got {}", total_units, num_cores);
-    std::vector<CoreItemRuns> per_core_runs;
     if (pairs_causal_chunks(shape, chunks, num_available_cores)) {
         const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
         const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
-        per_core_runs = split_items_paired(num_stacks, q_num_chunks, num_cores);
+        auto per_core_runs = split_items_paired(num_stacks, q_num_chunks, num_cores);
+        // A core gets at most three runs from the paired split (a pair is two runs, consecutive pairs fold
+        // into one), far below the runtime-arg limit. Falling back to the contiguous split would silently
+        // trade the balance away, so a list that does not fit is an error.
+        TT_FATAL(
+            fits_runtime_args(per_core_runs),
+            "SDPA forward: the paired work list of {} cores does not fit the runtime args",
+            num_cores);
+        return per_core_runs;
     }
-    if (per_core_runs.empty() || !fits_runtime_args(per_core_runs)) {
-        per_core_runs = split_items_contiguous(num_work_items(shape, chunks), num_cores);
-    }
-    return per_core_runs;
+    return split_items_contiguous(num_work_items(shape, chunks), num_cores);  // one run per core: always fits
 }
 
 namespace {
