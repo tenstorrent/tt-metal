@@ -4,6 +4,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/gddr_mc.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
+    inc/api/buffer_types.hpp
     inc/api/compile_time_args.h
     inc/api/circular_buffer_constants.h
     inc/api/tile_constants.h
