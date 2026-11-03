@@ -20,6 +20,13 @@ of work, so leaving it out of the trace costs little and keeps a single graph se
 The cache is tiny, 16 positions rounded up to the 64 that flash decode requires, but the
 step count is what matters here: this is a dispatch-bound block, which is exactly what a
 trace fixes.
+
+With `sample_on_device`, the whole frame is one trace instead: the predictor's positions
+are 0 to 15 every frame, so the 16 steps, the 15 heads and their sampling unroll into a
+single graph, and a frame costs one noise write, one replay and one 15-code read. The
+draw is Gumbel-max over the top k: host-drawn Gumbel noise added to the scaled logits,
+then the argmax. That is exactly a sample from the softmax over the top k, which
+`ttnn.sampling` is not: its bf16 cumulative sum never reaches the tail of a 50-way draw.
 """
 
 import torch
@@ -123,6 +130,12 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
     }
 
 
+# The candidates one device top-k call gives the frame trace. A top k of up to this samples
+# on device; ids tied with the k-th value stay in, as upstream's top-k keeps them, as long
+# as the tie ends within these candidates.
+DEVICE_TOP_K_LIMIT = 64
+
+
 class TtCodePredictorCachedDecoder:
     """Prefill two positions, then 14 cached steps, one output head each."""
 
@@ -195,6 +208,9 @@ class TtCodePredictorCachedDecoder:
 
         self.trace_id = None
         self._out = None
+        self._warmed = False
+        # Set by `sample_on_device`: the frame trace's sampling settings and its inputs.
+        self._device_sampling = None
 
     def _single_core_shard(self, column):
         return ttnn.MemoryConfig(
@@ -326,8 +342,13 @@ class TtCodePredictorCachedDecoder:
         hidden = ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.eps)
         return ttnn.slice(hidden, [0, length - 1, 0], [1, length, self.hidden])
 
-    def _step_ops(self, x):
-        """One position through the five layers. The output head stays outside the trace."""
+    def _step_ops(self, x, position=None):
+        """One position through the five layers. The output head stays outside the trace.
+
+        `position` is a (pos, cos, sin) triple of device tensors; the default is the ones
+        `set_position` writes.
+        """
+        pos, cos, sin = position or (self._pos, self._cos, self._sin)
         x = project(x, self.p, self.compute_config)
         for index, layer in enumerate(self.p["layers"]):
             normed = self._norm(x, layer, "input_layernorm")
@@ -339,22 +360,22 @@ class TtCodePredictorCachedDecoder:
             )
             query = ttnn.sharded_to_interleaved(query)
             key = ttnn.sharded_to_interleaved(key)
-            query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), self._cos, self._sin)
-            key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), self._cos, self._sin)
+            query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), cos, sin)
+            key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), cos, sin)
 
             ttnn.experimental.paged_fused_update_cache(
                 self.k_cache[index],
                 ttnn.to_memory_config(key, self._k_shard),
                 self.v_cache[index],
                 ttnn.to_memory_config(value, self._v_shard),
-                update_idxs_tensor=self._pos,
+                update_idxs_tensor=pos,
                 page_table=None,
             )
             attended = ttnn.transformer.scaled_dot_product_attention_decode(
                 query,
                 self.k_cache[index],
                 self.v_cache[index],
-                cur_pos_tensor=self._pos,
+                cur_pos_tensor=pos,
                 scale=self.scale,
                 compute_kernel_config=self.compute_config,
             )
@@ -380,9 +401,18 @@ class TtCodePredictorCachedDecoder:
         while another trace exists is corrupt once that trace runs unless released first.
         Warms at the last cache slot, which no real decode reaches, and leaves the cache
         alone so this can follow `prefill`.
+
+        Once is enough: the programs stay in the device's program cache when the trace is
+        released, so this does nothing again until `forget_programs`. A frame's warmup is
+        a whole eager frame, about 65 ms.
         """
-        self.set_position(self.max_seq - 1)
-        self._step_ops(self._in)
+        if self._warmed:
+            return
+        if self._device_sampling is not None:
+            self._frame_ops()
+        else:
+            self.set_position(self.max_seq - 1)
+            self._step_ops(self._in)
         ttnn.synchronize_device(self.device)
         self._warmed = True
 
@@ -392,10 +422,9 @@ class TtCodePredictorCachedDecoder:
         Every trace must be captured before any of them executes. Capturing a second trace
         after the first has run hangs the device: measured, and it took a board reset.
         """
-        if not getattr(self, "_warmed", False):
-            self.warmup()  # a trace cannot compile new programs
+        self.warmup()  # a trace cannot compile new programs
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-        self._out = self._step_ops(self._in)
+        self._out = self._frame_ops() if self._device_sampling is not None else self._step_ops(self._in)
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
 
@@ -409,7 +438,10 @@ class TtCodePredictorCachedDecoder:
         if self.trace_id is not None:
             ttnn.release_trace(self.device, self.trace_id)
             self.trace_id = None
-            self._warmed = False
+
+    def forget_programs(self):
+        """Note that the device's program cache was cleared, so the next capture warms again."""
+        self._warmed = False
 
     def reset(self):
         """Clear the caches without allocating."""
@@ -446,7 +478,111 @@ class TtCodePredictorCachedDecoder:
         ttnn.copy(ttnn.reshape(row, (1, 1, self.p["input_width"])), self._in)
         ttnn.deallocate(row)
 
-    def generate(self, talker_hidden, first_code, pick=None, watch=None):
+    def sample_on_device(self, temperature, top_k):
+        """Sample every codebook inside one frame trace, with top-k and temperature.
+
+        `top_k` of 1 is argmax. Must be called before `warmup` and `capture`.
+        """
+        if not 0 < top_k <= DEVICE_TOP_K_LIMIT:
+            raise ValueError(f"device sampling takes 0 < top_k <= {DEVICE_TOP_K_LIMIT}, got {top_k}")
+        if temperature <= 0:
+            raise ValueError(f"device sampling needs a positive temperature, got {temperature}")
+        if self.trace_id is not None:
+            raise RuntimeError("release the predictor's trace before changing how it samples")
+        steps = self.groups - 1
+        # Every position's inputs on device, built once: the frame trace reads them directly.
+        positions = []
+        for position in range(self.groups):
+            pos, cos, sin = self._host_position_inputs(position)
+            positions.append(tuple(tensor.to(self.device) for tensor in (pos, cos, sin)))
+        self._device_sampling = {
+            "temperature": float(temperature),
+            "top_k": int(top_k),
+            "positions": positions,
+            "noise": ttnn.from_torch(
+                torch.zeros(1, 1, steps, DEVICE_TOP_K_LIMIT),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            ),
+        }
+        self._warmed = False
+
+    def _sample(self, logits, step):
+        """One code from a head's logits: argmax of the scaled top k plus this step's noise.
+
+        Returns the code as a float32 [1, 1, 1, 1], exact, as every codebook index is far
+        below float32's 2^24. Of tied best scores, which only argmax meets, the lowest id
+        wins, as `torch.argmax` picks. The top k is stable so that id stays a candidate
+        however many logits tie.
+        """
+        settings = self._device_sampling
+        k = settings["top_k"]
+        values, indices = ttnn.topk(ttnn.reshape(logits, (1, 1, 1, -1)), k=DEVICE_TOP_K_LIMIT, dim=-1, stable=True)
+        values = ttnn.typecast(values, ttnn.float32)
+        floor = ttnn.slice(values, [0, 0, 0, k - 1], [1, 1, 1, k])
+        noise = ttnn.slice(settings["noise"], [0, 0, step, 0], [1, 1, step + 1, DEVICE_TOP_K_LIMIT])
+        scores = ttnn.add(ttnn.multiply(values, 1.0 / settings["temperature"]), noise)
+        # Below the k-th value is out; -1e30 rather than -inf keeps the max and eq finite.
+        scores = ttnn.where(ttnn.ge(values, floor), scores, -1e30)
+        hit = ttnn.eq(scores, ttnn.max(scores, dim=-1, keepdim=True))
+        return ttnn.min(ttnn.where(hit, ttnn.typecast(indices, ttnn.float32), 1e9), dim=-1, keepdim=True)
+
+    def _embed_code(self, table, code):
+        """`table`'s row for a code the device holds, shaped as a step input."""
+        index = ttnn.reshape(ttnn.to_layout(ttnn.typecast(code, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), (1, 1))
+        row = ttnn.embedding(index, table, layout=ttnn.TILE_LAYOUT)
+        return ttnn.reshape(row, (1, 1, self.p["input_width"]))
+
+    def _frame_ops(self):
+        """A whole frame from `_in` (the talker's hidden state) and `_index` (codebook 0).
+
+        Returns codebooks 1 to 15 as a uint32 [1, 1, 1, 15].
+        """
+        positions = self._device_sampling["positions"]
+        for cache in self.k_cache + self.v_cache:
+            ttnn.copy(self._zero_cache, cache)
+        self._step_ops(self._in, positions[0])
+        first = ttnn.embedding(self._index, self.p["talker_codec_embedding_device"], layout=ttnn.TILE_LAYOUT)
+        hidden = self._step_ops(ttnn.reshape(first, (1, 1, self.p["input_width"])), positions[1])
+        codes = []
+        for step in range(self.groups - 1):
+            code = self._sample(self._head(hidden, step), step)
+            codes.append(code)
+            if step == self.groups - 2:
+                break
+            hidden = self._step_ops(self._embed_code(self.p["codec_embedding_device"][step], code), positions[2 + step])
+        return ttnn.typecast(ttnn.concat(codes, dim=-1), ttnn.uint32)
+
+    def _generate_on_device(self, talker_hidden, first_code, watch=None, generator=None):
+        settings = self._device_sampling
+        if settings["top_k"] == 1:
+            gumbel = torch.zeros(1, 1, self.groups - 1, DEVICE_TOP_K_LIMIT)
+        else:
+            uniform = torch.rand(1, 1, self.groups - 1, DEVICE_TOP_K_LIMIT, generator=generator)
+            # Clamped off 0 and 1, where the double log is infinite.
+            gumbel = -torch.log(-torch.log(uniform.clamp_(1e-10, 1 - 1e-7)))
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(gumbel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), self._device_sampling["noise"]
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([[int(first_code)]], dtype=torch.int32), dtype=ttnn.uint32), self._index
+        )
+        if isinstance(talker_hidden, ttnn.Tensor):
+            ttnn.copy(ttnn.reshape(talker_hidden, (1, 1, -1)), self._in)
+        else:
+            self._fill_from_host(talker_hidden.reshape(1, 1, -1))
+        if self.trace_id is not None:
+            ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
+            codes = self._out
+        else:
+            codes = self._frame_ops()
+        codes = [int(code) for code in ttnn.to_torch(codes).reshape(-1)]
+        if watch is not None:
+            watch.split("predictor")
+        return codes
+
+    def generate(self, talker_hidden, first_code, pick=None, watch=None, generator=None):
         """Codebooks 1 to 15, from the talker's hidden state and codebook 0.
 
         `talker_hidden` may be the device tensor the talker returned, which is what the pipeline
@@ -454,7 +590,12 @@ class TtCodePredictorCachedDecoder:
         never leaves. The two prompt positions go through the traced step like the rest: a
         per-frame prefill allocated buffers, and buffers allocated under a live trace are corrupt
         once it runs.
+
+        Under `sample_on_device` the settings given there apply instead of `pick`, and
+        `generator` draws the frame's noise, so a seeded one makes frames reproducible.
         """
+        if self._device_sampling is not None:
+            return self._generate_on_device(talker_hidden, first_code, watch, generator)
         charge = watch.split if watch is not None else (lambda name: None)
         self.reset()
         if isinstance(talker_hidden, ttnn.Tensor):

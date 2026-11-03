@@ -109,6 +109,13 @@ def test_e2e(device):
     timings = dict(pipeline.last_timings)
     frames_per_second = again_codes.shape[0] / timings["decode_s"]
 
+    # Teacher forcing feeds codes through the predictor's `pick`, which only its host path
+    # calls; the device path samples inside one trace.
+    pipeline.release()
+    del pipeline
+    pipeline = Qwen3TTSPipeline(
+        device, max_frames=references.MAX_FRAMES, seed=references.SEED, predictor_on_device=False
+    )
     accuracy = BenchmarkProfiler()
     accuracy.start("run")
     accuracy.start("inference_decode")
