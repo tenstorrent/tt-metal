@@ -8,15 +8,17 @@
 // syncs) and the speedup. main's own kernel is not timed here: build this file on the merge-base with
 // run() calling sdpa_fw(query, key, value, sc.mask_type, mask, 0.0F, true, gate) to compare. Measured
 // that way on Blackhole p150b (merge-base 0fff850f3c6 vs this branch, us per launch), this kernel at
-// main's chunking matches main's kernel, so the speedups below are the chunking, not a kernel change:
+// main's chunking matches main's kernel within noise, so the speedups below are the chunking (and, with a
+// mask tensor, the head stacking), not a kernel change:
 //
 //   scenario                    main's kernel   this kernel, main's chunking   default pick
-//   tinyllama_s2048_causal             1656.4                         1656.6          882.7
-//   tinyllama_s4096_causal             6263.0                         6209.3         2571.4
-//   llama8b_s2048_causal               3149.2                         3163.8         1321.9
-//   tinyllama_s2048_nomask             3038.2                         3031.3         1244.7
-//   tinyllama_s2048_arbitrary          4103.9                         3839.1         1861.0
-//   tinyllama_s2048_causal_gate        1704.1                         1718.1          950.1
+//   tinyllama_s2048_causal             1656.4                         1661.6          873.3
+//   tinyllama_s4096_causal             6263.0                         6216.7         2526.8
+//   llama8b_s2048_causal               3149.2                         3159.1         1309.3
+//   tinyllama_s2048_nomask             3038.2                         3012.9         1224.6
+//   tinyllama_s2048_arbitrary          4103.9                         3831.5         1374.8
+//   llama8b_s2048_arbitrary          not timed                         6651.8         2086.9
+//   tinyllama_s2048_causal_gate        1704.1                         1714.9          941.6
 //
 // Usage: sdpa_fw_benchmark [scenario-name-substring] [q_chunk_size,k_chunk_size,heads_per_item ...]
 // Env:   TTML_SDPA_BENCH_WARMUP (default 2), TTML_SDPA_BENCH_MEASURE (default 10)
