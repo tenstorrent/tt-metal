@@ -44,7 +44,7 @@ namespace ckernel
 // The layout is based on dev_mem_map.h hardware definitions and excludes all reserved
 // system memory areas.
 //
-// QUASAR: Significantly larger L1 memory (4 MB) with 8 DM cores and 4 TRISC cores
+// QUASAR: Significantly larger L1 memory (3-4 MB depending on IP variant, see MEM_L1_SIZE) with 8 DM cores and 4 TRISC cores
 // Much more reserved memory for firmware, DM kernels, global/local storage compared to previous generations
 //
 // Memory Region Breakdown (from dev_mem_map.h):

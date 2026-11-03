@@ -36,7 +36,6 @@ namespace {
 
 uint32_t get_prefetch_ringbuffer_size(uint32_t num_cqs_per_core) {
     // Multiple CQs on one core share L1, so shrink the per-CQ ringbuffer so they fit.
-    // When each CQ has its own core, keep the full 1024 KB ringbuffer.
     return num_cqs_per_core > 1 ? 384_KB : 1024_KB;
 }
 

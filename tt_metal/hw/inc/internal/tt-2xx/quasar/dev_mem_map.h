@@ -30,8 +30,6 @@
 /////////////
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
-// Note: MEM_L1_SIZE and MEM_L1_UNCACHED_BASE come from the Quasar IP variant's register headers:
-// they're defined in overlay/overlay_addresses.h.
 
 #define MEM_ETH_BASE 0x0
 // Top 64K is reserved for syseng but host reads/writes from that region
