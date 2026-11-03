@@ -50,7 +50,7 @@ struct ReduceScatterMinimalAsyncParams {
 
     // Compile-time attributes drive the default program-cache reflection hash and the canonical key. The semaphore
     // and barrier addresses are deliberately left out (only the barrier's presence is keyed): callers cycle them, so
-    // Ring/LineReduceScatterMeshWorkloadFactory::override_runtime_arguments re-applies them on every cache hit.
+    // Ring/LineReduceScatterProgramFactory::override_runtime_arguments re-applies them on every cache hit.
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",

@@ -484,17 +484,16 @@ void append_reduce_scatter_common_args(
         common_args.push_back(0u);
     }
     for (const uint32_t semaphore_arg : reduce_scatter_semaphore_args(is_ring, barrier, semaphores)) {
-        // The semaphore addresses are not tensor addresses, so they cannot be bindings. ccl::reduce_scatter parks
-        // its GlobalSemaphores on the WorkloadDescriptor; matmul_reduce_scatter_async and
-        // reduce_scatter_minimal_async take them from the caller and re-apply them on every cache hit.
+        // Semaphore addresses are not tensor addresses, so they cannot be bindings.
         common_args.push_back(
             semaphore_arg);  // smuggled-rta-ok: GlobalSemaphore address, workload-scoped or re-applied
     }
 }
 
 // Cache-hit counterpart of append_reduce_scatter_common_args: re-writes every ReduceScatterCommonArgs slot of the
-// reader and writer by role, so the result does not depend on which tensors aliased on the call that built the
-// program.
+// reader and writer by role. The caller-owned semaphores are not in the program hash, so their slots are stale on a
+// hit. The tensor slots are re-written too: the input or the output may alias the persistent intermediate on the call
+// that built the program, and the bindings resolved on that call cannot tell them apart.
 void apply_reduce_scatter_common_args(
     tt::tt_metal::Program& program,
     const ReduceScatterDescriptorArtifacts& artifacts,
@@ -1183,15 +1182,13 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
     };
 }
 
-void apply_reduce_scatter_semaphore_args(
+void apply_ring_reduce_scatter_semaphore_args(
     tt::tt_metal::Program& program,
     const ReduceScatterDescriptorArtifacts& artifacts,
-    ccl::Topology topology,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::vector<GlobalSemaphore>& semaphore) {
     using Args = ttnn::ccl::ReduceScatterCommonArgs;
-    const auto semaphore_args =
-        reduce_scatter_semaphore_args(topology == ccl::Topology::Ring, barrier_semaphore, semaphore);
+    const auto semaphore_args = reduce_scatter_semaphore_args(/*is_ring=*/true, barrier_semaphore, semaphore);
     for (const size_t kernel_index : {artifacts.reader_kernel_index, artifacts.writer_kernel_index}) {
         auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_index);
         std::copy(semaphore_args.begin(), semaphore_args.end(), common_args.data() + Args::barrier);
@@ -1289,6 +1286,7 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
         is_last_chip);
 
     bool fuse_op = fused_op_signaler.has_value();
+    TT_FATAL(!fuse_op, "reduce_scatter_minimal_async line implementation does not support fusion");
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
@@ -1456,8 +1454,6 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
     // KERNEL CREATION
-    TT_FATAL(!fuse_op, "reduce_scatter_minimal_async line implementation does not support fusion");
-
     // Common Kernel Runtime Args
     const bool sync_with_other_direction = !(is_first_chip || is_last_chip);
     uint32_t fwd_bwd_semaphore_address = add_semaphore(program, sender_worker_core_range_set, 0);
@@ -1862,13 +1858,12 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
         compute_kernel_config);
 }
 
-void apply_reduce_scatter_semaphore_args(
+void apply_ring_reduce_scatter_semaphore_args(
     tt::tt_metal::Program& program,
     const ReduceScatterDescriptorArtifacts& artifacts,
-    ttnn::ccl::Topology topology,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::vector<GlobalSemaphore>& semaphore) {
-    ::ttnn::apply_reduce_scatter_semaphore_args(program, artifacts, topology, barrier_semaphore, semaphore);
+    ::ttnn::apply_ring_reduce_scatter_semaphore_args(program, artifacts, barrier_semaphore, semaphore);
 }
 
 ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program_descriptor(
@@ -1955,30 +1950,7 @@ std::optional<Tensor> ring_penult_intermediate(const std::vector<Tensor>& tensor
     return tensor_return_value.size() > 2 ? std::optional<Tensor>(tensor_return_value.at(2)) : std::nullopt;
 }
 
-using DescriptorBuilder = ReduceScatterDescriptorArtifacts (*)(
-    tt::tt_metal::ProgramDescriptor&,
-    const Tensor&,
-    const Tensor&,
-    const std::optional<Tensor>&,
-    const MeshCoordinate&,
-    const std::optional<MeshCoordinate>&,
-    const std::optional<MeshCoordinate>&,
-    Tensor&,
-    uint32_t,
-    uint32_t,
-    uint32_t,
-    uint32_t,
-    ttnn::ccl::Topology,
-    const std::vector<GlobalSemaphore>&,
-    const std::optional<GlobalSemaphore>&,
-    bool,
-    const std::optional<tt::tt_metal::SubDeviceId>&,
-    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>&,
-    std::optional<uint32_t>,
-    std::optional<uint32_t>,
-    std::optional<uint32_t>,
-    CoreCoord,
-    const std::optional<ttnn::DeviceComputeKernelConfig>&);
+using DescriptorBuilder = decltype(&build_ring_reduce_scatter_minimal_async_program_descriptor);
 
 tt::tt_metal::WorkloadDescriptor build_workload_descriptor(
     DescriptorBuilder build_program_descriptor,
@@ -2054,37 +2026,23 @@ tt::tt_metal::WorkloadDescriptor RingReduceScatterProgramFactory::create_workloa
         tensor_coords);
 }
 
-RingReduceScatterMeshWorkloadFactory::cached_mesh_workload_t RingReduceScatterMeshWorkloadFactory::create_mesh_workload(
-    const ReduceScatterMinimalAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ReduceScatterMinimalAsyncInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    return descriptor_adapter_t::create_mesh_workload(
-        operation_attributes, tensor_coords, tensor_args, tensor_return_value);
-}
-
-void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+void RingReduceScatterProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const ReduceScatterMinimalAsyncParams& operation_attributes,
     const ReduceScatterMinimalAsyncInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    // Tensor addresses in the per-core runtime args and tensor-backed CBs.
-    descriptor_adapter_t::apply_descriptor(cached_workload, operation_attributes, tensor_args, tensor_return_value);
-
+    std::vector<Tensor>& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
     // The penult intermediate is reallocated per invocation like the intermediate, so it is re-published too.
-    const auto penult_intermediate = ring_penult_intermediate(tensor_return_value);
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        ::ttnn::apply_reduce_scatter_common_args(
-            program,
-            kRingReduceScatterKernels,
-            /*is_ring=*/true,
-            operation_attributes.barrier_semaphore,
-            operation_attributes.semaphore,
-            tensor_args.input_tensor,
-            tensor_return_value.at(0),
-            tensor_return_value.at(1),
-            penult_intermediate);
-    }
+    ::ttnn::apply_reduce_scatter_common_args(
+        program,
+        kRingReduceScatterKernels,
+        /*is_ring=*/true,
+        operation_attributes.barrier_semaphore,
+        operation_attributes.semaphore,
+        tensor_args.input_tensor,
+        tensor_return_value.at(0),
+        tensor_return_value.at(1),
+        ring_penult_intermediate(tensor_return_value));
 }
 
 tt::tt_metal::WorkloadDescriptor LineReduceScatterProgramFactory::create_workload_descriptor(
@@ -2102,39 +2060,25 @@ tt::tt_metal::WorkloadDescriptor LineReduceScatterProgramFactory::create_workloa
         tensor_coords);
 }
 
-LineReduceScatterMeshWorkloadFactory::cached_mesh_workload_t LineReduceScatterMeshWorkloadFactory::create_mesh_workload(
-    const ReduceScatterMinimalAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ReduceScatterMinimalAsyncInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    return descriptor_adapter_t::create_mesh_workload(
-        operation_attributes, tensor_coords, tensor_args, tensor_return_value);
-}
-
-void LineReduceScatterMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+void LineReduceScatterProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const ReduceScatterMinimalAsyncParams& operation_attributes,
     const ReduceScatterMinimalAsyncInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
     TT_FATAL(
         operation_attributes.topology == ttnn::ccl::Topology::Linear,
-        "LineReduceScatterMeshWorkloadFactory expects Linear topology");
-
-    // Tensor addresses in the per-core runtime args and tensor-backed CBs.
-    descriptor_adapter_t::apply_descriptor(cached_workload, operation_attributes, tensor_args, tensor_return_value);
-
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        ::ttnn::apply_reduce_scatter_common_args(
-            program,
-            kLineReduceScatterKernels,
-            /*is_ring=*/false,
-            operation_attributes.barrier_semaphore,
-            operation_attributes.semaphore,
-            tensor_args.input_tensor,
-            tensor_return_value.at(0),
-            tensor_return_value.at(1),
-            /*penult=*/std::nullopt);
-    }
+        "LineReduceScatterProgramFactory expects Linear topology");
+    ::ttnn::apply_reduce_scatter_common_args(
+        program,
+        kLineReduceScatterKernels,
+        /*is_ring=*/false,
+        operation_attributes.barrier_semaphore,
+        operation_attributes.semaphore,
+        tensor_args.input_tensor,
+        tensor_return_value.at(0),
+        tensor_return_value.at(1),
+        /*penult=*/std::nullopt);
 }
 
 }  // namespace ttnn::experimental::prim

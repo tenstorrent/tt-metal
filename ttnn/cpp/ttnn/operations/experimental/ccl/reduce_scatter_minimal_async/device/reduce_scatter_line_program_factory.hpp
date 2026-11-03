@@ -7,14 +7,16 @@
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
-#include "reduce_scatter_minimal_async_descriptor_adapter.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+
+#include <optional>
+#include <vector>
 
 namespace ttnn::experimental::prim {
 
@@ -25,32 +27,16 @@ struct LineReduceScatterProgramFactory {
         const ReduceScatterMinimalAsyncInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
-};
 
-// The caller-owned GlobalSemaphores are not part of the program hash (see ReduceScatterMinimalAsyncParams), so
-// override_runtime_arguments re-applies them on every cache hit. It re-writes the whole common-args block by role,
-// tensors included: the input or the output may alias the persistent intermediate on the call that built the
-// program, and the bindings resolved on that call cannot tell them apart.
-struct LineReduceScatterMeshWorkloadFactory {
-    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
-        detail::ReduceScatterMinimalAsyncDescriptorAdapterOperation>::
-        DescriptorMeshWorkloadAdapter<LineReduceScatterProgramFactory>;
-    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const ReduceScatterMinimalAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
+    // Called on every cache hit after the buffer bindings are applied. Re-applies the hash-excluded caller-owned
+    // GlobalSemaphores (see ReduceScatterMinimalAsyncParams) and re-writes the tensor slots of the common args by role.
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const ReduceScatterMinimalAsyncParams& operation_attributes,
         const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate = std::nullopt);
 };
-
-static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<LineReduceScatterMeshWorkloadFactory>);
 
 ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program_descriptor(
     tt::tt_metal::ProgramDescriptor& desc,

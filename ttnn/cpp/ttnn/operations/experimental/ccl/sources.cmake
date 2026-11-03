@@ -124,7 +124,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_common/reduce_scatter_validate_utils.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
-    reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_descriptor_adapter.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
     reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
