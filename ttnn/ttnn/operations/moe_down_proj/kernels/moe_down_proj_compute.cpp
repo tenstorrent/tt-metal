@@ -3,7 +3,8 @@
 
 // moe_down_proj compute. Per wave:
 //   open_partials: one reserve of the nominal fp32 partials block (core_row_tiles_max x core_n_tiles).
-//   accumulate_round (per K round): one matmul_block per expert sub-block of this core's rows,
+//   accumulate_round (per K round), core_n_tiles <= 4: moe_down_proj_accumulate.h (raw LLK, same tiles and order).
+//   accumulate_round (per K round), wider rows: one matmul_block per expert sub-block of this core's rows,
 //     in0 = the sub-block's x rows (popped per call), in1 = the expert's w chunk (slot e of the round, transposed
 //     tiles, caller-managed cumulative wait), packed TileRowMajor with packer L1 accumulation into partials rows
 //     [r0, r0 + rows) (out_base_offset). A sub-block whose rows don't divide the preferred subblock height is cut
@@ -22,6 +23,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "moe_down_proj_plan.h"
+#include "moe_down_proj_accumulate.h"
 
 namespace {
 
@@ -124,7 +126,10 @@ void kernel_main() {
             }
         }
 
-        {
+        if constexpr (moe_accumulate::fits<core_n_tiles>) {
+            moe_accumulate::accumulate_wave<k_block_tiles, num_k_rounds, core_n_tiles, core_row_tiles_max>(
+                x_buf, w_buf, plan, row_lo, row_hi, my_rows, last_slot, cb_x_round, cb_w_round, cb_partials);
+        } else {
             MaybeDeviceZoneScope("compute_accumulate");
             for (uint32_t round = 0; round < num_k_rounds; ++round) {
                 const bool seeded = round > 0;
