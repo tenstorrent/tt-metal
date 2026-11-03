@@ -280,7 +280,9 @@ def launch_done_address() -> int | None:
 
 
 def host_signal_address(slot: int) -> int | None:
-    """Address of host signal slot, or None when this target signals through L1 only."""
+    """Quasar emulator and RTL simulator: the cluster control register the TRISC at mailbox word `slot` signals done
+    in. None elsewhere: ttsim keeps the L1 mailboxes, and Wormhole and Blackhole silicon use launch_done_address().
+    """
     if get_chip_architecture() != ChipArchitecture.QUASAR:
         return None
     # The emulator models the cluster control registers; ttsim (a shared library) does not
@@ -399,25 +401,20 @@ def reset_mailboxes(location: str = "0,0"):
     """Reset all core mailboxes (Unpacker, Math, Packer, Sfpu for Quasar, Unpacker, Math, Packer for Wormhole/Blackhole) before each test."""
 
     # Use 0xA3, because it's a non-zero value that we don't use anywhere else - it's good for triaging hangs.
+    MAILBOX_RESET = 0xA3
     MAILBOX_START_BLOCK = Mailboxes.Unpacker.value
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        write_words_to_device(
-            location=location,
-            addr=MAILBOX_START_BLOCK,
-            data=[0xA3] * len(Mailboxes),  # All 4 TRISC mailboxes on Quasar
-        )
-        for slot in range(4):
-            addr = host_signal_address(slot)
-            if addr is not None:
-                write_words_to_device(
-                    location=location, addr=addr, data=[0xA3], safe_mode=False
-                )
-    else:
-        write_words_to_device(
-            location=location,
-            addr=MAILBOX_START_BLOCK,
-            data=[0xA3, 0xA3, 0xA3],  # All 3 TRISC mailboxes on Wormhole/Blackhole
-        )
+    # All 4 TRISC mailboxes on Quasar, all 3 on Wormhole/Blackhole
+    write_words_to_device(
+        location=location,
+        addr=MAILBOX_START_BLOCK,
+        data=[MAILBOX_RESET] * len(Mailboxes),
+    )
+    for slot in range(len(Mailboxes)):
+        addr = host_signal_address(slot)
+        if addr is not None:
+            write_words_to_device(
+                location=location, addr=addr, data=[MAILBOX_RESET], safe_mode=False
+            )
 
 
 def pull_coverage_stream_from_tensix(
