@@ -707,11 +707,12 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_binop_scalar": "perf_sfpu_binop_scalar"},
     },
     "perf_sfpu_ema": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "alpha_bits",
             "approx_mode",
             "beta_bits",
+            "binary_init_before_ema",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
