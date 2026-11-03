@@ -64,8 +64,6 @@ struct ProgramSpec {
     // - Each node in the inferred placements uses at most 32 DFB slots on Wormhole, 64 on Blackhole,
     //   or 32 on Quasar. Placement overrides select backing-memory nodes. Build-time resource limits also apply.
     // - Aliased DFBs have identical effective node sets, regardless of how ranges are split.
-    // - Quasar device slots are contiguous from zero on each configured node.
-    // - DFBs that share a device slot on a kernel's nodes have compatible format and tile metadata.
     // - All PRODUCER bindings share access_pattern, and their kernels share num_threads and kind
     //   (compute or data movement). The same holds for all CONSUMER bindings.
     // - Gen1: all data-movement PRODUCER kernels share config_1xx->processor. The same holds for

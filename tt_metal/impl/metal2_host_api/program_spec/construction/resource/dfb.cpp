@@ -120,53 +120,6 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
 
 namespace {
 
-void ValidateDFBSlotFormats(
-    const KernelSpec& kernel,
-    const ProgramSpec& spec,
-    const CollectedSpecData& collected,
-    const DFBNameToSlotMap& slots) {
-    const auto& kernel_nodes = collected.kernel_node_set.at(kernel.unique_id);
-    std::unordered_map<uint32_t, const DataflowBufferSpec*> formats;
-    // JIT metadata includes every DFB on the kernel's nodes, including unbound DFBs.
-    for (const auto& dfb : spec.dataflow_buffers) {
-        if (!dfb.data_format_metadata || *dfb.data_format_metadata == DataFormat::Invalid ||
-            !collected.dfb_placements.at(dfb.unique_id).configuration.intersects(kernel_nodes)) {
-            continue;
-        }
-        const auto slot = slots.at(dfb.unique_id);
-        const auto [it, inserted] = formats.try_emplace(slot, &dfb);
-        const auto& first = *it->second;
-        TT_FATAL(
-            inserted || (first.data_format_metadata == dfb.data_format_metadata &&
-                         first.tile_format_metadata.value_or(Tile{}) == dfb.tile_format_metadata.value_or(Tile{})),
-            "KernelSpec '{}' receives conflicting format or tile metadata from DataflowBufferSpecs '{}' and '{}' "
-            "on device slot {}",
-            kernel.unique_id,
-            first.unique_id,
-            dfb.unique_id,
-            slot);
-    }
-}
-
-void ValidateContiguousDFBSlots(
-    const ProgramSpec& spec, const CollectedSpecData& collected, const DFBNameToSlotMap& slots) {
-    std::map<NodeCoord, std::set<uint32_t>> slots_by_node;
-    for (const auto& dfb : spec.dataflow_buffers) {
-        for (const auto& node : corerange_to_cores(collected.dfb_placements.at(dfb.unique_id).configuration)) {
-            slots_by_node[node].insert(slots.at(dfb.unique_id));
-        }
-    }
-    for (const auto& [node, node_slots] : slots_by_node) {
-        TT_FATAL(
-            *node_slots.rbegin() == node_slots.size() - 1,
-            "Quasar requires contiguous DFB device slots starting at 0 on node {}; "
-            "{} DFBs use a highest slot of {}. Change DFB placement or declaration order.",
-            node.str(),
-            node_slots.size(),
-            *node_slots.rbegin());
-    }
-}
-
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
@@ -276,16 +229,6 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 }
 
 }  // namespace
-
-void ValidateDFBDeviceSlots(
-    const ProgramSpec& spec, const CollectedSpecData& collected, const DFBNameToSlotMap& slots, const Hal& hal) {
-    if (hal.has_tile_counter_registers()) {
-        ValidateContiguousDFBSlots(spec, collected, slots);
-    }
-    for (const auto& kernel : spec.kernels) {
-        ValidateDFBSlotFormats(kernel, spec, collected, slots);
-    }
-}
 
 DataflowBufferHandles RegisterDataflowBuffers(
     const ProgramSpec& spec,
