@@ -1,0 +1,111 @@
+{
+ "args": {
+  "model_path": "mistralai/Mistral-Small-24B-Base-2501",
+  "revision": "b0a2e4ed093c26997495ae625528f81ea04b749f",
+  "data": null,
+  "layers": 0,
+  "trace": false,
+  "trace_alternate": false,
+  "tp": 4,
+  "seq_len": 1024,
+  "batch": 1,
+  "steps": 10,
+  "warmup_steps": 2,
+  "lr": 0.0001,
+  "weight_decay": 0.0,
+  "rank": 16,
+  "alpha": 32.0,
+  "random_init": false,
+  "random_data": false,
+  "seed": 42,
+  "ccl_overlap_alternate": false,
+  "ccl_overlap_serial": false,
+  "ccl_overlap_serial_async": false,
+  "ccl_overlap": false,
+  "track_memory": false,
+  "mem_probe": true,
+  "no_fused_lora": false,
+  "no_allcore_rmsnorm": false,
+  "no_fused_residual_norm": false,
+  "no_transposed_weights": false,
+  "host_loss": false,
+  "loss_log": "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter48c_full_tp4_real.json",
+  "data_log": null,
+  "dump_lora_init": null
+ },
+ "layers": 40,
+ "flops_per_step": 96371013058560,
+ "peak_tflops": 594.0,
+ "steps": [
+  {
+   "step": 1,
+   "loss": 0.44140625,
+   "ms": 760.0038331001997,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 2,
+   "loss": 0.32421875,
+   "ms": 437.7519180998206,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 3,
+   "loss": 0.248046875,
+   "ms": 445.96407981589437,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 4,
+   "loss": 0.203125,
+   "ms": 453.4440082497895,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 5,
+   "loss": 0.138671875,
+   "ms": 452.03613210469484,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 6,
+   "loss": 0.275390625,
+   "ms": 453.2725000753999,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 7,
+   "loss": 0.341796875,
+   "ms": 453.3009249716997,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 8,
+   "loss": 0.263671875,
+   "ms": 452.620652038604,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 9,
+   "loss": 0.3046875,
+   "ms": 452.2961098700762,
+   "trace": false,
+   "capture": false
+  },
+  {
+   "step": 10,
+   "loss": 0.447265625,
+   "ms": 455.7196293026209,
+   "trace": false,
+   "capture": false
+  }
+ ]
+}

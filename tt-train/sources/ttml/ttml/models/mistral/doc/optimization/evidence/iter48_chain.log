@@ -1,0 +1,26 @@
+=== iter48 harness 2026-11-02T23:59:02Z
+harness rc=0
+================== 70 passed, 2 warnings in 255.92s (0:04:15) ==================
+swiglu op tests rc=0
+============================== 35 passed in 3.53s ==============================
+=== iter48 8 layers real weights, host loss, one chip 2026-11-03T00:03:28Z
+rc=0
+compare rc=0
+max |diff| 0.0234 (tol 0.1), mean +0.0050, signs +8/-2
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+=== iter48 8 layers real weights, host loss, TP=4 overlap 2026-11-03T00:04:37Z
+rc=0
+compare rc=1
+max |diff| 0.7324 (tol 0.1), mean +0.2178, signs +7/-3
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+=== iter48 8 layers real weights, host loss, TP=4 no_overlap 2026-11-03T00:06:00Z
+rc=0
+compare rc=0
+max |diff| 0.0068 (tol 0.1), mean -0.0003, signs +4/-6
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+=== iter48 8 layers real weights, host loss, TP=4 serial 2026-11-03T00:07:18Z
+rc=0
+compare rc=0
+max |diff| 0.0066 (tol 0.1), mean -0.0000, signs +4/-6
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+=== iter48 TP=4 40 layers real weights overlap_a 2026-11-03T00:08:41Z

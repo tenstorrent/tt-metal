@@ -1,0 +1,10 @@
+=== iter48_tp TP=4 MFU after 480s cool-down 2026-11-02T23:44:28Z
+rc=0
+40 of 40 layers, tp 4: 440.4 ms/step over 6 steps (best 436.8), 218.8 TFLOP/s, MFU 36.84%
+=== iter48_tp TP=4 Tracy 4 layers 2026-11-02T23:55:51Z
+rc=0
+4 of 40 layers, tp 4: 54.7 ms/step over 2 steps (best 53.5), 221.3 TFLOP/s, MFU 37.26%
+=== done 2026-11-02T23:57:24Z
+collective overlap (iteration 47): installed
+step 1: collective overlap windows 80
+=== iter48 measurements finished 2026-11-02T23:57:25Z

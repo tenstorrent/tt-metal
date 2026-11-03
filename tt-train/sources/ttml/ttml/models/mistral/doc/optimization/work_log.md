@@ -516,6 +516,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 42 | `a7c2b6edac9` | sequence-parallel residual stream (`fused_residual_norm.py`, `lora.py`), docs, evidence |
 | 43 scoping | `8f3213e0267` | the rejected routes' evidence and docs |
 | 44 | `5223e39f0e9` | the norm rows kernels' slice cap 8 -> 16 (both factories, both dispatchers): 13 slices x 8 rows on the sequence-parallel shard; review round 13 answers; evidence |
+| review 14 | `95e7ebd6bd9` | the review round 14 answers: the overlap window's hazard fixed (persistent buffers), the window rejected and off by default, `--host-loss` at TP, the controls, the ranked table regenerated, the cycle diffs with op counts |
 | 48 | (this commit) | the attention shards on the fused LoRA path (`TRANSPOSED_SHAPES`, three 2D configs, the out forward transposed, the overlap on qkv); evidence |
 | 47 | `4c96f9fde82` | the gate_up dx reduce-scatter on a collective sub-device overlapped with dB / dA (`ccl_overlap.py`, `skinny_contract(grid_rows)`, the fused layer gathers the shard itself); iteration 47 scoping evidence |
 | 46 | `263dfc67576` | the attention projections' base matmuls on swept 2D configs (`ConfiguredFrozenLinear`, `PROGRAM_CONFIG_2D` x4, `_base_linear` routing, harness test); iteration 46 scoping evidence |

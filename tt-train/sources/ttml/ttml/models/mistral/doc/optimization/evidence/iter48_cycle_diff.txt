@@ -1,0 +1,92 @@
+kernel ms per profiled 4-layer step, 47 -> 48 (iter47_tp_ranked_ops_full.txt vs iter48_tp_ranked_ops_full.txt)
+chip 0: total 39.756 -> 45.190 (+5.434); collectives 4.798 -> 10.459 (+5.661); kernels without collectives 34.958 -> 34.731 (-0.227)
+    0.858 ( 4 ops) ->   3.883 ( 8 ops) (+3.025)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 20
+    0.434 ( 4 ops) ->   2.048 ( 8 ops) (+1.614)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.447 ( 4 ops) ->   1.613 ( 8 ops) (+1.166)  AllGatherAsync | 1x1x5120x256 |  | 20
+    0.000 ( 0 ops) ->   0.786 ( 4 ops) (+0.786)  Matmul | 1x1x5184x1536 | 1x1x1024x1536 | 80
+    0.000 ( 0 ops) ->   0.706 ( 4 ops) (+0.706)  Matmul | 1x1x1024x5184 | 1x1x5184x1536 | 80
+    0.691 ( 4 ops) ->   0.000 ( 0 ops) (-0.691)  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+    0.523 ( 4 ops) ->   0.000 ( 0 ops) (-0.523)  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+    0.000 ( 0 ops) ->   0.515 ( 4 ops) (+0.515)  Matmul | 1x1x5120x1088 | 1x1x1024x1088 | 110
+    0.513 ( 3 ops) ->   0.000 ( 0 ops) (-0.513)  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+    1.167 (10 ops) ->   0.716 ( 3 ops) (-0.451)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.431 ( 4 ops) ->   0.000 ( 0 ops) (-0.431)  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
+    0.000 ( 0 ops) ->   0.430 ( 4 ops) (+0.430)  Matmul | 1x1x1088x5120 | 1x1x5120x1024 | 99
+    0.016 ( 1 ops) ->   0.413 ( 1 ops) (+0.397)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    1.472 (13 ops) ->   1.176 ( 9 ops) (-0.296)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.240 ( 4 ops) ->   0.502 ( 8 ops) (+0.262)  TransposeSplit | 1x1x5184x1024 | 1x1x32[16]x5120 | 110
+    0.238 ( 4 ops) ->   0.000 ( 0 ops) (-0.238)  LowrankUpdate | 1x1x1024x5120 | 1x1x1024x32[16] | 110
+    0.236 ( 8 ops) ->   0.000 ( 0 ops) (-0.236)  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+    0.229 ( 7 ops) ->   0.000 ( 0 ops) (-0.229)  BinaryNg | 1x1x1024x1024 | 1x1x1024x1024 | 110
+    0.185 ( 4 ops) ->   0.393 ( 8 ops) (+0.208)  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110
+    0.188 ( 4 ops) ->   0.000 ( 0 ops) (-0.188)  Matmul | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+    0.172 ( 4 ops) ->   0.000 ( 0 ops) (-0.172)  Matmul | 1x1x1024x32[16] | 1x1x32[16]x1024 | 33
+    0.160 ( 4 ops) ->   0.325 ( 8 ops) (+0.165)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 104
+    0.157 ( 4 ops) ->   0.000 ( 0 ops) (-0.157)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x256x5120 | 104
+    0.145 ( 4 ops) ->   0.000 ( 0 ops) (-0.145)  SkinnyMatmulPartial | 1x1x1024x5120 | 1x1x5120x32[16] | 104
+    0.133 ( 4 ops) ->   0.268 ( 8 ops) (+0.135)  SkinnyContract | 1x1x32[16]x1024 | 1x1x5120x1024 | 110
+    0.137 ( 4 ops) ->   0.266 ( 8 ops) (+0.129)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x5120 | 77
+    0.128 ( 4 ops) ->   0.000 ( 0 ops) (-0.128)  LowrankUpdate | 1x1x1024x1536 | 1x1x1024x32[16] | 110
+    0.527 ( 4 ops) ->   0.408 ( 4 ops) (-0.119)  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 77
+    0.096 ( 4 ops) ->   0.000 ( 0 ops) (-0.096)  Matmul | 1x1x1024x1536 | 1x1x1536x32[16] | 33
+    0.019 ( 2 ops) ->   0.101 ( 2 ops) (+0.082)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.000 ( 0 ops) ->   0.066 ( 4 ops) (+0.066)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x1536 | 77
+    0.064 ( 4 ops) ->   0.000 ( 0 ops) (-0.064)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x1536 | 110
+    0.000 ( 0 ops) ->   0.061 ( 4 ops) (+0.061)  TransposeSplit | 1x1x1088x1024 | 1x1x32[16]x1024 | 110
+    0.030 ( 4 ops) ->   0.088 (12 ops) (+0.058)  FillPad | 1x1x1024x32[16] |  | 32
+    0.118 ( 4 ops) ->   0.067 ( 4 ops) (-0.051)  Matmul | 1x1x1024x32[16] | 1x1x1024x1024 | 33
+    0.049 ( 1 ops) ->   0.097 ( 1 ops) (+0.048)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.000 ( 0 ops) ->   0.043 ( 4 ops) (+0.043)  Concat | 1x1x1024x1024 | 1x1x1024x64 | 110
+    0.390 ( 8 ops) ->   0.431 ( 8 ops) (+0.041)  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 104
+    0.103 ( 4 ops) ->   0.066 ( 4 ops) (-0.037)  Matmul | 1x1x1024x1024 | 1x1x32[16]x1024 | 33
+    0.034 ( 4 ops) ->   0.000 ( 0 ops) (-0.034)  SkinnyMatmulReduce | 1x1x1024x5120 | 1x1x5120x32[16] | 32
+    0.223 ( 2 ops) ->   0.256 ( 2 ops) (+0.033)  AllGatherAsync | 1x1x1024x1280 |  | 20
+    0.033 ( 1 ops) ->   0.065 ( 1 ops) (+0.032)  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
+    0.011 ( 4 ops) ->   0.031 (12 ops) (+0.020)  PadCodegen | 1x1x1024x32[16] |  | 64
+    0.021 ( 4 ops) ->   0.041 ( 8 ops) (+0.020)  FillPad | 1x1x32[16]x5120 |  | 110
+    0.000 ( 0 ops) ->   0.020 ( 4 ops) (+0.020)  FillPad | 1x1x32[16]x1536 |  | 48
+chip 2: total 43.222 -> 39.445 (-3.777); collectives 8.264 -> 4.827 (-3.437); kernels without collectives 34.958 -> 34.618 (-0.340)
+    2.003 (10 ops) ->   0.333 ( 3 ops) (-1.670)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    2.014 (13 ops) ->   0.994 ( 9 ops) (-1.020)  AllGatherAsync | 1x1x256x5120 |  | 20
+    1.672 ( 4 ops) ->   0.883 ( 8 ops) (-0.789)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.000 ( 0 ops) ->   0.786 ( 4 ops) (+0.786)  Matmul | 1x1x5184x1536 | 1x1x1024x1536 | 80
+    0.000 ( 0 ops) ->   0.705 ( 4 ops) (+0.705)  Matmul | 1x1x1024x5184 | 1x1x5184x1536 | 80
+    0.692 ( 4 ops) ->   0.000 ( 0 ops) (-0.692)  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+    0.529 ( 4 ops) ->   0.000 ( 0 ops) (-0.529)  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+    0.000 ( 0 ops) ->   0.513 ( 4 ops) (+0.513)  Matmul | 1x1x5120x1088 | 1x1x1024x1088 | 110
+    0.512 ( 3 ops) ->   0.000 ( 0 ops) (-0.512)  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+    0.431 ( 4 ops) ->   0.000 ( 0 ops) (-0.431)  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
+    0.000 ( 0 ops) ->   0.430 ( 4 ops) (+0.430)  Matmul | 1x1x1088x5120 | 1x1x5120x1024 | 99
+    0.516 ( 4 ops) ->   0.858 ( 8 ops) (+0.342)  AllGatherAsync | 1x1x5120x256 |  | 20
+    0.255 ( 4 ops) ->   0.000 ( 0 ops) (-0.255)  LowrankUpdate | 1x1x1024x5120 | 1x1x1024x32[16] | 110
+    0.337 ( 1 ops) ->   0.086 ( 1 ops) (-0.251)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    0.226 ( 7 ops) ->   0.000 ( 0 ops) (-0.226)  BinaryNg | 1x1x1024x1024 | 1x1x1024x1024 | 110
+    0.224 ( 8 ops) ->   0.000 ( 0 ops) (-0.224)  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+    0.234 ( 4 ops) ->   0.439 ( 8 ops) (+0.205)  TransposeSplit | 1x1x5184x1024 | 1x1x32[16]x5120 | 110
+    0.188 ( 4 ops) ->   0.000 ( 0 ops) (-0.188)  Matmul | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+    0.139 ( 4 ops) ->   0.324 ( 8 ops) (+0.185)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x5120 | 77
+    0.199 ( 4 ops) ->   0.371 ( 8 ops) (+0.172)  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110
+    0.171 ( 4 ops) ->   0.000 ( 0 ops) (-0.171)  Matmul | 1x1x1024x32[16] | 1x1x32[16]x1024 | 33
+    0.157 ( 4 ops) ->   0.000 ( 0 ops) (-0.157)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x256x5120 | 104
+    0.159 ( 4 ops) ->   0.312 ( 8 ops) (+0.153)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 104
+    0.138 ( 4 ops) ->   0.000 ( 0 ops) (-0.138)  SkinnyMatmulPartial | 1x1x1024x5120 | 1x1x5120x32[16] | 104
+    0.128 ( 4 ops) ->   0.256 ( 8 ops) (+0.128)  SkinnyContract | 1x1x32[16]x1024 | 1x1x5120x1024 | 110
+    0.125 ( 4 ops) ->   0.000 ( 0 ops) (-0.125)  LowrankUpdate | 1x1x1024x1536 | 1x1x1024x32[16] | 110
+    0.096 ( 4 ops) ->   0.000 ( 0 ops) (-0.096)  Matmul | 1x1x1024x1536 | 1x1x1536x32[16] | 33
+    1.188 ( 4 ops) ->   1.278 ( 8 ops) (+0.090)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 20
+    0.000 ( 0 ops) ->   0.067 ( 4 ops) (+0.067)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x1536 | 77
+    0.063 ( 4 ops) ->   0.000 ( 0 ops) (-0.063)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x1536 | 110
+    0.030 ( 4 ops) ->   0.088 (12 ops) (+0.058)  FillPad | 1x1x1024x32[16] |  | 32
+    0.000 ( 0 ops) ->   0.053 ( 4 ops) (+0.053)  TransposeSplit | 1x1x1088x1024 | 1x1x32[16]x1024 | 110
+    0.077 ( 1 ops) ->   0.026 ( 1 ops) (-0.051)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.118 ( 4 ops) ->   0.067 ( 4 ops) (-0.051)  Matmul | 1x1x1024x32[16] | 1x1x1024x1024 | 33
+    0.272 ( 2 ops) ->   0.228 ( 2 ops) (-0.044)  AllGatherAsync | 1x1x1024x1280 |  | 20
+    0.000 ( 0 ops) ->   0.043 ( 4 ops) (+0.043)  Concat | 1x1x1024x1024 | 1x1x1024x64 | 110
+    0.104 ( 4 ops) ->   0.066 ( 4 ops) (-0.038)  Matmul | 1x1x1024x1024 | 1x1x32[16]x1024 | 33
+    0.539 ( 4 ops) ->   0.574 ( 4 ops) (+0.035)  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 77
+    0.034 ( 4 ops) ->   0.000 ( 0 ops) (-0.034)  SkinnyMatmulReduce | 1x1x1024x5120 | 1x1x5120x32[16] | 32
+    0.381 ( 8 ops) ->   0.415 ( 8 ops) (+0.034)  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 104
+    0.068 ( 2 ops) ->   0.036 ( 2 ops) (-0.032)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.011 ( 4 ops) ->   0.032 (12 ops) (+0.021)  PadCodegen | 1x1x1024x32[16] |  | 64
+    0.021 ( 4 ops) ->   0.041 ( 8 ops) (+0.020)  FillPad | 1x1x32[16]x5120 |  | 110
+    0.000 ( 0 ops) ->   0.020 ( 4 ops) (+0.020)  FillPad | 1x1x32[16]x1536 |  | 48

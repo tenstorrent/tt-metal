@@ -63,6 +63,12 @@ TRANSPOSED_SHAPES: set[tuple[int, int]] = {
     (5120, 16384),
     (8192, 5120),
     (5120, 32768),  # TP=4 shards
+    # Iteration 48 (the adapted retry of iteration 7): the TP=4 attention shards on the fused path, whose glue
+    # (transpose_split, the skinny products, the K-concat) is now cheaper than the composite path's dozen small ops
+    # per layer (2.35 ms per 4 layers on chip 0, `O/iter47_tp_ranked_ops_full.txt`); the qkv forward / dX and the
+    # out dX take the swept 2D configs below, the out forward the transposed orientation.
+    (5120, 1536),
+    (1024, 5120),
 }
 
 
@@ -166,6 +172,18 @@ PROGRAM_CONFIG_2D: dict[tuple[int, int, int, bool], dict] = {
     (1024, 5120, 1024, False): dict(
         grid=(11, 8), in0_block_w=16, out_subblock_h=2, out_subblock_w=1, per_core_M=4, per_core_N=3
     ),
+    # The fused attention shards (iteration 48; `O/iter46_sweep2d_1024_5184_1536.log`, `O/iter46_sweep2d_5184_1536_1024_tb.log`,
+    # `O/iter46_sweep2d_1088_5120_1024.log`): qkv forward [1024, 5184] x [5184, 1536] 188 us, qkv dX^T [5184, 1536] x
+    # [1024, 1536]^T 208 (ttnn's choice 233), out dX^T [1088, 5120] x [5120, 1024] 116.
+    (1024, 5184, 1536, False): dict(
+        grid=(11, 8), in0_block_w=9, out_subblock_h=4, out_subblock_w=1, per_core_M=4, per_core_N=5
+    ),
+    (5184, 1536, 1024, True): dict(
+        grid=(10, 10), in0_block_w=8, out_subblock_h=1, out_subblock_w=4, per_core_M=17, per_core_N=4
+    ),
+    (1088, 5120, 1024, False): dict(
+        grid=(11, 10), in0_block_w=16, out_subblock_h=2, out_subblock_w=1, per_core_M=4, per_core_N=3
+    ),
 }
 
 
@@ -183,6 +201,10 @@ FORWARD_TRANSPOSED_CONFIG: dict[tuple[int, int], dict] = {
     (5184, 16384): dict(
         grid=(11, 10), in0_block_w=9, out_subblock_h=1, out_subblock_w=3, per_core_M=52, out_block_h=13
     ),
+    # The attention out-projection (iteration 48): [5120, 1088] x [1024, 1088]^T on 110 cores, 141-158 us against
+    # 173-195 for the plain orientation on ttnn's choice (`O/iter46_wo_transposed_bench.log`); its output stays
+    # transposed for the residual norm like w2's.
+    (1088, 5120): dict(grid=(11, 10), in0_block_w=2, out_subblock_h=1, out_subblock_w=3, per_core_M=16),
 }
 
 
