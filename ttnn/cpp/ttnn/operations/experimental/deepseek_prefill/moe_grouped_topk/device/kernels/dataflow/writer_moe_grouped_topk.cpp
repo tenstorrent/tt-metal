@@ -5,6 +5,7 @@
 // Shared layout constants, score_tile/index_tile namespaces, generate_reduce_scalar,
 // write_single_scalar, gather<>, and overwrite_index_row_with_sentinel live in the common header.
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/dataflow/moe_gate_common_dataflow.hpp"
+#include "api/core_local_mem.h"
 
 FORCE_INLINE void generate_index_tile(
     const uint32_t cb_expert_index_template, const uint32_t index_write_addr, uint32_t start_expert_index) {
@@ -52,7 +53,8 @@ FORCE_INLINE void generate_index_tile_transposed(
                 p[r * columns_per_face + c] = v;
             }
         }
-        noc_async_read(get_noc_addr(face_addr), face_addr + index32_tile::face_size_bytes, index32_tile::face_size_bytes);
+        noc_async_read(
+            get_noc_addr(face_addr), face_addr + index32_tile::face_size_bytes, index32_tile::face_size_bytes);
     }
     noc_async_read_barrier();
     cb.push_back(1);
@@ -287,6 +289,9 @@ void kernel_main() {
     constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
     constexpr uint32_t weights_page_size = get_named_compile_time_arg_val("weights_page_size");
     constexpr bool row_major_weights = get_named_compile_time_arg_val("row_major_weights") != 0;
+    constexpr bool remap_experts = get_named_compile_time_arg_val("remap_experts") != 0;
+    constexpr uint32_t cb_expert_id_map = get_named_compile_time_arg_val("cb_expert_id_map");
+    constexpr uint32_t expert_id_map_page_size = get_named_compile_time_arg_val("expert_id_map_page_size");
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t cb_expert_index_template = get_named_compile_time_arg_val("cb_expert_index_template");
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
@@ -332,11 +337,13 @@ void kernel_main() {
     const uint32_t end_height_tile = get_arg_val<uint32_t>(3);
     const uint32_t padding_config_addr = get_arg_val<uint32_t>(4);
     const uint32_t biased_addr = get_arg_val<uint32_t>(5);
+    const uint32_t expert_id_map_addr = get_arg_val<uint32_t>(6);
 
     constexpr auto weights_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto padding_config_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto biased_args = TensorAccessorArgs<padding_config_args.next_compile_time_args_offset()>();
+    constexpr auto expert_id_map_args = TensorAccessorArgs<biased_args.next_compile_time_args_offset()>();
 
     const auto weights_accessor = TensorAccessor(weights_args, weights_addr, weights_page_size);
     const auto indices_accessor = TensorAccessor(indices_args, indices_addr, indices_page_size);
@@ -364,6 +371,17 @@ void kernel_main() {
     CircularBuffer out_indices_cb(cb_out_indices);
     CircularBuffer out_weights_cb(cb_out_weights);
     CircularBuffer biased_dump_cb(cb_biased_dump);
+    uint32_t expert_id_map_l1_addr = 0;
+    if constexpr (remap_experts) {
+        CircularBuffer map_cb(cb_expert_id_map);
+        map_cb.reserve_back(1);
+        expert_id_map_l1_addr = map_cb.get_write_ptr();
+        const CoreLocalMem<uint16_t> local_map(expert_id_map_l1_addr);
+        const auto map_accessor = TensorAccessor(expert_id_map_args, expert_id_map_addr, expert_id_map_page_size);
+        noc.async_read(
+            map_accessor, local_map, expert_id_map_page_size, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+    }
 
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     // I see no performance difference generating these internally inside the writer kernel
@@ -431,6 +449,21 @@ void kernel_main() {
             }
         }
 
+        if constexpr (remap_experts) {
+            // The gather above must see logical IDs. Only translate the final output, after
+            // padding has been sentinel-marked, so selection, weights and tie order are unchanged.
+            const CoreLocalMem<uint16_t> map(expert_id_map_l1_addr);
+            const CoreLocalMem<uint16_t> indices(out_indices_cb.get_read_ptr());
+            for (uint32_t row = 0; row < tokens_per_tile; ++row) {
+                for (uint32_t k = 0; k < n_activated_experts; ++k) {
+                    const uint32_t offset = ((row / 16) * 2 + k / 16) * 256 + (row % 16) * 16 + k % 16;
+                    const uint16_t logical = indices[offset];
+                    if (logical < experts) {
+                        indices[offset] = map[logical];
+                    }
+                }
+            }
+        }
         noc.async_write(out_indices_cb, indices_accessor, indices_page_size, {}, {.page_id = height_tile});
         out_weights_cb.wait_front(1);
         if constexpr (row_major_weights) {

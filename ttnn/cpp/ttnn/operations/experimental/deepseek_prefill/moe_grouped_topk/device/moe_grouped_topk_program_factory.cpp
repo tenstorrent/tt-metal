@@ -204,6 +204,15 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     Buffer* padding_runtime_buffer =
         tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer() : nullptr;
 
+    const bool remap_experts = tensor_args.expert_id_map.has_value();
+    auto cb_expert_id_map = tt::CBIndex::c_24;
+    auto* expert_id_map_buffer = remap_experts ? tensor_args.expert_id_map->buffer() : indices_buffer;
+    const uint32_t expert_id_map_page_size = static_cast<uint32_t>(expert_id_map_buffer->aligned_page_size());
+    if (remap_experts) {
+        add_cb(cb_expert_id_map, expert_id_map_page_size, 1, tt::DataFormat::UInt16);
+    }
+    Buffer* expert_id_map_runtime_buffer = remap_experts ? tensor_args.expert_id_map->buffer() : nullptr;
+
     KernelDescriptor::NamedCompileTimeArgs reader_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_in_bias", cb_in_bias},
@@ -287,6 +296,9 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
 
     KernelDescriptor::NamedCompileTimeArgs writer_named_compile_time_args = {
         {"row_major_weights", static_cast<uint32_t>(row_major_weights)},
+        {"remap_experts", static_cast<uint32_t>(remap_experts)},
+        {"cb_expert_id_map", cb_expert_id_map},
+        {"expert_id_map_page_size", expert_id_map_page_size},
         {"cb_out_weights", cb_out_weights},
         {"cb_out_indices", cb_out_indices},
         {"cb_expert_index_template", cb_expert_index_template},
@@ -333,6 +345,7 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(indices_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(padding_config_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(biased_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_id_map_buffer).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -394,7 +407,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
              start_height_tile,
              end_height_tile,
              padding_runtime_buffer,
-             biased_runtime_buffer});
+             biased_runtime_buffer,
+             expert_id_map_runtime_buffer});
     }
 
     desc.kernels.push_back(std::move(reader_kernel_desc));

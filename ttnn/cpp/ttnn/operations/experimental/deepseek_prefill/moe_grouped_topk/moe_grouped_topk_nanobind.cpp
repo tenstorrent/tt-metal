@@ -57,6 +57,11 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 weights_layout (ttnn.Layout, optional): Layout of the BFLOAT16 weights. Defaults to TILE.
                     ROW_MAJOR supports interleaved L1/DRAM output and at most 32 activated experts.
                     Indices remain TILE in either case.
+                expert_id_map (ttnn.Tensor, optional): Interleaved UINT16 ROW_MAJOR tensor of shape [1, E]
+                    mapping logical expert IDs to physical IDs. Entries must be valid expert IDs in [0, E).
+                    Applied after selection and unbiased-score gathering; weights, logical tie order and
+                    padding sentinels are unchanged. Supports standard 32x32 tiles and at most 32 activated
+                    experts. Defaults to None (no remapping).
 
             Returns:
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores (dtype BFLOAT16) and selected expert indices (dtype UINT16). The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
@@ -76,7 +81,8 @@ void bind_moe_grouped_topk(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("padding_config") = nb::none(),
         nb::arg("biased_scores") = nb::none(),
-        nb::arg("weights_layout") = tt::tt_metal::Layout::TILE);
+        nb::arg("weights_layout") = tt::tt_metal::Layout::TILE,
+        nb::arg("expert_id_map") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::detail
