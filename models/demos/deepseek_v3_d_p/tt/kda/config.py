@@ -56,10 +56,9 @@ KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 
-# The convolution tail (`KdaState.convolution`) is stored per 64-channel segment, the KDA state migration contract's
-# convolution segment: shape `[1, W / 64, (K-1) * 64]` ROW_MAJOR BF16, page `c // 64` holding the `K-1` history rows of
-# channels `[64c, 64c + 64)`, row `r` at element `64 r`. A page is exactly one slab segment, so the engine's per-slot
-# copy is a plain page copy with no relayout. `qkv_causal_conv1d_silu` reads and writes this layout directly.
+# The convolution tail (`KdaState.convolution`) is stored in `qkv_causal_conv1d_silu`'s SEGMENTS history layout, one
+# 64-channel segment per page. A page is exactly one slab segment of the KDA state migration contract, so the
+# engine's per-slot copy is a plain page copy with no relayout.
 KDA_CONVOLUTION_SEGMENT_CHANNELS = 64
 
 

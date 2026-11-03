@@ -693,8 +693,8 @@ def test_qkv_causal_conv1d_silu_rejects_channel_chunk_size_over_l1(
     [
         ("host_input", "allocated device tensor"),
         ("batch", r"input must be \[1,T,W\]"),
-        ("history_shape", r"ROWS history must be \[1,3,Q\+K\+V\]"),
-        ("segment_history_shape", r"SEGMENTS history must be \[1,\(Q\+K\+V\)/64,192\]"),
+        ("history_shape", r"history must be \[1,3,384\] in the ROWS layout"),
+        ("segment_history_shape", r"history must be \[1,6,192\] in the SEGMENTS layout"),
         ("tap_last_dimension", r"tap2 last dimension must equal Q\+K\+V"),
         ("tap_volume", "tap2 logical volume must equal"),
         ("history_layout", "history must use ROW_MAJOR layout, got Layout::TILE"),
