@@ -1,0 +1,50 @@
+{
+  "eval/golden_tests/linear_gelu/test_golden.py::test_op_loose[8x512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 247500,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/linear_gelu/test_golden.py::test_op_loose[16x256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 247500,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/linear_gelu/test_golden.py::test_op_loose[32x128-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 247400,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/linear_gelu/test_golden.py::test_op_loose[8x384-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 191400,
+    "target_ns": 68100,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/linear_gelu/test_golden.py::test_op_loose[4x512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 135500,
+    "target_ns": 45400,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/linear_gelu/test_golden.py::test_op_loose[8x256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 135500,
+    "target_ns": 45400,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/linear_gelu/test_golden.py::test_op_loose[2x512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 83700,
+    "target_ns": 22700,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/linear_gelu/test_golden.py::test_op_loose[4x256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 83300,
+    "target_ns": 22700,
+    "measured_on": "blackhole_p100a"
+  }
+}
