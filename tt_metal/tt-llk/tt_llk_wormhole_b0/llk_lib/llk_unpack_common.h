@@ -93,9 +93,13 @@ inline void _llk_unpack_hw_configure_(
     TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
 }
 
-// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
-// Only face_r_dim and the total face count are programmed, so the 1x2 grid picked for num_faces == 2 gives the
-// same registers as passing num_faces.
+/**
+ * @brief Legacy face_r_dim/num_faces overload of @ref _llk_unpack_hw_configure_, kept for the experimental/2_0
+ *        callers until they move to TensorShape (tt-llk#1033).
+ *
+ * Only face_r_dim and the total face count are programmed, so the 1x2 grid picked for num_faces == 2 gives the
+ * same registers as the real CB shape.
+ */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_src_format,
@@ -361,11 +365,15 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     }
 }
 
-// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
-// Also used by the metal llk_unpack_reconfig_data_format_src{a,b} wrappers: the experimental hybrid_llk_shims.hpp
-// (deepseek_prefill) renames _llk_unpack_reconfig_data_format_srca_impl_ by macro to a shim with this signature.
-// Only face_r_dim and the total face count are programmed, so the 1x2 grid picked for num_faces == 2 gives the
-// same registers as passing num_faces.
+/**
+ * @brief Legacy face_r_dim/num_faces overload of @ref _llk_unpack_reconfig_data_format_srca_impl_, kept for the
+ *        experimental/2_0 callers until they move to TensorShape (tt-llk#1033).
+ *
+ * Also used by the metal llk_unpack_reconfig_data_format_srca wrapper: the experimental hybrid_llk_shims.hpp
+ * (deepseek_prefill) renames this impl by macro to a shim with this signature.
+ * Only face_r_dim and the total face count are programmed, so the 1x2 grid picked for num_faces == 2 gives the
+ * same registers as the real CB shape.
+ */
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t unpack_src_format,
@@ -378,8 +386,13 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         unpack_src_format, unpack_dst_format, tile_size, ckernel::tensor_shape_from_num_faces(unpack_face_r_dim, unpack_num_faces));
 }
 
-// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
-// See the srca overload above; also used by the metal llk_unpack_reconfig_data_format_srcb wrapper.
+/**
+ * @brief Legacy face_r_dim/num_faces overload of @ref _llk_unpack_reconfig_data_format_srcb_impl_, kept for the
+ *        experimental/2_0 callers until they move to TensorShape (tt-llk#1033).
+ *
+ * Also used by the metal llk_unpack_reconfig_data_format_srcb wrapper, so the src{a,b} pair moves to TensorShape
+ * together. See the srca overload above.
+ */
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t unpack_src_format,
