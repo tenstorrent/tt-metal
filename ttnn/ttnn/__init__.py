@@ -181,6 +181,7 @@ from ttnn._ttnn.fabric import (
 from ttnn._ttnn import cluster
 
 from ttnn._ttnn.global_semaphore import (
+    experimental_create_global_semaphore_at_address,
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
@@ -218,6 +219,13 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStageGateDescriptor,
     D2DStageGateMode,
     D2D_STAGE_GATE_UNGATED_SLOT,
+    PCIeCoreLocation,
+    D2DReceiverCoordDescriptor,
+    D2DReceiverDescriptor,
+    D2DRankDescriptor,
+    D2DPipelineDescriptor,
+    D2DPipelineDescriptorFile,
+    d2d_pipeline_descriptor_path,
 )
 
 from ttnn._ttnn.layer_ack_service import (
@@ -237,6 +245,16 @@ from ttnn.types import (
     bfloat4_b,
     bfloat16,
     fp8_e4m3,
+    mxfp8_e4m3,
+    mxfp8_e5m2,
+    mxfp6_e2m3,
+    mxfp6_e3m2,
+    mxfp4,
+    mxint8,
+    mxint4,
+    mxint2,
+    MX_DTYPES,
+    is_mx_dtype,
     float32,
     MathFidelity,
     MemoryConfig,
@@ -391,6 +409,11 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
+NodeLocalSpan = ttnn._ttnn.tensor.NodeLocalSpan
+PerNodeDeviceLocalMemorySpan = ttnn._ttnn.tensor.PerNodeDeviceLocalMemorySpan
+PerNodeMeshDeviceMemorySpan = ttnn._ttnn.tensor.PerNodeMeshDeviceMemorySpan
+experimental_allocate_single_device_tensor = ttnn._ttnn.tensor.experimental_allocate_single_device_tensor
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
@@ -484,6 +507,8 @@ ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ttnn.ge(self, *args, **kwargs
 ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs)
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
 ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
+
+as_tensor_cache_repair = ttnn.operations.core.as_tensor_cache_repair
 
 from ttnn.operations.matmul import (
     MatmulMultiCoreReuseProgramConfig,

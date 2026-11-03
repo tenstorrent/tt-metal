@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -16,20 +17,19 @@ namespace tt::tt_metal::experimental {
 
 // Scratchpad placement census (multi-binding rule).
 //
-// A scratchpad is private, node-local L1. More than one KernelSpec may bind the same
-// ScratchpadSpec, but only on disjoint nodes: each node hosting the scratchpad must run exactly
-// one binding kernel instance, so the per-node region stays private to that one kernel.
-// (Allocation and CRTA delivery are per-binding-kernel — allocate_scratchpads stacks each
-// kernel's scratchpad onto its own cores' allocators — so disjoint bindings never interact.) Two
-// binding kernels on the same node would be true sharing, which is deferred behind a future
-// AdvancedOption and rejected here. Mirrors the local-DFB per-node census. (A kernel
-// binding the same scratchpad twice is already rejected during collection, so every binder here
-// is a distinct kernel.)
-void ValidateScratchpadBindersPerNode(const ValidationContext& ctx) {
+// By default, each node's scratchpad may be bound by only one kernel instance.
+// The advanced multi-binding option permits shared backing memory on overlapping nodes;
+// allocation groups those bindings and kernel code is responsible for synchronization.
+// Duplicate bindings within one kernel are rejected earlier during collection.
+void ValidateScratchpadBindersPerNode(const ValidationContext& ctx, tt::ARCH arch) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
 
     for (const auto& scratchpad : spec.scratchpads) {
+        const bool allow_multi_binding = scratchpad.advanced_options.allow_instance_multi_binding;
+        if (allow_multi_binding && !is_gen2_arch(arch)) {
+            continue;
+        }
         auto binders_it = collected.scratchpad_binders.find(scratchpad.unique_id);
         if (binders_it == collected.scratchpad_binders.end() || binders_it->second.size() < 2) {
             continue;  // unbound (caught earlier) or single binder — always legal.
@@ -51,15 +51,30 @@ void ValidateScratchpadBindersPerNode(const ValidationContext& ctx) {
                 names += (names.empty() ? "'" : ", '") + kernel->unique_id.get() + "'";
             }
             TT_FATAL(
-                false,
+                allow_multi_binding,
                 "ScratchpadSpec '{}' is bound by {} kernel instances on node {} ({}). A scratchpad is "
                 "private node-local L1; multiple kernels may bind the same scratchpad only on disjoint "
                 "nodes, so each node's instance stays private to one kernel. Sharing one node's "
-                "scratchpad across kernels is not yet supported — give each binding kernel disjoint nodes.",
+                "scratchpad across kernels requires advanced_options.allow_instance_multi_binding = true "
+                "and explicit synchronization in kernel code.",
                 scratchpad.unique_id,
                 kernels.size(),
                 node.str(),
                 names);
+            if (is_gen2_arch(arch)) {
+                // Gen2 DM cores are coherent with each other, but their cached L1 accesses
+                // are not coherent with compute cores' uncached accesses, even with synchronization.
+                TT_FATAL(
+                    std::all_of(
+                        kernels.begin(),
+                        kernels.end(),
+                        [](const KernelSpec* kernel) { return kernel->is_data_movement_kernel(); }),
+                    "ScratchpadSpec '{}' permits multi-binding only between DM kernels on Gen2. "
+                    "Node {} has binding kernels ({}); DM and compute scratchpad accesses are not cache-coherent.",
+                    scratchpad.unique_id,
+                    node.str(),
+                    names);
+            }
         }
     }
 }

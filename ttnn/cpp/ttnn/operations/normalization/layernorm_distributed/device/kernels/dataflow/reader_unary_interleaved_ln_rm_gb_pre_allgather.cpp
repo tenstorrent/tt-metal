@@ -22,7 +22,7 @@ void kernel_main() {
 
     constexpr auto blk = get_arg(args::blk);
 
-    Noc noc;
+    const Noc noc;
     // Input tiles, consumed downstream by the compute kernel.
     DataflowBuffer dfb_inp_buf(dfb::inp);
 

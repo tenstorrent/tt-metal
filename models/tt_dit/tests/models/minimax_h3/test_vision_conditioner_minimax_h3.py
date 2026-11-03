@@ -26,7 +26,8 @@ import ttnn
 from ....encoders.qwen3vl.loader_minimax_h3 import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
 from ....encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder
 from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp, vision_cu_seqlens
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp
+from ....encoders.vision import vision_cu_seqlens
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor

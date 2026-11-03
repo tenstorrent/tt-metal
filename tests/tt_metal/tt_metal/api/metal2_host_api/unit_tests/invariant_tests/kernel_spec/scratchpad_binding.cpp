@@ -20,19 +20,39 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundTwiceInOneKernelFails) {
-    // One kernel binds the SAME scratchpad twice under two different accessor_names. Illegal: a kernel
-    // may bind a given scratchpad at most once (two bindings would request two separate per-node
-    // allocations under one name). This is a structural input error with no node-set dependency, so
-    // it is caught up front during collection rather than by the placement census.
+    // One kernel may bind a given scratchpad only once, even under distinct accessor names.
+    // This structural error is caught during collection, before placement validation.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_a"},
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_b"},
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("binds scratchpad 'scratch_0' more than once")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadBoundTwiceInOneKernelWithMultiKernelBindingEnabledFails) {
+    // Sharing across kernels does not permit duplicate bindings within one kernel.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .advanced_options = {.allow_instance_multi_binding = true},
+    }};
     spec.kernels[0].scratchpad_bindings = {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_a"},
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_b"},
