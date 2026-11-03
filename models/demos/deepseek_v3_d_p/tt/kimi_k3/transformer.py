@@ -466,12 +466,15 @@ class TtKimiK3Transformer(LightweightModule):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
         if chunks is not None:
-            if d2h_service is not None or metadata is not None or metadata_msg is not None:
-                raise ValueError("a Kimi-K3 packed forward is eager and host-acked (no d2h_service or metadata)")
+            if metadata is not None or metadata_msg is not None:
+                raise ValueError("a Kimi-K3 packed forward reads no single-chunk metadata")
             return self.forward_packed(
                 token_ids,
                 kvpe_cache,
                 chunks,
+                # A packed forward's D2H acks go out once it is done (TtPrefillRuntime.prefill_forward); here the
+                # service only asks for each chunk's KV pad window to be zeroed as it is written.
+                zero_pad=d2h_service is not None,
                 index_kv_cache=index_kv_cache,
                 on_layer_complete=on_layer_complete,
                 on_layer_hidden=on_layer_hidden,
@@ -572,6 +575,8 @@ class TtKimiK3Transformer(LightweightModule):
         padding_config=None,
         rope_tensors=None,
         layer_tap: Optional[Callable] = None,
+        seed_indexer_indices=None,
+        zero_pad: bool = False,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them, any users at any depth): every
         layer runs its attention once per non-empty chunk against that chunk's slot and offset (MLA: its KV slab;
@@ -583,6 +588,10 @@ class TtKimiK3Transformer(LightweightModule):
         on_layer_complete: ``(global layer index, chunk)`` once per non-empty chunk per layer.
         layer_tap: ``(local_idx, hidden)`` after each layer with the live residual over every chunk's rows, as in
             forward().
+        zero_pad: zero each chunk's KV pad window as it is written without acking it, for a caller that sends the
+            acks itself once the forward is done (TtPrefillRuntime.prefill_forward; always on the traced path).
+        seed_indexer_indices: part of the shared packed contract (GLM-5.3's indexer reuse); Kimi-K3 has no indexer,
+            so it must be None.
         metadata / padding_config: the traced form. One ``(slot, actual_start, actual_end)`` device triple per
             chunk position replaces ``chunks`` (then None), and the persistent MoE padding config replaces the
             host row counts. Every position runs (an empty one points at a scratch slot); no acks.
@@ -593,8 +602,8 @@ class TtKimiK3Transformer(LightweightModule):
         n = len(metadata) if traced else len(chunks)
         if n != self.forward_chunks:
             raise ValueError(f"{n} chunks for a model built for {self.forward_chunks}")
-        if index_kv_cache is not None:
-            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+        if index_kv_cache is not None or seed_indexer_indices is not None:
+            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache and seed_indexer_indices must be None")
         if not (self.is_first_rank and self.is_last_rank):
             raise NotImplementedError("a Kimi-K3 packed forward is single-rank")
         if traced and (padding_config is None or on_layer_complete is not None):
@@ -660,6 +669,7 @@ class TtKimiK3Transformer(LightweightModule):
                     padding_real_rows=padding_real_rows,
                     packed_padding_config=padding_config,
                     attn_input_tap=attn_input_tap,
+                    zero_pad=zero_pad,
                 )
                 if layer_tap is not None and not layer.kv_only:
                     layer_tap(local_idx, residual.current())
