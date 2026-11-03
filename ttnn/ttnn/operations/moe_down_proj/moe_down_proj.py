@@ -35,8 +35,8 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
-    "buffer_type": [ttnn.BufferType.L1],
-    "out_buffer_type": [ttnn.BufferType.L1],
+    "buffer_type": [ttnn.BufferType.L1, ttnn.BufferType.DRAM],
+    "out_buffer_type": [ttnn.BufferType.L1, ttnn.BufferType.DRAM],
 }
 
 
