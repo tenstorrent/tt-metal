@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -109,6 +110,10 @@ def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: i
     """
     k_tiles = (per_device_emb_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     return (sp_dim, k_tiles * ttnn.TILE_SIZE, n_routed_experts)
+
+
+# Distinct per-chip real-row tuples build_padding_config_for_rows keeps device configs for.
+ROWS_PADDING_CONFIG_CACHE_SIZE = 64
 
 
 @dataclass
@@ -635,6 +640,10 @@ class TtMoEGatePrefill(LightweightModule):
         # build_padding_config ends in a ttnn.from_torch, so re-issuing it per chunk costs a host
         # transfer; caching the device tensor avoids that. Owned here => callers must NOT deallocate it.
         self._padding_config_cache: dict = {}
+        # build_padding_config_for_rows' configs, one per distinct per-chip real-row tuple. Packed forwards' ragged
+        # tails make that set grow with traffic, so it is LRU-bounded; an evicted config is deallocated (eager
+        # forwards consume it in queue order, and the traced path never uses it).
+        self._rows_padding_config_cache: OrderedDict = OrderedDict()
         # Persistent output row for the DEVICE-built padding config (build_padding_config_device). A
         # host from_torch is illegal inside a trace capture, so the traced path derives the config
         # on-device instead and refreshes THIS buffer in place — a stable address the capture can keep
@@ -1015,7 +1024,8 @@ class TtMoEGatePrefill(LightweightModule):
 
         For a packed forward (several chunks back to back on each chip), where no single (actual_isl,
         actual_start) describes the rows: the caller derives the counts from the chunks (packed_real_rows).
-        Memoized and owned here like build_padding_config, so callers must NOT deallocate the result.
+        Memoized (LRU, ROWS_PADDING_CONFIG_CACHE_SIZE entries) and owned here like build_padding_config, so callers
+        must NOT deallocate the result, nor hold it past the forward it was built for.
         """
         sp_factor = self.mesh_device.shape[0]
         seq_len_per_chip = self.config.sp_dim
@@ -1023,12 +1033,16 @@ class TtMoEGatePrefill(LightweightModule):
         assert all(0 <= r <= seq_len_per_chip for r in real_rows), f"{real_rows} outside [0, {seq_len_per_chip}]"
         if all(r == seq_len_per_chip for r in real_rows):
             return None
-        cache_key = ("rows", tuple(real_rows))
-        cached = self._padding_config_cache.get(cache_key)
+        cache_key = tuple(real_rows)
+        cached = self._rows_padding_config_cache.get(cache_key)
         if cached is not None:
+            self._rows_padding_config_cache.move_to_end(cache_key)
             return cached
         config_tensor = self._padding_config_tensor([[r, 0] for r in real_rows])
-        self._padding_config_cache[cache_key] = config_tensor
+        self._rows_padding_config_cache[cache_key] = config_tensor
+        if len(self._rows_padding_config_cache) > ROWS_PADDING_CONFIG_CACHE_SIZE:
+            _, evicted = self._rows_padding_config_cache.popitem(last=False)
+            ttnn.deallocate(evicted)
         return config_tensor
 
     def _padding_config_tensor(self, padding_config: list) -> ttnn.Tensor:
