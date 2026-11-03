@@ -622,6 +622,8 @@ jobs:
 
   # ttnn SFPU op tests on ttsim for WH/BH LLK changes (llk_ttsim_merge_gate_tests.yaml).
   # Not on main: sanity-tests.yaml runs the sim groups on every push.
+  # No llk-ci-changed: those files don't feed this job, and build.if doesn't schedule a
+  # build for them. The job's own list sets ttsim-ci-changed, which does.
   llk-ttsim-merge-gate-tests:
     needs: [build, find-changes]
     if: ${{ !cancelled() && needs.build.result == 'success' && (
@@ -629,9 +631,10 @@ jobs:
             needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
             needs.find-changes.outputs.llk-common-changed == 'true' ||
             needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
-            needs.find-changes.outputs.llk-ci-changed == 'true' ||
             needs.find-changes.outputs.ttsim-ci-changed == 'true')
         }}
+    permissions:
+      contents: read
     secrets: inherit
     uses: ./.github/workflows/ttnn-smoke-tests-impl.yaml
     with:
