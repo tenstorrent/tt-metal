@@ -180,6 +180,7 @@ std::shared_ptr<FlatDriscSenders> FlatDriscSenders::get(
             live->stop();
         }
     }
+    log_info(tt::LogOp, "flat DRISC senders: launching {} slots ({})", n_slots, to_string(tiles));
     std::shared_ptr<FlatDriscSenders> senders(new FlatDriscSenders(mesh_device, n_slots, tiles, probe));
     registry[&mesh_device] = senders;
     return senders;

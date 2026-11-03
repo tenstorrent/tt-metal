@@ -326,7 +326,7 @@ FlatProgramHandles add_flat_routed_expert_program(
     {
         TT_FATAL(p.r_ <= 8, "flat DRISC: <= 8 receivers a slot (se_drisc.hpp SE_DRISC_MAX_R)");
         TT_FATAL(
-            FlatDriscSenders::running_on(mesh_device, p.drisc_n, p.drisc_tiles, p.drisc_probe),
+            !any_drisc || FlatDriscSenders::running_on(mesh_device, p.drisc_n, p.drisc_tiles, p.drisc_probe),
             "flat_routed_expert: the DRISC senders of {} slots ({}) are not running on this mesh device "
             "(FlatDriscSenders::get)",
             p.drisc_n,

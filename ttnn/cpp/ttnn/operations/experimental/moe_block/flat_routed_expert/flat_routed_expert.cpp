@@ -5,6 +5,7 @@
 #include "flat_routed_expert.hpp"
 
 #include <algorithm>
+#include <tt-logger/tt-logger.hpp>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -198,6 +199,18 @@ FlatRoutedExpertResources ensure_flat_routed_expert_resources(
         "flat_routed_expert: {} gate/up cores' freed words overrun the x-ready word at {}",
         r.plan->gu.size(),
         X_READY_OFF);
+    // (no slot from a DRISC - gu_source tensix / tensix_split / tensix_noc1 / auto_tensix: the gate/up cores read every
+    // weight block themselves, so no DRISC sender is launched on the DRAM cores at all)
+    if (std::none_of(r.plan->slot_drisc.begin(), r.plan->slot_drisc.end(), [](bool d) { return d; })) {
+        static std::once_flag logged;
+        std::call_once(logged, [&] {
+            log_info(
+                tt::LogOp,
+                "flat_routed_expert: gu_source {} - no DRISC senders launched (gate/up cores read their own weights)",
+                to_string(r.plan->gu_source));
+        });
+        return r;
+    }
     // (one attachment per tile choice: a request for another choice relaunches the mesh's senders,
     // FlatDriscSenders::get)
     const std::string drisc_name = r.plan->drisc_tiles == FlatDriscTiles::both
