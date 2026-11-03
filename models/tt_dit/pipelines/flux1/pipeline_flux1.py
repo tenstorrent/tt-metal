@@ -24,7 +24,7 @@ from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, distribut
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.flux1.text_encoder import TextEncoder
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
-from models.tt_dit.solvers import EulerSolver
+from models.tt_dit.solvers import EulerSolver, calculate_shift
 from models.tt_dit.utils.tensor import from_torch_to_devices
 from models.tt_dit.utils.tracing import Tracer
 
@@ -270,7 +270,7 @@ class Flux1Pipeline(PipelineAPIMixin):
 
         logger.info("preparing timesteps...")
 
-        mu = _calculate_shift(latents_sequence_length, self._solvers[0].scheduler)
+        mu = calculate_shift(latents_sequence_length, self._solvers[0].scheduler)
         for solver in self._solvers:
             solver.set_schedule(sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps), mu=mu)
         timesteps = self._solvers[0].timesteps
@@ -457,14 +457,3 @@ def _latent_image_ids(*, height: int, width: int) -> torch.Tensor:
     latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
 
     return latent_image_ids.reshape(latent_image_id_height * latent_image_id_width, latent_image_id_channels)
-
-
-def _calculate_shift(image_seq_len: int, scheduler: FlowMatchEulerDiscreteScheduler) -> float:
-    base_seq_len = scheduler.config.get("base_image_seq_len", 256)
-    max_seq_len = scheduler.config.get("max_image_seq_len", 4096)
-    base_shift = scheduler.config.get("base_shift", 0.5)
-    max_shift = scheduler.config.get("max_shift", 1.15)
-
-    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
-    b = base_shift - m * base_seq_len
-    return image_seq_len * m + b

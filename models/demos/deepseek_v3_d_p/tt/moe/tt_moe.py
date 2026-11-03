@@ -82,8 +82,12 @@ class TtMoe(LightweightModule):
         use_latent_moe: bool = False,
         latent_use_norm: bool = True,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        gate_bias_centered: bool = False,
     ) -> bool:
         """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
+
+        ``gate_bias_centered`` (MOE_GATE_BIAS_CENTERED) must match the model's, or a cache missing the
+        centred gate bias reports complete.
 
         ``use_latent_moe`` must be passed for Kimi-K3, otherwise a cache missing the latent
         projections would be reported complete and __init__ would then fail loading them.
@@ -94,7 +98,7 @@ class TtMoe(LightweightModule):
         complete and the empty placeholder is loaded as the weights.
         """
         prefix = f"layer_{layer_idx}"
-        if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
+        if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate", bias_centered=gate_bias_centered):
             return False
         if not TtRoutedExpert.check_cache_complete(
             cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
@@ -125,6 +129,7 @@ class TtMoe(LightweightModule):
         routed_emb_dim: int | None = None,
         latent_weights: dict | None = None,
         latent_use_norm: bool = True,
+        gate_bias_centered: bool = False,
     ):
         """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy.
 
@@ -143,6 +148,7 @@ class TtMoe(LightweightModule):
             gate_config = TtMoEGateConfig(
                 dim=emb_dim,
                 n_routed_experts=gate_weights["weight"].shape[0],
+                bias_centered=gate_bias_centered,
             )
 
             TtMoEGatePrefill.build_ttnn_cache(
@@ -242,6 +248,7 @@ class TtMoe(LightweightModule):
         moe_transport: Optional[str] = "direct",
         combine_fwd_reduction: Optional[int] = None,
         dispatch_fwd_vc_pages: Optional[int] = None,
+        gate_bias_centered: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -359,6 +366,8 @@ class TtMoe(LightweightModule):
                 Needed only when the transport resolves to "fabric2d".
             dispatch_fwd_vc_pages: dispatch_fabric2d's fwd_vc_pages, the model's DISPATCH_FWD_VC_PAGES.
                 None takes the op's default.
+            gate_bias_centered: cache and use the gate's correction bias mean-centred (the model config's
+                MOE_GATE_BIAS_CENTERED, see tt_moe_gate_prefill.centre_gate_bias).
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -451,6 +460,7 @@ class TtMoe(LightweightModule):
             n_limited_groups=n_limited_groups,
             route_scale=route_scale,
             max_sp_dim=max_gate_seq_len_per_chip,
+            bias_centered=gate_bias_centered,
         )
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
         # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
@@ -458,14 +468,14 @@ class TtMoe(LightweightModule):
         if gate_score_func is not None:
             gate_config.score_func = gate_score_func
 
-        # Handle cache-only case (gate_weights=None)
+        # Cache-only case (gate_weights=None): no tensors, so the gate loads from weight_cache_path and refuses
+        # a missing centred bias instead of caching a placeholder under its name.
         if gate_weights is not None:
             gate_weight = gate_weights["weight"]
             gate_bias = gate_weights["e_score_correction_bias"]
         else:
-            # Dummy tensors for cache load (ignored when cache exists)
-            gate_weight = torch.empty(num_routed_experts, emb_dim)
-            gate_bias = torch.empty(num_routed_experts)
+            gate_weight = None
+            gate_bias = None
 
         self.gate = TtMoEGatePrefill(
             gate_config,

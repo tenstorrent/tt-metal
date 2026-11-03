@@ -86,9 +86,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "ckernel_sfpu_reduce_custom.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
+#include "llk_sfpu/ckernel_sfpu_reduce_custom.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
