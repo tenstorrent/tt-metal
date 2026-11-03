@@ -304,8 +304,12 @@ inline void calculate_sfpu_binary_div(
     if constexpr (ITERATIONS == 8) {
         {
             const std::uint32_t a0 = dst_index_in0 * 64, a1 = dst_index_in1 * 64, ao = dst_index_out * 64;
+            TTI_SETC16(addr_mod_t::addr_mod_dest_reg_addr[ADDR_MOD_4], 2);
 #ifndef DISABLE_SFPLOADMACRO
             if constexpr (!is_fp32_dest_acc_en) {
+                TTI_SFPSETMAN(0, p_sfpu::LCONST_neg1, 12, 0);
+                TTI_SFPLOADI(0, 2, 0x0084);
+                TTI_SFPCONFIG(0, 4 + 0, 0);
                 TTI_SFPLOADI(6, 0, 32640);
                 TTI_SFPLOADI(7, 2, 32767);
                 TTI_REPLAY(0, 12, 1, 1);
@@ -343,7 +347,7 @@ inline void calculate_sfpu_binary_div(
                 TTI_SFPIADD(0, 1, 0, 4);
                 TTI_SFPLOADI(1, 0, 65535);
                 TTI_SFPAND(0, 1, 0, 0);
-                TT_SFPSTORE(0, 0, 2, ao);
+                TT_SFPSTORE(0, 0, 0, ao);
 #pragma GCC unroll 1
                 for (int d = 1; d < ITERATIONS; d++) {
                     TTI_REPLAY(0, 12, 0, 0);
@@ -369,7 +373,7 @@ inline void calculate_sfpu_binary_div(
                     TTI_SFPIADD(0, 1, 0, 4);
                     TTI_SFPLOADI(1, 0, 65535);
                     TTI_SFPAND(0, 1, 0, 0);
-                    TT_SFPSTORE(0, 0, 2, ao);
+                    TT_SFPSTORE(0, 0, 0, ao);
                 }
                 return;
             }
@@ -413,7 +417,7 @@ inline void calculate_sfpu_binary_div(
                 TTI_SFPIADD(0, 1, 0, 4);
                 TTI_SFPLOADI(1, 0, 65535);
                 TTI_SFPAND(0, 1, 0, 0);
-                TT_SFPSTORE(0, 0, 2, ao);
+                TT_SFPSTORE(0, 0, 0, ao);
 #pragma GCC unroll 1
                 for (int d = 1; d < ITERATIONS; d++) {
                     TTI_REPLAY(0, 12, 0, 0);
@@ -440,7 +444,7 @@ inline void calculate_sfpu_binary_div(
                     TTI_SFPIADD(0, 1, 0, 4);
                     TTI_SFPLOADI(1, 0, 65535);
                     TTI_SFPAND(0, 1, 0, 0);
-                    TT_SFPSTORE(0, 0, 2, ao);
+                    TT_SFPSTORE(0, 0, 0, ao);
                 }
                 return;
             }
@@ -485,7 +489,7 @@ inline void calculate_sfpu_binary_div(
                 TTI_SFPIADD(0, 0, 1, 2);
                 TTI_SFPMOV(0, 2, 4, 0);
                 TTI_SFPENCC(3, 0, 0, 10);
-                TT_SFPSTORE(4, 0, 2, ao);
+                TT_SFPSTORE(4, 0, 0, ao);
 #pragma GCC unroll 1
                 for (int d = 1; d < ITERATIONS; d++) {
                     TTI_REPLAY(0, 16, 0, 0);
@@ -511,7 +515,7 @@ inline void calculate_sfpu_binary_div(
                     TTI_SFPIADD(0, 0, 1, 2);
                     TTI_SFPMOV(0, 2, 4, 0);
                     TTI_SFPENCC(3, 0, 0, 10);
-                    TT_SFPSTORE(4, 0, 2, ao);
+                    TT_SFPSTORE(4, 0, 0, ao);
                 }
                 return;
             }
@@ -592,15 +596,6 @@ inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
         // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
         sfpu_reciprocal_init<false>();
-        if constexpr (BINOP == BinaryOp::DIV) {
-            addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-#ifndef DISABLE_SFPLOADMACRO
-            TTI_SFPSETMAN(0, p_sfpu::LCONST_neg1, 12, 0);
-            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x0084);
-            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
-            TTI_SFPCONFIG(0, 4 + 0, 0);
-#endif
-        }
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
     }
