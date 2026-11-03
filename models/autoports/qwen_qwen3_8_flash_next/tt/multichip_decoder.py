@@ -1413,7 +1413,15 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
         self._decode_conv_history_packed = (
             self._conv_decode_phase and b in flat_gdn_batches() and s == 1 and self.conv_decode_history_enabled
         )
-        if flat and not self._decode_conv_history_packed:
+        lane_conv = (
+            flat and getattr(self, "_b1_flat", False) and os.environ.get("QWEN_FLASH_GDN_B1_LANECONV", "1") == "1"
+        )
+        if lane_conv:
+            # One row: the single-lane convolution (~45 us) beats the packed one (~65 us); same per-lane
+            # [B,S,2560] contract as decode_forward, so the conv and roll below are the per-lane ones.
+            self._decode_conv_history_packed = False
+            projected = ttnn.reshape(projected, (1, 1, 2560))
+        elif flat and not self._decode_conv_history_packed:
             raise ValueError("Flat decode requires the packed history convolution")
         if self._decode_conv_history_packed:
             from .gdn_conv_pack import history_convolution
@@ -1440,7 +1448,7 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
                 )
             q, k, v = [ttnn.concat([row[i] for row in lanes], dim=0) if b > 1 else lanes[0][i] for i in range(3)]
             q, k, v = [ttnn.to_layout(t[:, :s, :], ttnn.TILE_LAYOUT) for t in (q, k, v)]
-        self._roll_conv(projected, flat=flat)
+        self._roll_conv(projected, flat=flat and not lane_conv)
         a = ttnn.typecast(ttnn.to_layout(projections[..., 4096:4108], ttnn.TILE_LAYOUT), ttnn.float32)
         # Chunked prefill consumes log-space decay; every other recurrence takes exp(g).
         g = ttnn.multiply(
