@@ -49,46 +49,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t PREV_NUM_FACES = 4;
     constexpr std::uint32_t NEXT_NUM_FACES = 2;
 
+    const ckernel::TensorShape prev_shape = ckernel::make_tensor_shape_from_legacy(PREV_FACE_R, PREV_NUM_FACES);
+    const ckernel::TensorShape next_shape = ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES);
+
     // TO_FROM_INT8 lands in the impl's third template param, which is skip_int8 (inverted polarity: the
     // int8 derivation runs only when skip_int8 is false). Both runs use the same value, so it does not
     // affect the equivalence being asserted here.
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        prev_src,
-        prev_src,
-        prev_dst,
-        prev_dst,
-        ckernel::make_tensor_shape_from_legacy(PREV_FACE_R, PREV_NUM_FACES),
-        ckernel::make_tensor_shape_from_legacy(PREV_FACE_R, PREV_NUM_FACES),
-        PREV_SIZE,
-        PREV_SIZE);
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(prev_src, prev_src, prev_dst, prev_dst, prev_shape, prev_shape, PREV_SIZE, PREV_SIZE);
 
     if (params.CONFIGURE_TEST_RUN_IDX == 0)
     {
         // Format + shape in one reconfig.
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, /*skip_int8=*/TO_FROM_INT8>(
-            next_src, next_dst, NEXT_SIZE, ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES));
+            next_src, next_dst, NEXT_SIZE, next_shape);
         _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, /*skip_int8=*/TO_FROM_INT8>(
-            next_src, next_dst, NEXT_SIZE, ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES));
+            next_src, next_dst, NEXT_SIZE, next_shape);
     }
     else
     {
         // Format only (shape left at prev), then shape-only via reconfig_tile_shape.
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, /*skip_int8=*/TO_FROM_INT8>(
-            next_src, next_dst, NEXT_SIZE, ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES));
+            next_src, next_dst, NEXT_SIZE, next_shape);
         _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, /*skip_int8=*/TO_FROM_INT8>(
-            next_src, next_dst, NEXT_SIZE, ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES));
+            next_src, next_dst, NEXT_SIZE, next_shape);
 
-        _llk_unpack_reconfig_tile_shape_srca_(NEXT_SIZE, ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES));
-        _llk_unpack_reconfig_tile_shape_srcb_(NEXT_SIZE, ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES));
+        _llk_unpack_reconfig_tile_shape_srca_(NEXT_SIZE, next_shape);
+        _llk_unpack_reconfig_tile_shape_srcb_(NEXT_SIZE, next_shape);
     }
 
-    ckernel::unpacker::are_unpackers_AB_configured_correctly(
-        next_src,
-        next_dst,
-        next_src,
-        next_dst,
-        ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES),
-        ckernel::make_tensor_shape_from_legacy(NEXT_FACE_R, NEXT_NUM_FACES));
+    ckernel::unpacker::are_unpackers_AB_configured_correctly(next_src, next_dst, next_src, next_dst, next_shape, next_shape);
 }
 
 #endif
