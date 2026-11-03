@@ -869,7 +869,7 @@ TEST(RuntimeArgCountCacheHit, CPU_EmptyCommonArgsSurviveCountFinalization) {
 
     ProgramDescriptor with_common = desc;
     with_common.kernels[0].common_runtime_args = {10u, 11u};
-    Program populated{with_common};
+    Program populated{*mock.device, with_common};
     ProgramDescriptor cleared = with_common;
     cleared.kernels[0].common_runtime_args.clear();
     const uint32_t common_before = GetCommonRuntimeArgs(populated, 0)[0];

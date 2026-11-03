@@ -367,7 +367,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramConstruction_CbWithBothBuffer
         .tensor = &tensor,
     });
 
-    EXPECT_ANY_THROW((void)Program{desc});
+    EXPECT_ANY_THROW((void)Program(*get_mesh_device(), desc));
 }
 
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_CbTensor_UpdatesAddress) {

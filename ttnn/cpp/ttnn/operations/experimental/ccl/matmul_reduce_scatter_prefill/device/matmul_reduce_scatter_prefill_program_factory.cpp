@@ -924,8 +924,11 @@ MatmulReduceScatterPrefillMeshWorkloadFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
     const detail::Plan& plan = attrs.plan();
+    auto& mesh_device = *tensor_args.input_tensor.device();
     for (const auto& coord : tensor_coords.coords()) {
-        Program program{MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord)};
+        Program program{
+            mesh_device,
+            MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord)};
         shared_variables_t sv{
             .reader = GetCommonRuntimeArgs(program, args::kernel_index::READER),
             .writer = GetCommonRuntimeArgs(program, args::kernel_index::WRITER),
