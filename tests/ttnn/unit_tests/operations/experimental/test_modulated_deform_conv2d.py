@@ -19,6 +19,9 @@ from models.common.utility_functions import comp_pcc
 # op's HiFi2 products and its bfloat16 sum over kernel positions shrink outputs by about 0.55%; a
 # coefficient truncated instead of rounded to bfloat16 adds about 0.2% more.
 MAX_RELATIVE_BIAS = 1e-2
+# Blackhole P100's compute grid, the smallest BEVFormer-base's sharded DCN inputs are sized for: on fewer
+# cores, such as Wormhole's 64, a core's shard of them outgrows its L1.
+MODEL_GRID_CORES = 110
 
 
 def out_size(size, kernel, stride, padding, dilation):
@@ -168,6 +171,9 @@ def test_modulated_deform_conv2d_sharded_input(device, batch, in_h, in_w, channe
     are read from changes. ``shard_rows`` None shards the rows as the model does, evenly over the
     whole grid in whole 32-row blocks."""
     if shard_rows is None:
+        grid = device.compute_with_storage_grid_size()
+        if grid.x * grid.y < MODEL_GRID_CORES:
+            pytest.skip(f"the model's sharding needs a grid of {MODEL_GRID_CORES} cores, got {grid.x * grid.y}")
         shard_rows = grid_shard_rows(device, batch * in_h * in_w)
     conv = ((3, 3), (1, 1), (1, 1), (1, 1))
     x, offset, logits, weight, bias = random_inputs(batch, in_h, in_w, channels, c_out, *conv, 4.0)
