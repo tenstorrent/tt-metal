@@ -20,7 +20,12 @@ except ImportError:  # serving images (TTI/CI) do not ship the bring-up runtime
 
 import ttnn
 from models.autoports.qwen_qwen3_8_flash_next.tt.model import QwenFlashNextModel
-from models.autoports.qwen_qwen3_8_flash_next.tt.state_ops import advance_positions, prepare_sample_seeds, record_tokens
+from models.autoports.qwen_qwen3_8_flash_next.tt.state_ops import (
+    advance_positions,
+    prepare_sample_seeds,
+    record_tokens,
+    zero_inplace,
+)
 from models.common.modules.sampling.sampling_1d import Sampling1D
 
 
@@ -758,9 +763,14 @@ class QwenFlashNextGenerator(Generator):
         return tokens
 
     def _invalidate_decode_keys(self):
+        """Prefill/reset may rewrite any slot's pooled rows: decode views' dense keys rebuild next step."""
+        seen = set()
         for view in self.decode_views.values():
-            if hasattr(view, "invalidate_dense_keys"):
-                view.invalidate_dense_keys()
+            for layer in view.model.layers:
+                for _, marker in getattr(layer.attention, "dense_keys", {}).values():
+                    if id(marker) not in seen:
+                        seen.add(id(marker))
+                        zero_inplace(self.mesh, marker)
 
     def reset(self):
         self._invalidate_decode_keys()

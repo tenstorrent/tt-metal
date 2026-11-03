@@ -87,10 +87,10 @@ def transfer(attention, source, output, positions, page_table, *, seq, lane=None
         runtime.append(((core.x, core.y), [*[t.buffer_address() for t in tensors], begin, count, stride]))
     scratch = 2048 + 128 + 128 + attention.max_context // 32 * 4
     source = Path(__file__).with_name("kernels") / "qsa_pooled_paged.cpp"
-    marker = getattr(attention, "dense_marker", None) if gather and seq == 1 else None
-    if marker is not None:
-        # One-row view: per-layer dense keys, rebuild only rows the marker does not cover.
-        _dense_gather(attention, output, positions, page_table, args, tensors, marker, grid)
+    dense = getattr(attention, "dense_keys", {}).get(lane) if gather and seq == 1 else None
+    if dense is not None:
+        # Decode view lane with its own dense keys: rebuild only rows its marker does not cover.
+        _dense_gather(attention, dense[0], positions, page_table, args, [*tensors[:1], dense[0], *tensors[2:]], dense[1], grid)
         return
     if gather and seq == 1 and os.environ.get("QWEN_FLASH_QSA_RECT_GATHER", "1") == "1":
         # Decode lane gather: one grid rectangle sharing one argument list; each worker takes
@@ -156,9 +156,9 @@ def _dense_gather(attention, output, positions, page_table, args, tensors, marke
     ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
 
 
-def _dense_marker_update(attention, positions, seq):
+def _dense_marker_update(attention, positions, seq, lane, marker):
     """After the step's consumers: record [slot, completed rows] for the next incremental gather."""
-    tensors = [positions, attention._step_slots, attention.dense_marker]
+    tensors = [positions, attention._step_slots, marker]
     core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     cb = ttnn.CBDescriptor(
         total_size=512,
@@ -169,7 +169,7 @@ def _dense_marker_update(attention, positions, seq):
         kernel_source=str(Path(__file__).with_name("kernels") / "qsa_dense_marker.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core,
-        compile_time_args=[seq, 0] + _accessor_args(tensors),
+        compile_time_args=[seq, lane] + _accessor_args(tensors),
         runtime_args=[((0, 0), [t.buffer_address() for t in tensors])],
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -302,7 +302,9 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
     defer_rounding = os.environ.get("QWEN_FLASH_QSA_JOINT_ROUND", "1") == "1"
     selected_rows = []
     for lane in range(attention.batch_size):
-        transfer(attention, attention.pooled_cache, attention.pooled_keys, positions, page_table, seq=seq, lane=lane)
+        dense = getattr(attention, "dense_keys", {}).get(lane) if seq == 1 else None
+        keys = attention.pooled_keys if dense is None else dense[0]
+        transfer(attention, attention.pooled_cache, keys, positions, page_table, seq=seq, lane=lane)
         prefix_args = {}
         if getattr(attention, "indexer_prefix_cap", False):
             prepare_indexer_prefix(
@@ -316,7 +318,7 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
             prefix_args["valid_end_tensor"] = attention.indexer_prefix_bound
         scores = ttnn.experimental.indexer_score_dsa(
             qq[lane : lane + 1],
-            attention.pooled_keys,
+            keys,
             attention.indexer_weights[lane : lane + 1, :, :padded, :],
             chunk_start_idx=attention.blocks - 32,
             key_compression_ratio=1,
@@ -372,7 +374,10 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
             metadata_mode="per_row_one_row_per_core",
             workers=grid.x * grid.y,
         )
+        for lane, (_, marker) in getattr(attention, "dense_keys", {}).items():
+            _dense_marker_update(attention, positions, seq, lane, marker)
         return selected
-    if seq == 1 and getattr(attention, "dense_marker", None) is not None:
-        _dense_marker_update(attention, positions, seq)
+    if seq == 1:
+        for lane, (_, marker) in getattr(attention, "dense_keys", {}).items():
+            _dense_marker_update(attention, positions, seq, lane, marker)
     return selected_rows[0] if len(selected_rows) == 1 else ttnn.concat(selected_rows, dim=0)

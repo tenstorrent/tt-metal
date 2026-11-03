@@ -41,6 +41,30 @@ def _ops(owner):
     return result
 
 
+def _dense_keys(pool, owner, lanes):
+    """Dense pooled keys + [slot, rows valid] marker per (layer, lane), shared by every view
+    running that lane (paged_qsa._dense_gather): 16 MB/chip per lane and layer at 262K."""
+    result = {}
+    for lane in lanes:
+        key = ("dense_keys", id(owner), lane)
+        if key not in pool:
+            pool[key] = (
+                ttnn.zeros(
+                    tuple(owner.attention.pooled_keys.shape),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=owner.mesh,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ttnn.zeros(
+                    (1, 8), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=owner.mesh,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            )
+        result[lane] = pool[key]
+    return result
+
+
 def _decoder(owner, batch, pool):
     ops = _ops(owner.ops)
     result = _clone(owner, ops)
@@ -77,6 +101,10 @@ def _decoder(owner, batch, pool):
         attention.pooled_keys = _shared_zero(
             pool, "pooled_keys", owner.attention.pooled_keys, owner.attention.pooled_keys.shape, owner.mesh
         )
+        # Lanes 0..QWEN_FLASH_DECODE_DENSE_ROWS-1 keep incremental dense pooled keys (default 2:
+        # the one-user and two-user cases; 0 disables).
+        rows = int(os.environ.get("QWEN_FLASH_DECODE_DENSE_ROWS", "2")) if batch <= MAX_ROWS else 0
+        attention.dense_keys = _dense_keys(pool, owner, range(min(batch, rows)))
         # All lanes' RoPE in one pass (fused_decoder._batched_rope) instead of per-lane kernels.
         attention.batched_rope = batch <= MAX_ROWS and os.environ.get("QWEN_FLASH_DECODE_B4_ROPE", "1") != "0"
     if owner.ple is not None:
