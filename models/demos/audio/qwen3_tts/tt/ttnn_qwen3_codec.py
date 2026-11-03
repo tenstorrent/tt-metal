@@ -48,7 +48,7 @@ import torch
 
 import ttnn
 from models.demos.audio.qwen3_tts import weights as checkpoint
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import MASK_FILL, _compute_config
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import MASK_FILL, _compute_config, _rms_norm_config
 
 SNAKE_EPS = 1e-9
 # Frame counts the decoder rounds up to. Every distinct length compiles its own convolution
@@ -357,6 +357,7 @@ class TtCodecDecoder:
         self.p = parameters
         self.config = parameters["config"]
         self.compute_config = _compute_config(device)
+        self.norm_config = _rms_norm_config(device)
         # Config tensors in DRAM: in L1_SMALL, Wormhole hung at 64 frames and up (README).
         self.conv_config = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16, config_tensors_in_dram=True)
         self.trans_conv_config = ttnn.Conv2dConfig(config_tensors_in_dram=True)
@@ -502,11 +503,15 @@ class TtCodecDecoder:
         )
 
         for layer in params["layers"]:
-            normed = ttnn.rms_norm(x, weight=layer["input_layernorm"], epsilon=eps)
+            normed = ttnn.rms_norm(
+                x, weight=layer["input_layernorm"], epsilon=eps, compute_kernel_config=self.norm_config
+            )
             attended = self._attention(normed, layer, cos, sin, mask, length)
             x = ttnn.add(x, ttnn.multiply(attended, layer["attn_scale"]))
 
-            normed = ttnn.rms_norm(x, weight=layer["post_attention_layernorm"], epsilon=eps)
+            normed = ttnn.rms_norm(
+                x, weight=layer["post_attention_layernorm"], epsilon=eps, compute_kernel_config=self.norm_config
+            )
             gate = ttnn.linear(normed, layer["gate_proj"], compute_kernel_config=self.compute_config)
             up = ttnn.linear(normed, layer["up_proj"], compute_kernel_config=self.compute_config)
             projected = ttnn.linear(
@@ -514,7 +519,7 @@ class TtCodecDecoder:
             )
             x = ttnn.add(x, ttnn.multiply(projected, layer["mlp_scale"]))
 
-        x = ttnn.rms_norm(x, weight=params["norm"], epsilon=eps)
+        x = ttnn.rms_norm(x, weight=params["norm"], epsilon=eps, compute_kernel_config=self.norm_config)
         return ttnn.linear(
             x, params["output_proj"], bias=params["output_proj_bias"], compute_kernel_config=self.compute_config
         )
