@@ -35,8 +35,10 @@ struct SparseMatmulDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    // static ttsl::hash::hash_t compute_program_hash(
-    //     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    // The default hash minus zero_init_output: the flag only decides whether the output is zero-filled before the
+    // program runs, so both settings share one cached program.
+    static ttsl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     // static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
     //     const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
@@ -67,7 +69,8 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
     const std::optional<Tensor>& indices = std::nullopt,
     const std::optional<Tensor>& bias = std::nullopt,
-    const ttnn::PrefetcherPipeList& prefetcher_pipes = {});
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {},
+    bool zero_init_output = true);
 
 SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const Tensor& input_tensor_a,
@@ -87,6 +90,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
     const std::optional<Tensor>& indices = std::nullopt,
     const std::optional<Tensor>& bias = std::nullopt,
-    const ttnn::PrefetcherPipeList& prefetcher_pipes = {});
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {},
+    bool zero_init_output = true);
 
 }  // namespace ttnn::prim

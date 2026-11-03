@@ -636,7 +636,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
                 "If using optional output tensors, all output tensors must have a value");
             output_tensors.emplace_back(optional_output_tensor.value());
         }
-        if (!compact_output) {
+        if (!compact_output && operation_attributes.zero_init_output) {
             for (auto& output_tensor : output_tensors) {
                 output_tensor = ttnn::zeros_like(
                     output_tensor,
@@ -657,6 +657,9 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     }
     // Compact output requires a caller-supplied tensor, so this path is never compact.
     for (auto& output_tensor : output_tensors) {
+        if (!operation_attributes.zero_init_output) {
+            break;
+        }
         output_tensor = ttnn::zeros_like(
             output_tensor,
             std::nullopt,
@@ -668,8 +671,12 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     return output_tensors;
 }
 
-// static ttsl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
-//     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+ttsl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto program_attributes = operation_attributes;
+    program_attributes.zero_init_output = true;
+    return ttsl::hash::hash_objects_with_default_seed(program_attributes, tensor_args);
+}
 
 std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation_args(
     const Tensor& input_tensor_a,
@@ -689,7 +696,8 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<Tensor>& indices,
     const std::optional<Tensor>& bias,
-    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    bool zero_init_output) {
     auto sparse_matmul_attributes = SparseMatmulParams{
         nnz,
         is_input_a_sparse,
@@ -704,7 +712,8 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
         output_tile,
         global_cb,
         sub_device_id,
-        prefetcher_pipes};
+        prefetcher_pipes,
+        zero_init_output};
 
     auto parameters = create_sparse_matmul_attributes(
         input_tensor_a, input_tensor_b, sparsity, sparse_matmul_attributes, {optional_output_tensor});
@@ -745,7 +754,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<Tensor>& indices,
     const std::optional<Tensor>& bias,
-    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    bool zero_init_output) {
     auto [params, inputs] = sparse_matmul_build_operation_args(
         input_tensor_a,
         input_tensor_b,
@@ -764,7 +774,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
         sub_device_id,
         indices,
         bias,
-        prefetcher_pipes);
+        prefetcher_pipes,
+        zero_init_output);
     if (!params.prefetcher_pipes.empty()) {
         // The request goes out ahead of the program, so it is validated here as well as in launch: a
         // request whose matmul is then rejected leaves the prefetcher blocked on a pipe ring nothing
@@ -819,6 +830,7 @@ SparseMatmulParams create_sparse_matmul_attributes(
         matmul_struct.sub_device_id,
         // Not routed through MatmulParams above: create_matmul_attributes would validate the pipes
         // against the dense matmul's program config rules, and the sparse op validates its own.
-        parameters.prefetcher_pipes};
+        parameters.prefetcher_pipes,
+        parameters.zero_init_output};
 }
 }  // namespace ttnn::prim

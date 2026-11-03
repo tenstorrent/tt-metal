@@ -1479,3 +1479,82 @@ def test_quasar_sparse_matmul_interm0_format_tile_size(device, fp32_dest_acc_en,
             pcc_threshold=0.999,
             check_ulp=False,
         )
+
+
+@pytest.mark.parametrize("num_experts", [8])
+def test_sparse_matmul_zero_init_output(device, num_experts):
+    """zero_init_output=False skips the zero fill: the batches the sparsity skips keep the output buffer's old
+    contents, and every computed batch is identical to the default (zero-filled) call."""
+    torch.manual_seed(0)
+    m, k, n = 16, 128, 512
+    b, s = 1, 4
+    tile_h, tile_w = 16, 32
+    in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
+    sparsity = torch.ones((b, s, 1, num_experts), dtype=torch.bfloat16)
+    sparsity.view(-1)[torch.randperm(sparsity.numel())[: sparsity.numel() // 2]] = 0.0
+    nnz = int((sparsity != 0).sum().item())
+
+    def to_tt(t, dtype, layout, tile=None):
+        return ttnn.from_torch(
+            t, tile=tile, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    in0_t = to_tt(in0, ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.Tile((tile_h, 32)))
+    in1_t = to_tt(in1, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.Tile((32, tile_w)))
+    sparsity_t = to_tt(sparsity, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+    output_tile = ttnn.Tile([tile_h, tile_w])
+    core_x, core_y = 4, 4
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=m // tile_h,
+        per_core_N=int(math.ceil(n / tile_w)) // (core_x * core_y),
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    def run(**kwargs):
+        return ttnn.sparse_matmul(
+            in0_t,
+            in1_t,
+            sparsity=sparsity_t,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=program_config,
+            # a caller-supplied output carries its own tile (the op rejects both)
+            **({} if "optional_output_tensor" in kwargs else {"output_tile": output_tile}),
+            **kwargs,
+        )
+
+    fill = 7.0
+    shape = list(ttnn.to_torch(run()).shape)
+    # the default call into a caller-supplied output, then the same call with zero_init_output=False: identical
+    # programs, so the second reuses the first's cache entry
+    reference = ttnn.to_torch(
+        run(
+            optional_output_tensor=to_tt(
+                torch.full(shape, fill, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, output_tile
+            )
+        )
+    )
+    entries = device.num_program_cache_entries()
+    prefilled = to_tt(torch.full(shape, fill, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, output_tile)
+    skipped = ttnn.to_torch(run(optional_output_tensor=prefilled, zero_init_output=False))
+    # zero_init_output is not part of the program: the second call reuses the first call's program
+    assert device.num_program_cache_entries() == entries, "zero_init_output=False compiled a second program"
+
+    for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
+        got = skipped[b_i, s_i, 0, e_i]
+        if sparsity[b_i, s_i, 0, e_i] == 0.0:
+            assert torch.all(reference[b_i, s_i, 0, e_i] == 0), f"default call left batch {(b_i, s_i, e_i)} non-zero"
+            assert torch.all(got == fill), f"zero_init_output=False overwrote skipped batch {(b_i, s_i, e_i)}"
+        else:
+            assert torch.equal(got, reference[b_i, s_i, 0, e_i]), f"computed batch {(b_i, s_i, e_i)} differs"
