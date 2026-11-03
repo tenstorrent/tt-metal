@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
@@ -15,6 +16,8 @@ namespace ttnn::experimental::nomic_embed_text_v2_moe {
 
 // Sizes of one call and how its work splits over the cores.
 struct RoutedCombineLayout {
+    // false for a call without weights and bias: a one-slot gather that only tilizes.
+    bool combine = true;
     uint32_t top_k = 0;
     uint32_t padded_tokens = 0;
     uint32_t hidden_tiles = 0;
@@ -34,8 +37,8 @@ struct RoutedCombineDeviceOperation {
     struct tensor_args_t {
         const Tensor& expert_rows;
         const Tensor& combine_index;
-        const Tensor& combine_weights;
-        const Tensor& bias;
+        std::optional<Tensor> combine_weights;
+        std::optional<Tensor> bias;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -62,8 +65,8 @@ namespace ttnn::prim {
 Tensor routed_combine(
     const Tensor& expert_rows,
     const Tensor& combine_index,
-    const Tensor& combine_weights,
-    const Tensor& bias,
+    const std::optional<Tensor>& combine_weights,
+    const std::optional<Tensor>& bias,
     uint32_t num_tokens,
     const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config);

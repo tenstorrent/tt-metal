@@ -7,7 +7,7 @@ Four device operators stand in for the reference's whole attention path. Three o
 a convention that the wrong choice satisfies just as well:
 
   nlp_create_qkv_heads   three-major [q | k | v], not head-major
-  rotary_embedding_hf    NeoX half-split with concat-widened tables, not GPT-J interleaved
+  rotary_embedding_llama adjacent pairs: pair-permuted q and k, pair-interleaved tables, not concat-widened
   SDPA                   bidirectional, not causal
 
 Each produces finite, plausible output taken the other way, so each carries a negative control
@@ -29,13 +29,21 @@ from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe im
     apply_rotary_emb,
     build_extended_attention_mask,
 )
-from models.experimental.nomic_embed_text_v2_moe.tt.attention import attention_placement, sdpa_program_config
+from models.experimental.nomic_embed_text_v2_moe.tt.attention import (
+    attention_placement,
+    rotary_heads_per_view,
+    sdpa_program_config,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    ACTIVATION_L1_MAX_TILES,
     RotaryTables,
     additive_attention_mask,
+    rotary_pair_permutation,
+    rotary_rotation_matrix,
     rotary_tables,
     to_device,
 )
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import l1_bank_bytes
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -77,14 +85,22 @@ def reference_cos_sin(config, seqlen: int):
     return rotary._cos_cached, rotary._sin_cached
 
 
-def fold_batch_into_heads(x: torch.Tensor) -> torch.Tensor:
-    """(B, A, S, D) -> (1, B*A, S, D), the prefill layout rotary_embedding_hf takes.
+@pytest.fixture
+def rotation_matrix(device, tt_config):
+    return rotary_rotation_matrix(device, tt_config.core_grid)
 
-    The op's prefill mode wants a leading batch of 1. cos/sin are (1, 1, S, D) and broadcast
-    over the head axis, so folding batch into heads applies the same table to every row.
-    """
-    batch, heads, seqlen, head_dim = x.shape
-    return x.reshape(1, batch * heads, seqlen, head_dim)
+
+def rotary_input(x: torch.Tensor, folded: bool = False) -> torch.Tensor:
+    """(B, S, A, D) queries in the layout the model rotates them in: (B, A, S, D) with the head dims
+    pair-permuted, or (B*A, 1, S, D) when folded."""
+    batch, seqlen, heads, head_dim = x.shape
+    x = x.permute(0, 2, 1, 3)[..., rotary_pair_permutation(head_dim)]
+    return x.reshape(batch * heads, 1, seqlen, head_dim) if folded else x
+
+
+def reference_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """apply_rotary_emb on (B, S, A, D), returned as (B, A, S, D) with the head dims pair-permuted."""
+    return rotary_input(apply_rotary_emb(x, cos, sin))
 
 
 # Head splitting.
@@ -137,35 +153,74 @@ def test_head_major_qkv_view_is_decorrelated(device, config):
 
 @pytest.mark.parametrize("seqlen", [128, 512])
 def test_rotary_tables_match_the_reference(device, config, seqlen):
-    """The tables come from tt_transformers' get_rot_mats_hf; this is the guard on that reuse.
+    """The tables come from ttt_compat's get_rot_mats; this is the guard on that reuse.
 
-    Its unscaled path computes the same inv_freq, outer product and concat widening the
-    reference does, so the two are bit-exact in fp32. If a change upstream ever breaks that,
-    this fails before any rotated tensor does.
+    Its unscaled path computes the same inv_freq and outer product the reference does, then
+    widens each frequency into an adjacent pair, so the two are bit-exact in fp32. If a change
+    upstream ever breaks that, this fails before any rotated tensor does.
     """
     cos_tt, sin_tt = rotary_tables(device, config, seqlen, dtype=ttnn.float32)
     cos_ref, sin_ref = reference_cos_sin(config, seqlen)
 
-    assert torch.equal(ttnn.to_torch(cos_tt), torch.cat((cos_ref, cos_ref), dim=-1)[None, None])
-    assert torch.equal(ttnn.to_torch(sin_tt), torch.cat((sin_ref, sin_ref), dim=-1)[None, None])
+    assert torch.equal(ttnn.to_torch(cos_tt), torch.repeat_interleave(cos_ref, 2, dim=-1)[None, None])
+    assert torch.equal(ttnn.to_torch(sin_tt), torch.repeat_interleave(sin_ref, 2, dim=-1)[None, None])
 
 
+@pytest.mark.parametrize("folded", [pytest.param(False, id="heads"), pytest.param(True, id="folded")])
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_rotary_embedding_hf(device, config, batch, seqlen):
-    """aten.cos + sin + cat + neg + split + mul -> ttnn.experimental.rotary_embedding_hf."""
+def test_rotary_embedding_llama(device, config, rotation_matrix, batch, seqlen, folded):
+    """aten.cos + sin + cat + neg + split + mul -> ttnn.experimental.rotary_embedding_llama.
+
+    The op rotates adjacent pairs, so q comes in with its head dims pair-permuted, as Wqkv's
+    permuted rows produce it, in both layouts TtNomicBertAttention._rotate uses.
+    """
     heads, head_dim = config.num_attention_heads, config.head_dim
     x = torch.randn(batch, seqlen, heads, head_dim)
     cos_ref, sin_ref = reference_cos_sin(config, seqlen)
-    cos_tt, sin_tt = rotary_tables(device, config, seqlen)
 
-    x_tt = to_device(fold_batch_into_heads(x.permute(0, 2, 1, 3)), device)
-    out = ttnn.experimental.rotary_embedding_hf(x_tt, cos_tt, sin_tt, is_decode_mode=False)
+    out = ttnn.experimental.rotary_embedding_llama(
+        to_device(rotary_input(x, folded), device),
+        *rotary_tables(device, config, seqlen),
+        rotation_matrix,
+        is_decode_mode=False,
+    )
 
-    ref = apply_rotary_emb(x, cos_ref, sin_ref).permute(0, 2, 1, 3)
-    assert_with_pcc(ref, ttnn.to_torch(out).reshape(batch, heads, seqlen, head_dim), OPERATOR_PCC)
+    got = ttnn.to_torch(out).reshape(batch, heads, seqlen, head_dim)
+    assert_with_pcc(reference_rotary(x, cos_ref, sin_ref), got, OPERATOR_PCC)
 
 
-def test_rotary_at_position_zero_is_the_identity(device, config):
+# (batch, seqlen, heads a view keeps): rotary_heads_per_view's picks at short sequences from 1024
+# tokens up, off the tile grid among them (100 is 4 tiles).
+ROTARY_VIEW_SHAPES = [(256, 32, 6), (128, 64, 4), (85, 96, 2), (64, 128, 2), (48, 100, 2), (8, 128, 6)]
+
+
+@pytest.mark.parametrize("batch, seqlen, kept", ROTARY_VIEW_SHAPES)
+def test_rotary_in_a_view_equals_the_native_call(device, tt_config, config, rotation_matrix, batch, seqlen, kept):
+    """The model's view, (B * A / k, k, S, D), rotates every row as the native (B, A, S, D) call does,
+    bit for bit: it only changes how the op splits its rows over the cores."""
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    grid = tt_config.core_grid
+    assert rotary_heads_per_view(batch, ttnn.core.divup(seqlen, ttnn.TILE_SIZE), heads, grid.x * grid.y) == kept
+    x = to_device(torch.randn(batch, heads, seqlen, head_dim), device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    rotary = RotaryTables(device, config)
+    tables = rotary(seqlen)
+
+    native = ttnn.experimental.rotary_embedding_llama(x, *tables, rotation_matrix, is_decode_mode=False)
+    view = ttnn.reshape(x, (batch * heads // kept, kept, seqlen, head_dim))
+    rotated = ttnn.experimental.rotary_embedding_llama(view, *tables, rotation_matrix, is_decode_mode=False)
+    want, got = ttnn.to_torch(native), ttnn.to_torch(rotated).reshape(batch, heads, seqlen, head_dim)
+    # Freed before asserting, as in the SDPA tests: L1 tensors left in a failed test's frame would
+    # clash with the next test's circular buffers.
+    for tensor in (x, native, rotated):
+        ttnn.deallocate(tensor)
+    rotary.release(tables)
+    for table in rotary.tables:
+        ttnn.deallocate(table)
+
+    assert torch.equal(got, want), f"max abs {(got.float() - want.float()).abs().max():.3e}"
+
+
+def test_rotary_at_position_zero_is_the_identity(device, config, rotation_matrix):
     """Analytic anchor: position 0 has cos 1 and sin 0, so the rotation must leave x alone.
 
     A PCC test against a reference that shares the port's own convention cannot catch a
@@ -176,39 +231,37 @@ def test_rotary_at_position_zero_is_the_identity(device, config):
     cos_tt, sin_tt = rotary_tables(device, config, ttnn.TILE_SIZE)
 
     out = ttnn.to_torch(
-        ttnn.experimental.rotary_embedding_hf(to_device(x, device), cos_tt, sin_tt, is_decode_mode=False)
+        ttnn.experimental.rotary_embedding_llama(
+            to_device(x, device), cos_tt, sin_tt, rotation_matrix, is_decode_mode=False
+        )
     ).float()
 
     assert_with_pcc(x[:, :, 0], out[:, :, 0], 0.9999)
 
 
-def test_interleaved_rotary_tables_are_decorrelated(device, config):
-    """Negative control: GPT-J lane pairing under the kernel's NeoX rotate-half.
+def test_concat_widened_rotary_tables_are_decorrelated(device, config, rotation_matrix):
+    """Negative control: the reference's own concat-widened tables under the adjacent-pair kernel.
 
-    repeat_interleave instead of concat is the other plausible way to widen the half-dim
-    tables. Combined with half-split rotation it is not a rotation and does not preserve the
-    per-plane norm, but it runs and produces finite output.
+    torch.cat is how the reference widens its half-dim tables, so it is the plausible way to build
+    them here. On pair-permuted q it is not a rotation and does not preserve the per-plane norm,
+    but it runs and produces finite output.
     """
     batch, seqlen = 2, 128
     heads, head_dim = config.num_attention_heads, config.head_dim
     x = torch.randn(batch, seqlen, heads, head_dim)
     cos_ref, sin_ref = reference_cos_sin(config, seqlen)
+    x_tt = to_device(rotary_input(x), device)
 
-    x_tt = to_device(fold_batch_into_heads(x.permute(0, 2, 1, 3)), device)
-    out = ttnn.experimental.rotary_embedding_hf(
-        x_tt,
-        to_device(torch.repeat_interleave(cos_ref, 2, dim=-1)[None, None], device),
-        to_device(torch.repeat_interleave(sin_ref, 2, dim=-1)[None, None], device),
-        is_decode_mode=False,
+    concat_widened = [to_device(torch.cat((table, table), dim=-1)[None, None], device) for table in (cos_ref, sin_ref)]
+    out = ttnn.experimental.rotary_embedding_llama(x_tt, *concat_widened, rotation_matrix, is_decode_mode=False)
+    correct = ttnn.experimental.rotary_embedding_llama(
+        x_tt, *rotary_tables(device, config, seqlen), rotation_matrix, is_decode_mode=False
     )
-
-    correct = ttnn.experimental.rotary_embedding_hf(x_tt, *rotary_tables(device, config, seqlen), is_decode_mode=False)
-    ref = apply_rotary_emb(x, cos_ref, sin_ref).permute(0, 2, 1, 3)
-    shape = (batch, heads, seqlen, head_dim)
+    ref = reference_rotary(x, cos_ref, sin_ref)
 
     # Guards against a vacuous pass: compute_pcc returns 0.0 on a broken comparison.
-    assert compute_pcc(ttnn.to_torch(correct).reshape(shape).float(), ref) > OPERATOR_PCC
-    assert compute_pcc(ttnn.to_torch(out).reshape(shape).float(), ref) < DECORRELATED_PCC
+    assert compute_pcc(ttnn.to_torch(correct).float(), ref) > OPERATOR_PCC
+    assert compute_pcc(ttnn.to_torch(out).float(), ref) < DECORRELATED_PCC
 
 
 def padding_rows(tensor: ttnn.Tensor, seqlen: int) -> torch.Tensor:
@@ -216,7 +269,7 @@ def padding_rows(tensor: ttnn.Tensor, seqlen: int) -> torch.Tensor:
     return tensor.cpu().to_torch_with_padded_shape().float()[..., seqlen:, :]
 
 
-def test_rotary_zeroes_the_padding_of_q_only_with_zero_padded_tables(device, config):
+def test_rotary_zeroes_the_padding_of_q_only_with_zero_padded_tables(device, config, rotation_matrix):
     """The rotary tables' tile padding is what keeps the padding rows of q and k finite.
 
     The MoE layer's output padding is unwritten (tt.common.unflatten_tokens) and reaches q and k one
@@ -228,15 +281,18 @@ def test_rotary_zeroes_the_padding_of_q_only_with_zero_padded_tables(device, con
     heads, head_dim = config.num_attention_heads, config.head_dim
     # In place: the fill returns a tensor on the same buffer.
     q = ttnn.fill_implicit_tile_padding(
-        to_device(torch.randn(1, batch * heads, seqlen, head_dim), device), float("inf")
+        to_device(torch.randn(batch * heads, 1, seqlen, head_dim), device), float("inf")
     )
 
     exact = rotary_tables(device, config, seqlen)
     longer = rotary_tables(device, config, 512)
 
-    rotated = padding_rows(ttnn.experimental.rotary_embedding_hf(q, *exact, is_decode_mode=False), seqlen)
+    def rotate(tables):
+        return ttnn.experimental.rotary_embedding_llama(q, *tables, rotation_matrix, is_decode_mode=False)
+
+    rotated = padding_rows(rotate(exact), seqlen)
     assert torch.equal(rotated, torch.zeros_like(rotated))
-    rotated = padding_rows(ttnn.experimental.rotary_embedding_hf(q, *longer, is_decode_mode=False), seqlen)
+    rotated = padding_rows(rotate(longer), seqlen)
     passes_through = not torch.isfinite(rotated).all()
     assert passes_through, "a longer table no longer passes the padding through; re-check RotaryTables"
 
@@ -503,6 +559,116 @@ def test_sdpa_where_three_query_chunks_a_head_are_wrong(device, tt_config, confi
     per_row = (got - ref).abs().amax(dim=(1, 2, 3))
     wrong = per_row.gt(0.1).nonzero().flatten().tolist()
     config_text = f"q{kwargs['program_config'].q_chunk_size} k{kwargs['program_config'].k_chunk_size}"
+    assert not wrong, f"{config_text}: rows {wrong} are wrong, worst max abs {per_row.max():.3e}"
+    assert_with_pcc(ref, got, OPERATOR_PCC)
+
+
+def placement(tt_config, config, batch, seqlen, mask_dtype, resident_heads, qkv_in_l1):
+    """attention_placement as the model calls it with the residual stream resident_heads head tensors
+    deep in L1 and QKV's output in L1 below it or in DRAM."""
+    st = ttnn.core.divup(seqlen, ttnn.TILE_SIZE)
+    head_bank = l1_bank_bytes(batch * st * config.num_attention_heads * config.head_dim // ttnn.TILE_SIZE, tt_config)
+    qkv_bank = l1_bank_bytes(batch * st * 3 * config.hidden_size // ttnn.TILE_SIZE, tt_config) if qkv_in_l1 else 0
+    return attention_placement(
+        batch,
+        seqlen,
+        config.num_attention_heads,
+        config.head_dim,
+        tt_config.core_grid,
+        tt_config.compute_kernel_config(OpGroup.SDPA).fp32_dest_acc_en,
+        mask_dtype,
+        tt_config.l1_cb_bytes - resident_heads * head_bank - qkv_bank,
+        tt_config.l1_banks,
+        qkv_bank_bytes=qkv_bank,
+    )
+
+
+def test_placement_never_splits_a_head_into_three_query_chunks(tt_config, config):
+    """The placement's query chunks over every batch shape up to 512 tokens a sequence, without running SDPA.
+
+    Where the heads do not fit L1 on the rule's chunks, the placement takes smaller ones, and three
+    query chunks a head return wrong rows at 10 or more sequences. This pins the invariant over 10 to
+    64 sequences, on and off the tile grid, masked or not: up to ACTIVATION_L1_MAX_TILES tile rows with
+    the residual stream in L1 up to three head tensors deep and QKV's output in L1 or in DRAM, above it
+    with both in DRAM, as the model places them. A head runs as one, two or four query chunks.
+    """
+    odd = []
+    for mask_dtype in (None, tt_config.attention_mask_dtype):
+        for seqlen in [*range(32, 513, 32), 37, 100, 264, 437, 500]:
+            whole = ttnn.core.divup(seqlen, ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            for batch in range(10, 65):
+                in_l1 = batch * whole // ttnn.TILE_SIZE <= ACTIVATION_L1_MAX_TILES
+                layouts = [(depth, qkv) for depth in range(4) for qkv in (True, False)] if in_l1 else [(0, False)]
+                for resident_heads, qkv_in_l1 in layouts:
+                    program_config, _ = placement(
+                        tt_config, config, batch, seqlen, mask_dtype, resident_heads, qkv_in_l1
+                    )
+                    chunks = ttnn.core.divup(whole, program_config.q_chunk_size)
+                    if chunks > 1 and chunks % 2:
+                        odd.append(f"{batch}x{seqlen}: {chunks} chunks of {program_config.q_chunk_size}")
+    assert not odd, f"{len(odd)} shapes run an odd number of query chunks a head, e.g. {odd[:5]}"
+
+
+# (batch, seqlen, residual head tensors deep, QKV's output in L1): shapes up to 8192 tokens whose rule
+# key chunk does not fit L1 beside the heads, so the placement takes another, among them chunks that
+# do not divide the sequence (16x512 k192, 17x480 q256 k256, 15x416 k160, 27x288 k160).
+PLACEMENT_SHAPES = [
+    (16, 512, 2, False),
+    (16, 512, 1, True),
+    (17, 480, 1, True),
+    (15, 416, 1, True),
+    (23, 352, 2, True),
+    (21, 384, 2, False),
+    (27, 288, 1, True),
+]
+
+
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("batch, seqlen, resident_heads, qkv_in_l1", PLACEMENT_SHAPES)
+def test_sdpa_placement_in_l1_is_right(device, tt_config, config, batch, seqlen, resident_heads, qkv_in_l1, masked):
+    """The placement's chunks with q, k, v and the output in L1, where the rule's key chunk does not fit.
+
+    Its output must equal the same chunks' in DRAM bit for bit, and every row must be right against
+    torch, since SDPA has returned wrong rows for some chunk counts at 10 or more sequences.
+    """
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    query, key, value = (torch.randn(batch, heads, seqlen, head_dim) for _ in range(3))
+    kwargs = sdpa_kwargs(tt_config, config, batch, seqlen, masked=masked)
+    rule = kwargs.pop("program_config")
+    mask_dtype = tt_config.attention_mask_dtype if masked else None
+    chosen, memory = placement(tt_config, config, batch, seqlen, mask_dtype, resident_heads, qkv_in_l1)
+    assert memory.buffer_type == ttnn.BufferType.L1, f"{batch}x{seqlen}: the heads no longer fit L1"
+    assert chosen.k_chunk_size != rule.k_chunk_size, f"{batch}x{seqlen}: the rule's chunks fit now; pick another shape"
+    mask = None
+    if masked:
+        mask = additive_attention_mask(torch.ones(batch, seqlen, dtype=torch.long), device, mask_dtype=mask_dtype)
+
+    def run(memory_config):
+        inputs = [to_device(t, device, memory_config=memory_config) for t in (query, key, value)]
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *inputs,
+            attn_mask=mask,
+            is_causal=False,
+            program_config=chosen,
+            memory_config=memory_config,
+            **kwargs,
+        )
+        got = ttnn.to_torch(out).float()
+        # Freed before asserting, as in the test above: L1 tensors left in a failed test's frame
+        # would clash with the next test's circular buffers.
+        for tensor in (*inputs, out):
+            ttnn.deallocate(tensor)
+        return got
+
+    expected = run(ttnn.DRAM_MEMORY_CONFIG)
+    got = run(memory)
+    config_text = f"q{chosen.q_chunk_size} k{chosen.k_chunk_size}"
+    assert torch.equal(
+        got, expected
+    ), f"{config_text} in L1 differs from DRAM: max abs {(got - expected).abs().max():.3e}"
+    ref = torch.nn.functional.scaled_dot_product_attention(query, key, value, is_causal=False)
+    per_row = (got - ref).abs().amax(dim=(1, 2, 3))
+    wrong = per_row.gt(0.1).nonzero().flatten().tolist()
     assert not wrong, f"{config_text}: rows {wrong} are wrong, worst max abs {per_row.max():.3e}"
     assert_with_pcc(ref, got, OPERATOR_PCC)
 

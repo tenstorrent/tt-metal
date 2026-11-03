@@ -61,16 +61,17 @@ def tt_attention(device, config, tt_config, state_dict):
     return TtNomicBertAttention(device, config, tt_config, state_dict, PREFIX)
 
 
-def interleaved_tables(device, config, seqlen, dtype=ttnn.bfloat16):
-    """The GPT-J lane pairing: repeat_interleave instead of concat when widening D//2 to D.
+def concat_widened_tables(device, config, seqlen, dtype=ttnn.bfloat16):
+    """The reference's own widening of D//2 to D, torch.cat, which is wrong for the port.
 
-    The other plausible way to widen the half-width tables, and wrong under the kernel's NeoX
-    rotate-half: the pair is not a rotation and does not preserve the per-plane norm.
+    The module's q and k come out pair-permuted for rotary_embedding_llama's adjacent pairs, which
+    take pair-interleaved tables; under concat-widened ones the pair is not a rotation and does not
+    preserve the per-plane norm.
     """
     rotary = NomicBertRotaryEmbedding(dim=config.rotary_dim, base=config.rotary_emb_base)
     rotary._update_cos_sin_cache(seqlen, device=torch.device("cpu"), dtype=torch.float32)
     return tuple(
-        to_device(torch.repeat_interleave(table, 2, dim=-1)[None, None], device, dtype=dtype)
+        to_device(torch.cat((table, table), dim=-1)[None, None], device, dtype=dtype)
         for table in (rotary._cos_cached, rotary._sin_cached)
     )
 
@@ -160,8 +161,8 @@ def test_rotary_at_position_zero_is_the_identity(device, config, state_dict, tt_
     assert_with_pcc(x[:, :, 0], rotated[:, :, 0], 0.9999)
 
 
-def test_interleaved_rotary_tables_are_decorrelated(device, config, reference, tt_attention):
-    """Negative control for gate 2: the module must be fed concat-widened tables.
+def test_concat_widened_rotary_tables_are_decorrelated(device, config, reference, tt_attention):
+    """Negative control for gate 2: the module must be fed pair-interleaved tables.
 
     Both widenings run and return finite output, so only a comparison separates them.
     """
@@ -173,11 +174,11 @@ def test_interleaved_rotary_tables_are_decorrelated(device, config, reference, t
         ref = reference(x, attention_mask=None)
 
     correct = from_block_layout(tt_attention(x_tt, rotary_tables(device, config, seqlen)))
-    interleaved = from_block_layout(tt_attention(x_tt, interleaved_tables(device, config, seqlen)))
+    concat_widened = from_block_layout(tt_attention(x_tt, concat_widened_tables(device, config, seqlen)))
 
     # Guards against a vacuous pass: compute_pcc returns 0.0 on a broken comparison.
     assert compute_pcc(correct, ref) > MODULE_PCC
-    assert compute_pcc(interleaved, ref) < DECORRELATED_PCC
+    assert compute_pcc(concat_widened, ref) < DECORRELATED_PCC
 
 
 def test_the_module_overrides_the_causal_default(device, config, reference, tt_attention, tt_config):

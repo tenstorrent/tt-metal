@@ -7,8 +7,10 @@ A chunk is a run of whole sequences. Attention never crosses a sequence and the 
 token on its own, with no capacity limit, so a chunk's outputs are the ones it would get in any other
 batch: the split changes which programs run, not what they compute.
 
-Each chunk takes as many sequences as fit max_tokens and the last takes the rest, as DeepSeek V3's
-prefill chunks at a fixed size.
+Past max_tokens computed tokens (B x ceil32(S)) a pass stops fitting its activations in L1 and a token
+costs more, so each chunk takes as many sequences as fit max_tokens and the last takes the rest, as
+DeepSeek V3's prefill chunks at a fixed size. Some chunk sizes divide less evenly over the cores than
+their neighbours, but tuning the split to measured pass times only pays while those times are current.
 
 Computed tokens count each sequence at its tile-padded length, B x ceil32(S), as every program does.
 """

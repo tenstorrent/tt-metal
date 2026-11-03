@@ -360,3 +360,175 @@ def test_invalid_inputs_raise(device, expect_error, case):
 
     with expect_error(RuntimeError, f"routing_metadata: {message}"):
         routing_metadata(tensors["indices"](device), tensors["values"](device), **kwargs)
+
+
+# The router's scores: the experts' softmax in their first columns, exact zeros in the rest.
+SCORE_COLUMNS = 64
+
+
+def router_scores(tokens: int, num_experts: int, generator: torch.Generator, columns: int = SCORE_COLUMNS):
+    """(tokens, columns) scores as the router writes them."""
+    scores = torch.zeros(tokens, columns)
+    scores[:, :num_experts] = torch.randn(tokens, num_experts, generator=generator).softmax(-1)
+    return scores
+
+
+def device_scores(device, scores: torch.Tensor, memory_config=ttnn.L1_MEMORY_CONFIG):
+    """(tokens, columns) host scores -> (1, 1, tokens, columns) FLOAT32 TILE, the tile padding poisoned."""
+    return ttnn.from_torch(
+        scores.reshape(1, 1, *scores.shape),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        pad_value=POISON_WEIGHT,
+    )
+
+
+def stable_top_k(scores: torch.Tensor, num_experts: int, top_k: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """The host oracle of the selection: each row's top_k of its first num_experts columns, largest
+    first and a tie to the lower column."""
+    values, indices = torch.sort(scores[:, :num_experts], dim=-1, descending=True, stable=True)
+    return indices[:, :top_k], values[:, :top_k]
+
+
+def assert_same_outputs(got, want, signed_zero_equal=False):
+    """Two calls' four outputs, bit for bit, or with signed_zero_equal a weight -0.0 equal to 0.0."""
+    for name, got_tensor, want_tensor in zip(
+        ("gather_index", "combine_index", "combine_weights", "expert_counts"), got, want
+    ):
+        got_host, want_host = ttnn.to_torch(got_tensor), ttnn.to_torch(want_tensor)
+        assert got_host.shape == want_host.shape, f"{name}: shape {got_host.shape}, expected {want_host.shape}"
+        if got_host.dtype == torch.float32 and not signed_zero_equal:
+            got_host, want_host = got_host.view(torch.int32), want_host.view(torch.int32)
+        mismatches = int((got_host != want_host).sum())
+        assert mismatches == 0, f"{name}: {mismatches} of {want_host.numel()} entries differ"
+
+
+@pytest.mark.parametrize("num_tokens", [1, 37, 330, 2048, ROUTER_L1_MAX_TOKENS, ROUTER_L1_MAX_TOKENS + 1, MAX_TOKENS])
+def test_scores_select_as_topk_does(device, num_tokens):
+    """From the router's scores the op makes the metadata that ttnn.topk's selection makes, bit for
+    bit, and the oracle's. L1 up to ROUTER_L1_MAX_TOKENS tokens, DRAM above, as the router places them."""
+    generator = torch.Generator().manual_seed(num_tokens)
+    scores = router_scores(num_tokens, NUM_EXPERTS, generator)
+    memory_config = ttnn.L1_MEMORY_CONFIG if num_tokens <= ROUTER_L1_MAX_TOKENS else ttnn.DRAM_MEMORY_CONFIG
+    tt_scores = device_scores(device, scores, memory_config)
+
+    outputs = routing_metadata(scores=tt_scores, top_k=TOP_K, num_experts=NUM_EXPERTS)
+
+    values, indices = ttnn.topk(tt_scores, k=TOP_K, dim=-1)
+    assert_same_outputs(outputs, routing_metadata(indices, values, num_experts=NUM_EXPERTS))
+    assert_matches_reference(outputs, *stable_top_k(scores, NUM_EXPERTS, TOP_K), NUM_EXPERTS)
+
+
+@pytest.mark.parametrize(
+    "num_experts, top_k, columns",
+    [(1, 1, 32), (3, 1, 3), (5, 3, 32), (8, 2, 32), (16, 4, 16), (17, 2, 64), (40, 5, 40), (64, 16, 64)],
+)
+def test_scores_other_expert_and_choice_counts(device, num_experts, top_k, columns):
+    """One to four 16-column groups of experts, as many columns as experts or more, and the poisoned
+    tile padding of 3, 16 and 40 columns, which the op must not read."""
+    num_tokens = 330
+    generator = torch.Generator().manual_seed(num_experts * 100 + top_k)
+    scores = router_scores(num_tokens, num_experts, generator, columns)
+
+    outputs = routing_metadata(scores=device_scores(device, scores), top_k=top_k, num_experts=num_experts)
+
+    assert_matches_reference(outputs, *stable_top_k(scores, num_experts, top_k), num_experts)
+
+
+def test_scores_ties_take_the_lower_column(device):
+    """Equal scores, for the first choice and for the second, inside a face, across faces and across
+    tiles' worth of experts, and a lone nonzero score among zeros: the order ttnn.topk gives."""
+    rows = [
+        {0: 0.5, 1: 0.5, 2: 0.1},
+        {0: 0.1, 1: 0.5, 2: 0.5, 3: 0.3},
+        {3: 0.4, 7: 0.4, 0: 0.1},
+        {2: 0.4, 4: 0.4, 6: 0.4, 0: 0.1},
+        {0: 0.6, 1: 0.2, 2: 0.2, 3: 0.1},
+        {4: 0.6, 5: 0.2, 6: 0.2, 0: 0.1},
+        {0: 0.9},
+        {},
+        {15: 0.4, 16: 0.4},
+        {31: 0.4, 32: 0.4, 1: 0.1},
+    ]
+    num_experts = SCORE_COLUMNS
+    scores = torch.zeros(64, SCORE_COLUMNS)
+    for row, entries in enumerate(rows * 6):
+        for column, value in entries.items():
+            scores[row, column] = value
+    tt_scores = device_scores(device, scores)
+
+    outputs = routing_metadata(scores=tt_scores, top_k=TOP_K, num_experts=num_experts)
+
+    values, indices = ttnn.topk(tt_scores, k=TOP_K, dim=-1)
+    assert_same_outputs(outputs, routing_metadata(indices, values, num_experts=num_experts))
+    assert_matches_reference(outputs, *stable_top_k(scores, num_experts, TOP_K), num_experts)
+
+
+def test_scores_order_negatives_and_signed_zero(device):
+    """The selection orders scores below zero and treats -0.0 as 0.0, a tie that goes to the lower
+    column, as ttnn.topk does; each weight keeps its own bits, -0.0 included, where ttnn.topk's
+    values turn -0.0 into 0.0 (14 of these 288 weights)."""
+    generator = torch.Generator().manual_seed(7)
+    scores = torch.randn(96, NUM_EXPERTS, generator=generator)
+    scores[::3, 1] = -0.0
+    scores[::3, 2] = 0.0
+    scores[1::3, :] = -scores[1::3, :].abs()
+    tt_scores = device_scores(device, scores)
+
+    outputs = routing_metadata(scores=tt_scores, top_k=3, num_experts=NUM_EXPERTS)
+
+    values, indices = ttnn.topk(tt_scores, k=3, dim=-1)
+    assert_same_outputs(outputs, routing_metadata(indices, values, num_experts=NUM_EXPERTS), signed_zero_equal=True)
+    assert_matches_reference(outputs, *stable_top_k(scores, NUM_EXPERTS, 3), NUM_EXPERTS)
+
+
+SCORES_SHAPE = (1, 1, 64, SCORE_COLUMNS)
+
+# case: (call keyword arguments, as factories or plain values, error message)
+INVALID_SCORE_CALLS = {
+    "selection_and_scores": (
+        dict(
+            indices=_tensor(SELECTION_SHAPE, ttnn.uint32),
+            values=_tensor(SELECTION_SHAPE, ttnn.float32),
+            scores=_tensor(SCORES_SHAPE, ttnn.float32),
+            top_k=TOP_K,
+        ),
+        "takes indices with values, or scores, not both",
+    ),
+    "neither": (dict(), "takes indices with values, or scores, not both"),
+    "values_alone": (dict(values=_tensor(SELECTION_SHAPE, ttnn.float32)), "takes indices with values, or scores"),
+    "top_k_with_selection": (
+        dict(indices=_tensor(SELECTION_SHAPE, ttnn.uint32), values=_tensor(SELECTION_SHAPE, ttnn.float32), top_k=2),
+        "top_k goes with scores, and only with scores",
+    ),
+    "scores_without_top_k": (
+        dict(scores=_tensor(SCORES_SHAPE, ttnn.float32)),
+        "top_k goes with scores, and only with scores",
+    ),
+    "scores_dtype": (
+        dict(scores=_tensor(SCORES_SHAPE, ttnn.bfloat16), top_k=TOP_K),
+        "scores must be DataType::FLOAT32",
+    ),
+    "scores_rank": (dict(scores=_tensor((2, 1, 32, 64), ttnn.float32), top_k=TOP_K), "scores must be 1 x 1 x tokens"),
+    "scores_columns": (
+        dict(scores=_tensor((1, 1, 64, 4), ttnn.float32), top_k=TOP_K),
+        "scores must have a column for each of the 8 experts, got 4",
+    ),
+    "top_k_above_experts": (
+        dict(scores=_tensor(SCORES_SHAPE, ttnn.float32), top_k=3, num_experts=2),
+        "top_k 3 is above the 2 experts to select from",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", INVALID_SCORE_CALLS.keys())
+def test_invalid_score_calls_raise(device, expect_error, case):
+    arguments, message = INVALID_SCORE_CALLS[case]
+    kwargs = dict(num_experts=NUM_EXPERTS) | {
+        name: value(device) if callable(value) else value for name, value in arguments.items()
+    }
+
+    with expect_error(RuntimeError, f"routing_metadata: {message}"):
+        routing_metadata(**kwargs)

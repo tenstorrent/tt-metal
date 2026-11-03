@@ -26,9 +26,9 @@ ttnn.gelu are token-wise and take the batch-separated form unchanged. That confi
 trip to the six MoE layers, 12 reshapes rather than the 24 a flat-everywhere contract would
 need around attention.
 
-Sub-blocks take other shapes internally, (B, A, S, D) head-split, (1, B*A, S, D) for rotary and
-(1, 1, R, H) and (1, 1, R, F) across the experts, each produced and consumed by the op that owns
-it.
+Sub-blocks take other shapes internally, (B, A, S, D) head-split, (B*A, 1, S, D) for rotary at
+small batches and (1, 1, R, H) and (1, 1, R, F) across the experts, each produced and consumed by
+the op that owns it.
 
 The flat form keeps tokens batch-major, matching the reference's own x.view(-1, H), so the
 router's per-token weights stay aligned with the expert outputs.
@@ -41,10 +41,13 @@ two layouts and the data is physically copied.
 
 from __future__ import annotations
 
+from functools import cache
+
 import torch
 
 import ttnn
 
+from models.common.tensor_utils import get_rot_transformation_mat
 from models.experimental.nomic_embed_text_v2_moe.reference.configuration_nomic_moe import NomicMoEConfig
 from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe import build_extended_attention_mask
 from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import SMALL_M_TILES
@@ -54,7 +57,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.model_config import (
     MEMORY_CONFIG,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.pooling import MASK_SUM_FLOOR
-from models.tt_transformers.tt.rope import get_rot_mats_hf
+from models.ttt_compat.tt.rope import get_rot_mats
 
 
 def to_device(
@@ -69,9 +72,18 @@ def to_device(
 
 
 # Up to this many tile rows of M the residual stream (the block and embedding norms' outputs) and
-# the expert sum go to L1, where the next op reads them: bit-identical, 20 to 36 us a forward from
-# 1x32 to 1x320, measured with the dense experts the routed ones replaced.
-ACTIVATION_L1_MAX_TILES = 10
+# the expert sum go to L1, where the next op reads them: 20 to 36 us a forward from 1x32 to 1x320,
+# measured with the dense experts the routed ones replaced; 3% to 4.8% of a forward from 2048 to
+# 8192 tokens (2026-10-27), the norms 31% faster. Every op then plans its buffers below the residual
+# (matmul_config.l1_floor), and each block frees its input as soon as norm1 has read it, which keeps
+# the residual near the top of L1.
+ACTIVATION_L1_MAX_TILES = 256
+
+
+def m_tiles(shape: ttnn.Shape | tuple[int, ...]) -> int:
+    """Tile rows of M of an activation, each sequence at its tile-padded length: B * ceil(S / 32) for
+    (B, 1, S, W), ceil(T / 32) for the flat (1, 1, T, W)."""
+    return shape[0] * ttnn.core.divup(shape[-2], ttnn.TILE_SIZE)
 
 
 def activation_memory_config(shape: ttnn.Shape | tuple[int, ...]) -> ttnn.MemoryConfig:
@@ -81,8 +93,7 @@ def activation_memory_config(shape: ttnn.Shape | tuple[int, ...]) -> ttnn.Memory
     ceil(T / 32) for the flat (1, 1, T, W). It takes a shape, so an op's output can be placed before
     it exists.
     """
-    m_tiles = shape[0] * ttnn.core.divup(shape[-2], ttnn.TILE_SIZE)
-    return ttnn.L1_MEMORY_CONFIG if m_tiles <= ACTIVATION_L1_MAX_TILES else ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG if m_tiles(shape) <= ACTIVATION_L1_MAX_TILES else ttnn.DRAM_MEMORY_CONFIG
 
 
 def transpose_linear_weight(weight: torch.Tensor) -> torch.Tensor:
@@ -175,24 +186,34 @@ def additive_attention_mask(
     return cast
 
 
+def rotary_pair_permutation(head_dim: int) -> torch.Tensor:
+    """The head-dim order rotary_embedding_llama rotates in: new 2i holds old i, new 2i + 1 old i + D/2.
+
+    The reference rotates dimension i with i + D/2 (NeoX rotate-half); the llama kernel rotates
+    adjacent pairs, through a 32 x 32 matmul. q and k permuted alike leave q.k unchanged.
+    """
+    half = head_dim // 2
+    return torch.stack((torch.arange(half), torch.arange(half) + half), dim=1).flatten()
+
+
 def rotary_tables(
     device, config: NomicMoEConfig, seqlen: int, dtype: ttnn.DataType = ACTIVATION_DTYPE
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Build the (1, 1, S, head_dim) cos/sin tables rotary_embedding_hf reads, in L1.
+    """Build the (1, 1, S, head_dim) cos/sin tables rotary_embedding_llama reads, in L1.
 
-    Delegates to tt_transformers' get_rot_mats_hf, whose unscaled path computes the same
-    inv_freq, outer product and concat widening as NomicBertRotaryEmbedding plus
-    apply_rotary_emb. test_rotary_tables_match_the_reference holds them bit-exact in fp32.
+    Delegates to ttt_compat's get_rot_mats, whose unscaled path computes the same inv_freq and
+    outer product as NomicBertRotaryEmbedding and widens each frequency into an adjacent pair,
+    [c0, c0, c1, c1, ...]: the reference's concat-widened [c0 .. c31, c0 .. c31] in
+    rotary_pair_permutation's order. test_rotary_tables_match_the_reference holds them bit-exact in fp32.
 
-    The concat widening is load-bearing: interleaving gives the GPT-J lane pairing, which under
-    the kernel's NeoX rotate-half is not a rotation and does not preserve the per-plane norm.
+    The widening has to match the pairing of q and k: concat-widened tables under the adjacent-pair
+    kernel are not a rotation and do not preserve the per-plane norm.
 
-    L1 because rotary_embedding_hf reads the tables once per folded head: from DRAM they held it at
-    55% of the DRAM peak (tt-npe) although q, k and its output are in L1. In L1 rotary takes 0.97 ms
-    a forward at 8x512 against 1.27. The two tables are 64 KB each at S=512.
+    L1 because every core of the op reads them, and re-reads them every tile row once it has more than
+    eight. The two tables are 64 KB each at S=512.
     """
     tables = []
-    for table in get_rot_mats_hf(
+    for table in get_rot_mats(
         head_dim=config.head_dim,
         device=device,
         seq_len=seqlen,
@@ -204,6 +225,29 @@ def rotary_tables(
         ttnn.deallocate(table)
     cos, sin = tables
     return cos, sin
+
+
+def rotary_rotation_matrix(device, grid: ttnn.CoreCoord) -> ttnn.Tensor:
+    """rotary_embedding_llama's 32 x 32 rotation matrix, one copy in every core's L1, 2 KB a core.
+
+    With a copy on every core of the grid the prefill program reads it in place. From one DRAM copy
+    every core fetches it from one bank: rotary took 152 against 83 us a forward at 1x32, 684 against
+    624 at 8x512.
+    """
+    cores = grid.x * grid.y
+    return ttnn.from_torch(
+        get_rot_transformation_mat().repeat(1, 1, cores, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
 
 
 class RotaryTables:
@@ -254,6 +298,49 @@ class RotaryTables:
                 ttnn.deallocate(table)
 
 
+# Up to this many tile rows of M a layer norm splits the hidden axis over a block-sharded copy, in column-major
+# order: SHARDED_NORM_COLUMNS core rows take 3 of the 24 hidden tiles each, and M spreads over the grid's columns,
+# ceil(M / columns) tile rows a core, where the interleaved program gives each core whole rows. At 2x512 (32 tile
+# rows) a norm takes 12.7 to 13.0 us against 20.4, and the 25 norms with their conversions 47 us less a forward,
+# each norm's split output the next one's residual (tt/block.py). At 64 tile rows the conversions outweigh the
+# gain (a block's two norms 56.8 against 45.8 us), and from 192 no split fits L1 (2026-10-27).
+SHARDED_NORM_MAX_TILES = 32
+SHARDED_NORM_COLUMNS = 8
+# Above matmul_config.SMALL_M_TILES and up to this many tile rows the split norm runs without converting its
+# output back: out_proj, fc2 and the MoE combine write its layout, and QKV and fc1 read its output as it stands. At
+# 128 tile rows the norm takes 30.2 against 44.0 us interleaved, and its neighbours take the layout at no cost.
+SHARDED_NORM_DIRECT_MAX_TILES = 128
+
+
+def sharded_norm_statistics_scale(width: int) -> float:
+    """How many times the true mean and variance the block-sharded program computes over `width` columns.
+
+    It scales its sums by C/W on each core and 1/C across them, each rounded to bfloat16, C being
+    SHARDED_NORM_COLUMNS. At W = 768 = 3 x 256 one of the two carries a factor 1/3, which bfloat16 rounds
+    up by 2^-9; uncorrected, every norm output then shrinks by 0.1%, and the norm's error against
+    float64 is 2.08x the bfloat16 floor against 1.91x interleaved. LayerNormParameters multiplies gamma
+    by the square root, kept in float32 at the 10-bit mantissa the FPU reads it at: 1.53x (2026-10-22).
+    What remains is (scale - 1) x a row's mean over its standard deviation, under 0.2 at every norm of
+    this model.
+    """
+
+    def rounding(value: float) -> float:
+        return torch.tensor(value, dtype=torch.float32).to(torch.bfloat16).item() / value
+
+    return rounding(SHARDED_NORM_COLUMNS / width) * rounding(1 / SHARDED_NORM_COLUMNS)
+
+
+def round_to_tf32(tensor: torch.Tensor) -> torch.Tensor:
+    """float32 rounded to nearest even at TF32's 10-bit mantissa, the precision the FPU reads an operand at."""
+    bits = tensor.float().contiguous().view(torch.int32)
+    bits = (bits + 0xFFF + ((bits >> 13) & 1)) & ~0x1FFF
+    return bits.view(torch.float32)
+
+
+# LayerNormParameters' crossover from the tiled weight and bias to the row-major ones, in tile rows of M.
+NORM_ROW_MAJOR_ABOVE_TILES = 32
+
+
 class LayerNormParameters:
     """One layer norm's weight and bias, in each of the two forms the norm reads fastest by input size.
 
@@ -262,13 +349,17 @@ class LayerNormParameters:
     1.94 ms the norms took a forward at 8x512. As (1, 1, W/32, 32) row-major rows in L1 the read is
     1.5 KB a core, but issued a 64-byte row per barrier, about 1 us a call where a core holds one or
     two tile rows. The crossover sits between 32 tile rows of M (+4% for row-major) and 64 (-18% to
-    -27%), so the norm reads the row-major copy above SMALL_M_TILES, the dense matmuls' small-M
-    threshold. The 50 row-major tensors take 0.7 KB of each L1 bank; tiled in L1 they took 22 KB and
+    -27%), so the norm reads the row-major copy above NORM_ROW_MAJOR_ABOVE_TILES. The 50 row-major tensors take 0.7 KB of each L1 bank; tiled in L1 they took 22 KB and
     clashed with the L1 plan of SDPA's buffers.
+
+    The block-sharded norm below SHARDED_NORM_MAX_TILES reads `sharded`: gamma corrected for that
+    program's statistics scale, in float32, and the tiled bias.
     """
 
     def __init__(self, weight: torch.Tensor, bias: torch.Tensor, device, dtype: ttnn.DataType):
         self.tiled = tuple(to_device(tensor, device, dtype=dtype) for tensor in (weight, bias))
+        corrected = round_to_tf32(weight.float() * sharded_norm_statistics_scale(weight.numel()) ** 0.5)
+        self.sharded = (to_device(corrected, device, dtype=ttnn.float32), self.tiled[1])
         self.row_major = tuple(
             to_device(
                 tensor.reshape(1, 1, -1, ttnn.TILE_SIZE),
@@ -282,8 +373,134 @@ class LayerNormParameters:
 
     def for_input(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """(weight, bias) for a layer norm over x, (B, 1, S, W)."""
-        m_tiles = x.shape[0] * ttnn.core.divup(x.shape[-2], ttnn.TILE_SIZE)
-        return self.row_major if m_tiles > SMALL_M_TILES else self.tiled
+        return self.row_major if m_tiles(x.shape) > NORM_ROW_MAJOR_ABOVE_TILES else self.tiled
+
+
+def sharded_norm_split(m_tiles: int, width_tiles: int, grid: ttnn.CoreCoord) -> tuple[int, int] | None:
+    """(columns of cores, tile rows of M a core) of the hidden-axis split, or None for the interleaved call."""
+    if m_tiles > SHARDED_NORM_DIRECT_MAX_TILES or SHARDED_NORM_COLUMNS > grid.y or width_tiles % SHARDED_NORM_COLUMNS:
+        return None
+    block_h = ttnn.core.divup(m_tiles, grid.x)
+    return ttnn.core.divup(m_tiles, block_h), block_h
+
+
+@cache
+def sharded_norm_configs(
+    core_columns: int, block_h: int, width_tiles: int, inplace: bool = False
+) -> tuple[ttnn.MemoryConfig, ttnn.LayerNormShardedMultiCoreProgramConfig]:
+    """The block-sharded layout and program of a layer norm on SHARDED_NORM_COLUMNS x core_columns cores.
+
+    Column-major, the hidden axis on the grid's rows and M on its columns. Built directly:
+    create_sharded_memory_config takes a column-major shard shape as (width, height). inplace writes the
+    output into the input's buffer, bit for bit the same.
+    """
+    block_w = width_tiles // SHARDED_NORM_COLUMNS
+    grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_columns - 1, SHARDED_NORM_COLUMNS - 1))}
+    )
+    shard = ttnn.ShardSpec(grid, (block_h * ttnn.TILE_SIZE, block_w * ttnn.TILE_SIZE), ttnn.ShardOrientation.COL_MAJOR)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard)
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(core_columns, SHARDED_NORM_COLUMNS),
+        subblock_w=block_w,
+        block_h=block_h,
+        block_w=block_w,
+        inplace=inplace,
+    )
+    return memory_config, program_config
+
+
+def sharded_norm_layout(
+    shape: ttnn.Shape | tuple[int, ...], grid: ttnn.CoreCoord
+) -> tuple[ttnn.MemoryConfig, int, int, int] | None:
+    """(memory config, core columns, tile rows a core, core rows) of the split norm over an activation of
+    `shape`, for a producer to write its output in, or None where the norm runs interleaved."""
+    width_tiles = shape[-1] // ttnn.TILE_SIZE
+    split = sharded_norm_split(m_tiles(shape), width_tiles, grid)
+    if split is None:
+        return None
+    return sharded_norm_configs(*split, width_tiles)[0], *split, SHARDED_NORM_COLUMNS
+
+
+def layer_norm(
+    x: ttnn.Tensor,
+    parameters: LayerNormParameters,
+    *,
+    epsilon: float,
+    memory_config: ttnn.MemoryConfig,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    residual: ttnn.Tensor | None = None,
+    keep_sharded: bool = False,
+    consume_input: bool = False,
+    in_place: bool = True,
+) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor | None]:
+    """layer_norm(x + residual) over the last axis of x, (B, 1, S, W), written where memory_config says.
+
+    Up to SHARDED_NORM_DIRECT_MAX_TILES tile rows of M it runs block-sharded with the corrected gamma,
+    converting x and the residual to that layout and the output back. An x or residual already in it,
+    such as a previous call's keep_sharded output for the same shape, is taken as it is. Above SMALL_M_TILES,
+    where the dense projections are the port's own matmuls, a keep_sharded output is not converted back: its
+    readers take the layout (at 32 tile rows 2.8 us a conversion, 18 a forward).
+
+    consume_input hands x over: it is freed here, or overwritten by the output. Above SHARDED_NORM_MAX_TILES
+    the split norm runs in place on a converted x, and on a consumed one unless in_place is False. Where the
+    output lands decides the L1 plans after it: in place it takes x's slot, otherwise the highest free block
+    it fits, below x and the residual or in a hole above them (tt/block.py).
+
+    Returns:
+        The output; with keep_sharded=True, (output, its block-sharded form, or None where there is
+        none or the output is already in that layout).
+    """
+    width_tiles = x.shape[-1] // ttnn.TILE_SIZE
+    rows = m_tiles(x.shape)
+    split = sharded_norm_split(rows, width_tiles, x.device().compute_with_storage_grid_size())
+    if split is None:
+        weight, bias = parameters.for_input(x)
+        out = ttnn.layer_norm(
+            x,
+            residual_input_tensor=residual,
+            weight=weight,
+            bias=bias,
+            epsilon=epsilon,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if consume_input:
+            ttnn.deallocate(x)
+        return (out, None) if keep_sharded else out
+
+    sharded_config = sharded_norm_configs(*split, width_tiles)[0]
+    x_sharded = x if x.memory_config() == sharded_config else ttnn.to_memory_config(x, sharded_config)
+    converted = x_sharded is not x
+    inplace = rows > SHARDED_NORM_MAX_TILES and (converted or (consume_input and in_place))
+    program_config = sharded_norm_configs(*split, width_tiles, inplace)[1]
+    residual_sharded = residual
+    if residual is not None and residual.memory_config() != sharded_config:
+        residual_sharded = ttnn.to_memory_config(residual, sharded_config)
+    weight, bias = parameters.sharded
+    out_sharded = ttnn.layer_norm(
+        x_sharded,
+        residual_input_tensor=residual_sharded,
+        weight=weight,
+        bias=bias,
+        epsilon=epsilon,
+        memory_config=sharded_config,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if not inplace and (converted or consume_input):
+        ttnn.deallocate(x_sharded)
+    if converted and consume_input:
+        ttnn.deallocate(x)
+    if residual_sharded is not residual:
+        ttnn.deallocate(residual_sharded)
+    if keep_sharded and rows > SMALL_M_TILES:
+        return out_sharded, None
+    out = ttnn.to_memory_config(out_sharded, memory_config)
+    if keep_sharded:
+        return out, out_sharded
+    ttnn.deallocate(out_sharded)
+    return out
 
 
 def flatten_tokens(x: ttnn.Tensor) -> ttnn.Tensor:

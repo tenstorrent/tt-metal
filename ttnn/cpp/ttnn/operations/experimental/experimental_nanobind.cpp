@@ -63,8 +63,11 @@
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/fused_msda/fused_msda_nanobind.hpp"
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routed_combine/routed_combine_nanobind.hpp"
-#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/grouped_matmul/grouped_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/grouped_matmul_w1/grouped_matmul_w1_nanobind.hpp"
+#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/grouped_matmul_w2/grouped_matmul_w2_nanobind.hpp"
+#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/pirotski_matmul/pirotski_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routing_metadata/routing_metadata_nanobind.hpp"
+#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/router_front_end/router_front_end_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
@@ -218,8 +221,11 @@ void py_module(nb::module_& mod) {
     multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
     fused_msda::detail::bind_fused_msda(mod);
     ttnn::experimental::nomic_embed_text_v2_moe::bind_routed_combine(mod);
-    ttnn::experimental::nomic_embed_text_v2_moe::bind_grouped_matmul(mod);
+    ttnn::experimental::nomic_embed_text_v2_moe::bind_grouped_matmul_w1(mod);
+    ttnn::experimental::nomic_embed_text_v2_moe::bind_grouped_matmul_w2(mod);
+    ttnn::experimental::nomic_embed_text_v2_moe::bind_pirotski_matmul(mod);
     ttnn::experimental::nomic_embed_text_v2_moe::bind_routing_metadata(mod);
+    ttnn::experimental::nomic_embed_text_v2_moe::bind_router_front_end(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);

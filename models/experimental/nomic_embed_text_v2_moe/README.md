@@ -95,14 +95,13 @@ tt/
   embeddings.py               word lookup, token-type embedding folded into the table
   attention.py                fused QKV, rotary, bidirectional SDPA, output projection
   mlp.py                      dense FFN, even-numbered layers
-  router.py                   fp32 softmax and top-2 selection
+  router.py                   fp32 expert probabilities and the dispatch rows, in one op
   experts.py                  each token through its two experts only, weighted and summed
   moe.py                      router plus experts, odd-numbered layers
   block.py                    one encoder block, post-norm with fused residual adds
   encoder.py                  the 12 blocks in sequence
   pooling.py                  mean pool, Matryoshka truncation, L2 normalize
   model.py                    the whole model, plus the text-to-embedding driver
-  chunking.py                 splits a large batch into chunks of whole sequences
 demo/
   demo.py                     embeds queries and passages, prints the similarity matrix
 ```

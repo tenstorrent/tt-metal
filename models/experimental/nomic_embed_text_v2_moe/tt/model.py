@@ -64,6 +64,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     RotaryTables,
     activation_memory_config,
     additive_attention_mask,
+    layer_norm,
     pooling_mask,
     prepare_token_ids,
 )
@@ -111,8 +112,9 @@ class TtNomicBertModel(LightweightModule):
         """Embed the tokens and run the encoder stack, in chunks of whole sequences when the batch is large.
 
         Past tt_config.max_chunk_tokens computed tokens the batch runs as contiguous chunks
-        (tt.chunking.plan_chunks), each through the whole backbone, and their outputs are joined in DRAM.
-        Each sequence's output is what the backbone computes for it in its own chunk.
+        (tt.chunking.plan_chunks), each through the whole backbone, and their outputs are joined: a chunk's
+        activations then stay in L1. Each sequence's output is what the backbone computes for it in its own
+        chunk.
 
         Args:
             input_ids: (B, S) int64 token ids, from reference.preprocessing.tokenize.
@@ -126,7 +128,7 @@ class TtNomicBertModel(LightweightModule):
                 the word table.
 
         Returns:
-            ttnn.Tensor: (B, 1, S, H) last hidden state, one contextual vector per token.
+            ttnn.Tensor: (B, 1, S, H) last hidden state, one contextual vector per token, in DRAM.
 
         Raises:
             ValueError: If token_type_ids holds anything but zeros, which this checkpoint cannot
@@ -151,20 +153,11 @@ class TtNomicBertModel(LightweightModule):
         return out
 
     def backbone(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> ttnn.Tensor:
-        """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H); see forward."""
+        """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H) in DRAM; see forward."""
         seqlen = input_ids.shape[-1]
-        hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
-        weight, bias = self.emb_ln.for_input(hidden)
-        normalized = ttnn.layer_norm(
-            hidden,
-            weight=weight,
-            bias=bias,
-            epsilon=self.config.layer_norm_epsilon,
-            memory_config=activation_memory_config(hidden.shape),
-            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
-        )
-        ttnn.deallocate(hidden)
-
+        # The mask and the rotary tables live through the whole pass, so they are made first: L1 tensors
+        # are allocated from the top down, and made after the embeddings they would sit below the residual
+        # stream and split the space it frees.
         # dtype is passed explicitly rather than left to the helper's default, so lowering
         # tt_config.activation_dtype moves the mask's fill value with it.
         mask = None
@@ -176,9 +169,21 @@ class TtNomicBertModel(LightweightModule):
                 mask_dtype=self.tt_config.attention_mask_dtype,
             )
         rot_mats = self.rotary_tables(seqlen)
-        out = self.encoder(normalized, rot_mats, mask)
+
+        hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
+        normalized, normalized_sharded = layer_norm(
+            hidden,
+            self.emb_ln,
+            epsilon=self.config.layer_norm_epsilon,
+            memory_config=activation_memory_config(hidden.shape),
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
+            keep_sharded=True,
+            consume_input=True,
+        )
+        out = self.encoder(normalized, rot_mats, mask, free_input=True, hidden_sharded=normalized_sharded)
         self.rotary_tables.release(rot_mats)
-        ttnn.deallocate(normalized)
+        if mask is not None:
+            ttnn.deallocate(mask)
         return out
 
 
@@ -242,7 +247,7 @@ def embed(
     if attention_mask is None:
         attention_mask = torch.ones((batch, seqlen), dtype=torch.long)
     kernel_config = model.tt_config.compute_kernel_config(OpGroup.REDUCE)
-    lengths = attention_mask.sum(dim=-1).long()
+    lengths = attention_mask.sum(dim=-1)
     # Cutting a chunk to its longest sequence assumes right padding; any other mask keeps the full width.
     if not torch.equal(attention_mask.bool(), torch.arange(seqlen) < lengths[:, None]):
         lengths = torch.full_like(lengths, seqlen)

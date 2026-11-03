@@ -61,7 +61,8 @@ def routing_reference(
         next_row.append(region_start)
         region_start += math.ceil(count / BLOCK_ROWS) * BLOCK_ROWS
 
-    gather_index = [token_start] * (num_blocks * BLOCK_ROWS)
+    # A row that holds no slot copies token token_start + row mod num_tokens.
+    gather_index = [token_start + row % num_tokens for row in range(num_blocks * BLOCK_ROWS)]
     combine_index = [[0] * padded_tokens for _ in range(top_k)]
     for token, choices in enumerate(window):
         for k, expert in enumerate(choices):
