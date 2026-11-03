@@ -598,6 +598,41 @@ def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(
     assert device.num_program_cache_entries() == entries + 1
 
 
+def test_qkv_causal_conv1d_silu_program_key_includes_history_layout(
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    """At 192 channels one [1, 3, 192] history is valid in both layouts, so only history_layout keys the program."""
+    widths = (64, 64, 64)
+    (inputs, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
+        device, widths=widths, sequence=32, seed=774
+    )
+
+    def run(history_layout: ttnn.QkvCausalConv1dSiluHistoryLayout) -> tuple[ttnn.Tensor, ...]:
+        return _run(
+            input_tt,
+            history_tt,
+            taps_tt,
+            widths=widths,
+            channel_chunk_size=96,
+            actual_start=zero_actual_start,
+            history_layout=history_layout,
+        )
+
+    rows = run(ttnn.QkvCausalConv1dSiluHistoryLayout.ROWS)
+    entries = device.num_program_cache_entries()
+    segments = run(ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS)
+    assert device.num_program_cache_entries() == entries + 1
+    # The same bytes read as SEGMENTS pages hold different history rows.
+    segment_history = qkv_history_from_device_layout(history, ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS)
+    for layout, outputs, layout_history in (("rows", rows, history), ("segments", segments, segment_history)):
+        for name, golden, output in zip(
+            ("q", "k", "v"), qkv_reference(inputs, layout_history, taps, widths), outputs, strict=True
+        ):
+            assert_accurate(
+                golden, ttnn.to_torch(output), name=f"{layout} {name}", pcc_threshold=0.999, nrmse_threshold=0.008
+            )
+
+
 def test_qkv_causal_conv1d_silu_program_key_includes_channel_chunk_size(
     zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
