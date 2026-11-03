@@ -36,6 +36,8 @@ K_BLOCK_MAX = 8
 # (164 -> 177 us); DRAM x fits k = 6 (208 -> 223 us). Only with y in L1: one wave leaves the whole store as the tail,
 # which a DRAM y store (about 4x the L1 one) cannot afford (t3072 DRAM y 159 -> 165 us).
 K_BLOCK_ONE_PASS_MIN = 6
+# Most compute K rounds one x step may carry (see Blocking.x_step_rounds); 1 disables the split.
+X_STEP_ROUNDS_MAX = 1
 ONE_PASS_MAX_ROWS = 24
 MAX_WAVES = 4
 X_DEPTH = 2
@@ -68,6 +70,11 @@ W_OWNER_PAGE_BYTES = 16
 # the steps it receives in between on one long issue burst. 8x512 layer 0 / t = 1024: 1 -> 259 / 120 us,
 # 4 -> 202 / 108, 9 -> 179 / 106, 16 -> 174 / 102, 32 -> 178 / 103, 128 -> 193 / 120.
 PREFETCH_ISSUE_STEPS = 16
+# On multi-wave blockings the writer's w quota is at least this many tiles per step. A wave delivers only its
+# experts' chunks, so the round-derived quota front-loads less than the period needs. t4096 at 2 waves, k = 6:
+# quota 6 -> 8 / 10 / 12 measured 176.8 -> 170.8 / 171.8 / 171.9 us; one wave at k = 6 (t3072) measured 6 -> 8 133.6
+# -> 135.5 us. At k = 8 the round-derived quota is already 8.
+W_ISSUE_TILES_MIN_MULTI_WAVE = 8
 # Each owned w step's DRAM reads split by tile: w_reader_share / W_SHARE_DEN go on the reader RISC (NoC1) into the
 # stage CB, the rest stay on the writer RISC (NoC0), which multicasts the stage. NoC1 DRAM reads are about half as
 # fast here, but w reads sharing NoC0 with the w multicast cost t = 1024 about 22 us, so a share pays while the
@@ -187,10 +194,16 @@ class Blocking:
     num_waves: int
     k_block_tiles: int
     core_row_tiles_max: int
+    # Compute K rounds per x step (x K block = x_step_rounds * k_block_tiles).
+    x_step_rounds: int = 1
 
     @property
     def num_k_rounds(self):
         return TENSOR_K_TILES // self.k_block_tiles
+
+    @property
+    def x_steps_per_wave(self):
+        return self.num_k_rounds // self.x_step_rounds
 
 
 def _tile_bytes():
@@ -213,15 +226,15 @@ def store_blocks_per_round(core_row_tiles_max, num_waves, num_k_rounds, store_st
     return _div_up(core_row_tiles_max, num_k_rounds - store_start_round)
 
 
-def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves):
+def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves, x_step_rounds=1):
     """(index, pages, page bytes, format) per CB. Single source for both the budget solve and the allocation."""
     in_tile, acc_tile, out_tile = _tile_bytes()
-    x_round_tiles = core_row_tiles_max * k_block_tiles
+    x_step_tiles = x_step_rounds * core_row_tiles_max * k_block_tiles
     w_round_tiles = NUM_EXPERTS * core_n_tiles * k_block_tiles
     return [
-        (CB_X_ROUND, X_DEPTH * x_round_tiles, in_tile, ttnn.bfloat8_b),
+        (CB_X_ROUND, X_DEPTH * x_step_tiles, in_tile, ttnn.bfloat8_b),
         (CB_W_ROUND, W_DEPTH * w_round_tiles, in_tile, ttnn.bfloat8_b),
-        (CB_X_STAGE, x_round_tiles, in_tile, ttnn.bfloat8_b),
+        (CB_X_STAGE, x_step_tiles, in_tile, ttnn.bfloat8_b),
         (CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b),
         (CB_PARTIALS, core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32),
         (CB_OUTPUT_ROWS, out_depth_blocks(core_row_tiles_max, num_waves) * core_n_tiles, out_tile, ttnn.bfloat16),
@@ -231,12 +244,9 @@ def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, 
     ]
 
 
-def footprint_bytes(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves):
+def footprint_bytes(*cb_plan_args):
     return sum(
-        _div_up(pages * page_bytes, CB_ADDR_ALIGN) * CB_ADDR_ALIGN
-        for _, pages, page_bytes, _ in cb_plan(
-            core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves
-        )
+        _div_up(pages * page_bytes, CB_ADDR_ALIGN) * CB_ADDR_ALIGN for _, pages, page_bytes, _ in cb_plan(*cb_plan_args)
     )
 
 
@@ -272,8 +282,9 @@ def output_l1_bank_bytes(device, rows, out_memory):
 
 def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, out_in_dram=False):
     """Unless out_in_dram, the fewest waves (<= ONE_PASS_MAX_ROWS rows per core), then the largest
-    k_block_tiles >= K_BLOCK_ONE_PASS_MIN, that fit budget_bytes; failing that the largest k_block_tiles (divisor of
-    96, <= K_BLOCK_MAX), then the fewest waves."""
+    x K block >= K_BLOCK_ONE_PASS_MIN, that fit budget_bytes; failing that the largest x K block (divisor of
+    96, <= K_BLOCK_MAX), then the fewest waves. Each candidate x K block first tries one compute round per x step,
+    then splits it into x_step_rounds compute (and w) rounds, which shrinks the w CBs but not the x chain's steps."""
     k_blocks = [k for k in range(K_BLOCK_MAX, 0, -1) if TENSOR_K_TILES % k == 0]
     waves = range(1, MAX_WAVES + 1)
     # Unrestricted fewest waves first (one wave at k = 4) measured 8x512 layer 0 172 -> 177 us (L1 / L1), 221 -> 223 us
@@ -282,24 +293,30 @@ def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, o
         [] if out_in_dram else [(k, w, ONE_PASS_MAX_ROWS) for w in waves for k in k_blocks if k >= K_BLOCK_ONE_PASS_MIN]
     )
     order += [(k, w, None) for k in k_blocks for w in waves]
-    for k_block_tiles, num_waves, max_rows in order:
+    for x_k_block_tiles, num_waves, max_rows in order:
         core_row_tiles_max = _div_up(_div_up(tensor_row_tiles, num_waves), layout.num_m_groups)
         if max_rows is not None and core_row_tiles_max > max_rows:
             continue
-        if (
-            footprint_bytes(core_row_tiles_max, k_block_tiles, layout.core_n_tiles, counts_page_bytes, num_waves)
-            <= budget_bytes
-        ):
-            return Blocking(tensor_row_tiles, num_waves, k_block_tiles, core_row_tiles_max)
+        for x_step_rounds in [r for r in range(1, X_STEP_ROUNDS_MAX + 1) if x_k_block_tiles % r == 0]:
+            k_block_tiles = x_k_block_tiles // x_step_rounds
+            plan = (core_row_tiles_max, k_block_tiles, layout.core_n_tiles, counts_page_bytes, num_waves, x_step_rounds)
+            if footprint_bytes(*plan) <= budget_bytes:
+                return Blocking(tensor_row_tiles, num_waves, k_block_tiles, core_row_tiles_max, x_step_rounds)
     raise UnsupportedAxisValue(
         f"moe_down_proj: no (num_waves <= {MAX_WAVES}, k_block_tiles) fits the {budget_bytes} B of L1 free for CBs "
         f"for {tensor_row_tiles} tile rows on the {layout.name} layout"
     )
 
 
+def w_issue_quota(blocking, core_n_tiles):
+    """Staged w DRAM reads the writer RISC issues per channel step."""
+    quota = _div_up(NUM_EXPERTS * core_n_tiles * blocking.k_block_tiles, PREFETCH_ISSUE_STEPS)
+    return max(quota, W_ISSUE_TILES_MIN_MULTI_WAVE) if blocking.num_waves > 1 else quota
+
+
 def w_reader_share(blocking):
     """Eighths (W_SHARE_DEN) of each w step's DRAM reads the reader RISC issues; 0 keeps them all on the writer."""
-    if blocking.num_waves > 1:
+    if blocking.num_waves > 1 or blocking.x_step_rounds > 1:
         return 0
     return max(0, min(W_SHARE_MAX, (W_SHARE_ROWS_ZERO - blocking.core_row_tiles_max) // W_SHARE_ROWS_PER_STEP))
 
@@ -331,7 +348,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     store_quota = store_blocks_per_round(
         blocking.core_row_tiles_max,
         blocking.num_waves,
-        blocking.num_k_rounds,
+        blocking.x_steps_per_wave if store_on_reader else blocking.num_k_rounds,
         X_DEPTH if store_on_reader else W_DEPTH,
     )
     plan_ct = [tensor_row_tiles, blocking.num_waves, layout.num_m_groups]
@@ -358,6 +375,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         W_SHARE_DEN,
         CB_W_STAGE,
         CB_W_OWNER,
+        blocking.x_step_rounds,
     ]
     for tensor in (input_tensor, expert_counts, output, weight):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -375,7 +393,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         output.buffer_page_size(),
         W_DEPTH,
         CB_W_STAGE,
-        PREFETCH_ISSUE_STEPS,
+        w_issue_quota(blocking, core_n_tiles),
         int(store_on_reader),
         store_quota,
         CB_W_OWNER,
@@ -414,7 +432,12 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     cbs = [
         _cb(index, pages, page_bytes, dtype, cores)
         for index, pages, page_bytes, dtype in cb_plan(
-            blocking.core_row_tiles_max, blocking.k_block_tiles, core_n_tiles, counts_page_bytes, blocking.num_waves
+            blocking.core_row_tiles_max,
+            blocking.k_block_tiles,
+            core_n_tiles,
+            counts_page_bytes,
+            blocking.num_waves,
+            blocking.x_step_rounds,
         )
     ]
 

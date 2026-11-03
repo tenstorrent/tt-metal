@@ -3,12 +3,15 @@
 
 // moe_down_proj reader (x channel; the w channel runs on the writer RISC), plus store_wave when store_on_reader.
 // D0: counts page -> cb_counts_compute and cb_counts_writer (parsed from the landing copy for the plan).
-// deliver_x_round, x step s = (wave s / num_k_rounds, K round s % num_k_rounds) over the non-empty waves:
+// deliver_x_round, x step s = (wave s / x_steps_per_wave, x K block s % x_steps_per_wave) over the non-empty waves:
 //   the step's rotating sender of the m-group multicasts its rows' K block of x from its private staging buffer
 //   into the round slot along the m-group (xa); in the L layout it also copies the block to the group's strip core
 //   (xb). After a send the sender starts the reads of its next owned step into staging, a quota per step, so a
-//   step's L1 reads overlap the steps in between. Nominal core_row_tiles_max * k_block_tiles pages pushed per step; an
-//   empty m-group moves no data.
+//   step's L1 reads overlap the steps in between. Nominal x_step_rounds * core_row_tiles_max * k_block_tiles pages
+//   pushed per step; an empty m-group moves no data.
+// x_step_rounds: one x step carries that many consecutive compute K rounds (x K block = x_step_rounds *
+//   k_block_tiles), laid out round-major ([round][row][k]) so compute pops them as separate rounds. Fewer, larger x
+//   steps keep the x chain's per-step cost while the w rounds (and their CBs) stay at k_block_tiles.
 // w_reads_on_reader: this RISC also runs the w line sender's DRAM prefetch (moe_down_proj_w_prefetch.h) on NoC1 into
 //   cb_w_stage, a quota per step once the writer RISC has freed the stage, and pushes it one step before the owned
 //   w step; the writer RISC multicasts it on NoC0.
@@ -50,7 +53,11 @@ void kernel_main() {
     constexpr uint32_t w_share_den = get_compile_time_arg_val(21);
     constexpr uint32_t cb_w_stage = get_compile_time_arg_val(22);
     constexpr uint32_t cb_w_owner = get_compile_time_arg_val(23);
-    constexpr auto x_args = TensorAccessorArgs<24>();
+    constexpr uint32_t x_step_rounds = get_compile_time_arg_val(24);
+    static_assert(num_k_rounds % x_step_rounds == 0, "x steps must not straddle a wave");
+    static_assert(x_step_rounds == 1 || !w_reads_on_reader, "the reader's w prefetch steps per w round");
+    constexpr uint32_t x_steps_per_wave = num_k_rounds / x_step_rounds;
+    constexpr auto x_args = TensorAccessorArgs<25>();
     constexpr auto counts_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
@@ -67,6 +74,8 @@ void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t x_round_tiles = core_row_tiles_max * k_block_tiles;
+    constexpr uint32_t x_step_tiles = x_step_rounds * x_round_tiles;
+    constexpr uint32_t x_step_k_tiles = x_step_rounds * k_block_tiles;
 
     const auto x_accessor = TensorAccessor(x_args, x_addr, tile_bytes);
     const auto counts_accessor = TensorAccessor(counts_args, counts_addr, counts_page_bytes);
@@ -92,7 +101,7 @@ void kernel_main() {
     // Non-empty waves are a prefix (a wave is empty only past the active rows).
     uint32_t num_steps = 0;
     for (uint32_t wave = 0; wave < num_waves && !plan.wave_empty(wave); ++wave) {
-        num_steps += num_k_rounds;
+        num_steps += x_steps_per_wave;
     }
 
     Noc noc;
@@ -107,7 +116,7 @@ void kernel_main() {
 
     // Staged prefetch of this core's next owned step. Its reads are issued a quota per step (rather than all at
     // once after a send), so the sender keeps serving the channel rounds in between.
-    constexpr uint32_t issue_quota = (x_round_tiles + prefetch_issue_steps - 1) / prefetch_issue_steps;
+    constexpr uint32_t issue_quota = (x_step_tiles + prefetch_issue_steps - 1) / prefetch_issue_steps;
     uint32_t pf_first_page = 0;
     uint32_t pf_next = 0;
     uint32_t pf_total = 0;
@@ -123,22 +132,25 @@ void kernel_main() {
         if (step >= num_steps) {
             return;
         }
-        const uint32_t wave = step / num_k_rounds;
-        pf_first_page = plan.group_first(wave, group) * tensor_k_tiles + (step % num_k_rounds) * k_block_tiles;
-        pf_total = plan.group_rows(wave, group) * k_block_tiles;
+        const uint32_t wave = step / x_steps_per_wave;
+        pf_first_page = plan.group_first(wave, group) * tensor_k_tiles + (step % x_steps_per_wave) * x_step_k_tiles;
+        pf_total = plan.group_rows(wave, group) * x_step_k_tiles;
     };
     auto issue_prefetch = [&](uint32_t max_tiles) {
         for (; pf_next < pf_total && max_tiles > 0; ++pf_next, --max_tiles) {
-            const uint32_t row = pf_next / k_block_tiles;
-            const uint32_t kk = pf_next % k_block_tiles;
-            noc_async_read_page(pf_first_page + row * tensor_k_tiles + kk, x_accessor, stage_l1 + pf_next * tile_bytes);
+            const uint32_t row = pf_next / x_step_k_tiles;
+            const uint32_t kk = pf_next % x_step_k_tiles;
+            const uint32_t round = kk / k_block_tiles;
+            const uint32_t stage_tile = round * x_round_tiles + row * k_block_tiles + kk % k_block_tiles;
+            noc_async_read_page(
+                pf_first_page + row * tensor_k_tiles + kk, x_accessor, stage_l1 + stage_tile * tile_bytes);
         }
     };
 
     // Wave p's store starts after wave p + 1's first x_store_round x rounds (the x slots compute can fill before it
     // has untilized wave p), so compute starts wave p + 1 while the store drains, store_blocks_per_round per round.
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_page_bytes);
-    constexpr uint32_t x_store_round = x_depth < num_k_rounds ? x_depth : num_k_rounds;
+    constexpr uint32_t x_store_round = x_depth < x_steps_per_wave ? x_depth : x_steps_per_wave;
     auto store_wave = [&](uint32_t wave, uint32_t first = 0, uint32_t max_blocks = UINT32_MAX) {
         if constexpr (store_on_reader) {
             return moe_store_wave<cb_output_rows, core_n_tiles>(
@@ -196,23 +208,24 @@ void kernel_main() {
     start_prefetch(0);
     uint32_t stored = 0;
     for (uint32_t step = 0; step < num_steps; ++step) {
-        const uint32_t round = step % num_k_rounds;
+        const uint32_t round = step % x_steps_per_wave;
         if (round == 0) {
             stored = 0;
         }
-        if (step >= num_k_rounds && round >= x_store_round) {
-            stored = store_wave(step / num_k_rounds - 1, stored, store_blocks_per_round);
+        if (step >= x_steps_per_wave && round >= x_store_round) {
+            stored = store_wave(step / x_steps_per_wave - 1, stored, store_blocks_per_round);
         }
         if constexpr (w_reads_on_reader) {
             w_stage_step(step);
         }
-        const uint32_t group_rows = plan.group_rows(step / num_k_rounds, group);
+        const uint32_t group_rows = plan.group_rows(step / x_steps_per_wave, group);
         const bool owned = on_xa && xa_mcast.should_send(step);
         issue_prefetch(owned ? pf_total : issue_quota);
-        cb_reserve_back(cb_x_round, x_round_tiles);
+        cb_reserve_back(cb_x_round, x_step_tiles);
         if (group_rows > 0) {
             const uint32_t slot = get_write_ptr(cb_x_round);
-            const uint32_t bytes = group_rows * k_block_tiles * tile_bytes;
+            // Every round but the last spans its nominal slot; the last ends at the group's rows.
+            const uint32_t bytes = ((x_step_rounds - 1) * x_round_tiles + group_rows * k_block_tiles) * tile_bytes;
             if (owned) {
                 dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
                 xa_sender->send(stage_l1, slot, bytes);
@@ -228,13 +241,13 @@ void kernel_main() {
         if (owned) {
             start_prefetch(step + 1);
         }
-        cb_push_back(cb_x_round, x_round_tiles);
-        if (step >= num_k_rounds && round == num_k_rounds - 1) {
-            store_wave(step / num_k_rounds - 1, stored);
+        cb_push_back(cb_x_round, x_step_tiles);
+        if (step >= x_steps_per_wave && round == x_steps_per_wave - 1) {
+            store_wave(step / x_steps_per_wave - 1, stored);
         }
     }
     if (num_steps > 0) {
-        store_wave(num_steps / num_k_rounds - 1);
+        store_wave(num_steps / x_steps_per_wave - 1);
     }
     if constexpr (store_on_reader) {
         noc_async_write_barrier();

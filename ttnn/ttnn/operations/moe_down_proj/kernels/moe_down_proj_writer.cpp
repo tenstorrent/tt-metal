@@ -39,7 +39,8 @@ void kernel_main() {
     constexpr uint32_t out_page_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t w_depth = get_compile_time_arg_val(13);
     constexpr uint32_t cb_w_stage = get_compile_time_arg_val(14);
-    constexpr uint32_t prefetch_issue_steps = get_compile_time_arg_val(15);
+    // Staged w DRAM reads issued per channel step (host: w_issue_quota()).
+    constexpr uint32_t issue_quota = get_compile_time_arg_val(15);
     // The reader RISC (the other NoC) owns store_wave instead.
     constexpr bool store_on_reader = get_compile_time_arg_val(16) != 0;
     constexpr uint32_t store_blocks_per_round = get_compile_time_arg_val(17);
@@ -103,7 +104,6 @@ void kernel_main() {
     const uint32_t num_steps = num_waves_active * num_k_rounds;
     // Writer-private scratch unless w_reads_on_reader (then the reader produces it and this RISC consumes it).
     const uint32_t stage_l1 = get_write_ptr(cb_w_stage);
-    constexpr uint32_t issue_quota = (w_round_tiles + prefetch_issue_steps - 1) / prefetch_issue_steps;
     MoeWPrefetch<
         k_block_tiles,
         core_n_tiles,

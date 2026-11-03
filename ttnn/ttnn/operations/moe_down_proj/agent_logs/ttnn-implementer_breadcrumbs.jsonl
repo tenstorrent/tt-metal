@@ -6,3 +6,5 @@
 {"event":"test_run","status":"pass","test":"eval/golden_tests/moe_down_proj -k t4096|t3072|t1_|t37","result":"55/55","ts":"2026-11-03T02:55:12+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/moe_down_proj/","detail":"72/72 after R3 w reader share + one-pass blocking; t4096 163.9 t3072 133.8 t2048 107.5 t1024 84.2 us","ts":"2026-11-03T03:20:01+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/moe_down_proj/ + golden slice 60/60","detail":"R3 final: w reader share + one-wave blocking (k>=6, rows<=24, L1 y)","ts":"2026-11-03T03:29:21+00:00"}
+{"event":"test_run","status":"pass","test":"golden test_op_loose t4096_layer0 occupied","device_ns":178592,"note":"live budget picks 2 waves k=6","ts":"2026-11-03T09:04:56+00:00"}
+{"event":"test_run","status":"pass","test":"golden test_op_loose t4096_layer0-5 occupied","device_us":[171.7,170.8,171,172.5,171.5,169.4],"ts":"2026-11-03T09:23:16+00:00"}

@@ -1,0 +1,1064 @@
+{
+  "summary": {
+    "total": 93,
+    "supported_pass": 75,
+    "supported_fail": 6,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 12
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer0-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer0-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer0-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer0-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer1-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer1-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer1-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer1-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer2-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer2-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer2-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer2-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer3-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer3-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer3-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer3-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer4-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer4-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer4-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer4-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer5-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer5-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer5-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_layer5-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t3072_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t3072_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t3072_scaled-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t3072_scaled-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t2048_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t2048_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t2048_scaled-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t2048_scaled-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1024_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1024_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1024_scaled-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1024_scaled-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_uniform-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_uniform-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_uniform-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_uniform-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_one_expert-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_one_expert-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_one_expert-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_one_expert-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_zeros_between-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_zeros_between-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_zeros_between-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t4096_zeros_between-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1858_mult32_plus1-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1858_mult32_plus1-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1858_mult32_plus1-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1858_mult32_plus1-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t1_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t16_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t16_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t16_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t16_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t37_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t37_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t37_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t37_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t128_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t128_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t128_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t128_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t300_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t300_small-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t300_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op[t300_small-buffer_type=DRAM-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t3072_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t2048_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t1024_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "passed"
+      }
+    ],
+    "supported_fail": [
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer0-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "failed",
+        "failure_category": "OOM"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer1-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "failed",
+        "failure_category": "OOM"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer2-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "failed",
+        "failure_category": "OOM"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer3-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "failed",
+        "failure_category": "OOM"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer4-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "failed",
+        "failure_category": "OOM"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer5-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1"
+        },
+        "status": "failed",
+        "failure_category": "OOM"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_expert_identity",
+        "test_name": "test_expert_identity",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_region_boundaries[pad1_pad31]",
+        "test_name": "test_region_boundaries[pad1_pad31]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_region_boundaries[pad1_all]",
+        "test_name": "test_region_boundaries[pad1_all]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_region_boundaries[pad31_all]",
+        "test_name": "test_region_boundaries[pad31_all]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_empty_experts[first_last_empty]",
+        "test_name": "test_empty_experts[first_last_empty]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_empty_experts[only_last]",
+        "test_name": "test_empty_experts[only_last]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_empty_experts[only_middle]",
+        "test_name": "test_empty_experts[only_middle]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_empty_experts[alternating]",
+        "test_name": "test_empty_experts[alternating]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_empty_experts[first_empty]",
+        "test_name": "test_empty_experts[first_empty]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_empty_experts[last_empty]",
+        "test_name": "test_empty_experts[last_empty]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_transposed_read",
+        "test_name": "test_transposed_read",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_down_proj/test_regression.py::test_counts_change_warm_cache",
+        "test_name": "test_counts_change_warm_cache",
+        "status": "passed"
+      }
+    ]
+  }
+}

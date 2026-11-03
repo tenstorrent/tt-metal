@@ -1,0 +1,12 @@
+{
+  "properties": {
+    "multi_core": {
+      "value": true,
+      "source": "declared"
+    },
+    "bounded_cb": {
+      "value": true,
+      "source": "declared"
+    }
+  }
+}
