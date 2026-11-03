@@ -108,6 +108,8 @@ tests/emule/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 # TT-STL
 tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT
 tt_stl/**/CMakeLists.txt @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/metalium-developers-infra
+tt_stl/tt_stl/move_only_function.hpp @ayerofieiev-tt @akerteszTT @riverwuTT @ezaiakinTT
+tt_stl/tests/test_move_only_function.cpp @ayerofieiev-tt @akerteszTT @riverwuTT @ezaiakinTT
 
 # Model bringup tools
 tools/bringup/ @ctr-martemovTT
@@ -219,7 +221,7 @@ tt_metal/impl/program/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-ru
 tt_metal/impl/sources.cmake @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @cfjchu @riverwuTT @akerteszTT
 tt_metal/impl/sub_device/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/tensor/ @akerteszTT @riverwuTT @aliaksei-sala
-tt_metal/impl/threading/ @cfjchu @tt-asaigal @msudumbrekar-TT
+tt_metal/impl/threading/ @cfjchu @tt-asaigal @msudumbrekar-TT @ezaiakinTT
 tt_metal/impl/trace/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra
@@ -300,6 +302,9 @@ tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/ @amahmudTT @fvranicTT @
 # metal tests
 tests/tt_metal/distributed/ @tenstorrent/metalium-developers-metal-distributed @tenstorrent/metalium-runtime-performance
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-developers-infra
+tests/tt_metal/distributed/benchmark_mesh_fan_out.cpp @tenstorrent/metalium-developers-metal-distributed @tenstorrent/metalium-runtime-performance @ezaiakinTT
+tests/tt_metal/distributed/benchmark_thread_pool.cpp @tenstorrent/metalium-developers-metal-distributed @tenstorrent/metalium-runtime-performance @ezaiakinTT
+tests/tt_metal/distributed/test_thread_pool.cpp @tenstorrent/metalium-developers-metal-distributed @tenstorrent/metalium-runtime-performance @ezaiakinTT
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
 tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu
 tests/tt_metal/test_utils/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @kstevensTT @tenstorrent/metalium-developers-infra
