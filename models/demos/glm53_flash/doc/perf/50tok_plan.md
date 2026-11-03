@@ -50,4 +50,35 @@ instance, 16-32 users on the Galaxy.
 ## Log
 
 * 2026-11-03 21:36 lever 1 probe: `tp8_moe_1x8` (TT_VISIBLE_DEVICES=0,1,2,3,27,26,25,24, descriptor
-  `_logs/mesh/bh_galaxy_1x8_ring.textproto`, GLM53_MESH_SHAPE=1,8): the 1x8 ring opened under FABRIC_2D; result below.
+  `_logs/mesh/bh_galaxy_1x8_ring.textproto`, GLM53_MESH_SHAPE=1,8): the 1x8 ring opened under FABRIC_2D; PASS in 2:52: the hybrid MoE layer 4 on 8 columns, worst PCC vs HF 0.999957 at 2 rows and 0.999930 at 32 rows (the same bars as the (2, 4) block). Our mesh code takes cols = 8 for the MoE as is.
+
+## Where the per-layer overhead sits (roofline rows, 4 users per row, frozen tip)
+
+The launch gaps themselves are small (`layer.gaps`: 24 us over 33 gaps per KDA layer, 43 us over 76 per DSA layer).
+The 357 / 598 us of "overhead" per layer is inside under-utilised or sync-bound ops and in the 8-row MoE collectives:
+
+| cluster | KDA layer measured - floor | DSA layer measured - floor | what it is |
+|---|---|---|---|
+| `mhc.pre_block_fused` x2 | 141 us | 141 us | 82 us each for 11 us of bytes: the fused pre-block (coefficients + norms over 4 streams) runs latency-bound |
+| row collectives (`gather_x`, `gather_routing`, `rs_rows`) | 111 us over 77 us floor (188 us total) | 102 us over 77 (174 total) | the 8-row MoE exchange: vanish entirely on a 1-row instance |
+| `all_reduce` (attention + MoE) | 36 us | 33 us | 2 CCL ops each |
+| `kda.decode` | 49 us | - | DRAM under-utilised |
+| `dsa.state_composite` (29 ops) | - | 74 us | the paged-state glue |
+| `dsa.pool_gather`, `dsa.sdpa` | - | 91 + 49 us | L1/NoC bound |
+| `dsa.*_view` (7 ops) | - | 44 us | layout glue |
+
+Projection for one (1, 8) instance at 4 users, from the rows: KDA layer 958 - 188 (row CCL) - ~135 (half the
+weight bytes) = ~635 us; DSA layer 1360 - 174 - ~150 = ~1035 us; step ~33 ms = 30 tok/s/u. Then, in order:
+
+| step | saving per step | step | tok/s/u |
+|---|---|---|---|
+| (1, 8) instance, DP4 on the Galaxy | -11 ms | 33 ms | 30 |
+| `mhc.pre_block_fused` 82 -> ~20 us (90 calls) | -5.4 ms | 27.6 | 36 |
+| bfp4 routed experts (accuracy-gated) | -4 ms | 23.6 | 42 |
+| DSA glue: `state_composite` + views + `pool_gather` as 1-2 programs | -2.8 ms | 20.8 | 48 |
+| `kda.decode` to its DRAM floor | -1.7 ms | 19 | 52 |
+| MTP (K = 2-3) on top | | | 80-100 |
+
+Every row is a per-op change behind the existing PCC / decode-id gates; no megakernel is required for the 50 band.
+The reference's persistent-stack design stays the lever for the 100 band without MTP (it removes the remaining
+~100 us of collective + gap cost per layer).
