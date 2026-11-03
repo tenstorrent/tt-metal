@@ -531,6 +531,9 @@ Tensor scatter(
     //                                                                      -> native (demoted)
     //   - ROW_MAJOR whose resident input/output sticks do not fit the L1 free right now
     //                                                                      -> native
+    //   - TILE whose streaming tile pages do not fit the L1 free right now once this call's own
+    //     copies and output are deducted, and that the detour below declines
+    //                                                                      -> native
     //   - TILE with at most kRowMajorRerouteMaxHt post-transpose tile rows, input and index sticks of
     //     at most kRowMajorRerouteMaxStickElems elements whose raw byte widths are multiples of
     //     kRowMajorRerouteNocAlign, that fit live L1, and an output in the input's placement

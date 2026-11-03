@@ -102,6 +102,13 @@ bool scatter_interleaved_fits_l1(
     uint64_t index_page_bytes,
     uint64_t src_page_bytes);
 
+// The TILE streaming plan's footprint: two output and two input tile pages, one index and one src,
+// whatever the row width. The least a TILE call needs, and what the live-L1 routing gate asks for;
+// the interleaved plan is only an upgrade select_program_factory() takes when its row-resident
+// footprint fits what is free then.
+uint64_t scatter_tile_streaming_bytes(
+    uint64_t output_page_bytes, uint64_t input_page_bytes, uint64_t index_page_bytes, uint64_t src_page_bytes);
+
 // RM: the bytes a ROW_MAJOR factory keeps resident per core whatever the chunking -- the input and
 // output sticks, plus a same-sized FP32 accumulator (2x a BF16 page) for the bf16-reduce factory.
 // The one formula the routing gate, the program hash and both RM factories size from.
@@ -117,7 +124,8 @@ bool scatter_rm_min_plan_fits_l1(
 
 // RM: index/src CB depth in elements, scaled down from the 8192-element default to whatever the live
 // L1 frontier leaves once the fully-resident input/output pages (and, for bf16_reduce, the FP32
-// accumulator page) are seated. Rounded to a multiple of 32 once scaling is actually needed, so every
+// accumulator page) are seated; the chunk is budgeted as the CB-word-rounded pages the factory
+// allocates, not the raw bytes. Rounded to a multiple of 32 once scaling is actually needed, so every
 // chunk boundary offset stays NOC-aligned on Wormhole (32 B) and Blackhole (64 B) for the 2- and
 // 4-byte dtypes in scope, then floored to that same 32-element minimum so a frontier tighter than
 // what the caller planned against (the forced entry and direct prim callers only check the static
