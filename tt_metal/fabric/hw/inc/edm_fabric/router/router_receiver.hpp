@@ -335,7 +335,7 @@ FORCE_INLINE void record_forwarded(uint32_t forward_to) {
             constexpr uint32_t packed = packed_by_vc[ReceiverChannel<VC>::forwards_on_vc];
             uint32_t entries = 0;
             for (uint32_t names = forward_to; names != 0; names &= names - 1) {
-                entries |= 1u << downstream_entry(__builtin_ctz(names));
+                entries |= 1u << downstream_entry(lowest_bit(names));
             }
             channel_trimming_usage_recorder.merge_sender_channel_forwarded_to(
                 ReceiverChannel<VC>::rx,
@@ -553,9 +553,8 @@ FORCE_INLINE void accumulate_completion_credits(
     if constexpr (GROUP_SIZE == 1) {
         credits.accumulate_completion_credit(static_cast<uint8_t>(sources.source_of(first)), 1);
     } else {
-        // One sender channel when every byte of `group` equals the first. The expressions stay inline: wrapped in
-        // helpers, or with the test in a named bool, they change the -Os code (production VC1 builds).
-        // Slot first + k's sender channel in byte k.
+        // One sender channel when every byte of `group` equals the first: `one_per_slot` holds a 1 in each of the
+        // group's bytes. Slot first + k's sender channel is in byte k.
         const uint32_t group = sources.completion_group_sources(first, count);
         const uint32_t first_source = group & 0xFF;
         const uint32_t one_per_slot = count == 4 ? 0x01010101u : 0x01010101u & ((1u << (8 * count)) - 1);
@@ -854,7 +853,8 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
         }
         end_round(round, true);
         if constexpr (telemetry::any_option) {
-            telemetry::round_end<false, true>([] { return false; }, [] { return vc0_register_empty(); });
+            telemetry::round_end</*SENDER=*/false, /*RECEIVER=*/true>(
+                [] { return false; }, [] { return vc0_register_empty(); });
         }
     }
 }

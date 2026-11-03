@@ -29,6 +29,8 @@ FORCE_INLINE void for_each_index(F&& f) {
 }
 
 constexpr uint32_t popcount(uint32_t mask) { return static_cast<uint32_t>(__builtin_popcount(mask)); }
+// The number of bits up to and including the highest set bit (0 for an empty mask).
+constexpr size_t mask_width(uint32_t mask) { return mask == 0 ? 0 : 32 - static_cast<size_t>(__builtin_clz(mask)); }
 
 // For plain recursion over a channel mask: the lowest channel in MASK, and MASK without it. The per-pass code recurses
 // over its masks instead of iterating with a closure: a lambda capturing a loop's state can keep that state in memory.

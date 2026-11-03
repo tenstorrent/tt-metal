@@ -14,8 +14,7 @@
 // live in one global rather than in the loops' locals, so an option adds memory updates per packet without changing a
 // loop's register state. A round is one run of passes between end_round calls (router_round.hpp).
 // The call sites guard each call with `if constexpr` on the option, so a build with both options off carries no call,
-// argument or lambda: dead inline calls alone shifted register allocation in the spill-heavy loops (VC1 senders,
-// VC2 and speedy receivers).
+// argument or lambda in its loops.
 
 #include "router_common.hpp"
 #include "router_round.hpp"

@@ -110,7 +110,7 @@ FORCE_INLINE void finish_phase() {
 // acknowledgements only in a keepalive, so one-way traffic waits on this period once the sender's window is full. The
 // teardown master sets it on both queues at init and restores the firmware's values at teardown; 0 (the builder's
 // default off Blackhole) leaves the firmware's value.
-constexpr uint32_t keepalive_timeout = get_named_compile_time_arg_val("ETH_TXQ_SEQ_UPDATE_TIMEOUT");
+constexpr uint32_t keepalive_timeout = eth_txq_seq_update_timeout;
 constexpr bool sets_keepalive = keepalive_timeout != 0 && is_teardown_master;
 uint32_t firmware_keepalive[2];
 
@@ -146,7 +146,6 @@ FORCE_INLINE void zero_credit_counters(size_t block_addr) {
 __attribute__((noinline)) void init_txqs() {
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     set_keepalive();
-    static_assert(receiver_txq_id == sender_txq_id || receiver_txq_id == 1);
     if constexpr (receiver_txq_id != sender_txq_id) {
         if constexpr (is_receiver_role) {
             // The receiver's queue carries completion credits; its counters start at 0. The credit block holds a count
@@ -246,7 +245,7 @@ private:
     template <size_t N>
     DownstreamArgs of(const VcDownstreamArgs<N>& a, size_t first_teardown_sem) const {
         return {
-            a.mask & 0xF,
+            a.mask & ((1u << max_downstreams) - 1),
             a.first_slot_addrs.data(),
             a.location_info.data(),
             a.registration.data(),
@@ -354,12 +353,12 @@ __attribute__((noinline, optimize("Os"))) void run_handshakes() {
             }
             *edm_status() = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
             wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
-                (uint32_t)edm_status(), tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC, termination);
+                reinterpret_cast<uint32_t>(edm_status()), tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC, termination);
             if constexpr (is_local_handshake_master) {
                 notify_subordinate_routers(
                     edm_channels_mask,
                     local_handshake_master_eth_chan,
-                    (uint32_t)edm_status(),
+                    reinterpret_cast<uint32_t>(edm_status()),
                     tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
             }
         }
@@ -398,7 +397,7 @@ __attribute__((noinline)) void teardown() {
     if constexpr (wait_for_host_signal && is_local_handshake_master) {
         auto* termination = termination_signal();
         notify_subordinate_routers(
-            edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)termination, *termination);
+            edm_channels_mask, local_handshake_master_eth_chan, reinterpret_cast<uint32_t>(termination), *termination);
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

@@ -465,6 +465,8 @@ constexpr bool enable_context_switch = NAMED_CT_ARG("ENABLE_CONTEXT_SWITCH") != 
 constexpr bool enable_interrupts = NAMED_CT_ARG("ENABLE_INTERRUPTS") != 0;
 constexpr size_t sender_txq_id = NAMED_CT_ARG("SENDER_TXQ_ID");
 constexpr size_t receiver_txq_id = NAMED_CT_ARG("RECEIVER_TXQ_ID");
+// The TX queues' keepalive (ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT) while the router runs, in cycles; 0 keeps the firmware's.
+constexpr uint32_t eth_txq_seq_update_timeout = NAMED_CT_ARG("ETH_TXQ_SEQ_UPDATE_TIMEOUT");
 constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
 
 // Whether a VC's receiver-to-sender ack and completion credits travel through L1 counters instead of

@@ -4,10 +4,10 @@
 
 #pragma once
 
-// The single-ERISC router (Wormhole; Blackhole with two-ERISC mode off): one ERISC runs both roles. Each role keeps its
-// two-ERISC pass (sender::pass, receiver::pass) and its own state; here each pass runs out of line over a record of its
-// state in memory, so neither role's code has to hold the other's state in registers. The receiver's pass runs first:
-// it frees ring slots and returns the credits the far sender is waiting on.
+// The single-ERISC router (Blackhole with two-ERISC mode off; Wormhole once supported): one ERISC runs both roles. Each
+// role keeps its two-ERISC pass (sender::pass, receiver::pass) and its own state; here each pass runs out of line over
+// a record of its state in memory, so neither role's code has to hold the other's state in registers. The receiver's
+// pass runs first: it frees ring slots and returns the credits the far sender is waiting on.
 //
 // Rounds, router commands, the heartbeat and the context switch are the sender loop's (router_round.hpp); with one
 // ERISC there is no other ERISC to park or follow. Channel trimming may leave a role without channels: its pass is then

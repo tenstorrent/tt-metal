@@ -501,7 +501,7 @@ FORCE_INLINE void read_connection_semaphores(uint32_t* connection_semaphores) {
 // registers are tested. Only the one-word result stays live across the pass.
 template <uint32_t MASK, uint32_t WORKERS = 0>
 FORCE_INLINE uint32_t channels_with_packets(uint32_t* connection_semaphores = nullptr) {
-    uint32_t registers[MASK == 0 ? 1 : 32 - __builtin_clz(MASK)];
+    uint32_t registers[MASK == 0 ? 1 : mask_width(MASK)];
     begin_read_group();
     read_free_slots_registers<MASK>(registers);
     read_connection_semaphores<WORKERS>(connection_semaphores);
@@ -926,7 +926,7 @@ template <typename LoopCopy>
 FORCE_INLINE void pass(
     LoopCopy& loop_copy, SenderChannelStates& states, uint32_t& channels_in_flight, bool& send_yielded) {
     constexpr uint32_t worker_channels = SenderChannels::worker_channels;
-    uint32_t connection_semaphores[worker_channels == 0 ? 1 : 32 - __builtin_clz(worker_channels)];
+    uint32_t connection_semaphores[worker_channels == 0 ? 1 : mask_width(worker_channels)];
     const uint32_t holding =
         channels_with_packets<SenderChannels::read_at_pass_start, worker_channels>(connection_semaphores);
     check_worker_connection<0>(loop_copy, states, connection_semaphores);
@@ -967,7 +967,7 @@ FORCE_INLINE void after_round(
         round.counters,
         !IDLE_CONTEXT_SWITCHING || round.send_yielded || total_sent(loop_copy, states) != round.sent_at_round_start);
     if constexpr (telemetry::any_option) {
-        telemetry::round_end<true, RECEIVER>(
+        telemetry::round_end</*SENDER=*/true, RECEIVER>(
             [] { return any_channel_holds_packet(); },
             rx_register_empty,
             total_sent(loop_copy, states) - round.sent_at_round_start);

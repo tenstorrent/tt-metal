@@ -214,8 +214,8 @@ struct CommandBuffers {
     // The kinds each of the four buffers (WR, RD, WR_REG, AT) carries on this ERISC. Worker credits by the host's
     // worker positions, serviced or not (the host assigns buffers by channel, whatever the trimming). The forwards of
     // every VC that forwards to routers are one kind: VCs on the same buffers share their presets.
-    static constexpr std::array<uint32_t, 4> kinds_on = [] {
-        std::array<uint32_t, 4> kinds{};
+    static constexpr std::array<uint32_t, NUM_NOC_CMD_BUFS> kinds_on = [] {
+        std::array<uint32_t, NUM_NOC_CMD_BUFS> kinds{};
         kinds[atomics] |= ATOMICS;
         if (is_sender_role) {
             for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
