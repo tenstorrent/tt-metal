@@ -64,20 +64,35 @@ CoreCoord flat_worker_noc0(tt::tt_metal::distributed::MeshDevice& mesh_device, c
     return mx::GetWorkerNoc0Core(mesh_device, flat_reference_coord(mesh_device), logical);
 }
 
+CoreCoord flat_worker_noc0(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const CoreCoord& logical,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    return mx::GetWorkerNoc0Core(mesh_device, coord, logical);
+}
+
+FlatDriscTopology FlatDriscTopology::geometry(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    FlatDriscTiles tiles,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinate>& coord) {
+    FlatDriscTopology t;
+    t.tiles = tiles;
+    t.coord = coord.value_or(flat_reference_coord(mesh_device));
+    t.banks = mesh_device.dram_grid_size().x;
+    for (uint32_t b = 0; b < t.banks; ++b) {
+        t.cores.push_back(mx::GetDramCores(mesh_device, t.coord, b));
+    }
+    return t;
+}
+
 FlatDriscTopology FlatDriscTopology::of(tt::tt_metal::distributed::MeshDevice& mesh_device, FlatDriscTiles tiles) {
     TT_FATAL(
         mx::AreDramCoreKernelsSupported(mesh_device),
         "flat_routed_expert: DRISC gate/up weight senders only, and this device has no programmable DRAM cores");
-    FlatDriscTopology t;
-    t.tiles = tiles;
-    t.coord = flat_reference_coord(mesh_device);
-    t.banks = mesh_device.dram_grid_size().x;
+    FlatDriscTopology t = geometry(mesh_device, tiles);
     const auto region = mx::GetDramCoreKernelL1Region(mesh_device);
     t.base = region.base;
     t.size = region.size;
-    for (uint32_t b = 0; b < t.banks; ++b) {
-        t.cores.push_back(mx::GetDramCores(mesh_device, t.coord, b));
-    }
     return t;
 }
 

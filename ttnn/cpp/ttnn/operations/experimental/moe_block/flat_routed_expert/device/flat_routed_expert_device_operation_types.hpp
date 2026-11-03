@@ -50,6 +50,11 @@ enum class FlatGuSource : uint32_t {
     // layout.gu_place says, per gate/up core, which bank holds its share and who delivers it: a Tensix read on NOC0
     // (NCRISC) / NOC1 (BRISC), or a DRISC (the bank's free DRAM_TILE, drisc_tiles free_only: hybrid plans)
     placed = 4,
+    // every gate/up core reads its own share (NOC0 or NOC1), the bank and NoC of each core chosen per chip by a NoC
+    // link-load search over that chip's own geometry (flat_gu_place.hpp)
+    auto_tensix = 5,
+    // as auto_tensix, each bank's farthest-placed slot from its free DRAM_TILE's DRISC (drisc_tiles free_only)
+    auto_hybrid = 6,
 };
 const char* to_string(FlatGuSource source);
 

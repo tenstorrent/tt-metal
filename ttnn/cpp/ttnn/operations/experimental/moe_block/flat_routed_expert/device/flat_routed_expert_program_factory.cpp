@@ -17,6 +17,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <unordered_map>
 
 namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
 
@@ -882,18 +884,32 @@ std::vector<tt::tt_metal::CoreCoord> flat_y_writers(const FlatRoutedExpertPlan& 
     return out;
 }
 
-FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory::create(
-    const FlatRoutedExpertParams& cfg, const FlatRoutedExpertInputs& t, Tensor& /*output*/) {
+FlatRoutedExpertProgramFactory::cached_mesh_workload_t FlatRoutedExpertProgramFactory::create_mesh_workload(
+    const FlatRoutedExpertParams& cfg,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const FlatRoutedExpertInputs& t,
+    Tensor& /*output*/) {
     auto& mesh_device = *t.x.device();
-    tt::tt_metal::Program program{};
-    auto handles =
-        add_flat_routed_expert_program(program, mesh_device, cfg, *flat_routed_expert_plan(mesh_device, cfg), t);
-    return cached_program_t{std::move(program), std::move(handles)};
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
+    for (const auto& range : tensor_coords.ranges()) {
+        for (const auto& coord : range) {
+            tt::tt_metal::Program program{};
+            auto handles = add_flat_routed_expert_program(
+                program, mesh_device, cfg, *flat_routed_expert_chip_plan(mesh_device, cfg, coord), t);
+            const ttnn::MeshCoordinateRange r(coord, coord);
+            workload.add_program(r, std::move(program));
+            shared.emplace(r, std::move(handles));
+        }
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared)};
 }
 
 void FlatRoutedExpertProgramFactory::override_runtime_arguments(
-    cached_program_t& cached, const FlatRoutedExpertParams&, const FlatRoutedExpertInputs& t, Tensor&) {
-    override_flat_routed_expert_addresses(cached.program, cached.shared_variables, t);
+    cached_mesh_workload_t& cached, const FlatRoutedExpertParams&, const FlatRoutedExpertInputs& t, Tensor&) {
+    for (auto& [range, sv] : cached.shared_variables) {
+        override_flat_routed_expert_addresses(cached.workload.get_programs().at(range), sv, t);
+    }
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::flat_routed_expert

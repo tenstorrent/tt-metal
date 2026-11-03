@@ -4,6 +4,7 @@
 
 #include "flat_routed_expert_plan.hpp"
 #include "flat_drisc.hpp"
+#include "flat_gu_place.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <tuple>
 
@@ -163,6 +165,82 @@ tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<Core>& cores) {
     return tt::tt_metal::CoreRangeSet(rects);
 }
 
+void flat_apply_gu_place(FlatRoutedExpertPlan& p, const std::vector<uint32_t>& words) {
+    const auto cells = flat_gu_cells(p);
+    const uint32_t n_rd = p.drisc_n;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> cell;
+    for (uint32_t ci = 0; ci < cells.size(); ++ci) {
+        cell[{cells[ci].x, cells[ci].y}] = ci;
+    }
+    TT_FATAL(
+        words.size() == cells.size(),
+        "flat layout gu_place: {} words for {} gate/up cells (one per cell)",
+        words.size(),
+        cells.size());
+    std::vector<std::vector<uint32_t>> per_reader(n_rd);
+    std::vector<uint32_t> how_of(cells.size(), 0);
+    std::vector<bool> placed(cells.size(), false);
+    std::vector<bool> slot_drisc(n_rd, false);
+    // per bank: its slot b and slot b + banks; DRISC words pin their slot, Tensix words fill the rest
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> tw(p.banks);  // (ci, how) Tensix
+    for (const uint32_t w : words) {
+        const uint32_t x = w >> 24, y = (w >> 16) & 0xFF, b = (w >> 8) & 0xFF, how = w & 0xFF;
+        TT_FATAL(cell.contains({x, y}), "flat layout gu_place: ({}, {}) is no gate/up cell", x, y);
+        TT_FATAL(b < p.banks && how >= 1 && how <= 4, "flat layout gu_place word {:#x}", w);
+        const uint32_t ci = cell.at({x, y});
+        TT_FATAL(!placed[ci], "flat layout gu_place: ({}, {}) twice", x, y);
+        placed[ci] = true;
+        if (how >= FlatGuPlace::drisc_noc1) {
+            TT_FATAL(
+                p.drisc_tiles == FlatDriscTiles::free_only,
+                "flat layout gu_place: DRISC words need drisc_tiles free_only");
+            const uint32_t r = b + (how == FlatGuPlace::drisc_noc0 ? p.banks : 0);
+            per_reader[r].push_back(ci);
+            slot_drisc[r] = true;
+        } else {
+            tw[b].emplace_back(ci, how);
+        }
+    }
+    for (uint32_t b = 0; b < p.banks; ++b) {
+        for (const auto& [ci, how] : tw[b]) {
+            const uint32_t r = !slot_drisc[b] && per_reader[b].size() < p.r_ ? b : b + p.banks;
+            TT_FATAL(!slot_drisc[r], "flat layout gu_place: bank {} mixes DRISC and Tensix cores in a slot", b);
+            per_reader[r].push_back(ci);
+            how_of[ci] = how;
+        }
+    }
+    for (uint32_t r = 0; r < n_rd; ++r) {
+        TT_FATAL(
+            per_reader[r].size() == p.r_,
+            "flat layout gu_place: slot {} (bank {}) has {} cores; each bank's two slots take {} each",
+            r,
+            r % p.banks,
+            per_reader[r].size(),
+            p.r_);
+    }
+    p.gu.clear();
+    p.gu_how.clear();
+    p.gu_idle.clear();
+    for (uint32_t r = 0; r < n_rd; ++r) {
+        for (uint32_t ci : per_reader[r]) {
+            p.gu.push_back(cells[ci]);
+            p.gu_how.push_back(how_of[ci]);
+        }
+    }
+    p.slot_drisc = slot_drisc;
+}
+
+FlatGuAssign flat_gu_auto(const FlatRoutedExpertPlan& p, const FlatGuGeom& g) {
+    return flat_gu_search({&g}, flat_gu_traffic(p), p.rg, p.gu_source == FlatGuSource::auto_hybrid, kFlatGuIters);
+}
+
+FlatGuTraffic flat_gu_traffic(const FlatRoutedExpertPlan& p) {
+    // per expert: one gate/up core's share of 2 H I weights, the x rows (rows_hint, else the capacity), H I down
+    const double wb = p.w_tile / 1024.0, H = p.H, I = p.I;
+    const double rows = p.rows_hint > 0 ? p.rows_hint : p.m;
+    return FlatGuTraffic{2.0 * H * I * wb / flat_gu_cells(p).size(), rows * H * 2.0, H * I * wb};
+}
+
 FlatRoutedExpertPlan make_flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg) {
     auto* device = &mesh_device;
@@ -173,6 +251,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     p.E = cfg.experts_per_chip;
     p.NG = cfg.num_global_experts;
     p.m = cfg.max_tokens;
+    p.rows_hint = cfg.layout.rows_hint;
     TT_FATAL(p.H % 256 == 0 && p.I % 32 == 0 && p.m % 32 == 0, "flat_routed_expert: H % 256, I % 32, m % 32");
     TT_FATAL(p.m >= 256, "flat_routed_expert: the op is built for >= 256 tokens per expert (helper relays)");
     TT_FATAL(p.E >= 1 && p.E <= 64, "flat_routed_expert: 1..64 local experts");
@@ -301,9 +380,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     std::tie(p.dst_tiles, p.gu_rp) = gu_dst((p.gwt + 1) / 2, p.Ht, p.x_slots, p.nu != 0);
     const uint32_t mt_cap = std::min(p.dst_tiles / p.gwt, MT_MAX);
     p.mt = std::min(mt_cap, std::max(1u, p.m / 32));
-    // DRISC only: every gate/up weight slot from the DRAM cores (pure, tiles in switch mode); no Tensix weight readers
-    // (FlatDriscTopology::of fails on a device without programmable DRAM cores)
-    const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device, lo.drisc_tiles);
+    // the DRAM tiles' geometry (host only: also on a mock cluster); the senders' L1 region is the program factory's
+    const FlatDriscTopology drisc = FlatDriscTopology::geometry(mesh_device, lo.drisc_tiles);
     p.drisc_tiles = lo.drisc_tiles;
     TT_FATAL(
         lo.drisc_dma_cap < 0 || (lo.drisc_dma_cap >= 1 && lo.drisc_dma_cap <= 3),
@@ -532,12 +610,14 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     // mode: a bank's second slot from its NOC1-endpoint tile, on NOC0; one-tile choices: both from the bank's tile),
     // all pairs (slot, core) taken nearest first rather than round-robin nearest (which left the last slots 15-21
     // hops). Galaxy loads GLM-5.3 / GLM-Flash / K3 / K2.7 525 / 382 / 1232 / 808 -> 522 / 381 / 1216 / 808 us.
+    const bool by_words = p.gu_source == FlatGuSource::placed || p.gu_source == FlatGuSource::auto_tensix ||
+                          p.gu_source == FlatGuSource::auto_hybrid;
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
-    std::vector<bool> placed(gu_all.size(), false);
+    std::vector<bool> placed(gu_all.size(), by_words);
     // per gate/up cell: who delivers its share (0 DRISC, FlatGuPlace::tensix_noc0 / tensix_noc1)
     std::vector<uint32_t> how_of(gu_all.size(), 0);
     p.slot_drisc.assign(n_rd, p.gu_source == FlatGuSource::drisc);
-    {
+    if (!by_words) {
         std::vector<std::tuple<int, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
         std::vector<Core> worker_noc0;
         for (const auto& c : gu_all) {
@@ -568,55 +648,6 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             }
         }
         std::sort(pairs.begin(), pairs.end());
-        if (p.gu_source == FlatGuSource::placed) {
-            pairs.clear();  // (the caller's placement)
-            std::map<std::pair<uint32_t, uint32_t>, uint32_t> cell;
-            for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-                cell[{gu_all[ci].x, gu_all[ci].y}] = ci;
-            }
-            TT_FATAL(
-                lo.gu_place.size() == gu_all.size(),
-                "flat layout gu_place: {} words for {} gate/up cells (one per cell)",
-                lo.gu_place.size(),
-                gu_all.size());
-            // per bank: its slot b and slot b + banks; DRISC words pin their slot, Tensix words fill the rest
-            std::vector<std::vector<std::pair<uint32_t, uint32_t>>> tw(p.banks);  // (ci, how) Tensix
-            for (const uint32_t w : lo.gu_place) {
-                const uint32_t x = w >> 24, y = (w >> 16) & 0xFF, b = (w >> 8) & 0xFF, how = w & 0xFF;
-                TT_FATAL(cell.contains({x, y}), "flat layout gu_place: ({}, {}) is no gate/up cell", x, y);
-                TT_FATAL(b < p.banks && how >= 1 && how <= 4, "flat layout gu_place word {:#x}", w);
-                const uint32_t ci = cell.at({x, y});
-                TT_FATAL(!placed[ci], "flat layout gu_place: ({}, {}) twice", x, y);
-                placed[ci] = true;
-                if (how >= FlatGuPlace::drisc_noc1) {
-                    TT_FATAL(
-                        lo.drisc_tiles == FlatDriscTiles::free_only,
-                        "flat layout gu_place: DRISC words need drisc_tiles free_only");
-                    const uint32_t r = b + (how == FlatGuPlace::drisc_noc0 ? p.banks : 0);
-                    per_reader[r].push_back(ci);
-                    p.slot_drisc[r] = true;
-                } else {
-                    tw[b].emplace_back(ci, how);
-                }
-            }
-            for (uint32_t b = 0; b < p.banks; ++b) {
-                for (const auto& [ci, how] : tw[b]) {
-                    const uint32_t r = !p.slot_drisc[b] && per_reader[b].size() < p.r_ ? b : b + p.banks;
-                    TT_FATAL(!p.slot_drisc[r], "flat layout gu_place: bank {} mixes DRISC and Tensix cores in a slot", b);
-                    per_reader[r].push_back(ci);
-                    how_of[ci] = how;
-                }
-            }
-            for (uint32_t r = 0; r < n_rd; ++r) {
-                TT_FATAL(
-                    per_reader[r].size() == p.r_,
-                    "flat layout gu_place: slot {} (bank {}) has {} cores; each bank's two slots take {} each",
-                    r,
-                    r % p.banks,
-                    per_reader[r].size(),
-                    p.r_);
-            }
-        }
         for (const auto& [h, r, ci] : pairs) {
             if (!placed[ci] && per_reader[r].size() < p.r_) {
                 per_reader[r].push_back(ci);
@@ -640,6 +671,19 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
         if (!placed[ci]) {
             p.gu_idle.push_back(gu_all[ci]);
         }
+    }
+    if (by_words) {  // the caller's placement, or the link-load search's on this (the reference) chip
+        TT_FATAL(
+            p.gu_source == FlatGuSource::placed || lo.gu_place.empty(),
+            "flat layout: gu_place is for gu_source placed (auto sources search their own)");
+        TT_FATAL(
+            p.gu_source != FlatGuSource::auto_hybrid || lo.drisc_tiles == FlatDriscTiles::free_only,
+            "flat layout: gu_source auto_hybrid needs drisc_tiles free_only (its DRISC slots: the banks' free tiles)");
+        flat_apply_gu_place(
+            p,
+            p.gu_source == FlatGuSource::placed
+                ? lo.gu_place
+                : flat_gu_words(p, flat_gu_auto(p, flat_gu_geom(mesh_device, p, flat_reference_coord(mesh_device)))));
     }
 
     // ---- arena (per-role layout, 2 KB aligned) ----
@@ -765,6 +809,65 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
             plan->gu_kg,
             plan->mt * 32);
         it = cache.emplace(key, std::move(plan)).first;
+    }
+    return it->second;
+}
+
+std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_chip_plan(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FlatRoutedExpertConfig& c,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    auto base = flat_routed_expert_plan(mesh_device, c);
+    if (base->gu_source != FlatGuSource::auto_tensix && base->gu_source != FlatGuSource::auto_hybrid) {
+        return base;
+    }
+    // (chips of one geometry share the placement: the key is the mesh plan and the geometry's positions)
+    const FlatGuGeom g = flat_gu_geom(mesh_device, *base, coord);
+    static std::mutex mu;
+    static std::map<std::pair<const FlatRoutedExpertPlan*, std::vector<uint32_t>>, std::shared_ptr<const FlatRoutedExpertPlan>>
+        cache;
+    const auto key = std::make_pair(base.get(), g.key());
+    std::lock_guard<std::mutex> lock(mu);
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+        // this chip's own search, or the mesh's compromise placement (one search over every distinct geometry of
+        // the mesh) when that loads this chip's busiest link less (the local search stops in local minima)
+        static std::map<const FlatRoutedExpertPlan*, std::optional<FlatGuAssign>> compromise;
+        auto cit = compromise.find(base.get());
+        if (cit == compromise.end()) {
+            std::vector<FlatGuGeom> geoms;
+            for (const auto id : mesh_device.get_device_ids()) {
+                FlatGuGeom gg = flat_gu_geom(mesh_device, *base, mesh_device.get_view().find_device(id));
+                if (std::find(geoms.begin(), geoms.end(), gg) == geoms.end()) {
+                    geoms.push_back(std::move(gg));
+                }
+            }
+            std::optional<FlatGuAssign> comp;
+            if (geoms.size() > 1) {
+                std::vector<const FlatGuGeom*> gp;
+                for (const auto& gg : geoms) {
+                    gp.push_back(&gg);
+                }
+                comp = flat_gu_search(
+                    gp,
+                    flat_gu_traffic(*base),
+                    base->rg,
+                    base->gu_source == FlatGuSource::auto_hybrid,
+                    kFlatGuIters,
+                    kFlatGuCompromiseRestarts);
+            }
+            cit = compromise.emplace(base.get(), std::move(comp)).first;
+        }
+        FlatGuAssign a = flat_gu_auto(*base, g);
+        if (cit->second) {
+            const auto t = flat_gu_traffic(*base);
+            if (flat_gu_load(g, *cit->second, t).max_link < flat_gu_load(g, a, t).max_link) {
+                a = *cit->second;
+            }
+        }
+        auto chip = std::make_shared<FlatRoutedExpertPlan>(*base);
+        flat_apply_gu_place(*chip, flat_gu_words(*chip, a));
+        it = cache.emplace(key, std::move(chip)).first;
     }
     return it->second;
 }

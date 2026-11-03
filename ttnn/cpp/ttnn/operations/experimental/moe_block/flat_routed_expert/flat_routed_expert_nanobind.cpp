@@ -4,6 +4,7 @@
 
 #include "flat_routed_expert_nanobind.hpp"
 
+#include <chrono>
 #include <map>
 #include <memory>
 #include <string>
@@ -20,6 +21,8 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "device/flat_program.hpp"
+#include "device/flat_gu_place.hpp"
+#include "device/flat_routed_expert_plan.hpp"
 #include "flat_routed_expert.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
@@ -124,7 +127,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .value("tensix", FlatGuSource::tensix)
         .value("tensix_split", FlatGuSource::tensix_split)
         .value("tensix_noc1", FlatGuSource::tensix_noc1)
-        .value("placed", FlatGuSource::placed);
+        .value("placed", FlatGuSource::placed)
+        .value("auto_tensix", FlatGuSource::auto_tensix)
+        .value("auto_hybrid", FlatGuSource::auto_hybrid);
 
     nb::class_<FlatLayoutOptions>(mod, "FlatLayoutOptions", R"doc(
         The flat routed expert's layout / program choices (part of the plan key and of the program hash). Unset
@@ -332,6 +337,107 @@ void bind_flat_routed_expert(nb::module_& mod) {
         The flat expert's DRISC sender topology for ``n_slots`` gate/up weight slots: the senders' L1 working base,
         and per slot its DRAM tile (NoC xy, packed x << 16 | y), job index, alternate tile / job (switch mode; 0: none)
         and the tile that actually sends it (NOC0 grid coordinates, NoC). Introspection / benchmarks.
+        )doc");
+
+    mod.def(
+        "flat_gu_placement_report",
+        [](MeshDevice& mesh_device,
+           uint32_t hidden,
+           uint32_t intermediate,
+           uint32_t experts_per_chip,
+           uint32_t num_global_experts,
+           uint32_t max_tokens_per_expert,
+           bool weights_bf8,
+           uint32_t pin,
+           FlatLayoutOptions layout) {
+            if (layout.gu_source != FlatGuSource::auto_hybrid) {
+                layout.gu_source = FlatGuSource::auto_tensix;
+            }
+            const auto cfg = make_flat_routed_expert_config(
+                hidden, intermediate, experts_per_chip, num_global_experts, max_tokens_per_expert, weights_bf8, pin,
+                layout);
+            const auto plan = flat_routed_expert_plan(mesh_device, cfg);
+            const auto t = flat_gu_traffic(*plan);
+            const bool hybrid = layout.gu_source == FlatGuSource::auto_hybrid;
+            using clk = std::chrono::steady_clock;
+            // every chip's geometry, deduplicated
+            std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+            std::vector<FlatGuGeom> geoms;
+            std::vector<uint32_t> topo_of;
+            for (const auto id : mesh_device.get_device_ids()) {
+                const auto coord = mesh_device.get_view().find_device(id);
+                FlatGuGeom g = flat_gu_geom(mesh_device, *plan, coord);
+                uint32_t k = 0;
+                while (k < geoms.size() && geoms[k].key() != g.key()) {
+                    ++k;
+                }
+                if (k == geoms.size()) {
+                    geoms.push_back(std::move(g));
+                }
+                coords.push_back(coord);
+                topo_of.push_back(k);
+            }
+            std::vector<FlatGuAssign> own;
+            double ms_max = 0.0;
+            for (const auto& g : geoms) {
+                const auto t0 = clk::now();
+                own.push_back(flat_gu_search({&g}, t, plan->rg, hybrid, kFlatGuIters));
+                ms_max = std::max(ms_max, std::chrono::duration<double, std::milli>(clk::now() - t0).count());
+            }
+            std::vector<const FlatGuGeom*> gp;
+            for (const auto& g : geoms) {
+                gp.push_back(&g);
+            }
+            const auto t1 = clk::now();
+            const FlatGuAssign comp = flat_gu_search(gp, t, plan->rg, hybrid, kFlatGuIters, kFlatGuCompromiseRestarts);
+            const double ms_comp = std::chrono::duration<double, std::milli>(clk::now() - t1).count();
+            const FlatGuAssign& ref = own[topo_of[0]];  // (the reference chip: the first local one)
+            const double scale = experts_per_chip, us = 1e6 / (64.0 * 1.35e9);
+            nb::list chips;
+            for (size_t i = 0; i < coords.size(); ++i) {
+                const auto& g = geoms[topo_of[i]];
+                const auto& mine = own[topo_of[i]];
+                uint32_t diff = 0;
+                for (size_t c = 0; c < mine.bank.size(); ++c) {
+                    diff += mine.bank[c] != ref.bank[c] || mine.how[c] != ref.how[c];
+                }
+                nb::dict d;
+                d["coord"] = nb::make_tuple(coords[i][0], coords[i][1]);
+                d["topology"] = topo_of[i];
+                d["own_us"] = flat_gu_load(g, mine, t).max_link * scale * us;
+                d["reference_us"] = flat_gu_load(g, ref, t).max_link * scale * us;
+                d["compromise_us"] = flat_gu_load(g, comp, t).max_link * scale * us;
+                // (what flat_routed_expert_chip_plan takes: the chip's own search or the compromise, the lighter)
+                d["chosen_us"] = std::min(flat_gu_load(g, mine, t).max_link, flat_gu_load(g, comp, t).max_link) * scale * us;
+                d["cells_differing_from_reference"] = diff;
+                d["own_words"] = flat_gu_words(*plan, mine);
+                chips.append(d);
+            }
+            nb::dict out;
+            out["topologies"] = geoms.size();
+            out["chips"] = chips;
+            out["search_ms_max"] = ms_max;
+            out["compromise_search_ms"] = ms_comp;
+            out["compromise_words"] = flat_gu_words(*plan, comp);
+            out["bank_floor_us"] = (2.0 * t.gu_core * flat_gu_cells(*plan).size() / 2.0 + t.down + t.x) * scale /
+                                   plan->banks / 64e9 * 1e6;
+            return out;
+        },
+        nb::arg("mesh_device"),
+        nb::arg("hidden"),
+        nb::arg("intermediate"),
+        nb::arg("experts_per_chip"),
+        nb::arg("num_global_experts"),
+        nb::arg("max_tokens_per_expert"),
+        nb::kw_only(),
+        nb::arg("weights_bf8") = false,
+        nb::arg("pin") = 1,
+        nb::arg("layout") = FlatLayoutOptions{},
+        R"doc(
+        The flat expert's link-load gate/up placement per chip (host only, also on a mock cluster): the distinct chip
+        geometries, and per chip the modelled busiest NoC link (us at 64 B / cycle, 1.35 GHz, weights + x + down
+        reads) with its own placement, with the reference chip's, and with one compromise placement for all; the
+        search times (ms).
         )doc");
 
     nb::class_<FlatDriscSenders>(mod, "FlatDriscSenders", R"doc(

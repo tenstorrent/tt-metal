@@ -36,6 +36,8 @@ const char* to_string(FlatGuSource source) {
         case FlatGuSource::tensix_split: return "tensix_split";
         case FlatGuSource::tensix_noc1: return "tensix_noc1";
         case FlatGuSource::placed: return "placed";
+        case FlatGuSource::auto_tensix: return "auto_tensix";
+        case FlatGuSource::auto_hybrid: return "auto_hybrid";
     }
     return "?";
 }

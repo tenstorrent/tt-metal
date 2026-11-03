@@ -73,8 +73,13 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
             tt::tt_metal::Program program;
             shared_variables_t sv;
             // the flat routed expert on its cells (the same fragment on every chip), then the combine on the rest
+            // (this chip's plan: the auto gate/up placements follow its own geometry)
             sv.flat = flat_routed_expert::add_flat_routed_expert_program(
-                program, mesh_device, p.flat_config, *p.flat_plan, t.flat);
+                program,
+                mesh_device,
+                p.flat_config,
+                *flat_routed_expert::flat_routed_expert_chip_plan(mesh_device, p.flat_config, coord),
+                t.flat);
             TT_FATAL(
                 sv.flat.y_writers.size() == p.flat.writers.size(),
                 "routed_experts_combine: {} y writers in the program, {} planned",
