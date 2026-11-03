@@ -39,6 +39,8 @@ struct Fold {
         uint32_t stride_w{};
         // true → emit collapsed (1,1,N·H'·W',C·sh·sw); false → folded_4d.
         bool collapse_output{};
+        // Output memory config; std::nullopt derives it from the input's.
+        std::optional<tt::tt_metal::MemoryConfig> output_mem_config = std::nullopt;
     };
 
     struct tensor_args_t {
