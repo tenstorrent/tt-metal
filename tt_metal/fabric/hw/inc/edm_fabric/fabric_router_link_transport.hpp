@@ -32,9 +32,8 @@ struct EthTxqLinkTransport {
 
     // Assumes !is_busy() -- PLEASE CHECK BEFORE CALLING
     static FORCE_INLINE void send_packet(uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
-        // The txq drops a partial trailing 16B word.
-        internal_::eth_send_packet_bytes_unsafe(
-            TXQ_ID, src_addr, dest_addr, align_power_of_2(num_bytes, ETH_WORD_SIZE_BYTES));
+        uint32_t aligned_bytes = align_power_of_2(num_bytes, ETH_WORD_SIZE_BYTES);  // txq drops a partial last word
+        internal_::eth_send_packet_bytes_unsafe(TXQ_ID, src_addr, dest_addr, aligned_bytes);
     }
 
     static FORCE_INLINE void send_with_context_switch(uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
