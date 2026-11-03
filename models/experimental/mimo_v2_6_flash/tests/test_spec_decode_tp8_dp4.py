@@ -159,6 +159,9 @@ def kv_cache_and_tables(model, cfg, groups, buffers, rows, width):
     return kv, group_tables[0], [group_tables[g] for g in groups]
 
 
+# About 250-280 s each with a warm kernel cache, past pytest.ini's 300 s on a cold one (a fresh build compiles every
+# kernel in the first test).
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("backfill", [True, False], ids=["backfill", "no_backfill"])
 @pytest.mark.parametrize("mtp_layers", [3, 1], ids=["mtp3", "mtp1"])
 @pytest.mark.parametrize(
@@ -384,6 +387,7 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
         assert with_backfill >= without, f"mean accepted {with_backfill:.2f} with the backfill < {without:.2f} without"
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("mtp_layers", [3, 1], ids=["mtp3", "mtp1"])
 @pytest.mark.parametrize("device_params", [SPEC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
