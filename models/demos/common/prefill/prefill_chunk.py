@@ -9,6 +9,11 @@ chunks in pack order. At F = 1 its metadata is the single-chunk ``(slot_id, actu
 uint32, ``8 + 12 * F`` bytes; records past ``num_chunks`` are ``(INVALID_SLOT, 0, 0)``. Sentinels fill every word
 with ``SHUTDOWN_WORD`` / ``WARMUP_WORD``.
 
+With media (``max_refs`` > 0) the first rank's H2D metadata continues with ``n_refs`` (uint32) and ``max_refs``
+MediaRef records of ``REF_BYTES``: ``chunk_index``, ``start_pos``, ``num_tokens`` (uint32) and a 32-byte
+``media_key``. Records past ``n_refs`` are zero; a sentinel fills these words too. ``max_refs`` = 0 keeps the bytes
+above unchanged.
+
 Pure Python: the runner and host tests import it without a device.
 """
 
@@ -23,6 +28,10 @@ SHUTDOWN_WORD = -1
 WARMUP_WORD = -2
 # The KV-cache writer's tile grid: a chunk starts on a tile row.
 CHUNK_START_ALIGN = 32
+MEDIA_KEY_BYTES = 32
+_REF_COUNT = struct.Struct("<I")
+_MEDIA_REF = struct.Struct(f"<III{MEDIA_KEY_BYTES}s")
+REF_BYTES = _MEDIA_REF.size
 
 
 @dataclass(frozen=True)
@@ -46,12 +55,32 @@ class PrefillChunk:
 EMPTY_CHUNK = PrefillChunk(0, 0, 0)
 
 
-def metadata_size_bytes(forward_chunks: int) -> int:
+@dataclass(frozen=True)
+class MediaRef:
+    """A media item's tokens [start_pos, start_pos + num_tokens), absolute KV positions in the slot of chunk
+    ``chunk_index`` of the forward. Names the whole item, also when only part of it falls in that chunk."""
+
+    chunk_index: int
+    start_pos: int
+    num_tokens: int
+    media_key: bytes
+
+    @property
+    def end_pos(self) -> int:
+        return self.start_pos + self.num_tokens
+
+
+def media_refs_size_bytes(max_refs: int) -> int:
+    return _REF_COUNT.size + max_refs * REF_BYTES if max_refs else 0
+
+
+def metadata_size_bytes(forward_chunks: int, max_refs: int = 0) -> int:
     if forward_chunks < 1:
         raise ValueError(
             f"a forward of {forward_chunks} chunks; PREFILL_FORWARD_TOKENS_BUDGET must be >= the chunk size"
         )
-    return CHUNK_BYTES if forward_chunks == 1 else 4 * (HEADER_WORDS + CHUNK_WORDS * forward_chunks)
+    text = CHUNK_BYTES if forward_chunks == 1 else 4 * (HEADER_WORDS + CHUNK_WORDS * forward_chunks)
+    return text + media_refs_size_bytes(max_refs)
 
 
 def pad_chunks(chunks, forward_chunks: int) -> list:
@@ -88,16 +117,34 @@ def _pack_words(words) -> bytes:
     return struct.pack(f"<{len(words)}i", *words)
 
 
-def pack_forward_metadata(chunks, forward_chunks: int) -> bytes:
-    return _pack_words(forward_metadata_words(chunks, forward_chunks))
+def pack_media_refs(refs, max_refs: int) -> bytes:
+    if len(refs) > max_refs:
+        raise ValueError(f"{len(refs)} media refs, the metadata holds {max_refs}")
+    if not max_refs:
+        return b""
+    out = bytearray(media_refs_size_bytes(max_refs))
+    _REF_COUNT.pack_into(out, 0, len(refs))
+    for i, r in enumerate(refs):
+        if len(r.media_key) != MEDIA_KEY_BYTES:
+            raise ValueError(f"media key of {len(r.media_key)} B, want {MEDIA_KEY_BYTES}")
+        _MEDIA_REF.pack_into(
+            out, _REF_COUNT.size + i * REF_BYTES, r.chunk_index, r.start_pos, r.num_tokens, r.media_key
+        )
+    return bytes(out)
 
 
-def sentinel_words(word: int, forward_chunks: int) -> list:
-    return [word] * (metadata_size_bytes(forward_chunks) // 4)
+def pack_forward_metadata(chunks, forward_chunks: int, refs=(), max_refs: int = 0) -> bytes:
+    if chunks and chunks[0].is_sentinel:
+        return sentinel_metadata(chunks[0].slot_id, forward_chunks, max_refs)
+    return _pack_words(forward_metadata_words(chunks, forward_chunks)) + pack_media_refs(refs, max_refs)
 
 
-def sentinel_metadata(word: int, forward_chunks: int) -> bytes:
-    return _pack_words(sentinel_words(word, forward_chunks))
+def sentinel_words(word: int, forward_chunks: int, max_refs: int = 0) -> list:
+    return [word] * (metadata_size_bytes(forward_chunks, max_refs) // 4)
+
+
+def sentinel_metadata(word: int, forward_chunks: int, max_refs: int = 0) -> bytes:
+    return _pack_words(sentinel_words(word, forward_chunks, max_refs))
 
 
 def decode_forward_metadata(words, forward_chunks: int) -> list:
@@ -123,6 +170,36 @@ def decode_forward_metadata(words, forward_chunks: int) -> list:
         if records[k][0] & 0xFFFFFFFF != INVALID_SLOT or records[k][1:] != [0, 0]:
             raise ValueError(f"record {k} past num_chunks={num_chunks} is {records[k]}, not an unused record")
     return [PrefillChunk(*r) for r in records[:num_chunks]] + [EMPTY_CHUNK] * (forward_chunks - num_chunks)
+
+
+def decode_media_refs(raw: bytes, forward_chunks: int, max_refs: int) -> list:
+    """The MediaRefs of a forward's metadata bytes; not for a sentinel."""
+    if not max_refs:
+        return []
+    offset = metadata_size_bytes(forward_chunks)
+    if len(raw) < metadata_size_bytes(forward_chunks, max_refs):
+        raise ValueError(
+            f"metadata of {len(raw)} B, {max_refs} media refs need {metadata_size_bytes(forward_chunks, max_refs)}"
+        )
+    (count,) = _REF_COUNT.unpack_from(raw, offset)
+    if count > max_refs:
+        raise ValueError(f"n_refs={count}, the metadata holds {max_refs}")
+    offset += _REF_COUNT.size
+    return [MediaRef(*_MEDIA_REF.unpack_from(raw, offset + i * REF_BYTES)) for i in range(count)]
+
+
+def validate_media_refs(refs, chunks) -> None:
+    """Each ref names a non-empty chunk of the forward and overlaps its tokens; refs of one chunk do not overlap."""
+    prev = None
+    for r in sorted(refs, key=lambda r: (r.chunk_index, r.start_pos)):
+        if not 0 <= r.chunk_index < len(chunks) or chunks[r.chunk_index].is_empty:
+            raise ValueError(f"{r}: no non-empty chunk {r.chunk_index} in the forward")
+        c = chunks[r.chunk_index]
+        if r.num_tokens < 1 or not (r.start_pos < c.actual_end and r.end_pos > c.actual_start):
+            raise ValueError(f"{r}: does not overlap {c}")
+        if prev is not None and prev.chunk_index == r.chunk_index and prev.end_pos > r.start_pos:
+            raise ValueError(f"{r}: overlaps {prev}")
+        prev = r
 
 
 def validate_chunks(chunks, *, chunk_size: int, forward_chunks: int, num_users: int, max_seq_len: int) -> None:

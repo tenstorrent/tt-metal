@@ -9,6 +9,7 @@ import pytest
 
 from models.demos.common.prefill.prefill_chunk import (
     SHUTDOWN_WORD,
+    MediaRef,
     PrefillChunk,
     forward_metadata_words,
     pad_chunks,
@@ -91,6 +92,34 @@ def test_request_id_counts_forwards(loop):
         (1, FORWARDS[1]),
         (2, FORWARDS[2]),
     ]
+
+
+def test_first_rank_passes_media_refs_and_acks_only_the_chunks(monkeypatch):
+    _configure(monkeypatch, supports_packed_forward=True)
+    monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(runner, "_ack_record", lambda mesh_device, meta: "chunks-only record")
+    refs = [MediaRef(0, 100, 50, bytes(32))]
+    forward = runner._meta_from_words(forward_metadata_words(pad_chunks(FORWARDS[0], F), F))
+    metas = iter([{**forward, "media_refs": refs}, runner._meta_from_words(sentinel_words(SHUTDOWN_WORD, F))])
+    monkeypatch.setattr(runner, "_socket_next", lambda *args: (_Tensor(), None, next(metas)))
+
+    class MediaRuntime(_PackedRuntime):
+        def prefill_forward(self, inp, kv, chunks, request_id=0, d2h_service=None, *, metadata_msg=None, **kw):
+            self.calls.append((kw.get("media_refs"), metadata_msg))
+
+    runtime = MediaRuntime()
+    runner.run_request_loop(
+        runtime,
+        None,
+        0,
+        1,
+        d2d_rows=0,
+        d2d_width=0,
+        h2d_service=object(),
+        d2h_service=object(),
+        sockets=runner.SocketBuffers(metadata=None),
+    )
+    assert runtime.calls == [(refs, "chunks-only record")]
 
 
 def test_first_rank_refuses_a_bad_forward(loop, expect_error):

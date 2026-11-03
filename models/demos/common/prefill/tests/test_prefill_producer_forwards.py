@@ -12,10 +12,13 @@ import numpy as np
 import pytest
 import torch
 
+from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.common.prefill.prefill_chunk import (
     EMPTY_CHUNK,
+    MediaRef,
     PrefillChunk,
     decode_forward_metadata,
+    decode_media_refs,
     pad_chunks,
     validate_chunks,
 )
@@ -237,6 +240,23 @@ def check_packed_run(forwards, stats, cfg):
     assert {s: fill.real_len for s, fill in stats.resident.items()} == {s: p.actual_end for s, p in last.items()}
     assert stats.total_pushes == len(forwards)
     assert stats.total_chunks == sum(len(p) for p in forwards)
+
+
+@pytest.mark.parametrize("forward_chunks", [1, 2])
+def test_payload_lists_media(env, monkeypatch, forward_chunks):
+    env(forward_chunks=forward_chunks)
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(1000, 100), (3000, 10)])
+    pool = list(range(2 * C))
+    pushes = [producer.ChunkPush(0, k, k * C, (k + 1) * C, 2 * C) for k in range(2)]
+    image = (1000, 100, stub_media_key(100, 0))
+    if forward_chunks == 1:
+        forwards = [([p], [MediaRef(0, *image)]) for p in pushes]
+    else:
+        forwards = [(pushes, [MediaRef(0, *image), MediaRef(1, *image)])]
+    for forward, refs in forwards:
+        _, _, metadata = producer._forward_payload(forward, lambda slot_id: pool)
+        assert decode_media_refs(metadata, forward_chunks, 2) == refs
 
 
 @pytest.mark.parametrize("interleave", ["round_robin", "random"])
