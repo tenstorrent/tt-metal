@@ -23,17 +23,6 @@ inline std::string get_string_lowercase(tt::ARCH arch) {
 }
 
 namespace tt::test_utils {
-inline std::string get_env_arch_name() {
-    constexpr auto ARCH_NAME_ENV_VAR = "ARCH_NAME";
-
-    auto* arch_name_ptr = std::getenv(ARCH_NAME_ENV_VAR);
-    if (!arch_name_ptr) {
-        TT_THROW("Env var {} is not set.", ARCH_NAME_ENV_VAR);
-    }
-
-    return std::string(arch_name_ptr);
-}
-
 inline std::string get_umd_arch_name() {
 
     if(tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {

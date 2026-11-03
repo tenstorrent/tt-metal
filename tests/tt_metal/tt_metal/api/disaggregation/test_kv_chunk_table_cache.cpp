@@ -11,7 +11,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 
 #include "impl/context/metal_context.hpp"
 #include "internal/disaggregation/kv_chunk_table_cache.hpp"
@@ -31,9 +30,6 @@ std::string read_file(const fs::path& path) {
 class KvChunkTableCache : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (const char* arch = std::getenv("ARCH_NAME"); arch == nullptr || std::string_view(arch) != "blackhole") {
-            GTEST_SKIP() << "Blackhole-only";
-        }
         const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
         root_ = fs::temp_directory_path() / "kv-chunk-table-cache-test" / info->name();
         fs::remove_all(root_);
