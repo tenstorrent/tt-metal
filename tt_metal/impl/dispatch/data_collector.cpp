@@ -107,6 +107,7 @@ void DataCollector::RecordData(
     data_collector_t type,
     uint32_t transaction_size,
     std::optional<HalProcessorIdentifier> processor) {
+    std::lock_guard<std::mutex> lock(dispatch_data_mutex_);
     auto& dispatch_data = program_id_to_dispatch_data[program_id];
     if (dispatch_data.empty()) {
         // If no existing data for this program, initialize starting values.
@@ -128,10 +129,14 @@ void DataCollector::RecordKernelGroup(
         auto kernel = program.get_kernel(kernel_id);
         kernel_data.push_back({kernel->get_watcher_kernel_id(), kernel->get_kernel_processor_class()});
     }
+    std::lock_guard<std::mutex> lock(dispatch_data_mutex_);
     program_id_to_kernel_groups[program_id][core_type].push_back({std::move(kernel_data), kernel_group.core_ranges});
 }
 
-void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
+void DataCollector::RecordProgramRun(uint64_t program_id) {
+    std::lock_guard<std::mutex> lock(dispatch_data_mutex_);
+    program_id_to_call_count[program_id]++;
+}
 
 void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
     // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
@@ -243,6 +248,7 @@ bool DataCollector::IsRealtimeProfilerActive() const {
 }
 
 void DataCollector::DumpData() {
+    std::lock_guard<std::mutex> lock(dispatch_data_mutex_);
     if (program_id_to_dispatch_data.empty() && program_id_to_kernel_groups.empty() &&
         program_id_to_call_count.empty()) {
         return;

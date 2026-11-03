@@ -70,6 +70,7 @@ SKIPPED_OPS = [
     "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",  # Experimental variant of ring_joint_sdpa; API unstable.
     "ttnn.tosa_gather",  # TOSA operation omitted for docs.
     "ttnn.tosa_scatter",  # TOSA operation omitted for docs.
+    "ttnn.toy_scaled_add",  # Example operation: the reference port for tt_ops_code_gen's native migration.
 ]
 TTNN_PREFIX = "ttnn."
 DOCS_OP_LIST_PATH = "docs/source/ttnn/ttnn/api.rst"

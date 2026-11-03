@@ -23,6 +23,7 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/up_front_compile.hpp"           // up-front parallel precompile collect hook
+#include "ttnn/program_fingerprint.hpp"        // TT_METAL_PROGRAM_FINGERPRINT_DIR dump
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
@@ -231,6 +232,12 @@ void enqueue_mesh_workload(
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
+
+    // After the enqueue, which pads each core's runtime args to its kernel group's longest: a miss and a hit then
+    // record the same lists.
+    if (ttnn::program_fingerprint::enabled()) [[unlikely]] {
+        ttnn::program_fingerprint::record(*mesh_device, workload);
+    }
 
     TracyOpMeshWorkload(
         mesh_device,
