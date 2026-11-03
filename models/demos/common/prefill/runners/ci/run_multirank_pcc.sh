@@ -357,6 +357,8 @@ else
   RUNNER_PLACEMENT=""
 fi
 
+# tt-run forwards only TT_* variables to the ranks, so the triage hook would otherwise write its dumps
+# to /tmp on the worker instead of the shared directory the job uploads.
 cd "${TTRUN_CWD}"
 setsid python3 "${TTRUN_PY}" \
   --skip-executable-check \
@@ -371,6 +373,7 @@ setsid python3 "${TTRUN_PY}" \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
+    export TRIAGE_OUTPUT_DIR='${TRIAGE_OUTPUT_DIR:-}'; \
     ${RUNNER_OVERRIDES} \
     ${NUM_LAYERS_ENV} \
     export LOGURU_LEVEL=INFO; \

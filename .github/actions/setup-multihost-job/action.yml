@@ -259,4 +259,8 @@ runs:
           [ "$ok" = 1 ] && echo "triage armed"
         ' || echo "::warning::Could not verify triage arming on all hosts; a hang here may not produce triage output"
 
-        echo "Triage fires after ${HANG_DETECTION_TIMEOUT}s without dispatch progress"
+        if awk -v t="$HANG_DETECTION_TIMEOUT" 'BEGIN { exit !(t + 0 > 0) }'; then
+          echo "Triage fires after ${HANG_DETECTION_TIMEOUT}s without dispatch progress"
+        else
+          echo "Global dispatch watchdog off; triage fires only on a timeout the test arms itself"
+        fi

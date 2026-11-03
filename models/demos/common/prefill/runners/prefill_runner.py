@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import signal
+import sys
 import time
 from dataclasses import dataclass, fields
 from typing import Optional
@@ -1155,6 +1156,16 @@ def main() -> None:
 
     if CHUNK_TIMEOUT_SECONDS:
         ttnn.device.SetOperationTimeoutSeconds(mesh_device, 0)
+        hook = os.environ.get("TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE")
+        dump_dir = os.environ.get("TRIAGE_OUTPUT_DIR") or "/tmp/tt_triage"
+        # print, not logger: CI runs some models' runners at LOGURU_LEVEL=ERROR, and this line is how a
+        # run shows the hook reached every rank without needing a hang.
+        print(
+            f"[pp rank {rank}] chunk hang timeout {CHUNK_TIMEOUT_SECONDS:g}s; on timeout: "
+            + (f"run the triage hook (dumps to {dump_dir})" if hook else "throw only (no triage hook)"),
+            file=sys.stderr,
+            flush=True,
+        )
 
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN

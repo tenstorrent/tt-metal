@@ -188,7 +188,9 @@ jobs:
       # connects and drives H2D, so no device op completes for tens of seconds by design.
       # The default operation-timeout watchdog would fire mid-idle, run tt-triage (which
       # halts the cores) and wedge the fabric; disable it so the leg matches demo-sp, which
-      # never armed the watchdog.
+      # never armed the watchdog. The triage hook stays armed: the runner sets its own timeout
+      # around each chunk (TT_PREFILL_CHUNK_TIMEOUT_SECONDS in the model manifest), and a hang
+      # there runs tt-triage.
       hang-detection-timeout: 0
 
   Galaxy-Blaze-models-prefill-sc1-runner:
@@ -207,6 +209,7 @@ jobs:
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       include-test-group: disagg_prefill
       resource-prefix: sc1-runner
+      # Global watchdog off, triage hook armed; see the sc4 leg.
       hang-detection-timeout: 0
 
   prefill-scaling-summary:
