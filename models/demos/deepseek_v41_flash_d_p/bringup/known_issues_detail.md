@@ -824,3 +824,97 @@ growth a layer (MemAvailable >= 167 GiB).
 Re-run: `DS41_EXPERTS_IMPL=bfp4_mse PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
 models/demos/deepseek_v41_flash_d_p/tests/perf/test_experts_cache_warm.py -s` (if the cache is cold), then
 `python -m models.demos.common.bringup.orchestrator measure --task P.28 --part last`.
+
+## P.29 EXPERTS_BFP8_DOWN4: wiring check, cache warm, DRAM at 1M, change-on measure
+
+Perf pick P.29 (galaxy 8x4, 2026-11-03; DS41-198, DS41-199, DS41-200). No code change: P.27's value checked.
+(BREADCRUMBS.md is at the 500 KB hook limit, DS41-194: this is P.29's section; its heading there reads FIX.20/P.27-29.)
+
+Checked, works as built by P.27:
+- Cache names: `L<layer>.bfp8_down4.<hash>.flat.bf8d4.lay9c3da689dd35.{w_gu,w_d}.tensorbin` + `.done.json`
+  (9.63 + 2.55 GB a layer a box, 454 GB for 40 layers); own names, no collision with bfp4 / bfp8 / bfp4_mse.
+  P.27's layer 0 file hit (the warmer's arguments give the model's layout hash).
+- Load log: `EXPERTS_BFP4 layer=N impl=bfp8_down4 matrices=w2 ...`, `EXPERTS_LOAD ... impl=bfp8_down4 cache=hit`
+  (4-5 s a layer), `_bf4_mse_lossless` held on every w2 of the 40 layers (warm rc 0).
+- CPU emulation: `tt/experts.py:expert_weight_round("bfp8_down4")` = w1 / w3 identity, w2 `_bfp4_mse_round`.
+  bringup/hooks.py:1074 devfmt_component and reference/ds41_ref.py's experts_w still do not follow it (DS41-200,
+  outside P.29's paths, never gated).
+- Default stays bfp4 (F241): tt/settings.py unchanged.
+
+Warm: `DS41_EXPERTS_IMPL=bfp8_down4 ... tests/perf/test_experts_cache_warm.py -s`, 39 misses at 133-149 s a layer
+(host 41-42 s), 1 h 35 min.
+
+Load-time stats (w2 only: the bfloat4_b matrix; bfp4 = all three matrices, its own markers):
+
+| layer | changed % | worst rel (expert) | bfp4 changed % | bfp4 worst |
+|---|---|---|---|---|
+| 0 | 7.62 | 0.0645 (79) | 16.65 | 0.1196 |
+| 1 | 7.66 | 0.0669 (9) | 16.41 | 0.1179 |
+| 2 | 7.28 | 0.0634 (159) | 16.37 | 0.1181 |
+| 3 | 7.21 | 0.0637 (319) | 16.39 | 0.1198 |
+| 4 | 7.27 | 0.0638 (15) | 16.39 | 0.1190 |
+| 5 | 7.35 | 0.0640 (70) | 16.38 | 0.1183 |
+| 6 | 7.34 | 0.0653 (359) | 16.38 | 0.1193 |
+| 7 | 7.27 | 0.0649 (183) | 16.38 | 0.1189 |
+| 8 | 7.34 | 0.0640 (322) | 16.39 | 0.1200 |
+| 9 | 7.40 | 0.0648 (80) | 16.37 | 0.1183 |
+| 10 | 7.47 | 0.0651 (272) | 16.41 | 0.1191 |
+| 11 | 7.49 | 0.0678 (35) | 16.42 | 0.1199 |
+| 12 | 7.50 | 0.0658 (212) | 16.49 | 0.1215 |
+| 13 | 7.53 | 0.0677 (217) | 16.61 | 0.1235 |
+| 14 | 7.41 | 0.0693 (146) | 16.60 | 0.1226 |
+| 15 | 6.99 | 0.0793 (48) | 16.65 | 0.1313 |
+| 16 | 7.37 | 0.0712 (189) | 16.62 | 0.1261 |
+| 17 | 7.38 | 0.0751 (27) | 16.68 | 0.1277 |
+| 18 | 7.25 | 0.0748 (161) | 16.71 | 0.1290 |
+| 19 | 7.18 | 0.0738 (289) | 16.66 | 0.1288 |
+| 20 | 7.29 | 0.0718 (367) | 16.52 | 0.1253 |
+| 21 | 7.31 | 0.0676 (343) | 16.49 | 0.1230 |
+| 22 | 7.20 | 0.0702 (116) | 16.56 | 0.1247 |
+| 23 | 7.15 | 0.0724 (196) | 16.53 | 0.1259 |
+| 24 | 7.21 | 0.0695 (116) | 16.51 | 0.1246 |
+| 25 | 7.08 | 0.0699 (135) | 16.41 | 0.1249 |
+| 26 | 7.15 | 0.0720 (31) | 16.40 | 0.1258 |
+| 27 | 7.16 | 0.0698 (305) | 16.38 | 0.1252 |
+| 28 | 6.98 | 0.0685 (7) | 16.38 | 0.1233 |
+| 29 | 7.01 | 0.0694 (69) | 16.37 | 0.1244 |
+| 30 | 7.04 | 0.0679 (127) | 16.36 | 0.1241 |
+| 31 | 7.21 | 0.0687 (256) | 16.44 | 0.1243 |
+| 32 | 6.98 | 0.0757 (111) | 16.41 | 0.1255 |
+| 33 | 6.99 | 0.0724 (19) | 16.42 | 0.1295 |
+| 34 | 6.99 | 0.0653 (31) | 16.46 | 0.1213 |
+| 35 | 7.11 | 0.0744 (55) | 16.76 | 0.1287 |
+| 36 | 6.93 | 0.0759 (7) | 16.62 | 0.1324 |
+| 37 | 6.75 | 0.0984 (123) | 16.76 | 0.1676 |
+| 38 | 6.51 | 0.0999 (250) | 17.17 | 0.1702 |
+| 39 | 6.70 | 0.1068 (7) | 17.73 | 0.1781 |
+
+Range: 6.51-7.66 % of w2 changed, worst 0.063-0.107 (the same w2 matrices as bfp4_mse's worst on the late layers).
+
+DRAM per chip at 1M (test_dram, change on; bfp4 / bfp8 = P.27's table, capacity 31.831 GiB, budget 27.2):
+
+| GiB a chip | bfp4 | bfp8_down4 | bfp8 |
+|---|---|---|---|
+| routed experts | 8.899 | 14.172 | 16.809 |
+| after load | 18.454 | 23.727 | 26.364 |
+| peak (layer 36) | 19.634 | 24.907 | 27.544 |
+| chunk at 1,039,360 (s) | 185 | 145 | 146 |
+
+bfp8_down4 fits the 27.2 GiB budget at 1M (2.29 GiB under at peak; P.27's estimate 14.1 / 24.9 held).
+
+Change-on ladder, rung last (measure; limit = noise floor):
+
+| metric | bfp8_down4 | bfp4_mse | bfp4 | bfp8 | limit |
+|---|---|---|---|---|---|
+| err_final_hidden | 0.117 | 0.140 | 0.190 | 0.101 | 0.242 |
+| err_layer_L09 | 0.089 | 0.101 | 0.126 | 0.081 | 0.157 |
+| err_layer_L29 | 0.094 | 0.111 | 0.149 | 0.084 | 0.189 |
+| err_layer_L38 | 0.106 | 0.126 | 0.165 | 0.096 | 0.220 |
+| err_state_window_kv_L28 | 0.092 | 0.115 | 0.159 | 0.088 | 0.175 |
+| top5_overlap | 1.0 | 1.0 | 1.0 | 1.0 | >= 0.994 |
+
+Worst share of a limit: 0.88 (err_state_topk_idx_L08 0.151 / 0.172). Profile (change on, the measure's own):
+device 182.8 ms, chunk wall 202.0 ms; p51200 chunk wall 210.0 ms (spread 23.4), all four parts rc 0. The off side
+and the comparison are the orchestrator's A/B.
+
+Re-run: warm (above) if the cache is cold, then `python -m models.demos.common.bringup.orchestrator measure --task P.29`.

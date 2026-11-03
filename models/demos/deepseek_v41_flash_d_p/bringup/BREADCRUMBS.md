@@ -5183,4 +5183,4 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
 
 ## P.26 perf (8x4, 2026-11-01): WINDOW_KV_FORMAT=bf16_tiles; contract err_*_wkv_* diagnostics
 - Detail: known_issues_detail.md "P.26 WINDOW_KV_BF16" (this file is at the 500 KB hook limit, DS41-194).
-## FIX.20/P.27/28: known_issues_detail.md
+## FIX.20/P.27-29: known_issues_detail.md
