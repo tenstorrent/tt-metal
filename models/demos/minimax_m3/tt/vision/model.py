@@ -20,9 +20,10 @@ There is NO post-encoder LayerNorm and NO attention windowing: the tower
 attends fully. The 3D-RoPE cos/sin depend only on `image_grid_thw`: they are
 computed on host and pushed to DRAM with the first image of a grid, then
 kept for the next images of that grid; each forward copies them to L1 once
-for all blocks. Weights come from the Torch reference (reference/vision.py):
-seeded random weights in the unit tests, the checkpoint's through
-loader.build_reference.
+for all blocks. The blocks keep their activations in L1 where
+common.block_placement proves they fit, and the tower's output is in DRAM.
+Weights come from the Torch reference (reference/vision.py): seeded random
+weights in the unit tests, the checkpoint's through loader.build_reference.
 """
 from __future__ import annotations
 
@@ -30,13 +31,20 @@ from collections import OrderedDict
 from typing import List, Optional
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.tensor_utils import nearest_32
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
-from models.demos.minimax_m3.tt.vision.common import to_device
+from models.demos.minimax_m3.tt.vision.common import (
+    DRAM_PLACEMENT,
+    BlockPlacement,
+    block_placement,
+    l1_free_for_activations,
+    to_device,
+)
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, check_image_grid, check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
@@ -83,6 +91,10 @@ class M3VLVisionModel(LightweightModule):
         self.blocks = blocks
         self.projector = projector
         self._rope_cache = OrderedDict()  # (t, h, w) -> (cos, sin) on device, the least recently used first
+        # Where the blocks keep their activations (common.ACTIVATIONS), read at each forward: "l1" in L1 where
+        # block_placement proves they fit, "dram" every activation in DRAM, for comparison.
+        self.activations = "l1"
+        self._logged_dram_fallback = False
 
     @classmethod
     def from_torch(
@@ -159,14 +171,36 @@ class M3VLVisionModel(LightweightModule):
         """Run patch_embed -> pre_layrnorm -> the blocks on one image (push_pixel_values). Returns (1, 1, L, 1280)."""
         return self._tower_device(self.push_pixel_values(pixel_values, image_grid_thw), image_grid_thw)
 
+    def placement(self, x_tt: ttnn.Tensor) -> BlockPlacement:
+        """The BlockPlacement a forward gives the blocks for the pixel values x_tt (push_pixel_values):
+        DRAM_PLACEMENT with activations "dram", else block_placement's. Where that keeps activations in L1 and
+        l1_free_for_activations finds the device's L1 not as the placement's proof takes it, DRAM_PLACEMENT, and the
+        first time a warning with the reason."""
+        if self.activations == "dram" or not self.blocks:
+            return DRAM_PLACEMENT
+        placement = block_placement(self.blocks[0], x_tt.padded_shape[-2], self.activations)
+        if placement is DRAM_PLACEMENT:
+            return placement
+        free, why_not = l1_free_for_activations(self.device)
+        if free:
+            return placement
+        if not self._logged_dram_fallback:
+            logger.warning(f"the vision blocks keep their activations in DRAM: {why_not}")
+            self._logged_dram_fallback = True
+        return DRAM_PLACEMENT
+
     def _tower_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """forward_tower's device ops, on the pixel values that push_pixel_values gave, which stay allocated."""
+        """forward_tower's device ops, on the pixel values that push_pixel_values gave, which stay allocated. The
+        blocks get placement(x_tt), and the last block writes the tower's output to DRAM."""
+        placement = self.placement(x_tt)
         x_tt = self.patch_embed(x_tt)
-        x_tt = self.pre_layrnorm(x_tt)
+        x_tt = self.pre_layrnorm(x_tt, memory_config=placement.block_input)
         cos_tt, sin_tt = self._rope_to_l1(*self._cached_rope(image_grid_thw))
         try:
-            for blk in self.blocks:
-                x_tt = blk(x_tt, cos_tt, sin_tt)
+            for i, blk in enumerate(self.blocks):
+                last = i == len(self.blocks) - 1
+                out_memory_config = ttnn.DRAM_MEMORY_CONFIG if last else None
+                x_tt = blk(x_tt, cos_tt, sin_tt, placement, out_memory_config=out_memory_config)
         finally:
             ttnn.deallocate(cos_tt)
             ttnn.deallocate(sin_tt)

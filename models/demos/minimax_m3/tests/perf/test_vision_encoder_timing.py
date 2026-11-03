@@ -24,7 +24,9 @@ reuse.
 Neither line is the rate of images sent back to back: on the P150 where this was measured, 672x672 forwards run back to
 back for a few seconds settled about 8% slower each, about 76.5 ms against 70.9 ms.
 It asserts that the two outputs have the shape of the 576 tokens, are finite and are equal bit for bit (the same device
-ops on the same input), never a time.
+ops on the same input), never a time. M3_VISION_ACTIVATIONS sets M3VLVisionModel.activations, "l1" or "dram", and
+the model's default when unset. Both lines print it and the placement the forward takes, and the test fails if the
+check of L1 before each forward sends the forward to DRAM.
 
 The model has the checkpoint's 32 layers and projector at its dimensions, with the seeded random weights of the vision
 unit tests (the vision_reference fixture of tests/conftest.py): the time does not depend on the weights' values,
@@ -42,6 +44,7 @@ import torch
 
 import ttnn
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
+from models.demos.minimax_m3.tt.vision.common import block_placement
 from models.demos.minimax_m3.tt.vision.image_input import num_tokens
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 
@@ -85,12 +88,16 @@ def test_vision_encoder_timing(mesh_device, device_params, vision_reference):
     and checks that both give the same finite vision tokens of the right shape."""
     reference = vision_reference(MiniMaxM3VisionConfig().num_hidden_layers)
     model = M3VLVisionModel.from_torch(mesh_device, reference, dtype=ttnn.bfloat16)
+    model.activations = os.getenv("M3_VISION_ACTIVATIONS", model.activations)
     grid = VISION_GRIDS["h48w48"]
     grid_thw = torch.tensor([grid])
     generator = torch.Generator().manual_seed(0)
     pixel_values = torch.randn(math.prod(grid), reference.config.patch_dim, generator=generator)
 
     x_tt = model.push_pixel_values(pixel_values, grid_thw)
+    placement = model.placement(x_tt)
+    wanted = block_placement(model.blocks[0], x_tt.padded_shape[-2], model.activations)
+    assert placement is wanted, f"activations {model.activations} take placement {placement.name}, not {wanted.name}"
     runs = {
         "device forward": _time_calls(lambda: model.forward_device(x_tt, grid_thw), mesh_device),
         "end-to-end forward": _time_calls(lambda: model(pixel_values, grid_thw), mesh_device),
@@ -99,7 +106,10 @@ def test_vision_encoder_timing(mesh_device, device_params, vision_reference):
     for name, (times_ms, _) in runs.items():
         median, fastest, slowest = statistics.median(times_ms), min(times_ms), max(times_ms)
         calls = " ".join(f"{t:.2f}" for t in times_ms)
-        print(f"{name} {median:.2f} ms (min {fastest:.2f}, max {slowest:.2f}), calls {calls}")
+        print(
+            f"{name} {median:.2f} ms (min {fastest:.2f}, max {slowest:.2f}), activations {model.activations}"
+            f" in placement {placement.name}, calls {calls}"
+        )
 
     shape = (num_tokens(grid_thw), reference.config.text_hidden_size)
     tokens = []

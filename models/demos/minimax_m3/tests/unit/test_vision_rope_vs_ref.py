@@ -143,11 +143,12 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
     tables for the next images of that grid. Each image gets the tables of its own grid, also right after an image of
     the same patch count. The model keeps the ROPE_CACHE_GRIDS grids used last, frees the two tables of the grid it
     drops and no other cached table, and stages that grid again for its next image; _stage_rope gives its caller new
-    tables. No device: ttnn.from_torch, ttnn.to_memory_config, ttnn.deallocate and the modules are stand-ins."""
+    tables. No device: ttnn.from_torch, ttnn.to_memory_config, ttnn.deallocate and the modules are stand-ins. The
+    stand-in blocks have no weights to place activations by, so the model keeps them in DRAM."""
     tables, freed = [], []  # the cached (cos, sin) whose copies each forward gives the blocks; the cached tables freed
     copies = {}  # id of each L1 copy not freed yet -> the table it copies
 
-    def block(x, cos, sin):
+    def block(x, cos, sin, *placement, **out_memory_config):
         tables.append((copies[id(cos)], copies[id(sin)]))
         return x
 
@@ -168,8 +169,9 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
     config = ref.MiniMaxM3VisionConfig()
     model = M3VLVisionModel(
-        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=[block]
+        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x, memory_config: x, blocks=[block]
     )
+    model.activations = "dram"
 
     def forward(grid):
         """The tables the blocks get for an image of grid, which must be the grid's own and not freed."""
@@ -204,7 +206,8 @@ def test_vision_rope_tables_copied_to_l1(monkeypatch):
     """One forward copies the cached cos and sin of its grid to L1 once, before the first block, gives the two copies
     to every block and frees them after the last block. The cache keeps the two tables it uploaded to DRAM, not freed,
     and the next image of the grid copies the same tables. No device: ttnn.from_torch, ttnn.to_memory_config,
-    ttnn.deallocate and the modules are stand-ins."""
+    ttnn.deallocate and the modules are stand-ins. The stand-in blocks have no weights to place activations by, so the
+    model keeps them in DRAM."""
     uploads, calls = [], []  # (tensor, memory config) of each upload; the copies, blocks and frees in call order
 
     def from_torch(tensor, **kwargs):
@@ -216,7 +219,7 @@ def test_vision_rope_tables_copied_to_l1(monkeypatch):
         return calls[-1][3]
 
     def block(index):
-        def forward(x, cos, sin):
+        def forward(x, cos, sin, *placement, **out_memory_config):
             calls.append(("block", index, cos, sin))
             return x
 
@@ -229,8 +232,9 @@ def test_vision_rope_tables_copied_to_l1(monkeypatch):
     config = ref.MiniMaxM3VisionConfig()
     blocks = [block(index) for index in range(3)]
     model = M3VLVisionModel(
-        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=blocks
+        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x, memory_config: x, blocks=blocks
     )
+    model.activations = "dram"
     grid, copied = (1, 4, 6), None
     for image in (1, 2):
         calls.clear()

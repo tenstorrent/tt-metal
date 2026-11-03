@@ -5,11 +5,13 @@
 
 The upload of host tensors (to_device) and the torch->ttnn Linear weight/bias
 converters built on it, the compute-kernel configs, the weight matmul (linear)
-with its program config, and the SDPA program config, kept here so the modules
-don't each copy them.
+with its program config, the SDPA program config, and where an encoder block
+keeps its activations (block_placement), kept here so the modules don't each
+copy them.
 """
 from __future__ import annotations
 
+import dataclasses
 import functools
 import math
 from typing import Callable, Optional
@@ -17,10 +19,13 @@ from typing import Callable, Optional
 import torch
 
 import ttnn
+from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 
-# Circular-buffer bytes per core, below the roughly 1.39 MiB of L1 a Blackhole core has free with no L1 tensors, less
-# the RoPE tables the blocks read from L1 (8 KiB per core at 2304 patches). The largest K block that fits is taken, so
-# this also sets K blocks: at 672x672 fc1 and QKV get 4, which ran faster than 8 in a matmul sweep on a P150.
+# Circular-buffer bytes per core, below the roughly 1.39 MiB of L1 a Blackhole core has free with no L1 tensors. The
+# largest K block that fits is taken, so this also sets K blocks: at 672x672 fc1 and QKV get 4, which ran faster than 8
+# in a matmul sweep on a P150. The buffers share L1 with the RoPE tables and, where block_placement keeps them there,
+# the blocks' activations: the host test that walks the L1 budget pins the least room left below the lowest tensor on
+# each grid, at least 124416 B.
 LINEAR_L1_BYTES = 1_000_000
 # The largest K block (in0_block_w, in tiles): in that sweep fc2 and the out projection ran slower with 16.
 LINEAR_MAX_IN0_BLOCK_W = 8
@@ -74,21 +79,31 @@ def linear_compute_config():
     return hifi4_compute_config(packer_l1_acc=True)
 
 
+def memory_config_kwargs(memory_config: Optional[ttnn.MemoryConfig]) -> dict:
+    """An op's memory_config keyword: {"memory_config": memory_config}, or none where it is None, so that the op
+    writes its output where its default puts it."""
+    return {} if memory_config is None else {"memory_config": memory_config}
+
+
 def linear(
     x: ttnn.Tensor,
     w: ttnn.Tensor,
     b: Optional[ttnn.Tensor],
     compute_kernel_config,
-    activation: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
+    activation: Optional[Callable[..., ttnn.Tensor]] = None,
     fused_activation: Optional[ttnn.UnaryWithParam] = None,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    activation_memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
-    """The encoder's weight matmul: x @ w + b into DRAM, then activation, if given, on the result.
+    """The encoder's weight matmul: x @ w + b into memory_config, then activation, if given, on the result.
 
     w is [in, out] and b [1, 1, 1, out] or None, as as_linear_weight and as_linear_bias put them on the device. The
     program config is linear_program_config's for the tiles of x's and w's padded shapes. activation runs as an op of
-    its own on the matmul's output. fused_activation, given only with activation, is the same activation in the form a
-    program config's fused_activation takes: where linear_program_config gives a config, that config carries it and
-    activation does not run; where the helper leaves the choice to ttnn, activation runs as without it.
+    its own on the matmul's output, as activation(out, memory_config=activation_memory_config); None writes where out
+    is. fused_activation, given only with activation, is the same activation in the form a program config's
+    fused_activation takes: where linear_program_config gives a config, that config carries it, activation does not run
+    and the matmul writes activation_memory_config (memory_config when None); where the helper leaves the choice to
+    ttnn, activation runs as without it.
     """
     assert fused_activation is None or activation is not None, "fused_activation needs activation"
     program_config = linear_program_config(
@@ -98,21 +113,23 @@ def linear(
     if fused:
         # linear_program_config builds a new config at each call, so no other matmul gets the activation.
         program_config.fused_activation = fused_activation
+        if activation_memory_config is not None:
+            memory_config = activation_memory_config
     out = ttnn.linear(
         x,
         w,
         bias=b,
         compute_kernel_config=compute_kernel_config,
         program_config=program_config,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
-    return out if activation is None or fused else activation(out)
+    return out if activation is None or fused else activation(out, memory_config=activation_memory_config)
 
 
 def linear_program_config(mesh_device, rows: int, in_features: int, out_features: int, compute_kernel_config):
     """Program config for ttnn.linear of a (rows, in_features) input and an (in_features, out_features) weight, with
-    bf16 (or bfloat8_b) operands and output in DRAM, as the vision encoder runs its weight matmuls. None leaves the
-    choice to ttnn.
+    bf16 (or bfloat8_b) operands, as the vision encoder runs its weight matmuls: the input and the output interleaved,
+    in DRAM or L1, which the matmul's checks of the config do not tell apart. None leaves the choice to ttnn.
 
     A 2D multicast with one output block per core, after a sweep of the encoder's linears at 672x672 on a P150:
     - M over the grid's rows and N over its columns, or, with at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M
@@ -230,3 +247,139 @@ def _sdpa_q_chunk_size(seq_len: int, num_heads: int, cores: int) -> int:
     # The op deals the num_heads x ceil(seq_len / q) q chunks evenly over the cores, so the slowest core runs
     # ceil(num_heads * ceil(seq_len / q) / cores) chunks of q rows.
     return min(SDPA_Q_CHUNK_SIZES, key=lambda q: (math.ceil(num_heads * math.ceil(seq_len / q) / cores) * q, -q))
+
+
+@dataclasses.dataclass(frozen=True)
+class BlockPlacement:
+    """Where an encoder block's ops write their outputs: the memory_config each passes to ttnn, or None, where it
+    passes none and the op writes where its input is. The block's LayerNorms and RoPE ops never get one, and neither
+    does SDPA, whose output stays in DRAM, ttnn's default for it. block_placement picks one per image size and grid.
+
+    - name: the placement's name, for logs.
+    - block_input: pre_layrnorm's output, the first block's input.
+    - residual: the residual stream: both adds' outputs and the out_proj and fc2 outputs they add.
+    - qkv: QKV's output and the q, k and v heads split from it.
+    - fc1_out: fc1's output.
+    - gelu_out: GELU's output, fc2's input.
+    """
+
+    name: str
+    block_input: Optional[ttnn.MemoryConfig]
+    residual: ttnn.MemoryConfig
+    qkv: ttnn.MemoryConfig
+    fc1_out: ttnn.MemoryConfig
+    gelu_out: Optional[ttnn.MemoryConfig]
+
+
+# Every activation in DRAM: pre_layrnorm and GELU get no memory config and write where their input is.
+DRAM_PLACEMENT = BlockPlacement(
+    name="dram",
+    block_input=None,
+    residual=ttnn.DRAM_MEMORY_CONFIG,
+    qkv=ttnn.DRAM_MEMORY_CONFIG,
+    fc1_out=ttnn.DRAM_MEMORY_CONFIG,
+    gelu_out=None,
+)
+# The block's activations in L1 interleaved, except the inputs of out_proj and fc2: SDPA's and GELU's outputs stay in
+# DRAM (block_placement).
+L1_INTERLEAVED_PLACEMENT = BlockPlacement(
+    name="l1_interleaved",
+    block_input=ttnn.L1_MEMORY_CONFIG,
+    residual=ttnn.L1_MEMORY_CONFIG,
+    qkv=ttnn.L1_MEMORY_CONFIG,
+    fc1_out=ttnn.L1_MEMORY_CONFIG,
+    gelu_out=ttnn.DRAM_MEMORY_CONFIG,
+)
+# M3VLVisionModel.activations: "l1" keeps the blocks' activations in L1 where block_placement proves they fit, "dram"
+# keeps every activation in DRAM.
+ACTIVATIONS = ("l1", "dram")
+# The core grids block_placement keeps activations in L1 on, those of Blackhole chips by harvesting: the host test walks
+# the L1 budget on each.
+L1_GRIDS = ((11, 10), (12, 10), (13, 10))
+# The most rows block_placement keeps in L1, 72 tile rows: the largest image the image processor makes, 672x672. The
+# model takes larger images, which no device run has covered with activations in L1: with this limit lifted, the host
+# test's walk of the L1 budget finds sizes on 12x10 where an op's circular buffers would overlap the activations.
+L1_MAX_ROWS = 2304
+# A P150's L1 bank with no L1_SMALL region, as measured on one.
+P150_L1_BANK_BYTES = 1_460_864
+# The L1 bank block_placement is proven for: a P150's as every M3 mesh open leaves it, less the L1_SMALL region that the
+# allocator takes out of the bank. Each margin of the proof is the bank less the block's tensors and one op's circular
+# buffers, so a larger bank only adds room.
+PROOF_L1_BANK_BYTES = P150_L1_BANK_BYTES - L1_SMALL_SIZE
+# The most bytes at the top of each bank that other tensors may take when a forward starts: the proof keeps every
+# margin above it.
+PROOF_L1_FOREIGN_BYTES = 64 * 1024
+
+
+def block_placement(block, rows: int, activations: str) -> BlockPlacement:
+    """The BlockPlacement of an encoder block (M3VLBlock) for an input of `rows` rows, padded or not, with activations
+    one of ACTIVATIONS: L1_INTERLEAVED_PLACEMENT for "l1" where it is proven to fit, else DRAM_PLACEMENT.
+
+    L1_INTERLEAVED_PLACEMENT keeps the block's tensors in L1 interleaved, the layout every op of the block takes, but
+    for the inputs of out_proj and fc2. On a P150 (12x10) at 2304 patches, with every tensor of a block in L1
+    interleaved, the output was bit-identical and every op ran faster except out_proj and fc2, which use each input
+    tile for 4 output tiles per core: their input reads slowed down, and they ran 40.5 and 108.5 us per block slower
+    than with their input in DRAM. So SDPA's and GELU's outputs stay in DRAM. "l1" gives it
+    - on the grids of L1_GRIDS, up to L1_MAX_ROWS rows, where the host test walks the L1 budget;
+    - where linear_program_config gives each of the block's four linears a config: ttnn's own matmul configs plan by
+      the free L1, which activations in L1 would change.
+    The interleaved LayerNorm plans by the free L1 too; the host test checks that it keeps its plan.
+
+    The widths come from the block's weights and fp32 accumulation from their compute configs, as linear() reads
+    them, and the choice is cached on those numbers, the tile rows and the grid. "dram" reads nothing from block.
+    """
+    if activations not in ACTIVATIONS:
+        raise ValueError(f"activations must be one of {ACTIVATIONS}, got {activations!r}")
+    if activations == "dram":
+        return DRAM_PLACEMENT
+    linears = block_linears(block)
+    grid = linears[0][0].device().compute_with_storage_grid_size()
+    widths = tuple((w.padded_shape[-2], w.padded_shape[-1], bool(config.fp32_dest_acc_en)) for w, config in linears)
+    return _l1_block_placement(math.ceil(rows / ttnn.TILE_SIZE), widths, grid.x, grid.y)
+
+
+def block_linears(block) -> tuple:
+    """The weight and compute config of an encoder block's (M3VLBlock) QKV, out_proj, fc1 and fc2, in that order, as
+    the block passes them to linear()."""
+    attention, mlp = block.attention, block.mlp
+    return (
+        (attention.wqkv, attention.compute_kernel_config),
+        (attention.wo, attention.compute_kernel_config),
+        (mlp.fc1_weight, mlp.compute_kernel_config),
+        (mlp.fc2_weight, mlp.compute_kernel_config),
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _l1_block_placement(
+    m_tiles: int, linears: tuple[tuple[int, int, bool], ...], grid_x: int, grid_y: int
+) -> BlockPlacement:
+    """block_placement's choice for "l1" at m_tiles tile rows, with linears the (in_features, out_features,
+    fp32_dest_acc) of the block's linears."""
+    if (grid_x, grid_y) not in L1_GRIDS or m_tiles * ttnn.TILE_SIZE > L1_MAX_ROWS:
+        return DRAM_PLACEMENT
+    for in_features, out_features, fp32_dest_acc in linears:
+        k_tiles, n_tiles = math.ceil(in_features / ttnn.TILE_SIZE), math.ceil(out_features / ttnn.TILE_SIZE)
+        # linear_program_config's choice: None leaves the config to ttnn.
+        if _linear_blocking(m_tiles, k_tiles, n_tiles, grid_x, grid_y, fp32_dest_acc) is None:
+            return DRAM_PLACEMENT
+    return L1_INTERLEAVED_PLACEMENT
+
+
+def l1_free_for_activations(mesh_device) -> tuple[bool, str]:
+    """Whether mesh_device's L1 is as block_placement's proof takes it, and why not: one L1 bank per core of the
+    compute grid, at least PROOF_L1_BANK_BYTES per bank, and no L1 tensor more than PROOF_L1_FOREIGN_BYTES below the
+    top of the bank. Tensors are allocated from the top of the bank down, and an op's circular buffers, which start at
+    its bottom, must end below the lowest tensor, so a small tensor low in the bank cuts every margin."""
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    grid = mesh_device.compute_with_storage_grid_size()
+    if view.num_banks != grid.x * grid.y:
+        return False, f"{view.num_banks} L1 banks for {grid.x * grid.y} cores"
+    if view.total_bytes_per_bank < PROOF_L1_BANK_BYTES:
+        return False, f"{view.total_bytes_per_bank} B per L1 bank, under the {PROOF_L1_BANK_BYTES} B of the proof"
+    # The block table lists the bank's free and allocated blocks, at addresses from the bottom of the bank.
+    allocated = [int(block["address"]) for block in view.block_table if block["allocated"] == "yes"]
+    taken = view.total_bytes_per_bank - min(allocated, default=view.total_bytes_per_bank)
+    if taken > PROOF_L1_FOREIGN_BYTES:
+        return False, f"an L1 tensor {taken} B below the top of each bank, over {PROOF_L1_FOREIGN_BYTES} B"
+    return True, ""
