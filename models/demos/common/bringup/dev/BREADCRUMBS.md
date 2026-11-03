@@ -2533,3 +2533,10 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
   had measured the 'new' side through `orchestrator measure`.
 - Fix: ab.keep_default counts as switch-only, like ab.flip (F233): an unchanged tree is measured on both sides.
   Selftest test_perf_ab.py::test_a_keep_default_pick_with_no_code_change_is_measured.
+
+## F246: state.json under the repo's 500 KB hook again (DeepSeek-V4.1 P.29, 2026-11-03)
+- Problem: P.29's gate passed and git refused its commit (check-large-files: state.json 506 KB). Metrics (414 KB over
+  65 tasks, 17-digit floats) and the refused commit's own record (commit_pending, 190 KB) had grown it past F180's fix.
+- Fix: commit_pending joins SIDE_KEYS (history_state.json, uncommitted; state() merges it back); state.json keeps
+  metrics at 6 significant digits (results/ keeps the full values). DeepSeek-V4.1's state.json: ~431 KB.
+- Selftest: test_core.py::test_a_refused_commit_record_and_long_floats_stay_out_of_state_json.
