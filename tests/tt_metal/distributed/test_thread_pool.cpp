@@ -316,12 +316,11 @@ TEST(ThreadPoolTest, ParallelForParkAfter) {
     const auto device_ids = one_call_per_device(2);
     const std::vector<uint32_t> one_device(4, 0);
     std::atomic<uint32_t> runs = 0;
-    auto count = [&runs](size_t) { runs++; };
     for (uint32_t iter = 0; iter < 200; iter++) {
-        thread_pool->parallel_for({}, count, ThreadPool::AfterFanOut::Park);
-        thread_pool->parallel_for(one_device, count, ThreadPool::AfterFanOut::Park);
-        thread_pool->parallel_for(device_ids, count, ThreadPool::AfterFanOut::Park);
-        thread_pool->parallel_for(device_ids, count);
+        thread_pool->parallel_for({}, [&runs](size_t) { runs++; }, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(one_device, [&runs](size_t) { runs++; }, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(device_ids, [&runs](size_t) { runs++; }, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(device_ids, [&runs](size_t) { runs++; });
     }
     EXPECT_EQ(runs.load(), 200 * (one_device.size() + 2 * device_ids.size()));
 }
