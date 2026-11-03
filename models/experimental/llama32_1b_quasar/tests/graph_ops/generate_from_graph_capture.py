@@ -713,8 +713,16 @@ def _partial_shard(spec):
     return _rows(spec["shape"]) < capacity
 
 
-def _undefinable_output(case):
+# Ops that compute their whole output even when it has more elements than all inputs combined
+# (upsample, a matmul with a small inner dim, a channel-widening conv): no padding caveat.
+# Mirrors FULLY_DEFINED_OUTPUT_OPS in the suites' graph_case.py.
+FULLY_DEFINED_OUTPUT_OPS = frozenset({"ttnn.upsample", "ttnn.matmul", "ttnn.conv2d"})
+
+
+def _undefinable_output(op, case):
     """An output has more elements than every input combined, so part of it is untouched."""
+    if op in FULLY_DEFINED_OUTPUT_OPS:
+        return False
     in_elems = sum(math.prod(s["shape"]) for s in _tensor_specs(case))
     return any(math.prod(out["shape"]) > in_elems for out in case["outs"] if out is not None)
 
@@ -747,7 +755,7 @@ def summarize(op, cases, raw_count, dropped, dropped_kwargs) -> str:
             "built interleaved and relaid out — handing that memory config straight to from_torch would "
             "pad the logical shape up to the shard and change what the op computes"
         )
-    if any(_undefinable_output(case) for case in cases):
+    if any(_undefinable_output(op, case) for case in cases):
         caveats.append(
             "the output has more elements than all inputs combined (a batch-padded decode tensor), so the "
             "op cannot write all of it; finiteness is asserted over the portion the inputs can account for"

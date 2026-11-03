@@ -38,6 +38,8 @@ does not fit the device actually under test.
     pytest models/experimental/ops/quasar/tests/panoptic_deeplab_ops/ -m emulator
 """
 
+from pathlib import Path
+
 import pytest
 
 _EMU_MAX_ELEMS = 48 * 48 * 256
@@ -142,7 +144,12 @@ def pytest_configure(config):
     )
 
 
+_SUITE_DIR = Path(__file__).resolve().parent
+
+
 def pytest_collection_modifyitems(config, items):
+    # The hook sees the whole session's items, including sibling suites collected in the
+    # same run (e.g. yolo_ops); classify only this suite's own tests.
     for item in items:
-        if _fits_emulator(item):
+        if _SUITE_DIR in Path(str(item.fspath)).resolve().parents and _fits_emulator(item):
             item.add_marker(pytest.mark.emulator)

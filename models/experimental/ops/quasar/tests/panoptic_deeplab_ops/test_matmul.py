@@ -15,7 +15,6 @@ Captured 6 call(s) to this op; 2 distinct signature(s) covering 6 of them.
 
 Fidelity notes for this op:
   * compute_kernel_config is recorded only as an object address in the capture, so it is dropped and the op's default is used (can shift PCC, not shapes)
-  * the output has more elements than all inputs combined (a batch-padded decode tensor), so the op cannot write all of it; finiteness is asserted over the portion the inputs can account for
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and

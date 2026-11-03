@@ -794,9 +794,20 @@ def _ref_embedding(inputs, kwargs, case):
     return torch.nn.functional.embedding(ids.reshape(-1), table.reshape(-1, table.shape[-1]))
 
 
+def _implied_out_shape(case):
+    """Output-0 shape the call alone determines (for an output the capture never observed), or None."""
+    if case.get("op") == "ttnn.unsqueeze_to_4D":
+        first = case["args"][0] if case["args"] else None
+        if first is not None and first["k"] == "t" and len(first["shape"]) <= 4:
+            return [1] * (4 - len(first["shape"])) + list(first["shape"])
+    return None
+
+
 def _out_shapes(case):
     """Captured output shapes, or None when any of them was never observed."""
     outs = case.get("outs") or []
+    if len(outs) == 1 and outs[0] is None and _implied_out_shape(case) is not None:
+        return [tuple(_implied_out_shape(case))]
     if not outs or any(o is None for o in outs):
         return None
     return [tuple(o["shape"]) for o in outs]
@@ -1295,6 +1306,8 @@ def _derived_spec(case, op_name, index):
     first = case["args"][0] if case["args"] else None
     if index == 0 and op_name in _SHAPE_PRESERVING and first is not None and first["k"] == "t":
         spec["shape"] = first["shape"]
+    if index == 0 and _implied_out_shape(case) is not None:
+        spec["shape"] = _implied_out_shape(case)
 
     # The keyword arguments below describe the op's *result*, i.e. output 0. Further
     # outputs are by-products with their own type — conv2d's prepared weight and bias
@@ -1308,7 +1321,10 @@ def _derived_spec(case, op_name, index):
     if layout is not None:
         spec["layout"] = layout
 
+    # The target dtype can also be positional, e.g. ttnn.typecast(t, dtype).
     dtype = next((v["v"] for v in case["kwargs"].values() if v["k"] == "dtype"), None)
+    if dtype is None:
+        dtype = next((a["v"] for a in case["args"][1:] if a["k"] == "dtype"), None)
     if dtype is not None:
         spec["dtype"] = dtype
 
@@ -1447,6 +1463,12 @@ def _input_elements(case):
     return total
 
 
+# Ops whose output is computed in full even when it has more elements than all inputs
+# combined (an upsample, a matmul with a small inner dim, a channel-widening conv), so the
+# padding allowance in _check_finite does not apply. Mirrors the generator's set of the same name.
+FULLY_DEFINED_OUTPUT_OPS = frozenset({"ttnn.upsample", "ttnn.matmul", "ttnn.conv2d"})
+
+
 def _check_finite(host, case, op_name, index):
     """Assert the region the op can actually define is finite.
 
@@ -1468,7 +1490,7 @@ def _check_finite(host, case, op_name, index):
         return
 
     budget = _input_elements(case)
-    if n_total > budget:
+    if n_total > budget and op_name not in FULLY_DEFINED_OUTPUT_OPS:
         head = finite.reshape(-1)[:budget]
         bad = int(head.numel() - head.sum())
         if bad == 0:

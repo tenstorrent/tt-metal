@@ -16,7 +16,6 @@ Captured 102 call(s) to this op; 51 distinct signature(s) covering 102 of them.
 Fidelity notes for this op:
   * compute_config is recorded only as an object address in the capture, so it is dropped and the op's default is used (can shift PCC, not shapes)
   * an input's logical shape does not fill its shard (e.g. 8 rows in a 32-row shard), so it is built interleaved and relaid out — handing that memory config straight to from_torch would pad the logical shape up to the shard and change what the op computes
-  * the output has more elements than all inputs combined (a batch-padded decode tensor), so the op cannot write all of it; finiteness is asserted over the portion the inputs can account for
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
