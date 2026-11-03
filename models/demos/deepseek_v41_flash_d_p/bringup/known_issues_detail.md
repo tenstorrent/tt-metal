@@ -652,3 +652,90 @@ bfloat4_b today: tt/moe_block_adapter.py, so the A/B needs the block to take bfp
 Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.21 --spec
 models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (runs cached in
 generated/fix21_format_attribution/<golden hash>/v1/; delete them, or bump EMU_VERSION, after changing a site).
+
+## P.27 EXPERTS_BFP8: routed-expert formats on the block MoE, and DRAM per chip at 1M
+
+Perf pick P.27 (galaxy 8x4, 2026-11-02; DS41-197, DS41-198). EXPERTS_IMPL takes four values, all of them on
+MOE_IMPL=block (the default stays bfp4, F241; the orchestrator A/Bs bfp4 vs bfp8 here, P.28 / P.29 the other two):
+
+| value | w1 / w3 | w2 | rounding on the host | flat op wdtype |
+|---|---|---|---|---|
+| bfp4 | bfloat4_b | bfloat4_b | none (ttnn's RNE packing, `_bfp4_round`) | bf4 |
+| bfp8 | bfloat8_b | bfloat8_b | none (exact, `_bfp8_exact`, DS41-10 / DS41-35) | bf8 |
+| bfp4_mse | bfloat4_b | bfloat4_b | `_bfp4_mse_round`: per 16 values along K the larger or the one-lower exponent, least squared error, ties the larger | bf4 |
+| bfp8_down4 | bfloat8_b | bfloat4_b | w2 `_bfp4_mse_round` | bf8d4 (fork option down_weights_bf4) |
+
+What changed:
+- `tt/experts.py`: `IMPLS` (value -> wdtype and per-matrix format), `_bfp4_mse_round` (chunked; the group's
+  largest result has the chosen exponent, so ttnn's packing is lossless: asserted at load, `_bf4_mse_lossless`),
+  `expert_weight_round(impl)` (the CPU emulation of each value: bfp8 identity, bfp4 `_bfp4_round`, bfp4_mse /
+  bfp8_down4 w2 `_bfp4_mse_round`), `impl_dtypes`. `bfp4_stats` (changed fraction, worst ||dW|| / ||W||) is logged
+  for every bfloat4_b matrix (EXPERTS_BFP4 ... impl=, matrices=). The weight cache key already carries the value
+  (`L<layer>.<impl>.<hash>`), so each value has its own cache files.
+- `tt/moe_block_adapter.py`: the bfp4-only assert removed; `block_dtypes()` takes the op's dtypes
+  (`MoEDtypes.routed_weights` / `routed_down_weights`).
+- `models/demos/moe_block/moe_block.py` (shared): `MoEDtypes.routed_down_weights` (None = routed_weights);
+  RoutedExperts keeps the bfp4-only rule for the block's own packing and checks a caller's op against MoEDtypes;
+  TokenExchange.build sets K3_WDTYPE to the op's wdtype while K3 builds its placeholder flat op (DS41-197) and
+  checks the placement keys (down, rdn, relays, coords, arena_tiles, ...) equal; other models (bfp4, no caller op)
+  unchanged (a difference stays a warning there). static_l1_bytes differs on every format (K3's placeholder plans
+  without max_y_writers: 18304 B vs the op's 12160 B on bf8 / bf8d4): logged only.
+- The flat op's L1 plan already sizes everything from w_tile (1088 B for bfp8): gate/up split under GU_L1_BUDGET,
+  rings, regions; the block's arena (1208 KB, 35 cells, 16 accumulators) is the same for every value.
+- Fork flat_routed_expert_ttnn: down_weights_bf4 (CHANGELOG 2026-11-02; tests/unit/test_down_bf4.py 2 / 2 on 8x4:
+  bf8d4 == bf8 bit for bit on bfp4-exact down weights).
+
+Layer 0 through the block (tests/test_experts_formats.py, s10240 chunk 0, rel / PCC of the layer output vs the
+golden; cold cache miss: ~140 s a layer for bfp8 / bfp8_down4 / bfp4_mse):
+
+| value | rel | PCC | load-time stats (layer 0) |
+|---|---|---|---|
+| bfp4 | 0.0350 | 0.99940 | 16.65 % changed, worst matrix 0.1196 |
+| bfp4_mse | 0.0247 | 0.99970 | 7.75 % changed, worst matrix 0.0672 |
+| bfp8_down4 | 0.0206 | 0.99979 | w2 7.62 % changed, worst 0.0645 |
+| bfp8 | 0.0152 | 0.99989 | exact |
+
+Host (tests/test_experts_bfp4_mse.py, 3 / 3): ttnn's bfloat4_b packing of `_bfp4_mse_round` is bit-exact (random,
+ties, saturation, e2m1 groups, 6 real expert matrices); per matrix ||dW|| / ||W|| 0.063-0.065 (RNE 0.112-0.118);
+the lower exponent wins on 31 % of the tested groups.
+
+DRAM per chip (tests/bringup/test_dram.py; one slot, 1,048,576 tokens = max_seq 1,049,600, 40 layers, chunk at
+1,039,360; the mesh allocator is lockstep, so every chip reads the same; allocator capacity 31.831 GiB a chip;
+P.27 attempt 2, 2026-11-03, both sides after the state-walk fix below):
+
+| GiB a chip | bfp4 (gate unit) | bfp8 (measure, change on) |
+|---|---|---|
+| routed experts | 8.899 | 16.809 (x 1088 / 576) |
+| other weights (incl. indexer _kbuf / _bmax work buffers sized to max_seq, ~0.07 a layer) | 6.440 | 6.440 |
+| served caches (engine slabs) | 1.408 | 1.408 |
+| slot state (other) | 0.786 | 0.786 |
+| tables | 0.884 | 0.884 |
+| buffers + unattributed | 0.036 | 0.036 |
+| after load | 18.454 | 26.364 |
+| peak (layer 36, outside the MoE / attention calls; 795 samples) | 19.634 | 27.544 |
+| chunk at 1,039,360 (s, incl. sampling) | 185 | 146 |
+
+bfp8 at 1M: fits the physical capacity (27.54 of 31.83 GiB, 4.29 GiB free at peak) but not the 27.2 GiB budget
+(peak +0.34 GiB over; after load 26.36 fits). bfp8_down4 would be ~ 16.81 - 2.67 = 14.1 GiB of experts (w2 at bfp4),
+peak ~24.9 GiB (estimate; P.29 measures it).
+test_dram fix (attempt 2): DS41DeviceState holds `self.model` (tt/model.py:208), so the state's walk took every weight
+as "state" (attempt 1's bfp8 run: state 7.227, other_weights 0); the walk now skips the model and its mesh.
+
+Not done here (paths outside P.27's): bringup/hooks.py:devfmt_component and reference/ds41_ref.py's experts_w site
+still emulate bfp4 vs exact only; both should call `tt/experts.py:expert_weight_round(impl)` per matrix.
+
+## The MoE block's exchange plans its combine from K3's own placeholder flat op, built in K3_WDTYPE (env, default bf4)
+
+DS41-197 (P.27). models/demos/deepseek_v3_d_p/tt/moe/tt_k3_token_split_moe.py TtK3TokenSplitMoE.__init__ reads
+`self.wdtype = os.environ.get("K3_WDTYPE", "bf4")` and builds a "fake" FlatRoutedExpert with it (routed_only: the real
+weights come per call); `self.op.plan` then gives writers, cells, relays, the arena assertion and the deterministic
+planner's schedule. The plan depends on the weight tile (576 / 1088 B: gate/up split under GU_L1_BUDGET, rings,
+offsets), so a bfp8 routed op under a bf4 placeholder would run with a combine planned for another flat layout.
+moe_block TokenExchange.build now builds K3 inside `_k3_weight_format(op)` (K3_WDTYPE = the op's wdtype, restored
+after) and `_check_k3_plan` asserts the placement keys equal for the new formats. That K3 file is outside the bring-up
+paths; a `wdtype=` argument there would replace the environment hand-off. More in "P.27 EXPERTS_BFP8" above.
+
+## A least-squares bfp4 exponent halves the expert weights' error
+
+DS41-198 (P.27): numbers and the per-value table in "P.27 EXPERTS_BFP8: routed-expert formats on the block MoE, and
+DRAM per chip at 1M" above (tt/experts.py:_bfp4_mse_round; tests/test_experts_bfp4_mse.py, tests/test_experts_formats.py).

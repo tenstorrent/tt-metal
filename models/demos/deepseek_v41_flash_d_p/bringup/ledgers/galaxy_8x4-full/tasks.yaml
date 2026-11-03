@@ -2418,7 +2418,7 @@ tasks:
       emu_match_worst: '> 0'
       sites: '>= 6'
 - id: P.27
-  title: 'EXPERTS_BFP8: routed experts in bfloat8_b under MOE_IMPL=block (exact for the fp4 checkpoint), A/B against bfp4, with measured DRAM per chip at 1M'
+  title: 'EXPERTS_BFP8: routed experts in bfloat8_b under MOE_IMPL=block, plus the bfp4_mse and bfp8_down4 switch values (P.28 / P.29 A/B them); A/B bfp4 vs bfp8 at 50k, DRAM per chip at 1M'
   step: perf
   role: perf
   device: true
@@ -2450,7 +2450,7 @@ tasks:
       few minutes through devjob (start / wait), never killed. Do not profile the model and do not run the A/B yourself
       (the orchestrator measures bfp4 vs bfp8 at 51200 / 512000 / 1039360 and runs the ladder and contract tests on both
       sides). No fork regression suites; add tests only for what you add. Report: memory per group on both sides, and
-      whether bfp8 fits 1M within the 27.2 GiB budget and within the physical capacity.'
+      whether bfp8 fits 1M within the 27.2 GiB budget and within the physical capacity. (4) OWNER 2026-11-02 (after reviewing GPT-OSS PR #63374, models/demos/gpt_oss/tt/bfp4_quant.py on that branch): two more EXPERTS_IMPL values, made here, A/B-ed by P.28 / P.29 (no new agent work there): bfp4_mse = bfloat4_b with the shared exponent of each 16-value group (along K in weights_nk, i.e. inside one ue8m0 block) chosen by least squared error between the group''s largest exponent and one below it (the large values then saturate at 7; ties: the largest), rounded on the host at load and handed to ttnn as bfloat4_b, which must pack it losslessly (add a test that ttnn''s packing of the rounded tensor is bit-exact); bfp8_down4 = w1 / w3 in bfloat8_b, w2 (down) in bfloat4_b with the bfp4_mse rounding. Each value gets its own expert cache names; the CPU emulation of the device formats (FIX.21, _bfp4_round) follows the switch. Log the per-layer changed fraction and worst ||dW|| / ||W|| at load for bfp4_mse as for bfp4.'
   ab:
     env:
       EXPERTS_IMPL: bfp4
@@ -2463,14 +2463,83 @@ tasks:
   - last
   ab_positions:
   - 51200
-  - 512000
-  - 1039360
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      dram_load_gib_max: '> 0'
+      dram_peak_gib_max: '> 0'
+      dram_capacity_gib: '> 0'
+- id: P.28
+  title: 'EXPERTS_BFP4_MSE: A/B bfp4 vs bfp4_mse (least-squared-error shared exponent per 16-value K group, GPT-OSS #63374)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.27
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  - models/demos/moe_block
+  brief:
+    details: 'OWNER 2026-11-02: the ablation of the routed-expert formats, especially bfp4_mse (same bytes and speed as bfp4, less rounding error). P.27 built this value; do not re-implement it. Check that it is wired (cache names, load log, the CPU emulation follows it) and fix only what is broken; the default stays bfp4 (F241, switch-only). Do not profile the model and do not run the A/B yourself (the orchestrator measures bfp4 vs bfp4_mse at 51200, ladder rung last). Agent rules 18 / 19; device jobs over a few minutes through devjob (start / wait). No fork regression suites. Report the load log''s changed fraction and worst ||dW|| / ||W|| per layer.'
+  ab:
+    env:
+      EXPERTS_IMPL: bfp4
+      ENGRAM_TABLE: resident
+    change:
+      EXPERTS_IMPL: bfp4_mse
+      ENGRAM_TABLE: resident
+  ab_mode: full
+  ab_rungs:
+  - last
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+- id: P.29
+  title: 'EXPERTS_BFP8_DOWN4: A/B bfp4 vs bfp8 gate/up + bfp4_mse down, with DRAM per chip at 1M'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.28
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  - models/demos/moe_block
+  brief:
+    details: 'OWNER 2026-11-02: the ablation of the routed-expert formats: the memory fallback should bfp8 everywhere not fit 1M (GPT-OSS #63374 keeps bfp8 gate/up and bfp4 down for long contexts). P.27 built this value; do not re-implement it. Check that it is wired (cache names, load log, the CPU emulation follows it) and fix only what is broken; the default stays bfp4 (F241, switch-only). Do not profile the model and do not run the A/B yourself (the orchestrator measures bfp4 vs bfp8_down4 at 51200, ladder rung last). Agent rules 18 / 19; device jobs over a few minutes through devjob (start / wait). No fork regression suites. Report the load log''s changed fraction and worst ||dW|| / ||W|| per layer. test_dram.py runs on both sides.'
+  ab:
+    env:
+      EXPERTS_IMPL: bfp4
+      ENGRAM_TABLE: resident
+    change:
+      EXPERTS_IMPL: bfp8_down4
+      ENGRAM_TABLE: resident
+  ab_mode: full
+  ab_rungs:
+  - last
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2501,6 +2570,8 @@ tasks:
   - FIX.20
   - FIX.21
   - P.27
+  - P.28
+  - P.29
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh

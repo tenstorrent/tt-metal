@@ -273,6 +273,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.Ht = p.H / 32;
     p.It = p.I / 32;
     p.w_tile = cfg.weights_bf8 ? BF8_TILE : 576;
+    TT_FATAL(
+        !cfg.down_weights_bf4 || cfg.weights_bf8,
+        "flat_routed_expert: down_weights_bf4 needs bfp8 gate/up weights (bfp4 down is the default with bfp4 ones)");
+    p.wd_tile = cfg.down_weights_bf4 ? 576 : p.w_tile;
     if (cfg.x_bf16) {  // x as bf16 tiles (relay tilize, multicast, gate/up x ring)
         p.x_tile = 2048;
         p.sb_slots = 2;
@@ -1255,7 +1259,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         const uint32_t kd = FlatRoutedExpertPlan::kd_of(p.pcds[d], p.It);
         dn_ring_max = std::max(dn_ring_max, pyround(p.dring * (p.It / kd)) * kd * p.pcds[d]);
     }
-    p.h_off = al(std::max(dn_ring_max * p.w_tile, p.rd_off + (p.rdown ? p.ring_dr * p.slot_dr * p.w_tile : 0)));
+    p.h_off = al(std::max(dn_ring_max * p.wd_tile, p.rd_off + (p.rdown ? p.ring_dr * p.slot_dr * p.wd_tile : 0)));
     const uint32_t out_bytes = al(2 * out_tiles * BF8_TILE);
     uint32_t dyn_half = 512;  // as the program factory: CB 7 holds 4 halves of the counts / regions / ids
     while (dyn_half < (p.NG * 4 + 63) / 64 * 64 + (4 * p.E + 63) / 64 * 64) {
@@ -1366,7 +1370,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.relay_bytes = std::max(relay_bytes, x_words_bytes);
     p.vstride = 1 + p.nh;
     p.region_bytes = p.E * p.nk_gu * p.rg * p.slot * p.w_tile;
-    p.wd_region = p.E * p.It * pcd * p.w_tile;
+    p.wd_region = p.E * p.It * pcd * p.wd_tile;
     // The down cores' weight reads rotate over the DRAM banks instead of one bank per core (bank-pinned streams ran
     // at 55% of DRAM peak alone, rotating 65%; worklog 8d). Bit-identical. Kimi K2.7 / GLM 5.3 us per expert at
     // M 32 / 128: 62.3 / 72.3 -> 58.2 / 68.7, 54.3 / 63.9 -> 51.2 / 61.4; none at M >= 512. MIMO_FL_DW_ROT=0: one
@@ -1378,9 +1382,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             const uint32_t kd = FlatRoutedExpertPlan::kd_of(p.pcds[d], p.It), nb = p.E * (p.It / kd);
             sub = std::max(sub, (nb + p.banks - 1) / p.banks * kd * p.pcds[d]);
         }
-        p.wd_rot_region = sub * p.w_tile;
+        p.wd_rot_region = sub * p.wd_tile;
     }
-    p.wr_region = p.rdown ? p.E * p.It * p.pcd_r * p.w_tile : 0;
+    p.wr_region = p.rdown ? p.E * p.It * p.pcd_r * p.wd_tile : 0;
     for (uint32_t k = 0; k < p.nsg; ++k) {
         p.coords.push_back(p.down[k * p.nd_sg]);
     }

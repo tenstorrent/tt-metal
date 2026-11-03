@@ -116,7 +116,11 @@ class WireFormat:
 
 @dataclass(frozen=True)
 class MoEDtypes:
+    # the routed experts' weight tiles. The block's own packing (weights.routed) is bfloat4_b; a caller's laid-out op
+    # (MoELayer.build(routed_op=)) may be bfloat8_b (DeepSeek-V4.1 EXPERTS_IMPL=bfp8, P.27), and its down weights
+    # bfloat4_b under bfloat8_b gate / up (routed_down_weights; None: routed_weights)
     routed_weights: ttnn.DataType = ttnn.bfloat4_b
+    routed_down_weights: ttnn.DataType | None = None
     routed_activations: ttnn.DataType = ttnn.bfloat8_b  # x and h inside the experts
     routed_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     shared_weights: ttnn.DataType = ttnn.bfloat8_b
@@ -1707,7 +1711,15 @@ class RoutedExperts:
         layout: op's flat layout when not layout_of's (a dict of FlatLayoutOptions fields)."""
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
-        assert dtypes.routed_weights == ttnn.bfloat4_b, "bring-up: bfp4 routed weights"
+        down = dtypes.routed_down_weights or dtypes.routed_weights
+        if op is None:
+            assert dtypes.routed_weights == ttnn.bfloat4_b and down == ttnn.bfloat4_b, "bring-up: bfp4 routed weights"
+        else:  # (a caller's op: bfp4, bfp8, or bfp8 gate / up with bfp4 down - its tensors say which)
+            got = (op.w_gu.dtype, op.w_d.dtype)
+            assert got == (
+                dtypes.routed_weights,
+                down,
+            ), f"routed op weights {got} != MoEDtypes {(dtypes.routed_weights, down)}"
         self.gids = self.gids_of(g)
         self.cap = self.cap_of(g)
         self.layout_given = dict(layout) if layout is not None else None
@@ -1740,6 +1752,45 @@ class RoutedExperts:
             layout=self.layout_fields,
         )
         del per_dev, conv
+
+
+# the K3 module's placeholder flat op (routed_only: the weights come per call) takes its weight format from the
+# environment (K3_WDTYPE, read in TtK3TokenSplitMoE.__init__; default bf4); its plan sizes the combine's cells, writers
+# and arena, so it must be the routed op's: set while the exchange builds, then restored (DeepSeek-V4.1 P.27)
+_K3_PLAN_KEYS = ("down", "rdn", "rdown", "relays", "coords", "arena_tiles", "nd", "pcds", "banks")
+
+
+class _k3_weight_format:
+    def __init__(self, op):
+        self.wd = getattr(op, "_wdtype", "bf4")
+
+    def __enter__(self):
+        self.prev = os.environ.get("K3_WDTYPE")
+        os.environ["K3_WDTYPE"] = self.wd
+
+    def __exit__(self, *exc):
+        if self.prev is None:
+            os.environ.pop("K3_WDTYPE", None)
+        else:
+            os.environ["K3_WDTYPE"] = self.prev
+        return False
+
+
+def _check_k3_plan(k3_plan, op_plan, wd):
+    """The exchange's combine was sized from K3's placeholder plan: it must place what the routed op's plan places, and
+    static_l1_bytes is logged only (K3's placeholder plans without max_y_writers: it differs on the bfp4 path too).
+    Asserted for the formats P.27 added; the bfp4 path as before, a warning."""
+    a, b = dict(k3_plan), dict(op_plan)
+    diff = [k for k in _K3_PLAN_KEYS if k in a and k in b and a[k] != b[k]]
+    sa, sb = int(a.get("static_l1_bytes", 0)), int(b.get("static_l1_bytes", 0))
+    from loguru import logger
+
+    if sb != sa:  # (the bfp4 path always had this; Metal itself refuses CBs that clash with the arena)
+        logger.info(f"MoEBlock exchange: flat static CBs {sb} B (routed op, {wd}) vs {sa} B (K3's placeholder)")
+    if diff and wd == "bf4":
+        logger.warning(f"MoEBlock exchange: K3's flat plan differs from the routed op's in {diff}")
+        return
+    assert not diff, f"MoEBlock exchange ({wd} weights): K3's flat plan differs from the routed op's in {diff}"
 
 
 class TokenExchange:
@@ -1775,6 +1826,13 @@ class TokenExchange:
         g, m = self.g, self.model
         Hr, S, EPC = m.routed_width, g.tokens_per_chip, g.experts_per_chip
         d = K3Dims(H=Hr, latent=Hr, I=m.routed_expert_hidden_dim, E=m.num_experts, K=m.top_k, act=self.experts.act)
+        with _k3_weight_format(self.experts.op):
+            self._build_k3(TtK3TokenSplitMoE, d, S, EPC, worst_rows)
+        _check_k3_plan(self.block.op.plan, self.experts.op.plan, getattr(self.experts.op, "_wdtype", "bf4"))
+        self.builds += 1
+
+    def _build_k3(self, TtK3TokenSplitMoE, d, S, EPC, worst_rows):
+        g, m = self.g, self.model
         self.block = TtK3TokenSplitMoE(
             self.mesh,
             None,
@@ -1792,7 +1850,6 @@ class TokenExchange:
             combine_snap=self.combine_snap,
             deterministic=self.deterministic,
         )
-        self.builds += 1
 
     def __call__(self, own, rows, hook=None, tilize=True):
         """own: the owners' rows [1, 1, S/N, Hr] TILE; rows: the joint routing rows -> [S/N, Hr] TILE (tilize False: the

@@ -106,15 +106,21 @@ def block_options(mesh=None, own_rows: bool = False):
 
 
 def block_dtypes():
-    """D5: the shared expert at LoFi (bfp8 weights, the block's default); routed bfp4 at LoFi, router bf16. The shared
+    """D5: the shared expert at LoFi (bfp8 weights, the block's default); routed at LoFi in EXPERTS_IMPL's formats
+    (P.27: bfp4 / bfp4_mse bfloat4_b, bfp8 bfloat8_b, bfp8_down4 bfloat8_b gate / up + bfloat4_b down; the block takes
+    our laid-out op as it is), router bf16. The shared
     expert's x / h: GEMM_INPUTS (FIX.9, DS41-132; owner 2026-10-28, F208) - bfloat8_b, the reference's fp8 act quant of
     both (reference/ds41_ref.py _swiglu: _q8(x), _q8(h)); the router keeps bf16 x (the fused head typecasts a copy for
     the engine). SE_PACK_PRECISE: the fused head packs bfp8 h in one rounding (bfp8_pack_precise)."""
     from models.demos.moe_block.moe_block import MoEDtypes
 
     from .common import gemm_dtype
+    from .experts import impl_dtypes
 
+    gu, dn = impl_dtypes(settings.get("EXPERTS_IMPL"))
     return MoEDtypes(
+        routed_weights=gu,
+        routed_down_weights=None if dn == gu else dn,
         shared_fidelity=ttnn.MathFidelity.LoFi,
         shared_activations=gemm_dtype(),
         shared_pack_precise=settings.get("SE_PACK_PRECISE") == "on",
@@ -181,9 +187,6 @@ class TtMoEBlockLayer:
             "MOE_IMPL=block runs EXPERTS_PRECISION=glm only (owner decision D8, 2026-10-27): the block's exchange "
             "calls the flat op at LoFi with bfp8 x / h tiles; set DS41_EXPERTS_PRECISION=glm or DS41_MOE_IMPL=flat"
         )
-        assert (
-            settings.get("EXPERTS_IMPL") == "bfp4"
-        ), "MOE_IMPL=block: bfp4 routed weights (MoEBlock asserts bfloat4_b)"
         rows, cols = tuple(mesh.shape)
         self.mesh, self.layer, self.chunk = mesh, int(layer), int(chunk)
         self.fold = ccl.glue_fold()
@@ -193,7 +196,7 @@ class TtMoEBlockLayer:
         # (lines or a torus: the block reads the wraps from the open fabric; torus untested on DS41, owner D14)
         self.dtypes = block_dtypes()
         epc = g.experts_per_chip
-        # routed experts: our load and cache (weights_nk, bfp4) in DS41's EXPERTS_LAYOUT (D6: marko by default, the
+        # routed experts: our load and cache (weights_nk, EXPERTS_IMPL's formats) in DS41's EXPERTS_LAYOUT (D6: marko by default, the
         # block's own layout_of), as the block's op
         rw = _RoutedWeights(
             mesh,
@@ -236,7 +239,8 @@ class TtMoEBlockLayer:
         # (fused: the head lays out this layer's router and shared expert at the layer's first call - it needs the head)
         logger.info(
             f"MOE_BLOCK layer={layer} experts={m.num_experts} ({epc} a chip) chunk={self.chunk} cap={op.m} "
-            f"layout={settings.get('EXPERTS_LAYOUT')} {self.layout} head={self.head} shared_fidelity=LoFi"
+            f"layout={settings.get('EXPERTS_LAYOUT')} {self.layout} head={self.head} shared_fidelity=LoFi "
+            f"experts_impl={settings.get('EXPERTS_IMPL')}"
         )
 
     def block(self):

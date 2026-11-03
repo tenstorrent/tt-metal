@@ -69,6 +69,18 @@ struct FlatRoutedExpertConfig {
     // (a bfp8 tile then shares its exponents along K: exact for e2m1 x ue8m0 weights); no plan change. (FIX.9 removed
     // P.3's DeepSeek-only h options routed_weight / fp8_act_quant: no model used them.)
     bool weights_nk = false;
+    // DeepSeek-V4.1 option (0: off, the plan unchanged). At most this many y writers (down cores + reader tails): the
+    // L1 hand-off of a combine appended with flat_with_program has one landed counter per writer (combine_rf
+    // sparse_combine_rf.py L1_MAX_WRITERS, 32). The down cores are cut to fit before their column split is chosen (in
+    // the plan's own order, nearest first); the cells left over stay idle (free for the appended op). A Galaxy chip
+    // with its east DRAM readers in column 7 has 40 down cores at V4.1-Flash (4 columns each), column 6 has 32 (5
+    // each): capped at 32, both get the same down split and weight layout.
+    uint32_t max_y_writers = 0;
+    // DeepSeek-V4.1 option (false: the program above, unchanged). down_weights_bf4: with weights_bf8 (gate/up bfp8
+    // tiles), the down weights (and the reader tails' down weights) are bfp4 tiles: the down rings, regions and
+    // readers take the bfp4 tile size and data format (EXPERTS_IMPL=bfp8_down4, P.27). Taken from the down weight
+    // tensor's dtype by the op; the plan's own argument for flat_routed_expert_plan.
+    bool down_weights_bf4 = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "hidden",
@@ -91,7 +103,9 @@ struct FlatRoutedExpertConfig {
         "cmb_no_go",
         "cmb_slot_order",
         "layout",
-        "weights_nk");
+        "weights_nk",
+        "max_y_writers",
+        "down_weights_bf4");
     auto attribute_values() const {
         return std::make_tuple(
             hidden,
@@ -114,7 +128,9 @@ struct FlatRoutedExpertConfig {
             cmb_no_go,
             cmb_slot_order,
             layout.key(),
-            weights_nk);
+            weights_nk,
+            max_y_writers,
+            down_weights_bf4);
     }
 };
 
@@ -126,7 +142,8 @@ struct FlatRoutedExpertPlan {
     using Core = tt::tt_metal::CoreCoord;
     // shapes
     uint32_t H = 0, I = 0, E = 0, NG = 0, m = 0, Ht = 0, It = 0;
-    uint32_t w_tile = 0;  // weight tile bytes
+    uint32_t w_tile = 0;   // weight tile bytes (gate/up; and down unless down_weights_bf4)
+    uint32_t wd_tile = 0;  // down weight tile bytes (= w_tile, or bfp4 with down_weights_bf4)
     uint32_t banks = 0;
     // subgrids, gate/up split, sub-blocks
     uint32_t nsg = 1, n_rd_sg = 16;
