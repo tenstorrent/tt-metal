@@ -31,7 +31,15 @@ void kernel_main() {
     constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
     constexpr bool producer_on_trisc3 = get_arg(args::producer_on_trisc3) != 0;
     constexpr uint32_t producer_stamp_base = get_arg(args::producer_stamp_base);
-    constexpr bool i_produce = ckernel::TRISC_ID == (producer_on_trisc3 ? 3u : 2u);
+    // Only the producing TRISC stamps: trisc3 when the host asks for it, otherwise the pack thread.
+    constexpr uint32_t producer_trisc = producer_on_trisc3 ? 3u : 2u;
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    constexpr bool i_produce = producer_on_trisc3;
+#elif defined(UCK_CHLKC_PACK)
+    constexpr bool i_produce = !producer_on_trisc3;
+#else
+    constexpr bool i_produce = false;
+#endif
 
     DataflowBuffer dfb(dfb::out);
 
@@ -57,7 +65,7 @@ void kernel_main() {
             const uint32_t share_base = dfb.get_write_ptr() << 4;
             for (uint32_t j = 0; j < share; ++j) {
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(share_base + j * stride_tiles * entry_bytes) =
-                    producer_stamp_base + ckernel::TRISC_ID;
+                    producer_stamp_base + producer_trisc;
             }
             asm volatile("fence" ::: "memory");  // the stamps land before push_back posts the credit
         }

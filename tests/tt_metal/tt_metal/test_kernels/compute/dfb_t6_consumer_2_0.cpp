@@ -57,9 +57,15 @@ void kernel_main() {
     // no fifo state and reads share as 1, so acquire/release stays per tile to match PACK's count.
     const uint32_t share = dfb.get_consumer_share();
 
-    // Only the consuming TRISC takes the digests. One such thread per Neo, so the Neo's thread id keys its
-    // slice of the digest region.
-    constexpr bool i_consume = ckernel::TRISC_ID == (consumer_on_trisc3 ? 3u : 0u);
+    // Only the consuming TRISC takes the digests: trisc3 when the host asks for it, otherwise the unpack thread.
+    // One such thread per Neo, so the Neo's thread id keys its slice of the digest region.
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    constexpr bool i_consume = consumer_on_trisc3;
+#elif defined(UCK_CHLKC_UNPACK)
+    constexpr bool i_consume = !consumer_on_trisc3;
+#else
+    constexpr bool i_consume = false;
+#endif
     const uint32_t entry_bytes = dfb.get_entry_size();
     const uint32_t words_per_entry = entry_bytes / sizeof(uint32_t);
     // Spacing between the tiles of one share: 1 on a BLOCKED consumer, the ring stride when only
