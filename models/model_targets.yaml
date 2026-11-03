@@ -2670,7 +2670,7 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.1983
+              fps: 0.27
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2789,7 +2789,7 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.0735
+              fps: 0.087
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
