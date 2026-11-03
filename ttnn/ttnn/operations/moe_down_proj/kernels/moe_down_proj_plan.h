@@ -4,8 +4,8 @@
 // moe_down_proj plan: the counts-derived row split, identical on all three kernels of every core (plan_wave).
 // Pure integer code. Tile rows are expert-sorted regions of ceil(counts[e] / 32) tiles; the active rows
 // [0, active_row_tiles) are cut into num_waves waves, and each wave into num_m_groups contiguous per-group ranges
-// of core_row_tiles rows (the last ones shorter or empty). Every kernel walks the same channel-round order:
-// per wave, per K round, the x round, then one w chunk per in-wave expert in expert order.
+// of core_row_tiles rows (the last ones shorter or empty). Empty waves are skipped by every kernel; each
+// non-empty wave runs num_k_rounds x rounds (reader) and num_k_rounds w rounds (writer RISC).
 
 #pragma once
 
@@ -68,9 +68,19 @@ struct MoePlan {
         return a < b ? b - a : 0;
     }
 
-    // Experts whose rows the wave touches; the w stream delivers exactly these, in expert order.
-    bool expert_in_wave(uint32_t wave, uint32_t e) const {
-        uint32_t first;
-        return expert_rows_in(e, wave_start(wave), wave_end(wave), &first) != 0;
+    // Experts whose rows the wave touches form the contiguous slot range [*first, *last] (empty experts inside it
+    // carry no rows and are never read by compute). The w stream delivers this range once per K round.
+    void wave_experts(uint32_t wave, uint32_t* first, uint32_t* last) const {
+        const uint32_t lo = wave_start(wave);
+        const uint32_t hi = wave_end(wave);
+        *first = MOE_NUM_EXPERTS;
+        *last = 0;
+        for (uint32_t e = 0; e < MOE_NUM_EXPERTS; ++e) {
+            uint32_t row;
+            if (expert_rows_in(e, lo, hi, &row) != 0) {
+                *first = e < *first ? e : *first;
+                *last = e;
+            }
+        }
     }
 };

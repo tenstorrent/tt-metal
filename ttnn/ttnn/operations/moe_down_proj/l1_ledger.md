@@ -12,6 +12,8 @@ Every CB has the same index and size on every core of the layout (multicast slot
 | `cb_w_round` | `W_DEPTH * NUM_EXPERTS * core_n_tiles * k_block_tiles` | 2 rounds of in-wave expert chunks; empty / out-of-wave slots are pushed but hold no data | `{e: spans -> NUM_EXPERTS slots, n: spans -> core_n_tiles, k: spans -> k_block_tiles, m: streams (one chunk serves every row of the core's sub-block), wave: streams}` | Bfp8_b | reader | compute | whole kernel, recycled per round | none: concurrent with `cb_x_round` and `cb_partials`. Gap between capacity and live set: unused slots of experts that are empty, outside the wave, or not touching this core. Slots stay nominal because the multicast landing address must be identical on every line core (R2 does not change this). |
 | `cb_partials` | `core_row_tiles_max * core_n_tiles` | the whole wave block, `core_row_tiles * core_n_tiles` tiles, live from round 0 to the untilize | `{m: spans -> core_row_tiles_max, n: spans -> core_n_tiles, k: streams (folded by packer L1 accumulation each round), e: streams (sub-blocks of every expert occupy disjoint rows of the same block), wave: streams (recycled per wave)}` | Float32 (`fp32_dest_acc_en = True`, the only supported value) | compute (pack) | compute (unpack, untilize) | one wave | none: live across every round of the wave, so it overlaps `cb_x_round` / `cb_w_round` for its whole life; at the untilize it overlaps `cb_output_rows`. Not aliased with the next wave's x/w because the reader prefetches wave p+1 rounds 0-1 during wave p's untilize (explicit pipelining decision). |
 | `cb_output_rows` | `OUT_DEPTH * core_n_tiles` | 2 untilized tile rows (one being written by the writer, one being packed) | `{n: spans -> core_n_tiles, m: streams (one tile row at a time), k: none (after accumulation), e: none, wave: streams}` | Float16_b (output dtype) | compute | writer | untilize phase of every wave | none: concurrent with `cb_partials` during the untilize; with `num_waves >= 2` the writer still drains it while wave p+1's rounds run. Cannot alias `cb_partials`: different page format and overlapping lifetime. |
+| `cb_x_stage` (implementer) | `core_row_tiles_max * k_block_tiles` | 1 step: the next owned x step's rows, prefetched by the rotating sender | `{m: spans, k: spans, n/e/wave: streams}` | Bfp8_b | reader (NoC reads) | reader (multicast source) | whole kernel, RISC-private, no CB credits | none: live from the prefetch issue (one step after the sender's previous send) to its next send, overlapping `cb_x_round`'s two slots. It decouples the sender's L1 reads from the slot ring (X_DEPTH alone would cap the lookahead at one round). |
+| `cb_w_stage` (implementer) | `NUM_EXPERTS * core_n_tiles * k_block_tiles` | 1 step of in-wave expert chunks | `{e, n, k: spans; m, wave: streams}` | Bfp8_b | writer RISC (DRAM reads) | writer RISC (multicast source) | whole kernel, RISC-private | none: same reason as `cb_x_stage`; lets every line keep several steps of w DRAM reads in flight. |
 | `cb_counts_compute` | 1 (32 B page, constant) | 1 | `{m, n, k, e, wave: none}` (constant) | UInt32 | reader | compute | whole kernel | none: a second consumer (writer) would violate the one-consumer rule, hence `cb_counts_writer`. 32 B. |
 | `cb_counts_writer` | 1 (32 B page, constant) | 1 | `{m, n, k, e, wave: none}` (constant) | UInt32 | reader | writer | whole kernel | none: see `cb_counts_compute`; the reader issues one 32 B DRAM read per CB. |
 
@@ -37,13 +39,13 @@ Pattern check (Rule 3):
 | `k_block_tiles` | divisor of 96, <= `K_BLOCK_MAX` = 8 | `select_blocking` |
 | `NUM_EXPERTS` | 8 | `validate()`: E == 8 |
 | `X_DEPTH`, `W_DEPTH`, `OUT_DEPTH` | 2 each | host constants |
-| `CB_BUDGET_BYTES` | 800 KiB = 819,200 B | host constant (x 250 KB + y 118 KB per bank resident at R = 8416) |
+| `CB_BUDGET_BYTES` | 960 KiB = 983,040 B | host constant; y's lowest L1 address measured 1,204,352 B at R = 8416 on p100a (x 250 KB + y 118 KB per bank above the CBs) |
 
 ## Footprint
 
 ```
-footprint = X_DEPTH * core_row_tiles_max * k_block_tiles * 1088
-          + W_DEPTH * NUM_EXPERTS * core_n_tiles * k_block_tiles * 1088
+footprint = (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * 1088      # + cb_x_stage
+          + (W_DEPTH + 1) * NUM_EXPERTS * core_n_tiles * k_block_tiles * 1088  # + cb_w_stage
           + core_row_tiles_max * core_n_tiles * 4096
           + OUT_DEPTH * core_n_tiles * 2048
           + 2 * 32
@@ -57,7 +59,9 @@ footprint = X_DEPTH * core_row_tiles_max * k_block_tiles * 1088
 | `cb_output_rows` | `core_n_tiles`, `OUT_DEPTH` |
 | counts | constant |
 
-p100a, L layout (`core_n_tiles` = 2, `num_m_groups` = 9, `k_block_tiles` = 8): t = 4096 (2 waves, `core_row_tiles_max` = 15) 261,120 + 278,528 + 122,880 + 8,192 + 64 = 670,784 B. One wave would need 1,054,784 B (over budget), which is why `num_waves` = 2 there.
+p100a, L layout (`core_n_tiles` = 2, `num_m_groups` = 9, `k_block_tiles` = 8): t = 4096 (2 waves, `core_row_tiles_max` = 15) 391,680 + 417,792 + 122,880 + 8,192 + 64 = 940,608 B (staging included). One wave would exceed the budget, which is why `num_waves` = 2 there.
+
+Implementation note: the w channel runs on the writer RISC (NoC0) and x on the reader RISC (NoC1), each sender multicasting from its staging buffer; w moves as one multicast per K round covering the wave's expert slot range.
 
 ## Data-movement budget
 

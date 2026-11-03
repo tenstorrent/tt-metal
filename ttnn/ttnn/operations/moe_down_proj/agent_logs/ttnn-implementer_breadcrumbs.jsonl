@@ -1,0 +1,2 @@
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-03T01:35:19+00:00"}
+{"event":"test_run","result":"perf","notes":"ablation t4096/t1024: sync+mcast floor 130/46us, w reads +50us at t1024, x reads +16us at t4096; NoC swap w->NoC0 229->176us; staged prefetch with issue quota; K_BLOCK>8 hurts fill","ts":"2026-11-03T01:35:19+00:00"}

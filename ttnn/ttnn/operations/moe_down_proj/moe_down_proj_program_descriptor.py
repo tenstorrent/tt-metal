@@ -31,8 +31,9 @@ MAX_WAVES = 4
 X_DEPTH = 2
 W_DEPTH = 2
 OUT_DEPTH = 2
-# x (about 250 KB per bank) and y (about 118 KB per bank) stay resident in L1 at R = 8416.
-CB_BUDGET_BYTES = 800 * 1024
+# CBs sit below the L1 buffers: at R = 8416, x (about 250 KB per bank) and y (about 118 KB per bank) leave about
+# 1.1 MB above the unreserved base on p100a (y's lowest address measured at 1,204,352 B).
+CB_BUDGET_BYTES = 960 * 1024
 
 CB_X_ROUND = 0
 CB_W_ROUND = 1
@@ -40,8 +41,19 @@ CB_PARTIALS = 2
 CB_OUTPUT_ROWS = 3
 CB_COUNTS_COMPUTE = 4
 CB_COUNTS_WRITER = 5
+# Sender-private staging: a rotating sender prefetches its next owned step here, then multicasts it into the slot.
+CB_X_STAGE = 6
+CB_W_STAGE = 7
+# A staged prefetch's reads are issued over this many channel steps (a quota per step), so a sender never stalls
+# the steps it receives in between on one long issue burst. 8x512 layer 0 / t = 1024: 1 -> 259 / 120 us,
+# 4 -> 202 / 108, 9 -> 179 / 106, 16 -> 174 / 102, 32 -> 178 / 103, 128 -> 193 / 120.
+PREFETCH_ISSUE_STEPS = 16
 
 X_MAIN, X_STRIP, W_MAIN, W_STRIP = "xa", "xb", "wa", "wb"
+# NoC of each channel's RISC (the reader RISC carries x, the writer RISC carries w and the y store). w's DRAM reads
+# on NoC0 measured 8x512 layer 0 229 -> 176 us, t = 1024 125 -> 107 us against the swapped assignment.
+READER_NOC = ttnn.NOC.NOC_1
+WRITER_NOC = ttnn.NOC.NOC_0
 
 
 def _div_up(a, b):
@@ -155,8 +167,8 @@ def _tile_bytes():
 def footprint_bytes(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes):
     in_tile, acc_tile, out_tile = _tile_bytes()
     return (
-        X_DEPTH * core_row_tiles_max * k_block_tiles * in_tile
-        + W_DEPTH * NUM_EXPERTS * core_n_tiles * k_block_tiles * in_tile
+        (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * in_tile
+        + (W_DEPTH + 1) * NUM_EXPERTS * core_n_tiles * k_block_tiles * in_tile
         + core_row_tiles_max * core_n_tiles * acc_tile
         + OUT_DEPTH * core_n_tiles * out_tile
         + 2 * counts_page_bytes
@@ -202,23 +214,38 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     plan_ct = [tensor_row_tiles, blocking.num_waves, layout.num_m_groups]
     reader_ct = [
         CB_X_ROUND,
-        CB_W_ROUND,
+        CB_X_STAGE,
         CB_COUNTS_COMPUTE,
         CB_COUNTS_WRITER,
         *plan_ct,
         blocking.k_block_tiles,
         blocking.num_k_rounds,
         blocking.core_row_tiles_max,
+        TENSOR_K_TILES,
+        in_tile,
+        counts_page_bytes,
+        PREFETCH_ISSUE_STEPS,
+    ]
+    for tensor in (input_tensor, expert_counts):
+        reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    writer_ct = [
+        CB_OUTPUT_ROWS,
+        CB_COUNTS_WRITER,
+        CB_W_ROUND,
+        *plan_ct,
+        blocking.k_block_tiles,
+        blocking.num_k_rounds,
         core_n_tiles,
         TENSOR_K_TILES,
         NUM_EXPERTS * TENSOR_K_TILES,
         in_tile,
-        counts_page_bytes,
+        output.buffer_page_size(),
+        W_DEPTH,
+        CB_W_STAGE,
+        PREFETCH_ISSUE_STEPS,
     ]
-    for tensor in (input_tensor, weight, expert_counts):
-        reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
-    writer_ct = [CB_OUTPUT_ROWS, CB_COUNTS_WRITER, *plan_ct, core_n_tiles, output.buffer_page_size()]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+    for tensor in (output, weight):
+        writer_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
     compute_ct = [
         CB_X_ROUND,
         CB_W_ROUND,
@@ -236,40 +263,36 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     for (x, y), (line, group) in layout.roles.items():
-        reader_rt[x][y] = [
-            input_tensor.buffer_address(),
-            weight.buffer_address(),
-            expert_counts.buffer_address(),
-            group,
-            line,
-        ]
-        writer_rt[x][y] = [output.buffer_address(), group, line]
+        reader_rt[x][y] = [input_tensor.buffer_address(), expert_counts.buffer_address(), group]
+        writer_rt[x][y] = [output.buffer_address(), weight.buffer_address(), group, line]
         compute_rt[x][y] = [group]
 
     w_round_tiles = NUM_EXPERTS * core_n_tiles * blocking.k_block_tiles
+    x_round_tiles = blocking.core_row_tiles_max * blocking.k_block_tiles
     cbs = [
-        _cb(CB_X_ROUND, X_DEPTH * blocking.core_row_tiles_max * blocking.k_block_tiles, in_tile, ttnn.bfloat8_b, cores),
+        _cb(CB_X_ROUND, X_DEPTH * x_round_tiles, in_tile, ttnn.bfloat8_b, cores),
         _cb(CB_W_ROUND, W_DEPTH * w_round_tiles, in_tile, ttnn.bfloat8_b, cores),
+        _cb(CB_X_STAGE, x_round_tiles, in_tile, ttnn.bfloat8_b, cores),
+        _cb(CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b, cores),
         _cb(CB_PARTIALS, blocking.core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32, cores),
         _cb(CB_OUTPUT_ROWS, OUT_DEPTH * core_n_tiles, out_tile, ttnn.bfloat16, cores),
         _cb(CB_COUNTS_COMPUTE, 1, counts_page_bytes, ttnn.uint32, cores),
         _cb(CB_COUNTS_WRITER, 1, counts_page_bytes, ttnn.uint32, cores),
     ]
 
-    noc = ttnn.NOC.NOC_0
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "moe_down_proj_reader.cpp"),
         core_ranges=cores,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
+        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=READER_NOC),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "moe_down_proj_writer.cpp"),
         core_ranges=cores,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
+        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=WRITER_NOC),
     )
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "moe_down_proj_compute.cpp"),
@@ -280,10 +303,17 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     )
 
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    # x channel on the reader RISC, w channel on the writer RISC, each multicasting on its kernel's NoC.
+    channel_kernels = {
+        X_MAIN: (reader, READER_NOC),
+        X_STRIP: (reader, READER_NOC),
+        W_MAIN: (writer, WRITER_NOC),
+        W_STRIP: (writer, WRITER_NOC),
+    }
     semaphore_id = 0
-    for prefix in (X_MAIN, X_STRIP, W_MAIN, W_STRIP):
+    for prefix, (kernel, noc) in channel_kernels.items():
         if prefix not in layout.channels:
-            ttnn.attach_absent_mcast(reader, prefix)
+            ttnn.attach_absent_mcast(kernel, prefix)
             continue
         receivers, group_size, sender_config, order = layout.channels[prefix]
         mcast = ttnn.Mcast(
@@ -294,7 +324,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
             sender_config,
             order,
         )
-        mcast.attach(descriptor, prefix, [reader], semaphore_id)
+        mcast.attach(descriptor, prefix, [kernel], semaphore_id)
         semaphore_id = mcast.next_semaphore_id()
     descriptor.kernels = [reader, writer, compute]
     return descriptor
