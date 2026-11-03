@@ -48,8 +48,10 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     address_t input_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::input);
     address_t output_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::output);
-    // Input rows in tiles is the one runtime length word; the output row count follows from the gather dim.
+    // The runtime length words: input rows in tiles (the output row count follows from the gather dim) and the
+    // physical pages of one plane (the worker split; padded shards carry pages past Ht * Wt).
     const uint32_t input_tensor_Ht = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::input_Ht);
+    const uint32_t input_tensor_pages = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::input_pages);
     const uint32_t output_tensor_Ht = gather_dim == 2 ? input_tensor_Ht * ring_size : input_tensor_Ht;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
     size_t out_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::semaphore_0 + direction);
@@ -59,7 +61,7 @@ void kernel_main() {
     const AllGatherWorkerSplit split = all_gather_worker_split(
         global_worker_id,
         global_worker_count,
-        input_tensor_Ht,
+        input_tensor_pages,
         input_tensor_Wt,
         output_tensor_Wt,
         num_tiles_to_write_per_packet,

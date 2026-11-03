@@ -9,7 +9,7 @@
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 // Per-worker slice of one (batch, channel) plane of the all-gather input, derived on device from the
-// common row count so the reader and the writer of a worker always agree and a hit rewrites one word.
+// common page count so the reader and the writer of a worker always agree and a hit rewrites the words.
 struct AllGatherWorkerSplit {
     uint32_t input_tile_id_start;
     uint32_t input_tile_id_end;
@@ -21,12 +21,13 @@ struct AllGatherWorkerSplit {
 inline AllGatherWorkerSplit all_gather_worker_split(
     uint32_t global_worker_id,
     uint32_t global_worker_count,
-    uint32_t input_Ht,
+    uint32_t input_pages,
     uint32_t input_Wt,
     uint32_t output_Wt,
     uint32_t tiles_per_packet,
     uint32_t chunks_per_sync_or_zero) {
-    const uint32_t pages = input_Ht * input_Wt;
+    // The buffer's pages per plane, not Ht * Wt: padded shards carry pages past the logical tiles.
+    const uint32_t pages = input_pages;
     AllGatherWorkerSplit s;
     s.input_tile_id_start = ttnn::runtime_length::balanced_start(global_worker_id, pages, global_worker_count);
     s.input_tile_id_end = ttnn::runtime_length::balanced_end(global_worker_id, pages, global_worker_count);

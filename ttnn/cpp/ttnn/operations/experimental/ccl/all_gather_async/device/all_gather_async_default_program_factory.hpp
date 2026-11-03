@@ -30,6 +30,8 @@ struct AllGatherDescriptorArtifacts {
 
 // Input rows in tiles: the common runtime word the workers derive their tile ranges from.
 uint32_t all_gather_input_Ht(const Tensor& input);
+// Physical pages of one (batch, head) plane of the input: buffer pages over the batch-head count.
+uint32_t all_gather_input_pages(const Tensor& input);
 
 // Worker count per direction the default factory resolves: the explicit num_workers_per_link, else the
 // byte-based heuristic. The program hash folds it in because it fixes the core set.

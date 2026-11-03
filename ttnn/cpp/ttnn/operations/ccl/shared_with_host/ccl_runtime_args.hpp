@@ -15,9 +15,12 @@ struct AllGatherCommonArgs {
     static constexpr uint32_t barrier = 2;
     static constexpr uint32_t semaphore_0 = 3;
     static constexpr uint32_t semaphore_1 = 4;
-    // Input rows in tiles: the one length word the workers derive their tile ranges from.
+    // Input rows in tiles: the length word the output row count follows from.
     static constexpr uint32_t input_Ht = 5;
-    static constexpr uint32_t count = 6;
+    // Physical pages per (batch, head) plane: the buffer's page count over the batch-head count. The workers
+    // derive their tile ranges from it; it exceeds Ht * Wt when the shards carry padding.
+    static constexpr uint32_t input_pages = 6;
+    static constexpr uint32_t count = 7;
 };
 
 struct LlamaGatherReaderCommonArgs {

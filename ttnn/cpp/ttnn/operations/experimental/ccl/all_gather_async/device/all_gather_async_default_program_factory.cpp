@@ -701,6 +701,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
                                                    // apply_all_gather_async_minimal_default_semaphore_args()
         }
         common_args.push_back(input_tensor_Ht);  // smuggled-rta-ok: runtime row count, override
+        // Physical pages per plane (shard padding included), as the host split used before.
+        common_args.push_back(input_tensor.buffer()->num_pages() / batch_head_size);  // smuggled-rta-ok: override
         desc.kernels[kernel_index].emplace_common_runtime_args(common_args);
     }
 
@@ -718,7 +720,8 @@ void apply_all_gather_async_minimal_default_semaphore_args(
     using Args = ttnn::ccl::AllGatherCommonArgs;
     static_assert(
         Args::semaphore_0 == Args::barrier + 1 && Args::semaphore_1 == Args::barrier + 2 &&
-        Args::input_Ht == Args::barrier + 3 && Args::count == Args::barrier + 4);
+        Args::input_Ht == Args::barrier + 3 && Args::input_pages == Args::barrier + 4 &&
+        Args::count == Args::barrier + 5);
     const auto semaphore_args = all_gather_semaphore_args(barrier_semaphore, semaphore);
     for (const size_t kernel_index : {artifacts.reader_kernel_index, artifacts.writer_kernel_index}) {
         auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_index);
@@ -730,6 +733,12 @@ namespace experimental::prim {
 
 uint32_t all_gather_input_Ht(const Tensor& input) {
     return input.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+}
+
+uint32_t all_gather_input_pages(const Tensor& input) {
+    const auto& shape = input.padded_shape();
+    const uint32_t batch_head_size = std::accumulate(shape.cbegin(), shape.cend() - 2, 1u, std::multiplies<uint32_t>());
+    return input.buffer()->num_pages() / batch_head_size;
 }
 
 uint32_t all_gather_async_num_workers_per_direction(
@@ -815,10 +824,13 @@ void DefaultMeshWorkloadFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
     ttnn::apply_all_gather_async_minimal_default_semaphore_args(
         program, kDefaultKernels, operation_attributes.barrier_semaphore, operation_attributes.semaphore);
-    // The row count is not in the program hash: a hit may serve a new length.
+    // The row count is not in the program hash: a hit may serve a new length (and a new page count).
     const uint32_t input_Ht = all_gather_input_Ht(tensor_args.input_tensor);
+    const uint32_t input_pages = all_gather_input_pages(tensor_args.input_tensor);
     for (const size_t kernel_index : {kDefaultKernels.reader_kernel_index, kDefaultKernels.writer_kernel_index}) {
-        tt::tt_metal::GetCommonRuntimeArgs(program, kernel_index)[ttnn::ccl::AllGatherCommonArgs::input_Ht] = input_Ht;
+        auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_index);
+        common_args[ttnn::ccl::AllGatherCommonArgs::input_Ht] = input_Ht;
+        common_args[ttnn::ccl::AllGatherCommonArgs::input_pages] = input_pages;
     }
 }
 
