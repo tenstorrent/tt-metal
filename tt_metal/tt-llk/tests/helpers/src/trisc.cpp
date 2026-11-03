@@ -129,6 +129,19 @@ extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrume
 
     main();
 
+#if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !defined(COVERAGE) && !defined(TT_METAL_TTSIM)
+    // Trial (fix M): the math thread takes and releases REG_RMW after the pack thread is done, so every kernel ends
+    // with the math thread as the mutex's last owner.
+#if defined(LLK_TRISC_PACK)
+    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, ckernel::KERNEL_COMPLETE);
+#elif defined(LLK_TRISC_MATH)
+    (void)ckernel::mailbox_read(ckernel::ThreadId::PackThreadId);
+    ckernel::t6_mutex_acquire(ckernel::mutex::REG_RMW);
+    ckernel::t6_mutex_release(ckernel::mutex::REG_RMW);
+    ckernel::tensix_sync();
+#endif
+#endif
+
 #ifdef COVERAGE
     gcov_dump();
 #endif
