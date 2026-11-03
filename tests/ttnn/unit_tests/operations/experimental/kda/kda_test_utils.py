@@ -10,6 +10,9 @@ import torch.nn.functional as F
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CONVOLUTION_SEGMENT_CHANNELS, convolution_tail_shape
 
+# qkv_causal_conv1d_silu's three history rows.
+QKV_HISTORY_ROWS = 3
+
 
 def convolution_tail_to_device_layout(tail: torch.Tensor) -> torch.Tensor:
     """`[..., K-1, W]` host rows -> `[..., W/64, (K-1)*64]`, the op's SEGMENTS layout."""
