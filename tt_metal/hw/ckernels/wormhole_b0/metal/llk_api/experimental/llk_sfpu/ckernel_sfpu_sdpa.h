@@ -21,7 +21,6 @@ constexpr auto sdpa_lo16 = [](float x) constexpr { return static_cast<std::uint1
 constexpr auto sdpa_hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) >> 16); };
 
 constexpr auto sdpa_addr_mod_x_instr = ADDR_MOD_3;
-constexpr auto sdpa_addr_mod_x_config = ADDR_MOD_7;
 
 ALWI void sdpa_insert_sfpnop() { TTI_SFPNOP; }
 
@@ -184,7 +183,7 @@ inline void calculate_exponential_polynomial() {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en>
+template <bool SDPA_EXP_APPROX_MODE, std::uint16_t scale_bf16, bool is_fp32_dest_acc_en>
 inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
@@ -256,7 +255,7 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
+inline void calculate_softplus_first_column(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);
     float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);

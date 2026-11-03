@@ -19,7 +19,7 @@
  * respectively from the current tile in dst 0.
  * The element format is taken from the configured DEST format rather than fixed here, so the
  * load stays correct under both a 16-bit and a 32-bit DEST.
- * Loads and stores use ADDR_MOD_7, which the EMA init programs with zero increments, so a preceding FPU init cannot skew DEST.
+ * Loads and stores use ADDR_MOD_7 at its zero-advance invariant (set by hw_configure), so a preceding FPU init cannot skew DEST.
  */
 template <std::uint32_t I, std::uint32_t J>
 sfpi_inline void _ema_load_current_input_()
