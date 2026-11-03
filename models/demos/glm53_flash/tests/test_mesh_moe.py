@@ -25,7 +25,8 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.mesh import GLMMesh, mesh_device_params
 from models.demos.glm53_flash.tt.moe import TtMoE
 
-ROWS, COLS = 2, 4
+# the block shape: GLM53_MESH_SHAPE=rows,cols (default the (2, 4) block; (1, 8) = one TP8 ring of a Galaxy column)
+ROWS, COLS = (int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
 
 
 def l1_resident(obj, mesh: GLMMesh) -> list[str]:
