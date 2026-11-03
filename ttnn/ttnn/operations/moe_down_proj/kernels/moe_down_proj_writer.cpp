@@ -24,8 +24,6 @@ void kernel_main() {
     constexpr uint32_t cb_output_rows = get_compile_time_arg_val(0);
     constexpr uint32_t cb_counts_writer = get_compile_time_arg_val(1);
     constexpr uint32_t cb_w_round = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_w_stage = get_compile_time_arg_val(14);
-    constexpr uint32_t prefetch_issue_steps = get_compile_time_arg_val(15);
     constexpr uint32_t tensor_row_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t num_waves = get_compile_time_arg_val(4);
     constexpr uint32_t num_m_groups = get_compile_time_arg_val(5);
@@ -37,6 +35,8 @@ void kernel_main() {
     constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t out_page_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t w_depth = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_w_stage = get_compile_time_arg_val(14);
+    constexpr uint32_t prefetch_issue_steps = get_compile_time_arg_val(15);
     constexpr auto out_args = TensorAccessorArgs<16>();
     constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto wa_mcast = dataflow_kernel_lib::

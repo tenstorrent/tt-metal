@@ -164,14 +164,27 @@ def _tile_bytes():
     return ttnn.tile_size(ttnn.bfloat8_b), ttnn.tile_size(ttnn.float32), ttnn.tile_size(ttnn.bfloat16)
 
 
-def footprint_bytes(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes):
+def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes):
+    """(index, pages, page bytes, format) per CB. Single source for both the budget solve and the allocation."""
     in_tile, acc_tile, out_tile = _tile_bytes()
-    return (
-        (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * in_tile
-        + (W_DEPTH + 1) * NUM_EXPERTS * core_n_tiles * k_block_tiles * in_tile
-        + core_row_tiles_max * core_n_tiles * acc_tile
-        + OUT_DEPTH * core_n_tiles * out_tile
-        + 2 * counts_page_bytes
+    x_round_tiles = core_row_tiles_max * k_block_tiles
+    w_round_tiles = NUM_EXPERTS * core_n_tiles * k_block_tiles
+    return [
+        (CB_X_ROUND, X_DEPTH * x_round_tiles, in_tile, ttnn.bfloat8_b),
+        (CB_W_ROUND, W_DEPTH * w_round_tiles, in_tile, ttnn.bfloat8_b),
+        (CB_X_STAGE, x_round_tiles, in_tile, ttnn.bfloat8_b),
+        (CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b),
+        (CB_PARTIALS, core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32),
+        (CB_OUTPUT_ROWS, OUT_DEPTH * core_n_tiles, out_tile, ttnn.bfloat16),
+        (CB_COUNTS_COMPUTE, 1, counts_page_bytes, ttnn.uint32),
+        (CB_COUNTS_WRITER, 1, counts_page_bytes, ttnn.uint32),
+    ]
+
+
+def footprint_bytes(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes):
+    return sum(
+        pages * page_bytes
+        for _, pages, page_bytes, _ in cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes)
     )
 
 
@@ -208,7 +221,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     layout = select_layout(grid, tensor_row_tiles, layout_override)
     blocking = select_blocking(tensor_row_tiles, layout, counts_page_bytes)
     core_n_tiles = layout.core_n_tiles
-    in_tile, acc_tile, out_tile = _tile_bytes()
+    in_tile = ttnn.tile_size(ttnn.bfloat8_b)
     cores = layout.cores
 
     plan_ct = [tensor_row_tiles, blocking.num_waves, layout.num_m_groups]
@@ -267,17 +280,11 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         writer_rt[x][y] = [output.buffer_address(), weight.buffer_address(), group, line]
         compute_rt[x][y] = [group]
 
-    w_round_tiles = NUM_EXPERTS * core_n_tiles * blocking.k_block_tiles
-    x_round_tiles = blocking.core_row_tiles_max * blocking.k_block_tiles
     cbs = [
-        _cb(CB_X_ROUND, X_DEPTH * x_round_tiles, in_tile, ttnn.bfloat8_b, cores),
-        _cb(CB_W_ROUND, W_DEPTH * w_round_tiles, in_tile, ttnn.bfloat8_b, cores),
-        _cb(CB_X_STAGE, x_round_tiles, in_tile, ttnn.bfloat8_b, cores),
-        _cb(CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b, cores),
-        _cb(CB_PARTIALS, blocking.core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32, cores),
-        _cb(CB_OUTPUT_ROWS, OUT_DEPTH * core_n_tiles, out_tile, ttnn.bfloat16, cores),
-        _cb(CB_COUNTS_COMPUTE, 1, counts_page_bytes, ttnn.uint32, cores),
-        _cb(CB_COUNTS_WRITER, 1, counts_page_bytes, ttnn.uint32, cores),
+        _cb(index, pages, page_bytes, dtype, cores)
+        for index, pages, page_bytes, dtype in cb_plan(
+            blocking.core_row_tiles_max, blocking.k_block_tiles, core_n_tiles, counts_page_bytes
+        )
     ]
 
     reader = ttnn.KernelDescriptor(

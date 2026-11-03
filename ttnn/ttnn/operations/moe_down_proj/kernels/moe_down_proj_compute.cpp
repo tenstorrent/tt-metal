@@ -203,7 +203,7 @@ void kernel_main() {
             w_buf.pop_front(MOE_NUM_EXPERTS * w_chunk_tiles);
         }
         // The partials pack left packer L1 accumulation on; the untilize must overwrite its output.
-        PACK((llk_pack_reconfig_l1_acc(0)));
+        pack_reconfig_l1_acc(0);
 
         // untilize_wave
         partials_buf.push_back(partials_tiles);

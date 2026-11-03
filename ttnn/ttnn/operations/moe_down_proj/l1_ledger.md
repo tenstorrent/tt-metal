@@ -9,7 +9,7 @@ Every CB has the same index and size on every core of the layout (multicast slot
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_x_round` | `X_DEPTH * core_row_tiles_max * k_block_tiles` | 2 rounds: the round being computed plus the round landing (`2 * core_row_tiles * k_block_tiles` filled pages; capacity is nominal `core_row_tiles_max`) | `{m: spans -> core_row_tiles_max, k: spans -> k_block_tiles, n: streams (one x round serves every sub-block of the core's n-slice), e: streams (sub-blocks of all experts share the round), wave: streams}` | Bfp8_b | reader | compute | whole kernel, recycled per round | none: concurrent with `cb_w_round` and `cb_partials` in every round. Capacity above live set only on ragged cores (nominal pushes keep the ring aligned to whole rounds). Depth 2 is the overlap mechanism. |
-| `cb_w_round` | `W_DEPTH * NUM_EXPERTS * core_n_tiles * k_block_tiles` | 2 rounds of in-wave expert chunks; empty / out-of-wave slots are pushed but hold no data | `{e: spans -> NUM_EXPERTS slots, n: spans -> core_n_tiles, k: spans -> k_block_tiles, m: streams (one chunk serves every row of the core's sub-block), wave: streams}` | Bfp8_b | reader | compute | whole kernel, recycled per round | none: concurrent with `cb_x_round` and `cb_partials`. Gap between capacity and live set: unused slots of experts that are empty, outside the wave, or not touching this core. Slots stay nominal because the multicast landing address must be identical on every line core (R2 does not change this). |
+| `cb_w_round` | `W_DEPTH * NUM_EXPERTS * core_n_tiles * k_block_tiles` | 2 rounds of in-wave expert chunks; empty / out-of-wave slots are pushed but hold no data | `{e: spans -> NUM_EXPERTS slots, n: spans -> core_n_tiles, k: spans -> k_block_tiles, m: streams (one chunk serves every row of the core's sub-block), wave: streams}` | Bfp8_b | writer RISC (w channel, see Implementation note) | compute | whole kernel, recycled per round | none: concurrent with `cb_x_round` and `cb_partials`. Gap between capacity and live set: unused slots of experts that are empty, outside the wave, or not touching this core. Slots stay nominal because the multicast landing address must be identical on every line core (R2 does not change this). |
 | `cb_partials` | `core_row_tiles_max * core_n_tiles` | the whole wave block, `core_row_tiles * core_n_tiles` tiles, live from round 0 to the untilize | `{m: spans -> core_row_tiles_max, n: spans -> core_n_tiles, k: streams (folded by packer L1 accumulation each round), e: streams (sub-blocks of every expert occupy disjoint rows of the same block), wave: streams (recycled per wave)}` | Float32 (`fp32_dest_acc_en = True`, the only supported value) | compute (pack) | compute (unpack, untilize) | one wave | none: live across every round of the wave, so it overlaps `cb_x_round` / `cb_w_round` for its whole life; at the untilize it overlaps `cb_output_rows`. Not aliased with the next wave's x/w because the reader prefetches wave p+1 rounds 0-1 during wave p's untilize (explicit pipelining decision). |
 | `cb_output_rows` | `OUT_DEPTH * core_n_tiles` | 2 untilized tile rows (one being written by the writer, one being packed) | `{n: spans -> core_n_tiles, m: streams (one tile row at a time), k: none (after accumulation), e: none, wave: streams}` | Float16_b (output dtype) | compute | writer | untilize phase of every wave | none: concurrent with `cb_partials` during the untilize; with `num_waves >= 2` the writer still drains it while wave p+1's rounds run. Cannot alias `cb_partials`: different page format and overlapping lifetime. |
 | `cb_x_stage` (implementer) | `core_row_tiles_max * k_block_tiles` | 1 step: the next owned x step's rows, prefetched by the rotating sender | `{m: spans, k: spans, n/e/wave: streams}` | Bfp8_b | reader (NoC reads) | reader (multicast source) | whole kernel, RISC-private, no CB credits | none: live from the prefetch issue (one step after the sender's previous send) to its next send, overlapping `cb_x_round`'s two slots. It decouples the sender's L1 reads from the slot ring (X_DEPTH alone would cap the lookahead at one round). |
@@ -43,6 +43,9 @@ Pattern check (Rule 3):
 
 ## Footprint
 
+Host source of truth: `cb_plan()` in `moe_down_proj_program_descriptor.py` (the budget solve and the CB allocation
+both read it).
+
 ```
 footprint = (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * 1088      # + cb_x_stage
           + (W_DEPTH + 1) * NUM_EXPERTS * core_n_tiles * k_block_tiles * 1088  # + cb_w_stage
@@ -55,6 +58,7 @@ footprint = (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * 1088      # + c
 |------|-------------|
 | `cb_x_round` | `k_block_tiles` x `core_row_tiles_max` (so with `1 / num_waves` and `1 / num_m_groups`), linear in `X_DEPTH` |
 | `cb_w_round` | `k_block_tiles` x `core_n_tiles`, linear in `W_DEPTH`; independent of rows |
+| `cb_x_stage`, `cb_w_stage` | one round of `cb_x_round` / `cb_w_round` each (depth 1, sender-private) |
 | `cb_partials` | `core_row_tiles_max` x `core_n_tiles`; independent of `k_block_tiles` |
 | `cb_output_rows` | `core_n_tiles`, `OUT_DEPTH` |
 | counts | constant |
@@ -77,3 +81,13 @@ Per call at t = 4096, R = 8416, L layout, 2 waves, layer-0 counts (`active_row_t
 Totals per tier: DRAM 20.05 to 22.5 MB (w). L1-to-NoC reads 27.5 MB (x). Multicast payload received: about 1.9 MB w + 3.1 MB x per core. Writes 12.9 MB.
 
 > Cheapest-traffic split considered: 2D split with range-pruned w multicast (R2), same DRAM (22.5 MB) and same link bytes; it cuts w bytes received per core from about 1.9 MB to about 0.3 MB. Implemented: R1 (2D split, static line multicast). Deferred because the only difference is receiver ejection bytes, R1's predicted per-core receive (about 5.0 MB over at least 68 us of compute) is under two NoCs' ejection capacity, and R2 needs a raw per-expert semaphore protocol that `ttnn.Mcast` static groups cannot express. R2 keeps R1's slot layout and push sequence, so it replaces only the multicast destination and handshake.
+
+## Verifier notes (Phase 0)
+
+- The R2 deferral reason above ("receive bytes under ejection capacity") is a prediction. The implementer's ablation
+  measured a 130 us sync + multicast floor at t = 4096 (compute about 15 us of it), so the multicast scaffold, not
+  the DRAM stream, binds there. The receive-byte reduction (R2 plus a layout re-solve) is filed as perf
+  Refinement 2 in `op_requirements.md`.
+- The CB region ends at about 1,052,640 B (960 KiB budget above the unreserved base). Any L1 tensor below that
+  address at call time makes program creation throw `Statically allocated circular buffers ... clash with L1
+  buffers`. With x and y in L1 at R = 8416 that leaves no room for other L1 residents.
