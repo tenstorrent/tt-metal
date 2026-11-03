@@ -751,6 +751,13 @@ constexpr bool matmul_format_block_float(const DataFormat f)
     return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b;
 }
 
+// Two tile blocks of one K tile to a block float output at LoFi and HiFi2: the closed block through llk_pack_block (first block closed, then the W form) reads 4 to 10 cycles behind
+// main's per-tile pack on the sweep's production sequence; HiFi3 and HiFi4 keep it.
+constexpr bool matmul_pack_two_tile_per_tile(const MathFidelity fidelity, const DataFormat out, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
+{
+    return kt == 1 && rt * ct == 2 && matmul_format_block_float(out) && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2);
+}
+
 struct matmul_pack_block_cell
 {
     MathFidelity fidelity;
@@ -1430,7 +1437,8 @@ constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sy
                                  const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
                                  const bool l1_acc = false)
 {
-    if (half_sync && r0 == 32 && c1 == 32 && !l1_acc && matmul_pack_exact_per_tile(fidelity, throttle, in_a, in_b, out, rt, ct, kt))
+    if (half_sync && r0 == 32 && c1 == 32 && !l1_acc &&
+        (matmul_pack_exact_per_tile(fidelity, throttle, in_a, in_b, out, rt, ct, kt) || matmul_pack_two_tile_per_tile(fidelity, out, rt, ct, kt)))
     {
         return 0;
     }
