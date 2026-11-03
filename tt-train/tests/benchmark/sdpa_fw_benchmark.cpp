@@ -71,7 +71,7 @@ const ttml::metal::SDPAForwardProgramConfig kMainConfig{
 struct Row {
     std::string label;
     double device_us = 0.0;
-    double speedup = 0.0;  // main_us / device_us, both this kernel
+    double speedup = 0.0;  // main_chunking_us / device_us, both this kernel
     float max_abs_diff = 0.0F;
     std::string skipped;
 };
@@ -119,13 +119,13 @@ void run_scenario(
         return benchmark_utils::time_device_avg_us(device, num_warmup, num_measure, [&]() { (void)run(cfg); });
     };
 
-    const double main_us = time_cfg(kMainConfig);
+    const double main_chunking_us = time_cfg(kMainConfig);  // this kernel at main's chunking, not main's kernel
     const xt::xarray<float> main_out = core::to_xtensor(run(kMainConfig));
 
     auto measure = [&](const std::string& label, const metal::SDPAForwardProgramConfig& cfg) {
         Row row{.label = label};
         row.device_us = time_cfg(cfg);
-        row.speedup = benchmark_utils::speedup_x(main_us, row.device_us);
+        row.speedup = benchmark_utils::speedup_x(main_chunking_us, row.device_us);
         const xt::xarray<float> out = core::to_xtensor(run(cfg));
         row.max_abs_diff = static_cast<float>(xt::amax(xt::abs(out - main_out))());
         return row;
@@ -156,7 +156,7 @@ void run_scenario(
         sc.mask_type == metal::AttentionMaskType::Causal      ? (sc.gate ? "causal+gate" : "causal")
         : sc.mask_type == metal::AttentionMaskType::Arbitrary ? "arbitrary"
                                                               : "none");
-    fmt::print("this kernel at main's chunking (q=32, k=128, h=1): {:.1f} us\n", main_us);
+    fmt::print("this kernel at main's chunking (q=32, k=128, h=1): {:.1f} us\n", main_chunking_us);
     fmt::print("{:<20} {:>12} {:>9} {:>12}\n", "config", "device_us", "speedup", "max_abs_diff");
     for (const Row& row : rows) {
         if (row.skipped.empty()) {
