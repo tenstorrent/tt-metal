@@ -22,6 +22,8 @@ namespace ttnn {
  * If total_norm > max_norm, each gradient is scaled by:
  *   clip_coef = max_norm / (total_norm + 1e-6)
  *
+ * It runs moreh_clip_grad_norm_pow_sum, takes the norm_type-th root, then runs moreh_clip_grad_norm_scale.
+ *
  * Args:
  *     inputs (std::vector<Tensor>): Input tensors containing gradients to be clipped
  *     max_norm (float): Maximum norm value
@@ -42,6 +44,32 @@ Tensor moreh_clip_grad_norm(
     float norm_type = 2.0f,
     bool error_if_nonfinite = false,
     const std::optional<const Tensor>& total_norm = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+/**
+ * @brief The first part of moreh_clip_grad_norm: sum(|grad_i|^norm_type for all grads), as a [1, 1, 1, 1] tensor.
+ *
+ * With moreh_clip_grad_norm_scale, this lets a caller combine the sums of several groups of gradients before taking
+ * the norm, e.g. all-reduce the sum over tensor-parallel shards across devices.
+ */
+Tensor moreh_clip_grad_norm_pow_sum(
+    const std::vector<Tensor>& inputs,
+    float norm_type = 2.0f,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+/**
+ * @brief The last part of moreh_clip_grad_norm: scales the inputs in place by min(max_norm / (total_norm + 1e-6), 1).
+ *
+ * If error_if_nonfinite is true, total_norm is read back from every device first and an error is thrown if any copy
+ * is non-finite.
+ */
+void moreh_clip_grad_norm_scale(
+    const std::vector<Tensor>& inputs,
+    const Tensor& total_norm,
+    float max_norm,
+    bool error_if_nonfinite = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
