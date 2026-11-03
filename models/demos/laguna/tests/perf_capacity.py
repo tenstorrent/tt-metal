@@ -16,7 +16,6 @@ from models.demos.laguna.tt.functional_decoder import FunctionalDecoder
 
 LAYER = int(sys.argv[1]) if len(sys.argv) > 1 else 4
 SEQ = int(sys.argv[2]) if len(sys.argv) > 2 else 16384
-HIDDEN = 2048
 ART = DOC_DIR / "functional_decoder"
 
 dev = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
@@ -27,7 +26,7 @@ try:
     kv = dec.alloc_kv_cache(max_users=1, max_seq_len=SEQ + 64, block_size=32)
     pt = dec.make_page_table(1, kv["blocks_per_user"])
     torch.manual_seed(0)
-    x = torch.randn(1, SEQ, HIDDEN) * 0.5
+    x = torch.randn(1, SEQ, cfg.hidden_size) * 0.5  # the selected checkpoint's width (TT_LAGUNA_MODEL)
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
     t0 = time.perf_counter()
     out = dec.prefill_forward(xt, kv, pt, user_id=0, start_pos=0)
@@ -54,9 +53,10 @@ try:
     allres.append(res)
     with open(ART / "prefill_capacity.json", "w") as f:
         json.dump(allres, f, indent=2)
-except Exception as e:
+except Exception:
     import traceback
 
     traceback.print_exc()
+    raise  # a failed probe must not exit 0
 finally:
     ttnn.close_mesh_device(dev)

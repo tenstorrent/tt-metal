@@ -33,7 +33,6 @@ except Exception:
 LAYER = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 PREFILL_LEN = int(sys.argv[2]) if len(sys.argv) > 2 else 512
 DECODE_ITERS = int(sys.argv[3]) if len(sys.argv) > 3 else 20
-HIDDEN = 2048
 ART = DOC_DIR / "optimized_decoder"
 
 
@@ -41,6 +40,7 @@ def main():
     dev = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=200_000_000)
     try:
         cfg = R.build_config()
+        HIDDEN = cfg.hidden_size  # the selected checkpoint's width (TT_LAGUNA_MODEL)
         raw = W.load_layer_tensors(LAYER)
         max_seq = PREFILL_LEN + 64
         dec = OptimizedDecoder.from_state_dict(

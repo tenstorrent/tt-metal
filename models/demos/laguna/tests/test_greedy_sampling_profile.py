@@ -27,18 +27,22 @@ class _FakeSampler:
 
 
 def test_compact_argmax_is_default_off():
-    assert Sampling1DConfig(vocab_size=100_352).use_compact_argmax is False
+    # the pinned tt-transformers sampler's opt-in argmax flag
+    assert Sampling1DConfig(vocab_size=100_352).allow_force_argmax is False
 
 
-def test_standalone_greedy_keeps_generic_topk1_params():
+def test_standalone_greedy_keeps_generic_topk1_params(monkeypatch):
+    # the generic sampler path: the greedy-pick kernels off (TT_LAGUNA_GREEDY_PICK=0)
+    monkeypatch.setattr("models.demos.laguna.tt.generator._GREEDY_PICK", False)
     sampler = _FakeSampler()
     generator = object.__new__(LagunaGenerator)
     generator._sampler = lambda _batch: sampler
     k, p, temp = object(), object(), object()
     generator._greedy_params = {1: (k, p, temp)}
     output = object()
+    logits = SimpleNamespace(shape=(1, 1, 1, 100_352), layout=None)  # [.., rows, vocab shard]
 
-    assert generator._greedy_sample(object(), 1, output) is output
+    assert generator._greedy_sample(logits, 1, output) is output
     assert sampler.calls == [{"k": k, "p": p, "temp": temp, "tt_out_tok": output}]
 
 
