@@ -213,3 +213,8 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   alone **41.72 ms, pcc 0.9547** (base 44.36 / 0.9468) -> default (`GLM53_MHC_PRE_SINKHORN=dst`); `x_parts=1` alone
   43.56 ms, pcc 0.9147, first token and decode ids changed from position 1 -> rejected (the projection keeps its
   3-way bf16 split); both 41.18 / 0.9185 (the savings do not add). Step 1 of lever 3 lands **-2.6 ms**: 24.0 tok/s/u.
+* 23:26 **row exchange measured** (`rowx_8x4_r2`, the (8, 4) torus, T = 4): gather (x + routing, 9 chunks, 7 peers x
+  3 packets of 12 KB per chip) bit-exact on all 32 chips and after 20 trace replays, **40 us per traced call**
+  (the composite: 113 us); reduce exact to one bf16 ulp, **42 us** (74 us). About -105 us per MoE layer, -4.4 ms
+  per step expected; chain gate running (`gate84_B4_fabgather`: the gather alone must reproduce the dst run's ids;
+  `gate84_B4_fabric`: both knobs, judged by the chain pcc against 0.9547).

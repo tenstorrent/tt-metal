@@ -16,8 +16,7 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t MODE = get_compile_time_arg_val(0);
     constexpr uint32_t CB_TIN = get_compile_time_arg_val(1);
     constexpr uint32_t CB_RM = get_compile_time_arg_val(2);
@@ -60,4 +59,3 @@ void MAIN {
         cb_pop_front(CB_T, CT);
     }
 }
-}  // namespace NAMESPACE
