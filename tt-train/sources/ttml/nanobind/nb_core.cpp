@@ -119,14 +119,18 @@ void py_module(nb::module_& m) {
         [](const ttml::serialization::NamedParameters& parameters,
            float max_norm,
            float p_norm_type,
-           bool error_if_nonfinite) -> ttml::autograd::TensorPtr {
-            return ttml::core::clip_grad_norm(parameters, max_norm, p_norm_type, error_if_nonfinite);
+           bool error_if_nonfinite,
+           std::optional<uint32_t> cluster_axis) -> ttml::autograd::TensorPtr {
+            return ttml::core::clip_grad_norm(parameters, max_norm, p_norm_type, error_if_nonfinite, cluster_axis);
         },
         nb::arg("parameters"),
         nb::arg("max_norm"),
         nb::arg("p_norm_type") = 2.0f,
         nb::arg("error_if_nonfinite") = false,
-        "Clip gradients of parameters to a maximum norm. Returns the total norm after clipping.");
+        nb::arg("cluster_axis") = nb::none(),
+        "Clip gradients of parameters to a maximum norm in place. Returns the total norm before clipping. With "
+        "`cluster_axis`, parameters are tensor-parallel over that mesh axis: sharded gradients are reduced across it "
+        "and replicated ones, which must be identical on it (all-reduce partial-sum grads first), are counted once.");
 
     // Parameter precision (training_config.precision.master_dtype)
     m.def(
@@ -148,23 +152,6 @@ void py_module(nb::module_& m) {
         nb::arg("parameters"),
         "Apply training_config.precision to the parameters (precision.master_dtype) before creating the optimizer. "
         "Returns the dtype applied, or None.");
-
-    m.def(
-        "clip_grad_norm_tp",
-        [](const ttml::serialization::NamedParameters& sharded,
-           const ttml::serialization::NamedParameters& replicated,
-           float max_norm,
-           uint32_t cluster_axis,
-           float p_norm_type) -> ttml::autograd::TensorPtr {
-            return ttml::core::clip_grad_norm_tp(sharded, replicated, max_norm, cluster_axis, p_norm_type);
-        },
-        nb::arg("sharded"),
-        nb::arg("replicated"),
-        nb::arg("max_norm"),
-        nb::arg("cluster_axis"),
-        nb::arg("p_norm_type") = 2.0f,
-        "Tensor-parallel gradient clipping. `sharded` gradients are split along mesh axis `cluster_axis`, "
-        "`replicated` ones are identical on it. Clips in place; returns the pre-clip norm on device.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));

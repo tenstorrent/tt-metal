@@ -49,7 +49,22 @@
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
     bh_quietbox_2:
-      timeout: 25
+      # 20, not 25, leaves 5 of the team's bh_quietbox_2 unit budget for the 2x2 leg below. The test step took
+      # 10-13 min in the Oct-Nov 2026 nightlies.
+      timeout: 20
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: unit
+
+- name: tt-train cpp 2x2 distributed unit tests
+  # DP x TP tests on the whole QuietBox as one 2x2 mesh. Under the 1x2 descriptor above they skip.
+  cmd: |
+    mkdir -p generated/test_reports
+    export TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_2_2_line_line.textproto
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="*Tp2x2*"
+  skus:
+    bh_quietbox_2:
+      timeout: 5
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit

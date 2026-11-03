@@ -36,6 +36,18 @@ MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Opera
     return output_specs;
 }
 
+// The outputs are the inputs, scaled in place, so each keeps its own topology. Without this, every output would be
+// relabelled with the placements merged from all the inputs, e.g. a dim-2 shard scaled alongside a dim-3 shard.
+MorehClipGradNormStep3Operation::topology_return_value_t MorehClipGradNormStep3Operation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    topology_return_value_t output_topologies;
+    output_topologies.reserve(tensor_args.inputs.size());
+    for (const auto& input : tensor_args.inputs) {
+        output_topologies.push_back(input.tensor_topology());
+    }
+    return output_topologies;
+}
+
 // No output
 MorehClipGradNormStep3Operation::tensor_return_value_t MorehClipGradNormStep3Operation::create_output_tensors(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
