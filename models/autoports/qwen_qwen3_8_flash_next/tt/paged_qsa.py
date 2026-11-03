@@ -204,7 +204,7 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
     if (
         batched_selection
         and getattr(attention, "pooled_keys_all", None) is not None
-        and os.environ.get("QWEN_FLASH_BATCHED_SELECT", "1") == "1"
+        and os.environ.get("QWEN_FLASH_BATCHED_SELECT", "0") == "1"
     ):
         if not getattr(attention, "_batched_select_announced", False):
             attention._batched_select_announced = True

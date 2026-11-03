@@ -1852,7 +1852,8 @@ class ParallelQSA(OptimizedQSA):
         # The compact decode views reuse the owner's buffer (they gather only their lanes).
         obj.pooled_keys_all = (
             ttnn.empty((batch_size, 1, obj.blocks, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=ops.mesh)
-            if obj.paged_pooled and batch_size == 32
+            # 512 MB per attention layer at 262K context: only with batched selection (off by default).
+            if obj.paged_pooled and batch_size == 32 and os.environ.get("QWEN_FLASH_BATCHED_SELECT", "0") == "1"
             else None
         )
         return obj
