@@ -23,6 +23,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_bit_identical,
     collect_accuracy_and_determinism_results,
     assert_equal,
+    nrmse,
 )
 
 pytestmark = [
@@ -173,8 +174,8 @@ def _pack(a: torch.Tensor, b: torch.Tensor, *, slots: int = 1) -> torch.Tensor:
 def _split(output: ttnn.Tensor | torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """The packed [1, B*H, K, K+V] rows [E | B] as the transform (A, B), A = E + I (exact in FP32 for BF16 E).
 
-    Accuracy is judged on A, whose error the HiFi2 composition sets; relative to the smaller E the same error reads
-    several times larger. The complement form's own precision is covered in test_padding_prefix.py.
+    These cases judge the composition's arithmetic on A; the complement form's precision near the identity is
+    test_reduce_affine_transforms_complement_precision's.
     """
     host = (ttnn.to_torch(output) if isinstance(output, ttnn.Tensor) else output).float()
     assert host.dim() == 4 and host.shape[0] == 1, f"packed output shape {tuple(host.shape)}"
@@ -360,6 +361,85 @@ def test_reduce_affine_transforms_shape_accuracy(
             pcc_threshold=0.999,
             nrmse_threshold=0.01,
         )
+
+
+def _complement_inputs(
+    batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int, *, scale: float, diagonal: bool, seed: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Complement-form [E | B] summaries near the identity, |E| ~ scale, in FP64 and exactly representable in BF16 so
+    either summary dtype carries the same values. A diagonal E_g = -scale * I has a closed-form composition."""
+    generator = torch.Generator().manual_seed(seed)
+    leading = batch_heads * groups_per_head
+    e = -scale * torch.eye(key_dim, dtype=torch.float64).expand(leading, -1, -1).clone()
+    if not diagonal:
+        e += 0.1 * scale * torch.randn(e.shape, generator=generator, dtype=torch.float64)
+    b = 0.025 * torch.randn(leading, key_dim, value_dim, generator=generator, dtype=torch.float64)
+    return e.bfloat16().double(), b.bfloat16().double()
+
+
+def _complement_oracle(
+    e: torch.Tensor, b: torch.Tensor, batch_heads: int, groups_per_head: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """FP64 composition in complement form: E' = E_g + E + E_g E and B' = B_g + B + E_g B, groups in order."""
+    key_dim, value_dim = e.shape[-1], b.shape[-1]
+    e = e.reshape(batch_heads, groups_per_head, key_dim, key_dim)
+    b = b.reshape(batch_heads, groups_per_head, key_dim, value_dim)
+    total_e = torch.zeros(batch_heads, key_dim, key_dim, dtype=torch.float64)
+    total_b = torch.zeros(batch_heads, key_dim, value_dim, dtype=torch.float64)
+    for group in range(groups_per_head):
+        total_b = b[:, group] + total_b + e[:, group] @ total_b
+        total_e = e[:, group] + total_e + e[:, group] @ total_e
+    return total_e, total_b
+
+
+def test_reduce_affine_transforms_complement_oracle_matches_closed_form() -> None:
+    """With E_g = -s I the composed head is E = ((1 - s)^G - 1) I and B = sum_g (1 - s)^(G-1-g) B_g."""
+    batch_heads, groups_per_head, key_dim, value_dim, scale = 2, 3, 32, 64, 2.0**-7
+    e, b = _complement_inputs(batch_heads, groups_per_head, key_dim, value_dim, scale=scale, diagonal=True, seed=5)
+    total_e, total_b = _complement_oracle(e, b, batch_heads, groups_per_head)
+    decay = 1.0 - scale
+    expected_e = (decay**groups_per_head - 1.0) * torch.eye(key_dim, dtype=torch.float64).expand(batch_heads, -1, -1)
+    grouped_b = b.reshape(batch_heads, groups_per_head, key_dim, value_dim)
+    expected_b = sum(decay ** (groups_per_head - 1 - group) * grouped_b[:, group] for group in range(groups_per_head))
+    torch.testing.assert_close(total_e, expected_e, rtol=1e-12, atol=0.0)
+    torch.testing.assert_close(total_b, expected_b, rtol=1e-12, atol=1e-15)
+
+
+@pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize("diagonal", [True, False], ids=["diagonal", "noisy"])
+@pytest.mark.parametrize("scale", [1e-2, 1e-3], ids=["e1e-2", "e1e-3"])
+@pytest.mark.parametrize("groups_per_head", [2, 8], ids=["g2", "g8"])
+def test_reduce_affine_transforms_complement_precision(
+    zero_actual_start,
+    device: ttnn.Device,
+    groups_per_head: int,
+    scale: float,
+    diagonal: bool,
+    summary_dtype: ttnn.DataType,
+) -> None:
+    """The published E and B carry one BF16 rounding of the exact composition, however close the transforms are to the
+    identity. Composing A = I + E through source registers instead adds an absolute error near 2^-11 to E."""
+    batch_heads, key_dim, value_dim = 2, 128, 128
+    e, b = _complement_inputs(
+        batch_heads, groups_per_head, key_dim, value_dim, scale=scale, diagonal=diagonal, seed=1307
+    )
+    summaries = torch.cat([e, b], dim=-1).unsqueeze(0)
+    summaries_tt = _to_device(summaries.float(), device, summary_dtype)
+
+    output = ttnn.to_torch(_run(summaries_tt, groups_per_head, actual_start=zero_actual_start)).double()
+
+    expected_e, expected_b = _complement_oracle(e, b, batch_heads, groups_per_head)
+    actual_e, actual_b = output[0, :, :, :key_dim], output[0, :, :, key_dim:]
+    for name, expected, actual in (("E", expected_e, actual_e), ("B", expected_b, actual_b)):
+        one_rounding = float(nrmse(expected, expected.bfloat16().double()))
+        error = float(nrmse(expected, actual))
+        logger.info(f"composed {name}: NRMSE {error:.3e}, one BF16 rounding {one_rounding:.3e}")
+        assert (
+            error <= 1.5 * one_rounding
+        ), f"composed {name} NRMSE {error:.3e} > 1.5 x one BF16 rounding {one_rounding:.3e}"
+    if diagonal:
+        # Every element is within one BF16 ulp of the closed form; off-diagonal elements are exactly zero.
+        torch.testing.assert_close(actual_e, expected_e, rtol=2.0**-8, atol=0.0)
 
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])

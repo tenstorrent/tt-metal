@@ -45,19 +45,20 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const tt::tt_metal::experimental::KernelSpecName dataflow_kernel_name{"dataflow"};
     const tt::tt_metal::experimental::KernelSpecName compute_kernel_name{"compute"};
 
-    const tt::tt_metal::experimental::DFBSpecName initial_a_dfb_name{"initial_a"};
+    const tt::tt_metal::experimental::DFBSpecName initial_e_dfb_name{"initial_e"};
     const tt::tt_metal::experimental::DFBSpecName initial_b_dfb_name{"initial_b"};
-    const tt::tt_metal::experimental::DFBSpecName local_a_dfb_name{"local_a"};
+    const tt::tt_metal::experimental::DFBSpecName local_e_dfb_name{"local_e"};
     const tt::tt_metal::experimental::DFBSpecName local_b_dfb_name{"local_b"};
-    const tt::tt_metal::experimental::DFBSpecName to_remote_a_dfb_name{"to_remote_a"};
+    const tt::tt_metal::experimental::DFBSpecName to_remote_e_dfb_name{"to_remote_e"};
     const tt::tt_metal::experimental::DFBSpecName to_remote_b_dfb_name{"to_remote_b"};
     const tt::tt_metal::experimental::DFBSpecName from_remote_affine_dfb_name{"from_remote_affine"};
+    const tt::tt_metal::experimental::DFBSpecName from_remote_b_exact_dfb_name{"from_remote_b_exact"};
     const tt::tt_metal::experimental::DFBSpecName initial_state_dfb_name{"initial_state"};
+    const tt::tt_metal::experimental::DFBSpecName initial_state_exact_dfb_name{"initial_state_exact"};
     const tt::tt_metal::experimental::DFBSpecName final_dfb_name{"final"};
     const tt::tt_metal::experimental::DFBSpecName tail_affine_dfb_name{"tail_affine"};
     const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
-    const tt::tt_metal::experimental::DFBSpecName reset_b_dfb_name{"reset_b"};
-    const tt::tt_metal::experimental::DFBSpecName identity_dfb_name{"identity"};
+    const tt::tt_metal::experimental::DFBSpecName tail_entry_states_exact_dfb_name{"tail_entry_states_exact"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
@@ -79,20 +80,21 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.summaries.dtype());
     const uint32_t segmented_affine_tiles = key_matrix_tiles + state_matrix_tiles;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dataflow_buffers = {
-        make_dfb(initial_a_dfb_name, key_matrix_tiles, summary_format),
+        make_dfb(initial_e_dfb_name, key_matrix_tiles, summary_format),
         make_dfb(initial_b_dfb_name, state_matrix_tiles, summary_format),
-        make_dfb(local_a_dfb_name, 2 * key_matrix_tiles, tt::DataFormat::Float32),
+        make_dfb(local_e_dfb_name, 2 * key_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(local_b_dfb_name, 2 * state_matrix_tiles, tt::DataFormat::Float32),
-        make_dfb(to_remote_a_dfb_name, key_matrix_tiles, tt::DataFormat::Float32),
+        make_dfb(to_remote_e_dfb_name, key_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(to_remote_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(from_remote_affine_dfb_name, key_matrix_tiles + state_matrix_tiles, tt::DataFormat::Float32),
+        // Exact copies of the addends that a matmul also reads: the remote B, the initial state and the tail seed.
+        make_dfb(from_remote_b_exact_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(initial_state_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
+        make_dfb(initial_state_exact_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(final_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(tail_affine_dfb_name, segmented_affine_tiles, summary_format),
         make_dfb(tail_entry_states_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
-        make_dfb(reset_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
-        // The FP32 identity tile compute adds on diagonal tiles to form A = E + I, seeded by the dataflow kernel.
-        make_dfb(identity_dfb_name, 1, tt::DataFormat::Float32),
+        make_dfb(tail_entry_states_exact_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
     };
     // Initial inputs/state and final output are one-shot transfers. TO_REMOTE stays single-slot because dataflow
     // releases the current block before the remote input that makes compute runnable.
@@ -101,9 +103,12 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
     // receiver select different halves and silently corrupts the scan.
     for (const auto& dataflow_buffer : dataflow_buffers) {
-        if (dataflow_buffer.unique_id == from_remote_affine_dfb_name) {
+        if (dataflow_buffer.unique_id == from_remote_affine_dfb_name ||
+            dataflow_buffer.unique_id == from_remote_b_exact_dfb_name) {
             TT_FATAL(
-                dataflow_buffer.num_entries == key_matrix_tiles + state_matrix_tiles,
+                dataflow_buffer.num_entries ==
+                    (dataflow_buffer.unique_id == from_remote_affine_dfb_name ? key_matrix_tiles : 0) +
+                        state_matrix_tiles,
                 "affine_exclusive_scan: remotely addressed mailbox {} must hold exactly one block",
                 *dataflow_buffer.unique_id);
         }
@@ -117,28 +122,30 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         .dfb_bindings =
             {
                 tt::tt_metal::experimental::DFBBinding{
-                    initial_a_dfb_name, "initial_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    initial_e_dfb_name, "initial_e", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     initial_b_dfb_name, "initial_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
-                    local_a_dfb_name, "local_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    local_e_dfb_name, "local_e", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     local_b_dfb_name, "local_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
-                    to_remote_a_dfb_name, "to_remote_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    to_remote_e_dfb_name, "to_remote_e", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     to_remote_b_dfb_name, "to_remote_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     from_remote_affine_dfb_name,
                     "from_remote_affine",
                     tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::ProducerOf(from_remote_b_exact_dfb_name, "from_remote_b_exact"),
                 tt::tt_metal::experimental::DFBBinding{
                     initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::ProducerOf(initial_state_exact_dfb_name, "initial_state_exact"),
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::ProducerOf(tail_affine_dfb_name, "tail_affine"),
                 tt::tt_metal::experimental::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
-                tt::tt_metal::experimental::ProducerOf(identity_dfb_name, "identity"),
+                tt::tt_metal::experimental::ProducerOf(tail_entry_states_exact_dfb_name, "tail_entry_states_exact"),
             },
         .semaphore_bindings =
             {
@@ -165,20 +172,23 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
 
     auto compute_hardware_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     auto& unpack_modes = compute_hardware_config.unpack_modes;
+    // Matmul operands go through source registers; the B and state addends, and FP32 summaries (only ever copied),
+    // enter DST losslessly. E is only ever a matmul operand, so its sums read it through source registers too. An FP32
+    // tail transform is a matmul operand, so its B addend is read through a source register as well.
     for (const auto& name :
-         {local_a_dfb_name,
-          local_b_dfb_name,
-          from_remote_affine_dfb_name,
-          initial_state_dfb_name,
-          tail_entry_states_dfb_name,
-          reset_b_dfb_name}) {
+         {local_e_dfb_name, from_remote_affine_dfb_name, initial_state_dfb_name, tail_entry_states_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
-    // The identity enters DST losslessly for the FP32 addition.
-    unpack_modes[identity_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
+    for (const auto& name :
+         {local_b_dfb_name,
+          from_remote_b_exact_dfb_name,
+          initial_state_exact_dfb_name,
+          tail_entry_states_exact_dfb_name}) {
+        unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToDest;
+    }
     if (summary_format == tt::DataFormat::Float32) {
-        unpack_modes[initial_a_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
-        unpack_modes[initial_b_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
+        unpack_modes[initial_e_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
+        unpack_modes[initial_b_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
         unpack_modes[tail_affine_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
 
@@ -191,30 +201,30 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         .dfb_bindings =
             {
                 tt::tt_metal::experimental::DFBBinding{
-                    initial_a_dfb_name, "initial_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    initial_e_dfb_name, "initial_e", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     initial_b_dfb_name, "initial_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
-                    local_a_dfb_name, "local_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    local_e_dfb_name, "local_e", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     local_b_dfb_name, "local_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
-                    to_remote_a_dfb_name, "to_remote_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    to_remote_e_dfb_name, "to_remote_e", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     to_remote_b_dfb_name, "to_remote_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     from_remote_affine_dfb_name,
                     "from_remote_affine",
                     tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::ConsumerOf(from_remote_b_exact_dfb_name, "from_remote_b_exact"),
                 tt::tt_metal::experimental::DFBBinding{
                     initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::ConsumerOf(initial_state_exact_dfb_name, "initial_state_exact"),
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::ConsumerOf(tail_affine_dfb_name, "tail_affine"),
                 tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
-                tt::tt_metal::experimental::ProducerOf(reset_b_dfb_name, "reset_b"),
-                tt::tt_metal::experimental::ConsumerOf(reset_b_dfb_name, "reset_b"),
-                tt::tt_metal::experimental::ConsumerOf(identity_dfb_name, "identity"),
+                tt::tt_metal::experimental::ConsumerOf(tail_entry_states_exact_dfb_name, "tail_entry_states_exact"),
             },
         .compile_time_args = {{"Kt", key_tiles}, {"Vt", value_tiles}, {"G", groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},

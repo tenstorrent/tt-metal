@@ -19,6 +19,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_bit_identical,
     collect_accuracy_and_determinism_results,
     assert_equal,
+    nrmse,
 )
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
@@ -311,12 +312,10 @@ def test_affine_exclusive_scan_contract_and_trace(
     assert_accurate(
         expected, actual, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999, nrmse_threshold=0.01
     )
-    assert_accurate(
+    assert_bit_identical(
         snapshots[1],
         actual.reshape(batch_heads, groups_per_head, key_dim, value_dim)[:, 0],
-        name="exclusive first entry",
-        pcc_threshold=0.999,
-        nrmse_threshold=0.0006,
+        name="exclusive first entry is the initial state",
     )
     assert_bit_identical(actual, ttnn.to_torch(traced), name="trace replay")
     after = ttnn.to_torch(summaries_tt)
@@ -358,6 +357,49 @@ def test_affine_exclusive_scan_shape_accuracy(
         pcc_threshold=0.999,
         nrmse_threshold=0.007,
     )
+
+
+@pytest.mark.parametrize("scale", [1e-2, 1e-3], ids=["e1e-2", "e1e-3"])
+@pytest.mark.parametrize("groups_per_head", [2, 8], ids=["g2", "g8"])
+def test_affine_exclusive_scan_complement_precision(
+    zero_actual_start, device: ttnn.Device, groups_per_head: int, scale: float
+) -> None:
+    """Entry states keep FP32 precision for transforms near the identity: S + E S + B adds the small E S product to
+    exact copies of S and B."""
+    batch_heads, key_dim, value_dim = 2, 128, 128
+    generator = torch.Generator().manual_seed(2207)
+    leading = batch_heads * groups_per_head
+    e = -scale * torch.eye(key_dim, dtype=torch.float64).expand(leading, -1, -1).clone()
+    e += 0.1 * scale * torch.randn(e.shape, generator=generator, dtype=torch.float64)
+    e = e.bfloat16().double()
+    b = (0.025 * torch.randn(leading, key_dim, value_dim, generator=generator, dtype=torch.float64)).bfloat16().double()
+    initial_state = (0.05 * torch.randn(batch_heads, key_dim, value_dim, generator=generator)).double()
+    summaries_tt = _to_device(torch.cat([e, b], dim=-1).unsqueeze(0).float(), device, ttnn.bfloat16)
+    state_tt = _to_device(initial_state.float(), device)
+
+    # HiFi4, so the product's own fidelity (HiFi2 keeps 6 explicit bits of one operand) does not mask the composition.
+    hifi4 = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    actual = ttnn.to_torch(
+        _run(summaries_tt, state_tt, groups_per_head, actual_start=zero_actual_start, compute_kernel_config=hifi4)
+    ).double()
+
+    # FP64 oracle: S_{g+1} = S_g + E_g S_g + B_g.
+    grouped_e = e.reshape(batch_heads, groups_per_head, key_dim, key_dim)
+    grouped_b = b.reshape(batch_heads, groups_per_head, key_dim, value_dim)
+    entries = [initial_state]
+    for group in range(groups_per_head - 1):
+        entries.append(entries[-1] + grouped_e[:, group] @ entries[-1] + grouped_b[:, group])
+    expected = torch.stack(entries, dim=1).reshape(leading, key_dim, value_dim)
+    error = float(nrmse(expected, actual))
+    logger.info(f"exclusive entry states: NRMSE {error:.3e}")
+    # Only the product's operands round, to a source register's 2^-11, so the error scales with the composed E (about
+    # (G - 1) * scale); composing A = I + E instead leaves an error near 2^-11 whatever E is.
+    tolerance = 2.0**-9 * scale * (groups_per_head - 1)
+    assert error <= tolerance, f"entry-state NRMSE {error:.3e} > {tolerance:.3e}"
+    first_entries = actual.reshape(batch_heads, groups_per_head, key_dim, value_dim)[:, 0]
+    assert_bit_identical(initial_state.float(), first_entries.float(), name="first entry is the initial state")
 
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])

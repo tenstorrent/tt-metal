@@ -18,31 +18,45 @@
 FORCE_INLINE uint32_t worker_x(uint32_t worker) { return get_common_vararg(2 * worker); }
 FORCE_INLINE uint32_t worker_y(uint32_t worker) { return get_common_vararg(2 * worker + 1); }
 
-template <typename ReadySem, typename SendA, typename SendB, typename RemoteA, typename RemoteB>
+template <typename Send, typename Remote>
+FORCE_INLINE void write_to_mailbox(
+    Noc& noc, uint32_t target_x, uint32_t target_y, Send& send, Remote& remote, uint32_t tiles) {
+    noc.async_write(
+        send,
+        UnicastEndpoint{},
+        tiles * send.get_entry_size(),
+        {},
+        {.noc_x = target_x, .noc_y = target_y, .addr = remote.get_write_ptr()});
+}
+
+template <
+    typename ReadySem,
+    typename SendE,
+    typename SendB,
+    typename RemoteE,
+    typename RemoteEExact,
+    typename RemoteB,
+    typename RemoteBExact>
 FORCE_INLINE void send_affine_pair(
     Noc& noc,
     ReadySem& ready,
     uint32_t target,
-    SendA& send_a,
+    SendE& send_e,
     SendB& send_b,
-    RemoteA& remote_a,
+    RemoteE& remote_e,
+    RemoteEExact& remote_e_exact,
     RemoteB& remote_b,
-    uint32_t a_tiles,
+    RemoteBExact& remote_b_exact,
+    uint32_t e_tiles,
     uint32_t b_tiles) {
     const uint32_t target_x = worker_x(target);
     const uint32_t target_y = worker_y(target);
-    noc.async_write(
-        send_a,
-        UnicastEndpoint{},
-        a_tiles * send_a.get_entry_size(),
-        {},
-        {.noc_x = target_x, .noc_y = target_y, .addr = remote_a.get_write_ptr()});
-    noc.async_write(
-        send_b,
-        UnicastEndpoint{},
-        b_tiles * send_b.get_entry_size(),
-        {},
-        {.noc_x = target_x, .noc_y = target_y, .addr = remote_b.get_write_ptr()});
+    // Each summary goes to both of the peer's mailboxes: the one compute reads through source registers for the
+    // product, and the exact copy that unpacks to DST for the addition.
+    write_to_mailbox(noc, target_x, target_y, send_e, remote_e, e_tiles);
+    write_to_mailbox(noc, target_x, target_y, send_e, remote_e_exact, e_tiles);
+    write_to_mailbox(noc, target_x, target_y, send_b, remote_b, b_tiles);
+    write_to_mailbox(noc, target_x, target_y, send_b, remote_b_exact, b_tiles);
     noc.async_write_barrier();
     ready.up(noc, target_x, target_y, 1);
 }
@@ -122,18 +136,19 @@ template <
     uint32_t sp_size,
     uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
-    constexpr uint32_t a_tiles = Kt * Kt;
+    constexpr uint32_t e_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
 
     const auto summaries_accessor = TensorAccessor(tensor::summaries);
     const auto output_accessor = TensorAccessor(tensor::output);
-    DataflowBuffer initial_a(dfb::initial_a);
+    DataflowBuffer initial_e(dfb::initial_e);
     DataflowBuffer initial_b(dfb::initial_b);
-    DataflowBuffer send_a(dfb::send_a);
+    DataflowBuffer send_e(dfb::send_e);
     DataflowBuffer send_b(dfb::send_b);
-    DataflowBuffer remote_a(dfb::remote_a);
+    DataflowBuffer remote_e(dfb::remote_e);
+    DataflowBuffer remote_e_exact(dfb::remote_e_exact);
     DataflowBuffer remote_b(dfb::remote_b);
-    DataflowBuffer identity(dfb::identity);
+    DataflowBuffer remote_b_exact(dfb::remote_b_exact);
     DataflowBuffer published(dfb::output);
     Noc noc;
     Semaphore ready(sem::ready);
@@ -164,45 +179,59 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     const uint32_t head = worker_index / G;
     if (active == 0) {
         if (group == 0) {
-            write_identity_transform<Kt, Vt>(noc, remote_a, head, output_accessor, published.get_entry_size());
+            write_identity_transform<Kt, Vt>(noc, remote_e, head, output_accessor, published.get_entry_size());
         }
         return;
     }
     if (group >= active) {
         return;
     }
-    kda::seed_identity_tile(noc, identity);
 
-    initial_a.reserve_back(a_tiles);
+    initial_e.reserve_back(e_tiles);
     initial_b.reserve_back(b_tiles);
-    kda::read_summary_transform<Kt, Vt>(noc, summaries_accessor, initial_a, initial_b, worker_index);
+    kda::read_summary_transform<Kt, Vt>(noc, summaries_accessor, initial_e, initial_b, worker_index);
     noc.async_read_barrier();
-    initial_a.push_back(a_tiles);
+    initial_e.push_back(e_tiles);
     initial_b.push_back(b_tiles);
 
     uint32_t completed_stages = 0;
 
     uint32_t ready_target = 0;
     for (uint32_t distance = 1; distance < active; distance *= 2) {
-        send_a.wait_front(a_tiles);
+        send_e.wait_front(e_tiles);
         send_b.wait_front(b_tiles);
         if (group + distance < active) {
-            send_affine_pair(noc, ready, worker_index + distance, send_a, send_b, remote_a, remote_b, a_tiles, b_tiles);
+            send_affine_pair(
+                noc,
+                ready,
+                worker_index + distance,
+                send_e,
+                send_b,
+                remote_e,
+                remote_e_exact,
+                remote_b,
+                remote_b_exact,
+                e_tiles,
+                b_tiles);
         }
         if (group >= distance) {
-            remote_a.reserve_back(a_tiles);
+            remote_e.reserve_back(e_tiles);
+            remote_e_exact.reserve_back(e_tiles);
             remote_b.reserve_back(b_tiles);
+            remote_b_exact.reserve_back(b_tiles);
             ready_target++;
             ready.wait_min(ready_target);
-            remote_a.push_back(a_tiles);
+            remote_e.push_back(e_tiles);
+            remote_e_exact.push_back(e_tiles);
             remote_b.push_back(b_tiles);
+            remote_b_exact.push_back(b_tiles);
             // Compute publishes before it releases the next prefix to send, so drain the published rows first.
             if (kda_chronology::publishes_at_stage(group, active, distance)) {
                 write_published_transform<Kt, Vt>(noc, published, head, output_accessor);
             }
-            send_a.wait_front(2 * a_tiles);
+            send_e.wait_front(2 * e_tiles);
             send_b.wait_front(2 * b_tiles);
-            send_a.pop_front(a_tiles);
+            send_e.pop_front(e_tiles);
             send_b.pop_front(b_tiles);
         }
         // Do not release the next NoC stage until every receiver has consumed the remote buffers and produced its
@@ -214,6 +243,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     if (kda_chronology::publishes_unchanged(group, active)) {
         write_published_transform<Kt, Vt>(noc, published, head, output_accessor);
     }
-    send_a.wait_front(a_tiles);
+    send_e.wait_front(e_tiles);
     send_b.wait_front(b_tiles);
 }
