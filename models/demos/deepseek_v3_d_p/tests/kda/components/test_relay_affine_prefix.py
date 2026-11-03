@@ -216,9 +216,9 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
 
 # Device time of one relay call: its program's slowest chip under the realtime profiler, the median over single calls,
 # each after a discarded first and never back to back (a device synchronize separates them, the barrier consecutive
-# calls need). As in the KDA layer gate, the ring's wait for its predecessors moves a single call by a few percent.
-_PERF_SAMPLES = 7
-_PERF_MARGIN = 0.10
+# calls need). A few single calls run slow while the ring waits on its predecessors; the median of 15 does not.
+_PERF_SAMPLES = 15
+_PERF_MARGIN = 0.05
 # A full chunk that starts 320 rows into the second rank, as the layer gates place it: the relay starts mid-ring.
 _PERF_START = _ROWS + 320
 _PERF_KERNEL = "relay_affine_prefix"
