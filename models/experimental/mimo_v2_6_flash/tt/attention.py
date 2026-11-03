@@ -126,6 +126,10 @@ VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "auto")
 # rows past them as zeros, what padding them with idle slots (output 0, NO_KEY_LSE) gave, without the nine small ops.
 # MIMO_VERIFY_PAD_IDLE=1 pads.
 PAD_IDLE_SLOTS = os.environ.get("MIMO_VERIFY_PAD_IDLE", "0") == "1"
+# MIMO_PAIR_MERGE_GATHER=1 (stopgap for token soup under MTP spec decode): a pair-split decode / verify merges by
+# PairSplit.merge (the LSE all-gathered over the row, then ConcatHeads) instead of merge_heads' fabric LSE exchange.
+# Same math; with merge_heads, long-context serving collapses an engine's acceptance and its outputs turn to soup.
+PAIR_MERGE_GATHER = os.environ.get("MIMO_PAIR_MERGE_GATHER") == "1"
 
 
 def verify_variants():
@@ -1622,7 +1626,12 @@ class TtMiMoAttention:
         else:
             attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
         q_rot.deallocate(True)
-        attn_cat = self.pair.merge_heads(attn, lse, self.concat_heads)
+        if PAIR_MERGE_GATHER:
+            merged = self.pair.merge(attn, lse, ttnn.L1_MEMORY_CONFIG)
+            attn_cat = self.concat_heads(merged)
+            merged.deallocate(True)
+        else:
+            attn_cat = self.pair.merge_heads(attn, lse, self.concat_heads)
         attn.deallocate(True)
         lse.deallocate(True)
         return self._decode_o(attn_cat, compact)
