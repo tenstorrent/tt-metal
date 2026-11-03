@@ -41,6 +41,9 @@ void validate_stats_buffer(
         e_shape[3]);
     const auto& buf = tensor_args.persistent_output_buffer.value();
     TT_FATAL(buf.storage_type() == StorageType::DEVICE, "persistent_output_buffer must be on device");
+    TT_FATAL(
+        buf.device() == tensor_args.input.device(),
+        "persistent_output_buffer must be on the same mesh device as the input");
     TT_FATAL(buf.is_allocated(), "persistent_output_buffer must be allocated");
     TT_FATAL(
         buf.layout() == expected.layout(),
@@ -69,6 +72,87 @@ void validate_stats_buffer(
         b_shape[1],
         b_shape[2],
         b_shape[3]);
+}
+
+// The checks the row-free program hash does not pin, so they run on every call, miss and hit: the mesh
+// of every operand the kernels bind by raw address, the live rows against the capacity, the RoPE
+// tables' rows and batching, the tile-row map's shape and length, the per-token affine rows and the
+// stats scratch pages the live rows touch.
+void validate_rows(
+    const DitFusedDistributedRmsnormParams& /*args*/,
+    const DitFusedDistributedRmsnormInputs& tensor_args,
+    const DitFusedDistributedRmsnormSizing& sizing,
+    uint32_t stats_min_pages) {
+    const auto& input = tensor_args.input;
+    const auto& shape = input.logical_shape();
+    for (const auto* operand :
+         {&tensor_args.weight,
+          &tensor_args.bias,
+          &tensor_args.transformation_mat,
+          &tensor_args.rope_cos,
+          &tensor_args.rope_sin,
+          &tensor_args.reciprocals,
+          &tensor_args.affine_tile_row_map}) {
+        TT_FATAL(
+            !operand->has_value() ||
+                ((*operand)->storage_type() == StorageType::DEVICE && (*operand)->device() == input.device()),
+            "dit_fused_distributed_rmsnorm: every operand must be on the same mesh device as the input");
+    }
+    TT_FATAL(
+        sizing.num_tile_rows <= sizing.capacity_tile_rows,
+        "input has {} rows per device, more than row_capacity ({})",
+        sizing.num_tile_rows * TILE_HEIGHT,
+        sizing.capacity_tile_rows * TILE_HEIGHT);
+    if (tensor_args.rope_cos.has_value() && tensor_args.rope_sin.has_value()) {
+        const auto& cos_shape = tensor_args.rope_cos->logical_shape();
+        TT_FATAL(
+            cos_shape[2] == shape[2] && tensor_args.rope_sin->logical_shape() == cos_shape,
+            "rope_cos/rope_sin seq dim must equal input N ({})",
+            shape[2]);
+        // The reader indexes cos/sin by the within-batch row, so every batch must span whole tile rows.
+        TT_FATAL(
+            shape[1] <= 1 || shape[2] % TILE_HEIGHT == 0,
+            "Batched fused RoPE requires input N ({}) to be tile-aligned (multiple of {})",
+            shape[2],
+            TILE_HEIGHT);
+    }
+    const auto& tile_row_map = tensor_args.affine_tile_row_map;
+    if (tile_row_map.has_value()) {
+        const auto& map = tile_row_map.value();
+        TT_FATAL(map.is_allocated(), "affine_tile_row_map must be an allocated device tensor");
+        TT_FATAL(
+            map.physical_volume() == map.padded_shape()[-1],
+            "affine_tile_row_map must be a single row [1, 1, 1, T], got {}",
+            map.padded_shape());
+        TT_FATAL(
+            map.buffer()->num_pages() == 1u,
+            "affine_tile_row_map must occupy one buffer page (the reader loads a single page), got {}",
+            map.buffer()->num_pages());
+        TT_FATAL(
+            map.logical_shape()[-1] >= sizing.num_tile_rows,
+            "affine_tile_row_map has {} entries, the input has {} tile rows",
+            map.logical_shape()[-1],
+            sizing.num_tile_rows);
+        // The reader copies only the live entries, so the map may be longer than the input and the
+        // capacity; its buffer is sized for the capacity.
+        const uint32_t cb_bytes = tile_row_map_cb_bytes(map, sizing.capacity_tile_rows);
+        TT_FATAL(cb_bytes <= 65536u, "affine_tile_row_map buffer ({} B at capacity) exceeds 64 KiB", cb_bytes);
+    }
+    for (const auto* affine : {&tensor_args.weight, &tensor_args.bias}) {
+        if (affine->has_value()) {
+            const auto n = (*affine)->logical_shape()[-2];
+            TT_FATAL(
+                n == 1 || n == shape[2] || (tile_row_map.has_value() && n % TILE_HEIGHT == 0),
+                "per-token weight/bias rows ({}) must be 1, the input N ({}) or, with affine_tile_row_map, a "
+                "multiple of {}",
+                n,
+                shape[2],
+                TILE_HEIGHT);
+        }
+    }
+    if (sizing.use_mux) {
+        validate_stats_buffer(tensor_args, sizing, stats_min_pages);
+    }
 }
 
 }  // namespace
@@ -214,33 +298,13 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (tile_row_map.has_value()) {
+        // Mesh, shape, page and length checks: validate_rows (they are not pinned by the hash).
         const auto& map = tile_row_map.value();
-        TT_FATAL(
-            map.storage_type() == StorageType::DEVICE && map.is_allocated(),
-            "affine_tile_row_map must be an allocated device tensor");
-        // The reader binds the map's raw buffer address on the input's mesh, so a map that lives on
-        // another mesh would be read as unrelated memory.
-        TT_FATAL(
-            map.device() == input.device(), "affine_tile_row_map must be on the same mesh device as the input");
         TT_FATAL(
             map.dtype() == DataType::UINT32 || map.dtype() == DataType::INT32,
             "affine_tile_row_map must be UINT32 or INT32, got {}",
             map.dtype());
         TT_FATAL(map.layout() == Layout::ROW_MAJOR, "affine_tile_row_map must be ROW_MAJOR, got {}", map.layout());
-        TT_FATAL(
-            map.physical_volume() == map.padded_shape()[-1],
-            "affine_tile_row_map must be a single row [1, 1, 1, T], got {}",
-            map.padded_shape());
-        TT_FATAL(
-            map.buffer()->num_pages() == 1u,
-            "affine_tile_row_map must occupy one buffer page (the reader loads a single page), got {}",
-            map.buffer()->num_pages());
-        const uint32_t input_tile_rows = input.physical_volume() / padded[3] / TILE_HEIGHT;
-        TT_FATAL(
-            map.logical_shape()[-1] >= input_tile_rows,
-            "affine_tile_row_map has {} entries, the input has {} tile rows",
-            map.logical_shape()[-1],
-            input_tile_rows);
         const bool pt_w = weight.has_value() && weight->logical_shape()[-2] > 1;
         const bool pt_b = bias.has_value() && bias->logical_shape()[-2] > 1;
         TT_FATAL(pt_w || pt_b, "affine_tile_row_map needs a per-token ([.., rows, H]) weight or bias");
@@ -283,13 +347,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             "within-batch seq row",
             cos_shape[2],
             shape[2]);
-        if (batch > 1) {
-            TT_FATAL(
-                shape[2] % TILE_HEIGHT == 0,
-                "Batched fused RoPE requires input N ({}) to be tile-aligned (multiple of {})",
-                shape[2],
-                TILE_HEIGHT);
-        }
+        // batch > 1 also needs a tile-aligned N: checked with the other row-dependent invariants in validate_rows.
     }
 
     TT_FATAL(args.ring_size >= 1, "ring_size must be >= 1");
@@ -316,80 +374,24 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             *args.row_capacity,
             TILE_HEIGHT);
     }
-    const auto sizing = compute_sizing(args, input);
-    TT_FATAL(
-        sizing.num_tile_rows <= sizing.capacity_tile_rows,
-        "input has {} rows per device, more than row_capacity ({})",
-        sizing.num_tile_rows * TILE_HEIGHT,
-        sizing.capacity_tile_rows * TILE_HEIGHT);
-    if (tile_row_map.has_value()) {
-        // The reader's map buffer is sized for the capacity; the live map page must fit it.
-        const uint32_t cb_bytes = tile_row_map_cb_bytes(*tile_row_map, sizing.capacity_tile_rows);
-        TT_FATAL(cb_bytes <= 65536u, "affine_tile_row_map buffer ({} B at capacity) exceeds 64 KiB", cb_bytes);
-        TT_FATAL(
-            tile_row_map->buffer()->aligned_page_size() <= cb_bytes,
-            "affine_tile_row_map page ({} B) exceeds the {} B reader buffer sized for row_capacity",
-            tile_row_map->buffer()->aligned_page_size(),
-            cb_bytes);
-    }
-
     // The all-gather path (TP>1, whole-row norm) requires a caller-supplied
     // persistent buffer for the gathered-stats DRAM scratch. The buffer must
     // be allocated as a mesh-coherent MeshBuffer (same DRAM address on every
     // chip in the cluster) — required for the fabric mcast. Allocating it
     // outside the op lets the caller pre-create one MeshBuffer per cluster
     // and reuse it across launches; we reject mismatched shape/dtype/layout
-    // up front so a wrong tensor doesn't silently corrupt the AG.
-    if (sizing.use_mux) {
-        validate_stats_buffer(tensor_args, sizing, sizing.total_pages);
-    }
+    // up front so a wrong tensor doesn't silently corrupt the AG. A miss brings the buffer sized for
+    // the whole capacity (total_pages); a hit only needs the pages its live rows touch.
+    const auto sizing = compute_sizing(args, input);
+    validate_rows(args, tensor_args, sizing, sizing.total_pages);
 }
 
-// Cache hit: the hash fixes everything but the row count, so only the row-dependent bounds
-// are re-checked here. Nothing below touches the mesh.
+// Cache hit: the hash fixes everything but the row count and the operands' identity, so only the
+// row-dependent bounds and the mesh affinity are re-checked here. Nothing below touches the mesh.
 void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-    const auto& shape = input.logical_shape();
-    const auto sizing = compute_sizing(args, input);
-    TT_FATAL(
-        sizing.num_tile_rows <= sizing.capacity_tile_rows,
-        "input has {} rows per device, more than row_capacity ({})",
-        sizing.num_tile_rows * TILE_HEIGHT,
-        sizing.capacity_tile_rows * TILE_HEIGHT);
-    if (tensor_args.rope_cos.has_value()) {
-        TT_FATAL(
-            tensor_args.rope_cos->logical_shape()[2] == shape[2] &&
-                tensor_args.rope_sin->logical_shape() == tensor_args.rope_cos->logical_shape(),
-            "rope_cos/rope_sin seq dim must equal input N ({})",
-            shape[2]);
-    }
-    const auto& tile_row_map = tensor_args.affine_tile_row_map;
-    if (tile_row_map.has_value()) {
-        TT_FATAL(
-            tile_row_map->logical_shape()[-1] >= sizing.num_tile_rows,
-            "affine_tile_row_map has {} entries, the input has {} tile rows",
-            tile_row_map->logical_shape()[-1],
-            sizing.num_tile_rows);
-        TT_FATAL(
-            tile_row_map->buffer()->aligned_page_size() <=
-                tile_row_map_cb_bytes(*tile_row_map, sizing.capacity_tile_rows),
-            "affine_tile_row_map page ({} B) exceeds the reader buffer sized for row_capacity",
-            tile_row_map->buffer()->aligned_page_size());
-    }
-    for (const auto* affine : {&tensor_args.weight, &tensor_args.bias}) {
-        if (affine->has_value()) {
-            const auto n = (*affine)->logical_shape()[-2];
-            TT_FATAL(
-                n == 1 || n == shape[2] || (tile_row_map.has_value() && n % TILE_HEIGHT == 0),
-                "per-token weight/bias rows ({}) must equal input N ({}) without affine_tile_row_map",
-                n,
-                shape[2]);
-        }
-    }
-    if (sizing.use_mux) {
-        validate_stats_buffer(tensor_args, sizing, stats_pages_for_rows(sizing, args.ring_size, sizing.num_tile_rows));
-    }
+    const auto sizing = compute_sizing(args, tensor_args.input);
+    validate_rows(args, tensor_args, sizing, stats_pages_for_rows(sizing, args.ring_size, sizing.num_tile_rows));
 }
 
 DitFusedDistributedRmsnormDeviceOperation::spec_return_value_t
