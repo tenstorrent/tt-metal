@@ -8,8 +8,6 @@
 detector, which is cheaper than another reference run and isolates what tracing changes.
 """
 
-import math
-
 import pytest
 import torch
 from loguru import logger
@@ -22,6 +20,7 @@ from models.experimental.bevformer.tests.common import (
     frame_metas,
     random_image_batch,
     to_conv_layout,
+    turn_rig,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
@@ -45,17 +44,10 @@ PCC_THRESHOLD = 0.99999
 TRACE_REGION_SIZE = 256 << 20
 
 
-def _turn_rig(meta, degrees):
-    yaw = math.radians(degrees)
-    turn = torch.eye(4)
-    turn[:2, :2] = torch.tensor([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
-    meta["lidar2img"] = (torch.tensor(meta["lidar2img"]) @ turn).tolist()
-
-
 def _sequence(generator):
     frames = frame_metas(1, NUM_FRAMES, generator)
     for i, (meta,) in enumerate(frames):
-        _turn_rig(meta, i * RIG_YAW_STEP_DEG)
+        meta["lidar2img"] = turn_rig(meta["lidar2img"], i * RIG_YAW_STEP_DEG).tolist()
     # A depth row of constant -1 puts every point behind every camera. Negating the whole matrix
     # would not: it flips each camera to face backwards, and the surround rig still sees the BEV.
     (empty,) = frames[EMPTY_FRAME]

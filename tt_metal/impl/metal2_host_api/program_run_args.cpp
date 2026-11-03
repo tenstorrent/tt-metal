@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <set>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -38,6 +39,86 @@ const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const Prog
 
 const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
+}
+
+// Validation of the array args a KernelRunArgs supplies, shared by the full and partial-update paths:
+// each supplied array must be declared, set only on nodes the kernel runs on, and have exactly its
+// declared length. (The full path also requires every declared array; see ValidateProgramRunArgs.)
+void ValidateSuppliedArrayArgValues(
+    const ProgramRunArgs::KernelRunArgs& kernel_params,
+    const KernelRTASchema& schema,
+    const std::set<CoreCoord>& kernel_nodes) {
+    const auto& kernel_name = kernel_params.kernel;
+    for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+        const auto slots = schema.runtime_array_arg_slots.find(name);
+        TT_FATAL(
+            slots != schema.runtime_array_arg_slots.end(),
+            "Kernel '{}' sets RTA array '{}' which is not declared in the schema.",
+            kernel_name,
+            name);
+        for (const auto& [node, value] : per_node) {
+            TT_FATAL(
+                kernel_nodes.contains(node),
+                "Kernel '{}' is setting runtime_array_arg_values for node {}, but the kernel does not run on that "
+                "node.",
+                kernel_name,
+                node.str());
+            TT_FATAL(
+                value.size() == slots->second.size,
+                "Kernel '{}' node {} RTA array '{}' expects {} elements, but {} were provided",
+                kernel_name,
+                node.str(),
+                name,
+                slots->second.size,
+                value.size());
+        }
+    }
+    for (const auto& [name, value] : kernel_params.common_runtime_array_arg_values) {
+        const auto slots = schema.common_runtime_array_arg_slots.find(name);
+        TT_FATAL(
+            slots != schema.common_runtime_array_arg_slots.end(),
+            "Kernel '{}' sets CRTA array '{}' which is not declared in the schema.",
+            kernel_name,
+            name);
+        TT_FATAL(
+            value.size() == slots->second.size,
+            "Kernel '{}' CRTA array '{}' expects {} elements, but {} were provided",
+            kernel_name,
+            name,
+            slots->second.size,
+            value.size());
+    }
+}
+
+// Serialization-time length check for an array arg value. It runs even under skip_validation: it costs
+// one comparison, and a wrong-length value would otherwise overrun into the neighbouring args
+// (RuntimeArgsData's own bounds check is debug-only).
+void CheckArrayArgValueLength(
+    const KernelRTASchema::ArraySlots& slots,
+    const ArrayArgValue& value,
+    std::string_view kernel_name,
+    std::string_view array_name) {
+    TT_FATAL(
+        value.size() == slots.size,
+        "Kernel '{}' array '{}' expects {} elements, but {} were provided",
+        kernel_name,
+        array_name,
+        slots.size,
+        value.size());
+}
+
+// Write an array arg's value to its slots in a dispatch buffer. Checks the length first, even under
+// skip_validation (see CheckArrayArgValueLength).
+void WriteArrayArgValue(
+    uint32_t* buffer,
+    const KernelRTASchema::ArraySlots& slots,
+    const ArrayArgValue& value,
+    std::string_view kernel_name,
+    std::string_view array_name) {
+    CheckArrayArgValueLength(slots, value, kernel_name, array_name);
+    for (size_t i = 0; i < slots.size; ++i) {
+        buffer[slots.first_slot + i] = value[i].to_uint32();
+    }
 }
 
 // The sharded distribution geometry a spec resolves to, or nullopt when it is interleaved. Mirrors
@@ -448,11 +529,43 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
             kernel_name,
             named_crta_names.size(),
             kernel_params.common_runtime_arg_values.size());
+
+        // Validate array args: the supplied ones are well-formed (as on the update path), and every
+        // declared array is supplied, on every node the kernel runs on for an RTA array.
+        ValidateSuppliedArrayArgValues(kernel_params, *schema, kernel_nodes);
+        if (const auto& rta_array_slots = schema->runtime_array_arg_slots; !rta_array_slots.empty()) {
+            std::unordered_map<NodeCoord, size_t> rta_array_count_per_node;
+            for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+                for (const auto& [node, _value] : per_node) {
+                    (void)_value;
+                    rta_array_count_per_node[node]++;
+                }
+            }
+            for (const auto& node : kernel_nodes) {
+                const auto count = rta_array_count_per_node.find(node);
+                const size_t provided = count == rta_array_count_per_node.end() ? 0 : count->second;
+                TT_FATAL(
+                    provided == rta_array_slots.size(),
+                    "Kernel '{}' node {} expects {} RTA arrays, but {} were provided",
+                    kernel_name,
+                    node.str(),
+                    rta_array_slots.size(),
+                    provided);
+            }
+        }
+        for (const auto& [name, _slots] : schema->common_runtime_array_arg_slots) {
+            (void)_slots;
+            TT_FATAL(
+                kernel_params.common_runtime_array_arg_values.contains(name),
+                "Kernel '{}' is missing CRTA array '{}'.",
+                kernel_name,
+                name);
+        }
     }
 
     // Validate that all registered kernels with a non-empty RTA/CRTA schema have parameters.
-    // Kernels whose schema declares no named RTAs, no named CRTAs, no vararg RTAs, and no vararg
-    // CRTAs have no scalar runtime arguments to supply per enqueue and do not need a kernel_run_args
+    // Kernels whose schema declares no named RTAs or CRTAs (scalar or array), no vararg RTAs, and no
+    // vararg CRTAs have no runtime arguments to supply per enqueue and do not need a kernel_run_args
     // entry. This holds even if the kernel binds tensors: a TensorBinding's base address (and any
     // dynamic accessor fields) is filled automatically by SetProgramRunArgs for every binding-bearing
     // kernel — including a binding-only kernel omitted from kernel_run_args, via its second pass —
@@ -468,6 +581,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         }
         const bool has_anything_to_supply =
             !schema->runtime_arg_names.empty() || !schema->common_runtime_arg_names.empty() ||
+            !schema->runtime_array_arg_slots.empty() || !schema->common_runtime_array_arg_slots.empty() ||
             !schema->num_runtime_varargs_per_node.empty() || schema->num_common_runtime_varargs > 0;
         TT_FATAL(
             !has_anything_to_supply,
@@ -758,14 +872,16 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Named RTAs/CRTAs and vararg RTAs/CRTAs share a single dispatch buffer each (RTA + CRTA).
     //
     // Layout:
-    //   RTA per-node:  [named_rta_0 ... named_rta_N-1, per_node_ta_addr_0 ... per_node_ta_addr_P-1,
+    //   RTA per-node:  [named_rta_0 ... named_rta_N-1, RTA arrays, per_node_ta_addr_0 ... per_node_ta_addr_P-1,
     //                   vararg_0 ... vararg_M-1]
-    //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, scratch_addr_0 ...
+    //   CRTA:          [named_crta_0 ... named_crta_K-1, CRTA arrays, ta_addr_0 ... ta_addr_B-1, scratch_addr_0 ...
     //   scratch_addr_S-1,
     //                   vararg_0 ... vararg_L-1]
     //
-    // RTA layout has three sections: named RTAs, per-node TensorBinding addresses, and RTA varargs.
-    // CRTA layout has four sections: named CRTAs, TensorBinding addresses, Scratchpad addresses, and CRTA varargs.
+    // RTA layout has three sections: named RTAs (scalars, then arrays), per-node TensorBinding addresses, and RTA
+    // varargs.
+    // CRTA layout has four sections: named CRTAs (scalars, then arrays), TensorBinding addresses, Scratchpad
+    // addresses, and CRTA varargs.
     //
     // TensorBinding address section is used by headergen to emit the `tensor::` namespace tokens.
     // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
@@ -776,15 +892,15 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name.get());
         TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
 
-        const bool kernel_has_named_rtas = !schema->runtime_arg_names.empty();
         const size_t rta_vararg_offset = kernel->get_rta_layout().vararg_section_offset;
         const auto& slot_of = schema->runtime_arg_name_to_slot;
+        const auto& array_slots_of = schema->runtime_array_arg_slots;
 
-        // RTA layout per node: [named_rta_0 ... named_rta_{N-1}, per-node TensorBinding addresses,
-        // vararg_0 ... vararg_{M-1}].
-        // Named RTAs are scattered to their declaration slot via the schema's name->slot index
-        // (one hash lookup per supplied arg, O(N)/node — matching how UpdateProgramRunArgs
-        // serializes); varargs are positional and follow the named section.
+        // RTA layout per node: [named_rta_0 ... named_rta_{N-1}, RTA arrays, per-node TensorBinding
+        // addresses, vararg_0 ... vararg_{M-1}].
+        // Named RTAs (scalar and array) are scattered to their declaration slots via the schema's
+        // name->slot indexes (one hash lookup per supplied arg, O(N)/node — matching how
+        // UpdateProgramRunArgs serializes); varargs are positional and follow the named section.
         if (!kernel->cores_with_runtime_args().empty()) {
             // ---- Fast path (subsequent call): the per-node RTA buffers already exist, sized and
             // allocated by a prior call. Patch them in place, iterating ONLY the supplied args —
@@ -813,6 +929,24 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                         kernel_name,
                         node.str());
                     rta[s->second] = value.to_uint32();
+                }
+            }
+            for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+                const auto a = array_slots_of.find(name);
+                TT_FATAL(
+                    a != array_slots_of.end(),
+                    "Internal error: RTA array '{}' not in schema for kernel '{}'.",
+                    name,
+                    kernel_name);
+                for (const auto& [node, value] : per_node) {
+                    RuntimeArgsData& rta = kernel->runtime_args_data(node);
+                    TT_FATAL(
+                        rta.data() != nullptr,
+                        "SetProgramRunArgs fast path: kernel '{}' node {} has no allocated RTA buffer though the "
+                        "kernel reports prior runtime args. Internal invariant violation.",
+                        kernel_name,
+                        node.str());
+                    WriteArrayArgValue(rta.data(), a->second, value, kernel_name.get(), name);
                 }
             }
             for (const auto& [node, vals] : kernel_runtime_varargs(kernel_params)) {
@@ -850,6 +984,23 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                     named_rtas_by_node[node].emplace_back(s->second, value.to_uint32());
                 }
             }
+            // RTA arrays join the same per-node (slot, value) list, one entry per element.
+            for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+                const auto a = array_slots_of.find(name);
+                TT_FATAL(
+                    a != array_slots_of.end(),
+                    "Internal error: RTA array '{}' not in schema for kernel '{}'.",
+                    name,
+                    kernel_name);
+                const KernelRTASchema::ArraySlots& slots = a->second;
+                for (const auto& [node, value] : per_node) {
+                    CheckArrayArgValueLength(slots, value, kernel_name.get(), name);
+                    auto& node_rtas = named_rtas_by_node[node];
+                    for (size_t i = 0; i < slots.size; ++i) {
+                        node_rtas.emplace_back(slots.first_slot + i, value[i].to_uint32());
+                    }
+                }
+            }
             std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
             for (const auto& [node, args] : kernel_runtime_varargs(kernel_params)) {
                 varargs_by_node[node] = &args;
@@ -869,7 +1020,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 // Value-initialized to the exact combined width so the scatter can assign by slot.
                 // The per-node TensorBinding section is filled by PatchPerNodeBindingRtas below.
                 std::vector<uint32_t> combined(rta_vararg_offset + num_varargs, 0u);
-                if (kernel_has_named_rtas && has_named) {
+                if (has_named) {
                     for (const auto& [slot, value] : named_it->second) {
                         combined[slot] = value;
                     }
@@ -884,7 +1035,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         PatchPerNodeBindingRtas(*kernel, tensor_by_param, kernel_name.get(), /*require_all=*/true);
 
         // Assemble the kernel's per-enqueue CRTA buffer in four structurally-separate sections:
-        //   1. User-named CRTAs, in schema order, sourced from common_runtime_arg_values.
+        //   1. User-named CRTAs: the scalars, in schema order, sourced from common_runtime_arg_values;
+        //      then the arrays, at their schema slots, sourced from common_runtime_array_arg_values.
         //   2. TensorBinding section, in binding-handle order, sourced from TensorArgument via the
         //      tensor_by_param lookup. Each binding occupies (1 + num_runtime_field_crta_words)
         //      words: [address, optional shape...]. The handle's addr_crta_offset lines up with
@@ -904,6 +1056,13 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 name,
                 kernel_name);
             combined_crtas.push_back(v_it->second.to_uint32());
+        }
+        // Extend to the end of section 1, then write each array at its slots.
+        combined_crtas.resize(kernel->get_crta_layout().num_named_words, 0u);
+        for (const auto& [name, slots] : schema->common_runtime_array_arg_slots) {
+            const auto value = kernel_params.common_runtime_array_arg_values.get(name);
+            TT_FATAL(value.has_value(), "Internal error: CRTA array '{}' missing for kernel '{}'.", name, kernel_name);
+            WriteArrayArgValue(combined_crtas.data(), slots, *value, kernel_name.get(), name);
         }
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
@@ -1060,9 +1219,9 @@ void UpdateTensorArgs(
 }
 
 // Union the args of `src` into `dst` for a single kernel (same kernel name). Used by
-// MergeProgramRunArgs. Named RTAs (per node) and named CRTAs union by name; a given name may
-// appear in at most one input (disjoint), else error unless skip_validation. Positional varargs
-// cannot be name-merged: at most one input may supply them for a given node / for common varargs.
+// MergeProgramRunArgs. Named RTAs (per node) and named CRTAs, scalar and array, union by name; a
+// given name may appear in at most one input (disjoint), else error unless skip_validation. Positional
+// varargs cannot be name-merged: at most one input may supply them for a given node / for common varargs.
 void MergeKernelRunArgsInto(
     ProgramRunArgs::KernelRunArgs& dst, const ProgramRunArgs::KernelRunArgs& src, bool skip_validation) {
     const auto& kernel_name = dst.kernel;
@@ -1089,6 +1248,36 @@ void MergeKernelRunArgsInto(
                 TT_FATAL(
                     !dst_per_node.get(node).has_value(),
                     "MergeProgramRunArgs: kernel '{}' node {} runtime arg '{}' is specified in more than one "
+                    "ProgramRunArgs.",
+                    kernel_name,
+                    node.str(),
+                    name);
+            }
+            dst_per_node[node] = value;
+        }
+    }
+
+    // CRTA arrays, as named CRTAs. (An array merges whole: it is one arg.)
+    for (const auto& [name, value] : src.common_runtime_array_arg_values) {
+        if (!skip_validation) {
+            TT_FATAL(
+                !dst.common_runtime_array_arg_values.get(name).has_value(),
+                "MergeProgramRunArgs: kernel '{}' common runtime array arg '{}' is specified in more than one "
+                "ProgramRunArgs.",
+                kernel_name,
+                name);
+        }
+        dst.common_runtime_array_arg_values[name] = value;
+    }
+
+    // Per-node RTA arrays, as per-node named RTAs.
+    for (const auto& [name, src_per_node] : src.runtime_array_arg_values) {
+        auto& dst_per_node = dst.runtime_array_arg_values[name];
+        for (const auto& [node, value] : src_per_node) {
+            if (!skip_validation) {
+                TT_FATAL(
+                    !dst_per_node.get(node).has_value(),
+                    "MergeProgramRunArgs: kernel '{}' node {} runtime array arg '{}' is specified in more than one "
                     "ProgramRunArgs.",
                     kernel_name,
                     node.str(),
@@ -1134,10 +1323,10 @@ void MergeKernelRunArgsInto(
 //
 // UpdateProgramRunArgs applies an ARBITRARY subset of a Program's ProgramRunArgs; any arg not
 // supplied retains the value installed by the most recent SetProgramRunArgs. So, unlike the full
-// ValidateProgramRunArgs, this imposes NO completeness requirement — kernels, named RTAs/CRTAs,
-// varargs, and tensor args may all be freely omitted. Whatever IS supplied is still validated:
-// names must be declared (no extras), target nodes must belong to the kernel, and a supplied
-// vararg section's count must match the schema.
+// ValidateProgramRunArgs, this imposes NO completeness requirement — kernels, named RTAs/CRTAs
+// (scalar and array), varargs, and tensor args may all be freely omitted. Whatever IS supplied is
+// still validated: names must be declared (no extras), target nodes must belong to the kernel, and a
+// supplied array's length or vararg section's count must match the schema.
 //
 // The one exception to "tensor args may be omitted": resizing a borrowed-memory DFB requires
 // supplying that DFB's backing TensorParameter in the same update, so the per-bank fit check can
@@ -1230,6 +1419,9 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
                 kernel_name,
                 name);
         }
+
+        // --- Array args: any may be omitted (on any node, for an RTA array). Supplied ones are validated. ---
+        ValidateSuppliedArrayArgValues(kernel_params, *schema, kernel_nodes);
     }
 
     // DFB run overrides: same checks as the full path (duplicates; non-zero size overrides), plus a
@@ -1344,6 +1536,25 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             }
         }
 
+        // ---- Per-node RTA buffer: patch supplied RTA arrays at their slots (each replaced whole) ----
+        for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+            const auto a = schema->runtime_array_arg_slots.find(name);
+            TT_FATAL(
+                a != schema->runtime_array_arg_slots.end(),
+                "Internal error: RTA array '{}' not in schema for kernel '{}'.",
+                name,
+                kernel_name);
+            for (const auto& [node, value] : per_node) {
+                TT_FATAL(
+                    kernel->cores_with_runtime_args().contains(node),
+                    "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call "
+                    "SetProgramRunArgs at least once before a partial update.",
+                    kernel_name,
+                    node.str());
+                WriteArrayArgValue(kernel->runtime_args_data(node).data(), a->second, value, kernel_name.get(), name);
+            }
+        }
+
         // ---- Per-node RTA buffer: patch supplied varargs (positional, after the named section) ----
         for (const auto& [node, vals] : kernel_runtime_varargs(kernel_params)) {
             if (vals.empty()) {
@@ -1361,9 +1572,10 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             }
         }
 
-        // ---- CRTA buffer: patch supplied named CRTAs + supplied common varargs ----
+        // ---- CRTA buffer: patch supplied named CRTAs, CRTA arrays + supplied common varargs ----
         const auto& cvarargs = kernel_common_runtime_varargs(kernel_params);
-        const bool touches_crta = !kernel_params.common_runtime_arg_values.empty() || !cvarargs.empty();
+        const bool touches_crta = !kernel_params.common_runtime_arg_values.empty() ||
+                                  !kernel_params.common_runtime_array_arg_values.empty() || !cvarargs.empty();
         if (touches_crta) {
             TT_FATAL(
                 !kernel->common_runtime_args().empty(),
@@ -1383,6 +1595,15 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         kernel_name);
                     crta[it->second] = value.to_uint32();
                 }
+            }
+            for (const auto& [name, value] : kernel_params.common_runtime_array_arg_values) {
+                const auto a = schema->common_runtime_array_arg_slots.find(name);
+                TT_FATAL(
+                    a != schema->common_runtime_array_arg_slots.end(),
+                    "Internal error: CRTA array '{}' not in schema for kernel '{}'.",
+                    name,
+                    kernel_name);
+                WriteArrayArgValue(crta.data(), a->second, value, kernel_name.get(), name);
             }
             if (!cvarargs.empty()) {
                 // Common varargs live after the named CRTAs, the tensor-binding address section, and the

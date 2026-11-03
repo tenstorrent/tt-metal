@@ -214,7 +214,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 //  1. Walk the kernel's tensor_bindings in declaration order
 //  2. Pack each binding's CTA payload into a contiguous positional buffer
 //  3. Assign each binding a slot in the kernel's TensorBinding section of the CRTA buffer.
-//     The section is structurally separate, immediately following the user-named CRTAs.
+//     The section is structurally separate, immediately following the user-named CRTAs
+//     (base_named_crta_words: the scalars, then the arrays).
 //     Each binding occupies (1 + extra_crta_words) words: the always-present base address
 //     word, plus any runtime accessor field words (e.g. shape, when dynamic_tensor_shape
 //     is set on a sharded TensorParameter).
@@ -228,8 +229,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
-    size_t base_named_crta_count,
-    size_t base_named_rta_count,
+    size_t base_named_crta_words,
+    size_t base_named_rta_words,
     uint32_t base_cta_offset) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
@@ -237,8 +238,8 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     // Absolute word index into the unified positional CTA buffer:
     //   [ CTA varargs (base_cta_offset words) | TensorBinding payloads ... ]
     uint32_t cta_word_offset = base_cta_offset;
-    size_t crta_word_index = base_named_crta_count;
-    size_t rta_word_index = base_named_rta_count;
+    size_t crta_word_index = base_named_crta_words;
+    size_t rta_word_index = base_named_rta_words;
     uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
         const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
@@ -268,11 +269,11 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         out.handles.push_back(std::move(handle));
     }
 
-    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_count);
+    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_words);
     out.crta_layout.binding_section_words = binding_section_words;
-    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + binding_section_words;
-    out.rta_layout.num_named_words = static_cast<uint32_t>(base_named_rta_count);
-    out.rta_layout.binding_section_words = static_cast<uint32_t>(rta_word_index - base_named_rta_count);
+    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_words) + binding_section_words;
+    out.rta_layout.num_named_words = static_cast<uint32_t>(base_named_rta_words);
+    out.rta_layout.binding_section_words = static_cast<uint32_t>(rta_word_index - base_named_rta_words);
     out.rta_layout.vararg_section_offset = static_cast<uint32_t>(rta_word_index);
 
     return out;

@@ -485,7 +485,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 }
 
 // METAL 2.0 only:
-// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
+// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs (scalar and array) inside the `args` namespace.
 // Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
 // in, so that vararg indices in kernel code are stable across schema changes.
 //
@@ -519,6 +519,9 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Array args: RTA/CRTA arrays carry their placement; CTA arrays are already in name order.
+    const KernelArrayArgs& array_args = settings.get_array_args();
+
     // Metal 2.0 CTA-vararg prefix length in positional KERNEL_COMPILE_TIME_ARGS.
     // Values live in kernel_compile_time_args[0..N); TensorBinding payloads follow.
     const uint32_t cta_vararg_size = settings.get_compile_time_vararg_count();
@@ -534,7 +537,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
     // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
     // so we keep emitting those unconditionally.
-    const bool has_named_args = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
+    const bool has_named_args =
+        !rta_names.empty() || !crta_names.empty() || !cta_entries.empty() || !array_args.empty();
     if (has_named_args) {
         content << "namespace args {\n";
 
@@ -546,18 +550,37 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
             rta_offset += sizeof(uint32_t);
         }
+        // RTA arrays follow the scalars; lowering placed them (see KernelArrayArgs).
+        TT_ASSERT(
+            array_args.runtime.empty() || array_args.runtime.front().word_offset * sizeof(uint32_t) == rta_offset);
+        for (const auto& array : array_args.runtime) {
+            content << "constexpr experimental::RtaArrayArg<uint32_t, " << array.size << "> " << array.name << "{"
+                    << array.word_offset * sizeof(uint32_t) << "};\n";
+        }
         // Named CRTAs
-        // The TensorBinding address section follows immediately after the named CRTA slots in the CRTA
-        // buffer (see vararg-offset computation below).
+        // The TensorBinding address section follows immediately after the named CRTA slots (the scalars,
+        // then the arrays) in the CRTA buffer (see vararg-offset computation below).
         uint32_t crta_offset = 0;
         for (const auto& name : crta_names) {
             content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
             crta_offset += sizeof(uint32_t);
         }
+        TT_ASSERT(
+            array_args.common_runtime.empty() ||
+            array_args.common_runtime.front().word_offset * sizeof(uint32_t) == crta_offset);
+        for (const auto& array : array_args.common_runtime) {
+            content << "constexpr experimental::CrtaArrayArg<uint32_t, " << array.size << "> " << array.name << "{"
+                    << array.word_offset * sizeof(uint32_t) << "};\n";
+        }
         // Named CTAs
         // No offsets to deal with here; CTA values are emitted directly into the generated header.
         for (const auto& [name, value] : cta_entries) {
             content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
+        }
+        // CTA arrays: CtaVal<std::array<...>> takes three braces (CtaVal, std::array, its C array).
+        for (const auto& [name, values] : array_args.compile_time) {
+            content << "constexpr experimental::CtaVal<std::array<uint32_t, " << values.size() << ">> " << name << "{{{"
+                    << fmt::format("{}u", fmt::join(values, "u, ")) << "}}};\n";
         }
 
         content << "}  // namespace args\n\n";
@@ -641,6 +664,12 @@ std::string generate_tt_kernel_shim_if_present(
             "marker with template/function parameters) require the Metal 2.0 host API.",
             sig->name);
     }
+    TT_FATAL(
+        settings.get_array_args().empty(),
+        "TT_KERNEL entry '{}' (source: {}) belongs to a kernel that declares array arguments, which a TT_KERNEL "
+        "signature cannot take. Read them with get_arg(args::<name>) from a kernel_main() instead.",
+        sig->name,
+        source_desc);
     // Cross-check the kernel's declared parameters against the host-registered schema before
     // generating the shim, so a name typo or schema drift fails here with a clear message rather
     // than as a compile error buried in generated code (kernel param the host never registered) or
