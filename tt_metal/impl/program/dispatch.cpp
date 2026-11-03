@@ -353,13 +353,12 @@ void finalize_dfb_masks(
     const MetalContext& metal_ctx,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers) {
-    if (dataflow_buffers.empty()) {
-        return;
-    }
     for (auto& kg : kernel_groups) {
         auto kernel_config = kg->launch_msg.view().kernel_config();
         if (metal_ctx.hal().has_tile_counter_registers()) {
-            kernel_config.local_cb_mask() = kg->num_local_dfbs;
+            if (kg->num_local_dfbs != 0) {
+                kernel_config.local_cb_mask() = kg->num_local_dfbs;
+            }
             continue;
         }
         uint64_t kg_dfb_mask = 0;
@@ -371,7 +370,9 @@ void finalize_dfb_masks(
                 }
             }
         }
-        kernel_config.local_cb_mask() = kg_dfb_mask;
+        if (kg_dfb_mask != 0) {
+            kernel_config.local_cb_mask() = kg_dfb_mask;
+        }
     }
 }
 
