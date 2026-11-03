@@ -8,7 +8,12 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#include "experimental/idma_copy_rows.h"
+
+// The NoC-with-state includes hide get_arg from ADL on the args:: accessors.
+using experimental::get_arg;
 
 void kernel_main() {
     constexpr uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
@@ -24,15 +29,26 @@ void kernel_main() {
     Noc noc;
 #ifdef OUT_STAGING
     DataflowBuffer dfb_src(dfb::out_staging);  // transposed columns packed by the compute kernel
-#endif
-    DataflowBuffer dfb_dst(dfb::out);  // the resident output shard
 
-    uint32_t dst_addr = dfb_dst.get_write_ptr();
+    // The output shard is resident in this core's L1, at the same offset on every core.
+    const auto s = TensorAccessor(tensor::output);
+    uint32_t dst_addr = noc_address_backend::extract_local_address(s.get_noc_addr(0));
+#endif
 
     // temporary fix until pack_untilze is fully fixed: the host binds the staging buffer (and
-    // defines OUT_STAGING) only when Ht > 8; otherwise the compute kernel packs straight into the
-    // output shard and there is nothing for this kernel to move.
-#ifdef OUT_STAGING
+    // defines OUT_STAGING) only when Ht > 8 or on Quasar; otherwise the compute kernel packs straight
+    // into the output shard and there is nothing for this kernel to move.
+#if defined(OUT_STAGING) && defined(ARCH_QUASAR)
+    for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
+        for (uint32_t w = 0; w < Wt; ++w) {
+            dfb_src.wait_front(Ht);
+            uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
+            experimental::idma_copy_rows(dfb_src.get_read_ptr(), l1_read_offset_bytes, dst_addr, stick_size_bytes, W_curr);
+            dst_addr += W_curr * stick_size_bytes;
+            dfb_src.pop_front(Ht);
+        }
+    }
+#elif defined(OUT_STAGING)
     noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},
         stick_size_bytes,
