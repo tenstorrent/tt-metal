@@ -23,6 +23,7 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -244,7 +245,10 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), expected {expected_ns:,} ns, "
         f"band [{lower:,.0f}, {upper:,.0f}] (margin +/- {margin * 100:.1f}%)"
     )
-    assert lower <= total_ns <= upper, (
-        f"{case.label}: traced replay {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
-        f"(expected {expected_ns:,} ns, margin +/- {margin * 100:.1f}%)"
+    assert_perf_gate(
+        lower <= total_ns <= upper,
+        (
+            f"{case.label}: traced replay {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+            f"(expected {expected_ns:,} ns, margin +/- {margin * 100:.1f}%)"
+        ),
     )

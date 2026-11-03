@@ -37,6 +37,7 @@ from safetensors import safe_open
 from tracy import signpost
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.common.prefill.runners.runner_utils import resolve_trace_dir
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
@@ -2607,7 +2608,7 @@ def run_chunked_transformer_updated(
     finish_transformer(transformer)
 
     # Assert AFTER the table is logged so the full per-chunk breakdown is always visible on failure.
-    assert not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures)
+    assert_perf_gate(not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures))
 
 
 def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):

@@ -15,6 +15,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -144,10 +145,13 @@ def _allocate_state(layer: ttKDA) -> KdaState:
 def _assert_within_margin(what: str, measured_ms: float, reference_ms: float, margin: float) -> None:
     lower = reference_ms * (1.0 - margin)
     upper = reference_ms * (1.0 + margin)
-    assert lower <= measured_ms <= upper, (
-        f"{what} {measured_ms:.3f} ms is outside performance range "
-        f"[{lower:.3f}, {upper:.3f}] ms "
-        f"(reference {reference_ms:.3f} ms ± {margin:.0%})"
+    assert_perf_gate(
+        lower <= measured_ms <= upper,
+        (
+            f"{what} {measured_ms:.3f} ms is outside performance range "
+            f"[{lower:.3f}, {upper:.3f}] ms "
+            f"(reference {reference_ms:.3f} ms ± {margin:.0%})"
+        ),
     )
 
 

@@ -19,6 +19,7 @@ import pytest
 import torch
 from loguru import logger
 
+from models.common.ci_failure import assert_perf_gate
 from models.demos.gemma4_d_p.demo.text_demo_prefill import (
     REPORT_CONTEXT_KS,
     TRACE_REGION_SIZE,
@@ -141,4 +142,4 @@ def test_model_perf_glx(mesh_device, reset_seeds):
     logger.info("[perf_gate] wall and device times vs baseline ranges:\n" + "\n".join([RESULT_HEADER, *rows]))
     if fast:
         logger.warning("[perf_gate] faster than baseline range, update the baselines: " + ", ".join(fast))
-    assert not failures, "prefill time above baseline range: " + ", ".join(failures)
+    assert_perf_gate(not failures, "prefill time above baseline range: " + ", ".join(failures))
