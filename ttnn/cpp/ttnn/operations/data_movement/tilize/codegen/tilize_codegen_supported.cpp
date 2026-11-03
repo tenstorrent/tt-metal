@@ -55,6 +55,8 @@ constexpr uint32_t kMinFragmentBytes = 256;
 constexpr uint32_t kTargetCores = 24;
 // Few-row DRAM split: a cut onto fewer cores than this keeps the full grid split instead.
 constexpr uint32_t kMinSplitCores = 5;
+// Most tile rows a one-tile-wide input may have and still route to native; see is_demoted().
+constexpr uint32_t kDemoteMaxTileRows = 20;
 
 std::optional<uint32_t> row_major_element_size(DataType dtype) {
     switch (dtype) {
@@ -295,9 +297,18 @@ bool supported_execution_controls(
 }
 
 // Entries must come from device kernel durations, never end-to-end timing.
-bool is_demoted(
-    const Tensor& /*input*/, const tt::tt_metal::MemoryConfig& /*output_mem_config*/, DataType /*output_dtype*/) {
-    return false;
+//
+// Demoted: a one-tile-wide input (Wt == 1) with at most kDemoteMaxTileRows tile rows. One tile per row leaves
+// no width to split, and these kernels run for 1.5-2.4 us, too short to amortize the port's fixed per-launch
+// cost. Over the 80 such sweep cases, native/ported device time measured a median of 0.95 on P150 (73 slower),
+// 1.01 on N300 and 0.99 on p100a, with losses up to 7%. A dtype-converting call stays on codegen: native's
+// int32 conversion is not bit-correct, so it is no baseline there.
+bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& /*output_mem_config*/, DataType output_dtype) {
+    if (output_dtype != input.dtype()) {
+        return false;
+    }
+    const TilizeGeometry g = tilize_geometry(input, output_dtype);
+    return g.wt == 1 && g.tile_rows <= kDemoteMaxTileRows;
 }
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen
