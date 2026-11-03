@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 import pytest
 import ttnn
@@ -94,3 +95,85 @@ def test_power_as_activation(device, op_type, exponent):
     tt_out = ttnn.to_torch(z_tt)
 
     assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=1)
+
+
+def _assert_pow_scalar(actual: float, expected_val: float):
+    if math.isnan(expected_val):
+        assert math.isnan(actual), f"Expected NaN, got {actual}"
+    elif math.isinf(expected_val):
+        assert actual == expected_val, f"Expected {expected_val}, got {actual}"
+    elif expected_val == 0.0:
+        if math.copysign(1.0, expected_val) < 0:
+            assert actual == 0.0 and math.copysign(1.0, actual) < 0, f"Expected -0.0, got {actual}"
+        else:
+            assert actual == 0.0, f"Expected 0.0, got {actual}"
+    else:
+        assert math.isclose(actual, expected_val, rel_tol=1e-5, abs_tol=1e-5), f"Expected {expected_val}, got {actual}"
+
+
+@pytest.mark.parametrize(
+    "base_val, exponent, expected_val",
+    [
+        (0.3, 1e6, 0.0),
+        (0.3, 1e10, 0.0),
+        (0.01, 8.0e34, 0.0),
+        (float.fromhex("0x1.ffffffp-5"), 31.75, 0.0),
+        (0.0, -1.5, float("inf")),
+        (0.0, float("nan"), float("nan")),
+        (-0.0, -3.0, float("-inf")),
+        (-0.0, 3.0, -0.0),
+        (-2.0, -0.0, 1.0),
+    ],
+)
+def test_unary_pow_edge_cases_and_underflow(device, base_val, exponent, expected_val):
+    x_torch = torch.tensor([base_val], dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.pow(x_tt, exponent)
+    actual = ttnn.to_torch(z_tt).item()
+    _assert_pow_scalar(actual, expected_val)
+
+
+@pytest.mark.parametrize(
+    "base_val, exponent, expected_val",
+    [
+        (0.3, 1e6, 0.0),
+        (float.fromhex("0x1.ffffffp-5"), 31.75, 0.0),
+        (0.0, -1.5, float("inf")),
+        (0.0, float("nan"), float("nan")),
+        (-0.0, -3.0, float("-inf")),
+        (-0.0, 3.0, -0.0),
+        (-2.0, -0.0, 1.0),
+    ],
+)
+def test_unary_chain_power_sfpu_direct(device, base_val, exponent, expected_val):
+    x_torch = torch.tensor([base_val], dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.unary_chain(
+        x_tt,
+        [ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, exponent)],
+    )
+    actual = ttnn.to_torch(z_tt).item()
+    _assert_pow_scalar(actual, expected_val)
+
+
+@pytest.mark.parametrize(
+    "base_val, exponent, expected_val",
+    [
+        (0.3, 1e6, 0.0),
+        (0.01, 8.0e34, 0.0),
+        (float.fromhex("0x1.ffffffp-5"), 31.75, 0.0),
+        (0.0, -1.5, float("inf")),
+        (0.0, float("nan"), float("nan")),
+        (-0.0, -3.0, float("-inf")),
+        (-0.0, 3.0, -0.0),
+        (-2.0, -0.0, 1.0),
+    ],
+)
+def test_binary_pow_tensor_edge_cases_and_underflow(device, base_val, exponent, expected_val):
+    x_torch = torch.tensor([base_val], dtype=torch.float32)
+    y_torch = torch.tensor([exponent], dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.pow(x_tt, y_tt)
+    actual = ttnn.to_torch(z_tt).item()
+    _assert_pow_scalar(actual, expected_val)

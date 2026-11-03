@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -1058,8 +1060,10 @@ Tensor pow(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
     float exponent_floor = std::floor(exponent);
-    if (static_cast<std::int32_t>(exponent_floor) == exponent) {
-        std::int32_t exp = exponent;
+    if (std::isfinite(exponent) && exponent_floor == exponent &&
+        exponent >= static_cast<float>(std::numeric_limits<std::int32_t>::min()) &&
+        exponent < 2147483648.0f) {
+        std::int32_t exp = static_cast<std::int32_t>(exponent);
         return pow(input_a, exp, output_mem_config, output_tensor);
     }
     TT_FATAL(
