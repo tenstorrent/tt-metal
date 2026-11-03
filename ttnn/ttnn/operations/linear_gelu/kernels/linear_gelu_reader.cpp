@@ -23,6 +23,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "linear_gelu_row_blocks.h"
 
 void kernel_main() {
     constexpr uint32_t cb_activation_block = get_compile_time_arg_val(0);
@@ -57,6 +58,7 @@ void kernel_main() {
     const uint32_t x_round_offset = get_arg_val<uint32_t>(7);
     // Same for the W rounds of a column (chunk owner = round % column rows); see W_ROUND_SHIFT on the host.
     const uint32_t w_round_offset = get_arg_val<uint32_t>(8);
+    const RowBlocks blocks(core_rows, get_arg_val<uint32_t>(9), get_arg_val<uint32_t>(10), block_h);
 
     static_assert(k_ext_tiles == k_tiles + 1, "one bias K tile");
     constexpr uint32_t act_block_tiles = block_h * k_ext_tiles;
@@ -86,7 +88,7 @@ void kernel_main() {
         }
     }
 
-    const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;
+    const uint32_t num_row_blocks = blocks.num_blocks;
 
     // R2: one core of the grid row reads x row-block i (round = row offset + i, rotating sender) and multicasts the
     // whole slot, ones tiles included, into the same cb_activation_block slot on the rest of the row. Every core of a
@@ -97,8 +99,8 @@ void kernel_main() {
     // finish_activation_block completes the round. Split so row-block 0's reads overlap W chunk 0's delivery.
     auto issue_activation_reads = [&](uint32_t row_block_idx) {
         MaybeDeviceZoneScope("reader_x_issue");
-        const uint32_t first_row = row_block_idx * block_h;
-        const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
+        const uint32_t first_row = blocks.start(row_block_idx);
+        const uint32_t rows = blocks.rows(row_block_idx);
         cb_reserve_back(cb_activation_block, act_block_tiles);
         if (x_mcast.should_send(x_round_offset + row_block_idx)) {
             const uint32_t slot_addr = get_write_ptr(cb_activation_block);
@@ -118,8 +120,8 @@ void kernel_main() {
     };
     auto finish_activation_block = [&](uint32_t row_block_idx) {
         MaybeDeviceZoneScope("reader_x_mcast");
-        const uint32_t first_row = row_block_idx * block_h;
-        const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
+        const uint32_t first_row = blocks.start(row_block_idx);
+        const uint32_t rows = blocks.rows(row_block_idx);
         const uint32_t slot_addr = get_write_ptr(cb_activation_block);
         if (x_mcast.should_send(x_round_offset + row_block_idx)) {
             noc_async_read_barrier();

@@ -1,0 +1,284 @@
+--- kernels/linear_gelu_compute.cpp	2026-11-02 23:40:34.290247800 +0000
++++ perf_experiments/balanced_row_blocks/kernels/linear_gelu_compute.cpp	2026-11-02 23:43:52.005850209 +0000
+@@ -16,6 +16,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "linear_gelu_gelu_sfpu.h"
++#include "linear_gelu_row_blocks.h"
+
+ namespace {
+
+@@ -35,13 +36,18 @@
+     constexpr uint32_t block_h = get_compile_time_arg_val(3);
+     constexpr uint32_t block_w = get_compile_time_arg_val(4);
+     constexpr uint32_t k_ext_tiles = get_compile_time_arg_val(5);
++    constexpr uint32_t out_ring_pages = get_compile_time_arg_val(6);
+
+     const uint32_t core_rows = get_arg_val<uint32_t>(0);
+     const uint32_t num_n_blocks = get_arg_val<uint32_t>(1);
+-    const uint32_t sb_h = get_arg_val<uint32_t>(2);
+-    const uint32_t sb_w = get_arg_val<uint32_t>(3);
+-    const uint32_t tail_sb_h = get_arg_val<uint32_t>(4);
+-    const uint32_t tail_sb_w = get_arg_val<uint32_t>(5);
++    const RowBlocks blocks(core_rows, get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3));
++    // Subblocks of block 0, of the (rest_q + 1)-row and of the rest_q-row blocks.
++    const uint32_t sb0_h = get_arg_val<uint32_t>(4);
++    const uint32_t sb0_w = get_arg_val<uint32_t>(5);
++    const uint32_t sb_big_h = get_arg_val<uint32_t>(6);
++    const uint32_t sb_big_w = get_arg_val<uint32_t>(7);
++    const uint32_t sb_small_h = get_arg_val<uint32_t>(8);
++    const uint32_t sb_small_w = get_arg_val<uint32_t>(9);
+
+     static_assert(DST_ACCUM_MODE, "the load-macro GELU stores fp32 DEST unrounded");
+     using Gelu = GeluTanhActivation<kGeluLoadMacro>;
+@@ -62,7 +68,10 @@
+         weight_buf.wait_front(w_chunk_tiles);
+     }
+
+-    const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;
++    const uint32_t num_row_blocks = blocks.num_blocks;
++    // cb_output_tiles page offset mod the ring: a subblock is packed as one contiguous span, so each block starts
++    // on a multiple of its subblock area (the ring is a multiple of every area); the writer skips the same pad.
++    uint32_t out_pos = 0;
+     // matmul_block_init carries the subblock dims, so re-init only when they change (nominal -> tail).
+     uint32_t init_sb_h = 0;
+     uint32_t init_sb_w = 0;
+@@ -74,11 +83,17 @@
+         }
+         // Occupancy: matmul + packer GELU for one row-block, including the in-helper W / output CB waits.
+         MaybeDeviceZoneScope("compute_matmul_gelu");
+-        const uint32_t first_row = row_block_idx * block_h;
+-        const bool tail = core_rows - first_row < block_h;
+-        const uint32_t rows = tail ? core_rows - first_row : block_h;
+-        const uint32_t cur_sb_h = tail ? tail_sb_h : sb_h;
+-        const uint32_t cur_sb_w = tail ? tail_sb_w : sb_w;
++        const uint32_t rows = blocks.rows(row_block_idx);
++        const bool big = rows == blocks.rest_q + 1;
++        const uint32_t cur_sb_h = row_block_idx == 0 ? sb0_h : (big ? sb_big_h : sb_small_h);
++        const uint32_t cur_sb_w = row_block_idx == 0 ? sb0_w : (big ? sb_big_w : sb_small_w);
++        const uint32_t sb_area = cur_sb_h * cur_sb_w;
++        const uint32_t pad = (sb_area - out_pos % sb_area) % sb_area;
++        if (pad) {
++            out_buf.reserve_back(pad);
++            out_buf.push_back(pad);
++        }
++        out_pos = (out_pos + pad + rows * block_w * num_n_blocks) % out_ring_pages;
+         const auto shape =
+             MatmulBlockShape::of(rows / cur_sb_h, block_w / cur_sb_w, cur_sb_h, cur_sb_w, k_ext_tiles, 1);
+
+--- kernels/linear_gelu_reader.cpp	2026-11-02 22:51:10.066278225 +0000
++++ perf_experiments/balanced_row_blocks/kernels/linear_gelu_reader.cpp	2026-11-02 23:44:13.245738827 +0000
+@@ -21,6 +21,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "linear_gelu_row_blocks.h"
+
+ void kernel_main() {
+     constexpr uint32_t cb_activation_block = get_compile_time_arg_val(0);
+@@ -55,6 +56,7 @@
+     const uint32_t x_round_offset = get_arg_val<uint32_t>(7);
+     // Same for the W rounds of a column (chunk owner = round % column rows); see W_ROUND_SHIFT on the host.
+     const uint32_t w_round_offset = get_arg_val<uint32_t>(8);
++    const RowBlocks blocks(core_rows, get_arg_val<uint32_t>(9), get_arg_val<uint32_t>(10));
+
+     static_assert(k_ext_tiles == k_tiles + 1, "one bias K tile");
+     constexpr uint32_t act_block_tiles = block_h * k_ext_tiles;
+@@ -84,7 +86,7 @@
+         }
+     }
+
+-    const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;
++    const uint32_t num_row_blocks = blocks.num_blocks;
+
+     // R2: one core of the grid row reads x row-block i (round = row offset + i, rotating sender) and multicasts the
+     // whole slot, ones tiles included, into the same cb_activation_block slot on the rest of the row. Every core of a
+@@ -95,8 +97,8 @@
+     // finish_activation_block completes the round. Split so row-block 0's reads overlap W chunk 0's delivery.
+     auto issue_activation_reads = [&](uint32_t row_block_idx) {
+         MaybeDeviceZoneScope("reader_x_issue");
+-        const uint32_t first_row = row_block_idx * block_h;
+-        const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
++        const uint32_t first_row = blocks.start(row_block_idx);
++        const uint32_t rows = blocks.rows(row_block_idx);
+         cb_reserve_back(cb_activation_block, act_block_tiles);
+         if (x_mcast.should_send(x_round_offset + row_block_idx)) {
+             const uint32_t slot_addr = get_write_ptr(cb_activation_block);
+@@ -116,8 +118,8 @@
+     };
+     auto finish_activation_block = [&](uint32_t row_block_idx) {
+         MaybeDeviceZoneScope("reader_x_mcast");
+-        const uint32_t first_row = row_block_idx * block_h;
+-        const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
++        const uint32_t first_row = blocks.start(row_block_idx);
++        const uint32_t rows = blocks.rows(row_block_idx);
+         const uint32_t slot_addr = get_write_ptr(cb_activation_block);
+         if (x_mcast.should_send(x_round_offset + row_block_idx)) {
+             noc_async_read_barrier();
+--- kernels/linear_gelu_writer.cpp	2026-11-02 22:51:10.066278225 +0000
++++ perf_experiments/balanced_row_blocks/kernels/linear_gelu_writer.cpp	2026-11-02 23:44:13.245738827 +0000
+@@ -14,6 +14,7 @@
+ #include "api/dataflow/noc.h"
+ #include "api/core_local_mem.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "linear_gelu_row_blocks.h"
+
+ void kernel_main() {
+     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
+@@ -23,17 +24,21 @@
+     constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
+     constexpr uint32_t seq_tiles = get_compile_time_arg_val(5);
+     constexpr uint32_t last_valid_rows = get_compile_time_arg_val(6);
+-    constexpr auto out_args = TensorAccessorArgs<7>();
++    constexpr uint32_t out_ring_pages = get_compile_time_arg_val(7);
++    constexpr auto out_args = TensorAccessorArgs<8>();
+
+     const uint32_t out_addr = get_arg_val<uint32_t>(0);
+     const uint32_t row_start = get_arg_val<uint32_t>(1);
+     const uint32_t core_rows = get_arg_val<uint32_t>(2);
+     const uint32_t n_tile_start = get_arg_val<uint32_t>(3);
+     const uint32_t num_n_blocks = get_arg_val<uint32_t>(4);
+-    const uint32_t sb_h = get_arg_val<uint32_t>(5);
+-    const uint32_t sb_w = get_arg_val<uint32_t>(6);
+-    const uint32_t tail_sb_h = get_arg_val<uint32_t>(7);
+-    const uint32_t tail_sb_w = get_arg_val<uint32_t>(8);
++    const RowBlocks blocks(core_rows, get_arg_val<uint32_t>(5), get_arg_val<uint32_t>(6));
++    const uint32_t sb0_h = get_arg_val<uint32_t>(7);
++    const uint32_t sb0_w = get_arg_val<uint32_t>(8);
++    const uint32_t sb_big_h = get_arg_val<uint32_t>(9);
++    const uint32_t sb_big_w = get_arg_val<uint32_t>(10);
++    const uint32_t sb_small_h = get_arg_val<uint32_t>(11);
++    const uint32_t sb_small_w = get_arg_val<uint32_t>(12);
+
+     const auto out_accessor = TensorAccessor(out_args, out_addr, tile_bytes);
+
+@@ -60,14 +65,22 @@
+         noc.write_zeros_l1_barrier();
+     };
+
+-    const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;
++    const uint32_t num_row_blocks = blocks.num_blocks;
++    // Mirrors compute's ring alignment pad (see linear_gelu_compute.cpp).
++    uint32_t out_pos = 0;
+     for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
+-        const uint32_t first_row = row_block_idx * block_h;
+-        const bool tail = core_rows - first_row < block_h;
+-        const uint32_t rows = tail ? core_rows - first_row : block_h;
+-        const uint32_t cur_sb_h = tail ? tail_sb_h : sb_h;
+-        const uint32_t cur_sb_w = tail ? tail_sb_w : sb_w;
++        const uint32_t first_row = blocks.start(row_block_idx);
++        const uint32_t rows = blocks.rows(row_block_idx);
++        const bool big = rows == blocks.rest_q + 1;
++        const uint32_t cur_sb_h = row_block_idx == 0 ? sb0_h : (big ? sb_big_h : sb_small_h);
++        const uint32_t cur_sb_w = row_block_idx == 0 ? sb0_w : (big ? sb_big_w : sb_small_w);
+         const uint32_t sb_tiles = cur_sb_h * cur_sb_w;
++        const uint32_t pad = (sb_tiles - out_pos % sb_tiles) % sb_tiles;
++        if (pad) {
++            cb_wait_front(cb_output_tiles, pad);
++            cb_pop_front(cb_output_tiles, pad);
++        }
++        out_pos = (out_pos + pad + rows * block_w * num_n_blocks) % out_ring_pages;
+         const uint32_t m_base = row_start + first_row;
+         // Occupancy: waits on the packer plus the write issue for one row-block.
+         MaybeDeviceZoneScope("writer_drain");
+--- linear_gelu_program_descriptor.py	2026-11-02 23:30:28.393517215 +0000
++++ perf_experiments/balanced_row_blocks/descriptor_balanced.py	2026-11-02 23:44:28.925656601 +0000
+@@ -12,12 +12,15 @@
+
+ from __future__ import annotations
+
++import math
+ from dataclasses import dataclass
+ from pathlib import Path
+
+ import ttnn
+
+ KERNEL_DIR = Path(__file__).parent / "kernels"
++# "first": block 0 = block_h, the rest balanced; "full": every block balanced (block 0 the larger).
++BALANCE = "first"
+
+ TILE = 32
+ HIDDEN = 768
+@@ -89,6 +92,17 @@
+     return max(2, _div_up(OUT_RING_PAGES, block_h * block_w))
+
+
++def row_blocks(rows, block_h, balance=None):
++    """Per-block row counts (mirrors kernels/linear_gelu_row_blocks.h)."""
++    balance = balance or BALANCE
++    num_blocks = _div_up(rows, block_h)
++    first = min(rows, block_h) if balance == "first" else _div_up(rows, num_blocks)
++    if num_blocks == 1:
++        return num_blocks, first, [first]
++    q, r = divmod(rows - first, num_blocks - 1)
++    return num_blocks, first, [first] + [q + (1 if j < r else 0) for j in range(num_blocks - 1)]
++
++
+ def _footprint_bytes(block_h, core_n_tiles_max, block_w, tile_bytes):
+     fixed = (K_EXT_TILES * core_n_tiles_max + 1) * tile_bytes
+     act = ACT_DEPTH * block_h * K_EXT_TILES * tile_bytes
+@@ -212,14 +226,28 @@
+     writer_rt = ttnn.RuntimeArgs()
+     compute_rt = ttnn.RuntimeArgs()
+     core_n_tiles = blocking.core_n_tiles_max
+-    sb_h, sb_w = _subblock(block_h, block_w, blocking.dest_tiles)
++    per_row = []
++    areas = set()
++    for row in range(blocking.active_rows):
++        rows = min(blocking.core_m_tiles, blocking.tensor_m_tiles - row * blocking.core_m_tiles)
++        num_blocks, first, sizes = row_blocks(rows, block_h)
++        q = sizes[-1] if num_blocks > 1 else 0
++        sb0 = _subblock(first, block_w, blocking.dest_tiles)
++        sb_big = _subblock(q + 1, block_w, blocking.dest_tiles) if num_blocks > 1 else (1, 1)
++        sb_small = _subblock(q, block_w, blocking.dest_tiles) if q else (1, 1)
++        for size in sizes:
++            sb = sb0 if size == first else (sb_big if size == q + 1 else sb_small)
++            areas.add(sb[0] * sb[1])
++        per_row.append((rows, num_blocks, first, [*sb0, *sb_big, *sb_small]))
++    # Every block starts on a multiple of its subblock area (kernel pad), so the ring must be a multiple of all.
++    out_pages = _out_depth(block_h, block_w) * block_h * block_w
++    lcm = math.lcm(*areas)
++    out_pages = _div_up(out_pages, lcm) * lcm
++    compute_ct.append(out_pages)
++    writer_ct.insert(7, out_pages)
+     for row in range(blocking.active_rows):
+         row_start = row * blocking.core_m_tiles
+-        rows = min(blocking.core_m_tiles, blocking.tensor_m_tiles - row_start)
+-        last_block_h = rows - (_div_up(rows, block_h) - 1) * block_h
+-        # cb_output_tiles drains one subblock as one contiguous span. Every nominal block leaves the ring at a
+-        # multiple of block_h * block_w, so a tail area dividing it can never straddle the ring end.
+-        tail_sb_h, tail_sb_w = _subblock(last_block_h, block_w, blocking.dest_tiles, block_h * block_w)
++        rows, num_blocks, first, sbs = per_row[row]
+         for col in range(blocking.active_cols):
+             n_tile_start = col * core_n_tiles
+             num_n_blocks = min(core_n_tiles, N_TILES - n_tile_start) // block_w
+@@ -234,6 +262,8 @@
+                 num_n_blocks,
+                 row,
+                 col + W_ROUND_SHIFT if W_SENDER_STAGGER else 0,
++                num_blocks,
++                first,
+             ]
+             writer_rt[x][y] = [
+                 output.buffer_address(),
+@@ -241,16 +271,15 @@
+                 rows,
+                 n_tile_start,
+                 num_n_blocks,
+-                sb_h,
+-                sb_w,
+-                tail_sb_h,
+-                tail_sb_w,
++                num_blocks,
++                first,
++                *sbs,
+             ]
+-            compute_rt[x][y] = [rows, num_n_blocks, sb_h, sb_w, tail_sb_h, tail_sb_w]
++            compute_rt[x][y] = [rows, num_n_blocks, num_blocks, first, *sbs]
+     cbs = [
+         _cb(CB_ACTIVATION_BLOCK, ACT_DEPTH * block_h * K_EXT_TILES, tile_bytes, cores),
+         _cb(CB_WEIGHT_RESIDENT, K_EXT_TILES * blocking.core_n_tiles_max, tile_bytes, cores),
+-        _cb(CB_OUTPUT_TILES, _out_depth(block_h, block_w) * block_h * block_w, tile_bytes, cores),
++        _cb(CB_OUTPUT_TILES, out_pages, tile_bytes, cores),
+         _cb(CB_BIAS_ONES_TILE, 1, tile_bytes, cores),
+     ]

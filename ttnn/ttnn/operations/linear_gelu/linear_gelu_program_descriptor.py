@@ -12,6 +12,7 @@ K-block of k_ext_tiles accumulates in fp32 DEST; GELU runs on the packer before 
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,6 +90,30 @@ def _out_depth(block_h, block_w):
     return max(2, _div_up(OUT_RING_PAGES, block_h * block_w))
 
 
+# Row-block split by x's buffer type. "balanced": one block_h block (its compute hides the W delivery), then the rest
+# split evenly, so no 1-row tail runs 1x1 subblocks: DRAM x 8x512 99.1 -> 95.5, 8x384 79.8 -> 77.0 us. Carve-out
+# "tail" (block_h blocks plus one remainder block) for L1 x, where balanced measured 8x512 89.8 -> 90.6 us: x lands
+# early there, and the final 3-tile subblock's GELU drains unhidden.
+ROW_SPLIT = {ttnn.BufferType.L1: "tail", ttnn.BufferType.DRAM: "balanced"}
+
+
+def _num_full(rows, block_h, policy):
+    """Leading block_h-row blocks before the balanced rest."""
+    num_blocks = _div_up(rows, block_h)
+    return num_blocks - 1 if policy == "tail" else min(1, num_blocks - 1)
+
+
+def row_blocks(rows, block_h, num_full):
+    """(num_blocks, per-block rows, per-block kind) mirroring kernels/linear_gelu_row_blocks.h: num_full block_h-row
+    blocks, then the rest split evenly, larger first. kind 0 = block_h rows, 1 = q + 1 rows, 2 = q rows."""
+    num_blocks = _div_up(rows, block_h)
+    rest_blocks = num_blocks - num_full
+    q, r = divmod(rows - num_full * block_h, rest_blocks)
+    sizes = [block_h] * num_full + [q + (1 if j < r else 0) for j in range(rest_blocks)]
+    kinds = [0] * num_full + [1 if j < r else 2 for j in range(rest_blocks)]
+    return num_blocks, q, sizes, kinds
+
+
 def _footprint_bytes(block_h, core_n_tiles_max, block_w, tile_bytes):
     fixed = (K_EXT_TILES * core_n_tiles_max + 1) * tile_bytes
     act = ACT_DEPTH * block_h * K_EXT_TILES * tile_bytes
@@ -146,15 +171,14 @@ def select_blocking(input_tensor, compute_kernel_config, out_buffer_type):
     return Blocking(tensor_m_tiles=tensor_m_tiles, dest_tiles=dest_tiles, transposed=transposed, **cand)
 
 
-def _subblock(rows, block_w, dest_tiles, area_divides=None):
-    """Largest-area (sb_h, sb_w) with sb_h | rows, sb_w | block_w, area <= dest_tiles (and area | area_divides when
-    given); larger sb_h on ties."""
+def _subblock(rows, block_w, dest_tiles):
+    """Largest-area (sb_h, sb_w) with sb_h | rows, sb_w | block_w, area <= dest_tiles; larger sb_h on ties."""
     best = (1, 1)
     for sb_h in range(1, rows + 1):
         if rows % sb_h:
             continue
         for sb_w in range(1, block_w + 1):
-            if block_w % sb_w or sb_h * sb_w > dest_tiles or (area_divides and area_divides % (sb_h * sb_w)):
+            if block_w % sb_w or sb_h * sb_w > dest_tiles:
                 continue
             if (sb_h * sb_w, sb_h) > (best[0] * best[1], best[0]):
                 best = (sb_h, sb_w)
@@ -212,14 +236,26 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     core_n_tiles = blocking.core_n_tiles_max
-    sb_h, sb_w = _subblock(block_h, block_w, blocking.dest_tiles)
+    per_row = []
+    areas = set()
+    row_split = ROW_SPLIT[input_tensor.memory_config().buffer_type]
+    for row in range(blocking.active_rows):
+        rows = min(blocking.core_m_tiles, blocking.tensor_m_tiles - row * blocking.core_m_tiles)
+        num_full = _num_full(rows, block_h, row_split)
+        num_blocks, q, sizes, kinds = row_blocks(rows, block_h, num_full)
+        sbs = [_subblock(h, block_w, blocking.dest_tiles) if h else (1, 1) for h in (block_h, q + 1, q)]
+        for kind in kinds:
+            areas.add(sbs[kind][0] * sbs[kind][1])
+        per_row.append((rows, num_blocks, num_full, [v for sb in sbs for v in sb]))
+    # Every block starts on a multiple of its subblock area (kernel pad), so the ring must be a multiple of all.
+    out_pages = _out_depth(block_h, block_w) * block_h * block_w
+    lcm = math.lcm(*areas)
+    out_pages = _div_up(out_pages, lcm) * lcm
+    compute_ct.append(out_pages)
+    writer_ct.insert(7, out_pages)
     for row in range(blocking.active_rows):
         row_start = row * blocking.core_m_tiles
-        rows = min(blocking.core_m_tiles, blocking.tensor_m_tiles - row_start)
-        last_block_h = rows - (_div_up(rows, block_h) - 1) * block_h
-        # cb_output_tiles drains one subblock as one contiguous span. Every nominal block leaves the ring at a
-        # multiple of block_h * block_w, so a tail area dividing it can never straddle the ring end.
-        tail_sb_h, tail_sb_w = _subblock(last_block_h, block_w, blocking.dest_tiles, block_h * block_w)
+        rows, num_blocks, num_full, sbs = per_row[row]
         for col in range(blocking.active_cols):
             n_tile_start = col * core_n_tiles
             num_n_blocks = min(core_n_tiles, N_TILES - n_tile_start) // block_w
@@ -234,6 +270,8 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
                 num_n_blocks,
                 row,
                 col + W_ROUND_SHIFT if W_SENDER_STAGGER else 0,
+                num_blocks,
+                num_full,
             ]
             writer_rt[x][y] = [
                 output.buffer_address(),
@@ -241,16 +279,15 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
                 rows,
                 n_tile_start,
                 num_n_blocks,
-                sb_h,
-                sb_w,
-                tail_sb_h,
-                tail_sb_w,
+                num_blocks,
+                num_full,
+                *sbs,
             ]
-            compute_rt[x][y] = [rows, num_n_blocks, sb_h, sb_w, tail_sb_h, tail_sb_w]
+            compute_rt[x][y] = [rows, num_n_blocks, num_blocks, num_full, *sbs]
     cbs = [
         _cb(CB_ACTIVATION_BLOCK, ACT_DEPTH * block_h * K_EXT_TILES, tile_bytes, cores),
         _cb(CB_WEIGHT_RESIDENT, K_EXT_TILES * blocking.core_n_tiles_max, tile_bytes, cores),
-        _cb(CB_OUTPUT_TILES, _out_depth(block_h, block_w) * block_h * block_w, tile_bytes, cores),
+        _cb(CB_OUTPUT_TILES, out_pages, tile_bytes, cores),
         _cb(CB_BIAS_ONES_TILE, 1, tile_bytes, cores),
     ]
 

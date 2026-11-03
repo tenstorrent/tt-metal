@@ -16,6 +16,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "linear_gelu_gelu_sfpu.h"
+#include "linear_gelu_row_blocks.h"
 
 namespace {
 
@@ -35,13 +36,18 @@ void kernel_main() {
     constexpr uint32_t block_h = get_compile_time_arg_val(3);
     constexpr uint32_t block_w = get_compile_time_arg_val(4);
     constexpr uint32_t k_ext_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t out_ring_pages = get_compile_time_arg_val(6);
 
     const uint32_t core_rows = get_arg_val<uint32_t>(0);
     const uint32_t num_n_blocks = get_arg_val<uint32_t>(1);
-    const uint32_t sb_h = get_arg_val<uint32_t>(2);
-    const uint32_t sb_w = get_arg_val<uint32_t>(3);
-    const uint32_t tail_sb_h = get_arg_val<uint32_t>(4);
-    const uint32_t tail_sb_w = get_arg_val<uint32_t>(5);
+    const RowBlocks blocks(core_rows, get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3), block_h);
+    // Subblocks of the block_h-row, the (rest_q + 1)-row and the rest_q-row blocks.
+    const uint32_t sb0_h = get_arg_val<uint32_t>(4);
+    const uint32_t sb0_w = get_arg_val<uint32_t>(5);
+    const uint32_t sb_big_h = get_arg_val<uint32_t>(6);
+    const uint32_t sb_big_w = get_arg_val<uint32_t>(7);
+    const uint32_t sb_small_h = get_arg_val<uint32_t>(8);
+    const uint32_t sb_small_w = get_arg_val<uint32_t>(9);
 
     static_assert(DST_ACCUM_MODE, "the load-macro GELU stores fp32 DEST unrounded");
     using Gelu = GeluTanhActivation<kGeluLoadMacro>;
@@ -62,8 +68,11 @@ void kernel_main() {
         weight_buf.wait_front(w_chunk_tiles);
     }
 
-    const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;
-    // matmul_block_init carries the subblock dims, so re-init only when they change (nominal -> tail).
+    const uint32_t num_row_blocks = blocks.num_blocks;
+    // cb_output_tiles page offset mod the ring: a subblock is packed as one contiguous span, so each block starts
+    // on a multiple of its subblock area (the ring is a multiple of every area); the writer skips the same pad.
+    uint32_t out_pos = 0;
+    // matmul_block_init carries the subblock dims, so re-init only when they change (between row-block sizes).
     uint32_t init_sb_h = 0;
     uint32_t init_sb_w = 0;
     for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
@@ -74,11 +83,17 @@ void kernel_main() {
         }
         // Occupancy: matmul + packer GELU for one row-block, including the in-helper W / output CB waits.
         MaybeDeviceZoneScope("compute_matmul_gelu");
-        const uint32_t first_row = row_block_idx * block_h;
-        const bool tail = core_rows - first_row < block_h;
-        const uint32_t rows = tail ? core_rows - first_row : block_h;
-        const uint32_t cur_sb_h = tail ? tail_sb_h : sb_h;
-        const uint32_t cur_sb_w = tail ? tail_sb_w : sb_w;
+        const uint32_t rows = blocks.rows(row_block_idx);
+        const uint32_t kind = blocks.kind(row_block_idx);
+        const uint32_t cur_sb_h = kind == 0 ? sb0_h : (kind == 1 ? sb_big_h : sb_small_h);
+        const uint32_t cur_sb_w = kind == 0 ? sb0_w : (kind == 1 ? sb_big_w : sb_small_w);
+        const uint32_t sb_area = cur_sb_h * cur_sb_w;
+        const uint32_t pad = (sb_area - out_pos % sb_area) % sb_area;
+        if (pad) {
+            out_buf.reserve_back(pad);
+            out_buf.push_back(pad);
+        }
+        out_pos = (out_pos + pad + rows * block_w * num_n_blocks) % out_ring_pages;
         const auto shape =
             MatmulBlockShape::of(rows / cur_sb_h, block_w / cur_sb_w, cur_sb_h, cur_sb_w, k_ext_tiles, 1);
 

@@ -14,6 +14,7 @@
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "linear_gelu_row_blocks.h"
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
@@ -23,17 +24,21 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t last_valid_rows = get_compile_time_arg_val(6);
-    constexpr auto out_args = TensorAccessorArgs<7>();
+    constexpr uint32_t out_ring_pages = get_compile_time_arg_val(7);
+    constexpr auto out_args = TensorAccessorArgs<8>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
     const uint32_t core_rows = get_arg_val<uint32_t>(2);
     const uint32_t n_tile_start = get_arg_val<uint32_t>(3);
     const uint32_t num_n_blocks = get_arg_val<uint32_t>(4);
-    const uint32_t sb_h = get_arg_val<uint32_t>(5);
-    const uint32_t sb_w = get_arg_val<uint32_t>(6);
-    const uint32_t tail_sb_h = get_arg_val<uint32_t>(7);
-    const uint32_t tail_sb_w = get_arg_val<uint32_t>(8);
+    const RowBlocks blocks(core_rows, get_arg_val<uint32_t>(5), get_arg_val<uint32_t>(6), block_h);
+    const uint32_t sb0_h = get_arg_val<uint32_t>(7);
+    const uint32_t sb0_w = get_arg_val<uint32_t>(8);
+    const uint32_t sb_big_h = get_arg_val<uint32_t>(9);
+    const uint32_t sb_big_w = get_arg_val<uint32_t>(10);
+    const uint32_t sb_small_h = get_arg_val<uint32_t>(11);
+    const uint32_t sb_small_w = get_arg_val<uint32_t>(12);
 
     const auto out_accessor = TensorAccessor(out_args, out_addr, tile_bytes);
 
@@ -60,14 +65,22 @@ void kernel_main() {
         noc.write_zeros_l1_barrier();
     };
 
-    const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;
+    const uint32_t num_row_blocks = blocks.num_blocks;
+    // Mirrors compute's ring alignment pad (see linear_gelu_compute.cpp).
+    uint32_t out_pos = 0;
     for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
-        const uint32_t first_row = row_block_idx * block_h;
-        const bool tail = core_rows - first_row < block_h;
-        const uint32_t rows = tail ? core_rows - first_row : block_h;
-        const uint32_t cur_sb_h = tail ? tail_sb_h : sb_h;
-        const uint32_t cur_sb_w = tail ? tail_sb_w : sb_w;
+        const uint32_t first_row = blocks.start(row_block_idx);
+        const uint32_t rows = blocks.rows(row_block_idx);
+        const uint32_t kind = blocks.kind(row_block_idx);
+        const uint32_t cur_sb_h = kind == 0 ? sb0_h : (kind == 1 ? sb_big_h : sb_small_h);
+        const uint32_t cur_sb_w = kind == 0 ? sb0_w : (kind == 1 ? sb_big_w : sb_small_w);
         const uint32_t sb_tiles = cur_sb_h * cur_sb_w;
+        const uint32_t pad = (sb_tiles - out_pos % sb_tiles) % sb_tiles;
+        if (pad) {
+            cb_wait_front(cb_output_tiles, pad);
+            cb_pop_front(cb_output_tiles, pad);
+        }
+        out_pos = (out_pos + pad + rows * block_w * num_n_blocks) % out_ring_pages;
         const uint32_t m_base = row_start + first_row;
         // Occupancy: waits on the packer plus the write issue for one row-block.
         MaybeDeviceZoneScope("writer_drain");
