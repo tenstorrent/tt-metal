@@ -493,7 +493,6 @@ class QwenImagePipeline(PipelineAPIMixin):
                         height=size.height,
                         traced=traced,
                         encoder_traced=traced,
-                        vae_traced=traced,
                         image=image,
                         mask_image=mask_image,
                         strength=1.0,
@@ -544,7 +543,6 @@ class QwenImagePipeline(PipelineAPIMixin):
                         height=size.height,
                         traced=traced,
                         encoder_traced=traced,
-                        vae_traced=traced,
                         image=images,
                         # Edit inpainting takes a single image.
                         mask_image=Image.new("L", (size.width, size.height), 255) if image_count == 1 else None,
@@ -563,7 +561,6 @@ class QwenImagePipeline(PipelineAPIMixin):
         width: int | None = None,
         height: int | None = None,
         traced: bool = True,
-        vae_traced: bool | None = None,
         encoder_traced: bool | None = None,
         image: Image.Image | Sequence[Image.Image] | None = None,
         mask_image: Image.Image | None = None,
@@ -633,7 +630,6 @@ class QwenImagePipeline(PipelineAPIMixin):
             raise ValueError(msg)
         layout = self._layout(size, conditions)
 
-        vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         on_event = on_event if on_event is not None else null_callback
         negative_prompts = negative_prompts if negative_prompts is not None else [""] * prompt_count
@@ -681,7 +677,7 @@ class QwenImagePipeline(PipelineAPIMixin):
             batch_size=prompt_count * num_images_per_prompt,
             seed=seed,
             first_step=first_step if inpaint else None,
-            traced=vae_traced,
+            traced=traced,
         )
         context = [tensor.from_torch(c, device=d) for c, d in zip(torch_contexts, self._devices, strict=True)]
         latents = tensor.from_torch_to_devices(latents, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
@@ -767,7 +763,7 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         logger.info("decoding image...")
         on_event(SectionStart("vae"))
-        images = self._decode_latents(latents[-1], size=size, traced=vae_traced)
+        images = self._decode_latents(latents[-1], size=size, traced=traced)
         on_event(SectionEnd("vae"))
 
         on_event(SectionEnd("total"))
