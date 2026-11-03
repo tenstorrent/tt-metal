@@ -67,6 +67,7 @@ add_subdirectory(fft)
 add_subdirectory(fused_msda)
 add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(plusone)
+add_subdirectory(dequantize_mxfp8)
 add_subdirectory(dequantize_nvfp4)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
@@ -114,6 +115,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::FusedMSDA
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
+        TTNN::Ops::Experimental::Mxfp8
         TTNN::Ops::Experimental::Nvfp4
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
@@ -167,6 +169,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Mxfp8>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Nvfp4>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>

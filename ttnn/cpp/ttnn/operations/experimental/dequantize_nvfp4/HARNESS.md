@@ -5,6 +5,15 @@ evaluate it, and compare results. The driver does not invoke an LLM or start
 an unbounded search. A supervising agent chooses edits and a time budget.
 Every hardware invocation goes through `scripts/run_safe_pytest.sh`.
 
+The evaluator is shared by every quantized format: `scripts/quant_harness.py`
+(`--format nvfp4|mxfp8`), `scripts/quant_harness_plugin.py`, and
+`scripts/quant_loop_stats.py`. `scripts/nvfp4_harness.py` and
+`scripts/nvfp4_loop_stats.py` remain as NVFP4 entry points with unchanged CLIs.
+The refactor changed the trusted evaluator files, so results recorded before it
+carry different evaluator hashes. `compare` rejects pairing them; re-measure the
+baseline. See [the MXFP8 harness](../dequantize_mxfp8/HARNESS.md) for the
+per-format differences.
+
 ## Source and runtime isolation
 
 `prepare` makes a sparse, detached Git worktree containing only the operation's
