@@ -58,11 +58,11 @@ constexpr uint32_t kblocks_per_slice = get_compile_time_arg_val(18);
 constexpr uint32_t cb_out_shard = get_compile_time_arg_val(19);
 constexpr bool out_tail = get_compile_time_arg_val(20) != 0;
 constexpr bool act_mcast = get_compile_time_arg_val(21) != 0;  // R4/R5 with > 1 channel slice
-// R4/R5: cb_act_send depth in own K-blocks. The owner tilizes own block kb right after own block
-// kb - act_send_depth was multicast; >= kblocks_per_slice tilizes the whole own slice up front.
-constexpr uint32_t act_send_depth = get_compile_time_arg_val(22);
-// R4/R5: an own K-block is tilized this many K-blocks (rounds) before its own multicast round, and no
-// earlier than its cb_act_send slot frees (>= num_slices - 1: as soon as the slot frees).
+// R4/R5 (Perf 2, in place): cb_act_tiles landing ring depth D in K-blocks. cb_act_send is an alias
+// index over the same memory: own round R is tilized straight into ring slot R % D.
+constexpr uint32_t act_ring_depth = get_compile_time_arg_val(22);
+// R4/R5: an own K-block is tilized this many K-blocks (rounds) before its own multicast round (its
+// ring slot's previous round R - D has been popped by then: lead < D).
 constexpr uint32_t act_tilize_lead = get_compile_time_arg_val(37);
 // Fused ReLU (technique 4): packer ReLU on the final output pack only — the bias pack, or the
 // untilize pack when there is no bias — and cleared right after, so the next block's tilize
@@ -115,10 +115,15 @@ using namespace compute_kernel_lib;
 
 // tilize_kblock: bm tile-rows x bk tiles of RM im2col -> tiles.
 //   R0:    this K-block's in0 (cb_act_tiles).
-//   R4/R5 (act_mcast): own blocks are j = kb * num_slices + my_slice. Own blocks [0, depth) are
-//          tilized into cb_act_send at block 0; own block kb + depth right after own block kb was
-//          multicast (block kb * num_slices + my_slice + 1), so the owner's tilize (and the
-//          reader's gather feeding it) overlaps the other slices' turns. One slice: as R0.
+//   R4/R5 (act_mcast): own blocks are rounds R = kb * num_slices + my_slice (absolute R over the
+//          m-blocks). Own round R is tilized in place into landing-ring slot R % D (alias index
+//          cb_act_send) at the matmul hook of K-block R - act_tilize_lead; the writer multicasts it
+//          from that slot. Skip pushes keep the alias fifo's write pointer on slot R % D. The freed
+//          send buffer pays for the third ring slot, which absorbs the owner's tilize so its own
+//          send is no longer gated on it (Perf 2, measured -7.4% on the SDXL focus case).
+uint32_t own_base = 0;   // absolute round of the current matmul call's K-block 0
+uint32_t own_alias = 0;  // alias-fifo blocks pushed so far
+bool own_started = false;
 struct TilizeKBlock {
     uint32_t my_slice;
     uint32_t m_block = 0;
@@ -147,22 +152,24 @@ struct TilizeKBlock {
                 tilize<tilize_w, cb_act_rm, cb_act_tiles>(block_m_tiles * tilize_blocks_per_row);
             }
         } else {
-            constexpr uint32_t first = act_send_depth < kblocks_per_slice ? act_send_depth : kblocks_per_slice;
+            static_assert(!act_mcast || act_tilize_lead < act_ring_depth, "own slot must be free at the tilize hook");
             if (block == 0) {
-                for (uint32_t kb = 0; kb < first; ++kb) {
-                    tilize_own();
+                if (own_started) {
+                    own_base += num_k_blocks;
                 }
-            } else {
-                // Own block kb (>= the first `first`) is tilized before matmul block
-                // max(after own block kb - depth was sent, act_tilize_lead rounds before its own round):
-                // just in time, so compute does not stall the row on a gather that is not needed yet.
-                for (uint32_t kb = first; kb < kblocks_per_slice; ++kb) {
-                    const uint32_t freed = (kb - act_send_depth) * num_slices + my_slice + 1;
-                    const uint32_t round = kb * num_slices + my_slice;
-                    const uint32_t jit = round > act_tilize_lead ? round - act_tilize_lead : 0;
-                    if (block == (jit > freed ? jit : freed)) {
-                        tilize_own();
+                own_started = true;
+            }
+            for (uint32_t kb = 0; kb < kblocks_per_slice; ++kb) {
+                const uint32_t rl = kb * num_slices + my_slice;
+                const uint32_t hook = rl > act_tilize_lead ? rl - act_tilize_lead : 0;
+                if (block == hook) {
+                    const uint32_t skips = (own_base + rl - own_alias) % act_ring_depth;
+                    if (skips) {
+                        cb_reserve_back(cb_act_send, skips * block_m_tiles * block_k_tiles);
+                        cb_push_back(cb_act_send, skips * block_m_tiles * block_k_tiles);
                     }
+                    own_alias += skips + 1;
+                    tilize_own();
                 }
             }
         }

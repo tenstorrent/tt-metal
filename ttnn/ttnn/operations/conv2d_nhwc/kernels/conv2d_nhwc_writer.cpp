@@ -349,13 +349,26 @@ void kernel_main() {
     const uint32_t act_rounds = num_m_blocks * num_n_blocks * num_k_blocks;
     uint32_t act_round = 0;  // next round to land
     uint32_t act_acked = 0;  // rounds [0, act_acked) handled
-    bool act_sent_ahead = false;  // the next (own) round was multicast during the previous one
+    bool act_sent_ahead = false;  // R9 only: the next (own) round was multicast during the previous one
+    // Perf 2 (in-place own block): compute tilizes own round R straight into landing slot R % D of
+    // cb_act_tiles through the alias index cb_act_send, pushing empty "skip" blocks so the alias fifo
+    // stays in step with the ring; the writer pops the same skips and multicasts from the slot itself.
+    [[maybe_unused]] uint32_t own_alias = 0;  // alias-fifo blocks consumed so far
     const uint32_t act_block_bytes_full = act_block_tiles * get_tile_size(cb_act_tiles);
     const uint32_t act_cb_limit = get_local_cb_interface(cb_act_tiles).fifo_limit;
     const uint32_t act_cb_bytes = get_local_cb_interface(cb_act_tiles).fifo_size;
+    [[maybe_unused]] const uint32_t act_ring_depth = act_cb_bytes / act_block_bytes_full;  // landing slots
     [[maybe_unused]] auto ack_rounds = [&](uint32_t next) {
         const uint32_t end = next + act_ack_lead < act_rounds ? next + act_ack_lead : act_rounds;
         for (; act_acked < end; ++act_acked) {
+            if constexpr (!conv_gather::direct_in0 && act_channels > 1) {
+                // In place, two channels: never block the next (own) round's send on an ack further
+                // ahead — that reserve waits for this core's compute; it is retried after the send.
+                if (next < act_rounds && next % num_slices == my_slice &&
+                    !cb_pages_reservable_at_back(cb_act_tiles, (act_acked - next + 1) * act_block_tiles)) {
+                    return;
+                }
+            }
             if (act_acked % num_slices != my_slice) {
                 cb_reserve_back(cb_act_tiles, (act_acked - next + 1) * act_block_tiles);
                 act_ack(act_acked);
@@ -466,7 +479,21 @@ void kernel_main() {
                     // R9: the own K-block is the resident shard's tiles (published by the reader).
                     constexpr uint32_t cb_src = conv_gather::direct_in0 ? conv_gather::cb_in_shard : cb_act_send;
                     if (owner == my_slice) {
-                        if (!act_sent_ahead) {
+                        if constexpr (!conv_gather::direct_in0) {
+                            // In place: the own block was tilized into this landing slot; multicast
+                            // it from the slot to the others (src == dst: self excluded).
+                            MaybeDeviceZoneScope("writer_act_send");
+                            const uint32_t skips = (act_round - own_alias) % act_ring_depth;
+                            if (skips) {
+                                cb_wait_front(cb_src, skips * act_block_tiles);
+                                cb_pop_front(cb_src, skips * act_block_tiles);
+                            }
+                            own_alias += skips + 1;
+                            cb_wait_front(cb_src, act_block_tiles);
+                            ASSERT(get_read_ptr(cb_src) == landing);
+                            act_send(act_round, landing, landing, act_block_bytes);
+                            cb_pop_front(cb_src, act_block_tiles);
+                        } else if (!act_sent_ahead) {
                             MaybeDeviceZoneScope("writer_act_send");
                             cb_wait_front(cb_src, act_block_tiles);
                             act_send(act_round, get_read_ptr(cb_src), landing, act_block_bytes);
@@ -474,10 +501,12 @@ void kernel_main() {
                         }
                         act_sent_ahead = false;
                     } else {
-                        // Send ahead: own the next round (same m-block) and its block is tilized —
+                        // R9 send ahead: own the next round (same m-block) and its block is ready —
                         // multicast it into the next slot (its receivers acked it when this round's
-                        // predecessor landed) before waiting for this round.
-                        if (act_channels > 1 && k_block + 1 < num_k_blocks && kblock_owner(k_block + 1) == my_slice &&
+                        // predecessor landed) before waiting for this round. In place does not send
+                        // ahead (two concurrent row multicasts regress).
+                        if (conv_gather::direct_in0 && act_channels > 1 && k_block + 1 < num_k_blocks &&
+                            kblock_owner(k_block + 1) == my_slice &&
                             cb_pages_available_at_front(cb_src, act_block_tiles)) {
                             cb_reserve_back(cb_act_tiles, 2 * act_block_tiles);
                             uint32_t next_landing = landing + act_block_bytes_full;

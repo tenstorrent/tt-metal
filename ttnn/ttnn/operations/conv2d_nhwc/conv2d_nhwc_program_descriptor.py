@@ -55,9 +55,12 @@ WEIGHT_DEPTH = 2  # cb_weight_tiles depth, in (bk x bn) K-blocks
 # the weight DRAM latency and column handshake leave the row exchange's critical chain. 2 = no lead.
 SHARDED_WEIGHT_DEPTH = 6
 OUT_RM_DEPTH = 2  # cb_out_rm depth, in (1 tile-row x bn) quanta
-ACT_SEND_DEPTH = 1  # R4/R5 cb_act_send depth, in own (bm x bk) K-blocks (tilized, awaiting multicast);
-# >= kblocks_per_slice tilizes the whole own slice at m-block start (the former own-slice prefetch).
-ACT_RECV_DEPTH = 2  # R4/R5 cb_act_tiles depth, in received (bm x bk) K-blocks (double-buffered multicast)
+# R4/R5 cb_act_tiles landing ring depth, in (bm x bk) K-blocks, before the act-channel extra slot.
+# Perf 2: the owner tilizes its own K-block in place into its landing slot (cb_act_send is an alias
+# index over this ring) and multicasts from there, so there is no separate send buffer; its bytes pay
+# for the third slot, which absorbs the owner's tilize (with 2 slots the owner's send waited on its own
+# tilize-delayed compute pop: measured -7.4% SDXL L1 3x3, same L1 peak).
+ACT_RECV_DEPTH = 3
 # R4/R5: an own K-block is tilized (into cb_act_send) this many rounds before its own multicast round,
 # instead of as soon as the previous own block was sent: compute then never waits on the reader's
 # gather of a block that is not needed yet (that wait stalled the whole row's exchange). Clamped to
@@ -756,9 +759,6 @@ def select_blocking_sharded(
     act_channels = ACT_CHANNELS if (act_mcast and memory_layout == _ML.BLOCK_SHARDED and S > 1) else 1
     recv_depth = ACT_RECV_DEPTH + act_channels - 1
 
-    def send_depth(bk):
-        return min(ACT_SEND_DEPTH, slice_k_tiles // bk)
-
     def rm_rows(bm, deep=False):
         # deep (single-K pipeline): one whole m-block ahead is enough — compute pops m-block i's rows
         # at its tilize, so the reader fills them with m-block i+1 during the matmul.
@@ -816,7 +816,6 @@ def select_blocking_sharded(
         return (
             roles * (max(halo, 1) if not tile_in else 0) * src_bytes
             + roles * rm_rows(bm, deep) * bk * T
-            + (send_depth(bk) * bm * bk * T if act_mcast else 0)
             + (recv_depth if act_mcast else 1) * bm * bk * T
             + (slice_k_tiles if weights_resident else SHARDED_WEIGHT_DEPTH * bk) * nt_s * T_w
             + bm * nt_s * T_acc
@@ -948,7 +947,6 @@ def select_blocking_sharded(
         "native_group": False,
         "tap_major": tap_major,
         "tilize_w": tap_tiles if tap_major else bk,
-        "act_send_depth": send_depth(bk),
         "act_tilize_lead": max(1, min(ACT_TILIZE_LEAD, S - 1)) if act_mcast else 0,
         "act_channels": act_channels,
         "act_recv_depth": recv_depth,
@@ -1213,8 +1211,15 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     ]
     if p["stage_stride"]:
         cbs.append(_cb(CB_STICK_STAGE, act_dtype, p["stage_stride"], 2 * p["stage_row_sticks"], cores))
-    if act_mcast:
-        cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], rm_pages(p["act_send_depth"] * bm * bk), cores))
+    if act_mcast and not direct_in0:
+        # In place (Perf 2): cb_act_send is an alias index over the landing ring (own fifo pointers);
+        # compute tilizes own blocks straight into their landing slot, the writer multicasts from it.
+        assert in0_dtype == act_dtype and T_in0 == p["T"]
+        act_tiles_cb = cbs[3]  # CB_ACT_TILES (the last entry of the list above)
+        assert act_tiles_cb.format_descriptors[0].buffer_index == CB_ACT_TILES
+        act_tiles_cb.format_descriptors = list(act_tiles_cb.format_descriptors) + [
+            ttnn.CBFormatDescriptor(buffer_index=CB_ACT_SEND, data_format=act_dtype, page_size=p["T"])
+        ]
     if tile_in:
         # Window (R0) / halo (sharded) tile-rows in the input's format, reader -> compute untilize.
         cbs.append(_cb(CB_WIN_TILES, input_tensor.dtype, T_in, rm_pages(p["halo_tile_rows"] * c_tiles), cores))
@@ -1366,7 +1371,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         CB_OUT_SHARD,
         1 if p.get("out_tail", False) else 0,
         1 if act_mcast else 0,
-        p.get("act_send_depth", 1),
+        p.get("act_recv_depth", 1),  # landing ring depth (in-place own slot)
         1 if p["activation"] == "relu" else 0,
         1 if dw else 0,
         p["taps"],
