@@ -186,7 +186,7 @@ void kernel_main() {
 
 
 def moe_packed_enabled():
-    return os.environ.get("QWEN_PREFILL_MOE_PACKED", "0") != "0"
+    return os.environ.get("QWEN_PREFILL_MOE_PACKED", "1") != "0"
 
 
 def packed_capacity_rows(n):
