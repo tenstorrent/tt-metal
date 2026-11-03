@@ -128,7 +128,9 @@ def test_merged_programs_are_f2s_multicast_programs_with_the_mixers_shapes():
         "semaphores=[fp.semaphore_descriptor(0, all_set)]",
     ):
         assert pin in nd and pin in f2_nd, pin
-    assert "[FLAT_TILES, 8, 8, 9, 17, DOWN_SPILL, 10], fidelity=fidelity, fp32_dest=True)" in nd
+    assert (
+        "[FLAT_TILES, 8, 8, 9, 17, DOWN_SPILL, 10], fidelity=fidelity, fp32_dest=True )" in nd
+    )  # fidelity: the weight dtype's matmul fidelity (c498a94f943)
     assert "gr.NORM" in nd and "gr.DOWN" in nd and "gr._rectangle(mesh, *DOWN_GRID, rows_above=BRANCHES)" in nd
     assert 'gr.avg_scaler("chain")' in nd and "[scaler_bits, gr._bits(gr.EPS)]" in nd
     lg = _flat(inspect.getsource(fm.low_rank_gate))

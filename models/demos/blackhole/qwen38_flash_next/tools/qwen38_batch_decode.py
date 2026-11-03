@@ -70,6 +70,9 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
 from models.demos.blackhole.qwen38_flash_next.ttnn.pack_landing import Qwen38TTNNPackLander
 from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
 
+PARK_DRIFT_MARGIN = (
+    4096  # an idle lane is parked once its position reaches allocated_context minus this (``park_idle``)
+)
 WARM_TOKEN_ID = 1000  # any in-vocabulary id: the warm passes write garbage into lane state that a reset clears
 
 
@@ -166,6 +169,9 @@ def page_table_rows(page_rows: Sequence[Sequence[int]], lanes: int) -> list[list
     return [list(row) for row in page_rows]
 
 
+STEP_SPLIT = os.environ.get("QWEN38_STEP_SPLIT") == "1"  # per-part step timings (read once)
+
+
 class Qwen38PageAllocator:
     """Host free list over pages ``1 .. num_pages - 1`` in a seeded-shuffled order (page 0, the scratch, is never
     handed out): consecutive allocations are not contiguous and interleave across lanes."""
@@ -227,6 +233,12 @@ def chain_warm_hook(hook):
         yield
     finally:
         Qwen38TracedChain.open = original
+
+
+def lane_token_ids(row: torch.Tensor) -> list[int]:
+    """The token ids of a token-row read (FP32 values): rounded to the nearest integer."""
+
+    return [int(v) for v in row.to(torch.float32).round().to(torch.int64).tolist()]
 
 
 @dataclass
@@ -298,6 +310,7 @@ class Qwen38PlainLaneDecoder:
         self.released = False
         self.page_table_dirty = False  # a page row changed since the last table write (grow, release)
         self.last_admit: dict[str, float] = {}
+        self.step_split: dict[str, float] = {}  # QWEN38_STEP_SPLIT=1: the last step's seconds per part
         self.lane_moves = 0  # W5: lanes moved down by ``move_lane`` (compaction)
         self.last_move: dict[str, Any] = {}
         # P2a (vLLM adapter): compile the full-vocabulary gather of the lane logits in ``prepare`` (eager, misses allowed)
@@ -1060,22 +1073,35 @@ class Qwen38PlainLaneDecoder:
         self.page_rows[lane] += self.allocator.allocate(1)
         self.page_table_dirty = True
 
-    def sync_page_table(self) -> bool:
-        """Upload the whole page table if a row changed since the last upload; returns whether it wrote."""
+    def sync_page_table(self, keep: list | None = None) -> bool:
+        """Upload the whole page table if a row changed since the last upload; returns whether it wrote.  ``keep``
+        collects the host tensor of the upload (it must outlive a replay enqueued without blocking)."""
 
         if self.paging is None or not self.page_table_dirty:
             return False
-        self.model.write_lane_page_table(self.ls, page_table_rows(self.page_rows, self.lanes))
+        kept = {} if keep is None else {"keep": keep}
+        self.model.write_lane_page_table(self.ls, page_table_rows(self.page_rows, self.lanes), **kept)
         self.page_table_dirty = False
         return True
 
     def park_idle(self, lanes: Iterable[int]) -> bool:
-        """Park idle lanes at position 0 before a step (the trace advanced them): one position-row write, only when an
-        idle lane's mirror is off 0; returns whether it wrote."""
+        """Park idle lanes at position 0 before a step (the trace advanced them): one position-row write that parks
+        every idle lane, made only when an idle lane below the bucket ``R`` the step replays is off 0 (position or
+        shift: it is computed) or an idle lane has drifted to ``allocated_context - PARK_DRIFT_MARGIN`` (the replay adds
+        1 to every lane, computed or not, so an idle lane above ``R`` climbs until then).  A lane at or above ``R`` is
+        not computed by the bucket-``R`` trace: its drift changes no byte a computed lane sees, and it is parked
+        when ``R`` grows to hold it or at the bound.  One bucket (``R`` = every lane): the lanes off 0, as ever.
+        Returns whether it wrote."""
 
         lanes = list(lanes)
         position = self.ls.position
-        if not any(position.positions[lane] or position.shifts[lane] for lane in lanes):
+        replayed = self.bucket_for_step()
+        bound = int(self.model.allocated_context) - PARK_DRIFT_MARGIN
+        if not any(
+            (lane < replayed and (position.positions[lane] or position.shifts[lane]))
+            or position.positions[lane] >= bound
+            for lane in lanes
+        ):
             return False
         position.park(lanes)
         return True
@@ -1107,8 +1133,10 @@ class Qwen38PlainLaneDecoder:
         return True
 
     def import_lane(self, vm: Any, lane: int, length: int, context: Any, pages: Sequence[int]) -> None:
-        """Move the B=1 chain's just-prefilled state (``length`` tokens, PLE context ``context``) into lane ``lane``
-        with the page row ``pages``: ``admit`` without its prefill and without the allocator (the pages are vLLM's)."""
+        """Move the B=1 chain's state (``length`` tokens, PLE context ``context``) into lane ``lane`` with the page row
+        ``pages``: ``admit`` without its prefill and without the allocator (the pages are vLLM's).  The chain may be
+        just prefilled or, for the adapter's hybrid single mode, ``length - prompt`` decode steps further: only the
+        length and the context are read."""
 
         model, ls = self.model, self.ls
         started = time.perf_counter()
@@ -1213,24 +1241,75 @@ class Qwen38PlainLaneDecoder:
 
     def step(self, tokens: Sequence[int]) -> list[int]:
         """One lane-body replay of the smallest bucket holding every live lane, consuming ``tokens`` (one per lane; the
-        bucket reads the first R); returns the lanes' next greedy tokens, -1 for the lanes R and up."""
+        bucket reads the first R); returns the lanes' next greedy tokens, -1 for the lanes R and up.  The blocking
+        composition of :meth:`enqueue_step` and :meth:`finish_step`."""
+
+        r = self.enqueue_step(tokens)
+        return self.finish_step(r)
+
+    def enqueue_step(
+        self,
+        tokens: Sequence[int],
+        *,
+        blocking: bool = True,
+        write_tokens: bool = True,
+        keep: list | None = None,
+    ) -> int:
+        """The host-to-device half of :meth:`step`: the PLE rows of ``tokens[:R]``, the token row write (skipped with
+        ``write_tokens`` False: the row already holds the tokens, the resolve epilogue of the previous replay wrote them),
+        the replay (``blocking`` False: enqueued only) and the position mirror advance.  Returns R.  ``keep`` collects the
+        host tensors the uploads read, which must outlive the replay when it is not blocking."""
 
         model, ls, mesh = self.model, self.ls, self.mesh
         r = self.bucket_for_step()
         bucket = self.bucket_sets[r]
+        split = STEP_SPLIT
+        if split:
+            t0 = time.perf_counter()
         idle = [u for u in range(self.lanes) if self.positions[u] is None]  # no request: PLE context None
         for u in idle:
             self.contexts[u] = None
-        self.contexts[:r] = list(model.write_lane_ple_rows(bucket.ls, tokens[:r], self.contexts[:r]))
+        kept = {} if keep is None else {"keep": keep}
+        self.contexts[:r] = list(model.write_lane_ple_rows(bucket.ls, tokens[:r], self.contexts[:r], **kept))
         for u in idle:
             self.contexts[u] = None
-        model.write_lane_tokens(bucket.ls, tokens[:r])
-        ttnn._ttnn_execute_trace(mesh, bucket.trace_id, cq_id=0, blocking=True)
+        if split:
+            t1 = time.perf_counter()
+        if write_tokens:
+            model.write_lane_tokens(bucket.ls, tokens[:r], **kept)
+        if split:
+            t2 = time.perf_counter()
+        ttnn._ttnn_execute_trace(mesh, bucket.trace_id, cq_id=0, blocking=blocking)
+        if split:
+            t3 = time.perf_counter()
         ls.position.advance_replayed()  # the shared position row: the trace added 1 to all 32 entries
         self.active = bucket
         self.bucket_steps[r] += 1
-        row = ttnn.to_torch(ttnn.get_device_tensors(ls.token_row)[0]).reshape(-1)[:r]
-        return [int(v) for v in row.to(torch.float32).round().to(torch.int64).tolist()] + [-1] * (self.lanes - r)
+        if split:
+            t4 = time.perf_counter()
+            self.step_split = {"ple": t1 - t0, "tok": t2 - t1, "exe": t3 - t2, "adv": t4 - t3, "read": 0.0}
+        return r
+
+    def finish_step(self, r: int) -> list[int]:
+        """The device-to-host half of :meth:`step`: the blocking read of the token row's first ``r`` lanes (the lanes'
+        next greedy tokens), -1 for the lanes ``r`` and up."""
+
+        split = STEP_SPLIT
+        if split:
+            t4 = time.perf_counter()
+        row = ttnn.to_torch(ttnn.get_device_tensors(self.ls.token_row)[0]).reshape(-1)[:r]
+        result = lane_token_ids(row) + [-1] * (self.lanes - r)
+        if split:
+            self.step_split["read"] = time.perf_counter() - t4
+        return result
+
+    def enqueue_token_read(self) -> tuple[Any, Any, Any]:
+        """The async read of the token row (device 0's replica; every lane's greedy token after the last replay): a
+        non-blocking copy into a fresh host tensor, then two events on cq 0 after it (one the adapter waits, one the
+        plugin's output thread waits).  Returns ``(host, adapter_event, plugin_event)``."""
+
+        host = ttnn.from_device(ttnn.get_device_tensors(self.ls.token_row)[0], blocking=False)
+        return host, ttnn.record_event(self.mesh, cq_id=0), ttnn.record_event(self.mesh, cq_id=0)
 
     # -- release -----------------------------------------------------------------------------------
 

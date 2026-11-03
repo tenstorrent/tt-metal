@@ -61,7 +61,7 @@ void kernel_main() {
     src.wait_front(NT);
     index.wait_front(NT);
     {
-        FUSED_ZONE("k_fold_sort");
+        FUSED_ZONE("fz_rt_f_sort");
         tile_regs_acquire();
         for (uint32_t w = 0; w < NT; ++w) {
             frt_load_tile(cb_keys, cb_idx, w, (w == 0) ? 0 : 1);

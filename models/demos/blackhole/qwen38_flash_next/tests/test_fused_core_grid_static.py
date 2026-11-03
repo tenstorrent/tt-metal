@@ -82,8 +82,8 @@ def test_score_merge_kernels_take_a_chunk_range():
     )
     assert "const uint32_t total_chunks = get_arg_val<uint32_t>(5);" in reader
     assert (
-        "gathered.get_noc_addr((d * rows + r) * total_chunks + chunk, 0)" in reader
-    )  # the 2 KB page of device d, row r, chunk c
+        "gathered.get_noc_addr((d * live_rows + src_row) * total_chunks + chunk, 0)" in reader
+    )  # the 2 KB page of device d, row r (live row, or row 0 for dead rows), chunk c
     assert "for (uint32_t chunk = first_chunk; chunk < first_chunk + chunks; ++chunk) {" in reader
     assert (
         "const uint32_t chunks = get_arg_val<uint32_t>(1);" in compute
@@ -106,7 +106,8 @@ def test_score_merge_kernels_take_a_chunk_range():
         and "cores=fp.core_rectangle(work,mesh)" in source
     )
     assert (
-        "[(w.core,[gathered.buffer_address(),mask.buffer_address(),rows,w.start,w.count,chunks])forwinwork]" in source
+        "[(w.core,[gathered.buffer_address(),mask.buffer_address(),rows,w.start,w.count,chunks,live_rows])forwinwork]"
+        in source
     )
     assert (
         "[(w.core,[rows,w.count])forwinwork]" in source

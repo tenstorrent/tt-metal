@@ -33,7 +33,11 @@ def test_registry_switch_adds_candidate_row_only_when_asked():
     assert registry.edge_trim_names({edge_trim.ENV: "1"}) == frozenset()
     assert registry.edge_trim_names({edge_trim.ENV: "1", edge_trim.OPTS_ENV: "candidate_row"}) == {"candidate_row"}
     source = inspect.getsource(registry.enabled_names)
-    assert "names & (TP8_READY | edge)" in source and "edge_trim_names(environ)" in source
+    assert (
+        "ready = TP8_READY | edge" in source
+        and "return names & ready" in source
+        and "edge_trim_names(environ)" in source
+    )
     assert "candidate_row" not in registry.TP8_READY  # not served at TP=8 without the switch
 
 

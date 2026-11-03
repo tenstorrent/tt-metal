@@ -110,7 +110,11 @@ def test_pinned_runtime_routes_uint32_last_dim_repeat_interleave_to_eight_ops_an
     codegen = _cpp(
         "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.cpp"
     )
-    assert "if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32) {" in codegen
+    # UINT32 is still not admitted (bfloat8_b TILE outer dims joined the list upstream, #61897)
+    assert (
+        "if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32 &&\n"
+        "        dtype != DataType::BFLOAT8_B) {" in codegen
+    )
     assert "if (nd == ndim - 1) {\n            return false;" in codegen
     native = _cpp("ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/repeat_interleave.cpp")
     last_dim = native.split("if (normalized_dim == input_rank - 1) {", 1)[1].split("\n    }\n", 1)[0]

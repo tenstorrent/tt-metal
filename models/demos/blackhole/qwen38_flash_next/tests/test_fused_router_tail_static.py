@@ -107,7 +107,9 @@ def _llk_sort_with_pass_guard() -> str:
     loop -- what kernels/topk_lanes.h must contain, regenerated from the LLK source of this tree."""
 
     llk = (
-        (fp.REPO_ROOT / "tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h").read_text().splitlines()
+        (fp.REPO_ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_topk.h")
+        .read_text()
+        .splitlines()
     )
     declaration = next(i for i, l in enumerate(llk) if "inline void _bitonic_topk_phases_steps(" in l)
     start = max(i for i in range(declaration) if llk[i].startswith("template <"))
@@ -199,32 +201,34 @@ def test_lanes_plan_one_core_per_live_pass(expect_error):
     assert not rt.lanes_enabled({rt.LANES_ENV: "0"})  # the single-core form is the off switch
 
 
-def _llk_exp_precise_loop_with_vector_guard() -> str:
-    """The precise fp32-dest loop of the LLK's calculate_exponential with `if ((pair_mask >> (d >> 1)) & 1u)` around the
-    load / exp / store and the `dst_reg++` kept outside it -- what kernels/exp_live.h must contain."""
+# The LLK's fp32-dest exp loop as it was before 69bd2d415cb ("GDN prep: fp32 exp as a recorded replay body"), which made the
+# default fp32 path _sfpu_exp_fp32_accurate_tti_ and left this sfpi loop under #ifdef DISABLE_SFPLOADMACRO as the plain
+# reference stream.  kernels/exp_live.h keeps the loop (verified on device), so it is compared with this frozen text.
+_FROZEN_LLK_EXP_LOOP = [
+    "for (int d = 0; d < ITERATIONS; d++) {",
+    "sfpi::vFloat val = sfpi::dst_reg[0];",
+    "sfpi::dst_reg[0] =",
+    "_ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);",
+    "sfpi::dst_reg++;",
+    "}",
+]
 
-    llk = (
-        (fp.REPO_ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h")
+
+def _llk_exp_precise_loop_with_vector_guard() -> str:
+    """The frozen precise fp32-dest loop of the LLK's calculate_exponential with `if ((pair_mask >> (d >> 1)) & 1u)` around
+    the load / exp / store and the `dst_reg++` kept outside it -- what kernels/exp_live.h must contain."""
+
+    llk = [
+        l.strip()
+        for l in (fp.REPO_ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h")
         .read_text()
         .splitlines()
-    )
+    ]
     start = next(i for i, l in enumerate(llk) if l.startswith("void calculate_exponential("))
-    branch = next(
-        i for i in range(start, len(llk)) if llk[i].strip() == "} else {"
-    )  # the fp32-dest (non-replay) branch
-    loop = next(i for i in range(branch, len(llk)) if "for (int d = 0; d < ITERATIONS; d++) {" in llk[i])
-    assert loop == branch + 1, "the LLK's fp32-dest branch gained a statement before its loop: re-derive exp_live.h"
-    close = next(i for i in range(loop, len(llk)) if llk[i].strip() == "}" and "dst_reg++" in llk[i - 1])
-    assert (
-        llk[close + 1].strip() == "}"
-    ), "the LLK's fp32-dest branch gained a statement after its loop: re-derive exp_live.h"
-    body = [l.strip() for l in llk[loop : close + 1]]
-    assert body[1:4] == [
-        "sfpi::vFloat val = sfpi::dst_reg[0];",
-        "sfpi::dst_reg[0] =",
-        "_ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);",
-    ], body
-    assert body[4] == "sfpi::dst_reg++;" and body[5] == "}"
+    # the frozen loop is still the LLK's reference stream (the DISABLE_SFPLOADMACRO form of the fp32 branch)
+    assert any(
+        llk[i : i + 6] == _FROZEN_LLK_EXP_LOOP for i in range(start, len(llk) - 5)
+    ), "the LLK's sfpi exp loop changed"
     return "\n".join(
         [
             "    for (int d = 0; d < end; d++) {",  # end = 2 * (last live pair + 1): the face step is CR-based (see the header)
@@ -315,7 +319,9 @@ def test_live_pair_mask_covers_every_live_token_row_of_the_fp32_tile():
     # 8 cols (32 lanes)", address +2 = the other column half, +4 = the next 4 rows), so vectors 2p, 2p + 1 = rows
     # 4p..4p + 3 at all 16 columns.  Every live token row must sit in a pair whose bit is set, in both faces that hold it;
     # the guard's `(pair_mask >> (d >> 1)) & 1u` runs both vectors of a set pair.
-    bcast = (fp.REPO_ROOT / "tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bcast.h").read_text()
+    bcast = (
+        fp.REPO_ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_bcast.h"
+    ).read_text()
     assert "One SFPLOAD/SFPSTORE moves 4 dest rows x 8 cols (32 lanes)" in bcast
     assert "addr +2 -> rows 0-3,  cols  8-15" in bcast and "addr +4 -> rows 4-7,  cols  0-7" in bcast
     assert "addr +16 -> start of next face" in bcast

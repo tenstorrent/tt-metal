@@ -32,12 +32,21 @@ BUILDERS = sorted(FUSED.glob("**/*.py"))
 INCLUDE = '#include "../../kernels/zones.h"'
 ZONE = re.compile(r'FUSED_ZONE\("([^"]+)"\)')
 NAME = re.compile(r"^fz_[a-z0-9_]+$")
-KERNEL_FILES = 178
-ZONES = 414  # zone marks over the kernels; a variant program's copy (gdn_step conv_split, gr_recip_last front2, ...) reuses its original's names
+KERNEL_FILES = 203
+ZONES = 479  # zone marks over the kernels; a variant program's copy (gdn_step conv_split, gr_recip_last front2, ...) reuses its original's names
 # Sources that run no phase of the served decode (microbenchmark / idle / empty stand-ins and the KV page scatter): no zones, no include.
 FUNCTION_SCOPE_ZONE = {  # kernels added after the one-block-per-zone rule: a zone that does not follow a "{" line (the kernel keeps its own scoping)
     "gdn_step/kernels/conv_reader.cpp",
     "gdn_step/kernels/conv_writer.cpp",
+    "gdn_step/kernels/reader_gate4.cpp",
+    "gdn_step/kernels/reader_norm4.cpp",
+    "gdn_step/kernels/reader_vb3.cpp",
+    "gdn_step/kernels/reader_vb4.cpp",
+    "gdn_step/kernels/writer_gate4.cpp",
+    "gdn_step/kernels/writer_norm4.cpp",
+    "qsa_block/kernels/main_tail_writer_staging_row.cpp",
+    "router_tail_sc/kernels/reader_rtf_fold.cpp",
+    "router_tail_sc/kernels/writer_rtf_fold.cpp",
     "gr_recip_last/kernels/front_reader.cpp",
     "gr_recip_last/kernels/front_reader3.cpp",
     "gr_recip_last/kernels/raw_writer.cpp",

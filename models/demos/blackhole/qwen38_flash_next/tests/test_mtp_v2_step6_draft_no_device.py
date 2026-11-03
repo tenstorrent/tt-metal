@@ -54,7 +54,10 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
-from models.demos.blackhole.qwen38_flash_next.ttnn.layer import Qwen38TTNNLayerNamespace
+from models.demos.blackhole.qwen38_flash_next.ttnn.layer import (
+    Qwen38TTNNDecoderLayerGenericState,
+    Qwen38TTNNLayerNamespace,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 MTP_V2_SOURCE = ROOT / "ttnn" / "mtp_v2.py"
@@ -253,7 +256,7 @@ def _build(fake, monkeypatch, world: _World, *, drafts: int, position: int, acce
         layer,
         _Mixer(world.mix),
         _Mixer(world.final),
-        SimpleNamespace(attention=generic),
+        Qwen38TTNNDecoderLayerGenericState(Qwen38TTNNLayerNamespace.MTP, 0, generic, None),
         alignment_layer_state,
         residual,
     )
@@ -282,6 +285,16 @@ def _build(fake, monkeypatch, world: _World, *, drafts: int, position: int, acce
         tile = _replicated(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), BF16)
         return SimpleNamespace(cos=tile, sin=tile, block_start_cos=tile, block_start_sin=tile, deallocate=lambda: None)
 
+    def rows_one(index_row, block_start_row):
+        """The 1-row body's RoPE rows: the index row is the position scalar on every lane (position ones x P)."""
+
+        lanes = index_row.torch_shards()[0].reshape(-1).tolist()
+        assert len(set(lanes)) == 1
+        world.rope_requests.append(lanes)
+        assert set(block_start_row.torch_shards()[0].reshape(-1).tolist()) == {4 * (lanes[0] // 4)}
+        tile = _replicated(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), BF16)
+        return SimpleNamespace(cos=tile, sin=tile, block_start_cos=tile, block_start_sin=tile, deallocate=lambda: None)
+
     embedding = SimpleNamespace(
         embed_device_token_rows=world.embed,
         embed_device_token=world.embed_one,
@@ -297,7 +310,8 @@ def _build(fake, monkeypatch, world: _World, *, drafts: int, position: int, acce
         mesh_contract=contract,
         allocated_context=CONTEXT,
         model_io=SimpleNamespace(embedding=embedding, lm_head=_LMHead(world)),
-        rope_table=SimpleNamespace(rows_chunk=rows_chunk),
+        rope_table=SimpleNamespace(rows_chunk=rows_chunk, rows=rows_one),
+        _position_derive=None,
         qsa_position_constants=qsa_module.Qwen38TTNNQSAPositionConstants.build("mesh", contract, BLOCKS),
         layers=(),
     )
@@ -344,6 +358,24 @@ def _build(fake, monkeypatch, world: _World, *, drafts: int, position: int, acce
         fake.deallocate(residual_)
         return out
 
+    def forward_decode_generic(mixed, generic_state, *, prepared_ple, rope, qsa_position):
+        """The MTP layer's 1-row decode body (the default draft rows): the row math of the verify-form stand-in, with the
+        positions it derived recorded in the same terms."""
+
+        assert generic_state is not alignment.generic_state and prepared_ple is None
+        assert mixed.shape == (1, 4, 1, WIDTH)
+        world.positions.append(
+            {
+                "kv_block_start": int(qsa_position.kv_block_start.torch_shards()[0].reshape(-1)[0]),
+                "block": int(qsa_position.block_index_i32.torch_shards()[0].reshape(-1)[0]),
+                "remainder": int(qsa_position.kv_row_hit.torch_shards()[0].float().reshape(-1).argmax()),
+            }
+        )
+        out = world.layer(mixed)
+        fake.deallocate(mixed)
+        return out
+
+    layer.forward_decode_generic = forward_decode_generic
     monkeypatch.setattr(mtp_v2, "_validate_verify_state", lambda model_, verify_: None)
     monkeypatch.setattr(mtp_v2, "_forward_layer_verify", forward_layer_verify)
     return model, verify, state
@@ -406,17 +438,15 @@ def test_forward_draft_matches_eager_rows_and_assembles_the_host_images(fake, mo
     assert [entry["kv_block_start"] for entry in world.positions] == [(position + i) & ~31 for i in range(drafts - 1)]
     assert [entry["remainder"] for entry in world.positions] == [(position + i) % 32 for i in range(drafts - 1)]
     assert [lanes[0] for lanes in world.rope_requests] == [position + i for i in range(drafts - 1)]
-    assert all(lanes == list(range(lanes[0], lanes[0] + 32)) for lanes in world.rope_requests)
-    # The alignment window is untouched; the draft history started as window[a + 1 : a + 4] and advanced once per
-    # row after the first (the stub layer writes no raw rows, so the advances shift zeros in).
+    assert all(len(set(lanes)) == 1 for lanes in world.rope_requests)  # the 1-row body's index row is P on every lane
+    # The alignment window is untouched; the draft history is window[a + 1 : a + 4].
     assert torch.equal(alignment_qsa.raw_history.torch_shards()[0], history_before)
     assert torch.equal(alignment_qsa.raw_rows.torch_shards()[0], raw_rows_before)
     window = torch.cat([history_before[0, 0, :3], raw_rows_before[0, 0]])
     derived = torch.zeros(32, 128, dtype=torch.bfloat16)
     derived[:3] = window[accepted + 1 : accepted + 4]
-    advances = drafts - 2
-    expected_history = torch.zeros(32, 128, dtype=torch.bfloat16)
-    expected_history[: 3 - advances] = derived[advances:3]
+    # The 1-row body (default) advances no history between rows: its private ring and staging carry the rows.
+    expected_history = derived
     assert _same_zero(draft.qsa_state.raw_history.torch_shards()[0][0, 0], expected_history)
     # The position scalar is untouched (the verify body owns P).
     assert state.position.read() == position

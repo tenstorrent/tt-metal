@@ -23,6 +23,7 @@ import torch.nn.functional as F
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.tt.gr import Qwen38GatedResidual, Qwen38GatedResidualWeights
 from models.demos.blackhole.qwen38_flash_next.tt.model import Qwen38FinalMixerWeights
+from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul as decode_matmul_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import final_mixer as final_mixer_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import gr as gr_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
@@ -203,7 +204,8 @@ def test_final_mixer_stacked_weights_match_the_gr_layout() -> None:
         assert torch.equal(prepared["up"][0, 0, :, rows], shard.up.permute(2, 0, 1).reshape(RANK, FLAT_WIDTH))
 
 
-def test_decode_program_configs_minimize_k_blocks_on_the_eight_bank_grid() -> None:
+def test_decode_program_configs_minimize_k_blocks_on_the_eight_bank_grid(monkeypatch) -> None:
+    monkeypatch.setattr(decode_matmul_module, "_MM_WIDE_BLOCK_ON", False)  # the stock block rule
     mesh_device = SimpleNamespace(dram_grid_size=lambda: ttnn.CoreCoord(8, 1))
 
     # Fused down+injection: K=2560 over five storage cores gives sixteen tiles
@@ -237,6 +239,11 @@ def test_decode_program_configs_minimize_k_blocks_on_the_eight_bank_grid() -> No
     # storage core.
     _, program = dram_sharded_matmul_configs(mesh_device, FLAT_WIDTH, RANK, num_cores=5)
     assert (program.in0_block_w, program.per_core_N) == (8, 2)
+
+    # The default (QWEN38_MM_WIDE_BLOCK on, f2ab787078b): (2560, 320) takes the wide block of 16 tiles, the same output.
+    monkeypatch.setattr(decode_matmul_module, "_MM_WIDE_BLOCK_ON", True)
+    _, program = dram_sharded_matmul_configs(mesh_device, FLAT_WIDTH, RANK, num_cores=5)
+    assert (program.in0_block_w, program.per_core_N) == (16, 2)
 
 
 def test_gr_module_binds_exactly_these_decode_configs() -> None:

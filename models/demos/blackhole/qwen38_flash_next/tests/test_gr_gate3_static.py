@@ -62,14 +62,15 @@ def test_single_batch_reads():
 
 
 def test_gr_live_rows_blocks_are_ifdef_only():
-    """writer.cpp and mcast_phase.h differ from HEAD only by the GR_LIVE_ROWS helper and its two call sites."""
+    """writer.cpp and mcast_phase.h differ from their text before eca0820e739 (which added the GR_LIVE_ROWS blocks)
+    only by the GR_LIVE_ROWS helper and its two call sites."""
 
     import re
 
     for name in ("writer.cpp", "mcast_phase.h"):
         path = (KERNELS / name).relative_to(REPO)
         head = subprocess.run(
-            ["git", "show", f"HEAD:{path}"], cwd=REPO, capture_output=True, text=True, check=True
+            ["git", "show", f"eca0820e739^:{path}"], cwd=REPO, capture_output=True, text=True, check=True
         ).stdout
         text = (KERNELS / name).read_text()
         text = re.sub(r"\n#ifdef GR_LIVE_ROWS\n.*?#endif\n", "\n", text, flags=re.S)

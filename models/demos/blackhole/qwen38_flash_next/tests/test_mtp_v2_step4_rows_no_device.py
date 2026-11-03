@@ -574,6 +574,9 @@ def pin_stock_decode_paths(monkeypatch, fake_ttnn):
     is wrapped in try/except), so the stock all_gather of the fake serves, as the inline call did before they existed.
     """
 
+    monkeypatch.setenv(
+        "QWEN38_MM_STREAM2", "0"
+    )  # default on since 996ae0c00e2; its stock fallback calls the real ttnn.linear
     monkeypatch.setenv("QWEN38_EDGE_TRIM", "0")  # the merged PLE key|value matmul / embed reduce are device-only
     from models.demos.blackhole.qwen38_flash_next.ttnn.fused import edge_trim, mm_stream, row_gather, row_reduce
 

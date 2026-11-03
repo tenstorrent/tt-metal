@@ -118,9 +118,11 @@ def test_norm_core_compute_layout_and_bodies():
     recip_phase = fused_src[
         fused_src.index('FUSED_ZONE("fz_gl_c_recip")') : fused_src.index('FUSED_ZONE("fz_gl_c_nout")')
     ]
-    assert (
-        recip_body.replace("recip.reserve_back(1);", "recip.reserve_back(1);recip_out.reserve_back(1);") in recip_phase
-    )
+    # the rsqrt is norm_compute's rsqrt_tile(0) unless QWEN38_FRONT_ROWTRIM_ITERS is defined (rows 0..3 only; 52036a88cd1)
+    recip_head = recip_body.replace("recip.reserve_back(1);", "recip.reserve_back(1);recip_out.reserve_back(1);")
+    assert recip_head.endswith("rsqrt_tile(0);")
+    recip_head = recip_head[: -len("rsqrt_tile(0);")]
+    assert recip_head + "#ifdefQWEN38_FRONT_ROWTRIM_ITERSrsqrt_tile_rows(0);#elsersqrt_tile(0);#endif" in recip_phase
     assert "pack_tile(0,c_recip);pack_tile(0,c_recip_out);" in recip_phase
     assert (
         "reconfig_data_format(c_res,c_res);pack_reconfig_data_format(c_var);"

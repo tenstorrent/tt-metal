@@ -82,6 +82,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic impor
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import (
     WARM_TOKEN_ID,
     Qwen38PlainLaneDecoder,
+    lane_token_ids,
     pack_buckets_from_env,
     pack_dram_bytes,
     prefill_pack_enabled,
@@ -157,6 +158,43 @@ HOST_DRAW_BRANCHES = (
     "inverse_cdf",
     "top_k_threshold",
 )  # fmt: skip
+HYBRID_SINGLE = (
+    os.environ.get("QWEN38_HYBRID_SINGLE") == "1"
+)  # batch mode: a lone plain greedy request decodes on the B=1 chain (read once)
+ASYNC_DECODE = (
+    os.environ.get("QWEN38_ASYNC_DECODE") == "1"
+)  # vLLM async scheduling: a steady greedy step is enqueued and its token read overlaps the plugin's host work (read once)
+STEP_SPLIT = os.environ.get("QWEN38_STEP_SPLIT") == "1"  # per-part host timings in the decode log lines (read once)
+SPLIT_STEP_PARTS = ("ple", "tok", "exe", "adv", "read")  # Qwen38PlainLaneDecoder.step_split keys
+ASYNC_SPLIT_STEP_PARTS = ("wait", *SPLIT_STEP_PARTS)  # async decode: exe is the enqueue time, wait the block on step N
+SPLIT_CHAIN_PARTS = {  # single-slot decode: chain method -> part
+    "write_token_row": "feed",
+    "feed_token_row": "feed",
+    "execute_head": "head",
+    "refresh_ple_row": "ple",
+    "prepare_ple_row": "ple",
+    "upload_ple_row": "ple",
+    "execute_tail": "tail",
+    "read_token_row": "read",
+    "read_token_row_nonblocking": "read",  # async decode
+    "record_event": "read",
+    "event_synchronize": "wait",  # async decode: the block on the previous step's event
+}
+
+
+class _SplitMarks:
+    """QWEN38_STEP_SPLIT=1: seconds per named section; ``lap`` charges the time since the last mark."""
+
+    def __init__(self, start: float) -> None:
+        self.last = start
+        self.acc: dict[str, float] = {}
+
+    def lap(self, name: str) -> None:
+        now = time.perf_counter()
+        self.acc[name] = self.acc.get(name, 0.0) + now - self.last
+        self.last = now
+
+
 DECODE_LOG_INTERVAL = 256  # batch mode: one adapter log line per this many decode calls
 BATCH_LANE_INDEXER_FORM = "wide"
 KV_BYTES_PER_TOKEN = 12 * 512 * 2  # 12 QSA layers x one 512-wide bf16 row, per device
@@ -164,6 +202,9 @@ BATCH_MIN_BLOCK_SIZE = 32  # the QSA page scatter works in 32-row slabs
 BATCH_MAX_BLOCK_SIZE = 4096
 # The DRAM admission's refusal of the slab's resident prefill weights (ttnn/prefill_dense.py, admit_prefill_dense_dram).
 PREFILL_DENSE_REFUSAL_MARK = "refused: the resident prefill weights need"
+
+
+_MISSING = object()  # a contract field the sampling params do not carry
 
 
 @dataclass(frozen=True)
@@ -188,6 +229,34 @@ class Qwen38HostSamplingPolicy:
     @property
     def penalized(self) -> bool:
         return self.presence_penalty != 0.0 or self.frequency_penalty != 0.0 or self.repetition_penalty != 1.0
+
+    # the contract fields ``from_contract`` reads
+    CONTRACT_FIELDS = (
+        "enable_log_probs",
+        "num_logprobs",
+        "temperature",
+        "top_k",
+        "top_p",
+        "seed",
+        "presence_penalty",
+        "frequency_penalty",
+        "repetition_penalty",
+    )
+
+    @classmethod
+    def contract_rows(cls, sampling_params: Any) -> SimpleNamespace:
+        """``sampling_params`` with each contract field's tensor turned into a list once: ``from_contract`` of the
+        result gives, for every row, the policy ``from_contract`` of ``sampling_params`` gives (the batch decode builds
+        one policy per live row and would convert every field once per row).  A field the contract lacks stays
+        missing, so its default and its errors are the same."""
+
+        return SimpleNamespace(
+            **{
+                name: value.tolist() if isinstance(value, torch.Tensor) else value
+                for name in cls.CONTRACT_FIELDS
+                if (value := getattr(sampling_params, name, _MISSING)) is not _MISSING
+            }
+        )
 
     @classmethod
     def from_contract(cls, sampling_params: Any, row: int | None = None) -> "Qwen38HostSamplingPolicy":
@@ -825,6 +894,34 @@ def parse_slot_remap(slot_remap: Any, lanes: int) -> list[int]:
     return remap
 
 
+class Qwen38AsyncTokenError(Qwen38ChatChainError):
+    """Async decode: the token the device produced for the previous step is outside the tokenizer (the LM-head padding
+    rows are not masked on the async path; the blocking path falls back to the masked full logits)."""
+
+
+@dataclass(eq=False)
+class Qwen38AsyncStep:
+    """One enqueued steady decode step: what ``decode_forward`` returns under async decode and ``read_decode_output``
+    hands the plugin as the host output.  ``host`` is the non-blocking read of the token row (device 0's replica), complete
+    once the events passed; ``event`` is the plugin's (its output thread waits it), ``adapter_event`` the adapter's (the
+    next step waits it); both sit on cq 0 right after the read.  ``row_lane`` maps each output row to the lane (or 0 for
+    the chain's token) whose token it takes, ``lanes`` the lanes the read covers (the bucket's R, 1 for the chain), ``rows``
+    the output rows.  ``keep`` holds the host tensors of the step's uploads until the adapter has waited its event.  All
+    but ``keep`` and ``plugin_waits`` are immutable after the call returns: the output thread reads only those."""
+
+    kind: str  # "lane" or "chain"
+    host: Any
+    event: Any
+    adapter_event: Any
+    row_lane: dict[int, int]
+    lanes: int
+    rows: int
+    keep: list = field(default_factory=list)
+    plugin_waits: bool = (
+        False  # read_decode_output handed the event to the plugin: process_decode_output_host need not wait
+    )
+
+
 @dataclass
 class Qwen38VLLMSlot:
     """Host mirror of the one resident slot: the tokens the device consumed (their count is the device position),
@@ -882,7 +979,7 @@ class _ModelCapabilities:
             "supports_device_penalties": True,
             "supports_chunked_prefill": False,
             "supports_prefix_caching": False,
-            "supports_async_decode": False,
+            "supports_async_decode": ASYNC_DECODE,
             "supports_sample_on_device": True,
         }
 
@@ -905,6 +1002,32 @@ class Qwen38ForCausalLM:
         **kwargs: Any,
     ) -> None:
         self.chain = chain  # batch mode: None until allocate_kv_cache opens it
+        if STEP_SPLIT:
+            self._split_outside: deque[float] = deque(
+                maxlen=DECODE_LOG_INTERVAL
+            )  # seconds between decode_forward calls
+            self._split_exit: float | None = None
+            self._split_single: deque[dict[str, float]] = deque(maxlen=DECODE_LOG_INTERVAL)
+            self._split_single_calls = 0
+            self._split_acc: dict[str, float] = {}
+            self._split_first: float | None = None
+            if chain is not None:
+                self._install_split_probes(chain)
+            self._decode_forward_untimed = self.decode_forward
+            self.decode_forward = self._decode_forward_timed
+        # async decode (QWEN38_ASYNC_DECODE): the plugin may send reload_inputs=False and read tokens on another thread
+        self.async_decode = ASYNC_DECODE
+        if self.async_decode and os.environ.get(TOKEN_FEEDBACK_VARIABLE, "1") != "1":
+            raise ValueError(
+                f"QWEN38_ASYNC_DECODE=1 needs {TOKEN_FEEDBACK_VARIABLE}=1 (the device feeds the token back)"
+            )
+        self._async_pending: Qwen38AsyncStep | None = None  # the newest step whose token the adapter has not read yet
+        self._inflight: list[Qwen38AsyncStep] = []  # steps whose adapter event the adapter has not waited (keep-alive)
+        # lane (the chain / single slot: 0) -> the token the next step feeds, as the adapter last returned or read it;
+        # None while a step is in flight (its tokens are in the handle) or unknown
+        self._last_tokens: dict[int, int] | None = None
+        self._last_synced = False  # the device token row holds ``_last_tokens`` for every lane in it
+        self._moves_pending: list[tuple[int, int]] = []  # compaction moves since the last token read (lane src -> dst)
         self.allocated_context = allocated_context
         self.context_limit = Qwen38ResidentContext(allocated_context).context_limit
         self.slot = Qwen38VLLMSlot()
@@ -928,6 +1051,12 @@ class Qwen38ForCausalLM:
         self.lane_moves = 0
         self.lane_slots: list[Qwen38VLLMSlot] = [Qwen38VLLMSlot() for _ in range(batch_lanes)]  # per-lane policy/RNG
         self.batch_failed = False
+        # hybrid single (QWEN38_HYBRID_SINGLE): a lone plain greedy request stays on the B=1 chain (``self.slot`` holds its
+        # host state, ``hybrid_slot`` is its state slot, ``hybrid_pages`` its last vLLM page row) until a second request,
+        # a policy the chain does not serve or a slot movement demotes it into a lane (_demote_hybrid)
+        self.hybrid_single = HYBRID_SINGLE and batch_lanes > 1
+        self.hybrid_slot: int | None = None
+        self.hybrid_pages: list[int] = []
         self.last_prefill_groups: list = []  # the groups of the last packed-mode prefill call (pack on)
         self._pending_note: dict[int, int] | None = None  # the moves decode_forward applied, not yet noted
         self.decode_calls = 0  # batch mode: decode calls so far (the periodic log line)
@@ -1184,6 +1313,7 @@ class Qwen38ForCausalLM:
         """The prompt into the reset state; returns the last position's logits (or, for a plain greedy
         ``sampling_params``, the device's greedy token as int32 ``[1, 1]``) and the zero mrope delta."""
 
+        self._quiesce_pending()  # a step the plugin discards may still be in flight; the prefill resets the state
         if self.batch_mode:
             return self._prefill_batch(
                 tokens=tokens,
@@ -1253,6 +1383,66 @@ class Qwen38ForCausalLM:
             raise
         return out
 
+    def _install_split_probes(self, chain: Any) -> None:
+        """QWEN38_STEP_SPLIT=1, single-slot decode: time the chain calls ``_step`` and ``_greedy_token`` make."""
+
+        for name, part in SPLIT_CHAIN_PARTS.items():
+            inner = getattr(chain, name, None)
+            if inner is None:
+                continue
+
+            def probe(*args: Any, _inner: Any = inner, _part: str = part, **kwargs: Any) -> Any:
+                started = time.perf_counter()
+                if self._split_first is None:
+                    self._split_first = started
+                try:
+                    return _inner(*args, **kwargs)
+                finally:
+                    self._split_acc[_part] = self._split_acc.get(_part, 0.0) + time.perf_counter() - started
+
+            setattr(chain, name, probe)
+
+    def _decode_forward_timed(self, **kwargs: Any) -> Any:
+        """QWEN38_STEP_SPLIT=1: ``decode_forward`` with the gap since the previous return, and, in single-slot mode, the
+        per-part split logged every ``DECODE_LOG_INTERVAL`` calls."""
+
+        entry = time.perf_counter()
+        if self._split_exit is not None:
+            self._split_outside.append(entry - self._split_exit)
+        self._split_acc = {}
+        self._split_first = None
+        try:
+            return self._decode_forward_untimed(**kwargs)
+        finally:
+            end = time.perf_counter()
+            if not self.batch_mode:
+                parts = self._split_acc
+                prep = (self._split_first if self._split_first is not None else end) - entry
+                total = end - entry
+                entry_parts = {
+                    "total": total,
+                    "prep": prep,
+                    **{k: parts.get(k, 0.0) for k in SPLIT_CHAIN_PARTS.values()},
+                }
+                entry_parts["post"] = (
+                    total - prep - sum(parts.get(k, 0.0) for k in ("feed", "head", "ple", "tail", "read", "wait"))
+                )
+                self._split_single.append(entry_parts)
+                self._split_single_calls += 1
+                if self._split_single_calls % DECODE_LOG_INTERVAL == 0:
+                    recent = list(self._split_single)
+                    mean = lambda key: sum(e[key] for e in recent) / len(recent) * 1e3  # noqa: E731
+                    outside = sum(self._split_outside) / len(self._split_outside) * 1e3 if self._split_outside else 0.0
+                    wait_text = f"wait {mean('wait'):.2f}, " if self.async_decode else ""
+                    logger.info(
+                        f"single decode: {self._split_single_calls} calls, last {len(recent)}: total {mean('total'):.2f} ms; "
+                        f"prep {mean('prep'):.2f}, feed {mean('feed'):.2f}, head {mean('head'):.2f}, "
+                        f"ple {mean('ple'):.2f}, tail {mean('tail'):.2f}, read {mean('read'):.2f}, "
+                        f"{wait_text}"
+                        f"post {mean('post'):.2f} ms; outside {outside:.2f} ms"
+                    )
+            self._split_exit = time.perf_counter()
+
     def decode_forward(
         self,
         *,
@@ -1272,13 +1462,19 @@ class Qwen38ForCausalLM:
         prompt_tokens: Any = None,
         output_tokens: Any = None,
         **kwargs: Any,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | Qwen38AsyncStep:
         """One teacher-forced step with the token vLLM sampled; returns the next position's logits, or, when the
         plugin sends ``sampling_params`` (its device-sampling contract), the next token as int32 ``[1, 1]``: the device's greedy
         token when the row is plain greedy (no penalty), else drawn on the host from the full row with
         vLLM's sampler semantics.  A row with ``enable_log_probs`` keeps the token its route gives and returns
         ``(token [1, 1] int32, logprob [1] float32)``: the raw logprob of that token (``log_softmax`` of the full row,
-        before temperature, penalties, top-k and top-p), read from the full row besides the device's greedy token."""
+        before temperature, penalties, top-k and top-p), read from the full row besides the device's greedy token.
+
+        ``QWEN38_ASYNC_DECODE=1``: the plugin may send ``reload_inputs=False`` (its ``tokens`` and ``start_pos`` are then
+        stale: the adapter feeds the token it read from the device, or last returned, and counts its own positions).  A
+        steady step (``reload_inputs=False``, ``read_from_device=False``, every live row plain greedy: no penalties, no
+        logprobs, ``sampling_params`` present) only enqueues the device work and returns a :class:`Qwen38AsyncStep`
+        for ``read_decode_output``; any other call first waits for the step in flight and runs the blocking path."""
 
         if (
             not kwargs
@@ -1300,10 +1496,12 @@ class Qwen38ForCausalLM:
             )
         if "reset_batch" in kwargs:
             raise TypeError("decode_input_update_contract 1: reset_batch is not accepted")
-        if reload_inputs is False:
+        if reload_inputs is False and not self.async_decode:
             raise ValueError("host tokens are authoritative on this adapter: reload_inputs must be True")
         if self.batch_mode:
             return self._decode_batch(
+                reload_inputs=reload_inputs,
+                read_from_device=read_from_device,
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,
@@ -1318,9 +1516,11 @@ class Qwen38ForCausalLM:
             raise ValueError(f"one resident slot: slot_remap must be None or [0], got {list(slot_remap)}")
         if tokens.shape[0] != 1:
             raise ValueError(f"one resident slot: tokens must be [1, 1], got {tuple(tokens.shape)}")
-        token_id = int(tokens[0, 0])
-        if not 0 <= token_id < TOKENIZER_SIZE:
-            raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id}")
+        resident = not reload_inputs  # the plugin's token and position are stale: the adapter's own are the authority
+        if not resident:
+            token_id = int(tokens[0, 0])
+            if not 0 <= token_id < TOKENIZER_SIZE:
+                raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id}")
         policy = history = None
         host_fast = os.environ.get(HOST_FAST_VARIABLE, "1") == "1"
         if host_fast:  # one parse of the contract: device_greedy_contract's rule on the policy this step needs anyway
@@ -1334,25 +1534,39 @@ class Qwen38ForCausalLM:
                 policy = Qwen38HostSamplingPolicy.from_contract(sampling_params)
         if policy is not None and policy.penalized:
             history = penalty_history(prompt_tokens, output_tokens)
+        logprobs = policy is not None and policy.logprobs
+        steady = self.async_decode and resident and read_from_device is False and greedy_token and not logprobs
+        if self.async_decode and not steady:
+            self._quiesce_pending()
         self._require_serviceable(enable_trace)
-        position = int(start_pos[0])
-        if position != len(self.slot.committed):
-            raise Qwen38ChatChainError(f"runner position {position} vs device position {len(self.slot.committed)}")
+        if resident:
+            if not steady:
+                token_id = self._resident_token(0)
+                if not 0 <= token_id < TOKENIZER_SIZE:
+                    raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id}")
+            position = len(self.slot.committed)
+        else:
+            position = int(start_pos[0])
+            if position != len(self.slot.committed):
+                raise Qwen38ChatChainError(f"runner position {position} vs device position {len(self.slot.committed)}")
         if policy is not None:
             self._adopt_policy(policy, reseed=reset_sampling_state)
-        logprobs = policy is not None and policy.logprobs
+        if steady:
+            return self._async_chain_step()[0]
         try:
             with nullcontext() if host_fast else self.chain.loop_guard():  # the guard only rebinds ttnn names
                 residue = self._step(token_id)
                 if greedy_token:
                     token = self._greedy_token(residue)
                     if not logprobs:
+                        self._remember_tokens({0: int(token)})
                         return token
                 logits = self._read_logits(residue)
         except BaseException:
             self.slot.failed = True
             raise
         if policy is None:
+            self._remember_tokens(None)
             return logits
         row = logits[0, 0]
         raw = row.clone() if logprobs and history is not None else row  # the penalties act in place
@@ -1360,6 +1574,7 @@ class Qwen38ForCausalLM:
             if history is not None:
                 apply_penalties(row, *history, policy)
             token = torch.tensor([[sample_from_row(row, policy, self.slot.generator)]], dtype=torch.int32)
+        self._remember_tokens({0: int(token)}, synced=greedy_token)
         if not logprobs:
             return token
         return token, torch.tensor([raw_logprob(raw, int(token))], dtype=torch.float32)
@@ -1438,6 +1653,7 @@ class Qwen38ForCausalLM:
                     token = self._padded_greedy_fallback(residue)
                 image[0, 0] = token
                 if not logprobs:
+                    self._remember_tokens({0: token})
                     return result
                 token = result
             logits = self._read_logits(residue)
@@ -1445,6 +1661,7 @@ class Qwen38ForCausalLM:
             slot.failed = True
             raise
         if policy is None:
+            self._remember_tokens(None)
             return logits
         row = logits[0, 0]
         raw = row.clone() if logprobs and history is not None else row
@@ -1452,6 +1669,7 @@ class Qwen38ForCausalLM:
             if history is not None:
                 apply_penalties(row, *history, policy)
             token = torch.tensor([[sample_from_row(row, policy, slot.generator)]], dtype=torch.int32)
+        self._remember_tokens({0: int(token)}, synced=greedy_token)
         if not logprobs:
             return token
         return token, torch.tensor([raw_logprob(raw, int(token))], dtype=torch.float32)
@@ -1509,6 +1727,7 @@ class Qwen38ForCausalLM:
         in the vLLM process, before the first request.  ``can_sample_on_device`` (mode ``all`` or ``decode_only``) is
         served: the sampled decode steps draw on the host from the row the greedy path reads."""
 
+        self._quiesce_pending()
         self.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv_cache, can_sample_on_device=False)
         if self.batch_mode:
             if max_batch_size != self.lanes:
@@ -1546,8 +1765,10 @@ class Qwen38ForCausalLM:
         self.slot = Qwen38VLLMSlot()
 
     def release_request(self, slot: int) -> None:
-        """The request's slot is free; the device is untouched (the next prefill resets it)."""
+        """The request's slot is free; the device is untouched (the next prefill resets it).  Async decode: a step in
+        flight (the plugin discards its output) is waited first, so its host buffers are free."""
 
+        self._quiesce_pending()
         if self.batch_mode:
             self._release_lane_of_slot(slot)
             return
@@ -1555,6 +1776,7 @@ class Qwen38ForCausalLM:
             raise ValueError(f"one resident slot: slot must be 0, got {slot}")
         self.slot.committed = []
         self.slot.ple_context = None
+        self._remember_tokens(None)
 
     def release_persistent_capture(self) -> None:
         """Worker shutdown while the mesh is open: the chain's release order, skipped after a failed chain call.  Batch
@@ -1563,6 +1785,8 @@ class Qwen38ForCausalLM:
         if self.slot.failed or self.batch_failed:
             logger.warning("a chain call failed; the traces and states are left to the mesh close")
             return
+        self._quiesce_pending()  # the in-flight read needs the mesh alive
+        self._clear_hybrid()
         if self.batch_mode:
             if self.decoder is not None:
                 self.decoder.release()
@@ -1588,6 +1812,240 @@ class Qwen38ForCausalLM:
         for old, new in moves.items():
             lane_of_slot[new] = self.lane_of_slot[old]
         self.lane_of_slot = lane_of_slot
+
+    # -- async decode (QWEN38_ASYNC_DECODE) ---------------------------------------------------------------------------
+    #
+    # A steady step enqueues the device work and a non-blocking read of the token row and returns at once; the plugin's
+    # host work for the next step overlaps the device step.  The next steady step waits the adapter's own event of that
+    # read (it needs the token for the PLE row), so the plugin's output thread, which waits its own event and reads the
+    # handle's host tensor, never shares mutable state with the worker thread.
+
+    def _async_steady(self, read_from_device: Any, positions: list[int], sampling_params: Any) -> bool:
+        """Whether a ``reload_inputs=False`` batch call is a steady async step: no host read asked for, ``sampling_params``
+        present, every live row (``start_pos >= 0``) plain greedy without penalties or logprobs."""
+
+        if read_from_device is not False or sampling_params is None or logprobs_requested(sampling_params):
+            return False
+        live_rows = [row for row, position in enumerate(positions) if position >= 0]
+        if not live_rows:
+            return False
+        contract_rows = Qwen38HostSamplingPolicy.contract_rows(sampling_params)
+        for row in live_rows:
+            policy = Qwen38HostSamplingPolicy.from_contract(contract_rows, row)
+            if not policy.greedy or policy.penalized or policy.logprobs:
+                return False
+        return True
+
+    def _remember_tokens(self, tokens: Mapping[int, int] | None, *, synced: bool = True) -> None:
+        """The tokens the next step feeds (lane -> token; the chain / single slot: lane 0) as this blocking call returned
+        them; ``synced``: the device token row holds them.  None: unknown.  A no-op without async decode."""
+
+        if not self.async_decode:
+            return
+        self._last_tokens = None if tokens is None else dict(tokens)
+        self._last_synced = synced and tokens is not None
+        self._moves_pending.clear()
+
+    def _resident_token(self, lane: int) -> int:
+        """``reload_inputs=False``: the token lane ``lane`` feeds is the one the adapter returned or read, not the plugin's."""
+
+        token = None if self._last_tokens is None else self._last_tokens.get(lane)
+        if token is None:
+            raise Qwen38ChatChainError(
+                f"reload_inputs=False but the adapter holds no token for lane {lane}: the plugin must reload the "
+                "inputs after a prefill, a release, a layout change or a step the adapter did not return a token for"
+            )
+        return token
+
+    def _handle_values(self, handle: Qwen38AsyncStep) -> dict[int, int]:
+        """Lane -> token from the handle's host read (complete once its events passed).  Reads only the handle's own data:
+        it runs on the plugin's output thread too."""
+
+        if handle.kind == "chain":
+            return {0: int(self.chain.pending_value(handle.host))}
+        ids = lane_token_ids(ttnn.to_torch(handle.host).reshape(-1)[: handle.lanes])
+        return {lane: ids[lane] for lane in set(handle.row_lane.values())}
+
+    def _wait_handle(self, handle: Qwen38AsyncStep) -> None:
+        """Block for the adapter's event of ``handle``; a device error marks the state failed (it surfaces here)."""
+
+        try:
+            if handle.kind == "chain":
+                self.chain.event_synchronize(handle.adapter_event)
+                self.chain.mark_ple_fenced()  # the PLE upload of the step before this read has finished
+            else:
+                ttnn.event_synchronize(handle.adapter_event)
+        except BaseException:
+            if handle.kind == "chain":
+                self.slot.failed = True
+            else:
+                self.batch_failed = True
+            raise
+
+    def _previous_tokens(self) -> tuple[dict[int, int], bool, float]:
+        """The tokens the next steady step feeds: ``(lane -> token, device row holds them, seconds blocked)``.  With a step
+        in flight: wait its adapter event and read its host copy (compaction moves since applied); else the tokens the
+        last blocking call returned."""
+
+        handle = self._async_pending
+        if handle is None:
+            if self._last_tokens is None:
+                self._resident_token(0)  # raises with the message
+            synced = self._last_synced and not self._moves_pending
+            self._moves_pending.clear()  # _move_lane applied them to the tokens
+            return dict(self._last_tokens), synced, 0.0
+        started = time.perf_counter()
+        self._wait_handle(handle)
+        wait_s = time.perf_counter() - started
+        values = self._handle_values(handle)
+        moved = bool(self._moves_pending)
+        for src, dst in self._moves_pending:
+            if src in values:
+                values[dst] = values.pop(src)
+        self._moves_pending.clear()
+        self._inflight.clear()  # the adapter event passed: the uploads and the read are done, the holds are free
+        self._async_pending = None
+        self._last_tokens, self._last_synced = dict(values), not moved
+        return values, not moved, wait_s
+
+    def _quiesce_pending(self) -> None:
+        """Wait for the step in flight and finish its host bookkeeping (the token it produced becomes the next one fed, the
+        chain's token-row record), then release the holds.  Called before any call that is not a steady step.  A step the
+        plugin discards needs no rollback: its request is finished or the next call reloads the inputs."""
+
+        if not self._inflight:
+            self._async_pending = None
+            return
+        newest = self._inflight[-1]  # cq 0 is in order: its event passing means every earlier step's did too
+        self._wait_handle(newest)
+        if self._async_pending is newest:
+            values = self._handle_values(newest)
+            for src, dst in self._moves_pending:
+                if src in values:
+                    values[dst] = values.pop(src)
+            self._moves_pending.clear()
+            self._last_tokens, self._last_synced = values, True
+            if newest.kind == "chain":
+                self.chain.note_token_row_value(values[0])  # no HEAD since: the row holds the token the next step feeds
+        self._async_pending = None
+        self._inflight.clear()
+
+    def _register_step(self, handle: Qwen38AsyncStep) -> None:
+        self._async_pending = handle
+        self._inflight.append(handle)
+        self._last_tokens, self._last_synced = None, False  # in the handle until its event is waited
+        self._moves_pending.clear()
+
+    def _check_async_token(self, token: int, where: str) -> None:
+        if not 0 <= token < TOKENIZER_SIZE:
+            raise Qwen38AsyncTokenError(
+                f"async decode: the device greedy token {token} ({where}) is outside the tokenizer [0, {TOKENIZER_SIZE}); "
+                "the async path has no masked full-logits fallback"
+            )
+
+    def _enqueue_lane_step(
+        self, decoder: Qwen38PlainLaneDecoder, row_lanes: dict[int, int], keep: list
+    ) -> tuple[Qwen38AsyncStep, float]:
+        """A steady lane step after its pre-step host work: wait for the previous step's token read, PLE rows of those
+        tokens, the replay (no token write when the row already holds them: the lane trace's resolve epilogue copied each
+        computed lane's greedy token into ``token_row``), non-blocking; then the token-row read and the two events.
+        Returns the handle and the seconds blocked on the previous step."""
+
+        values, synced, wait_s = self._previous_tokens()
+        lane_tokens = [WARM_TOKEN_ID] * self.lanes
+        for row, lane in row_lanes.items():
+            token = values.get(lane)
+            if token is None:
+                raise Qwen38ChatChainError(f"async decode: no token for lane {lane} (row {row}) from the previous step")
+            self._check_async_token(token, f"lane {lane}")
+            lane_tokens[lane] = token
+        r = decoder.bucket_for_step()
+        # an idle lane below R computes too: it takes the warm token as the blocking path does (its own greedy would not
+        # be a valid input), and a moved lane's token is not in the row at its new place
+        write_tokens = not synced or any(decoder.positions[lane] is None for lane in range(r))
+        r = decoder.enqueue_step(lane_tokens, blocking=False, write_tokens=write_tokens, keep=keep)
+        host, adapter_event, plugin_event = decoder.enqueue_token_read()
+        handle = Qwen38AsyncStep("lane", host, plugin_event, adapter_event, dict(row_lanes), r, self.lanes, keep)
+        self._register_step(handle)
+        return handle, wait_s
+
+    def _async_chain_step(self, rows: int = 1, row: int = 0) -> tuple[Qwen38AsyncStep, float]:
+        """A steady chain step (the single slot, or the hybrid's lone row ``row`` of ``rows``): with a step in flight HEAD
+        is enqueued before the wait for that step's token, then the fence, the token joins ``committed``, the PLE row,
+        TAIL; with none, the blocking path's ``_step`` of the token last returned.  Then the token-row read and the two
+        events.  No ``loop_guard`` (it patches ttnn process-wide, and the plugin's output thread calls ttnn).  Returns the
+        handle and the seconds blocked on the previous step."""
+
+        chain = self.chain
+        prev = self._async_pending
+        if prev is not None and prev.kind != "chain":
+            raise Qwen38ChatChainError("async decode: the step in flight is not a chain step")
+        token = None
+        if prev is None:
+            token = self._resident_token(0)
+            self._check_async_token(token, "the last returned token")
+        wait_s = 0.0
+        try:
+            if prev is None:
+                self._step(token)
+            else:
+                residue = len(self.slot.committed) % RESIDUE_CLASSES
+                chain.execute_head(residue)  # HEAD reads the token row on the device: it does not need the host token
+                values, _synced, wait_s = self._previous_tokens()
+                token = values[0]
+                self._check_async_token(token, "chain")
+                host_row, context = chain.prepare_ple_row(token, self.slot.ple_context)
+                chain.upload_ple_row(host_row)
+                self.slot.ple_context = context
+                self.slot.committed.append(token)
+                chain.execute_tail(residue)
+            host = chain.read_token_row_nonblocking()
+            adapter_event = chain.record_event()
+            plugin_event = chain.record_event()
+        except BaseException:
+            self.slot.failed = True
+            raise
+        handle = Qwen38AsyncStep("chain", host, plugin_event, adapter_event, {row: 0}, 1, rows)
+        self._register_step(handle)
+        return handle, wait_s
+
+    def read_decode_output(
+        self, tt_out: Any, async_read: bool = False, sample_rows: Any = None
+    ) -> tuple[Any, list[Any]]:
+        """The plugin's read of ``decode_forward``'s result, as ``(host, events)``: the handle itself for a step enqueued
+        under async decode (its read is already in flight; ``async_read`` hands over the plugin's event, otherwise the
+        call waits for it), a host tensor or tuple unchanged.  Nothing is enqueued here."""
+
+        if isinstance(tt_out, (torch.Tensor, tuple)):
+            return tt_out, []
+        if not isinstance(tt_out, Qwen38AsyncStep):
+            raise TypeError(f"read_decode_output: unexpected decode output {type(tt_out).__name__}")
+        tt_out.plugin_waits = True
+        if async_read:
+            return tt_out, [tt_out.event]
+        ttnn.event_synchronize(tt_out.event)
+        return tt_out, []
+
+    def process_decode_output_host(self, tt_out: Any, is_tokens: bool = False, sample_rows: Any = None) -> Any:
+        """The tokens of a step's output as int32 ``[rows, 1]``: each live row's token, taken from the lane its row mapped
+        to when the step was enqueued (padding rows 0).  Host tensors and tuples pass through.  Runs on the plugin's output
+        thread while the worker enqueues the next step: it reads only the handle."""
+
+        if isinstance(tt_out, (torch.Tensor, tuple)):
+            return tt_out
+        if not isinstance(tt_out, Qwen38AsyncStep):
+            raise TypeError(f"process_decode_output_host: unexpected decode output {type(tt_out).__name__}")
+        if not is_tokens:
+            raise ValueError("process_decode_output_host: an async step's output is tokens (is_tokens=True)")
+        if not tt_out.plugin_waits:
+            ttnn.event_synchronize(
+                tt_out.event
+            )  # the plugin never called read_decode_output: the read may be in flight
+        values = self._handle_values(tt_out)
+        out = torch.zeros(tt_out.rows, 1, dtype=torch.int32)
+        for row, lane in tt_out.row_lane.items():
+            out[row, 0] = values[lane]
+        return out
 
     # -- batch mode (max_num_seqs 2..32) -----------------------------------------------------------------------------
 
@@ -1687,11 +2145,10 @@ class Qwen38ForCausalLM:
         (vLLM's null block, our scratch page) among them, an id outside the pool, more than the lane table holds, or
         fewer than ``needed`` blocks (the step would write into the scratch page)."""
 
-        ids = [int(block) for block in torch.as_tensor(row).reshape(-1).tolist()]
-        count = len(ids)
-        while count and ids[count - 1] == 0:
-            count -= 1
-        pages = ids[:count]
+        table_row = torch.as_tensor(row).reshape(-1)
+        nonzero = torch.nonzero(table_row)
+        count = int(nonzero[-1]) + 1 if nonzero.numel() else 0
+        pages = [int(block) for block in table_row[:count].tolist()]
         if 0 in pages:
             raise ValueError(f"{label}: block 0 (vLLM's null block) inside the page-table row {pages}")
         if pages and (min(pages) < 0 or max(pages) >= self.num_blocks):
@@ -1709,9 +2166,15 @@ class Qwen38ForCausalLM:
         if isinstance(slot, bool) or not isinstance(slot, int) or not 0 <= slot < self.lanes:
             raise ValueError(f"slot must be in [0, {self.lanes}), got {slot!r}")
         decoder = self._require_batch_ready()
+        if slot == self.hybrid_slot:  # the request lives on the chain: its host state is the only state to clear
+            self._clear_hybrid()
+            self._remember_tokens(None)
+            return
         lane = self.lane_of_slot[slot]
         decoder.release_lane_external(lane)
         self.lane_slots[lane] = Qwen38VLLMSlot()
+        if self._last_tokens is not None:
+            self._last_tokens.pop(lane, None)
 
     def _move_lane(self, decoder: Qwen38PlainLaneDecoder, src: int, dst: int) -> None:
         """Compaction: the decoder moves live lane ``src`` into free lane ``dst``; the slot that held ``src`` now holds
@@ -1726,6 +2189,11 @@ class Qwen38ForCausalLM:
         self.lane_of_slot[slot_src], self.lane_of_slot[slot_dst] = dst, src
         self.lane_slots[dst] = self.lane_slots[src]
         self.lane_slots[src] = Qwen38VLLMSlot()
+        if self.async_decode:  # the token row is indexed by lane and does not follow the move
+            self._moves_pending.append((src, dst))
+            if self._last_tokens is not None and src in self._last_tokens:
+                self._last_tokens[dst] = self._last_tokens.pop(src)
+                self._last_synced = False
         self.lane_moves += 1
         logger.info(f"decode compaction: lane {src} -> {dst} ({decoder.last_move.get('ms', 0.0):.1f} ms)")
 
@@ -1779,7 +2247,20 @@ class Qwen38ForCausalLM:
             policies.append(
                 None if sampling_params is None else Qwen38HostSamplingPolicy.from_contract(sampling_params, i)
             )
+        policy = policies[0] if rows == 1 else None
+        hybrid_start = (
+            self.hybrid_single
+            and self.hybrid_slot is None
+            and rows == 1
+            and (policy is None or (policy.greedy and not policy.penalized and not policy.logprobs))
+            and all(position is None for position in decoder.positions)
+        )
+        if self.hybrid_slot is not None:
+            self._demote_hybrid()  # before anything touches the chain: the prefill's reset_and_seed would destroy it
         self._require_serviceable(enable_trace, recovering=True)
+        if hybrid_start:
+            out = self._prefill_row_chain(slots[0], prompts[0], pages[0], policy)
+            return out, torch.zeros(rows, dtype=torch.long)
         if prefill_pack_enabled(lanes=self.lanes):
             return self._prefill_batch_grouped(prompts, pages, policies, slots), torch.zeros(rows, dtype=torch.long)
         outputs: list[torch.Tensor] = []
@@ -1841,6 +2322,171 @@ class Qwen38ForCausalLM:
             generator = position_generator(policy.seed, len(prompt) - 1)
             out = torch.tensor([[sample_from_row(row, policy, generator)]], dtype=torch.int32)
         return out
+
+    def _prefill_row_chain(
+        self, slot: int, prompt: list[int], pages: list[int], policy: Qwen38HostSamplingPolicy | None
+    ) -> torch.Tensor:
+        """Hybrid single: the one row's B=1 chain prefill, no import.  The request stays on the chain (``self.slot``
+        holds its host state) with ``slot`` as its state slot and ``pages`` as its last page row.  Returns what
+        :meth:`_prefill_row_single` returns for the row: the device greedy token ``[1, 1]`` int32 for a plain greedy
+        ``policy``, else (no sampling params: the plugin samples the first token on the host) the masked logits
+        ``[1, 1, VOCAB_SIZE]``.  The first decode carries the real policy (``_hybrid_stays`` demotes a non-greedy one).
+        """
+
+        out = self._prefill_one(prompt, greedy_token=policy is not None)
+        self.hybrid_slot = slot
+        self.hybrid_pages = list(pages)
+        if policy is not None:
+            self._adopt_policy(policy, reseed=True, slot=self.slot)
+        else:
+            self._remember_tokens(None)  # the logits left no token on record: the first decode must reload its inputs
+        logger.info(f"hybrid single: slot {slot} ({len(prompt)} tokens) decodes on the chain")
+        return out
+
+    def _clear_hybrid(self) -> None:
+        """The chain request is gone (released, or moved into a lane): fresh host state, no hybrid."""
+
+        self.slot = Qwen38VLLMSlot()
+        self.hybrid_slot = None
+        self.hybrid_pages = []
+
+    def _demote_hybrid(self) -> None:
+        """Move the chain request into a lane (``import_lane`` of its ``len(committed)`` tokens, PLE context and last page
+        row), keep its slot object (policy, RNG stream) as the lane's, and free the chain.  A failed chain call drops the
+        request instead: its state is not trusted.  No reverse move exists."""
+
+        self._quiesce_pending()  # async decode: the chain's step in flight (its token is the lane's next input)
+        decoder = self._require_batch_ready()
+        slot = self.hybrid_slot
+        if self.slot.failed:
+            logger.warning(f"hybrid single: slot {slot} dropped, its chain state failed")
+            self._clear_hybrid()
+            self._remember_tokens(None)
+            return
+        started = time.perf_counter()
+        lane = self._take_lane(decoder, slot, set())
+        length = len(self.slot.committed)
+        try:
+            decoder.import_lane(self, lane, length, self.slot.ple_context, self.hybrid_pages)
+        except BaseException:
+            self.batch_failed = True
+            raise
+        self.lane_slots[lane] = self.slot
+        self._clear_hybrid()
+        if self.async_decode:  # the chain's next token is now the lane's; the lane's token row does not hold it
+            token = (self._last_tokens or {}).get(0)
+            self._remember_tokens(None if token is None else {lane: token}, synced=False)
+        elapsed = time.perf_counter() - started
+        decoder.last_admit = {**getattr(decoder, "last_admit", {}), "hybrid_import_s": elapsed}
+        logger.info(f"hybrid single: slot {slot} demoted into lane {lane} at {length} tokens in {elapsed:.3f} s")
+
+    def _hybrid_stays(
+        self, positions: list[int], slot_remap: Any, sampling_params: Any
+    ) -> tuple[int, list[int], Qwen38HostSamplingPolicy] | None:
+        """``(row, remap, policy)`` when this decode keeps the chain request on the chain: exactly one live row, which
+        resolves to the request's state slot, plain greedy without penalties or logprobs.  Else None (demote)."""
+
+        live_rows = [row for row, position in enumerate(positions) if position >= 0]
+        if len(live_rows) != 1 or sampling_params is None or logprobs_requested(sampling_params):
+            return None
+        remap = parse_slot_remap(slot_remap, self.lanes)
+        row = live_rows[0]
+        if remap[row] != self.hybrid_slot:
+            return None
+        policy = Qwen38HostSamplingPolicy.from_contract(Qwen38HostSamplingPolicy.contract_rows(sampling_params), row)
+        if not policy.greedy or policy.penalized or policy.logprobs:
+            return None
+        return row, remap, policy
+
+    def _decode_chain_row(
+        self,
+        *,
+        started: float,
+        tokens: torch.Tensor,
+        positions: list[int],
+        page_table: torch.Tensor,
+        enable_trace: bool,
+        row: int,
+        remap: list[int],
+        policy: Qwen38HostSamplingPolicy,
+        reset_sampling_state: bool,
+        resident: bool = False,
+        steady: bool = False,
+    ) -> torch.Tensor | Qwen38AsyncStep:
+        """Hybrid single: the one live row's step on the B=1 chain (the single-slot step and greedy token), no lane work.
+        Returns int32 ``[lanes, 1]``: the token in the live row, 0 elsewhere.  Keeps the request's last page row for a
+        later demotion.  Async decode: ``resident`` (``reload_inputs`` False) ignores the plugin's token and position for
+        the chain's own; ``steady`` enqueues the step (:meth:`_async_chain_step`) and returns its handle."""
+
+        marks = _SplitMarks(started) if STEP_SPLIT else None
+        self._require_serviceable(enable_trace)
+        lanes = self.lanes
+        if resident:
+            position = len(self.slot.committed)
+            token_id = None if steady else self._resident_token(0)
+        else:
+            position = positions[row]
+            token_id = int(tokens[row, 0])
+        if token_id is not None and not 0 <= token_id < TOKENIZER_SIZE:
+            raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id} (row {row})")
+        if position >= self.context_limit:
+            raise ValueError(f"row {row}: position {position} is past the context limit {self.context_limit}")
+        if position != len(self.slot.committed):
+            raise Qwen38ChatChainError(f"runner position {position} vs device position {len(self.slot.committed)}")
+        pages = self._page_row(page_table[row], needed=position // self.block_size + 1, label=f"decode row {row}")
+        if marks:
+            marks.lap("row_checks")
+        self.hybrid_pages = pages
+        self._pending_note = (
+            {remap[r]: r for r in range(lanes) if remap[r] != r} if remap != list(range(lanes)) else None
+        )
+        self.lane_of_slot = [self.lane_of_slot[remap[r]] for r in range(lanes)]
+        self.hybrid_slot = row  # the row now holds the state slot
+        self._adopt_policy(policy, reseed=reset_sampling_state, slot=self.slot)
+        if marks:
+            marks.lap("adopt_policy")
+        step_started = time.perf_counter()
+        if steady:
+            handle, wait_s = self._async_chain_step(rows=lanes, row=row)
+            step_s = time.perf_counter() - step_started - wait_s  # the enqueue: the wait is its own part
+        else:
+            try:
+                with nullcontext() if os.environ.get(HOST_FAST_VARIABLE) == "1" else self.chain.loop_guard():
+                    residue = self._step(token_id)
+                    token = self._greedy_token(residue)
+            except BaseException:
+                self.slot.failed = True
+                raise
+            step_s = time.perf_counter() - step_started
+            out = torch.zeros(lanes, 1, dtype=torch.int32)
+            out[row, 0] = token
+            self._remember_tokens({0: int(token)})
+        now = time.perf_counter()
+        self.decode_stats.append(
+            {
+                "rows": 1,
+                "bucket": 0,  # no lane replay
+                "total_s": now - started,
+                "step_s": step_s,
+                "gather_s": 0.0,
+                "overhead_s": (now - started) - step_s,
+                "candidates_s": 0.0,
+                "draw_s": 0.0,
+                "normalizer_s": 0.0,
+                "fallback_read_s": 0.0,
+                "fallback_draw_s": 0.0,
+                "fallback_s": 0.0,
+                "sampled_rows": 0,
+                "logprobs_rows": 0,
+            }
+        )
+        if marks:
+            self.decode_stats[-1]["split"] = marks.acc
+            self.decode_stats[-1]["step_split"] = (  # the chain step; the lane-only parts are 0
+                {"exe": step_s, "wait": wait_s} if steady else {"exe": step_s}
+            )
+        self._log_batch_decode(self.decoder, marks)
+        return handle if steady else out
 
     def _prefill_batch_grouped(
         self,
@@ -1915,7 +2561,9 @@ class Qwen38ForCausalLM:
         sampling_params: Any,
         prompt_tokens: Any,
         output_tokens: Any,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        reload_inputs: bool = True,
+        read_from_device: bool = True,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | Qwen38AsyncStep:
         """One replay of the lane trace for the live rows.  Row ``i`` is live when ``start_pos[i] >= 0``; it runs in lane
         ``lane_of_slot[i]`` after ``slot_remap`` was applied to the slot -> lane map.  Every lane that holds a request
         must have a live row (the trace advances every lane).  Lanes without a request run the warm token on the scratch
@@ -1926,9 +2574,16 @@ class Qwen38ForCausalLM:
         ``enable_log_probs`` the raw logprob of its final token (``log_softmax`` of its fp32 row, padding at ``-inf``,
         before the penalties, temperature, top-k and top-p), 0 for every other row.  Such a row's token comes from the
         route it would take without the request; the request only adds the row's read (with the fallback lanes' rows,
-        through the same row read) and the host computation."""
+        through the same row read) and the host computation.
+
+        Async decode (``reload_inputs`` False): the rows' ``tokens`` and ``start_pos`` values are stale and ignored (the
+        liveness of a row, ``start_pos >= 0``, is not); each lane feeds the token the adapter read from the device or last
+        returned, at its own position mirror.  A steady step (every live row plain greedy, ``read_from_device`` False)
+        does the host work above, waits for the previous step's token read, enqueues the replay without blocking and the
+        read of the token row, and returns a :class:`Qwen38AsyncStep` for ``read_decode_output``; no gather or draw."""
 
         started = time.perf_counter()
+        marks = _SplitMarks(started) if STEP_SPLIT else None
         decoder = self._require_batch_ready()
         lanes = self.lanes
         if tuple(tokens.shape) != (lanes, 1):
@@ -1939,9 +2594,39 @@ class Qwen38ForCausalLM:
         if page_table is None or torch.as_tensor(page_table).shape[0] < lanes:
             raise ValueError(f"batch mode: page_table must hold {lanes} rows")
         page_table = torch.as_tensor(page_table)
+        if marks:
+            marks.lap("checks")
+        resident = (
+            not reload_inputs
+        )  # async decode: tokens and positions are stale, the adapter's own are the authority
+        steady = False
+        if self.async_decode:
+            steady = resident and self._async_steady(read_from_device, positions, sampling_params)
+            if not steady:
+                self._quiesce_pending()  # the blocking path below needs the step in flight finished
+        if self.hybrid_slot is not None:
+            stays = self._hybrid_stays(positions, slot_remap, sampling_params)
+            if stays is not None:
+                row, remap, policy = stays
+                return self._decode_chain_row(
+                    started=started,
+                    tokens=tokens,
+                    positions=positions,
+                    page_table=page_table,
+                    enable_trace=enable_trace,
+                    row=row,
+                    remap=remap,
+                    policy=policy,
+                    reset_sampling_state=reset_sampling_state,
+                    resident=resident,
+                    steady=steady,
+                )
+            self._demote_hybrid()  # the lone request cannot stay on the chain: the lane path below serves it
         if self.decode_compact:  # before the slot -> lane map is read: the moved lanes are what the rows resolve to
             for src, dst in decoder.compaction_moves():
                 self._move_lane(decoder, src, dst)
+        if marks:
+            marks.lap("compact")
         remap = parse_slot_remap(slot_remap, lanes)
         new_map = [self.lane_of_slot[remap[row]] for row in range(lanes)]
         live_rows = [row for row, position in enumerate(positions) if position >= 0]
@@ -1960,27 +2645,46 @@ class Qwen38ForCausalLM:
             raise Qwen38ChatChainError(
                 f"contract error: live rows {strangers} map to lanes with no prefilled request (slot -> lane {new_map})"
             )
+        if marks:
+            marks.lap("map")
         lane_tokens = [WARM_TOKEN_ID] * lanes
         pages: dict[int, list[int]] = {}
         policies: dict[int, Qwen38HostSamplingPolicy] = {}
+        contract_rows = None if sampling_params is None else Qwen38HostSamplingPolicy.contract_rows(sampling_params)
         for row in live_rows:
-            lane, position = row_lanes[row], positions[row]
-            token_id = int(tokens[row, 0])
-            if not 0 <= token_id < TOKENIZER_SIZE:
+            lane = row_lanes[row]
+            mirror = decoder.lane_position(lane)
+            if resident:
+                position = positions[
+                    row
+                ] = mirror  # the plugin's start_pos is stale; the draws below read ``positions``
+                token_id = None if steady else self._resident_token(lane)
+            else:
+                position = positions[row]
+                token_id = int(tokens[row, 0])
+            if token_id is not None and not 0 <= token_id < TOKENIZER_SIZE:
                 raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id} (row {row})")
             if position >= self.context_limit:
                 raise ValueError(f"row {row}: position {position} is past the context limit {self.context_limit}")
-            mirror = decoder.lane_position(lane)
             if position != mirror:
                 raise Qwen38ChatChainError(
                     f"runner position {position} vs device position {mirror} (row {row}, lane {lane})"
                 )
+            if marks:
+                marks.lap("row_checks")
             pages[row] = self._page_row(
                 page_table[row], needed=position // self.block_size + 1, label=f"decode row {row}"
             )
-            lane_tokens[lane] = token_id
+            if marks:
+                marks.lap("page_row")
+            if token_id is not None:
+                lane_tokens[lane] = token_id
             if sampling_params is not None:
-                policies[row] = Qwen38HostSamplingPolicy.from_contract(sampling_params, row)
+                policies[row] = Qwen38HostSamplingPolicy.from_contract(contract_rows, row)
+                if marks:
+                    marks.lap("policy")
+        if marks:
+            marks.lap("row_checks")
         host_rows = [row for row, policy in policies.items() if not (policy.greedy and not policy.penalized)]
         lp_rows = [row for row in live_rows if row in policies and policies[row].logprobs]
         lp_lanes = {row_lanes[row] for row in lp_rows}
@@ -1995,19 +2699,62 @@ class Qwen38ForCausalLM:
             {remap[row]: row for row in range(lanes) if remap[row] != row} if remap != list(range(lanes)) else None
         )
         self.lane_of_slot = new_map
+        if marks:
+            marks.lap("policy_prep")
         for row in live_rows:
             decoder.set_page_row(row_lanes[row], pages[row])
+            if marks:
+                marks.lap("set_page_row")
             if row in policies:
                 self._adopt_policy(policies[row], reseed=reset_sampling_state, slot=self.lane_slots[row_lanes[row]])
+                if marks:
+                    marks.lap("adopt_policy")
+        keep: list = (
+            []
+        )  # steady async step: the uploads' host tensors, held until the adapter has waited the step's event
         try:
-            decoder.sync_page_table()
+            decoder.sync_page_table(**({"keep": keep} if steady else {}))
+            if marks:
+                marks.lap("sync_page_table")
             decoder.park_idle([lane for lane in range(lanes) if lane not in holders])
+            if marks:
+                marks.lap("park_idle")
             step_started = time.perf_counter()
-            lane_ids = decoder.step(lane_tokens)
+            if steady:
+                handle, wait_s = self._enqueue_lane_step(decoder, row_lanes, keep)
+            else:
+                lane_ids = decoder.step(lane_tokens)
             step_s = time.perf_counter() - step_started
+        except Qwen38AsyncTokenError:
+            raise  # before the replay: the lanes are as the step found them
         except BaseException:
             self.batch_failed = True
             raise
+        if steady:
+            now = time.perf_counter()
+            self.decode_stats.append(
+                {
+                    "rows": len(live_rows),
+                    "bucket": handle.lanes,
+                    "total_s": now - started,
+                    "step_s": step_s - wait_s,  # the enqueue: the wait for the previous step is its own part
+                    "gather_s": 0.0,
+                    "overhead_s": (now - started) - (step_s - wait_s),
+                    "candidates_s": 0.0,
+                    "draw_s": 0.0,
+                    "normalizer_s": 0.0,
+                    "fallback_read_s": 0.0,
+                    "fallback_draw_s": 0.0,
+                    "fallback_s": 0.0,
+                    "sampled_rows": 0,
+                    "logprobs_rows": 0,
+                }
+            )
+            if marks:
+                self.decode_stats[-1]["split"] = marks.acc
+                self.decode_stats[-1]["step_split"] = {**getattr(decoder, "step_split", {}), "wait": wait_s}
+            self._log_batch_decode(decoder, marks)
+            return handle
         gather_started = time.perf_counter()
         logits = None
         candidates_s = draw_s = fallback_s = normalizer_s = fallback_read_s = fallback_draw_s = 0.0
@@ -2114,6 +2861,23 @@ class Qwen38ForCausalLM:
                 "logprobs_rows": len(lp_rows),
             }
         )
+        if marks:
+            self.decode_stats[-1]["split"] = marks.acc
+            self.decode_stats[-1]["step_split"] = dict(getattr(decoder, "step_split", {}))
+        if self.async_decode:
+            if sampling_params is None:
+                self._remember_tokens(None)
+            else:  # the device row holds the greedy ids: it matches ``out`` unless a row was drawn or fell back to the host
+                greedy_only = not host_rows and all(
+                    int(out[row, 0]) == int(lane_ids[row_lanes[row]]) for row in live_rows
+                )
+                self._remember_tokens({row_lanes[row]: int(out[row, 0]) for row in live_rows}, synced=greedy_only)
+        self._log_batch_decode(decoder, marks)
+        return out if log_probs is None else (out, log_probs)
+
+    def _log_batch_decode(self, decoder: Any, marks: _SplitMarks | None) -> None:
+        """Count the decode call; every ``DECODE_LOG_INTERVAL`` calls log the means over the last calls' stats."""
+
         self.decode_calls += 1
         if self.decode_calls % DECODE_LOG_INTERVAL == 0:
             recent = list(self.decode_stats)[-DECODE_LOG_INTERVAL:]
@@ -2125,6 +2889,9 @@ class Qwen38ForCausalLM:
                 sum(entry[key] for entry in fallback_steps) / len(fallback_steps) * 1e3 if fallback_steps else 0.0
             )
             branches = ", ".join(f"{name} {count}" for name, count in self.host_branch_counts.items() if count)
+            split_text = ""
+            if marks:
+                split_text = self._split_log_text(recent)
             logger.info(
                 f"batch decode: {self.decode_calls} calls, last {len(recent)}: mean rows {mean('rows'):.2f}, "
                 f"bucket R {mean('bucket'):.1f} (steps per bucket {dict(getattr(decoder, 'bucket_steps', {}))}), "
@@ -2145,8 +2912,28 @@ class Qwen38ForCausalLM:
                 f"row read {'on' if self.batch_row_read else 'off'}: "
                 f"{counters['row_read_steps']} steps / {counters['row_read_rows']} lanes, full gather "
                 f"{counters['full_read_steps']} steps; host branches: {branches or 'none'}"
+                f"{split_text}"
             )
-        return out if log_probs is None else (out, log_probs)
+
+    def _split_log_text(self, recent: list[dict[str, Any]]) -> str:
+        """QWEN38_STEP_SPLIT=1: the batch decode log line's tail, means in ms over ``recent``."""
+
+        def mean(dicts: list[dict[str, float]], key: str) -> float:
+            return sum(d.get(key, 0.0) for d in dicts) / max(len(dicts), 1) * 1e3
+
+        steps = [e.get("step_split", {}) for e in recent]
+        pres = [e.get("split", {}) for e in recent]
+        names = list(dict.fromkeys(name for d in pres for name in d))
+        outside = sum(self._split_outside) / len(self._split_outside) * 1e3 if self._split_outside else 0.0
+        return (
+            "; step split: "
+            + ", ".join(
+                f"{k} {mean(steps, k):.2f}" for k in (ASYNC_SPLIT_STEP_PARTS if self.async_decode else SPLIT_STEP_PARTS)
+            )
+            + " ms; pre-step: "
+            + ", ".join(f"{k} {mean(pres, k):.2f}" for k in names)
+            + f" ms; outside {outside:.2f} ms"
+        )
 
     def _draw_candidate_rows(
         self,
@@ -2263,6 +3050,7 @@ class Qwen38ForCausalLM:
         needed = (length + 1) // self.block_size + 1
         if self.num_blocks < needed + 1:
             raise ValueError(f"warmup needs {needed} blocks beside the scratch block, the pool has {self.num_blocks}")
+        hybrid_single, self.hybrid_single = self.hybrid_single, False  # the warmup runs the lane path
         table = torch.zeros(self.lanes, self.decoder.paging.max_blocks, dtype=torch.int32)
         table[0, :needed] = torch.arange(1, needed + 1, dtype=torch.int32)
         prompt = torch.tensor([WARMUP_PROMPT_TOKEN_IDS], dtype=torch.int32)
@@ -2311,6 +3099,8 @@ class Qwen38ForCausalLM:
         self.release_request(0)
         self.lane_of_slot = list(range(self.lanes))
         self.lane_slots = [Qwen38VLLMSlot() for _ in range(self.lanes)]
+        self.hybrid_single = hybrid_single
+        self._clear_hybrid()
         self._pending_note = None
         self.decode_stats.clear()
         self.decode_calls = 0

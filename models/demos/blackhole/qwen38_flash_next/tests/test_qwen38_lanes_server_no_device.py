@@ -355,11 +355,15 @@ def test_lane_body_gr_read_is_the_single_streams_read_rows_call() -> None:
         "layer.mlp_gr.read_rows(residual, flat_views=True)",
     )
     for call in calls:
-        assert call in lanes and call in single, call
+        assert call in lanes, call  # the lane body reads every row
+        # the single-stream verify body also passes live_rows (eca0820e739), which read_rows forwards only to a fused read
+        # that supports it
+        assert "".join((call[:-1] + ", live_rows=gr_live_rows)").split()) in "".join(single.split()), call
     gr = GR_SOURCE.read_text(encoding="utf-8")
     read_rows = gr[gr.index("    def read_rows(") :]
     assert 'if flat_views and getattr(self, "_read_fused", None) is not None:' in read_rows
     assert "return self._read_fused(self, residual_rows)" in read_rows
+    assert 'getattr(self._read_fused, "supports_live_rows", False)' in read_rows
     init = gr[gr.index("        self._read_fused = None") : gr.index("        self._write_fused = None")]
     assert 'if fused_kernels.enabled("gr_recip_last"):' in init and 'name = "gr_recip_last"' in init
     # the lane GDN rows dispatch through the fold's registry step as the single stream's forward_rows does (wave F)

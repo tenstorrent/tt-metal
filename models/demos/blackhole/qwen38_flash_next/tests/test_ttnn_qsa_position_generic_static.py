@@ -689,7 +689,9 @@ def test_pinned_binary_layout_rules_force_a_tile_staging_and_homogeneous_operand
     assert (
         "Optional output tensor with Row Major input is not supported right now for Elementwise operations" in wrapper
     )
-    assert "const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE);" in wrapper
+    assert (
+        "const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);" in wrapper
+    )
     device = _cpp("ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.cpp")
     assert (
         "input_tensor_a.layout() == Layout::ROW_MAJOR &&\n        input_tensor_b.layout() == Layout::ROW_MAJOR) {\n"

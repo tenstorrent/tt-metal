@@ -234,7 +234,9 @@ def test_open_allocates_the_alternates_before_the_snapshot_captures_every_chain_
     assert "MTP_WARM_ACCEPT_UNIFORMS[: target.drafts + 1]" in _segment(SESSION_SOURCE, functions["warm_mtp_chain"])
     warm = _segment(SESSION_SOURCE, functions["warm_mtp_chain"])
     assert (
-        "[MTP_BOOTSTRAP_DRAFT_TOKEN] * target.drafts" in warm and "while warm_fed % RESIDUE_CLASSES != residue:" in warm
+        "[MTP_BOOTSTRAP_DRAFT_TOKEN] * target.drafts" in warm
+        and "(warm_fed % RESIDUE_CLASSES != residue)" in warm  # the 1-row steps to the round's residue class
+        and "while ((warm_fed < dr2_positions[index]) if dr2_positions else" in warm
     )
     assert (
         "for target in [chain_mtp] + [" in opened and "if count != chain_mtp.drafts ]: warm_mtp_chain(target)" in opened

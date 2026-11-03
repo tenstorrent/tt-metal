@@ -1212,6 +1212,9 @@ class Qwen38TTNNTextModel:
                 self._position_derive_lanes = fused_kernels.position_derive.derive_lanes_fused
         self._clean_feature_rows_hosts: dict[int, Any] = {}  # the -0.0 feature rows per chunk row count (host)
         self._state_owner = object()
+        # id(lane state) -> (state, lanes) of the lane states ``write_lane_ple_rows`` validated: the 48-layer check runs
+        # once per state, not per step; dropped at release (the held state keeps its id from being reused)
+        self._ple_validated_lanes: dict[int, tuple[Qwen38TTNNTextModelLaneState, int]] = {}
         # ids of the chunk states whose pad inputs hold the full-pass values (set by ``write_chunk_pad(None)``, dropped by
         # a partial write and at release): the next full-pass write is skipped
         self._chunk_pad_full: set[int] = set()
@@ -3968,6 +3971,7 @@ class Qwen38TTNNTextModel:
         self._validate_lane_state(state)
         if not state.is_view:
             raise ValueError("release_bucket_lane_state takes a bucket view; use release_lane_state")
+        self._ple_validated_lanes.pop(id(state), None)
         actions = [
             (
                 f"target layer {index} bucket lane state",
@@ -3987,6 +3991,7 @@ class Qwen38TTNNTextModel:
     def release_lane_state(self, state: Qwen38TTNNTextModelLaneState) -> None:
         self._validate_lane_state(state)
         self._require_parent_lane_state(state, "release_lane_state")
+        self._ple_validated_lanes.pop(id(state), None)
         actions = [
             (
                 f"target layer {index} lane state",
@@ -4053,10 +4058,13 @@ class Qwen38TTNNTextModel:
             contexts[lane] = None
             ple.token_contexts = tuple(contexts)
 
-    def write_lane_page_table(self, state: Qwen38TTNNTextModelLaneState, rows: Sequence[Sequence[int]]) -> None:
+    def write_lane_page_table(
+        self, state: Qwen38TTNNTextModelLaneState, rows: Sequence[Sequence[int]], keep: list | None = None
+    ) -> None:
         """Host upload of the page table, in place (outside any trace): ``rows[u]`` = lane u's page ids (pages 1..
         num_pages-1; page 0 is the reserved scratch), padded with 0 to ``max_blocks``; lanes without a row (and rows
-        past ``len(rows)`` up to 32) are all 0."""
+        past ``len(rows)`` up to 32) are all 0.  ``keep`` collects the host tensor of the upload (it must outlive a
+        replay enqueued without blocking)."""
 
         self._validate_lane_state(state)
         self._require_parent_lane_state(state, "write_lane_page_table")
@@ -4073,15 +4081,15 @@ class Qwen38TTNNTextModel:
             if any(not 0 <= page < paging.num_pages for page in pages):
                 raise ValueError(f"lane {lane} page ids must be in [0, {paging.num_pages}), got {pages}")
             host[0, 0, lane, : len(pages)] = torch.tensor(pages, dtype=torch.int32)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                host,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
-            ),
-            state.page_table,
+        host_table = ttnn.from_torch(
+            host,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
         )
+        ttnn.copy_host_to_device_tensor(host_table, state.page_table)
+        if keep is not None:
+            keep.append(host_table)
 
     def admit_lane_kv_paged(
         self, state: Qwen38TTNNTextModelLaneState, chain_state: Qwen38TTNNTextModelGenericState, lane: int, rows: int
@@ -4173,31 +4181,41 @@ class Qwen38TTNNTextModel:
         layout.validate(self.mesh_contract)
         return layout
 
-    def write_lane_tokens(self, state: Qwen38TTNNTextModelLaneState, tokens: Sequence[int]) -> None:
-        """Host write of the token row (outside any trace): lane u = ``tokens[u]``, the idle lanes 0."""
+    def write_lane_tokens(
+        self, state: Qwen38TTNNTextModelLaneState, tokens: Sequence[int], keep: list | None = None
+    ) -> None:
+        """Host write of the token row (outside any trace): lane u = ``tokens[u]``, the idle lanes 0.  ``keep``
+        collects the host tensor of the upload (it must outlive a replay enqueued without blocking)."""
 
         lanes = self._validate_lane_state(state)
         tokens = [int(token) for token in tokens]
         if len(tokens) != lanes:
             raise ValueError(f"lane tokens need one token per lane: got {len(tokens)}, expected {lanes}")
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                self.model_io.embedding.host_token_rows(tokens + [0] * (CHUNK_ROWS - lanes)),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
-            ),
-            state.token_row,
+        host = ttnn.from_torch(
+            self.model_io.embedding.host_token_rows(tokens + [0] * (CHUNK_ROWS - lanes)),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
         )
+        ttnn.copy_host_to_device_tensor(host, state.token_row)
+        if keep is not None:
+            keep.append(host)
 
     def write_lane_ple_rows(
-        self, state: Qwen38TTNNTextModelLaneState, tokens: Sequence[int], contexts
+        self, state: Qwen38TTNNTextModelLaneState, tokens: Sequence[int], contexts, keep: list | None = None
     ) -> tuple[tuple[int, int], ...]:
         """Host write of the PLE rows (outside any trace): lane u's ``tokens[u]`` looked up under ``contexts[u]``
         in one batched read into the persistent rows.  Returns the next context per lane; the caller keeps them
-        (the body's PLE state is pinned context-free)."""
+        (the body's PLE state is pinned context-free).  ``keep`` collects the host tensor of the upload (it must outlive
+        a replay enqueued without blocking)."""
 
-        lanes = self._validate_lane_state(state)
+        self._require_healthy()
+        validated = self._ple_validated_lanes.get(id(state))
+        if validated is not None and validated[0] is state:
+            lanes = validated[1]
+        else:
+            lanes = self._validate_lane_state(state)
+            self._ple_validated_lanes[id(state)] = (state, lanes)
         ple = self.layers[PLE_CHECKPOINT_LAYER].ple
         if ple is None:
             raise RuntimeError("checkpoint layer 1 PLE owner is unavailable")
@@ -4205,15 +4223,15 @@ class Qwen38TTNNTextModel:
         if len(tokens) != lanes:
             raise ValueError(f"lane PLE rows need one token per lane: got {len(tokens)}, expected {lanes}")
         rows, next_contexts = ple.host_lanes(tokens, contexts)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                rows.contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
-            ),
-            state.ple_rows.embedding_rows,
+        host = ttnn.from_torch(
+            rows.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
         )
+        ttnn.copy_host_to_device_tensor(host, state.ple_rows.embedding_rows)
+        if keep is not None:
+            keep.append(host)
         return next_contexts
 
     def _embed_residual_lanes_from_device_token(self, state: Qwen38TTNNTextModelLaneState):

@@ -262,7 +262,9 @@ def test_metrics_report():
 def host_decoder(lanes=4, page_size=64, num_pages=20):
     decoder = Qwen38PlainLaneDecoder(lanes, paging=Qwen38LanePaging(page_size, num_pages, 128))
     writes = []
-    decoder.model = SimpleNamespace(write_lane_page_table=lambda ls, rows: writes.append([list(r) for r in rows]))
+    decoder.model = SimpleNamespace(
+        allocated_context=32768, write_lane_page_table=lambda ls, rows: writes.append([list(r) for r in rows])
+    )
     decoder.ls = SimpleNamespace()
     return decoder, writes
 

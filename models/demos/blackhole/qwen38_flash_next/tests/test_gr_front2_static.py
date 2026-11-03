@@ -31,12 +31,14 @@ def test_sources_exist_and_default_kernels_untouched():
 
 
 def test_stats_u_recip_kernel_is_head_plus_the_rowtrim_define():
-    """QWEN38_FRONT_ROWTRIM adds a helper and one call-site switch; with both removed the kernel is HEAD's text."""
+    """QWEN38_FRONT_ROWTRIM adds a helper and one call-site switch; with both removed the kernel is the text before 52036a88cd1 (which added the rowtrim)."""
 
     import re
 
     path = (KERNELS / "stats_u_recip_compute.cpp").relative_to(REPO)
-    head = subprocess.run(["git", "show", f"HEAD:{path}"], cwd=REPO, capture_output=True, text=True, check=True).stdout
+    head = subprocess.run(
+        ["git", "show", f"52036a88cd1^:{path}"], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout
     text = (KERNELS / "stats_u_recip_compute.cpp").read_text()
     text = re.sub(r"// QWEN38_FRONT_ROWTRIM_ITERS.*?#endif\n\n", "", text, count=1, flags=re.S)
     text = re.sub(r"#ifdef QWEN38_FRONT_ROWTRIM_ITERS\n.*?#else\n(.*?)#endif\n", r"\1", text, count=1, flags=re.S)

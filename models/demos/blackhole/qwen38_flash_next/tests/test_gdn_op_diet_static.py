@@ -304,7 +304,7 @@ def test_collectives_read_and_write_the_matmul_shard_layouts_directly() -> None:
     assert "to_memory_config(full_hidden" not in project
     assert "hidden_ws" not in project
     assert (
-        "projected_ws = fused_mm_stream.linear(\n            full_hidden," in project
+        "projected_ws = fused_mm_stream.linear(\n                full_hidden," in project
     )  # the stock linear unless QWEN38_MM_STREAM
     # the reduce is the row_reduce dispatch (the stock ttnn.reduce_scatter outside its contract or at QWEN38_ROW_REDUCE=0)
     gate = _method_source("_out_project").replace(
