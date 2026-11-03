@@ -54,6 +54,10 @@ MAX_PACKED_ROWS_PER_CHIP = 2016
 class TtKimiK3Transformer(LightweightModule):
     """A slice of Kimi-K3's layers, plus the tail when this rank holds it."""
 
+    # Whether a rank boundary carries AttnRes's sealed snapshots. False only for a model built on the plain residual
+    # stream (the bisection arm, PlainResidualStream), whose handoff is the live sum alone.
+    HANDS_OFF_SEALED = True
+
     @staticmethod
     def check_cache_complete(
         cache_path,
@@ -133,14 +137,16 @@ class TtKimiK3Transformer(LightweightModule):
         if mtp_predictor is not None:
             raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
         assert forward_chunks >= 1, f"forward_chunks must be positive, got {forward_chunks}"
-        packed_rows = seq_len * forward_chunks // tuple(mesh_device.shape)[sp_axis]
+        sp = tuple(mesh_device.shape)[sp_axis]
+        packed_rows = seq_len * forward_chunks // sp
         if forward_chunks > 1 and packed_rows > MAX_PACKED_ROWS_PER_CHIP:
+            budget = MAX_PACKED_ROWS_PER_CHIP * sp // seq_len * seq_len
             raise ValueError(
-                f"Kimi-K3 packs at most {MAX_PACKED_ROWS_PER_CHIP} MoE rows per chip per forward; {forward_chunks} chunks "
-                f"of {seq_len} tokens are {packed_rows}. The MoE's shared-expert down projection (TtSharedExpert, "
-                f"get_program_configs) would need more static circular buffers than L1 holds on Kimi-K3's widths. Lower "
-                f"PREFILL_FORWARD_TOKENS_BUDGET to at most {MAX_PACKED_ROWS_PER_CHIP * tuple(mesh_device.shape)[sp_axis]} "
-                f"tokens ({MAX_PACKED_ROWS_PER_CHIP * tuple(mesh_device.shape)[sp_axis] // seq_len} chunks)."
+                f"Kimi-K3 packs at most {MAX_PACKED_ROWS_PER_CHIP} MoE rows per chip per forward; {forward_chunks} "
+                f"chunks of {seq_len} tokens are {packed_rows}. The MoE's shared-expert down projection "
+                f"(TtSharedExpert, get_program_configs) would need more static circular buffers than L1 holds on "
+                f"Kimi-K3's widths. Lower PREFILL_FORWARD_TOKENS_BUDGET to at most {budget} tokens "
+                f"({budget // seq_len} chunks)."
             )
         # Chunks per packed forward; seq_len stays the per-chunk size.
         self.forward_chunks = forward_chunks
@@ -380,11 +386,15 @@ class TtKimiK3Transformer(LightweightModule):
         has `F // BLOCK_SIZE` snapshots behind it. A function of the boundary alone, which is
         what keeps the transfer a static shape and therefore trace-capturable.
         """
+        if not self.HANDS_OFF_SEALED:
+            return 1
         return 1 + self.first_layer_idx // BLOCK_SIZE
 
     @property
     def outbound_planes(self) -> int:
         """Planes this rank sends on — the same count evaluated at the far edge of its slice."""
+        if not self.HANDS_OFF_SEALED:
+            return 1
         return 1 + (self.first_layer_idx + self.num_layers) // BLOCK_SIZE
 
     def _pack_handoff(self, live, sealed):
