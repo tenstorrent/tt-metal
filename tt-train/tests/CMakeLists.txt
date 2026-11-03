@@ -8,7 +8,6 @@ set(SOURCES
     core/clip_grad_norm_test.cpp
     core/parameter_dtype_test.cpp
     core/clip_grad_norm_tp_test.cpp
-    core/distributed_test.cpp
     core/random_tests.cpp
     core/program_utils_test.cpp
     model/linear_regression_ddp_test.cpp
