@@ -152,6 +152,27 @@ TEST_F(MeshDispatchFixture, TensixKernelMetaSourceCodeShowsInlineSource) {
     EXPECT_EQ(file_meta.source, kernel_file) << "FILE_PATH kernels should report their file path in metadata";
 }
 
+// Unit test for Kernel::compute_hash() - the build optimization level is a build input and must change the hash
+TEST_F(CompileProgramWithKernelPathEnvVarFixture, DataMovementTestDifferentOptLevelShouldProduceDifferentHashes) {
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp";
+
+    DataMovementConfig config_default{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+    DataMovementConfig config_o0(config_default);
+    config_o0.opt_level = KernelBuildOptLevel::O0;
+
+    auto program_default = CreateProgram();
+    auto program_o0 = CreateProgram();
+
+    auto kernel_handle_default = CreateKernel(program_default, kernel_file, CoreCoord(0, 0), config_default);
+    auto kernel_handle_o0 = CreateKernel(program_o0, kernel_file, CoreCoord(0, 0), config_o0);
+
+    auto kernel_default = program_default.impl().get_kernel(kernel_handle_default);
+    auto kernel_o0 = program_o0.impl().get_kernel(kernel_handle_o0);
+
+    EXPECT_NE(kernel_default->compute_hash(), kernel_o0->compute_hash())
+        << "opt_level is not accounted for in Kernel::compute_hash()";
+}
+
 // Unit test for Kernel::compute_hash() - tests that different unpack_to_dest_mode produces different hashes
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDestModeShouldProduceDifferentHashes) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp";

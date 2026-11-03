@@ -507,7 +507,14 @@ void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_qu
 bool Device::compile_fabric() {
     fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(
         MetalEnvAccessor(*env_).impl(), context_->get_dispatch_core_manager().get_dispatch_core_config(), this);
-    return fabric_program_ != nullptr;
+    if (fabric_program_ == nullptr) {
+        return false;
+    }
+    // Laying the program out is part of compiling it: this is where a router that does not fit the
+    // kernel config buffer fails, and a mock-cluster compile (which never configures routers) must
+    // run that check too. Nothing between here and configure_fabric() changes the layout.
+    fabric_program_->impl().finalize_offsets(this);
+    return true;
 }
 
 void Device::configure_fabric() {
@@ -516,8 +523,6 @@ void Device::configure_fabric() {
     }
 
     tt::tt_fabric::configure_fabric_cores(MetalEnvAccessor(*env_).impl(), this);
-
-    fabric_program_->impl().finalize_offsets(this);
 
     slow_dispatch::WriteRuntimeArgsToDevice(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
     slow_dispatch::ConfigureDeviceWithProgram(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
