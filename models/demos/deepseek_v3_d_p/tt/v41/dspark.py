@@ -45,12 +45,21 @@ SP_AXIS = 0
 TILE = 32
 
 
-def seed_rows(length: int, window: int) -> tuple[int, int, int]:
+def seed_rows(length: int, window: int, offset: int = 0) -> tuple[int, int, int]:
     """(lo, a, b): the real positions [lo, length) a chunk with ``length`` valid tokens seeds and the tile-aligned
-    rows [a, b) around them (at most window + 32 rows). The generic chunk tables use the same arithmetic for the
-    seed rows' RoPE buffer (``V41ChunkTables.dspark_rope``)."""
+    chunk rows [a, b) around them (at most window + 32 rows). ``offset``: the chunk row the positions start at (a
+    packed chunk's segment, ``TT_V41_PACK``: position p is chunk row ``offset + p``; the rows [a, b) then cover
+    ``[offset + lo, offset + length)`` and are at most window + 64 since a segment's offset need not be tile
+    aligned). The generic chunk tables use the same arithmetic for the seed rows' RoPE buffer
+    (``V41ChunkTables.dspark_rope``)."""
     lo = max(0, length - window)
-    return lo, lo // TILE * TILE, -(-length // TILE) * TILE
+    return lo, (offset + lo) // TILE * TILE, -(-(offset + length) // TILE) * TILE
+
+
+def seed_rows_max(window: int, offset: bool = False) -> int:
+    """The most rows ``seed_rows`` spans: window + 32 for a chunk's own positions, window + 64 for a segment at an
+    arbitrary offset (the RoPE buffers are sized by it)."""
+    return window + (2 * TILE if offset else TILE)
 
 
 class TtV41DSpark(LightweightModule):
@@ -114,23 +123,32 @@ class TtV41DSpark(LightweightModule):
         return ttnn.typecast(ttnn.multiply(total, 1.0 / self.hc), ttnn.bfloat16)
 
     # --- D1 --------------------------------------------------------------------------------------------------
-    def _seed_rows(self, length: int) -> tuple[int, int, int]:
-        """(lo, a, b): the real positions [lo, length) a chunk seeds and the tile-aligned rows [a, b) around them."""
-        return seed_rows(length, self.window)
+    def _seed_rows(self, length: int, offset: int = 0) -> tuple[int, int, int]:
+        """(lo, a, b): the real positions [lo, length) a chunk (or its segment at chunk row ``offset``) seeds and
+        the tile-aligned chunk rows [a, b) around them."""
+        return seed_rows(length, self.window, offset)
+
+    def _gather(self, taps: list):
+        """``taps`` (one per target layer, in order) concatenated along the hidden dim and gathered over SP: the
+        whole chunk's rows ``[1, 1, rows, n_taps * hidden/tp]`` bf16 on every rank, once per chunk."""
+        assert len(taps) == self.n_taps
+        return self._sp_all_gather(ttnn.concat(taps, dim=3))
+
+    def _project_rows(self, x, a: int, b: int):
+        """main_x ``[1, 1, b - a, hidden]`` bf16 (replicated) of the gathered taps' chunk rows [a, b)."""
+        x = fp8_qdq(ttnn.slice(x, [0, 0, a, 0], [1, 1, b, x.shape[3]]))
+        y = ttnn.linear(x, self.main_proj, dtype=ttnn.float32, compute_kernel_config=self.compute_kernel_config)
+        y = ttnn.typecast(self.ccl.tp_all_reduce(y), ttnn.bfloat16)  # the reference GEMM rounds once to bf16
+        return ttnn.rms_norm(y, weight=self.main_norm, epsilon=self.eps)
 
     def project(self, taps: list, length: int):
         """``taps`` (one per target layer, in order) of a chunk with ``length`` valid tokens -> (main_x, a):
         ``main_x`` ``[1, 1, b - a, hidden]`` bf16 (replicated) holds main_x of chunk rows [a, b), which cover the
         last ``min(length, window)`` valid rows."""
-        assert len(taps) == self.n_taps
         padded = taps[0].shape[2] * self.sp
         assert 0 < length <= padded, f"valid length {length} outside the chunk's {padded} rows"
         _, a, b = self._seed_rows(length)
-        x = self._sp_all_gather(ttnn.concat(taps, dim=3))
-        x = fp8_qdq(ttnn.slice(x, [0, 0, a, 0], [1, 1, b, x.shape[3]]))
-        y = ttnn.linear(x, self.main_proj, dtype=ttnn.float32, compute_kernel_config=self.compute_kernel_config)
-        y = ttnn.typecast(self.ccl.tp_all_reduce(y), ttnn.bfloat16)  # the reference GEMM rounds once to bf16
-        return ttnn.rms_norm(y, weight=self.main_norm, epsilon=self.eps), a
+        return self._project_rows(self._gather(taps), a, b), a
 
     # --- D2 --------------------------------------------------------------------------------------------------
     def new_rings(self) -> list:
@@ -150,22 +168,46 @@ class TtV41DSpark(LightweightModule):
         """Write the DSpark window KV of the chunk's last ``min(length, window)`` real positions (absolute
         ``start + p``) into ``rings`` slot ``(start + p) % window``, in place. Call once per chunk, in order.
         ``rope``: this chunk's ``seed_rope(start, length)``, uploaded ahead."""
+        padded = taps[0].shape[2] * self.sp
+        assert 0 < length <= padded, f"valid length {length} outside the chunk's {padded} rows"
+        self._seed(self._gather(taps), 0, start, length, rings, rope)
+
+    def seed_packed(self, taps: list, segments, rings: list, ropes: list) -> None:
+        """``seed`` of a packed chunk (``TT_V41_PACK``): segment ``g`` at chunk rows ``[offset, offset + length)``
+        is a whole prompt at its own positions ``0 .. length``, so its last ``min(length, window)`` positions are
+        written into ``rings[g]`` (its own ring set) at slots ``p % window``, from the taps gathered once and that
+        segment's RoPE pair ``ropes[g]`` (``V41ChunkTables.dspark_rope_segments``). Row-local throughout, so each
+        segment's rings equal the single prefill's of the same prompt."""
+        assert len(segments) <= len(rings) and len(segments) == len(ropes), (len(segments), len(rings), len(ropes))
+        padded = taps[0].shape[2] * self.sp
+        x = self._gather(taps)
+        for g, (offset, length) in enumerate(segments):
+            assert 0 < length and offset + length <= padded, f"segment {g} [{offset}, {offset + length}) of {padded}"
+            self._seed(x, offset, 0, length, rings[g], ropes[g])
+
+    def _seed(self, x, offset: int, start: int, length: int, rings: list, rope: tuple) -> None:
+        """The seeding of the gathered taps ``x`` (``_gather``) for the positions ``[0, length)`` held at chunk rows
+        ``[offset, offset + length)`` (absolute positions ``start + p``) into ``rings``."""
         assert len(rings) == len(self.layers)
-        main_x, a = self.project(taps, length)
-        lo, _, b = self._seed_rows(length)
+        lo, a, b = self._seed_rows(length, offset)
+        main_x = self._project_rows(x, a, b)
         cos, sin = rope
         assert cos.shape[2] == b - a, f"RoPE table of {cos.shape[2]} rows for seed rows [{a}, {b})"
         x = fp8_qdq(main_x)
+        first, last = offset + lo - a, offset + length - a  # the seeded positions' rows within [a, b)
         for layer, ring in zip(self.layers, rings):
             kv = ttnn.linear(x, layer["wkv"], compute_kernel_config=self.compute_kernel_config)
             kv = self._rope(ttnn.rms_norm(kv, weight=layer["kv_norm"], epsilon=self.eps), cos, sin)
             kv = ttnn.to_layout(fp8_qdq(kv), ttnn.ROW_MAJOR_LAYOUT)
-            self._write_ring(ring, ttnn.slice(kv, [0, 0, lo - a, 0], [1, 1, length - a, self.head_dim]), start + lo)
+            self._write_ring(ring, ttnn.slice(kv, [0, 0, first, 0], [1, 1, last, self.head_dim]), start + lo)
 
-    def seed_rope(self, start: int, length: int) -> tuple:
+    def seed_rope(self, start: int, length: int, offset: int = 0) -> tuple:
         """Replicated fp32 cos/sin ``[1, 1, b - a, rope_dim]`` (ratio-0 table) of the seed rows [a, b) of the chunk
-        at ``start`` with ``length`` valid tokens (``_seed_rows``); depends on the chunk's position only."""
-        _, a, b = self._seed_rows(length)
+        at ``start`` with ``length`` valid tokens (``_seed_rows``); depends on the chunk's position only.
+        ``offset``: a packed segment's chunk row (``seed_rows``): row ``a + i`` is position ``start + a - offset + i``
+        (the rows before the segment, when its offset is not tile aligned, get the positions before ``start``:
+        they are never written)."""
+        _, a, b = self._seed_rows(length, offset)
         return tuple(
             ttnn.from_torch(
                 t,
@@ -174,7 +216,7 @@ class TtV41DSpark(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            for t in cos_sin(self.config, False, torch.arange(start + a, start + b))
+            for t in cos_sin(self.config, False, torch.arange(start + a - offset, start + b - offset))
         )
 
     def _rope(self, kv, cos, sin):

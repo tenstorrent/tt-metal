@@ -19,7 +19,14 @@ by its segments), and the decode after it. ``V41_PJ_TRACE=1`` (default 0: the pa
 at warm-up (``V41PackTrace``, the segment joins per slot) and checks a replayed pack against the eager pack of the
 same prompts bit for bit (logits and pool rows), alternating layouts and a single prompt between them, with the
 replays' device time. ``V41_PJ_LONG=1`` adds the ``2 x 2052`` layout. ``V41_PJ_MAX_SEQ`` (16,384) is the context,
-``V41_PJ_BATCH`` (16) the slots. Results: ``V41_PJ_RESULT {json}``, ``V41_PJ_OUT``."""
+``V41_PJ_BATCH`` (16) the slots. Results: ``V41_PJ_RESULT {json}``, ``V41_PJ_OUT``.
+
+With the drafter on (``TT_V41_SPEC=K``, the served catalog) the join also loads the
+slot's drafter rings from the packed chunk's per-segment seeding (``V41PrefillState.segment_rings[g]``): the rows
+compared per slot then include each drafter stage's ring rows of the prompt's last 128 positions
+(``drafter_ring[s]``), which must equal the single prefill's for segment 0, and the free-running tokens come from
+the speculative round through the ``[B, 1]`` contract (one token a call, the round's others buffered), with the
+device rounds each slot took recorded beside them (``rounds``: equal rings and rows give equal drafts)."""
 
 import json
 import os
@@ -90,6 +97,26 @@ def _slot_rows(mesh_device, pool: V41DecodePool, slot: int, length: int) -> dict
         # the written rows only: a join scatters ``rows`` rows, so the last page's tail past them is the slot's
         # previous occupant's (fresh slots agree, reused ones do not), as for the single path
         out[f"index_k_blocks[{src}]"] = pages.reshape(-1, pages.shape[-1] // BLOCK_ROWS)[:rows]
+    return out
+
+
+def _drafter_rings(mesh_device, model, slot: int, length: int) -> dict:
+    """The slot's drafter rings on its rank's first chip after the join: per stage the rows of the prompt's last
+    ``RING`` positions (slot ``q % ring_slots`` of the slot's user; the other rows of a position-based ring are
+    whatever an earlier occupant left), ``[RING, head_dim]`` bf16. Empty without the drafter."""
+    drafter = model.drafter
+    if drafter is None:
+        return {}
+    users = drafter.users
+    rank, u = divmod(slot, model.users_per_rank)
+    user = u if users > 1 else 0
+    chip = rank * tuple(mesh_device.shape)[1]
+    base = user * drafter.ring_slots
+    rows = torch.tensor([base + q % drafter.ring_slots for q in range(length - RING, length)])
+    out = {}
+    for s, stage in enumerate(drafter.stages):
+        every = ttnn.to_torch(ttnn.get_device_tensors(stage.kv)[chip])[0, 0]
+        out[f"drafter_ring[{s}]"] = every[rows].clone()
     return out
 
 
@@ -191,6 +218,7 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         "max_seq": max_seq_len,
         "traced": traced,
         "decode_flags": {k: v for k, v in os.environ.items() if k.startswith("V41_DECODE_")},
+        "spec": {k: v for k, v in os.environ.items() if k.startswith("TT_V41_SPEC")},
     }
 
     t0 = time.time()
@@ -281,11 +309,21 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
             assert key in model.slots, key
         return [model.slots[key] for key in keys]
 
+    rounds: dict[int, int] = {}  # key -> the device rounds its slot took in the last ``free_run`` (the drafter on)
+
     def free_run(keys: list[int], first: list[int], lengths: list[int], n: int) -> list[list[int]]:
-        """``n`` greedy steps of every key together, each fed its own previous token -> per key its tokens."""
+        """``n`` greedy steps of every key together, each fed its own previous token -> per key its tokens. With
+        the drafter on, a call whose slot holds buffered tokens of its last round hands one over without a device
+        step: ``rounds[key]`` counts the calls that stepped."""
         fed = list(first)
         out = [[] for _ in keys]
+        for key in keys:
+            rounds[key] = 0
         for s in range(n):
+            for key in keys:
+                slot = model.slots.get(key)
+                if slot is None or not model.buffered.get(slot):
+                    rounds[key] += 1
             got = decode([(key, fed[i], lengths[i] + s) for i, key in enumerate(keys)])
             for i in range(len(keys)):
                 out[i].append(got[i])
@@ -314,7 +352,10 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         ref_full = model.prefill_last["chunk"] == chunk  # the reference on the full chunk: segment 0 bit-identical
         checks[f"{tag} reference"] = dict(model.prefill_last)
         ref_slots = join(ref_keys)
-        ref_rows = [_slot_rows(mesh_device, pool, slot, prompt) for slot in ref_slots]
+        ref_rows = [
+            {**_slot_rows(mesh_device, pool, slot, prompt), **_drafter_rings(mesh_device, model, slot, prompt)}
+            for slot in ref_slots
+        ]
         # the pack: the same prompts in one call
         pack_keys = new_keys(k)
         t0 = time.time()
@@ -342,7 +383,10 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         assert len(set(pack_slots + ref_slots)) == 2 * k, (pack_slots, ref_slots)
         for g, key in enumerate(pack_keys):
             assert model.decoder.position(pack_slots[g]) == prompt, (g, model.decoder.position(pack_slots[g]))
-        pack_rows = [_slot_rows(mesh_device, pool, slot, prompt) for slot in pack_slots]
+        pack_rows = [
+            {**_slot_rows(mesh_device, pool, slot, prompt), **_drafter_rings(mesh_device, model, slot, prompt)}
+            for slot in pack_slots
+        ]
         for g in range(k):
             rec = _logits_record(ref_logits[g], pack_logits[g])
             checks[f"{tag} logits[{g}]"] = rec
@@ -357,9 +401,13 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         tokens = free_run(keys, first, lengths * 2, steps)
         for g in range(k):
             rec = _tokens_record(tokens[g], tokens[k + g])
+            rec["rounds"] = [rounds[ref_keys[g]], rounds[pack_keys[g]]]
             checks[f"{tag} tokens[{g}]"] = {**rec, "ref": tokens[g], "pack": tokens[k + g]}
             if not rec["equal"]:
                 judge(f"{tag} tokens[{g}]", [f"{tag}: segment {g} decode tokens {rec}"], must=g == 0 and ref_full)
+            if model.drafter is not None and rec["rounds"][0] != rec["rounds"][1]:
+                # the same rows and rings draft the same tokens, so the slots take the same rounds
+                judge(f"{tag} rounds[{g}]", [f"{tag}: segment {g} rounds {rec['rounds']}"], must=g == 0 and ref_full)
         # the c1 variant: fresh prefills, each slot alone for a few steps (one live row: the c1 capture and the
         # live-user index under FD's flags, bound by the slot's position)
         c1_steps = min(steps, 4)
@@ -434,7 +482,10 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
                 {"k": k, "n": n, **{a: b for a, b in model.pack_traces[model.pack_last["layout"]].last.items()}}
             )
             slots_r = join(keys_r)
-            rows_r = [_slot_rows(mesh_device, pool, slot, n) for slot in slots_r]
+            rows_r = [
+                {**_slot_rows(mesh_device, pool, slot, n), **_drafter_rings(mesh_device, model, slot, n)}
+                for slot in slots_r
+            ]
             # the same prompts eagerly (the captures set aside), at the same pool step
             saved, model.pack_traces = model.pack_traces, {}
             try:
@@ -445,7 +496,7 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
             finally:
                 model.pack_traces = saved
             for g in range(k):
-                rows_e = _slot_rows(mesh_device, pool, slots_e[g], n)
+                rows_e = {**_slot_rows(mesh_device, pool, slots_e[g], n), **_drafter_rings(mesh_device, model, slots_e[g], n)}
                 lines, record = _compare(f"{tag} {turn} k{k} rows[{g}]", rows_e, rows_r[g])
                 if not torch.equal(logits_e[g], logits_r[g]):
                     lines.append(
@@ -467,6 +518,8 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         result["trace_after_requests"] = _trace_bytes(mesh_device)
 
     result["dram_after_requests"] = _dram_bytes(mesh_device)
+    if model.drafter is not None:
+        result["spec_stats"] = dict(model.spec_stats)
     result["failures"], result["reported"] = failures, reported
     logger.info("V41_PJ_RESULT " + json.dumps(result))
     out = os.environ.get("V41_PJ_OUT")

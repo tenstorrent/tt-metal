@@ -4,21 +4,32 @@
 
 """DeepSeek-V4.1-Flash for vllm-tt-plugin (harness): the V4.1 prefill and the decode step behind the plugin's
 model contract (``initialize_vllm_model``, ``allocate_kv_cache``, ``prefill_forward``, ``decode_forward``,
-``read_decode_output``, ``warmup_model_prefill`` / ``warmup_model_decode``; ``models/demos/deepseek_v3/tt/generator_vllm.py``
+``read_decode_output``, ``warmup_model_prefill`` / ``warmup_model_decode``;
+``models/demos/deepseek_v3/tt/generator_vllm.py``
 is the precedent).
 
-Requests and state. The plugin hands prefill and decode rows with vLLM's block tables; this model keeps its own
-caches and ignores the KV tensors it allocates for the plugin, so a request is identified by the first block of its
-block table (block 0 is vLLM's null block, never a request's). A prefill runs into one of ``TT_V41_PREFILL_SLOTS``
-prefill states (``V41PrefillState``; traced per state and prompt length, else eager) and joins the request's decode
-slot (``TtV41BatchDecoder``: ``max_batch_size`` slots in a pool sharded over the mesh rows; the slot of that block,
-or the least recently used one); a decode call steps every row's slot at once (one replayed capture) and reads the
-gathered logits once. Every row is text, single-chunk prefill (``start_pos`` 0), host sampling (the logits of the
-full vocabulary come to the host). Prompts need at least ``SLIDING_WINDOW`` tokens (the decode step starts after a
+Requests and state. The plugin hands prefill and decode rows with vLLM's block tables; this model keeps its
+own
+caches and ignores the KV tensors it allocates for the plugin, so a request is identified by the first block
+of its
+block table (block 0 is vLLM's null block, never a request's). A prefill runs into one of
+``TT_V41_PREFILL_SLOTS``
+prefill states (``V41PrefillState``; traced per state and prompt length, else eager) and joins the request's
+decode
+slot (``TtV41BatchDecoder``: ``max_batch_size`` slots in a pool sharded over the mesh rows; the slot of that
+block,
+or the least recently used one); a decode call steps every row's slot at once (one replayed capture) and reads
+the
+gathered logits once. Every row is text, single-chunk prefill (``start_pos`` 0), host sampling (the logits of
+the
+full vocabulary come to the host). Prompts need at least ``SLIDING_WINDOW`` tokens (the decode step starts
+after a
 full window) and prompt plus output at most ``max_model_len``.
 
-Environment: ``TT_V41_CHECKPOINT`` (the pinned snapshot; ``weights.resolve_checkpoint``), ``TT_V41_WEIGHT_CACHE``
-(the device MoE cache, ``tests/v41/weight_cache.py``), ``TT_V41_ENGRAM_MMAP`` (the Engram tables mapped from disk).
+Environment: ``TT_V41_CHECKPOINT`` (the pinned snapshot; ``weights.resolve_checkpoint``),
+``TT_V41_WEIGHT_CACHE``
+(the device MoE cache, ``tests/v41/weight_cache.py``), ``TT_V41_ENGRAM_MMAP`` (the Engram tables mapped from
+disk).
 ``TT_V41_CHUNK`` (default 8192) is the prefill chunk; ``max_model_len`` is rounded up to a multiple of it.
 ``TT_V41_LAYERS`` (default ``all``) selects the layer schedule, for checks on shallower models.
 """
@@ -62,46 +73,65 @@ from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_d
 
 WARMUP_PROMPT = 255  # tokens of the warm-up prompt (a full window; odd, so the ratio-2 carry path runs first)
 # TT_V41_SPEC=K (speculative decode): the decode step is the verify decoder (tt/v41/spec_verify)
-# with the DSpark drafter in its capture; a greedy request's step verifies K drafts and the round's
-# accepted tokens are handed to the plugin one per decode_forward call (the pool is ahead of the
-# plugin's position by the buffered tokens; the plugin's contract is unchanged, the calls that drain
-# the buffer touch no device). Speculation needs one live slot a mesh row and the drafter's rings
-# hold one request's state (the last joined): the other slots' rows run plain. A sampling request's
-# round draws the served sampler on every verify row and accepts while the draw equals the next
-# draft (the match rule preserves the sequential served sampler's law); TT_V41_SPEC_SAMPLED=0 makes
-# such a request run plain instead (the greedy-only path). TT_V41_SPEC_GREEDY_ALL=1 (a smoke's
-# knob): every request is verified greedily whatever it asked.
+# with the DSpark drafter in its capture; a greedy request's step verifies K drafts and the round's accepted
+# tokens
+# are handed to the plugin one per decode_forward call (the pool is ahead of the plugin's position by the
+# buffered
+# tokens; the plugin's contract is unchanged, the calls that drain the buffer touch no device). Speculation
+# needs
+# one live slot a mesh row and the drafter's rings hold one request's state (the last joined): the other
+# slots'
+# rows run plain. A sampling request's round draws the served sampler on every verify row and accepts while
+# the
+# draw equals the next draft (the match rule preserves the sequential served sampler's law);
+# TT_V41_SPEC_SAMPLED=0 makes such a request run plain instead (the greedy-only path).
+# TT_V41_SPEC_GREEDY_ALL=1 (a smoke's knob): every request is verified greedily whatever it
+# asked.
 SPEC = "TT_V41_SPEC"
 SPEC_GREEDY_ALL = "TT_V41_SPEC_GREEDY_ALL"
 SPEC_SAMPLED = "TT_V41_SPEC_SAMPLED"
 # TT_V41_SPEC_RINGS=slot (the served c32 round): the drafter keeps a ring per slot, so every
-# request speculates: a step of one live slot is the fused c1 round above; a step of several runs every slot of the
-# pool as a block of 1 + K rows (the requests' drafts padded to K, a pad row rejected by construction; the slots
-# without a request as dummies at their last position, whose writes sit past their frontier: one capture whatever
-# the live set) and then one standalone draft call for the four slots of every rank at once (the accepted rows'
-# taps written first). "one" (default): one ring set, the last joined request speculates, the others run plain.
+# request speculates: a step of one live slot is the fused c1 round above; a step of several runs every slot
+# of the
+# pool as a block of 1 + K rows (the requests' drafts padded to K, a pad row rejected by construction; the
+# slots
+# without a request as dummies at their last position, whose writes sit past their frontier: one capture
+# whatever
+# the live set) and then one standalone draft call for the four slots of every rank at once (the accepted
+# rows'
+# taps written first). "one" (default): one ring set, the last joined request speculates, the others run
+# plain.
 SPEC_RINGS = "TT_V41_SPEC_RINGS"
 SPEC_PAD = 0  # the pad draft and the dummy slots' token: any id; a pad row's token is never committed
 WARMUP_DECODE_STEPS = 8  # at most; done once the step is captured and replayed once
 PREFILL_SLOTS = "TT_V41_PREFILL_SLOTS"  # prefill states (default 2): requests prefill through them into the pool
-# Traced prefill: ``TT_V41_TRACE_PREFILL_LENGTHS`` lists prompt lengths (tokens, comma-separated) whose prefill is
+# Traced prefill: ``TT_V41_TRACE_PREFILL_LENGTHS`` lists prompt lengths (tokens, comma-separated) whose
+# prefill is
 # captured per slot at warm-up (the trace phase) and replayed for every prompt of exactly that length; other
 # lengths run eagerly, or are captured on their first request when ``TT_V41_TRACE_PREFILL_ON_MISS=1``.
 TRACE_PREFILL_LENGTHS = "TT_V41_TRACE_PREFILL_LENGTHS"
 TRACE_PREFILL_ON_MISS = "TT_V41_TRACE_PREFILL_ON_MISS"
 TRACE_PREFILL_SLACK = "TT_V41_TRACE_PREFILL_SLACK"  # also capture each listed length +- this many tokens (1)
-# ``TT_V41_PREFILL_GENERIC=1`` (transformer.PREFILL_GENERIC): the prefill states are position-generic and the trace
-# phase captures one ``V41GenericPrefillTrace`` per state (one capture per score-width bucket), so prompts of any
-# length longer than one chunk replay captures for every chunk but the final one. The per-length captures above
+# ``TT_V41_PREFILL_GENERIC=1`` (transformer.PREFILL_GENERIC): the prefill states are position-generic and the
+# trace
+# phase captures one ``V41GenericPrefillTrace`` per state (one capture per score-width bucket), so prompts of
+# any
+# length longer than one chunk replay captures for every chunk but the final one. The per-length captures
+# above
 # still apply to prompts of exactly those lengths (they replay the final chunk too).
-# ``TT_V41_SHORT_CHUNK``: smaller prefill chunks (tokens, comma-separated, ascending, each below TT_V41_CHUNK; 0 or
-# unset: none) for the short prompts. Each is a view of the model with that chunk (``TtV41Transformer.with_chunk``)
-# and one prefill state whose context is the first score-width bucket; the listed lengths that fit a short chunk
-# are captured on the smallest one that holds them instead of the full-chunk states, and a whole prompt of such a
+# ``TT_V41_SHORT_CHUNK``: smaller prefill chunks (tokens, comma-separated, ascending, each below TT_V41_CHUNK;
+# 0 or
+# unset: none) for the short prompts. Each is a view of the model with that chunk
+# (``TtV41Transformer.with_chunk``)
+# and one prefill state whose context is the first score-width bucket; the listed lengths that fit a short
+# chunk
+# are captured on the smallest one that holds them instead of the full-chunk states, and a whole prompt of
+# such a
 # length prefills there (a 1,028-token prompt paid a 5,120-row chunk's padded rows).
 SHORT_CHUNK = "TT_V41_SHORT_CHUNK"
 # deferred final chunks: a request parked after its bulk chunks
-# (joined into its slot, its carries in the slot's parking buffers) has its prefix restored into a prefill state when
+# (joined into its slot, its carries in the slot's parking buffers) has its prefix restored into a prefill
+# state when
 # its final chunk is called; off (unset or "0") is the serial path, bit for bit.
 DEFER_FINAL = "TT_V41_DEFER_FINAL"
 
@@ -111,14 +141,19 @@ def defer_final() -> bool:
 
 
 # ``TT_V41_PACK=1`` with ``TT_V41_PACK_LAYOUTS`` (cache.PACK_LAYOUTS): one more generic
-# prefill state on the full-chunk model (``pack_state``, its context the first score bucket rounded to the chunk)
-# runs several whole prompts of a listed layout as one packed chunk (``TtV41Transformer.prefill_packed``; captured
-# per layout at warm-up, ``V41PackTrace``), each prompt joining its decode slot from its own segment of the state.
-# A ``prefill_forward`` whose whole-prompt rows begin with a listed layout's lengths packs them; every other row
+# prefill state on the full-chunk model (``pack_state``, its context the first score bucket rounded to the
+# chunk)
+# runs several whole prompts of a listed layout as one packed chunk (``TtV41Transformer.prefill_packed``;
+# captured
+# per layout at warm-up, ``V41PackTrace``), each prompt joining its decode slot from its own segment of the
+# state.
+# A ``prefill_forward`` whose whole-prompt rows begin with a listed layout's lengths packs them; every other
+# row
 # takes the single path as before. Without the layouts the flag changes nothing in the generator.
 PACK_MAX_SEQ = "TT_V41_PACK_MAX_SEQ"  # the packed state's context (default: the first bucket rounded to the chunk)
 # ``TT_V41_PACK_CHUNK``: the chunk the packed state is built on: one of the
-# ``TT_V41_SHORT_CHUNK`` geometries, so a pack of short prompts pays that chunk's rows (a pack of four 1,028s on
+# ``TT_V41_SHORT_CHUNK`` geometries, so a pack of short prompts pays that chunk's rows (a pack of four 1,028s
+# on
 # the 5,120 geometry, as measured) and not the full chunk's; unset: the full-chunk model.
 PACK_CHUNK = "TT_V41_PACK_CHUNK"
 
@@ -151,11 +186,16 @@ def _trace_bytes(mesh_device) -> int:
 
 
 def _l1_probe(mesh_device, tag: str) -> None:
-    """``TT_V41_L1_PROBE=1``: log main L1's allocation (per bank) and its block table under ``tag``, at the warm-up's
-    stages. A program-cache entry first built inside a step (a collective's global semaphores: ``ttnn.all_gather``,
-    ``ttnn.reduce_scatter``) keeps its L1 blocks where the step's transients left room, and a program whose static
-    CBs reach past them is then rejected at compile or enqueue ("Statically allocated circular buffers ... clash
-    with L1 buffers ... allocated at N"): the owner is found by the stage its blocks first appear in. The table's
+    """``TT_V41_L1_PROBE=1``: log main L1's allocation (per bank) and its block table under ``tag``, at the
+    warm-up's
+    stages. A program-cache entry first built inside a step (a collective's global semaphores:
+    ``ttnn.all_gather``,
+    ``ttnn.reduce_scatter``) keeps its L1 blocks where the step's transients left room, and a program whose
+    static
+    CBs reach past them is then rejected at compile or enqueue ("Statically allocated circular buffers ...
+    clash
+    with L1 buffers ... allocated at N"): the owner is found by the stage its blocks first appear in. The
+    table's
     addresses are allocator-relative (absolute = address + the L1 unreserved base, 111,616 on Blackhole)."""
     if os.environ.get("TT_V41_L1_PROBE", "0") != "1":
         return
@@ -186,7 +226,8 @@ def _layers(spec: str) -> list[int]:
 
 class DeepseekV41ForCausalLM:
     # device sampling of the decode step (TT_V41_SAMPLE_ON_DEVICE, default on) with the plugin's
-    # sample_on_device_mode "decode_only": the step ends in ttnn.sampling over each row's top-128 candidates and
+    # sample_on_device_mode "decode_only": the step ends in ttnn.sampling over each row's top-128 candidates
+    # and
     # returns token ids; prefill returns logits (host sampling once per request). The host sampler over 32 x
     # 129,280 logits took ~100 ms a step.
     SAMPLE_ON_DEVICE = os.environ.get("TT_V41_SAMPLE_ON_DEVICE", "1") == "1"
@@ -206,8 +247,10 @@ class DeepseekV41ForCausalLM:
         prefill_slots: int = 2,
         vllm_config=None,
     ):
-        """``vllm_config``: unused; vLLM's registry classifies a model as generative by the shape of ``__init__``,
-        ``embed_input_ids``, ``forward`` and ``compute_logits`` (interfaces_base.py), none of which the TT plugin
+        """``vllm_config``: unused; vLLM's registry classifies a model as generative by the shape of
+        ``__init__``,
+        ``embed_input_ids``, ``forward`` and ``compute_logits`` (interfaces_base.py), none of which the TT
+        plugin
         calls: it runs ``prefill_forward`` / ``decode_forward``."""
         self.mesh_device, self.model, self.decoder, self.tokenizer = mesh_device, model, decoder, tokenizer
         self.config = model.config
@@ -216,7 +259,8 @@ class DeepseekV41ForCausalLM:
         # decode slots: first block id -> pool slot, least recently used first; the free slots
         self.slots: OrderedDict[int, int] = OrderedDict()
         self.free: list[int] = list(range(max_batch_size))
-        # prefill states, in use round-robin (a request's rows are in its decode slot once its prefill returns)
+        # prefill states, in use round-robin (a request's rows are in its decode slot once its prefill
+        # returns)
         self.generic = prefill_generic()
         self.prefill_states: list[V41PrefillState] = [
             model.new_state(generic=self.generic) for _ in range(prefill_slots)
@@ -276,11 +320,14 @@ class DeepseekV41ForCausalLM:
         # ``segment`` (offset, length, g)); oldest first
         self.pending: OrderedDict[int, tuple[V41PrefillState, torch.Tensor, dict]] = OrderedDict()
         self.next_prefill_state = 0
-        # speculative decode (TT_V41_SPEC): the draft length, the drafter (attached to the verify decoder), the slot
-        # whose state the drafter's rings hold, per slot the next round's drafts and the round's tokens not yet
+        # speculative decode (TT_V41_SPEC): the draft length, the drafter (attached to the verify decoder),
+        # the slot
+        # whose state the drafter's rings hold, per slot the next round's drafts and the round's tokens not
+        # yet
         # handed to the plugin
         self.spec_k = int(os.environ.get(SPEC, "0"))
-        # V41_SPEC_PREPARE_NEXT=1 (default): the multi-slot round builds the next step's position-dependent host
+        # V41_SPEC_PREPARE_NEXT=1 (default): the multi-slot round builds the next step's position-dependent
+        # host
         # inputs while its draft replay runs
         self.spec_prepare_next = os.environ.get("V41_SPEC_PREPARE_NEXT", "1") == "1"
         self.spec_greedy_all = os.environ.get(SPEC_GREEDY_ALL, "0") == "1"
@@ -296,14 +343,16 @@ class DeepseekV41ForCausalLM:
         self.last_drafts: dict[int, list[int]] = {}  # the ragged contract: row -> the next drafts (``take_drafts``)
         self.spec_stats = {"rounds": 0, "accepted": 0, "emitted": 0, "buffered_steps": 0}
         self.warmed_up = False
-        # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace of a model
+        # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace of a
+        # model
         self.prefill_traces: dict[tuple[int, int], V41PrefillTrace] = {}
         self.prefill_buffers: dict[int, dict] = {id(m): {} for m in [model] + [v for _, v, _ in self.short]}
         self.prefill_traced = False
         self.prefill_last: dict = {}  # the last prefill_forward row: tokens, start, mode, chunk (the tests read it)
         spec = os.environ.get(TRACE_PREFILL_LENGTHS, "").strip()
         listed = sorted({int(x) for x in spec.split(",") if x.strip()})
-        # each listed length and its neighbours: the benchmark's synthetic prompts miss a registered length by a
+        # each listed length and its neighbours: the benchmark's synthetic prompts miss a registered length by
+        # a
         # token now and then (a quarter of the requests at some points, each paying an eager
         # final chunk of 1.7 s), and a capture is exact in its valid length
         slack = int(os.environ.get(TRACE_PREFILL_SLACK, "1"))
@@ -323,7 +372,8 @@ class DeepseekV41ForCausalLM:
     def compute_logits(self, hidden_states):
         raise NotImplementedError("the TT plugin runs prefill_forward / decode_forward")
 
-    # --- construction (the plugin's loader) --------------------------------------------------------------------------
+    # --- construction (the plugin's loader)
+    # --------------------------------------------------------------------------
     @classmethod
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
@@ -365,7 +415,8 @@ class DeepseekV41ForCausalLM:
         users = max_batch_size // sp
         rings_per_slot = os.environ.get(SPEC_RINGS, "one") == "slot"
         if spec_k:
-            # rings per slot: every slot of a rank holds a block of 1 + K rows in the multi-slot step (the MoE's
+            # rings per slot: every slot of a rank holds a block of 1 + K rows in the multi-slot step (the
+            # MoE's
             # real rows decoupled from the slots)
             decoder = TtV41VerifyDecoder(
                 model,
@@ -406,7 +457,8 @@ class DeepseekV41ForCausalLM:
             )
             decoder.attach_drafter(drafter, users=list(range(max_batch_size // sp)), max_k=spec_k)
             if rings_per_slot:
-                # the multi-slot step's merged index selection over every slot's rows, and the standalone call's
+                # the multi-slot step's merged index selection over every slot's rows, and the standalone
+                # call's
                 # input buffers, before any capture (a persistent tensor allocated after a
                 # capture may sit in its freed intermediates)
                 decoder.prepare_merge(
@@ -434,7 +486,8 @@ class DeepseekV41ForCausalLM:
     def _unswap(self, where: str) -> None:
         """``TT_V41_UNSWAP=1``: release the weight cache's page cache and swap the resident
         Engram tables back in (a swapped table row is a 5 ms major fault on the step's host side)."""
-        # the resident tables (TT_V41_ENGRAM_MMAP=0: anonymous memory, swappable); a mapped table is page cache
+        # the resident tables (TT_V41_ENGRAM_MMAP=0: anonymous memory, swappable); a mapped table is page
+        # cache
         tables = [e.table.rows for e in self.model.engram.values() if isinstance(e.table, V41EngramTable)]
         if tables:
             unswap(tables, getattr(self, "weight_cache_root", None), where)
@@ -443,7 +496,8 @@ class DeepseekV41ForCausalLM:
     def get_max_tokens_all_users(
         cls, model_name="", num_devices=1, tt_data_parallel=1, max_model_len=None, max_num_seqs=None, **kwargs
     ):
-        """vLLM's KV block pool: every slot can hold a full context (the plugin's blocks are bookkeeping here)."""
+        """vLLM's KV block pool: every slot can hold a full context (the plugin's blocks are bookkeeping
+        here)."""
         assert max_model_len is not None and max_num_seqs is not None
         return int(max_model_len) * int(max_num_seqs)
 
@@ -454,7 +508,8 @@ class DeepseekV41ForCausalLM:
         )
         return [torch.zeros(1) for _ in range(num_layers)]
 
-    # --- requests -------------------------------------------------------------------------------------------------
+    # --- requests
+    # -------------------------------------------------------------------------------------------------
     @staticmethod
     def _request_key(page_table, row: int) -> int:
         key = int(page_table[row, 0])
@@ -498,7 +553,8 @@ class DeepseekV41ForCausalLM:
         return state
 
     def _short_state(self, n: int | None) -> V41PrefillState | None:
-        """The short-chunk state a whole prompt of ``n`` tokens prefills through: the smallest short chunk that
+        """The short-chunk state a whole prompt of ``n`` tokens prefills through: the smallest short chunk
+        that
         holds it and has its capture (``n`` None: a chunk of a longer prompt; no short state)."""
         if n is None:
             return None
@@ -508,11 +564,13 @@ class DeepseekV41ForCausalLM:
         return None
 
     def _state_for(self, key: int, start: int, whole: int | None = None) -> V41PrefillState:
-        """The prefill state of request ``key``: at ``start`` 0 a free one (a short-chunk state when ``whole``, the
+        """The prefill state of request ``key``: at ``start`` 0 a free one (a short-chunk state when
+        ``whole``, the
         length of a prompt that is one call, fits one with a capture), else the one holding the request's
         earlier chunks. States are owned from a request's first chunk to its join into a decode slot; the join
         happens at the request's first decode step, or here, when another request needs its state first (the
-        scheduler prefills the waiting requests before it decodes, so a request's prefix is complete by then: it
+        scheduler prefills the waiting requests before it decodes, so a request's prefix is complete by then:
+        it
         admits one new prefill a step and advances a partial one alone)."""
         if start == 0:
             short = self._short_state(whole)
@@ -540,7 +598,8 @@ class DeepseekV41ForCausalLM:
         return state
 
     def _restore(self, key: int, start: int) -> V41PrefillState:
-        """TT_V41_DEFER_FINAL: request ``key``, parked (joined into its slot after its bulk chunks), gets a free
+        """TT_V41_DEFER_FINAL: request ``key``, parked (joined into its slot after its bulk chunks), gets a
+        free
         prefill state with its ``start``-token prefix restored from the slot; the caller
         re-creates the pending entry."""
         slot = self.slots[key]
@@ -554,7 +613,8 @@ class DeepseekV41ForCausalLM:
         state = free[0]
         t0 = time.time()
         if os.environ.get("TT_V41_RESTORE_SYNC", "1") == "1":
-            # a join's replay issued just before (non-blocking) reads the state the restore overwrites, and the
+            # a join's replay issued just before (non-blocking) reads the state the restore overwrites, and
+            # the
             # restore's transients may land on a replay's freed intermediates (the second
             # restore of a cohort hung in its gather without this wait)
             ttnn.synchronize_device(self.mesh_device)
@@ -578,7 +638,8 @@ class DeepseekV41ForCausalLM:
         return self.pack_state
 
     def _pack_rows(self, rows: list[int], lengths, start_pos, total_lens) -> tuple | None:
-        """The FIFO prefix of this call's whole-prompt rows (``start_pos`` 0, one call) whose lengths, in row order,
+        """The FIFO prefix of this call's whole-prompt rows (``start_pos`` 0, one call) whose lengths, in row
+        order,
         form a listed layout: (the layout, its rows), or None."""
         if self.pack_state is None:
             return None
@@ -611,7 +672,8 @@ class DeepseekV41ForCausalLM:
         rows.sort(key=lambda i: 0 if start_pos is not None and int(start_pos[i]) > 0 else 1)
         packed = self._pack_rows(rows, lengths, start_pos, total_lens)
         if packed is not None:
-            # the packed chunk (TT_V41_PACK_LAYOUTS): the listed prefix of whole prompts in one call, each row's
+            # the packed chunk (TT_V41_PACK_LAYOUTS): the listed prefix of whole prompts in one call, each
+            # row's
             # logits its segment's, each request pending on its segment of the packed state
             layout, pack_rows = packed
             keys = [self._request_key(page_table, i) for i in pack_rows]
@@ -703,15 +765,10 @@ class DeepseekV41ForCausalLM:
         t0 = time.time()
         self.decoder.join(slot, prompt if segment is not None else prompt[: state.start], state, segment)
         if self.drafter is not None:
-            # the drafter's rings take this request's seeding: the slot's own ring on its rank (rings per slot), or
+            # the drafter's rings take this request's seeding: the slot's own ring on its rank (rings per
+            # slot), or
             # the one set of rings (the last joined request speculates)
-            assert segment is None, "a packed segment does not seed the drafter's rings yet"
-            assert state.dspark_rings is not None, "the prefill did not seed the drafter's rings"
-            if self.spec_rings_per_slot:
-                r, u = divmod(slot, self.users_per_rank)
-                self.drafter.load_rings_from_device(state.dspark_rings, start=state.start, user=u, rank=r)
-            else:
-                self.drafter.load_rings_from_device(state.dspark_rings, start=state.start)
+            self._load_rings(slot, state, segment)
             self.ring_owner = slot
             self.next_drafts.pop(slot, None)
             self.buffered.pop(slot, None)
@@ -725,8 +782,28 @@ class DeepseekV41ForCausalLM:
             f"{'' if segment is None else f' segment {segment[2]} at {segment[0]}'})"
         )
 
+    def _load_rings(self, slot: int, state: V41PrefillState, segment=None) -> None:
+        """The drafter's rings of ``slot`` take the seeding of ``state`` (a prefill's ``dspark_rings``, at its
+        ``start``) or of its packed ``segment`` ``(offset, length, g)`` (``segment_rings[g]``, seeded by the
+        packed
+        chunk at the segment's own positions, at ``length``): the slot's own ring on its rank with rings per
+        slot,
+        the one set of rings otherwise."""
+        if segment is None:
+            rings, start = state.dspark_rings, state.start
+        else:
+            rings = state.segment_rings[segment[2]] if state.segment_rings is not None else None
+            start = segment[1]
+        assert rings is not None, "the prefill did not seed the drafter's rings"
+        if self.spec_rings_per_slot:
+            r, u = divmod(slot, self.users_per_rank)
+            self.drafter.load_rings_from_device(rings, start=start, user=u, rank=r)
+        else:
+            self.drafter.load_rings_from_device(rings, start=start)
+
     def _capture_prefill(self, state: V41PrefillState, n: int) -> V41PrefillTrace:
-        """Capture the prefill of ``n``-token prompts into ``state`` (the slot's own cache tensors, so the slot's
+        """Capture the prefill of ``n``-token prompts into ``state`` (the slot's own cache tensors, so the
+        slot's
         decode captures read what the replay wrote). The first capture at a length compiles its kernels (two
         untraced runs); later slots at that length need one untraced run for the steady-state resources."""
         model = self.models[id(state)]
@@ -743,9 +820,12 @@ class DeepseekV41ForCausalLM:
         return trace
 
     def decode_forward(self, **kwargs) -> torch.Tensor:
-        """``tokens`` [B, 1], ``start_pos`` [B], ``page_table`` [B, blocks] -> fp32 logits ``[B, 1, vocab]``, or with
-        ``sampling_params`` (device sampling: per-row ``temperature``, ``top_k``, ``top_p`` lists) the sampled token
-        ids ``[B]`` int32; rows whose block table starts with the null block are idle. One step of the pool for
+        """``tokens`` [B, 1], ``start_pos`` [B], ``page_table`` [B, blocks] -> fp32 logits ``[B, 1, vocab]``,
+        or with
+        ``sampling_params`` (device sampling: per-row ``temperature``, ``top_k``, ``top_p`` lists) the sampled
+        token
+        ids ``[B]`` int32; rows whose block table starts with the null block are idle. One step of the pool
+        for
         every active row."""
         tokens, positions, page_table = kwargs["tokens"], kwargs["start_pos"], kwargs["page_table"]
         params = kwargs.get("sampling_params")
@@ -793,15 +873,18 @@ class DeepseekV41ForCausalLM:
 
     def _decode_forward_spec(self, tokens, positions, page_table, params, out) -> torch.Tensor:
         """``decode_forward`` under ``TT_V41_SPEC``: the verify decoder's round for the slot whose rows the
-        drafter holds (greedy or sampled: the request's ``(top_k, top_p, temperature)`` on every one of its rows
+        drafter holds (greedy or sampled: the request's ``(top_k, top_p, temperature)`` on every one of its
+        rows
         and the match rule; under ``TT_V41_SPEC_SAMPLED=0`` greedy requests only), plain rows for the
         others (every slot under ``TT_V41_SPEC_GREEDY_ALL`` is verified greedily). Two
         contracts, told apart by the tokens' width: ``[B, 1]`` (the plugin unchanged): the
         round's tokens are handed over one per call, a slot with buffered tokens from its last round hands the
         next one over without a device step; ``[B, 1 + K]`` (the plugin's ragged contract): column 0 is
-        the last token, columns ``1 ..`` the drafts the scheduler scheduled (-1 past them: the ones this generator
+        the last token, columns ``1 ..`` the drafts the scheduler scheduled (-1 past them: the ones this
+        generator
         proposed last step, as the scheduler clipped them), the result ``[B, 1 + K]`` int32 holds every row's
-        emitted tokens (the accepted drafts and the bonus; -1 past them) and ``take_drafts`` the next drafts per
+        emitted tokens (the accepted drafts and the bonus; -1 past them) and ``take_drafts`` the next drafts
+        per
         row."""
         assert params is not None, "speculative decode samples on device"
         ragged = tokens.shape[1] > 1
@@ -812,7 +895,8 @@ class DeepseekV41ForCausalLM:
         blocks, rows, sampling = {}, {}, {}
         speculating = False  # a live slot proposes this step (the drafter in the graph: the ``vd:`` variants)
         t0 = time.time()
-        # the rows' scalars as lists once (an element read of a tensor is microseconds, and the loop made eight a
+        # the rows' scalars as lists once (an element read of a tensor is microseconds, and the loop made
+        # eight a
         # row)
         keys, toks, poss = page_table[:, 0].tolist(), tokens.tolist(), positions.tolist()
         temps, topks, topps = (_as_list(v) for v in (params.temperature, params.top_k, params.top_p))
@@ -826,7 +910,8 @@ class DeepseekV41ForCausalLM:
             token, p = toks[i][0], int(poss[i])
             buffered = None if ragged else self.buffered.get(slot)
             if buffered:
-                # the plugin feeds back the token we handed it; the pool processed it in the last round and the
+                # the plugin feeds back the token we handed it; the pool processed it in the last round and
+                # the
                 # next of the round's tokens follows without a step
                 assert (
                     token == self.handed[slot]
@@ -855,7 +940,8 @@ class DeepseekV41ForCausalLM:
             return out
         if self.spec_rings_per_slot and len(blocks) > 1:
             return self._spec_step_slots(blocks, rows, sampling, out, ragged, t0)
-        # a step whose live slots all run plain (sampled, or not the rings' owner) is the plain variant (``v:``,
+        # a step whose live slots all run plain (sampled, or not the rings' owner) is the plain variant
+        # (``v:``,
         # captured at warm-up), not a round proposing drafts nobody verifies
         self.decoder.draft_plain = speculating
         result = self.decoder.decode(blocks, sampling)
@@ -887,9 +973,12 @@ class DeepseekV41ForCausalLM:
         return out
 
     def _uniform_blocks(self, blocks: dict) -> tuple[dict, dict]:
-        """``TT_V41_SPEC_RINGS=slot``'s multi-slot step: every slot of the pool as a block of ``1 + K`` rows (the
-        requests' drafts padded, the slots without a request as dummies at their position; a slot whose block would
-        not fit its pool is left out, at the cost of a capture) -> (the blocks, the real draft count per slot)."""
+        """``TT_V41_SPEC_RINGS=slot``'s multi-slot step: every slot of the pool as a block of ``1 + K`` rows
+        (the
+        requests' drafts padded, the slots without a request as dummies at their position; a slot whose block
+        would
+        not fit its pool is left out, at the cost of a capture) -> (the blocks, the real draft count per
+        slot)."""
         K, decoder = self.spec_k, self.decoder
         real = {slot: len(block) - 1 for slot, block in blocks.items()}
         uniform = {}
@@ -906,8 +995,10 @@ class DeepseekV41ForCausalLM:
 
     def _spec_step_slots(self, blocks: dict, rows: dict, sampling: dict, out, ragged: bool, t0: float):
         """The multi-slot round with rings per slot (``TT_V41_SPEC_RINGS=slot``): the uniform
-        step over every slot, the accept capped at each request's real drafts, then one standalone draft call for
-        the live slots of every rank (their accepted rows' taps written to their rings first), whose drafts are the
+        step over every slot, the accept capped at each request's real drafts, then one standalone draft call
+        for
+        the live slots of every rank (their accepted rows' taps written to their rings first), whose drafts
+        are the
         slots' next."""
         K, decoder, drafter, users = self.spec_k, self.decoder, self.drafter, self.users_per_rank
         uniform, real = self._uniform_blocks(blocks)
@@ -945,7 +1036,8 @@ class DeepseekV41ForCausalLM:
                 self.spec_stats["emitted"] += len(emitted)
         if ragged:  # one tensor write for the 32 rows (32 small ones and 32 sums before)
             out[torch.tensor(list(rows.values()), dtype=torch.int64)] = torch.tensor(emitted_rows, dtype=torch.int32)
-        # one block count on every rank: the ranks short of blocks get dummies (no tap write, their drafts unread)
+        # one block count on every rank: the ranks short of blocks get dummies (no tap write, their drafts
+        # unread)
         n = max(len(e) for e in entries)
         for r in range(self.sp):
             while len(entries[r]) < n:
@@ -956,7 +1048,8 @@ class DeepseekV41ForCausalLM:
         drafter.stage(drafter.host_inputs_blocks(entries), tap32=decoder.taps)
         if self.spec_prepare_next and drafter.trace and n in drafter.captures:
             # the next step's position half built while the draft replay runs: the next
-            # uniform step's slots are this one's unless a request joins or leaves in between (then it is rebuilt)
+            # uniform step's slots are this one's unless a request joins or leaves in between (then it is
+            # rebuilt)
             drafter.run_blocks([e["token"] for e in entries[0]], read=False, wait=False)
             decoder.prepare_next(self._uniform_blocks({})[0])
             drafter.wait()
@@ -983,7 +1076,8 @@ class DeepseekV41ForCausalLM:
         return out
 
     def take_drafts(self) -> dict[int, list[int]]:
-        """The ragged contract's drafts after a ``decode_forward``: row index -> the drafts proposed for the row's
+        """The ragged contract's drafts after a ``decode_forward``: row index -> the drafts proposed for the
+        row's
         next step (empty for a plain row), once."""
         drafts, self.last_drafts = self.last_drafts, {}
         return drafts
@@ -991,14 +1085,20 @@ class DeepseekV41ForCausalLM:
     def read_decode_output(self, tt_out, async_read=False):
         return (tt_out, []) if async_read else tt_out
 
-    # --- warm-up (the plugin's model_runner.warmup_model) ---------------------------------------------------------------
+    # --- warm-up (the plugin's model_runner.warmup_model)
+    # ---------------------------------------------------------------
     def warmup_model_prefill(self, enable_trace: bool, **kwargs) -> None:
-        """Compile the prefill (one prompt per prefill state, each joining every decode slot) on the first call;
-        the second (trace) call, which the plugin makes after the decode capture, captures the prefill of every
+        """Compile the prefill (one prompt per prefill state, each joining every decode slot) on the first
+        call;
+        the second (trace) call, which the plugin makes after the decode capture, captures the prefill of
+        every
         ``TT_V41_TRACE_PREFILL_LENGTHS`` length on every prefill state (the captures' persistent tensors are
-        consumed right after each replay, so they may share addresses with the decode capture's intermediates; the
-        pool and the prefill states predate every capture), a length that fits a short chunk on that chunk's state
-        only (``TT_V41_SHORT_CHUNK``; its joins captured at the chunk's width). Other lengths keep running eagerly."""
+        consumed right after each replay, so they may share addresses with the decode capture's intermediates;
+        the
+        pool and the prefill states predate every capture), a length that fits a short chunk on that chunk's
+        state
+        only (``TT_V41_SHORT_CHUNK``; its joins captured at the chunk's width). Other lengths keep running
+        eagerly."""
         if enable_trace:
             if self.prefill_traced:
                 return
@@ -1013,8 +1113,10 @@ class DeepseekV41ForCausalLM:
                 f"DeepSeek-V4.1-Flash warm-up: {len(self.decoder.join_traces)} joins captured in {time.time() - t0:.1f} s"
             )
             if defer_final() and self.decoder.restore_traced:
-                # TT_V41_RESTORE_TRACE=1: the restores captured per (state, slot, width) beside the joins, on the
-                # states before the prefill captures (the eager compile runs and the captures write the states)
+                # TT_V41_RESTORE_TRACE=1: the restores captured per (state, slot, width) beside the joins, on
+                # the
+                # states before the prefill captures (the eager compile runs and the captures write the
+                # states)
                 t0 = time.time()
                 for state in self.prefill_states:
                     for slot in range(self.max_batch_size):
@@ -1054,8 +1156,10 @@ class DeepseekV41ForCausalLM:
                         f"{trace.num_segments} segments)"
                     )
             if self.pack_state is not None and os.environ.get("TT_V41_PACK_TRACE", "1") == "1":
-                # per layout its packed chunk's capture (the state at the pack's end after it), then the joins of
-                # its segments into every slot at the segments' width (one capture per distinct (offset, g, slot))
+                # per layout its packed chunk's capture (the state at the pack's end after it), then the joins
+                # of
+                # its segments into every slot at the segments' width (one capture per distinct (offset, g,
+                # slot))
                 joins0, t0, trace0 = len(self.decoder.join_traces), time.time(), _trace_bytes(self.mesh_device)
                 for k, layout in enumerate(self.pack_layouts):
                     t1 = time.time()
@@ -1088,7 +1192,8 @@ class DeepseekV41ForCausalLM:
         self._warmup_join()
 
     def _short_chunk(self, n: int) -> int | None:
-        """The index in ``short`` of the smallest short chunk that holds a whole prompt of ``n`` tokens (None: the
+        """The index in ``short`` of the smallest short chunk that holds a whole prompt of ``n`` tokens (None:
+        the
         full chunk's states serve it)."""
         for k, (chunk, _, _) in enumerate(self.short):
             if n <= chunk:
@@ -1096,17 +1201,21 @@ class DeepseekV41ForCausalLM:
         return None
 
     def _padding_lengths(self, model: TtV41Transformer | None = None) -> list[int]:
-        """Every chunk valid length the served prefills will hand ``model``'s MoE (the full-chunk model, or a short
-        chunk's view): the chunk, the warm-up prompt's, and each listed prompt length's single chunk or final chunk
+        """Every chunk valid length the served prefills will hand ``model``'s MoE (the full-chunk model, or a
+        short
+        chunk's view): the chunk, the warm-up prompt's, and each listed prompt length's single chunk or final
+        chunk
         (a short chunk: the listed lengths it serves)."""
         model = self.model if model is None else model
         chunk = model.chunk
         lengths = {chunk, WARMUP_PROMPT}
         if model is self.model:  # the packed layouts' totals (the packed state runs on the full-chunk model), and
             # their segment lengths: a packable prompt runs alone on this model when it is not a traced length
-            # (the join test's references; a queue of one in serving), and a config built lazily after the decode
+            # (the join test's references; a queue of one in serving), and a config built lazily after the
+            # decode
             # capture is overwritten by the decode replays (the join test's k=2
-            # references drifted, and its 40-layer traced run hung in the first eager chunk after the c1 replays)
+            # references drifted, and its 40-layer traced run hung in the first eager chunk after the c1
+            # replays)
             lengths |= {layout[-1][0] + layout[-1][1] for layout in self.pack_layouts}
             lengths |= {n for layout in self.pack_layouts for _, n in layout}
         for n in self.trace_lengths:
@@ -1117,10 +1226,14 @@ class DeepseekV41ForCausalLM:
         return sorted(lengths)
 
     def _prebuild_padding_configs(self) -> None:
-        """Build the MoE gates' memoized padding configs (``TtMoEGatePrefill.build_padding_config``, one device
-        tensor per chunk valid length) before any capture, for the full-chunk model and every short chunk's view.
-        Built lazily, a length's config was allocated the first time it ran, during the per-length captures after
-        the decode capture, where a persistent buffer can take the addresses of a capture's freed intermediates:
+        """Build the MoE gates' memoized padding configs (``TtMoEGatePrefill.build_padding_config``, one
+        device
+        tensor per chunk valid length) before any capture, for the full-chunk model and every short chunk's
+        view.
+        Built lazily, a length's config was allocated the first time it ran, during the per-length captures
+        after
+        the decode capture, where a persistent buffer can take the addresses of a capture's freed
+        intermediates:
         the decode replay then overwrote the config and the next prefill of that length dispatched pad rows (a
         one-chunk replay 0.26 to 0.36 s by what the decode had written, the logits unchanged)."""
         for model in [self.model] + [view for _, view, _ in self.short]:
@@ -1136,8 +1249,10 @@ class DeepseekV41ForCausalLM:
             )
 
     def _warmup_join(self) -> None:
-        """Prefill the warm-up prompt into every prefill state (the full-chunk states first: the shared expert's
-        reduce-scatter intermediate is allocated at the first input's shape, ``with_chunk``) and join every decode
+        """Prefill the warm-up prompt into every prefill state (the full-chunk states first: the shared
+        expert's
+        reduce-scatter intermediate is allocated at the first input's shape, ``with_chunk``) and join every
+        decode
         slot from them."""
         self._prebuild_padding_configs()
         prompt = self._warmup_prompt()
@@ -1162,11 +1277,11 @@ class DeepseekV41ForCausalLM:
         logger.info(f"DeepSeek-V4.1-Flash warm-up: {self.max_batch_size} slots joined in {time.time() - t0:.1f} s")
         _l1_probe(self.mesh_device, "after warm-up joins")
         if self.pack_state is not None:
-            # one eager pack of every listed layout: the chunk's programs at each pack's shapes and
-            # every persistent tensor of the packed path (the layouts' tables and padding configs
-            # are built above) before any capture (warming only the largest layout left other
-            # layouts' first runs after the captures); the largest layout's segments join slots 0..
-            # (the segment join's scatter programs compiled)
+            # one eager pack of every listed layout: the chunk's programs at each pack's shapes and every
+            # persistent
+            # tensor of the packed path (the layouts' tables and padding configs are built above) before any
+            # capture (warming only the largest layout left other layouts' first runs after the captures);
+            # the largest layout's segments join slots 0.. (the segment join's scatter programs compiled)
             for layout in self.pack_layouts:
                 prompts = [self._warmup_prompt(n) for _, n in layout]
                 t0 = time.time()
@@ -1176,7 +1291,12 @@ class DeepseekV41ForCausalLM:
                 joins = 0
                 if layout is self.pack_layouts[0]:
                     for g, (offset, n) in enumerate(layout):
-                        self.decoder.join(g % self.max_batch_size, prompts[g], self.pack_state, (offset, n, g))
+                        slot = g % self.max_batch_size
+                        self.decoder.join(slot, prompts[g], self.pack_state, (offset, n, g))
+                        if self.drafter is not None and (self.spec_rings_per_slot or slot == 0):
+                            # the slot's rings follow its rows, so its warm-up rounds (``_warmup_spec``) draft
+                            # from a coherent ring; with one ring set, slot 0's (the owner) only
+                            self._load_rings(slot, self.pack_state, (offset, n, g))
                     joins = len(layout)
                 logger.info(
                     f"DeepSeek-V4.1-Flash warm-up: packed prefill of {[n for _, n in layout]} tokens and "
@@ -1187,13 +1307,17 @@ class DeepseekV41ForCausalLM:
             self._prewarm_restore()
 
     def _prewarm_restore(self) -> None:
-        """Run one eager restore of every width bucket (``join_widths``) into a prefill state before any capture
+        """Run one eager restore of every width bucket (``join_widths``) into a prefill state before any
+        capture
         (TT_V41_DEFER_FINAL). The restore's row-major gathers are ``all_gather_async``'s
-        composite path, ``all_broadcast`` + ``concat``, and ``all_broadcast`` creates two global semaphores in L1
-        per cached workload, resident for the program cache's lifetime: created lazily, at the first restore of a
+        composite path, ``all_broadcast`` + ``concat``, and ``all_broadcast`` creates two global semaphores in
+        L1
+        per cached workload, resident for the program cache's lifetime: created lazily, at the first restore
+        of a
         shape after the captures, they took L1 addresses a capture's freed intermediates had baked, the next
         replay overwrote them with tensor rows, and the next restore of that shape waited forever on its
-        out-ready semaphore (``broadcast_rm_writer.cpp:212``, every device). Created here, the captures allocate
+        out-ready semaphore (``broadcast_rm_writer.cpp:212``, every device). Created here, the captures
+        allocate
         below them. A served restore uses the bucket's shapes only (``TtV41BatchDecoder.restore``)."""
         state = self.prefill_states[0]
         t0 = time.time()
@@ -1207,7 +1331,8 @@ class DeepseekV41ForCausalLM:
         _l1_probe(self.mesh_device, "after warm-up restores")
 
     def warmup_model_decode(self, enable_trace: bool, **kwargs) -> None:
-        """Run the decode step on every slot until it is captured and replayed once (the first call compiles, the
+        """Run the decode step on every slot until it is captured and replayed once (the first call compiles,
+        the
         capture follows; the second call finds it captured)."""
         if self.warmed_up:
             return
@@ -1261,11 +1386,16 @@ class DeepseekV41ForCausalLM:
         self._unswap("after the warm-up")
 
     def _warmup_spec(self, prompt: torch.Tensor) -> None:
-        """The verify decoder's captures: the plain 32-slot step (``v:``) is captured by ``warmup_model_decode``'s
-        loop; here, per user index (the tile row a request's slot takes: the capture is per (user, rows), not per
-        rank), slot ``u``'s rounds at 1 .. K + 1 rows (``vd:``: the drafter in the graph), each variant run eagerly
-        twice, captured and replayed once, the drafts of each step feeding the next (every slot was joined from the
-        warm-up prompt, whose seeding the drafter's rings hold), then its plain one-slot step (``v:``, the drafter
+        """The verify decoder's captures: the plain 32-slot step (``v:``) is captured by
+        ``warmup_model_decode``'s
+        loop; here, per user index (the tile row a request's slot takes: the capture is per (user, rows), not
+        per
+        rank), slot ``u``'s rounds at 1 .. K + 1 rows (``vd:``: the drafter in the graph), each variant run
+        eagerly
+        twice, captured and replayed once, the drafts of each step feeding the next (every slot was joined
+        from the
+        warm-up prompt, whose seeding the drafter's rings hold), then its plain one-slot step (``v:``, the
+        drafter
         off: a sampled request's, or one whose rings another request holds; captured on its first served call
         otherwise, 1.3 s)."""
         decoder, K = self.decoder, self.spec_k
@@ -1372,7 +1502,8 @@ class DeepseekV41ForCausalLM:
         decoder.draft_plain = True
 
     def _warmup_prompt(self, n: int = WARMUP_PROMPT) -> torch.Tensor:
-        """The first ``n`` tokens of the text the tests use (``oracle.text_tokens``, with this tokenizer), the text
+        """The first ``n`` tokens of the text the tests use (``oracle.text_tokens``, with this tokenizer), the
+        text
         repeated when ``n`` outruns it."""
         import bz2
 

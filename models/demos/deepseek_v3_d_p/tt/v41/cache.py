@@ -37,7 +37,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
-from models.demos.deepseek_v3_d_p.tt.v41.dspark import seed_rows
+from models.demos.deepseek_v3_d_p.tt.v41.dspark import seed_rows, seed_rows_max
 from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -48,8 +48,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 WINDOW_SLOT = 128  # >= sliding_window - 1 carried rows, tile aligned
 
-# "1": a generic state may run a packed chunk (several whole prompts concatenated in one chunk, each isolated by
-# its own RoPE positions, window rows, index-mask bounds, carries and scored row; 
+# "1": a generic state may run a packed chunk (several whole prompts concatenated in one chunk, each isolated
+# by
+# its own RoPE positions, window rows, index-mask bounds, carries and scored row;
 # ``TtV41Transformer.prefill_packed``). Off (the default), nothing in the chunk graph changes.
 PACK = "TT_V41_PACK"
 
@@ -83,13 +84,15 @@ def check_pack(segments, chunk: int, ratios) -> None:
 
 # The served layouts (``TT_V41_PACK_LAYOUTS``): a comma list of ``<k>x<length>`` (k whole
 # prompts of exactly ``length`` tokens, e.g. ``4x1028,3x1028,2x1028,2x2052``) or ``<l1>+<l2>+...`` (distinct
-# lengths in row order). A ``prefill_forward`` whose rows (in order) begin with a listed layout's lengths runs them
+# lengths in row order). A ``prefill_forward`` whose rows (in order) begin with a listed layout's lengths runs
+# them
 # as one packed chunk; its capture is made at warm-up. Unset: no packing in the generator.
 PACK_LAYOUTS = "TT_V41_PACK_LAYOUTS"
 
 
 def parse_pack_layouts(spec: str | None, chunk: int, ratios) -> list[tuple[tuple[int, int], ...]]:
-    """The layouts of ``spec`` (``PACK_LAYOUTS``' form) as ``pack_segments`` tuples, each checked against the chunk;
+    """The layouts of ``spec`` (``PACK_LAYOUTS``' form) as ``pack_segments`` tuples, each checked against the
+    chunk;
     longest (in prompts) first, so a FIFO prefix matches the largest layout it can."""
     layouts = []
     for item in (spec or "").split(","):
@@ -111,7 +114,8 @@ def parse_pack_layouts(spec: str | None, chunk: int, ratios) -> list[tuple[tuple
 
 
 def match_pack_layout(lengths: list[int], layouts) -> tuple | None:
-    """The first layout of ``layouts`` whose lengths are a prefix of ``lengths`` (prompt lengths in row order)."""
+    """The first layout of ``layouts`` whose lengths are a prefix of ``lengths`` (prompt lengths in row
+    order)."""
     for segments in layouts:
         k = len(segments)
         if len(lengths) >= k and all(int(lengths[i]) == segments[i][1] for i in range(k)):
@@ -119,14 +123,17 @@ def match_pack_layout(lengths: list[int], layouts) -> tuple | None:
     return None
 
 
-# per-chip bytes of the one zero block a state uploads per tensor; larger caches are zeroed by device copies of it (a
+# per-chip bytes of the one zero block a state uploads per tensor; larger caches are zeroed by device copies
+# of it (a
 # replicated 0.5 GB host upload is a 4 GB host write that outlasts the safe runner's 5 s dispatch timeout)
 ZERO_BLOCK_BYTES = 4 << 20
 
 
 def replicated_zeros(mesh_device, rows: int, width: int, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
-    """Replicated DRAM zeros [1, 1, rows, width] of ``dtype`` in ``layout`` (row-major, or tiled with ``rows`` a
-    multiple of 32): one host upload of at most ZERO_BLOCK_BYTES per chip (whole 32-row groups), copied on device
+    """Replicated DRAM zeros [1, 1, rows, width] of ``dtype`` in ``layout`` (row-major, or tiled with ``rows``
+    a
+    multiple of 32): one host upload of at most ZERO_BLOCK_BYTES per chip (whole 32-row groups), copied on
+    device
     over the rest of the rows."""
     step = max(ZERO_BLOCK_BYTES // (width * 2), 32) // 32 * 32  # rows of the block (<= 2 bytes per element)
     assert layout == ttnn.ROW_MAJOR_LAYOUT or rows % 32 == 0, (layout, rows)
@@ -196,23 +203,30 @@ class V41CacheGeometry:
 
 
 class V41ChunkTables:
-    """Device-resident position tables of one cache geometry, uploaded once outside the chunk loop, so a chunk's
+    """Device-resident position tables of one cache geometry, uploaded once outside the chunk loop, so a
+    chunk's
     forward uploads and writes nothing from the host (trace capture; dev-spec D-G (b)). Per chunk the forward
     only slices them on device.
 
-    * RoPE cos/sin of every position (``rope``), one replicated ``[1, 1, max_seq / stride, 64]`` table per kind:
-      ratio-0 or compressed frequencies, rows at token positions (stride 1) or at ratio-r group-first positions
+    * RoPE cos/sin of every position (``rope``), one replicated ``[1, 1, max_seq / stride, 64]`` table per
+    kind:
+      ratio-0 or compressed frequencies, rows at token positions (stride 1) or at ratio-r group-first
+      positions
       (stride r: compressed KV, index keys).
-    * Window rows (``window_rows``): the per-chip query rows' 128-row causal windows into the KV tensor's window
+    * Window rows (``window_rows``): the per-chip query rows' 128-row causal windows into the KV tensor's
+    window
       region; they depend on the chunk start only through ``min(start, window - 1)``.
-    * The indexer's start-relative visibility of the chunk's own compressed rows for chunks starting at a multiple
-      of the ratio (``visibility_tail``; rows before the chunk are visible to every query), and each chip's first
+    * The indexer's start-relative visibility of the chunk's own compressed rows for chunks starting at a
+    multiple
+      of the ratio (``visibility_tail``; rows before the chunk are visible to every query), and each chip's
+      first
       chunk query index (``query_first``: the candidate source pins each query's newest row from it).
 
     Per-chip query layout (window rows, indexer tails): chip (a, b) holds the chunk's contiguous query rows
     ``(a * tp + b) * S/(sp*tp)`` onwards, as after the head->sequence all-to-all.
 
-    **Generic mode** (``generic=True``; ``V41GenericPrefillTrace``): a chunk's forward depends on its start only
+    **Generic mode** (``generic=True``; ``V41GenericPrefillTrace``): a chunk's forward depends on its start
+    only
     through device inputs, so one capture serves every chunk whose score width falls in one bucket. The RoPE
     slices, the pin page (``start + query_first``), the per-query visible counts of the indexer masks and the
     compressed-row indices of the cache writes are host-filled fixed buffers (``prepare_chunk``); the indexer
@@ -229,14 +243,19 @@ class V41ChunkTables:
         layers: list[int],
         generic: bool = False,
         dspark: bool = False,
+        pack_segments: int = 0,
     ):
         """``dspark`` (generic only): keep the DSpark seeding's RoPE pair as a per-chunk host-filled input
-        (``dspark_rope``), so the generic chunk graph seeds the rings (speculative decode)."""
+        (``dspark_rope``), so the generic chunk graph seeds the rings (speculative decode). ``pack_segments``
+        (with ``dspark``): a packed state's segments, each with its own seed-row RoPE pair among the layout's
+        host
+        fills (``dspark_rope_segments``), so a packed chunk seeds one ring set per segment."""
         self.mesh_device, self.config = mesh_device, config
         self.sp, self.tp = tuple(mesh_device.shape)
         self.max_seq_len, self.chunk = max_seq_len, chunk
         self.generic = generic
         self.dspark = dspark and generic
+        self.pack_segments = pack_segments if self.dspark else 0
         self.ratios = ratios = {config.compress_ratio(l) for l in layers}
         self.kinds = kinds = {(r > 0, 1) for r in ratios} | {(True, r) for r in ratios if r > 1}
         window = config.SLIDING_WINDOW
@@ -251,7 +270,8 @@ class V41ChunkTables:
         # ratio 1 needs no visibility table: the score kernel's causal mask is exactly t <= p there
         self._visibility = {r: self._visibility_table(r) for r in ratios if r > 1}
 
-    # --- generic mode --------------------------------------------------------------------------------------------
+    # --- generic mode
+    # --------------------------------------------------------------------------------------------
     MIN_BUCKET = 8192  # the first score-width bucket (tokens); doubles up to max_seq_len
 
     def _init_generic(self, ratios, kinds):
@@ -267,9 +287,11 @@ class V41ChunkTables:
             kind: tuple(self._replicated(torch.zeros(1, 1, self.chunk // kind[1], 64), ttnn.bfloat16) for _ in range(2))
             for kind in sorted(kinds)
         }
-        # the pin page: start + query_first per chip (segment_max / candidate_scores read p_i = pin_base + pin[0] + i)
+        # the pin page: start + query_first per chip (segment_max / candidate_scores read p_i = pin_base +
+        # pin[0] + i)
         self._pin = self._sharded_u32(torch.zeros(self.sp, self.tp, 1, 8, dtype=torch.int32))
-        # per-ratio visible counts of this chip's queries [1, 1, rows, 1] fp32 tiled, and the column iota at the
+        # per-ratio visible counts of this chip's queries [1, 1, rows, 1] fp32 tiled, and the column iota at
+        # the
         # widest score ([1, 1, 1, max/ratio + 32] fp32, sliced per bucket)
         self._visible = {r: self._per_query_chip(torch.zeros(self.chunk, 1), ttnn.float32) for r in ratios if r > 0}
         self._iota = {
@@ -277,7 +299,8 @@ class V41ChunkTables:
             for r in ratios
             if r > 0
         }
-        # the compressed rows a chunk writes: per ratio [1, 1, 1, chunk / ratio] uint32 (row-major, replicated)
+        # the compressed rows a chunk writes: per ratio [1, 1, 1, chunk / ratio] uint32 (row-major,
+        # replicated)
         self._row_index = {
             r: ttnn.from_torch(
                 torch.zeros(1, 1, 1, self.chunk // r, dtype=torch.int32),
@@ -290,7 +313,8 @@ class V41ChunkTables:
             if r > 0
         }
         # the DSpark seed rows' fp32 RoPE pair (``TtV41DSpark.seed_rope``: the rows [a, b) of the chunk's last
-        # ``window`` valid positions, <= window + 32 rows; the chunk's start is the only position input the seeding
+        # ``window`` valid positions, <= window + 32 rows; the chunk's start is the only position input the
+        # seeding
         # has), host-filled per chunk as the bf16 tables are; ``dspark_rope`` slices the chunk's rows
         self._dspark_rope = (
             tuple(
@@ -299,13 +323,25 @@ class V41ChunkTables:
             if self.dspark
             else None
         )
+        # a packed state's segments (TT_V41_PACK with the drafter): per segment its own
+        # seed rows' pair, window + 64 rows (a segment's offset is ratio-aligned, not tile-aligned:
+        # ``seed_rows``),
+        # filled per layout with the pack's other host inputs (``prepare_pack_host``)
+        self._pack_dspark_rope = [
+            tuple(
+                self._replicated(torch.zeros(1, 1, seed_rows_max(self.config.SLIDING_WINDOW, True), 64), ttnn.float32)
+                for _ in range(2)
+            )
+            for _ in range(self.pack_segments)
+        ]
         self._query_rows = rows
         self._chunk_start = None
         self._host_cache: dict[int, list] = {}
         self._chunk_masks = None  # per-chunk row-major masks shared by the index sources (begin_chunk_masks)
         # packed chunks (TT_V41_PACK): per ratio the per-query lower bound of the index mask
         # (the first compressed row of the query's segment, [1, 1, rows, 1] fp32 tiled like ``_visible``), the
-        # window-row table per layout (``window_rows``) and the packed host fills per layout; ``_segments`` is the
+        # window-row table per layout (``window_rows``) and the packed host fills per layout; ``_segments`` is
+        # the
         # layout of the chunk being run (None: a single prompt, the graph of before)
         self._pack = pack_enabled()
         self._base = {}
@@ -325,7 +361,8 @@ class V41ChunkTables:
         )
 
     def bucket(self, start: int, length: int) -> int:
-        """The score-width bucket (tokens) of the chunk at ``start``: the smallest bucket at or above its visible
+        """The score-width bucket (tokens) of the chunk at ``start``: the smallest bucket at or above its
+        visible
         token count ``start + length``."""
         visible = start + length
         for w in self.buckets:
@@ -340,9 +377,12 @@ class V41ChunkTables:
     HOST_CACHE = 64  # chunk starts whose ``prepare_chunk_host`` tensors are kept (~2 MB each at chunk 5,120)
 
     def prepare_chunk_host(self, start: int) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
-        """The host tensors ``prepare_chunk`` copies into the chunk's input buffers, each with its buffer: RoPE
-        rows, the pin page, the visible counts, the row indices. Depends on ``start`` only, so it can run ahead of
-        the device (on the prefill's prefetch thread), and the last ``HOST_CACHE`` starts' tensors are kept (every
+        """The host tensors ``prepare_chunk`` copies into the chunk's input buffers, each with its buffer:
+        RoPE
+        rows, the pin page, the visible counts, the row indices. Depends on ``start`` only, so it can run
+        ahead of
+        the device (on the prefill's prefetch thread), and the last ``HOST_CACHE`` starts' tensors are kept
+        (every
         prompt's first chunk shares one set; 10 ms to build)."""
         assert self.generic
         assert start % self.chunk == 0 or start == 0, start
@@ -398,35 +438,64 @@ class V41ChunkTables:
             pairs += self._dspark_rope_host(start, chunk)
         return pairs
 
-    def _dspark_rope_host(self, start: int, length: int) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
-        """The seed rows' cos / sin of the chunk at ``start`` with ``length`` valid tokens (``TtV41DSpark.seed_rope``'s
-        values, fp32, padded with zero rows to the buffer), each with its buffer."""
-        _, a, b = seed_rows(length, self.config.SLIDING_WINDOW)
-        rows = self._dspark_rope[0].shape[2]
+    def _dspark_rope_host(
+        self, start: int, length: int, offset: int = 0, buffers: tuple | None = None
+    ) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """The seed rows' cos / sin of the chunk at ``start`` with ``length`` valid tokens
+        (``TtV41DSpark.seed_rope``'s
+        values, fp32, padded with zero rows to the buffer), each with its buffer (default the chunk's pair; a
+        packed
+        segment's at chunk row ``offset`` gives its own, ``seed_rope``'s positions)."""
+        buffers = self._dspark_rope if buffers is None else buffers
+        _, a, b = seed_rows(length, self.config.SLIDING_WINDOW, offset)
+        rows = buffers[0].shape[2]
+        assert b - a <= rows, (a, b, rows)
         pairs = []
-        for host, buffer in zip(cos_sin(self.config, False, torch.arange(start + a, start + b)), self._dspark_rope):
+        positions = torch.arange(start + a - offset, start + b - offset)
+        for host, buffer in zip(cos_sin(self.config, False, positions), buffers):
             padded = torch.zeros(1, 1, rows, host.shape[3])
             padded[:, :, : b - a] = host
             pairs.append((self._host_replicated(padded, ttnn.float32), buffer))
         return pairs
 
     def dspark_rope(self, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """The chunk's seed rows' RoPE pair (``[1, 1, b - a, 64]`` fp32 replicated, what ``TtV41DSpark.seed`` takes)
-        for ``length`` valid tokens, sliced from the host-filled buffers (``prepare_chunk`` filled them for this
+        """The chunk's seed rows' RoPE pair (``[1, 1, b - a, 64]`` fp32 replicated, what ``TtV41DSpark.seed``
+        takes)
+        for ``length`` valid tokens, sliced from the host-filled buffers (``prepare_chunk`` filled them for
+        this
         chunk's start and length)."""
         assert self._dspark_rope is not None, "the tables were built without DSpark"
         _, a, b = seed_rows(length, self.config.SLIDING_WINDOW)
         return tuple(ttnn.slice(t, [0, 0, 0, 0], [1, 1, b - a, t.shape[3]]) for t in self._dspark_rope)
 
+    def dspark_rope_segments(self, segments) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """Per segment of a packed chunk its seed rows' RoPE pair (what ``TtV41DSpark.seed_packed`` takes),
+        sliced
+        from the segment's host-filled buffers (``prepare_chunk(..., segments=)`` filled them for the
+        layout)."""
+        assert len(segments) <= len(
+            self._pack_dspark_rope
+        ), f"{len(segments)} segments, {len(self._pack_dspark_rope)} ring sets"
+        out = []
+        for (offset, length), buffers in zip(segments, self._pack_dspark_rope):
+            _, a, b = seed_rows(length, self.config.SLIDING_WINDOW, offset)
+            out.append(tuple(ttnn.slice(t, [0, 0, 0, 0], [1, 1, b - a, t.shape[3]]) for t in buffers))
+        return out
+
     def prepare_chunk(
         self, start: int, length: int, host: list | None = None, pairs: list | None = None, segments=None
     ) -> None:
-        """Host-fill the chunk's input buffers: RoPE rows, the pin page, the visible counts, the row indices. Runs
-        between a chunk's ``_stage`` and its forward (or replay); no device work beyond the copies (ordered on the
-        command queue after the replays issued before them). ``host``: ``prepare_chunk_host(start)`` made ahead.
+        """Host-fill the chunk's input buffers: RoPE rows, the pin page, the visible counts, the row indices.
+        Runs
+        between a chunk's ``_stage`` and its forward (or replay); no device work beyond the copies (ordered on
+        the
+        command queue after the replays issued before them). ``host``: ``prepare_chunk_host(start)`` made
+        ahead.
         ``pairs``: a list the (host, buffer) pairs are appended to instead of copied, for a batched upload
-        (``TtV41Transformer._stage`` with ``TT_V41_PREFILL_HOST_BATCH=1``). ``segments``: a packed chunk's layout
-        (``prepare_pack_host``; ``start`` is 0): the fills are per segment and the chunk's graph adds the index
+        (``TtV41Transformer._stage`` with ``TT_V41_PREFILL_HOST_BATCH=1``). ``segments``: a packed chunk's
+        layout
+        (``prepare_pack_host``; ``start`` is 0): the fills are per segment and the chunk's graph adds the
+        index
         mask's lower bound and takes the layout's window rows."""
         assert self.generic
         if segments is not None:
@@ -437,7 +506,9 @@ class V41ChunkTables:
             if self._dspark_rope is not None and length != self.chunk:  # a partial final chunk: its own seed rows
                 # replace the full chunk's rope rows, so a batched upload writes each buffer once
                 rope = self._dspark_rope
-                items = [it for it in items if not any(it[1] is b for b in rope)] + self._dspark_rope_host(start, length)
+                items = [it for it in items if not any(it[1] is b for b in rope)] + self._dspark_rope_host(
+                    start, length
+                )
         if pairs is not None:
             pairs.extend(items)
         else:
@@ -454,7 +525,8 @@ class V41ChunkTables:
     # --- packed chunks (TT_V41_PACK) -------------------------------------------------------
     @staticmethod
     def _segment_starts(segments, chunk: int) -> torch.Tensor:
-        """[chunk] int64: the start row of the segment holding each chunk row (the pad rows after the pack form a
+        """[chunk] int64: the start row of the segment holding each chunk row (the pad rows after the pack
+        form a
         segment of their own at the pack's end: never read by a valid query)."""
         starts = torch.zeros(chunk, dtype=torch.int64)
         for offset, length in segments:
@@ -465,10 +537,14 @@ class V41ChunkTables:
 
     def prepare_pack_host(self, segments) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
         """``prepare_chunk_host`` of a packed chunk at start 0 (kept per layout): the RoPE rows at each row's
-        position within its segment (the compressed tables at the group-first rows' local positions, whole groups
-        since segments are ratio-aligned), the pin page and the visible counts as at start 0 (a query's visible
-        count ``(i + 1) // r`` is unchanged: its segment's rows are at ``[offset / r, (i + 1) // r)``), the lower
-        bound ``offset / r`` per query (``_base``) and the row indices as at start 0 (the pack's compressed rows
+        position within its segment (the compressed tables at the group-first rows' local positions, whole
+        groups
+        since segments are ratio-aligned), the pin page and the visible counts as at start 0 (a query's
+        visible
+        count ``(i + 1) // r`` is unchanged: its segment's rows are at ``[offset / r, (i + 1) // r)``), the
+        lower
+        bound ``offset / r`` per query (``_base``) and the row indices as at start 0 (the pack's compressed
+        rows
         are contiguous)."""
         assert self.generic and self._pack, "packed chunks need TT_V41_PACK=1 at the state's construction"
         segments = tuple(segments)
@@ -502,11 +578,16 @@ class V41ChunkTables:
             )
         for r, buffer in self._row_index.items():
             pairs.append((single[id(buffer)], buffer))
+        if self._pack_dspark_rope:  # each segment's seed rows' RoPE pair, at the segment's own positions
+            assert len(segments) <= len(self._pack_dspark_rope), (len(segments), len(self._pack_dspark_rope))
+            for (offset, length), buffers in zip(segments, self._pack_dspark_rope):
+                pairs += self._dspark_rope_host(0, length, offset, buffers)
         self._pack_host[segments] = pairs
         return pairs
 
     def _pack_window_table(self, segments):
-        """``_window_table(0)`` of a layout: rows ``WINDOW_SLOT + i + o`` of query i, -1 where ``i + o`` lies before
+        """``_window_table(0)`` of a layout: rows ``WINDOW_SLOT + i + o`` of query i, -1 where ``i + o`` lies
+        before
         the query's segment (the previous prompt's last rows are not its window)."""
         return self._per_query_chip(self.pack_window_rows_host(segments), ttnn.int32)
 
@@ -541,7 +622,8 @@ class V41ChunkTables:
         return self._query_first, start
 
     def mask(self, ratio: int, width: int):
-        """Generic: additive bf16 [1, 1, rows, width] of this chip's queries: -inf at the score columns at or past
+        """Generic: additive bf16 [1, 1, rows, width] of this chip's queries: -inf at the score columns at or
+        past
         the query's visible count (rows the query may not see), 0 elsewhere."""
         assert self.generic
         iota = ttnn.slice(self._iota[ratio], [0, 0, 0, 0], [1, 1, 1, width])
@@ -552,10 +634,14 @@ class V41ChunkTables:
 
     # --- the masks built once per chunk (TT_V41_PREFILL_MASK_ONCE) ------------------------
     def begin_chunk_masks(self) -> None:
-        """Generic: from here to ``end_chunk_masks`` the index sources share one row-major mask per (ratio, width)
-        (``chunk_mask``), built at the first use in this chunk's graph. The mask depends on the chunk only through
-        the visible counts (a device input), so it is the same tensor for every index source of a ratio; the score
-        kernel writes row-major and ``ttnn.add`` runs row-major, so the per-layer tilize of the score, the mask
+        """Generic: from here to ``end_chunk_masks`` the index sources share one row-major mask per (ratio,
+        width)
+        (``chunk_mask``), built at the first use in this chunk's graph. The mask depends on the chunk only
+        through
+        the visible counts (a device input), so it is the same tensor for every index source of a ratio; the
+        score
+        kernel writes row-major and ``ttnn.add`` runs row-major, so the per-layer tilize of the score, the
+        mask
         build and the untilize of the sum go: one add a layer."""
         assert self.generic
         self._chunk_masks = {}
@@ -567,7 +653,8 @@ class V41ChunkTables:
         self._chunk_masks = None
 
     def chunk_mask(self, ratio: int, width: int):
-        """The chunk's shared row-major mask of this ratio and score width (``mask``'s values), or None outside
+        """The chunk's shared row-major mask of this ratio and score width (``mask``'s values), or None
+        outside
         ``begin_chunk_masks`` .. ``end_chunk_masks`` (the caller builds its own, tiled, as before)."""
         if self._chunk_masks is None:
             return None
@@ -625,14 +712,16 @@ class V41ChunkTables:
         return self._per_query_chip(rows, ttnn.int32)
 
     def _visibility_table(self, ratio: int):
-        """Additive [chunk, chunk / ratio + 32]: query i sees the chunk's compressed row u iff u < (i + 1) // ratio
+        """Additive [chunk, chunk / ratio + 32]: query i sees the chunk's compressed row u iff u < (i + 1) //
+        ratio
         (the extra tile, past the chunk's rows, is -inf: the indexer's zero-key pad tile)."""
         i = torch.arange(self.chunk).view(-1, 1)
         u = torch.arange(self.chunk // ratio + 32).view(1, -1)
         return self._per_query_chip(torch.where(u >= (i + 1) // ratio, float("-inf"), 0.0), ttnn.bfloat16)
 
     def _query_first_table(self):
-        """Per-chip uint32 row-major [1, 1, 1, 8]: element 0 is the chip's first chunk query index (sp, tp) order."""
+        """Per-chip uint32 row-major [1, 1, 1, 8]: element 0 is the chip's first chunk query index (sp, tp)
+        order."""
         rows = self.chunk // (self.sp * self.tp)
         first = torch.zeros(self.sp, self.tp, 1, 8, dtype=torch.int32)
         first[..., 0] = (torch.arange(self.sp * self.tp, dtype=torch.int32) * rows).reshape(self.sp, self.tp, 1)
@@ -645,7 +734,8 @@ class V41ChunkTables:
         )
 
     def rope(self, compressed: bool, stride: int, start: int):
-        """cos, sin of the chunk at ``start``: rows at positions ``start + stride * j`` (j < chunk / stride), each SP
+        """cos, sin of the chunk at ``start``: rows at positions ``start + stride * j`` (j < chunk / stride),
+        each SP
         rank its contiguous share, replicated over TP (``[1, 1, chunk / (stride * sp), 64]`` bf16 tiled)."""
         assert start % stride == 0 and start + self.chunk <= self.max_seq_len, (start, stride, self.max_seq_len)
         first, rows = start // stride, self.chunk // stride
@@ -679,12 +769,14 @@ class V41ChunkTables:
         return ttnn.slice(t, [0, 0, 0, 0], [1, 1, t.shape[2], width])
 
     def query_first(self):
-        """Per-chip [1, 1, 1, 8] uint32 row-major: element 0 is the chunk query index of the chip's first query row."""
+        """Per-chip [1, 1, 1, 8] uint32 row-major: element 0 is the chunk query index of the chip's first
+        query row."""
         return self._query_first
 
 
 class V41PrefillState:
-    """Per-request device state: compressed KV / index-K caches per KV source, ratio-0 scratch, window carries,
+    """Per-request device state: compressed KV / index-K caches per KV source, ratio-0 scratch, window
+    carries,
     DSpark window rings, and the geometry's position tables (``tables``)."""
 
     FORMATS = (MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8)
@@ -702,15 +794,22 @@ class V41PrefillState:
         dspark: bool = False,
         pack_segments: int = 0,
     ):
-        """``generic``: position-generic chunk graphs (``V41ChunkTables`` generic mode; ``V41GenericPrefillTrace``):
-        the cache writes scatter by an uploaded row index instead of a start-dependent slice. ``tiled_index_k``
-        (generic only; ``TT_V41_PREFILL_MASK_ONCE``): keep a tiled twin of each index-K cache with one zero tile past
-        its rows (``index_k_tiled``), written by ``write_compressed`` beside the row-major rows, so an index source's
-        score kernel reads a tile-aligned prefix of it (one slice) instead of slicing, tilizing and padding the
+        """``generic``: position-generic chunk graphs (``V41ChunkTables`` generic mode;
+        ``V41GenericPrefillTrace``):
+        the cache writes scatter by an uploaded row index instead of a start-dependent slice.
+        ``tiled_index_k``
+        (generic only; ``TT_V41_PREFILL_MASK_ONCE``): keep a tiled twin of each index-K cache with one zero
+        tile past
+        its rows (``index_k_tiled``), written by ``write_compressed`` beside the row-major rows, so an index
+        source's
+        score kernel reads a tile-aligned prefix of it (one slice) instead of slicing, tilizing and padding
+        the
         row-major rows at every chunk. The row-major cache stays the one the candidate scorer
-        and the decode join read. ``dspark`` (generic only): the tables keep the DSpark seed rows' RoPE pair as a
+        and the decode join read. ``dspark`` (generic only): the tables keep the DSpark seed rows' RoPE pair
+        as a
         host-filled chunk input, so a generic chunk graph seeds the rings (``V41ChunkTables.dspark_rope``).
-        ``pack_segments``: allocate the window carries of that many packed segments now (a served packed state:
+        ``pack_segments``: allocate the window carries of that many packed segments now (a served packed
+        state:
         every persistent tensor before any capture) instead of at a segment's first
         packed chunk."""
         assert kv_format in self.FORMATS, f"V4.1 KV format must be one of {self.FORMATS}, got {kv_format}"
@@ -721,7 +820,14 @@ class V41PrefillState:
         layout.check_chunk(chunk)
         self.layers = list(layers)
         self.tables = V41ChunkTables(
-            mesh_device, config, max_seq_len, chunk, self.layers, generic=generic, dspark=dspark
+            mesh_device,
+            config,
+            max_seq_len,
+            chunk,
+            self.layers,
+            generic=generic,
+            dspark=dspark,
+            pack_segments=pack_segments,
         )
         self.generic = generic
         self.start = 0
@@ -752,8 +858,10 @@ class V41PrefillState:
             kv_zeros(g.kv_rows(0), 0) if any(config.compress_ratio(l) == 0 for l in self.layers) else None
         )
         self.window_carry = {l: kv_zeros(WINDOW_SLOT, config.compress_ratio(l)) for l in self.layers}
-        # ratio-2 compressor carry: fp32 (kv, score) of a trailing incomplete group, None when groups are complete;
-        # held in fixed buffers (``carry_buffers``), so a graph captured on the state (the decode pool's join) reads
+        # ratio-2 compressor carry: fp32 (kv, score) of a trailing incomplete group, None when groups are
+        # complete;
+        # held in fixed buffers (``carry_buffers``), so a graph captured on the state (the decode pool's join)
+        # reads
         # them at one address whatever the prompt
         self.compressor_carry = {l: None for l in sources if config.compress_ratio(l) > 1}
         self.carry_buffers = {
@@ -769,8 +877,10 @@ class V41PrefillState:
             )
             for l in self.compressor_carry
         }
-        # packed chunks (TT_V41_PACK): each segment's own window carries, per segment index then layer, allocated
-        # at a segment's first packed chunk (``segment_window_carry``); the join of a segment takes them instead of
+        # packed chunks (TT_V41_PACK): each segment's own window carries, per segment index then layer,
+        # allocated
+        # at a segment's first packed chunk (``segment_window_carry``); the join of a segment takes them
+        # instead of
         # ``window_carry`` (which holds the pack's last segment's, as a single prompt's would)
         self.segment_carry: dict[int, dict[int, ttnn.Tensor]] = {}
         for seg in range(pack_segments):
@@ -778,8 +888,13 @@ class V41PrefillState:
                 self.segment_window_carry(seg, layer)
         # chunk-transient sharing: the latest index source's top-k and the candidate source's CandidateBlocks
         self.selection = {}
-        # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark runs
+        # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark
+        # runs; a
+        # packed state (``pack_segments``) holds one ring set per segment too (``segment_rings[g]``: the
+        # segment's
+        # own prompt's last ``window`` positions, what its decode slot's drafter rings take at the join)
         self.dspark_rings = None
+        self.segment_rings: list[list] | None = None
         # decode (tt/v41/decode.py): the Engram hash history of the request this state holds
         self.engram_history = None
         self._ccl = get_tt_ccl(mesh_device) if layout.sp > 1 else None
@@ -809,9 +924,11 @@ class V41PrefillState:
         return packed
 
     def to_host(self, t) -> torch.Tensor:
-        """Logical fp32 rows [rows, width] of a state tensor (first device's replica); SCALED_FP8 rows are decoded."""
+        """Logical fp32 rows [rows, width] of a state tensor (first device's replica); SCALED_FP8 rows are
+        decoded."""
         if t.dtype == MlaKvCacheFormat.SCALED_FP8.storage_dtype:
-            # FP8 bytes leave the device only through a mesh composer (single-device FP8 to_torch is unsupported)
+            # FP8 bytes leave the device only through a mesh composer (single-device FP8 to_torch is
+            # unsupported)
             composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
             physical = ttnn.to_torch(t, mesh_composer=composer)[0, 0]
             return reconstruct_scaled_fp8_kv_cache(physical, self.kv_geometry).float()
@@ -845,7 +962,8 @@ class V41PrefillState:
 
     def write_window(self, layer: int, window_kv_local):
         """Place ``layer``'s carry and this chunk's window KV (per SP rank ``[1, 1, chunk/sp, d]``, logical
-        values of ``layer_kv_format(layer)``) into the window region of the tensor its attention reads. Returns
+        values of ``layer_kv_format(layer)``) into the window region of the tensor its attention reads.
+        Returns
         that tensor."""
         dst = self.kv_tensor(layer)
         self._write_rows(dst, self.window_carry[layer], 0)
@@ -870,8 +988,10 @@ class V41PrefillState:
             if rows.shape[2] != count:
                 rows = ttnn.slice(rows, [0, 0, 0, 0], [1, 1, count, rows.shape[3]])
             if self.generic:
-                # the destination rows come from the chunk's uploaded row index (``first + i``), so the graph is the
-                # same at every chunk start: row ``i`` of the encoded rows lands at ``dst_base + row_index[i]``
+                # the destination rows come from the chunk's uploaded row index (``first + i``), so the graph
+                # is the
+                # same at every chunk start: row ``i`` of the encoded rows lands at ``dst_base +
+                # row_index[i]``
                 from models.demos.deepseek_v3_d_p.tt.v41.pool import scatter_rows
 
                 encoded = self._encode(rows, fmt)
@@ -882,7 +1002,8 @@ class V41PrefillState:
                 self._write_rows(cache, self._encode(rows, fmt), offset)
 
     def write_window_rows(self, layer: int, rows):
-        """Decode (``tt/v41/decode.py``): place ``layer``'s carry at rows [0, WINDOW_SLOT) and ``rows`` ``[1, 1, n,
+        """Decode (``tt/v41/decode.py``): place ``layer``'s carry at rows [0, WINDOW_SLOT) and ``rows`` ``[1,
+        1, n,
         d]`` (the token's window KV on every row, the same on every chip; logical values of
         ``layer_kv_format(layer)``) at WINDOW_SLOT, so row WINDOW_SLOT is the token's and
         ``update_window_carry(layer, 1)`` is the ring shift. Returns the tensor its attention reads."""
@@ -912,7 +1033,8 @@ class V41PrefillState:
             ttnn.deallocate(row)
 
     def segment_window_carry(self, segment: int, layer: int) -> ttnn.Tensor:
-        """The window carry buffer of packed segment ``segment`` for ``layer`` (WINDOW_SLOT rows in the layer's KV
+        """The window carry buffer of packed segment ``segment`` for ``layer`` (WINDOW_SLOT rows in the
+        layer's KV
         format), allocated at first use."""
         carries = self.segment_carry.setdefault(segment, {})
         if layer not in carries:
@@ -924,7 +1046,8 @@ class V41PrefillState:
 
     def update_window_carry(self, layer: int, length: int):
         """After ``layer``'s attention: its carry becomes the last WINDOW_SLOT rows ending at the chunk's
-        last valid token (rows [length, length + WINDOW_SLOT) of the window region). A packed chunk also writes
+        last valid token (rows [length, length + WINDOW_SLOT) of the window region). A packed chunk also
+        writes
         each segment's carry (the WINDOW_SLOT rows ending at the segment's last token) into the segment's own
         buffer."""
         src = self.kv_tensor(layer)
