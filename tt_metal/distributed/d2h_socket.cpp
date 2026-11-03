@@ -31,30 +31,133 @@
 #include <algorithm>
 #include <cstdlib>
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
-#else
-// The hugepage D2H path requires explicit cache-line eviction (_mm_clflush + _mm_lfence)
-// because device PCIe writes may be non-snooped on WH.  This is x86-specific.
-// init_host_buffer_hugepage() will TT_FATAL before any of these are reached on non-x86;
-// stubs exist solely to allow the translation unit to compile.
-static inline void _mm_clflush(const void*) noexcept {
-    TT_THROW("D2H hugepage cache flush is x86-only and should never be reached on this architecture");
-}
-static inline void _mm_lfence() noexcept {
-    TT_THROW("D2H hugepage cache flush is x86-only and should never be reached on this architecture");
-}
+#elif defined(__riscv) && (__riscv_xlen == 64)
+#include <sys/syscall.h>
+#include <unistd.h>  // syscall(); included above too, repeated so this block stands alone
+#if __has_include(<asm/hwprobe.h>)
+#include <asm/hwprobe.h>
+#define TT_D2H_HAVE_RISCV_HWPROBE 1
+#endif
 #endif
 
 namespace tt::tt_metal::distributed {
 
 namespace {
 
-// `_mm_clflush` invalidates one host cache line; 64 B is the line size on typical x86-64.
-constexpr uint32_t k_x86_clflush_line_bytes = 64;
+// Host cache management for the hugepage D2H path.
+//
+// The device's PCIe writes into the hugepage are not guaranteed to be snooped on WH, while the
+// host maps that memory write-back cacheable, so a host read can keep returning a stale line.
+// Every read of device-written data is therefore preceded by an explicit writeback+invalidate of
+// the lines involved.
+//
+// x86 uses clflush + lfence. riscv64 uses the Zicbom cbo.flush plus a fence -- cbo.flush rather
+// than cbo.inval because the host writes this memory itself during setup (the data ring is
+// memset and the counter zeroed), so a plain invalidate could discard dirty host lines. Zicbom is
+// optional in rv64gc and its block size is implementation-defined, so both are resolved at run
+// time; where it is unavailable the hugepage path stays unoffered exactly as before.
+
+#if defined(__x86_64__) || defined(__i386__)
+
+bool host_cache_flush_available() { return true; }
+
+// 64 B is the line size on typical x86-64.
+uint32_t host_cache_line_bytes() { return 64; }
+
+void host_cache_flush_line(const void* addr) { _mm_clflush(addr); }
+
+void host_cache_flush_barrier() { _mm_lfence(); }
+
+#elif defined(__riscv) && (__riscv_xlen == 64)
+
+// Zicbom availability and cache-block size, resolved once via riscv_hwprobe(2). The kernel only
+// reports an extension there once it is usable from user mode, which is what this path needs.
+struct RiscvCboInfo {
+    bool usable = false;
+    uint32_t block_bytes = 0;
+};
+
+RiscvCboInfo probe_riscv_cbo() {
+    RiscvCboInfo info;
+#if defined(TT_D2H_HAVE_RISCV_HWPROBE) && defined(__NR_riscv_hwprobe) && \
+    defined(RISCV_HWPROBE_KEY_ZICBOM_BLOCK_SIZE) && defined(RISCV_HWPROBE_EXT_ZICBOM)
+    riscv_hwprobe pairs[2] = {
+        {RISCV_HWPROBE_KEY_IMA_EXT_0, 0},
+        {RISCV_HWPROBE_KEY_ZICBOM_BLOCK_SIZE, 0},
+    };
+    if (::syscall(__NR_riscv_hwprobe, pairs, 2UL, 0UL, nullptr, 0U) != 0) {
+        return info;
+    }
+    const auto block_bytes = static_cast<uint32_t>(pairs[1].value);
+    if ((static_cast<uint64_t>(pairs[0].value) & RISCV_HWPROBE_EXT_ZICBOM) != 0 && block_bytes > 0) {
+        info.usable = true;
+        info.block_bytes = block_bytes;
+    }
+#endif
+    return info;
+}
+
+const RiscvCboInfo& riscv_cbo_info() {
+    static const RiscvCboInfo info = probe_riscv_cbo();
+    return info;
+}
+
+bool host_cache_flush_available() { return riscv_cbo_info().usable; }
+
+uint32_t host_cache_line_bytes() { return riscv_cbo_info().block_bytes; }
+
+void host_cache_flush_line(const void* addr) {
+    // cbo.flush writes back and invalidates the cache block holding addr. Emitted under a local
+    // .option arch so the rest of the build keeps its base -march (Zicbom need not be in it).
+    __asm__ volatile(
+        ".option push\n\t"
+        ".option arch, +zicbom\n\t"
+        "cbo.flush 0(%0)\n\t"
+        ".option pop"
+        :
+        : "r"(addr)
+        : "memory");
+}
+
+void host_cache_flush_barrier() {
+    // Order the flushes above against the loads that read the flushed lines.
+    __asm__ volatile("fence rw,rw" ::: "memory");
+}
+
+#else
+
+bool host_cache_flush_available() { return false; }
+
+uint32_t host_cache_line_bytes() { return 0; }
+
+void host_cache_flush_line(const void*) {
+    TT_THROW("D2H hugepage cache flush is not implemented on this architecture");
+}
+
+void host_cache_flush_barrier() { TT_THROW("D2H hugepage cache flush is not implemented on this architecture"); }
+
+#endif
+
+// Flush every cache block overlapping [start, start + bytes). Striding byte offsets from start
+// instead would leave the final block unflushed whenever start is not block-aligned, and the block
+// size is implementation-defined on riscv64 rather than fixed at 64 as on x86.
+void host_cache_flush_range(const void* start, uint32_t bytes, uint32_t line_bytes) {
+    if (bytes == 0) {
+        return;
+    }
+    TT_ASSERT((line_bytes & (line_bytes - 1)) == 0, "Host cache-line size {} is not a power of two", line_bytes);
+    const auto addr = reinterpret_cast<uintptr_t>(start);
+    const auto mask = ~static_cast<uintptr_t>(line_bytes - 1);
+    for (uintptr_t block = addr & mask; block <= ((addr + bytes - 1) & mask); block += line_bytes) {
+        host_cache_flush_line(reinterpret_cast<const void*>(block));
+    }
+}
 
 // Drive the device forward one step from a host socket credit-wait loop. Simulator co-steps the umd
 // clock; emule pumps the parked fiber scheduler so a kernel blocked on this host-fed socket resumes.
@@ -147,22 +250,15 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
 }
 
-bool D2HSocket::hugepage_fallback_supported_on_host() {
-#if defined(__x86_64__) || defined(__i386__)
-    return true;
-#else
-    return false;
-#endif
-}
+bool D2HSocket::hugepage_fallback_supported_on_host() { return host_cache_flush_available(); }
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device) {
-#if !defined(__x86_64__) && !defined(__i386__)
-    // Cache management for WB + non-snooped PCIe DMA is x86-specific (clflush + lfence).
-    // WH — the only architecture that takes this hugepage path — is x86-only, so this
-    // should never be reachable on other architectures.
-    TT_FATAL(false, "D2H hugepage path is not supported on non-x86 architectures");
-    return {};
-#endif
+    // Cache management for WB + non-snooped PCIe DMA needs an architecture-specific
+    // writeback+invalidate (x86 clflush, RISC-V Zicbom cbo.flush). Callers are expected to have
+    // consulted hugepage_fallback_supported_on_host() first.
+    TT_FATAL(
+        host_cache_flush_available(),
+        "D2H hugepage path requires host cache-line flush support, which is unavailable on this host");
     using_hugepage_ = true;
 
     auto* device = internal::get_device(*mesh_device, sender_core_.device_coord);
@@ -650,8 +746,9 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
         }
         advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         if (using_hugepage_) {
-            _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-            _mm_lfence();
+            host_cache_flush_line(
+                const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+            host_cache_flush_barrier();
             uint32_t bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
             bytes_recv = bytes_sent_value - bytes_acked_;
             bytes_sent_ = bytes_sent_value;
@@ -700,8 +797,8 @@ uint32_t D2HSocket::discard_pending_pages() {
     TT_FATAL(page_size_ > 0, "Page size must be set before discarding pages.");
     uint32_t bytes_sent_value;
     if (using_hugepage_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-        _mm_lfence();
+        host_cache_flush_line(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        host_cache_flush_barrier();
         bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
     } else {
         tt_driver_atomics::mfence();
@@ -744,8 +841,9 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
     };
     auto read_bytes_sent = [this]() -> uint32_t {
         if (using_hugepage_) {
-            _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-            _mm_lfence();
+            host_cache_flush_line(
+                const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+            host_cache_flush_barrier();
             return *hugepage_bytes_sent_host_ptr_;
         }
         tt_driver_atomics::mfence();
@@ -796,13 +894,11 @@ void D2HSocket::read_available(void* data, uint32_t num_bytes, bool notify_sende
     uint32_t* base = using_hugepage_ ? hugepage_data_host_ptr_ : host_buffer_.get();
     uint32_t* src = base + (read_ptr_ / sizeof(uint32_t));
     if (using_hugepage_) {
-        for (uint32_t i = 0; i < head_bytes; i += k_x86_clflush_line_bytes) {
-            _mm_clflush(reinterpret_cast<char*>(src) + i);
-        }
-        for (uint32_t i = 0; i < tail_bytes; i += k_x86_clflush_line_bytes) {
-            _mm_clflush(reinterpret_cast<char*>(base) + i);
-        }
-        _mm_lfence();
+        const uint32_t line_bytes = host_cache_line_bytes();
+        TT_ASSERT(line_bytes > 0, "Hugepage D2H path entered without a usable host cache-line size");
+        host_cache_flush_range(src, head_bytes, line_bytes);
+        host_cache_flush_range(base, tail_bytes, line_bytes);
+        host_cache_flush_barrier();
     }
     std::memcpy(data, src, head_bytes);
     if (tail_bytes > 0) {
@@ -827,8 +923,8 @@ bool D2HSocket::try_read_impl(void* data, uint32_t num_pages, bool notify_sender
 
     uint32_t bytes_sent_value;
     if (using_hugepage_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-        _mm_lfence();
+        host_cache_flush_line(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        host_cache_flush_barrier();
         bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
     } else {
         tt_driver_atomics::mfence();
@@ -855,8 +951,8 @@ void D2HSocket::pop(uint32_t num_pages, bool notify_sender) {
 uint32_t D2HSocket::bytes_sent() const {
     validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     if (using_hugepage_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-        _mm_lfence();
+        host_cache_flush_line(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        host_cache_flush_barrier();
         return *hugepage_bytes_sent_host_ptr_;
     }
     return std::atomic_ref<uint32_t>(*bytes_sent_ptr_).load(std::memory_order_acquire);
@@ -867,8 +963,8 @@ uint32_t D2HSocket::pages_available() {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking available pages.");
     uint32_t bytes_sent_value;
     if (using_hugepage_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-        _mm_lfence();
+        host_cache_flush_line(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        host_cache_flush_barrier();
         bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
     } else {
         tt_driver_atomics::mfence();

@@ -186,16 +186,16 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     }
 
     // Without 64-bit PCIe addressing and without an IOMMU the D2H socket falls back to the
-    // hugepage path, which relies on x86 cache-line flush instructions (see d2h_socket.cpp).
-    // Decide here rather than letting D2HSocket TT_FATAL (and log "critical") on every
-    // device open on non-x86 hosts.
+    // hugepage path, which needs host cache-line flush support (see d2h_socket.cpp). Decide
+    // here rather than letting D2HSocket TT_FATAL (and log "critical") on every device open
+    // on hosts that lack it.
     if (!hal.get_supports_64_bit_pcie_addressing() && !cluster.is_iommu_enabled() &&
         !D2HSocket::hugepage_fallback_supported_on_host()) {
         log_debug(
             tt::LogMetal,
-            "Real-time profiler disabled on device {}: the D2H socket hugepage fallback is only "
-            "implemented for x86 hosts and IOMMU is disabled. Enable IOMMU to re-enable RT "
-            "profiler on this host.",
+            "Real-time profiler disabled on device {}: the D2H socket hugepage fallback needs "
+            "host cache-line flush support (x86 clflush, or RISC-V Zicbom) and IOMMU is disabled. "
+            "Enable IOMMU to re-enable RT profiler on this host.",
             device_id);
         return {};
     }

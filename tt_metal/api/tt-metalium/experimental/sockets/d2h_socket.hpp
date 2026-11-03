@@ -148,8 +148,9 @@ public:
 
     /**
      * Whether this host can use the hugepage D2H fallback (taken when the device lacks
-     * 64-bit PCIe addressing and the host has no IOMMU). The fallback relies on x86
-     * cache-line flush instructions, so it is only available on x86 hosts.
+     * 64-bit PCIe addressing and the host has no IOMMU). The fallback needs an explicit
+     * host cache-line writeback+invalidate: x86 clflush, or RISC-V Zicbom cbo.flush where
+     * the extension is present. Resolved at run time on hosts where it is optional.
      */
     static bool hugepage_fallback_supported_on_host();
 
