@@ -55,13 +55,8 @@ inline void llk_math_matmul_init(
         "SrcA and SrcB must both be 2x formats or both non-2x formats");
 
     // srcA/srcB above are the per-op effective src-register formats, which for MxFp4 differ from the
-    // op-agnostic unpack_dst_format[] table that kernel startup (llk_math_hw_configure) already
-    // programmed the ALU from and latched as DataFormatConfigSet::DEFAULT. That latch keys on which
-    // config set is active, not on the formats, so _configure_default_alu_data_format_state_ would
-    // early-return and leave the ALU decoding 2x-packed src registers as Float16_b while the EN_X2
-    // MOP below ran over them. When the formats deviate, program the ALU directly instead; this is
-    // still the DEFAULT config shape (no dest-format override), so the
-    // latched DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
+    // op-agnostic unpack_dst_format[] table. When the formats deviate, program the ALU directly; this is
+    // still the DEFAULT config shape (no dest-format override).
     if ((srcA_format != static_cast<DataFormat>(get_operand_dst_format(operandB_id))) ||
         (srcB_format != static_cast<DataFormat>(get_operand_dst_format(operandA_id)))) {
         const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
@@ -92,9 +87,7 @@ inline void llk_math_matmul_init(
  *
  * Undoes the MxFp4 -> MxFp4_2x_B deviation that @ref llk_math_matmul_init programmed into the ALU
  * format registers, restoring the op-agnostic unpack_dst_format[] values so a following non-matmul
- * op decodes its src registers correctly. Only acts when init deviated (an operand was MxFp4). Uses
- * _configure_alu_formats_ directly for the same reason init does: the DataFormatConfigSet::DEFAULT
- * latch (still truthful) makes _configure_default_alu_data_format_state_ early-return.
+ * op decodes its src registers correctly. Only acts when init deviated (an operand was MxFp4).
  *
  * @note Pair with @ref llk_unpack_AB_matmul_uninit (via mm_uninit); call before the next op when an
  * MxFp4 matmul operand is reused by a non-matmul op in the same kernel.
