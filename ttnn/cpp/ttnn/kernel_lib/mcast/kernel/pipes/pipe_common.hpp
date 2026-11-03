@@ -14,9 +14,9 @@ enum class SourceL1Guard { Guard, CallerManaged };
 
 namespace detail {
 
-// Returns once the NoC has read the L1 source of every write this core issued, so the source can be reused.
-// On Wormhole the NIU can still read a source after NIU_MST_WRITE_REQS_OUTGOING_ID drops when L1 banks are
-// busy (e.g. packer L1 accumulation), so wait for the write acks there.
+// Returns once the NoC has read the L1 source of every untagged (trid 0) write this core issued,
+// so the source can be reused. On Wormhole the NIU has been seen reading a source after
+// NIU_MST_WRITE_REQS_OUTGOING_ID drops (see #63951), so wait for write acks there.
 template <typename NocT>
 FORCE_INLINE void wait_write_sources_read(NocT& noc) {
 #ifdef ARCH_WORMHOLE
