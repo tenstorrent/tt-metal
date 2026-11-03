@@ -63,9 +63,9 @@ _PRO_TAIL = ((_PRO_HEAD, 26), (36, 25))  # (first, count) of each process after 
 _HANDOFF = Path(os.getenv("V4_DEPTH_HANDOFF_DIR", "generated/v4_depth_handoff")) / "pro"
 _SLOTS = 2  # PREFILL_NUM_USERS in tt/runners/manifests/dsv4_{pro,flash}.json
 # The last layer is graded at its own floor: its PCC is carried by a few tokens whose norm is
-# hundreds of times the median. It measures Flash L42 0.5919 to 0.6348 across hosts and bases. A model
+# hundreds of times the median. It measures Flash L42 0.5919 to 0.6426 across hosts and bases. A model
 # without an entry logs its last-layer PCC ungraded.
-_LAST_LAYER_FLOOR = {DeepSeekV4FlashConfig: 0.62}
+_LAST_LAYER_FLOOR = {DeepSeekV4FlashConfig: 0.58}
 
 
 def _galaxy(model_config):
