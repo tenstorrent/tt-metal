@@ -13,10 +13,16 @@ BONSAI_OPT_STAGE picks the window (default decode):
   on the device and reads one token id back. Call 0 compiles the argmax and is not timed; TRACE_STAGE_MS[decode] is
   the mean wall time of the other 128 calls.
 
-Under the device profiler (TT_METAL_DEVICE_PROFILER=1, the tool's profile command) nothing is traced: prefill runs the
-same chunk forwards eagerly (bonsai_support.prefill_eager), once untimed, and for the prefill stage once more between
-PREFILL_START and PREFILL_END; the decode stage runs one untimed eager decode step, then two between DECODE_START
-and DECODE_END, teacher forced from the reference continuation.
+Under the device profiler (TT_METAL_DEVICE_PROFILER=1, the tool's profile command) nothing is traced, and the model is
+built with BONSAI_OPT_PROFILE_LAYERS layers (unset or 0: all 64). The device profiler records every op from the
+start, and a full-depth 4096-token eager prefill alone writes a device log of about 4.5 GB per chunk, so:
+- prefill: the chunk forwards run eagerly (bonsai_support.prefill_eager), once untimed, then once between
+  PREFILL_START and PREFILL_END. The prefill spec profiles 4 layers, one repeat of the model's pattern (3 Gated
+  DeltaNet layers, 1 full-attention layer); the tool scales in-layer rows to full depth.
+- decode: no prefill runs. One untimed eager decode step at position ISL, then two between DECODE_START and
+  DECODE_END, teacher forced from the reference continuation, against the untouched KV cache and GDN state. The
+  ops are the same with and without a prior prefill (checked 2026-11-03 on a 4-layer build with ttnn graph
+  capture: 1539 calls per step, same sequence); only the values differ, and the profile reads only times.
 """
 
 from __future__ import annotations
@@ -63,13 +69,12 @@ def test_bonsai_perf(mesh_device, device_params):
     print(f"BONSAI_PROMPT_TOKENS={P}", flush=True)
     print(f"GATE_CONFIG stage={STAGE} profiling={int(profiling)} trace={int(not profiling)}", flush=True)
 
-    model, page_table = build_model(device)
-    vocab = model.args.vocab_size
-
     if profiling:
-        model.prepare_prefill_trace_chunked(device, page_table, chunk_size=CHUNK, warmup_masked_buckets=False)
-        prefill_eager(model, prompt, page_table)  # compiles the last-token norm and LM head
+        layers = int(os.environ.get("BONSAI_OPT_PROFILE_LAYERS", "0") or 0)
+        model, page_table = build_model(device, n_layers=layers or None)
         if STAGE == "prefill":
+            model.prepare_prefill_trace_chunked(device, page_table, chunk_size=CHUNK, warmup_masked_buckets=False)
+            prefill_eager(model, prompt, page_table)  # compiles the last-token norm and LM head
             ttnn.synchronize_device(device)
             signpost("PREFILL_START")
             prefill_eager(model, prompt, page_table)
@@ -86,6 +91,8 @@ def test_bonsai_perf(mesh_device, device_params):
         signpost("DECODE_END")
         return
 
+    model, page_table = build_model(device)
+    vocab = model.args.vocab_size
     model.capture_prefill_trace_chunked(device, page_table, chunk_size=CHUNK, warmup_masked_buckets=False)
     logits = prefill_traced(model, prompt, page_table)  # untimed: compiles the last-token norm and LM head
     prefill_ms = []

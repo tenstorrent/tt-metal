@@ -47,13 +47,17 @@ def load_reference() -> dict:
     return ref
 
 
-def build_model(device):
-    """(model, page_table): the demo's single-device build, KV cache allocated, plain decode (no MTP)."""
+def build_model(device, n_layers=None):
+    """(model, page_table): the demo's single-device build, KV cache allocated, plain decode (no MTP).
+
+    n_layers builds the first n checkpoint layers only (the profiler's depth); None builds all of them."""
     import ttnn
     from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
     t0 = time.time()
-    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=MAX_SEQ_LEN, enable_mtp=False)
+    model = Qwen36Model.from_pretrained(
+        device, max_batch_size=1, max_seq_len=MAX_SEQ_LEN, enable_mtp=False, n_layers=n_layers
+    )
     print(f"BONSAI_MODEL_LOAD_S={time.time() - t0:.1f} layers={model.args.n_layers}", flush=True)
     kv_cache_shape = [NUM_BLOCKS, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
