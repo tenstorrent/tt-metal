@@ -138,15 +138,20 @@ jobs:
           fetch-depth: 2
       - name: Fetch the base ref to diff against
         if: github.event_name == 'pull_request'
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
         run: |
           git fetch --no-tags --depth=1 origin \
-            "+refs/heads/${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}"
+            "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
       - name: Check for new InterleavedAddrGen usages in changed files
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           # Get the base branch for comparison
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_REF="origin/${BASE_BRANCH}"
           else
             BASE_REF="HEAD^"
           fi
