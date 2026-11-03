@@ -135,8 +135,20 @@ jobs:
         # No hugepages on viommu runners or on GitHub-hosted CPU-only runners.
         - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && matrix.test-group.sku != 'github_hosted_cpu' && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
-      # github_hosted_cpu has no /dev/tenstorrent to pass through.
-      options: ${{ matrix.test-group.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent' || '' }} ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
+      # github_hosted_cpu has no /dev/tenstorrent to pass through. What it does
+      # need is an unrestricted seccomp profile, to run the sanitizer binaries:
+      # the GitHub-hosted ubuntu-26.04 image leaves vm.mmap_rnd_bits at the
+      # kernel default of 32 (its sysctl.conf workaround is no longer applied at
+      # boot), so TSan's mapping check fails and it falls back to
+      # personality(ADDR_NO_RANDOMIZE) to re-exec without ASLR. Docker's default
+      # seccomp profile allows personality() only with args 0, 8, 0x20000,
+      # 0x20008 and 0xffffffff, so that call returns -1 and TSan aborts at
+      # startup ("CHECK failed: tsan_platform_linux.cpp:290", exit 139).
+      # Scoped to this SKU: a GitHub-hosted, deviceless runner executing our own
+      # test binaries. Drop it once actions/runner-images#15146 restores
+      # mmap_rnd_bits=28 -- upstream LLVM notes that lowering the ASLR entropy
+      # is the preferable fix of the two.
+      options: ${{ matrix.test-group.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent' || '--security-opt seccomp=unconfined' }} ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash

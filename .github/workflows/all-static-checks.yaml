@@ -207,11 +207,9 @@ jobs:
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
   cmake-version:
-    # Pinned, not ubuntu-latest: this job runs install_dependencies.sh, which only
-    # handles jammy and noble and adds apt.llvm.org repos for clang 17/20 that do
-    # not exist for ubuntu-26.04 (resolute), so apt-get update exits 100. Only
-    # fires when cmake-changed is true, so a workflow-only PR is what trips it.
-    runs-on: ubuntu-24.04
+    # Runs install_dependencies.sh directly on the runner OS, so this is the job
+    # that proves the script works on whatever ubuntu-latest currently is.
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
