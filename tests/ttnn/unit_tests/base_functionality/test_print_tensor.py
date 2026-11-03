@@ -11,6 +11,12 @@ from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, TORCH_INTEGER_DTYPES
 
 
+@pytest.fixture(autouse=True)
+def reset_printoptions():
+    yield
+    ttnn.set_printoptions(profile="short", sci_mode=None, precision=4)
+
+
 GOLDEN_TENSOR_STRINGS = {
     (
         ttnn.uint16,
