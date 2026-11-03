@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    QKV_HISTORY_ROWS,
     assert_accurate,
     convolution_tail_from_device_layout,
 )
@@ -165,11 +166,16 @@ def reconstruct_state_at_sp_rank(
 
 
 def _convolution_rows(shard: torch.Tensor, width: int) -> torch.Tensor:
-    """One chip's device-layout tail of ``width`` channels as ``[1, K-1, W]`` rows; K-1 is read off its pages."""
+    """One chip's SEGMENTS tail of ``width`` channels as ``[1, K-1, W]`` rows.
+
+    The segment count refuses a shard of the wrong width, and the decoder refuses a tail whose pages hold other than
+    K-1 = ``QKV_HISTORY_ROWS`` rows. At W = 192 a ``[1, 3, 192]`` row tail passes both: no shape check can tell it from
+    a segment tail.
+    """
     segments = width // KDA_CONVOLUTION_SEGMENT_CHANNELS
     if shard.shape[-2] != segments:
         raise ValueError(f"tail shard {tuple(shard.shape)} does not hold {segments} segments of {width} channels")
-    return convolution_tail_from_device_layout(shard, shard.shape[-1] // KDA_CONVOLUTION_SEGMENT_CHANNELS)
+    return convolution_tail_from_device_layout(shard, QKV_HISTORY_ROWS)
 
 
 def reconstruct_convolution_at_sp_rank(
