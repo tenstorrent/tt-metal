@@ -91,3 +91,24 @@ weight bytes) = ~635 us; DSA layer 1360 - 174 - ~150 = ~1035 us; step ~33 ms = 3
 Every row is a per-op change behind the existing PCC / decode-id gates; no megakernel is required for the 50 band.
 The reference's persistent-stack design stays the lever for the 100 band without MTP (it removes the remaining
 ~100 us of collective + gap cost per layer).
+
+## Serving layout for lever 1 (DP4 x TP8)
+
+The model's row axis is not data parallel for the MoE: the hybrid expert layout splits each expert's intermediate
+dimension over the mesh rows and exchanges tokens between rows (`gather_x` / `rs_rows`), so a (4, 8) mesh would be
+one 32-chip instance with 4-row collectives, not four instances. Four independent TP8 instances are therefore four
+engines: the vLLM TT plugin's standard multi-process DP (`--data-parallel-size 4`, per-rank mesh and
+`TT_VISIBLE_DEVICES` discovery), each rank on one Galaxy column opened as the (1, 8) ring (the topology-only
+`bh_galaxy_1x8_ring.textproto` applies to every column; the ring closes through the torus wrap). Users per rank 4-8;
+prefix cache, slot placement and the page table stay per rank. To validate after the (1, 8) step numbers: the plugin's
+DP discovery on the Galaxy's columns, one rank served, then four.
+
+## Log (continued)
+
+* 21:40 `tp8_e2e_1x8_B4`: the 45-layer chain + perf on column 0 as a (1, 8) ring, 4 users, bfp8 (the (1,8) weight
+  cache converts first, ~50-80 s per layer).
+* 21:47 `tp8_e2e_1x8_B4_bfp4`: the same on column 1 with `GLM53_MODEL_EXPERT_DTYPE=bfp4` (routed W13 bfp4, W2 bfp8)
+  into `_cache/mesh_bfp4`, chain PCC bar lowered to 0.9 so the run reports its step and ids; accuracy comes from the
+  evals, not this chain.
+* 21:46 pre-block profile on chip 8 (tracy over `test_mhc_pre_block.py::test_pre_block_real`, B = 1/4/32, FPU and
+  exact variants): the op's device time per case.
