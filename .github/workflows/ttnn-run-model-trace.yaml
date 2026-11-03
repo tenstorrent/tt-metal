@@ -607,6 +607,7 @@ jobs:
     concurrency:
       group: ttnn-ops-v6-trace-load
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
       pull-requests: write
