@@ -577,6 +577,17 @@ def test_a_switch_only_accept_keeps_the_shipped_default(mk, sandbox, monkeypatch
     assert o.led.status("P.1") == "PASS"
 
 
+def test_adding_keep_default_after_the_ab_keeps_its_report(mk, sandbox):
+    """F241: keep_default only says what the accept ships; set after the A/B ran (DeepSeek-V4.1 P.28), the report and
+    its decision still match the task."""
+    t = pick()
+    o = mk([t], CHANGE)
+    before = o.ab_key(o.led.task("P.1"))
+    t2 = dict(t, ab=dict(t["ab"], keep_default=True))
+    assert o.ab_key(t2) == before
+    assert o.ab_key(dict(t, ab=dict(t["ab"], change={"TOY_FIDELITY": "hifi3"}))) != before
+
+
 def test_the_accept_runs_the_gate_when_the_code_changed_since_the_ab(mk, sandbox):
     gate = f"BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER}"
     o = mk([pick(gate={"cmd": gate, "metrics": {"device_ms_experts": "< 10"}})], CHANGE)
