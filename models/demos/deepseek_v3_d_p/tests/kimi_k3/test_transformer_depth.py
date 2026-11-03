@@ -145,13 +145,13 @@ def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path 
     return {"embed_weight": model["embed_weight"].float(), "norm_weight": model["norm_weight"], "layers": layers}
 
 
-def _compose(mesh_device, tensor, sp_axis, tp_axis):
+def _compose(mesh_device, tensor, sp_axis, tp_axis, seq_len=SEQ_LEN):
     dims = [0, 0]
     dims[sp_axis], dims[tp_axis] = 2, 3
     return ttnn.to_torch(
         tensor,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
-    ).reshape(-1, KimiK3Config.EMB_SIZE)[:SEQ_LEN]
+    ).reshape(-1, KimiK3Config.EMB_SIZE)[:seq_len]
 
 
 # Almost all of this is reading routed experts out of the TTNN cache, which is a fixed cost per
