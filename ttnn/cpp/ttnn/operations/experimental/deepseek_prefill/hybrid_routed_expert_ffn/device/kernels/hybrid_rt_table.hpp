@@ -26,4 +26,4 @@ inline constexpr uint32_t kHybridRtLinearInRow = 4;
 // Two values a, b: a + b * the core's logical x, in uint32 arithmetic.
 inline constexpr uint32_t kHybridRtLinearInColumn = 5;
 
-inline constexpr uint32_t hybrid_rt_entry(uint32_t kind, uint32_t slot) { return (kind << kHybridRtKindShift) | slot; }
+constexpr uint32_t hybrid_rt_entry(uint32_t kind, uint32_t slot) { return (kind << kHybridRtKindShift) | slot; }
