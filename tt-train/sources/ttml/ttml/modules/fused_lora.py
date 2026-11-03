@@ -269,6 +269,8 @@ class FusedLoraLinearT(Function):
                 s_dh_t, x_val, 1.0, False, big_transposed=False, small_transposed=True, grid_rows=rows
             )
             ctx.overlap.exit()
+            if not ctx.overlap.serial:
+                dx = ttnn.clone(dx)  # off the window's persistent output buffer (the next window reuses it)
             for t in (dx_full, h_t, s_dh_t):
                 ttnn.deallocate(t)
         else:

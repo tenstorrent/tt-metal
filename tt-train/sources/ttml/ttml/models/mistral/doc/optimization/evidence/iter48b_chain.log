@@ -1,0 +1,25 @@
+=== iter48b TP=4 gradient check 2026-11-03T00:18:21Z
+tp4 rc=0
+tp 4: transposed 5, fused 4, configured 0
+PASS
+2 layers overlap rc=0
+2 layers no_overlap rc=0
+PASS (worst 1.03e-04; the gate_up / qkv A gradients take the owned product in the window: rounding-level)
+=== iter48b TP=4 40 layers real weights overlap_a 2026-11-03T00:21:03Z
+rc=0
+step 1: collective overlap windows 80
+40 of 40 layers, tp 4: 474.2 ms/step over 8 steps (best 465.1), 203.2 TFLOP/s, MFU 34.21%
+=== iter48b TP=4 40 layers real weights overlap_b 2026-11-03T00:28:34Z
+rc=0
+step 1: collective overlap windows 80
+40 of 40 layers, tp 4: 475.2 ms/step over 8 steps (best 463.8), 202.8 TFLOP/s, MFU 34.14%
+=== iter48b TP=4 40 layers real weights serial 2026-11-03T00:36:08Z
+rc=0
+step 1: collective overlap windows 80
+40 of 40 layers, tp 4: 474.1 ms/step over 8 steps (best 463.7), 203.3 TFLOP/s, MFU 34.22%
+determinism (a == b): PASS
+window == serial routes: PASS
+=== iter48b alternating overlap A/B, 32 pairs 2026-11-03T00:43:45Z
+rc=0
+40 of 40 layers, tp 4: 466.1 ms/step over 64 steps (best 453.9), 206.8 TFLOP/s, MFU 34.81%
+=== iter48b_tp TP=4 MFU after 600s cool-down 2026-11-03T00:51:47Z

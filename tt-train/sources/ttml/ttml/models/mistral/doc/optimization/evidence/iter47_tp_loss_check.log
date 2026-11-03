@@ -1,0 +1,7 @@
+=== overlap 23:28:51
+rc=1
+compare rc=1
+=== no_overlap 23:28:54
+rc=1
+compare rc=1
+=== tp loss check finished

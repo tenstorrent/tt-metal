@@ -1,0 +1,3 @@
+in-process alternating A/B, 32 pairs after a 4-minute cool-down (`O/iter48b_mfu_alternate.log`, steps 3-66): overlap on (even steps) 467.3 ms mean (sd 4.3, best 457.7) over 32 steps, off (odd steps) 464.9 (sd 5.1, best 453.9) over 32; paired difference on - off +2.4 ms per step, SE 0.9 (t = 2.9); the box warming through the run: first 8 pairs +5.0, last 8 pairs +1.0
+on: 457.7 460.4 468.7 469.9 464.7 469.9 466.0 460.2 462.6 461.6 473.7 464.5 470.6 462.6 464.7 466.0 468.1 471.1 469.1 465.7 464.2 469.8 471.8 472.1 468.8 465.8 476.6 470.0 469.5 467.8 467.6 473.0
+off: 453.9 458.1 459.6 463.2 457.5 458.6 463.8 462.7 459.5 466.9 465.9 462.3 463.8 463.2 468.5 466.7 468.7 464.1 464.8 462.5 461.5 465.0 470.4 474.7 466.2 468.9 467.6 463.3 470.0 479.4 465.8 469.8

@@ -1,0 +1,18 @@
+2-block TP=4 gradient check, the collective overlap window on vs off (iteration 47): relative L2 difference per gradient
+LoraModel/model/blocks/0/attention/out_linear/lora_A    (1, 1, 16, 4096)     rel 0.00e+00
+LoraModel/model/blocks/0/attention/out_linear/lora_B    (1, 1, 5120, 16)     rel 0.00e+00
+LoraModel/model/blocks/0/attention/qkv_linear/lora_A    (1, 1, 16, 5120)     rel 0.00e+00
+LoraModel/model/blocks/0/attention/qkv_linear/lora_B    (1, 1, 6144, 16)     rel 0.00e+00
+LoraModel/model/blocks/0/mlp/w2/lora_A                  (1, 1, 16, 32768)    rel 0.00e+00
+LoraModel/model/blocks/0/mlp/w2/lora_B                  (1, 1, 5120, 16)     rel 0.00e+00
+LoraModel/model/blocks/0/mlp/w_gate_up/lora_A           (1, 1, 16, 5120)     rel 7.02e-05
+LoraModel/model/blocks/0/mlp/w_gate_up/lora_B           (1, 1, 65536, 16)    rel 0.00e+00
+LoraModel/model/blocks/1/attention/out_linear/lora_A    (1, 1, 16, 4096)     rel 0.00e+00
+LoraModel/model/blocks/1/attention/out_linear/lora_B    (1, 1, 5120, 16)     rel 0.00e+00
+LoraModel/model/blocks/1/attention/qkv_linear/lora_A    (1, 1, 16, 5120)     rel 0.00e+00
+LoraModel/model/blocks/1/attention/qkv_linear/lora_B    (1, 1, 6144, 16)     rel 0.00e+00
+LoraModel/model/blocks/1/mlp/w2/lora_A                  (1, 1, 16, 32768)    rel 0.00e+00
+LoraModel/model/blocks/1/mlp/w2/lora_B                  (1, 1, 5120, 16)     rel 0.00e+00
+LoraModel/model/blocks/1/mlp/w_gate_up/lora_A           (1, 1, 16, 5120)     rel 6.56e-05
+LoraModel/model/blocks/1/mlp/w_gate_up/lora_B           (1, 1, 65536, 16)    rel 0.00e+00
+loss                                                    (1,)                 rel 0.00e+00

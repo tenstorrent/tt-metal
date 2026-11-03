@@ -113,7 +113,12 @@ def fused_forward(model, input, mask):
 
     if sp:
         residual = ttml.ops.distributed.scatter(residual, 2, sp_axis)  # the replicated embedding rows -> the shard
-    h = gather(blocks[0].attention_norm(residual))  # no gradient upstream (frozen embedding): the plain op
+    # Iteration 48: with the collective overlap the fused qkv takes the shard and gathers it itself (as gate_up does).
+    qkv_overlapped = (
+        overlap is not None and getattr(blocks[0].attention.qkv_linear, "collective_overlap", None) is not None
+    )
+    h = blocks[0].attention_norm(residual)  # no gradient upstream (frozen embedding): the plain op
+    h = h if qkv_overlapped else gather(h)
     for i, block in enumerate(blocks):
         delta = block.attention(h, mask)
         residual, h = add_rmsnorm(residual, delta, block.mlp_norm)
@@ -122,7 +127,7 @@ def fused_forward(model, input, mask):
         delta = block.mlp(h if overlap is not None else gather(h))
         if i + 1 < len(blocks):
             residual, h = add_rmsnorm(residual, delta, blocks[i + 1].attention_norm)
-            h = gather(h)
+            h = h if qkv_overlapped else gather(h)
         else:
             h = gather(add_rmsnorm(residual, delta, model.ln_fc, return_sum=False), replicated_grad=True)
     logits = model.fc(h)
@@ -133,7 +138,13 @@ def fused_forward(model, input, mask):
     return logits
 
 
-def use_fused_residual_norm(model, sequence_parallel: bool = True, collective_overlap: bool = True) -> int:
+def use_fused_residual_norm(
+    model,
+    sequence_parallel: bool = True,
+    collective_overlap: bool = False,
+    overlap_serial: bool = False,
+    overlap_serial_async: bool = False,
+) -> int:
     """Switch the :class:`ttml.models.mistral.Mistral` inside ``model`` (or ``model`` itself) to
     :func:`fused_forward`. Every RMSNorm gamma must be frozen. Returns the number of fused norms.
 
@@ -142,9 +153,11 @@ def use_fused_residual_norm(model, sequence_parallel: bool = True, collective_ov
     row-parallel LoRA layers return their reduce-scattered shard and the column-parallel ones drop the broadcast
     node (the all-gather's backward reduces their partial input gradients).
 
-    ``collective_overlap`` (iteration 47, TP + sequence parallel): the fused gate_up layers run the reduce-scatter of
-    their input gradient on a collective sub-device while their adapter products run on the compute rows
-    (:class:`ttml.modules.ccl_overlap.CollectiveOverlap`); the model's ``collective_overlap`` holds the manager."""
+    ``collective_overlap`` (iteration 47, TP + sequence parallel; off by default since iteration 48): the fused
+    column-parallel layers run the reduce-scatter of their input gradient on a collective sub-device while their
+    adapter products run on the compute rows (:class:`ttml.modules.ccl_overlap.CollectiveOverlap`); the model's
+    ``collective_overlap`` holds the manager. Correct with persistent buffers (iteration 48), but slower: +2.4 ms per
+    step over 32 alternating pairs (`doc/optimization/evidence/iter48b_alternate_summary.txt`)."""
     from ttml.models.mistral import Mistral
     from ttml.modules.lora import LoraColumnParallelLinear, LoraRowParallelLinear
 
@@ -161,25 +174,29 @@ def use_fused_residual_norm(model, sequence_parallel: bool = True, collective_ov
     # residual norm (no transpose op); only valid under this forward, whose norms read it transposed. (A fused
     # gate_up with such a copy hands its output transposed to the SwiGLU instead, iteration 39, set at fusion.)
     for name, m in llama.named_modules():
-        if name.endswith("w2") and getattr(m, "weight_cat_fwd", None) is not None:
-            m.transposed_output = True
+        if (name.endswith("w2") or name.endswith("out_linear")) and getattr(m, "weight_cat_fwd", None) is not None:
+            m.transposed_output = True  # iteration 48: the out-projection in the transposed orientation too
     row_parallel = [m for _, m in llama.named_modules() if isinstance(m, LoraRowParallelLinear)]
     if sequence_parallel and row_parallel:
         llama.sequence_parallel_axis = row_parallel[0].cluster_axis
         for _, m in llama.named_modules():
             if isinstance(m, (LoraRowParallelLinear, LoraColumnParallelLinear)):
                 m.sequence_parallel = True
-        gate_ups = [
+        column_parallel = [
             m
             for name, m in llama.named_modules()
-            if name.endswith("w_gate_up")
+            if (name.endswith("w_gate_up") or name.endswith("qkv_linear"))
             and isinstance(m, LoraColumnParallelLinear)
             and getattr(m, "lora_fused", False)
         ]
-        if collective_overlap and gate_ups:
+        if collective_overlap and column_parallel:
             from ttml.modules.ccl_overlap import CollectiveOverlap
 
-            llama.collective_overlap = CollectiveOverlap(ttml.autograd.AutoContext.get_instance().get_device())
-            for m in gate_ups:
+            llama.collective_overlap = CollectiveOverlap(
+                ttml.autograd.AutoContext.get_instance().get_device(),
+                serial=overlap_serial,
+                serial_async=overlap_serial_async,
+            )
+            for m in column_parallel:  # iteration 47: gate_up; iteration 48: the fused qkv as well
                 m.collective_overlap = llama.collective_overlap
     return len(norms) - 1  # the first norm stays the plain op

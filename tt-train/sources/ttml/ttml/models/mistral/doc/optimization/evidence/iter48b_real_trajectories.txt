@@ -1,0 +1,12 @@
+1 46: 0.4414  48b overlap a: 0.4414  48b overlap b: 0.4414  48b serial: 0.4414
+2 46: 0.3242  48b overlap a: 0.3242  48b overlap b: 0.3242  48b serial: 0.3242
+3 46: 0.2480  48b overlap a: 0.2471  48b overlap b: 0.2471  48b serial: 0.2471
+4 46: 0.2031  48b overlap a: 0.2021  48b overlap b: 0.2021  48b serial: 0.2021
+5 46: 0.1416  48b overlap a: 0.1396  48b overlap b: 0.1396  48b serial: 0.1396
+6 46: 0.2734  48b overlap a: 0.2734  48b overlap b: 0.2734  48b serial: 0.2734
+7 46: 0.3438  48b overlap a: 0.3418  48b overlap b: 0.3418  48b serial: 0.3418
+8 46: 0.2656  48b overlap a: 0.2637  48b overlap b: 0.2637  48b serial: 0.2637
+9 46: 0.3027  48b overlap a: 0.3047  48b overlap b: 0.3047  48b serial: 0.3047
+10 46: 0.4531  48b overlap a: 0.4492  48b overlap b: 0.4492  48b serial: 0.4492
+determinism (a == b): PASS
+window == serial routes: PASS

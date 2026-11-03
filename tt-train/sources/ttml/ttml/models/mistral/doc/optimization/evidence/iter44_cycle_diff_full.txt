@@ -1,0 +1,33 @@
+kernel ms per profiled 4-layer step, 42 -> 44 (iter42_tp_ranked_ops_full.txt vs iter44_tp_ranked_ops_full.txt)
+chip 0: total 40.438 -> 44.509 (+4.071); collectives 5.299 -> 9.335 (+4.036); kernels without collectives 35.139 -> 35.174 (+0.035)
+    2.259 (14 ops) ->   4.570 (14 ops) (+2.311)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.543 ( 4 ops) ->   1.317 ( 4 ops) (+0.774)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.421 ( 8 ops) ->   0.000 ( 0 ops) (-0.421)  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 64
+    0.000 ( 0 ops) ->   0.391 ( 8 ops) (+0.391)  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 104
+    1.438 (13 ops) ->   1.742 (13 ops) (+0.304)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.180 ( 1 ops) ->   0.462 ( 1 ops) (+0.282)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    0.175 ( 4 ops) ->   0.000 ( 0 ops) (-0.175)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x256x5120 | 64
+    0.172 ( 4 ops) ->   0.000 ( 0 ops) (-0.172)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 64
+    0.000 ( 0 ops) ->   0.162 ( 4 ops) (+0.162)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 104
+    0.000 ( 0 ops) ->   0.160 ( 4 ops) (+0.160)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x256x5120 | 104
+    0.032 ( 1 ops) ->   0.185 ( 1 ops) (+0.153)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.463 ( 4 ops) ->   0.564 ( 4 ops) (+0.101)  AllGatherAsync | 1x1x5120x256 |  | 20
+    0.224 ( 2 ops) ->   0.260 ( 2 ops) (+0.036)  AllGatherAsync | 1x1x1024x1280 |  | 20
+    0.051 ( 2 ops) ->   0.085 ( 2 ops) (+0.034)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.026 ( 1 ops) ->   0.060 ( 1 ops) (+0.034)  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
+chip 2: total 42.206 -> 39.017 (-3.189); collectives 7.124 -> 4.192 (-2.932); kernels without collectives 35.082 -> 34.825 (-0.257)
+    3.132 (14 ops) ->   1.533 (14 ops) (-1.599)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    1.054 ( 4 ops) ->   0.440 ( 4 ops) (-0.614)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.413 ( 8 ops) ->   0.000 ( 0 ops) (-0.413)  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 64
+    0.000 ( 0 ops) ->   0.380 ( 8 ops) (+0.380)  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 104
+    0.290 ( 1 ops) ->   0.016 ( 1 ops) (-0.274)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    1.607 (13 ops) ->   1.409 (13 ops) (-0.198)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.171 ( 4 ops) ->   0.000 ( 0 ops) (-0.171)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x256x5120 | 64
+    0.169 ( 4 ops) ->   0.000 ( 0 ops) (-0.169)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 64
+    0.000 ( 0 ops) ->   0.155 ( 4 ops) (+0.155)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 104
+    0.000 ( 0 ops) ->   0.155 ( 4 ops) (+0.155)  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x256x5120 | 104
+    0.118 ( 1 ops) ->   0.023 ( 1 ops) (-0.095)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.067 ( 2 ops) ->   0.017 ( 2 ops) (-0.050)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.482 ( 4 ops) ->   0.433 ( 4 ops) (-0.049)  AllGatherAsync | 1x1x5120x256 |  | 20
+    0.044 ( 1 ops) ->   0.023 ( 1 ops) (-0.021)  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
+    0.242 ( 2 ops) ->   0.221 ( 2 ops) (-0.021)  AllGatherAsync | 1x1x1024x1280 |  | 20

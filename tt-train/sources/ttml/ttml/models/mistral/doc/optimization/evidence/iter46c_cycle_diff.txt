@@ -1,30 +1,30 @@
 kernel ms per profiled 4-layer step, 44 -> 46c (iter44_tp_ranked_ops_full.txt vs iter46c_tp_ranked_ops_full.txt)
 chip 0: total 44.509 -> 38.884 (-5.625); collectives 9.335 -> 4.148 (-5.187); kernels without collectives 35.174 -> 34.736 (-0.438)
-    4.570 ->   1.523 (-3.047)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
-    1.317 ->   0.434 (-0.883)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
-    0.462 ->   0.015 (-0.447)  AllBroadcast | 1x1x1024x32[1] |  | 2
-    1.742 ->   1.384 (-0.358)  AllGatherAsync | 1x1x256x5120 |  | 20
-    0.185 ->   0.023 (-0.162)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
-    0.564 ->   0.425 (-0.139)  AllGatherAsync | 1x1x5120x256 |  | 20
-    0.583 ->   0.513 (-0.070)  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
-    0.085 ->   0.017 (-0.068)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
-    0.756 ->   0.691 (-0.065)  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
-    0.585 ->   0.521 (-0.064)  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
-    0.476 ->   0.431 (-0.045)  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
-    0.260 ->   0.224 (-0.036)  AllGatherAsync | 1x1x1024x1280 |  | 20
-    0.060 ->   0.024 (-0.036)  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
+    4.570 (14 ops) ->   1.523 (14 ops) (-3.047)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    1.317 ( 4 ops) ->   0.434 ( 4 ops) (-0.883)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.462 ( 1 ops) ->   0.015 ( 1 ops) (-0.447)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    1.742 (13 ops) ->   1.384 (13 ops) (-0.358)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.185 ( 1 ops) ->   0.023 ( 1 ops) (-0.162)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.564 ( 4 ops) ->   0.425 ( 4 ops) (-0.139)  AllGatherAsync | 1x1x5120x256 |  | 20
+    0.583 ( 3 ops) ->   0.513 ( 3 ops) (-0.070)  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+    0.085 ( 2 ops) ->   0.017 ( 2 ops) (-0.068)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.756 ( 4 ops) ->   0.691 ( 4 ops) (-0.065)  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+    0.585 ( 4 ops) ->   0.521 ( 4 ops) (-0.064)  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+    0.476 ( 4 ops) ->   0.431 ( 4 ops) (-0.045)  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
+    0.260 ( 2 ops) ->   0.224 ( 2 ops) (-0.036)  AllGatherAsync | 1x1x1024x1280 |  | 20
+    0.060 ( 1 ops) ->   0.024 ( 1 ops) (-0.036)  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
 chip 2: total 39.017 -> 44.983 (+5.966); collectives 4.192 -> 10.177 (+5.985); kernels without collectives 34.825 -> 34.806 (-0.019)
-    1.533 ->   3.988 (+2.455)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
-    0.440 ->   2.467 (+2.027)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
-    0.016 ->   0.645 (+0.629)  AllBroadcast | 1x1x1024x32[1] |  | 2
-    1.409 ->   1.902 (+0.493)  AllGatherAsync | 1x1x256x5120 |  | 20
-    0.433 ->   0.544 (+0.111)  AllGatherAsync | 1x1x5120x256 |  | 20
-    0.023 ->   0.133 (+0.110)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
-    0.017 ->   0.114 (+0.097)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
-    0.585 ->   0.515 (-0.070)  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
-    0.756 ->   0.692 (-0.064)  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
-    0.583 ->   0.534 (-0.049)  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
-    0.221 ->   0.269 (+0.048)  AllGatherAsync | 1x1x1024x1280 |  | 20
-    0.476 ->   0.431 (-0.045)  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
-    0.243 ->   0.267 (+0.024)  LowrankUpdate | 1x1x1024x5120 | 1x1x1024x32[16] | 110
-    0.187 ->   0.208 (+0.021)  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110
+    1.533 (14 ops) ->   3.988 (14 ops) (+2.455)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.440 ( 4 ops) ->   2.467 ( 4 ops) (+2.027)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.016 ( 1 ops) ->   0.645 ( 1 ops) (+0.629)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    1.409 (13 ops) ->   1.902 (13 ops) (+0.493)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.433 ( 4 ops) ->   0.544 ( 4 ops) (+0.111)  AllGatherAsync | 1x1x5120x256 |  | 20
+    0.023 ( 1 ops) ->   0.133 ( 1 ops) (+0.110)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.017 ( 2 ops) ->   0.114 ( 2 ops) (+0.097)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.585 ( 3 ops) ->   0.515 ( 3 ops) (-0.070)  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+    0.756 ( 4 ops) ->   0.692 ( 4 ops) (-0.064)  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+    0.583 ( 4 ops) ->   0.534 ( 4 ops) (-0.049)  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+    0.221 ( 2 ops) ->   0.269 ( 2 ops) (+0.048)  AllGatherAsync | 1x1x1024x1280 |  | 20
+    0.476 ( 4 ops) ->   0.431 ( 4 ops) (-0.045)  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
+    0.243 ( 4 ops) ->   0.267 ( 4 ops) (+0.024)  LowrankUpdate | 1x1x1024x5120 | 1x1x1024x32[16] | 110
+    0.187 ( 4 ops) ->   0.208 ( 4 ops) (+0.021)  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110

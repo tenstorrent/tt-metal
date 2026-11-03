@@ -1,0 +1,569 @@
+{
+ "args": {
+  "model_path": "mistralai/Mistral-Small-24B-Base-2501",
+  "revision": "b0a2e4ed093c26997495ae625528f81ea04b749f",
+  "data": null,
+  "layers": 0,
+  "trace": false,
+  "trace_alternate": false,
+  "tp": 4,
+  "seq_len": 1024,
+  "batch": 1,
+  "steps": 66,
+  "warmup_steps": 2,
+  "lr": 0.0001,
+  "weight_decay": 0.0,
+  "rank": 16,
+  "alpha": 32.0,
+  "random_init": true,
+  "random_data": true,
+  "seed": 42,
+  "ccl_overlap_alternate": true,
+  "ccl_overlap_serial": false,
+  "ccl_overlap_serial_async": false,
+  "no_ccl_overlap": false,
+  "track_memory": false,
+  "mem_probe": false,
+  "no_fused_lora": false,
+  "no_allcore_rmsnorm": false,
+  "no_fused_residual_norm": false,
+  "no_transposed_weights": false,
+  "host_loss": false,
+  "loss_log": "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter48b_mfu_alternate.json",
+  "data_log": null,
+  "dump_lora_init": null
+ },
+ "layers": 40,
+ "flops_per_step": 96371013058560,
+ "peak_tflops": 594.0,
+ "steps": [
+  {
+   "step": 1,
+   "loss": 11.9375,
+   "ms": 647.837660741061,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 2,
+   "loss": 11.9375,
+   "ms": 458.8448256254196,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 3,
+   "loss": 11.9375,
+   "ms": 453.9272258989513,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 4,
+   "loss": 11.9375,
+   "ms": 457.72820385172963,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 5,
+   "loss": 11.9375,
+   "ms": 458.09889398515224,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 6,
+   "loss": 11.9375,
+   "ms": 460.36306489259005,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 7,
+   "loss": 11.9375,
+   "ms": 459.6336856484413,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 8,
+   "loss": 11.875,
+   "ms": 468.68580440059304,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 9,
+   "loss": 11.9375,
+   "ms": 463.2408423349261,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 10,
+   "loss": 11.9375,
+   "ms": 469.9271018616855,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 11,
+   "loss": 11.9375,
+   "ms": 457.53289572894573,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 12,
+   "loss": 11.9375,
+   "ms": 464.6594896912575,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 13,
+   "loss": 11.9375,
+   "ms": 458.6317017674446,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 14,
+   "loss": 12.0,
+   "ms": 469.85839819535613,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 15,
+   "loss": 11.9375,
+   "ms": 463.7703546322882,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 16,
+   "loss": 11.9375,
+   "ms": 466.0112611018121,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 17,
+   "loss": 11.9375,
+   "ms": 462.6722768880427,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 18,
+   "loss": 11.9375,
+   "ms": 460.1800390519202,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 19,
+   "loss": 11.9375,
+   "ms": 459.49496421962976,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 20,
+   "loss": 11.9375,
+   "ms": 462.55316818132997,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 21,
+   "loss": 11.9375,
+   "ms": 466.8870768509805,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 22,
+   "loss": 11.9375,
+   "ms": 461.64114866405725,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 23,
+   "loss": 12.0,
+   "ms": 465.8797341398895,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 24,
+   "loss": 11.9375,
+   "ms": 473.6888990737498,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 25,
+   "loss": 11.9375,
+   "ms": 462.25157706066966,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 26,
+   "loss": 11.9375,
+   "ms": 464.48878617957234,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 27,
+   "loss": 11.9375,
+   "ms": 463.82263815030456,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 28,
+   "loss": 12.0,
+   "ms": 470.6336888484657,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 29,
+   "loss": 11.9375,
+   "ms": 463.1883907131851,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 30,
+   "loss": 11.9375,
+   "ms": 462.5620199367404,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 31,
+   "loss": 11.9375,
+   "ms": 468.48273277282715,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 32,
+   "loss": 11.9375,
+   "ms": 464.7097769193351,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 33,
+   "loss": 11.9375,
+   "ms": 466.68830094859004,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 34,
+   "loss": 11.9375,
+   "ms": 465.992976911366,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 35,
+   "loss": 11.9375,
+   "ms": 468.6881941743195,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 36,
+   "loss": 11.9375,
+   "ms": 468.09550700709224,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 37,
+   "loss": 12.0,
+   "ms": 464.1374577768147,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 38,
+   "loss": 11.9375,
+   "ms": 471.1406957358122,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 39,
+   "loss": 11.9375,
+   "ms": 464.83945194631815,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 40,
+   "loss": 11.9375,
+   "ms": 469.0781459212303,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 41,
+   "loss": 11.9375,
+   "ms": 462.4747782945633,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 42,
+   "loss": 11.9375,
+   "ms": 465.72963800281286,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 43,
+   "loss": 11.9375,
+   "ms": 461.4720740355551,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 44,
+   "loss": 11.9375,
+   "ms": 464.2058853060007,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 45,
+   "loss": 11.9375,
+   "ms": 464.97013000771403,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 46,
+   "loss": 11.9375,
+   "ms": 469.8162223212421,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 47,
+   "loss": 11.9375,
+   "ms": 470.37590527907014,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 48,
+   "loss": 11.875,
+   "ms": 471.837495919317,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 49,
+   "loss": 11.9375,
+   "ms": 474.7166973538697,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 50,
+   "loss": 11.9375,
+   "ms": 472.05283818766475,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 51,
+   "loss": 11.9375,
+   "ms": 466.21859166771173,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 52,
+   "loss": 11.9375,
+   "ms": 468.8476212322712,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 53,
+   "loss": 12.0,
+   "ms": 468.94551906734705,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 54,
+   "loss": 11.9375,
+   "ms": 465.77331610023975,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 55,
+   "loss": 11.9375,
+   "ms": 467.58597111329436,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 56,
+   "loss": 11.9375,
+   "ms": 476.58735094591975,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 57,
+   "loss": 11.9375,
+   "ms": 463.3034681901336,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 58,
+   "loss": 12.0,
+   "ms": 469.97636277228594,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 59,
+   "loss": 11.9375,
+   "ms": 469.9898879043758,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 60,
+   "loss": 11.9375,
+   "ms": 469.5043070241809,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 61,
+   "loss": 12.0,
+   "ms": 479.3889387510717,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 62,
+   "loss": 11.9375,
+   "ms": 467.8145362995565,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 63,
+   "loss": 11.9375,
+   "ms": 465.83175426349044,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 64,
+   "loss": 11.9375,
+   "ms": 467.63598220422864,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 65,
+   "loss": 11.9375,
+   "ms": 469.84919626265764,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 66,
+   "loss": 11.9375,
+   "ms": 473.0005580931902,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  }
+ ]
+}

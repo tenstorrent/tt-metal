@@ -76,10 +76,22 @@ def parse_args() -> argparse.Namespace:
         help="iteration 47 A/B: the collective overlap on for even steps and off for odd steps in one process",
     )
     p.add_argument(
-        "--no-ccl-overlap",
+        "--ccl-overlap-serial",
         action="store_true",
-        help="iteration 47: do not run the gate_up input-gradient reduce-scatter on a collective sub-device "
-        "overlapped with the adapter products",
+        help="review round 14 control: the overlap window's ops and routes (the owned dA product, the fused layer's "
+        "own reduce-scatter) without sub-devices, serial on the full grid",
+    )
+    p.add_argument(
+        "--ccl-overlap-serial-async",
+        action="store_true",
+        help="review round 14 control: the window's own async reduce-scatter call on all cores, no sub-devices",
+    )
+    p.add_argument(
+        "--ccl-overlap",
+        action="store_true",
+        help="iteration 47: run the fused column-parallel layers' input-gradient reduce-scatter on a collective "
+        "sub-device overlapped with their adapter products (off by default since iteration 48: correct, but +2.4 ms "
+        "per step)",
     )
     p.add_argument("--track-memory", action="store_true", help="print device memory after the first step")
     p.add_argument("--mem-probe", action="store_true", help="print allocated DRAM after the forward and after the step")
@@ -132,9 +144,16 @@ def load_tokens(model_dir: Path, data_path: Path, vocab_size: int) -> np.ndarray
     return tokens
 
 
-def host_cross_entropy(logits, targets: np.ndarray) -> float:
-    """Mean next-token cross-entropy of the device logits, computed on the host in fp32 (no bf16 loss quantisation)."""
-    z = logits.to_numpy(ttnn.DataType.FLOAT32).reshape(-1, logits.shape()[-1]).astype(np.float32)
+def host_cross_entropy(logits, targets: np.ndarray, vocab_parallel_mesh=None) -> float:
+    """Mean next-token cross-entropy of the device logits, computed on the host in fp32 (no bf16 loss quantisation).
+    Under TP the vocab-parallel logits shards are concatenated on the host (review round 14: the loss match with
+    the collective overlap window needs the mesh)."""
+    if vocab_parallel_mesh is not None:
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        z = ttnn.to_torch(logits.get_value(), mesh_composer=ttnn.ConcatMeshToTensor(device, dim=3)).float().numpy()
+        z = z.reshape(-1, z.shape[-1]).astype(np.float32)
+    else:
+        z = logits.to_numpy(ttnn.DataType.FLOAT32).reshape(-1, logits.shape()[-1]).astype(np.float32)
     z = z - z.max(axis=1, keepdims=True)
     lse = np.log(np.exp(z).sum(axis=1))
     picked = z[np.arange(z.shape[0]), targets.reshape(-1).astype(np.int64)]
@@ -195,8 +214,6 @@ def main() -> None:
         mesh = ttml.Mesh((1, args.tp), ("dp", "tp"))
         ttml.open_device_mesh(mesh)
         config = dataclasses.replace(config, use_tp=True, embedding_placement=EmbeddingPlacement.VocabParallel)
-        if args.host_loss:
-            raise ValueError("--host-loss needs the full logits on one chip; not available with --tp > 1")
     else:
         mesh = None
         ttml.autograd.AutoContext.get_instance().open_device()
@@ -216,8 +233,11 @@ def main() -> None:
         print(f"RMSNorm layers on the all-core backward: {len(norms)}")
     ccl_overlap = None
     if not args.no_fused_residual_norm:
-        overlap = not args.no_ccl_overlap and not args.trace  # a trace cannot capture the sub-device switches
-        print(f"residual adds fused into the norms: {use_fused_residual_norm(model, collective_overlap=overlap)}")
+        overlap = args.ccl_overlap and not args.trace  # a trace cannot capture the sub-device switches
+        print(
+            "residual adds fused into the norms: "
+            f"{use_fused_residual_norm(model, collective_overlap=overlap, overlap_serial=args.ccl_overlap_serial, overlap_serial_async=args.ccl_overlap_serial_async)}"
+        )
         mistral = next((m for _, m in model.named_modules() if isinstance(m, Mistral)), None)
         ccl_overlap = getattr(mistral, "collective_overlap", None)
         print(f"collective overlap (iteration 47): {'installed' if ccl_overlap is not None else 'off'}")
@@ -320,7 +340,7 @@ def main() -> None:
             y = ttml.autograd.Tensor.from_numpy(y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
         optimizer.zero_grad()
         logits = model(x, None)
-        host_loss = host_cross_entropy(logits, y_np) if args.host_loss else None
+        host_loss = host_cross_entropy(logits, y_np, mesh if use_tp else None) if args.host_loss else None
         if use_tp:
             # The LM head output stays vocab-sharded; the loss reduces across the tp axis.
             loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(logits, y, cluster_axis=mesh.axis_index("tp"))
