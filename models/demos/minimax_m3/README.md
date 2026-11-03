@@ -92,6 +92,15 @@ PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=1024 PREFILL_FORWARD_TOKENS_BUDGET=4096 PRE
 
 Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/). The unit tests that model real dims (RoPE θ, MoE routing, MSA parameters) read them from the selected variant's config, so `M3_MODEL_VARIANT=MiniMax-M3.1 pytest ...` runs them for M3.1; tests that need particular layer types set an explicit schedule (`utils/model_variant.with_layer_schedule`).
 
+The vision encoder (`tt/vision/`, one image per forward) has its own tests on one card, with seeded random weights and no checkpoint: its device tests compare each module and the whole encoder with the torch reference in `reference/vision.py`, and its host tests need no device.
+
+```bash
+# The vision tests at the CI grids; M3_VISION_ALL_GRIDS=1 runs every grid of VISION_GRIDS (tests/unit/vision_helpers.py)
+pytest models/demos/minimax_m3/tests/unit/ -k test_vision_
+# Wall time of the 32-layer encoder on one 672x672 image on an idle chip, on the device and end to end
+M3_VISION_TIMING=1 pytest -s models/demos/minimax_m3/tests/perf/test_vision_encoder_timing.py
+```
+
 ### Compute precision
 
 Two switches ([`tt/compute_configs.py`](tt/compute_configs.py)), each on for MiniMax-M3.1 and off for MiniMax-M3 by
@@ -211,6 +220,8 @@ short aliases (`CHUNK`, `CACHE`, `LAYERS`, `LAYER_IDS`, `LEVEL`, `STAGES`, `STAG
 | `PERF_SEQ`, `PERF_LAYERS`, `PERF_EXPERTS`, `PERF_REPS`, `REAL`, `TRACE_REGION` | `tests/perf/test_model_perf.py` | Synthetic model perf test shape / repetitions / real-weights switch / trace region bytes. |
 | `M3_CKPT` | `tests/unit/test_msa_layer_vs_ref.py` | Checkpoint dir for the real-weights MSA test (falls back to `HF_MODEL`; the test skips without either). Its config picks the variant whose dims / RoPE the test uses. |
 | `RUN_INDEXER_ACCURACY` | `tests/unit/test_indexer_score_msa_accuracy.py` | `1` = run the opt-in indexer accuracy sweep. |
+| `M3_VISION_ALL_GRIDS` | `tests/unit/test_vision_*_vs_ref.py` | `1` = run the vision device tests on every image grid of `VISION_GRIDS` (`tests/unit/vision_helpers.py`), not only the CI grids. |
+| `M3_VISION_TIMING` | `tests/perf/test_vision_encoder_timing.py` | `1` = run the opt-in vision encoder timing test (builds the 32-layer encoder with random weights). |
 | `REF_ATTN_Q_CHUNK`, `REF_FFN_TOKEN_CHUNK` | `reference/model.py` | Torch reference chunking (`256` query rows, `4096` FFN tokens) to bound host memory. |
 | `OFFLOAD_DIR` | `tests/golden_hf_first_token.py` | HF `accelerate` offload dir for the first-token golden (`/tmp/m3_offload`). |
 | `CI` | `tests/test_factory.py` | `true` = parametrize only the largest mesh shape that fits the runner. |
@@ -223,11 +234,13 @@ Multi-galaxy pipeline-parallel prefill (2 / 4 galaxies) — running, KV-cache ac
 tt/attention/     dense SP (ring_joint) + sparse MSA (indexer + sparse_sdpa_msa), RoPE, KV-cache
 tt/moe/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
 tt/               dense_mlp, layer, model, rms_norm, topk, mlp, weight_cache, tt_prefill_runtime
-reference/        torch reference model + sparse GQA prefill
+tt/vision/        vision encoder (ViT tower + projector), its input checks, RoPE tables and program configs; loader.py builds its torch reference from the checkpoint
+reference/        torch reference model + sparse GQA prefill; vision.py: torch reference of the vision encoder
 scripts/          golden KV-cache generation + verification
 scripts/prefill_matrix/  repeatable (new x cached) prefill perf matrix on the 16-stage pipeline (see its README)
 docs/             multi-galaxy pipeline-parallel prefill running & testing
 configs/<variant>/config.json     MiniMax-M3 / MiniMax-M3.1 text configs (modeling code loaded from the checkpoint via HF_MODEL)
 tests/unit/       module-by-module PCC tests
+tests/perf/test_vision_encoder_timing.py  opt-in vision encoder timing (M3_VISION_TIMING=1)
 tests/            galaxy harnesses (prefill KV-cache PCC, first-token, smoke)
 ```

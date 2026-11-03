@@ -7,13 +7,13 @@ MiniMax-M3-VL encoder MLP.
 Linear(1280 -> 5120) -> GELU -> Linear(5120 -> 1280) in each encoder layer; the projector runs two more MLPs of the
 same form with other widths (projector.py).
 
-The HF activation is `gelu` (the accurate, erf-based GELU — config
+The HF activation is `gelu` (the accurate, erf-based GELU: config
 `hidden_act="gelu"`, not the tanh approximation). We map it to
 `ttnn.gelu(..., fast_and_approximate_mode=False)` (accurate_gelu), or, with
 M3VLMLP.fuse_gelu and where fc1 gets a program config, to the same GELU
 inside fc1's matmul (ACCURATE_GELU_FUSED).
 
-Reference: `MiniMaxM3VLVisionMLP` — attributes:
+Reference: `MiniMaxM3VLVisionMLP`, with the attributes:
     self.fc1 = nn.Linear(hidden_size, intermediate_size, bias=True)
     self.activation_fn = gelu
     self.fc2 = nn.Linear(intermediate_size, hidden_size, bias=True)
@@ -66,9 +66,7 @@ class M3VLMLP(LightweightModule):
         # HiFi4 + FP32 dst accum for the matmuls (small accuracy boost), partial sums accumulated in L1.
         self.compute_kernel_config = linear_compute_config()
         # On: where fc1 gets a program config, its matmul applies the GELU in the fp32 dest register before rounding
-        # to bf16; elsewhere, and off, accurate_gelu runs on fc1's bf16 output. Off as built: on one P150 the fused
-        # GELU made a 672x672 forward faster but a 448x448 one slower, and left real images' outputs no closer to
-        # Hugging Face's, one of them clearly further.
+        # to bf16; elsewhere, and off, accurate_gelu runs on fc1's bf16 output. Off as built.
         self.fuse_gelu = False
 
     @classmethod

@@ -23,8 +23,8 @@ One forward takes all patches of a request as one sequence of L patches:
 
 There is no attention mask: with several images in one call, every patch attends to the patches of
 all of them. That is Hugging Face 5.12.1's behaviour, kept here for parity with it only: vLLM and
-SGLang keep attention inside each image, and the TT model (M3VLVisionModel) and encode() take one
-image per forward.
+SGLang keep attention inside each image, and the TT model (M3VLVisionModel) takes one image per
+forward.
 
 The module names are the ones the TT ``from_torch`` builders read (``patch_embed``, ``pre_layrnorm``,
 ``layers``, ``projector``). ``load_hf_state_dict`` takes the Hugging Face key layout
@@ -316,8 +316,8 @@ class MiniMaxM3VisionEncoder(nn.Module):
         reference can take the first layers of the checkpoint. A vision_tower.* key outside the patch embed,
         pre_layrnorm and layers, such as a final LayerNorm or a learned position embedding, raises ValueError;
         load_state_dict, which is strict, raises for any other weight the reference does not have, such as an unknown
-        multi_modal_projector.* one, and for any weight of the reference that is missing. A patch embed weight flattened to (hidden, patch_dim) is reshaped back to the
-        Conv3d layout.
+        multi_modal_projector.* one, and for any weight of the reference that is missing. A patch embed weight
+        flattened to (hidden, patch_dim) is reshaped back to the Conv3d layout.
         """
         own, unmapped = {}, []
         for key, value in state_dict.items():

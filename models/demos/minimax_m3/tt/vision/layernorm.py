@@ -45,17 +45,13 @@ class M3VLLayerNorm(LightweightModule):
         ), f"weight must be 1D of size {dim}, got {tuple(weight.shape)}"
         assert bias.ndim == 1 and bias.shape[0] == dim, f"bias must be 1D of size {dim}, got {tuple(bias.shape)}"
 
-        # ttnn.layer_norm expects weight/bias laid out as TILE-aligned 2D.
-        # Match the qwen3_vl convention: expand to [TILE, dim] so the
-        # underlying op can broadcast across the height dim of any
-        # input.
+        # Weight and bias go to the device as [32, dim] tiles of copies of their row, as qwen3_vl's vision LayerNorm
+        # lays them out; ttnn.layer_norm reads the first row of each tile.
         self.weight = to_device(weight.view(1, 1, dim).expand(1, ttnn.TILE_SIZE, dim), mesh_device, dtype)
         self.bias = to_device(bias.view(1, 1, dim).expand(1, ttnn.TILE_SIZE, dim), mesh_device, dtype)
 
-        # Statistics accumulated in fp32, not bf16: on a P150 with the MiniMax-M3.1-Flash weights, against the
-        # Hugging Face model in fp32 on 11 images, this raised the vision tokens' PCC on every image, cut their relL2
-        # by 8 to 39% and brought pre_layrnorm's error to within 6% of that model's own error in bf16, at no
-        # measurable time cost.
+        # Statistics in fp32: with fp32_dest_acc_en the op reduces in fp32 and keeps the mean, the centred row and the
+        # variance in fp32 tiles.
         self.compute_kernel_config = hifi4_compute_config()
 
     @classmethod

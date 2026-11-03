@@ -12,8 +12,8 @@ HF_MODEL is set) and that load_hf_state_dict maps HF's names and rejects vision 
 
 No device and no checkpoint. Needs transformers with minimax_m3_vl (tt-metal pins 5.12.1), which the hf_vision
 fixture imports: without it these tests fail, and the other tests in the directory still collect. The test does
-not import ttnn, but pytest also loads models/demos/minimax_m3/conftest.py, which does; add --noconftest
-where ttnn is not installed.
+not import ttnn, but pytest also loads models/demos/minimax_m3/conftest.py, which does. Where ttnn is not installed,
+add --noconftest and -k "not load_hf_state_dict": that test takes the root conftest's expect_error fixture.
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_reference_vs_hf.py
@@ -45,8 +45,8 @@ GRIDS = {
     "h4w6": [(1, 4, 6)],
     "h6w4": [(1, 6, 4)],
     "t2h4w4": [(2, 4, 4)],
-    # HF parity only: Hugging Face 5.12.1 gives the images of one call one attention (no mask). The TT model and
-    # encode() take one image per forward, as vLLM and SGLang keep attention inside each image.
+    # HF parity only: Hugging Face 5.12.1 gives the images of one call one attention (no mask). The TT model takes
+    # one image per forward, as vLLM and SGLang keep attention inside each image.
     "two_images": [(1, 4, 4), (1, 2, 6)],
 }
 
