@@ -373,7 +373,8 @@ class Flux2Transformer(Module):
             prompt_sequence_length: int.
             compute_prompt_output: bool. Whether to compute the prompt output. Final prompt output is typically unused.
         """
-        time_embed = self.time_guidance_embed(timestep=timestep, guidance=guidance)
+        # diffusers scales guidance by 1000 inside the transformer; callers pass the raw guidance scale.
+        time_embed = self.time_guidance_embed(timestep=timestep, guidance=guidance * 1000.0)
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
