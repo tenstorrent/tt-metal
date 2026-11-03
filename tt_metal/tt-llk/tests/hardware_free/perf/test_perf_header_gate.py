@@ -28,8 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "perf"))
 from perf_schema_derive import (  # noqa: E402
     PARAM_BASES,
     ROOT,
+    UNCHECKED_SHARED_SOURCES,
     class_field_specs,
     class_post_init_copies,
+    column_sets_in_tree,
     derive_perf_test_column_sets,
     derive_perf_test_schemas,
     emitted_fields,
@@ -37,6 +39,7 @@ from perf_schema_derive import (  # noqa: E402
     helper_returned_param_calls,
     iter_source_files,
     load_pure_module,
+    perf_test_keys_per_source,
 )
 from tt_llk_perf import metrics as engine
 
@@ -254,19 +257,80 @@ def _assert_one_column_set_per_file(column_sets, arch):
         "",
         *problems,
         "",
-        "One file writes one CSV, so every test function in it must emit the "
-        "same columns. Add the missing parameter with a neutral value, or split "
-        "the file.",
+        "One perf test writes one CSV, so every function that builds its config "
+        "must emit the same columns. Add the missing parameter with a neutral "
+        "value, or give each perf test its own runner.",
     ]
     assert not problems, "\n".join(msg)
 
 
 def test_one_column_set_per_perf_test_file():
-    _assert_one_column_set_per_file(derive_perf_test_column_sets(quasar=False), "WH/BH")
+    column_sets = derive_perf_test_column_sets(quasar=False)
+    assert sum(map(len, column_sets["perf_eltwise_binary_sfpu"].values())) >= 4
+    assert sum(map(len, column_sets["perf_eltwise_binary"].values())) >= 2
+    _assert_one_column_set_per_file(column_sets, "WH/BH")
 
 
 def test_one_column_set_per_perf_test_file_qsr():
-    _assert_one_column_set_per_file(derive_perf_test_column_sets(quasar=True), "Quasar")
+    column_sets = derive_perf_test_column_sets(quasar=True)
+    assert sum(map(len, column_sets["perf_eltwise_binary_sfpu_quasar"].values())) >= 3
+    _assert_one_column_set_per_file(column_sets, "Quasar")
+
+
+def test_unchecked_shared_sources_still_back_more_than_one_perf_test():
+    keys = perf_test_keys_per_source(quasar=False) | perf_test_keys_per_source(
+        quasar=True
+    )
+    stale = sorted(p for p in UNCHECKED_SHARED_SOURCES if len(keys.get(p, [])) < 2)
+    assert not stale, f"Remove from UNCHECKED_SHARED_SOURCES: {stale}"
+
+
+def _synthetic_column_sets(source):
+    specs = class_field_specs()
+    return column_sets_in_tree(
+        ast.parse(source),
+        specs,
+        helper_returned_param_calls(specs),
+        class_post_init_copies(),
+    )
+
+
+def test_nested_helper_folds_into_its_parent():
+    groups = _synthetic_column_sets(
+        """
+def _run_a():
+    def build():
+        return PerfConfig(templates=[LOOP_FACTOR(1)])
+    cfg = {"test_name": "sources/a.cpp", "runtimes": [NUM_FACES()]}
+    return build()
+
+async def _run_b():
+    cfg = {"test_name": "sources/a.cpp", "runtimes": [NUM_FACES()]}
+    return PerfConfig(templates=[LOOP_FACTOR(1)])
+"""
+    )
+    assert list(groups.values()) == [
+        ["sources/a.cpp (_run_a)", "sources/a.cpp (_run_b)"]
+    ]
+
+
+def test_functional_only_and_partly_visible_functions_are_skipped():
+    groups = _synthetic_column_sets(
+        """
+def _run_perf():
+    return PerfConfig(templates=[LOOP_FACTOR(1), NUM_FACES()])
+
+def test_functional():
+    return create_test_or_perf_config(is_perf=False, templates=[LOOP_FACTOR(1)])
+
+def _run_spread(extra):
+    return PerfConfig(templates=[LOOP_FACTOR(1), *extra])
+
+def _run_conditional(c):
+    return PerfConfig(templates=[LOOP_FACTOR(1), NUM_FACES() if c else None])
+"""
+    )
+    assert list(groups.values()) == [["_run_perf"]]
 
 
 def test_functions_that_disagree_are_reported_with_the_odd_column():
