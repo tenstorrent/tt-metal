@@ -147,7 +147,11 @@ ALWI uint32_t get_tile_l1_byte_address(uint32_t operand_id, uint32_t tile_index)
     uint32_t offset_address = static_cast<uint32_t>(local_dfb.stride_size) * tile_index;
 #else
     uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
+#ifdef ARCH_BLACKHOLE
     uint32_t offset_address = get_operand_unpack_tile_size(operand_id) * tile_index;
+#else
+    uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+#endif
 #endif
     return (base_address + offset_address) << 4;  // Convert to byte address
 }
