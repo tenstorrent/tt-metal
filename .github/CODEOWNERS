@@ -3,7 +3,7 @@
 # Top-level files
 /* @tenstorrent/metalium-developers-infra
 METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
-setup.py @tenstorrent/metalium-developers-ttnn-core
+setup.py @tenstorrent/metalium-developers-infra @FConstantinos @aliaksei-sala
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
