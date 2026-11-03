@@ -14,7 +14,11 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtHCACompressor, rope_table_tokens
-from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import TtV4AttentionBase
+from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import (
+    TtV4AttentionBase,
+    alloc_compressed_cache,
+    check_shared_cache,
+)
 
 
 def _cache_write_rows(chunk_entries: int) -> int:
@@ -24,15 +28,28 @@ def _cache_write_rows(chunk_entries: int) -> int:
     return -(-(ttnn.TILE_SIZE - 1 + chunk_entries) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
+def hca_cache_rows(max_seq_len: int, chunk: int, compress_rate: int) -> int:
+    """Rows one user's compressed cache needs: the entries, tile-rounded because cache writes land on tile
+    boundaries, plus one write's headroom, since a write rewrites whole tiles and can reach past them."""
+    entries = -(-int(max_seq_len) // compress_rate)
+    return -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE + _cache_write_rows(-(-int(chunk) // compress_rate))
+
+
 class TtHCAState:
     """Chunked-prefill state, owned by the caller and passed to ``TtHCA.forward``.
 
     The device tensors keep a FIXED shape for the whole prefill and only their contents advance --
     that is what lets one compiled program serve every chunk. The counters say how much is real;
-    the attention mask -infs the rest."""
+    the attention mask -infs the rest.
 
-    def __init__(self, compressed_kv, sliding_carry, tail, max_seq_len):
-        self.compressed_kv = compressed_kv  # [B, 1, compressed_capacity, head_dim]
+    ``compressed_kv`` is not this state's own: it is the layer's user-major cache, shared by every slot
+    (and, in a transformer, every HCA layer), and ``cache_row`` is this state's row in it. ``cache_bounds``
+    are that row's slice bounds as device tensors, so reading a row compiles one program for every row."""
+
+    def __init__(self, compressed_kv, cache_row, cache_bounds, sliding_carry, tail, max_seq_len):
+        self.compressed_kv = compressed_kv  # [slots * layers, 1, compressed_capacity, head_dim], shared
+        self.cache_row = int(cache_row)
+        self.cache_bounds = cache_bounds
         self.sliding_carry = sliding_carry  # [B, 1, sliding_window, head_dim]
         # The cache's last tile is usually only partly filled. Its entries sit here, right-aligned, so the
         # next write can place them and the new entries with a single shift.
@@ -42,8 +59,8 @@ class TtHCAState:
         self.kv_actual = 0
 
     def deallocate(self) -> None:
-        """Free this state's tensors."""
-        for tensor in (self.compressed_kv, self.sliding_carry, self.tail):
+        """Free the tensors this state owns; the shared compressed cache stays with the layer."""
+        for tensor in (self.sliding_carry, self.tail):
             ttnn.deallocate(tensor)
 
 
@@ -59,6 +76,8 @@ class TtHCA(TtV4AttentionBase):
         self._shift_cache = {}
         self._take_cache = {}
         self._state_dims = None  # (max_seq_len, compressed capacity) the tables were built for
+        self._compressed_cache = None  # the user-major cache every state shares
+        self._cache_rows = None  # each slot's row in it, and that row's slice bounds
 
     @property
     def chunk_align(self) -> int:
@@ -80,13 +99,22 @@ class TtHCA(TtV4AttentionBase):
         self.build_tables(max_seq_len, chunk_tokens=chunk_tokens)
         return self.new_state(batch)
 
-    def build_tables(self, max_seq_len: int, chunk_tokens: int | None = None) -> None:
-        """The half of ``alloc_state`` every user shares: masks, one-hots and rope tables. Run once;
-        ``new_state`` then allocates each user's state over them."""
-        entries = -(-int(max_seq_len) // self.compressor.compress_rate)
-        capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # cache writes land on tile boundaries
-        # A write always rewrites whole tiles, so the last one can reach past the entries themselves.
-        # ``chunk_tokens`` sizes that headroom.
+    def build_tables(
+        self,
+        max_seq_len: int,
+        chunk_tokens: int | None = None,
+        compressed_kv: ttnn.Tensor | None = None,
+        *,
+        slot_num: int = 1,
+        layer_num: int = 1,
+        cache_layer_idx: int = 0,
+    ) -> None:
+        """The half of ``alloc_state`` every user shares: masks, one-hots, rope tables and the compressed
+        cache. Run once; ``new_state`` then allocates each user's carries over them.
+
+        ``compressed_kv`` is the user-major cache of ``slot_num`` users x ``layer_num`` layers this layer
+        writes row ``user * layer_num + cache_layer_idx`` of (see ``alloc_compressed_cache``). Left None, a
+        private one of the same layout is allocated."""
         chunk = chunk_tokens or max_seq_len
         align = self.compressor.compress_rate * self.sp_factor
         assert chunk % align == 0, (
@@ -95,7 +123,7 @@ class TtHCA(TtV4AttentionBase):
             f"to end on a compression-window boundary. prepare_input rounds a raw prompt up to that."
         )
         width = -(-int(chunk) // self.compressor.compress_rate)
-        capacity += _cache_write_rows(width)
+        capacity = hca_cache_rows(max_seq_len, chunk, self.compressor.compress_rate)
         # Every one-hot the write can ever need: with chunks of differing real length r_e reaches every
         # value, so the whole TILE_SIZE set is built.
         self._build_tail_tile_matrices(width)
@@ -109,13 +137,32 @@ class TtHCA(TtV4AttentionBase):
         self._slab_index = self.ops.rope_index_base(chunk // self.sp_factor)
         self._state_dims = (int(max_seq_len), capacity)
 
+        layout = dict(slot_num=slot_num, layer_num=layer_num, rows=capacity, head_dim=self.head_dim)
+        if compressed_kv is None:
+            compressed_kv = alloc_compressed_cache(self.device, sp_axis=self.sp_axis, **layout)
+        check_shared_cache(compressed_kv, what="HCA compressed cache", **layout)
+        self._compressed_cache = compressed_kv
+        self._cache_rows = []
+        for user in range(slot_num):
+            row = user * layer_num + cache_layer_idx
+            bounds = [
+                self.ops.from_torch(torch.tensor(b, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                for b in ([row, 0, 0, 0], [row + 1, 1, capacity, self.head_dim])
+            ]
+            self._cache_rows.append((row, bounds))
+
     def new_state(self, batch: int = 1, cache_user_id: int = 0) -> TtHCAState:
-        """A fresh, zeroed state at position 0, over the tables ``build_tables`` made. ``cache_user_id`` is
-        taken for parity with ``TtCSA.new_state``; nothing an HCA state reads is shared between slots."""
+        """A fresh state at position 0 for user slot ``cache_user_id``, over the tables ``build_tables``
+        made. The slot's compressed rows are not cleared: the mask -infs every entry past ``entry_count``,
+        and the first write rebuilds its tile from the fresh, zeroed ``tail``."""
         assert self._state_dims is not None, "call build_tables before new_state"
-        max_seq_len, capacity = self._state_dims
+        assert batch == 1, f"a TtHCAState holds one user (batch 1); hold one state per user slot, got batch={batch}"
+        max_seq_len, _ = self._state_dims
+        row, bounds = self._cache_rows[cache_user_id]
         return TtHCAState(
-            compressed_kv=self.ops.from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
+            compressed_kv=self._compressed_cache,
+            cache_row=row,
+            cache_bounds=bounds,
             sliding_carry=self.ops.from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
             tail=self.ops.from_torch(torch.zeros(batch, 1, ttnn.TILE_SIZE, self.head_dim)),
             max_seq_len=max_seq_len,
@@ -183,7 +230,8 @@ class TtHCA(TtV4AttentionBase):
 
         src = ttnn.concat([state.tail, new_entries], dim=2)  # [B, 1, tile + width, head_dim]
         merged = ttnn.matmul(shift, src, memory_config=self.memory_config)
-        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, merged, 0, update_idx=f * tile)
+        # batch_idx and update_idx are runtime args of fill_cache, so any row and offset reuse one program.
+        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, merged, state.cache_row, update_idx=f * tile)
         state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
 
     def _build_tail_tile_matrices(self, width):
@@ -272,10 +320,19 @@ class TtHCA(TtV4AttentionBase):
         # -infs everything past total_entries.
         self._write_compressed(state, new_entries, n_new)
 
+        # The state's row of the shared cache. The bounds are device tensors, so every row reuses one
+        # program; host-int bounds would compile one per row.
+        compressed_kv = ttnn.slice(
+            state.compressed_kv,
+            *state.cache_bounds,
+            memory_config=self.memory_config,
+            slice_dim=0,
+            num_devices=state.compressed_kv.shape[0],
+        )
         attn, next_carry = self._attention(
             q,
             sliding_kv,
-            state.compressed_kv,
+            compressed_kv,
             mask_block,
             cos,
             sin,
@@ -283,6 +340,7 @@ class TtHCA(TtV4AttentionBase):
             kv_actual=state.kv_actual,
             real_len=real_len,
         )
+        ttnn.deallocate(compressed_kv)
 
         state.entry_count = total_entries
         state.kv_actual += real_len

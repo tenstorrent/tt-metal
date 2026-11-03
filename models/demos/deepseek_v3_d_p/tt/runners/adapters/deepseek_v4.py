@@ -65,8 +65,15 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
         return path
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
-        """Empty: every V4 attention allocates and owns its own state."""
+        """Empty: the model allocates its own caches, migratable ones included (``tt/v4/kv_caches.py``)."""
         return MlaKvCaches(kvpe=None)
+
+    def cache_kind(self, config_id: int) -> str:
+        """Table config ``config_id``'s kind; none is a ``"kvpe"`` or DSA ``"index"`` cache a generic consumer
+        could decode, so the producer must not infer one from the config count."""
+        from models.demos.deepseek_v3_d_p.tt.v4.kv_caches import CACHE_KINDS
+
+        return CACHE_KINDS[config_id] if 0 <= config_id < len(CACHE_KINDS) else "other"
 
     def layer_split_boundaries(self, num_layers: int) -> set:
         """Layer 0, or any layer past the hash-routed ones."""

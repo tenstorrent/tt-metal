@@ -46,11 +46,29 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, csa_slab_align, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtCsaIndexer
-from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import TtV4AttentionBase
+from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import (
+    TtV4AttentionBase,
+    alloc_compressed_cache,
+    check_shared_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 _SENTINEL = 0xFFFFFFFF  # sparse_sdpa's "no key here"; the indexer emits it where the reference has -1
 _INDEX_ALIGN = 128  # sparse_sdpa reads the index list in k_chunk_size-wide steps
+
+
+def csa_capacity(max_seq_len: int, chunk: int, compress_rate: int) -> int:
+    """Compressed rows one user's joint table needs. Writes are exact-width from a tile-aligned offset, so
+    the last one can reach one slab past the entries themselves. The table adds the window and one chunk."""
+    entries = -(-int(max_seq_len) // compress_rate)
+    return -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE + chunk // compress_rate
+
+
+def csa_index_seq_len(max_seq_len: int, chunk: int, compress_rate: int, sp_factor: int) -> int:
+    """Tokens the indexer's key cache spans: whole padded slabs, rounded so each chip's share of the
+    compressed rows is a whole number of tiles (``TtCSA.chunk_align`` per chip)."""
+    align = compress_rate * ttnn.TILE_SIZE * sp_factor
+    return -(-rope_table_tokens(max_seq_len, chunk) // align) * align
 
 
 def index_tables(rows: int, sliding: int, topk: int, capacity: int):
@@ -114,14 +132,16 @@ class TtCSAState:
     ``write_k``. ``new_state`` resets that user slot's indexer overlap state alongside the two below, so both
     begin at the same position.
 
-    One tensor here is not this state's own: ``index_kv_cache`` is the layer's user-major key cache, shared by
-    every slot's state, and ``cache_user_id`` picks this state's rows in it. ``deallocate`` leaves it alone."""
+    Two tensors here are not this state's own: ``joint_kv`` and ``index_kv_cache`` are user-major tables
+    shared by every slot (and, in a transformer, every CSA layer). ``table_row`` is this state's row of the
+    joint table, and ``cache_user_id`` picks its rows of the index cache. ``deallocate`` leaves both alone."""
 
-    def __init__(self, joint_kv, kv_state, score_state, index_kv_cache, max_seq_len, cache_user_id=0):
+    def __init__(self, joint_kv, table_row, kv_state, score_state, index_kv_cache, max_seq_len, cache_user_id=0):
         # The single ROW_MAJOR table sparse_sdpa reads, laid out as the module docstring describes. The
         # carry lives in it too, at a fixed row range, so there is no separate carry tensor: forward
         # writes the next chunk's carry there once this chunk's attention has already read it.
-        self.joint_kv = joint_kv  # [1, 1, capacity + sliding_window + chunk, head_dim]
+        self.joint_kv = joint_kv  # [slots * layers, 1, capacity + sliding_window + chunk, head_dim], shared
+        self.table_row = int(table_row)
         # The overlap the next chunk's first window needs: its predecessor window's Ca slice, in the
         # decode-compatible Blaze layout the compressor op emits and consumes.
         self.kv_state = kv_state  # [B, 1, CSA_STATE_ROWS, head_dim]
@@ -133,8 +153,8 @@ class TtCSAState:
         self.kv_actual = 0
 
     def deallocate(self) -> None:
-        """Free the tensors this state owns; the shared index key cache stays with the layer."""
-        for tensor in (self.joint_kv, self.kv_state, self.score_state):
+        """Free the tensors this state owns; the shared tables stay with the layer."""
+        for tensor in (self.kv_state, self.score_state):
             ttnn.deallocate(tensor)
 
 
@@ -157,6 +177,7 @@ class TtCSA(TtV4AttentionBase):
         self._carry_row = None  # where the carry starts in the joint table
         self._raw_row = None  # and where this chunk's raw keys do
         self._index_kv_cache = None  # the user-major indexer key cache every state shares
+        self._joint_table = None  # and the user-major joint table
         self._state_dims = None  # (max_seq_len, chunk) the tables were built for
 
     @staticmethod
@@ -219,9 +240,15 @@ class TtCSA(TtV4AttentionBase):
         max_seq_len: int,
         chunk_tokens: int | None = None,
         index_kv_cache: ttnn.Tensor | None = None,
+        joint_kv: ttnn.Tensor | None = None,
     ) -> None:
-        """The half of ``alloc_state`` every user shares: the constant tables, the indexer and its
-        user-major key cache. Run once; ``new_state`` then allocates each user's state over them."""
+        """The half of ``alloc_state`` every user shares: the constant tables, the indexer, and the two
+        user-major tables, the index key cache and the joint table. Run once; ``new_state`` then allocates
+        each user's state over them.
+
+        Both tables are laid out by the indexer settings' ``slot_num`` / ``layer_num``: this layer's rows
+        for user ``u`` are ``u * layer_num + cache_layer_idx``. Left None, each is allocated privately in
+        that layout."""
         rate = self.compressor.compress_rate
         chunk = chunk_tokens or max_seq_len
         align = csa_slab_align(rate, self.sp_factor, self.tp_factor)
@@ -230,11 +257,7 @@ class TtCSA(TtV4AttentionBase):
             f"asks for that. prepare_input rounds a raw prompt up to it."
         )
 
-        width = chunk // rate  # entries one call emits, a whole number of tiles by chunk_align
-        entries = -(-int(max_seq_len) // rate)
-        # Writes are exact-width from a tile-aligned offset, so the last one can reach one slab past the
-        # entries themselves.
-        capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE + width
+        capacity = csa_capacity(max_seq_len, chunk, rate)
         # The joint table's three regions. The index list is built off the same two numbers, so the rows
         # it names and the rows forward writes cannot drift apart.
         self._carry_row = capacity
@@ -252,18 +275,37 @@ class TtCSA(TtV4AttentionBase):
         self._build_index_consts(chunk, capacity)
         self._state_dims = (int(max_seq_len), chunk)
 
+        # ROW_MAJOR and unpadded because sparse_sdpa reads it by row; replicated because any query may
+        # name any row; DRAM-interleaved because slice_write's sharded factories compile the whole write
+        # offset into the program, and the compressed rows are appended at a moving one.
+        settings = self._indexer_settings
+        layout = dict(
+            slot_num=settings["slot_num"],
+            layer_num=settings["layer_num"],
+            rows=self._raw_row + chunk,
+            head_dim=self.head_dim,
+        )
+        if joint_kv is None:
+            joint_kv = alloc_compressed_cache(
+                self.device,
+                sp_axis=self.sp_axis,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **layout,
+            )
+        check_shared_cache(joint_kv, what="CSA joint table", **layout)
+        self._joint_table = joint_kv
+
     def new_state(self, batch: int = 1, cache_user_id: int = 0) -> TtCSAState:
         """A fresh state at position 0 for user slot ``cache_user_id``, over the tables ``build_tables``
-        made. Every user's state shares the one user-major index key cache; the slot picks its rows."""
+        made. Every user's state shares the user-major joint table and index key cache; the slot picks its
+        rows. Neither is cleared: each chunk writes its rows before attention reads them, the index list
+        names no compressed row past ``entry_count``, and the first chunk's list never points into the
+        carry region."""
         assert self._state_dims is not None, "call build_tables before new_state"
-        max_seq_len, chunk = self._state_dims
+        assert batch == 1, f"a TtCSAState holds one user (batch 1); hold one state per user slot, got batch={batch}"
+        max_seq_len, _ = self._state_dims
         kv_state, score_state = self.compressor.alloc_overlap_state(batch)
-        # ROW_MAJOR and unpadded because sparse_sdpa reads it by row; replicated because any query may
-        # name any row. The carry region starts out zero and the first chunk's index list never points
-        # into it, so nothing reads it before forward writes it.
-        joint_kv = self.ops.from_torch(
-            torch.zeros(batch, 1, self._raw_row + chunk, self.head_dim), layout=ttnn.ROW_MAJOR_LAYOUT
-        )
         # Two overlap states advance through a prefill, one per compressor: the block's, which lives in
         # the returned TtCSAState and is advanced by forward, and the indexer's, which the indexer keeps
         # privately per slot and advances inside write_k. They describe the same token positions, so they
@@ -272,8 +314,10 @@ class TtCSA(TtV4AttentionBase):
         # make a fresh indexer. It goes last, so a failed allocation above leaves the slot's indexer state
         # with the request it belongs to. This is what makes new_state(k) a reset of slot k, never a spare.
         self._indexer.reset_overlap_state(cache_user_id)
+        settings = self._indexer_settings
         return TtCSAState(
-            joint_kv=joint_kv,
+            joint_kv=self._joint_table,
+            table_row=cache_user_id * settings["layer_num"] + settings["cache_layer_idx"],
             kv_state=kv_state,
             score_state=score_state,
             index_kv_cache=self._index_kv_cache,
@@ -291,9 +335,7 @@ class TtCSA(TtV4AttentionBase):
         rate = self.compressor.compress_rate
         settings = self._indexer_settings
         slot_num, layer_num = settings["slot_num"], settings["layer_num"]
-        index_align = self.chunk_align * self.sp_factor
-        index_tokens = rope_table_tokens(max_seq_len, chunk)
-        index_seq_len = -(-index_tokens // index_align) * index_align
+        index_seq_len = csa_index_seq_len(max_seq_len, chunk, rate, self.sp_factor)
         index_head_dim = settings["config"].index_head_dim
         # Entries per chip, since the cache is SP-sharded over the block-cyclic sequence blocks.
         index_entries_local = index_seq_len // rate // self.sp_factor
@@ -433,12 +475,14 @@ class TtCSA(TtV4AttentionBase):
             **kwargs,
         )
 
-    def _write_rows(self, table, rows, start: int):
-        """Write ``rows`` into the joint table at row ``start``. ``rows`` arrives TILE, as every producer
-        here does; the table is ROW_MAJOR, so the conversion happens on the small tensor."""
+    def _write_rows(self, state, rows, start: int):
+        """Write ``rows`` into the state's row of the joint table, at ``start``. ``rows`` arrives TILE, as
+        every producer here does; the table is ROW_MAJOR, so the conversion happens on the small tensor.
+        The interleaved factory compiles only the last-dim start in, so any table row reuses one program."""
         rm = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
-        end = [rm.shape[0], 1, start + rm.shape[2], rm.shape[3]]
-        ttnn.experimental.slice_write(rm, table, start=[0, 0, start, 0], end=end, step=[1, 1, 1, 1])
+        row = state.table_row
+        end = [row + rm.shape[0], 1, start + rm.shape[2], rm.shape[3]]
+        ttnn.experimental.slice_write(rm, state.joint_kv, start=[row, 0, start, 0], end=end, step=[1, 1, 1, 1])
         ttnn.deallocate(rm)
 
     def _write_compressed(self, state, new_entries):
@@ -457,7 +501,7 @@ class TtCSA(TtV4AttentionBase):
             f"compressed cache full: writing rows [{state.entry_count}, {state.entry_count + width}) "
             f"exceeds capacity {self._carry_row}; allocate the state with a larger max_seq_len"
         )
-        self._write_rows(state.joint_kv, new_entries, state.entry_count)
+        self._write_rows(state, new_entries, state.entry_count)
 
     def _build_index(self, state, top_k):
         """This chunk's index list: overwrite the source's top-k block, then gather through the
@@ -487,8 +531,9 @@ class TtCSA(TtV4AttentionBase):
         ``kv_actual`` by the time a caller gets here."""
         return ttnn.gather(self._index_source, -1, self._index_perm[0 if first_chunk else 1])
 
-    def _sparse_attention(self, q, table, index, cos, sin):
-        """One ``sparse_sdpa`` over the joint table, then V's RoPE undone.
+    def _sparse_attention(self, q, state, index, cos, sin):
+        """One ``sparse_sdpa`` over the state's row of the joint table, then V's RoPE undone. The row is a
+        runtime arg of the op, so every row reuses one program.
 
         No mask and no causal flag: the index list already says exactly which keys each query sees. The
         reshard is GLM's (``ttMLA._sparse_mla``) -- when the TP head shard is thinner than the op's
@@ -503,12 +548,13 @@ class TtCSA(TtV4AttentionBase):
 
         out = ttnn.transformer.sparse_sdpa(
             q_rm,
-            table,
+            state.joint_kv,
             index,
             self.head_dim,  # V4 has no RoPE-only tail, so v_dim is the full width
             kv_format=ttnn.transformer.SparseKVFormat.BF16,
             scale=self.scaling,
             k_chunk_size=_INDEX_ALIGN,
+            cache_batch_idx=state.table_row,
             attention_sink=self._sparse_sinks(),
         )
         ttnn.deallocate(q_rm)
@@ -591,7 +637,7 @@ class TtCSA(TtV4AttentionBase):
         # The raw keys go in whole: every chip's queries may reach into any of them, and the gather is
         # what makes that possible. The carry is written after attention, below.
         sliding_kv = self._gather_sliding(sliding_kv)
-        self._write_rows(state.joint_kv, sliding_kv, self._raw_row)
+        self._write_rows(state, sliding_kv, self._raw_row)
 
         # The indexer runs its own ratio-4 compressor at index_head_dim over the same windows and writes
         # its own block-cyclic key cache, so it only shares the hidden states and q_lora with us.
@@ -607,14 +653,14 @@ class TtCSA(TtV4AttentionBase):
         )
         index = self._build_index(state, top_k)
         ttnn.deallocate(top_k)
-        attn = self._sparse_attention(q, state.joint_kv, index, cos, sin)
+        attn = self._sparse_attention(q, state, index, cos, sin)
         ttnn.deallocate(index)
 
         # Overwrites the carry this chunk just attended over, so it has to follow the attention. Taken
         # from the gathered slab, whose last REAL rows are the next chunk's window.
         next_carry = self._take_carry(sliding_kv, real_len)
         ttnn.deallocate(sliding_kv)
-        self._write_rows(state.joint_kv, next_carry, self._carry_row)
+        self._write_rows(state, next_carry, self._carry_row)
         ttnn.deallocate(next_carry)
 
         state.kv_state = self.compressor.terminal_state(kv_state)

@@ -401,6 +401,7 @@ def populate_kv_chunk_address_table_block_cyclic(
     layer_rows=None,
     tp_axis=None,
     alias_rows=None,
+    period=PREFILL_CHUNK_TOKENS,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
@@ -423,6 +424,8 @@ def populate_kv_chunk_address_table_block_cyclic(
             linear chip row*tp + col owns tokens [seq_chunk*5120 + row*640 + col*(640/tp), +640/tp).
         alias_rows: {alias table row: source table row}; each alias gets every location its source does.
             Decode MTP levels that share one KV cache read level 1's rows this way. None = no aliases.
+        period: rows per block-cyclic block across the SP shards (stage_layout path). A token cache's is one
+            chunk; DeepSeek-V4's CSA index cache holds one row per compressed entry, so its is chunk / rate.
         (remaining args as in create_kv_chunk_address_table_block_cyclic)
 
     Returns:
@@ -450,13 +453,13 @@ def populate_kv_chunk_address_table_block_cyclic(
         # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
         rows = mesh_shape[0]
 
-        tokens_per_chunk_local = PREFILL_CHUNK_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
-        num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS  # number of 5k chunks in the seq len
+        tokens_per_chunk_local = period // mesh_shape[sp_axis]  # 640 for 5k chunks
+        num_chunks_per_seq_len = seq_len // period  # number of 5k chunks in the seq len
 
-        assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
+        assert seq_len % period == 0, f"seq_len {seq_len} must be a multiple of {period}"
 
         assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
-            f"{PREFILL_CHUNK_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
+            f"{period} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
             f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
         )
 
@@ -500,9 +503,7 @@ def populate_kv_chunk_address_table_block_cyclic(
                             aliases = aliases_of.get(table_row, ())
                             for seq_chunk in range(num_chunks_per_seq_len):
                                 chunk_token_start = (
-                                    seq_chunk * PREFILL_CHUNK_TOKENS
-                                    + row * tokens_per_chunk_local
-                                    + col * tokens_per_device
+                                    seq_chunk * period + row * tokens_per_chunk_local + col * tokens_per_device
                                 )
                                 chunk_token_end = chunk_token_start + tokens_per_device
                                 for position in range(
@@ -1025,6 +1026,50 @@ def populate_kv_chunk_address_table_kda(
     return lookup_table
 
 
+def populate_kv_chunk_address_table_replicated(
+    lookup_table, config, *, stage_layout, rows_per_layer, num_users, config_id=0, layer_rows=None
+):
+    """
+    Populate ONE config from a cache every chip holds whole: user-major ``[slots * layers, 1, rows_per_layer,
+    D]``, paged ``config.chunk_n_tokens`` rows a page, pages round-robin over the banks. DeepSeek-V4's
+    compressed caches are this: the HCA cache in 32-row ND shards, the CSA joint table in one-row interleaved
+    pages. Both put page ``p`` in bank ``p % num_banks`` at ``base + (p // num_banks) * page_bytes`` (see
+    ``populate_kv_chunk_address_table_kda``).
+
+    Positions are rows, published from row 0 up to ``config.max_sequence_length``; ``rows_per_layer`` is the
+    physical stride, which may be longer (the CSA table's window and chunk rows follow its compressed ones).
+    Every chip is a replica, so one device group spans the stage's whole mesh. ``layer_rows`` maps the stage's
+    compacted layer space to the published layer axis, as for the other configs.
+    """
+    rows_per_page = config.chunk_n_tokens
+    assert rows_per_layer % rows_per_page == 0, f"{rows_per_layer} rows a layer is not whole {rows_per_page}-row pages"
+    pages_per_layer = rows_per_layer // rows_per_page
+    page_bytes = config.chunk_size_bytes
+    for stage in stage_layout:
+        count = int(stage["count"])
+        if count == 0:
+            continue
+        base = int(stage["base_addr"])
+        num_banks = int(stage["num_banks"])
+        first = int(stage["first_layer"])
+        members = [fid for row in stage["fnids"] for fid in row]
+        group_idx = lookup_table.add_device_group(members)
+        for fid in members:
+            lookup_table.set_fabric_node_host(fid, host_name=f"host-{stage['host_tag']:08x}")
+        for slot in range(num_users):
+            for local_layer in range(count):
+                batch = slot * count + local_layer
+                row = layer_rows[first + local_layer] if layer_rows is not None else first + local_layer
+                for position in range(0, config.max_sequence_length, rows_per_page):
+                    page = batch * pages_per_layer + position // rows_per_page
+                    location = ttnn.experimental.disaggregation.KvCacheLocation()
+                    location.noc_addr = ((page % num_banks) << 32) | (base + (page // num_banks) * page_bytes)
+                    location.size_bytes = page_bytes
+                    location.device_group_index = group_idx
+                    lookup_table.set(row, position, slot, location, config_id)
+    return lookup_table
+
+
 def init_kvpe_cache(
     kvpe_cache_head_dim,
     mesh_device,
@@ -1038,6 +1083,7 @@ def init_kvpe_cache(
     full_mesh=False,
     tp_axis=None,
     bank_aligned=False,
+    memory_config=None,
 ):
     """
     Initialize KVPE cache for MLA.
@@ -1057,6 +1103,8 @@ def init_kvpe_cache(
         tp_axis: KV dedup. None (default) = SP-sharded, TP-replicated (per-device rows = seq_len / sp).
             When set, also sharded across TP (rows = seq_len / (sp*tp)); the container topology is
             unchanged (the op defines the per-device layout) — only the per-device seq width shrinks.
+        memory_config: overrides the 32-token ND-sharded pages, for a cache whose reader needs another
+            layout (DeepSeek-V4's CSA joint table is DRAM-interleaved ROW_MAJOR; see TtCSA).
 
     Returns:
         kvpe_cache: Initialized KVPE cache on device
@@ -1096,7 +1144,7 @@ def init_kvpe_cache(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     )
-    kv_mem_config = ttnn.MemoryConfig(
+    kv_mem_config = memory_config or ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.DRAM,
         nd_shard_spec=kv_nd_shard_spec,
     )

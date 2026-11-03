@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.tt.v4.block import _HASH_GATE_MODES, TtV4Block
+from models.demos.deepseek_v3_d_p.tt.v4.kv_caches import allocate_v4_kv_caches
 
 
 class TtV4Transformer(LightweightModule):
@@ -144,6 +145,16 @@ class TtV4Transformer(LightweightModule):
 
         layers = state_dict["layers"]
         assert len(layers) == num_layers, f"state_dict holds {len(layers)} layers, the slice is {num_layers}"
+        # The migratable caches, one tensor per kind across this rank's layers (kv_migration_stages names them).
+        self.kv_caches = allocate_v4_kv_caches(
+            mesh_device,
+            config,
+            layer_ids,
+            slot_num=slot_num,
+            max_seq_len=max_seq_len or seq_len,
+            chunk=seq_len,
+            sp_axis=sp_axis,
+        )
         self.layers = []
         for local_idx, layer_idx in enumerate(layer_ids):
             hash_layer = config.mlp_layer_types[layer_idx] == "hash_moe"
@@ -170,6 +181,7 @@ class TtV4Transformer(LightweightModule):
                     weight_cache_path=weight_cache_path,
                     is_balanced=is_balanced,
                     slot_num=slot_num,
+                    kv_cache=self.kv_caches.for_layer(layer_idx),
                     **block_kwargs,
                 )
             )

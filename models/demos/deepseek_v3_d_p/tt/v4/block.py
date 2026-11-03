@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
+from models.demos.deepseek_v3_d_p.tt.v4.kv_caches import LayerCache
 
 _ATTENTION = {
     "sliding_attention": TtSWA,
@@ -44,8 +45,9 @@ class TtV4Block(LightweightModule):
     Two properties shape the class:
 
       * attention is per layer. ``config.layer_types[layer_idx]`` names it, and V4's attention modules
-        own their KV state and build their own rope, so the block supplies no cache, no rope tensors
-        and no indexer, and holds no cache-migration handoff.
+        own their per-slot state and build their own rope, so the block supplies no rope tensors and
+        no indexer. The migratable caches are the one exception: a transformer passes each layer its
+        place in the rank's shared tensors (``kv_cache``).
       * the residual is hyper-connections, so the block's own input and output carry ``hc_mult``
         parallel streams in fp32. Every sublayer between them still sees one hidden state.
 
@@ -91,11 +93,13 @@ class TtV4Block(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
         slot_num: int = 1,
+        kv_cache: LayerCache = LayerCache(),
     ):
         """``seq_len`` is the padded per-chunk length; ``max_seq_len`` the full per-user length the
         attention state must span, defaulting to one chunk. ``attn_reference`` is the torch attention
         module the weights are read off, and ``mhc_weights`` the ``(fn, base, scale)`` triple per site.
-        ``slot_num`` is how many users' attention state the block holds at once.
+        ``slot_num`` is how many users' attention state the block holds at once. ``kv_cache`` is this
+        layer's place in its rank's shared caches (``V4KvCaches.for_layer``); the default is private.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -143,22 +147,25 @@ class TtV4Block(LightweightModule):
         )
 
         assert slot_num >= 1, f"slot_num must be positive, got {slot_num}"
-        is_csa = attn_kind == "compressed_sparse_attention"
-        # The CSA indexer keeps per-slot overlap state and a user-major key cache, so it is told the
-        # slot count; SWA and HCA state is one tensor set per slot, held below.
-        attn_kwargs = {"slot_num": slot_num} if is_csa else {}
+        # HCA's compressed cache and CSA's two tables are user-major over the layers of their kind, so
+        # those attentions are told the layout; SWA state is one tensor set per slot, held below.
+        layout = dict(slot_num=slot_num, layer_num=kv_cache.layer_num, cache_layer_idx=kv_cache.layer_pos)
+        ctor_kwargs, table_kwargs = {
+            "compressed_sparse_attention": (layout, dict(index_kv_cache=kv_cache.index, joint_kv=kv_cache.table)),
+            "heavily_compressed_attention": ({}, dict(compressed_kv=kv_cache.table, **layout)),
+        }.get(attn_kind, ({}, {}))
         # The full per-axis topology: the attention's SP-axis gather needs the SP element and its
         # other collectives the TP one. Its weights come off the torch module, not a state dict, so
         # there is nothing for a weight cache to hold for this half of the block.
         self.attn = _ATTENTION[attn_kind].from_reference(
-            mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology, **attn_kwargs
+            mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology, **ctor_kwargs
         )
         # Tables once, then one state per user slot. Each state's shape is the same for every chunk,
         # only its contents advance.
         # TODO once a V4 transformer owns this state instead of the block, forward() needs the chunk
         # offset back the way TtPrefillBlock takes actual_start: a caller-owned cache does not
         # advance itself, so the position has to come in with the chunk.
-        self.attn.build_tables(max_seq_len or seq_len, chunk_tokens=seq_len)
+        self.attn.build_tables(max_seq_len or seq_len, chunk_tokens=seq_len, **table_kwargs)
         self.attn_states = [self.attn.new_state(cache_user_id=slot) for slot in range(slot_num)]
 
         self.ffn = TtPrefillBlock._build_moe(
