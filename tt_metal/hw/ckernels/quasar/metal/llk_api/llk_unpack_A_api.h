@@ -97,13 +97,13 @@ inline void llk_unpack_A_init(
                 transpose_of_faces == within_face_16x16_transpose,
                 "Quasar unpack unary supports only full transpose (transpose_of_faces and within_face_16x16_transpose "
                 "must match)");
-            // Route to UNP_DEST purely on the op-writer flag. The operand must be 32-bit: UNP_DEST writes a 16-bit
-            // datum with the 16-bit tile stride, off the 32-bit DEST addressing of the to-dest placers.
+            // Route to UNP_DEST purely on the op-writer flag. On a 32-bit DEST the operand must be 32-bit: UNP_DEST
+            // writes a 16-bit datum with the 16-bit tile stride, off the 32-bit addressing of the to-dest placers.
             if constexpr (unpack_to_dest) {
                 LLK_ASSERT(
-                    static_cast<DataFormat>(unpack_dst_format[operand_id]) == DataFormat::Float32 ||
+                    !DST_ACCUM_MODE || static_cast<DataFormat>(unpack_dst_format[operand_id]) == DataFormat::Float32 ||
                         static_cast<DataFormat>(unpack_dst_format[operand_id]) == DataFormat::Int32,
-                    "Quasar unpack-to-dest operand must be Float32 or Int32");
+                    "Quasar unpack-to-dest operand must be Float32 or Int32 on a 32-bit DEST");
                 // Transpose is not supported on UNP_DEST and is forced off inside the primitive. Tiny tiles land at
                 // the DEST layout the pack side reads (_llk_unpack_to_dest_tile_rows_).
                 _llk_unpack_unary_operand_to_dest_init_(bfd_id, tensor_shape);
