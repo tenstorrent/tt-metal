@@ -22,8 +22,8 @@ using namespace ckernel;
  * in units of 16 datums (one face row), so it is the number of face rows in a row of tiles.
  *
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
- * @param l1_base_idx: Offset of the current row of tiles.
- * @note @ref _llk_pack_untilize_ calls this once per row of 32x32 tiles, before the MOP that writes that row.
+ * @param l1_base_idx: L1 offset of the first tile of the current block, in tile widths (see @ref _llk_pack_untilize_).
+ * @note @ref _llk_pack_untilize_ calls this once per block of 32x32 tiles, before the MOP that writes that block.
  */
 inline void _llk_pack_untilize_set_dst_offset_(const TensorShape& tensor_shape, const std::uint32_t l1_base_idx)
 {
@@ -181,7 +181,8 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
  * @brief Packs out tiles and untilizes them; always uses Packer 0 for untilize.
  *
  * @param dest_idx: Index into the DEST register for a tile.
- * @param l1_tile_idx: Index into the L1 buffer for the first tile of the row, in tile widths.
+ * @param l1_tile_idx: L1 offset of the first tile of the block, in tile widths: for tile row y and tile column x,
+ *        y * num_faces_r_dim * face_r_dim * FULL_CT_DIM + x.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
  * @note Call @ref _llk_pack_untilize_init_ with the same tensor_shape before this function.
  */
