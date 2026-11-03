@@ -344,6 +344,8 @@
         set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
+        export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP8xTP4" -vvv --tb=short
       '
     )
 
@@ -369,7 +371,7 @@
 
     echo "===== [1/4] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
     k3_contracts || exit $?
-    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 ====="
+    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + layer-1 real weights ====="
     k3_kda || exit $?
     echo "===== [3/4] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
     k3_mla || exit $?
@@ -395,6 +397,8 @@
 - name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k"
   fabric_profile: torus_xy
   cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
@@ -1211,7 +1215,7 @@
 
 # Prefill accuracy outside the migration path: one traced runtime prefills each GPU-trace dataset, then
 # checks every KV head and the next-token likelihoods (per context-depth bin) against the trace.
-- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy 256k@8k"
+- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy full@8k"
   fabric_profile: 1d
   artifact_subdir: gemma4_d_p_prefill_accuracy
   cmd: |
@@ -1226,7 +1230,7 @@
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
     mpirun --bind-to none --pernode --tag-output \
       python3 -m pytest \
-        'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-256k-8x4]' \
+        'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-all-full-8x4]' \
         -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
   test_type: gemma4_d_p_prefill_accuracy
   test_tags: [gemma4_d_p, kv_cache, accuracy]
@@ -2163,12 +2167,15 @@
   # TorusXY descriptor (see fabric_profile); it holds split KV within 2.5% of the classic SP
   # ring measured back to back. Its accuracy cases run on QB2 (blackhole_multi_card_sanity_tests).
   cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     export MESH_DEVICE=TG
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       rc=0
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy -k "kimi_k3" -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_determinism -k "kimi_k3" -svv || rc=1
@@ -2177,7 +2184,7 @@
       exit $rc
     '
   test_type: ring_joint_sdpa_perf
-  test_tags: [kimi_k2_7, kimi_k3, sdpa, mla, ccl, determinism]
+  test_tags: [kimi_k2_7, kimi_k3, gemma4, sdpa, mla, ccl, determinism]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:

@@ -149,8 +149,6 @@ public:
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
-    bool compile_fabric();
-    void configure_fabric();
     void update_smc_dispatch_telemetry_for_fast_dispatch(
         uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords);
     void set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled);
@@ -241,9 +239,6 @@ private:
 
     // TODO #20966: Remove this member
     std::weak_ptr<distributed::MeshDevice> mesh_device;
-
-    // Fabric program includes ethernet router kernel
-    std::unique_ptr<Program> fabric_program_;
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
