@@ -141,7 +141,7 @@ Stage-data re-check. The only internal datum is the fp32 partial block (`core_ro
 
 | Mechanism | Cap on which extent | Clamp | What happens unclamped |
 |-----------|--------------------|-------|------------------------|
-| fp32 DEST, half-sync | matmul output subblock `sb_h * sb_w <= 4` | per call: largest area with `sb_w \| core_n_tiles`, `sb_h \| call_rows`, area <= 4. An odd sub-block is cut into an even part and a 1-row tail (two calls), so all but one tile row use area 4 (2x2 at `core_n_tiles` = 2). Re-init (`InitMode::Short`) only when the subblock shape changes. | DEST overrun, silently wrong tiles |
+| fp32 DEST, half-sync | matmul output subblock `sb_h * sb_w <= 4` | Perf 1: a compile-time `1 x core_n_tiles` subblock (area <= 4) on every call. At 2x2 the fp32 partials pack serialized with the matmul (payload 115.9 -> 99.4 us at t = 4096 occupied, bit-exact); a runtime shape costs ~45% more payload. | DEST overrun, silently wrong tiles |
 | `matmul_block` shape legality (`matmul_block_helpers.hpp:139-170`) | `in0_num_subblocks = call_rows / sb_h`, `in1_num_subblocks = core_n_tiles / sb_w` exact | as above | partial subblocks unpacked from the wrong tiles |
 | `caller_owns_pack_target` pack offsets (`matmul_block_helpers.inl:443-448, 484-489`) | a sub-block packs into rows `[r0, r0 + rows)` of `cb_partials` | helper extension `out_base_offset = r0 * core_n_tiles` (see API Mapping) | every sub-block packs onto row 0 of the partials |
 | CB ring contiguity (`ttnn-cb-memory-fundamentals.md`, ring-wrap invariant) | a matmul's in0 / in1 window must not straddle the ring end | every round pushes and pops the nominal `core_row_tiles_max * k_block_tiles` (x) and `NUM_EXPERTS * core_n_tiles * k_block_tiles` (w) pages, empty slots included; capacity is `DEPTH x` that | a straddling window reads wrapped garbage |
@@ -238,7 +238,7 @@ for (uint32_t wave_idx = 0; wave_idx < num_waves; ++wave_idx) {
 | L5 data-movement RISC split | both channels share NCRISC; a sender blocked on a handshake stalls the other channel | x channel on NCRISC / NoC0, w channel on BRISC / NoC1 with the writer (catalog `split_reader`; sibling measured NoC1 DRAM reads slower) |
 | L6 store issue cost | 32 * `core_row_tiles` segment writes of 128 B per wave per core | stateful `noc_async_write_one_packet_with_state` writes; gathering an m-group's segments into full 1536 B rows on one core |
 | L7 x sender bank order | the 12 cores of an m-group are fed by one sender, but all m-group senders read rows that start at the same k, so they hit the same L1 banks at the same time | start each sender's k walk at `(group * stride) mod k_block_tiles` (catalog `bank_stagger`) |
-| L8 subblock shape | area-4 2x2 plus a 1-row tail vs uniform 1x2 (no tail call); unpack-bound at LoFi is possible | both, at t = 4096 |
+| L8 subblock shape | measured in Perf 1: uniform 1x2 (constexpr) beats 2x2 + tail | resolved |
 
 ### Catalog evidence
 

@@ -1,0 +1,23 @@
+--- a/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_compute.cpp	2026-11-03 10:26:58.250893795 +0000
++++ b/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_compute.cpp	2026-11-03 10:26:58.270893689 +0000
+@@ -36,7 +36,7 @@
+ };
+ 
+ // Largest-area subblock (taller on ties) with h | rows, w | width, h * w <= limit.
+-ALWI Subblock best_subblock(uint32_t rows, uint32_t width, uint32_t limit) {
++ALWI constexpr Subblock best_subblock(uint32_t rows, uint32_t width, uint32_t limit) {
+     Subblock best{1, 1};
+     for (uint32_t w = 1; w <= width; ++w) {
+         if (width % w) {
+@@ -94,8 +94,9 @@
+     }
+     const MoePlan plan(counts, tensor_row_tiles, num_waves, num_m_groups);
+ 
+-    // Width-only preference: the main part of every sub-block uses it, a shorter tail gets its own best fit.
+-    const Subblock preferred = best_subblock(dest_limit, core_n_tiles, dest_limit);
++    // One tile row, widest w: at 2x2 the partials pack serializes with the matmul, at 1 x w it hides behind it.
++    // constexpr: a runtime shape costs ~45% more payload at 1 x w (per-call LLK scalar work).
++    constexpr Subblock preferred = best_subblock(1, core_n_tiles, dest_limit);
+ 
+     for (uint32_t wave = 0; wave < num_waves; ++wave) {
+         if (plan.wave_empty(wave)) {
