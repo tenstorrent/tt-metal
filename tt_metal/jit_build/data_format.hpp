@@ -43,8 +43,8 @@ std::vector<DataFormat> get_unpack_dst_formats(
     bool int_fpu_en = false,
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 
-// (Quasar only) Kernel-wide UnpackToDestEn: any explicit to-dest mode entry (TT_FATAL unless that operand is Float32,
-// Int32 or UInt32), or, with the 32-bit DEST enabled, any Int32/UInt32 operand; a 16-bit DEST never routes on format.
+// (Quasar only) Kernel-wide UnpackToDestEn: any explicit to-dest mode entry (TT_FATAL when the DEST is 32-bit and that
+// operand is not Float32 / Int32 / UInt32), or, with the 32-bit DEST enabled, any Int32/UInt32 operand.
 bool quasar_unpack_to_dest_en(
     std::span<const DataFormat> buf_formats,
     const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode,

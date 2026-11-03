@@ -57,6 +57,9 @@ TEST(DataFormatQuasar, ExplicitToDestEntryRequires32BitOperand) {
     const std::array<DataFormat, 2> bf16_then_fp32{DataFormat::Float16_b, DataFormat::Float32};
     EXPECT_ANY_THROW(tt::quasar_unpack_to_dest_en(bf16_then_fp32, {kToDestFp32, kDefault}, /*fp32_dest_acc_en=*/true));
     EXPECT_NO_THROW(tt::quasar_unpack_to_dest_en(bf16_then_fp32, {kDefault, kToDestFp32}, /*fp32_dest_acc_en=*/true));
+    // A 16-bit DEST uses the 16-bit tile stride as well, so a 16-bit operand may route to it (main's
+    // QuasarTransposeWHDestFloat16b); the explicit entry still selects the to-dest sync.
+    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(bf16_then_fp32, {kToDestFp32, kDefault}, /*fp32_dest_acc_en=*/false));
     const std::array<DataFormat, 2> int_formats{DataFormat::Int32, DataFormat::UInt32};
     EXPECT_NO_THROW(tt::quasar_unpack_to_dest_en(int_formats, {kToDestFp32, kToDestFp32}, /*fp32_dest_acc_en=*/true));
     const std::array<DataFormat, 1> int16_formats{DataFormat::Int16};

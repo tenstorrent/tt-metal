@@ -87,9 +87,6 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     // llk_unpack_hw_configure pairs it with llk_math_pack_sync_init, so unpack and math reset their bank parity
     // together. The reset must NOT live in the per-op llk_unpack_A_init: op writers call copy_init inside their tile
     // loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
-    static_assert(
-        !UnpackToDestEn || DST_ACCUM_MODE,
-        "unpack-to-dest needs 32-bit DEST (UNPACR_DEST into a 16-bit DEST is unverified)");
     if constexpr (UnpackToDestEn) {
         _llk_unpack_dest_init_();
         // Seed the semaphores this thread posts, in front of its own first wait and post on them. Math arms no wait on

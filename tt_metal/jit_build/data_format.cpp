@@ -243,15 +243,15 @@ bool quasar_unpack_to_dest_en(
             continue;
         }
         explicit_to_dest = true;
-        if (i < buf_formats.size()) {
-            // UNP_DEST writes a 16-bit datum with the 16-bit tile stride, off the 32-bit DEST addressing of the
-            // to-dest placers; the mode-only query (no formats) cannot check this.
+        if (fp32_dest_acc_en && i < buf_formats.size()) {
+            // UNP_DEST writes a 16-bit datum with the 16-bit tile stride, off the addressing of a 32-bit DEST; a 16-bit
+            // DEST takes the same stride, so only the 32-bit DEST is checked (the mode-only query has no formats).
             const DataFormat format = buf_formats[i];
             TT_FATAL(
                 format == DataFormat::Invalid || format == DataFormat::Float32 || format == DataFormat::Int32 ||
                     format == DataFormat::UInt32,
-                "Quasar unpack-to-dest operand {} is {}: only Float32 / Int32 / UInt32 operands can be routed to DEST "
-                "(a 16-bit datum misaddresses the 32-bit DEST)",
+                "Quasar unpack-to-dest operand {} is {}: only Float32 / Int32 / UInt32 operands can be routed to a "
+                "32-bit DEST (a 16-bit datum misaddresses it)",
                 i,
                 format);
         }
