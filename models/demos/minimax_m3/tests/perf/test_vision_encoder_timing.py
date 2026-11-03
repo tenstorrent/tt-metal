@@ -12,8 +12,9 @@ It prints the median, fastest and slowest of 10 calls, and all 10, for two kinds
 Each set of calls follows 2 warm-ups and an IDLE_S pause, so it runs at full chip clock. Back to back, images run
 slower. The test asserts only that both outputs are equal, finite and of the right shape. It uses seeded random
 weights, so it needs no checkpoint.
-M3_VISION_ACTIVATIONS sets M3VLVisionModel.activations, "l1" or "dram", and the model's default when unset. Both
-lines print it and the placement the forward takes. The test fails if the L1 check before a forward sends it to DRAM.
+M3_VISION_ACTIVATIONS sets M3VLVisionModel.activations, "l1", "l1_interleaved" or "dram", and the model's default
+when unset. Both lines print it and the placement the forward takes. The test fails if the L1 check before a forward
+sends it to DRAM.
 """
 from __future__ import annotations
 

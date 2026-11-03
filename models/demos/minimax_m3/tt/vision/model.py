@@ -165,7 +165,8 @@ class M3VLVisionModel(LightweightModule):
         self.projector = projector
         self._rope_cache = OrderedDict()  # (t, h, w) -> (cos, sin) on device, the least recently used first
         # Where the blocks keep their activations (common.ACTIVATIONS), read at each forward: "l1" in L1 where
-        # block_placement proves they fit, "dram" every activation in DRAM, for comparison.
+        # block_placement proves they fit, the MLP's hidden activations in block shards where those fit;
+        # "l1_interleaved" the same without the shards and "dram" every activation in DRAM, both for comparison.
         self.activations = "l1"
         self._logged_dram_fallback = False
 

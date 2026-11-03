@@ -100,7 +100,8 @@ class M3VLMLP(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, placement: BlockPlacement = DRAM_PLACEMENT) -> ttnn.Tensor:
         """fc2(gelu(fc1(x))), with fc1's, GELU's and fc2's outputs where placement's fc1_out, gelu_out and residual
-        put them. The projector's MLPs take the default, every output in DRAM."""
+        put them; linear() picks fc1's and fc2's program configs for where their inputs and outputs are, block shards
+        included. The projector's MLPs take the default, every output in DRAM."""
         hidden = linear(
             x,
             self.fc1_weight,

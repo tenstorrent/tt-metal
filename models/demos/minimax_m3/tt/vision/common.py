@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import math
-from typing import Callable, Optional
+from typing import Callable, NamedTuple, Optional
 
 import torch
 
@@ -92,22 +92,41 @@ def linear(
     """Run the weight matmul x @ w + b into memory_config, then activation, if given, as a separate op.
 
     w is [in, out] and b is [1, 1, 1, out] or None, as as_linear_weight and as_linear_bias upload them. The program
-    config is linear_program_config's for the padded shapes. activation is called as
-    activation(out, memory_config=activation_memory_config), and None writes where out is. fused_activation is the
-    same activation in a program config's form, and needs activation. Where linear_program_config gives a config, the
-    matmul applies fused_activation and activation does not run. The matmul then writes activation_memory_config, or
-    memory_config when that is None.
+    config is linear_program_config's for the padded shapes, and for an input or an output in L1 block shards.
+    activation is called as activation(out, memory_config=activation_memory_config), and None writes where out is.
+    fused_activation is the same activation in a program config's form, and needs activation. Where
+    linear_program_config gives a config, the matmul applies fused_activation and activation does not run. The matmul
+    then writes activation_memory_config, or memory_config when that is None. Raises ValueError for a sharded input or
+    output where linear_program_config leaves the choice to ttnn.
     """
     assert fused_activation is None or activation is not None, "fused_activation needs activation"
-    program_config = linear_program_config(
-        x.device(), x.padded_shape[-2], w.padded_shape[-2], w.padded_shape[-1], compute_kernel_config
-    )
-    fused = fused_activation is not None and program_config is not None
+    in0_sharded = x.memory_config().is_sharded()
+
+    def program_config_for(out_memory_config):
+        return linear_program_config(
+            x.device(),
+            x.padded_shape[-2],
+            w.padded_shape[-2],
+            w.padded_shape[-1],
+            compute_kernel_config,
+            in0_sharded=in0_sharded,
+            out_sharded=out_memory_config.is_sharded(),
+        )
+
+    fused_memory_config = memory_config if activation_memory_config is None else activation_memory_config
+    program_config = None if fused_activation is None else program_config_for(fused_memory_config)
+    fused = program_config is not None
     if fused:
         # linear_program_config builds a new config at each call, so no other matmul gets the activation.
         program_config.fused_activation = fused_activation
-        if activation_memory_config is not None:
-            memory_config = activation_memory_config
+        memory_config = fused_memory_config
+    else:
+        program_config = program_config_for(memory_config)
+    if program_config is None and (in0_sharded or memory_config.is_sharded()):
+        raise ValueError(
+            f"a matmul of {x.padded_shape[-2]} rows by {tuple(w.padded_shape[-2:])} with a sharded input or output"
+            " needs linear_program_config's config, and it leaves this one to ttnn"
+        )
     out = ttnn.linear(
         x,
         w,
@@ -119,14 +138,29 @@ def linear(
     return out if activation is None or fused else activation(out, memory_config=activation_memory_config)
 
 
-def linear_program_config(mesh_device, rows: int, in_features: int, out_features: int, compute_kernel_config):
+def linear_program_config(
+    mesh_device,
+    rows: int,
+    in_features: int,
+    out_features: int,
+    compute_kernel_config,
+    *,
+    in0_sharded: bool = False,
+    out_sharded: bool = False,
+):
     """Return the program config for a weight matmul of (rows, in_features) by (in_features, out_features).
 
-    Operands and output are bf16 or bfloat8_b, interleaved in DRAM or L1: the matmul's checks of the config do not tell
-    the two apart. The config is a 2D multicast with one output block per core.
+    Operands and output are bf16 or bfloat8_b, interleaved in DRAM or L1, or in L1 block shards. The matmul's checks of
+    the config do not tell DRAM and L1 apart. The config is a 2D multicast with one output block per core.
     _linear_blocking picks the split and the blocks within the LINEAR_* limits.
     Returns None to leave the choice to ttnn in two cases. Either a 1D multicast would give each core no more output
     tiles, as for small images, or no K block fits in LINEAR_L1_BYTES.
+
+    in0_sharded, for an input in block shards, sets fuse_batch, which the matmul needs for one. With the encoder's
+    single batch it changes nothing else. out_sharded, for an output in block shards, takes the first output subblock
+    that is one tile high or the block's full width, as the matmul needs. ttnn lays such an output out by this config,
+    one block of per_core_M x per_core_N tiles per core of the split. Neither flag changes the split or the K blocks,
+    so each output tile is the same sum, added in the same order.
     """
     grid = mesh_device.compute_with_storage_grid_size()
     blocking = _linear_blocking(
@@ -136,6 +170,7 @@ def linear_program_config(mesh_device, rows: int, in_features: int, out_features
         grid.x,
         grid.y,
         bool(compute_kernel_config.fp32_dest_acc_en),
+        out_sharded=out_sharded,
     )
     if blocking is None:
         return None
@@ -150,8 +185,19 @@ def linear_program_config(mesh_device, rows: int, in_features: int, out_features
         per_core_M=per_core_m,
         per_core_N=per_core_n,
         transpose_mcast=transpose_mcast,
-        fuse_batch=False,
+        fuse_batch=in0_sharded,
     )
+
+
+class _LinearBlocking(NamedTuple):
+    """linear_program_config's choice, in tiles."""
+
+    per_core_m: int
+    per_core_n: int
+    in0_block_w: int
+    subblock_h: int
+    subblock_w: int
+    transpose_mcast: bool
 
 
 @functools.lru_cache(maxsize=None)
@@ -163,14 +209,15 @@ def _linear_blocking(
     grid_y: int,
     fp32_dest_acc: bool,
     *,
+    out_sharded: bool = False,
     l1_bytes: int = LINEAR_L1_BYTES,
     max_in0_block_w: int = LINEAR_MAX_IN0_BLOCK_W,
     min_transposed_per_core_m: int = LINEAR_MIN_TRANSPOSED_PER_CORE_M,
 ):
-    """Return linear_program_config's choice in tiles, or None.
+    """Return linear_program_config's choice in tiles, as a _LinearBlocking, or None.
 
-    The choice is (per_core_M, per_core_N, in0_block_w, out_subblock_h, out_subblock_w, transpose_mcast). The limits
-    default to the LINEAR_* values at import time, and are part of the cache key.
+    out_sharded changes only the subblock. The limits default to the LINEAR_* values at import time, and are part of
+    the cache key.
     """
     cores = grid_x * grid_y
     # Output tiles per core of a 1D multicast: all the rows and a slice of the columns on each core, or vice versa.
@@ -195,9 +242,14 @@ def _linear_blocking(
         return None
     dest_tiles = 4 if fp32_dest_acc else 8
     subblock_h, subblock_w = next(
-        (h, w) for h, w in _SUBBLOCKS if h * w <= dest_tiles and per_core_m % h == 0 and per_core_n % w == 0
+        (h, w)
+        for h, w in _SUBBLOCKS
+        if h * w <= dest_tiles
+        and per_core_m % h == 0
+        and per_core_n % w == 0
+        and (not out_sharded or h == 1 or w == per_core_n)
     )
-    return per_core_m, per_core_n, fitting[-1], subblock_h, subblock_w, transpose
+    return _LinearBlocking(per_core_m, per_core_n, fitting[-1], subblock_h, subblock_w, transpose)
 
 
 # The q chunks sdpa_program_config picks from. Chunks below 128 are left out: on a P150 a q chunk of 64 saved 0.4 ms
@@ -244,7 +296,7 @@ class BlockPlacement:
     - block_input: pre_layrnorm's output, the first block's input.
     - residual: the residual stream: both adds' outputs and the out_proj and fc2 outputs they add.
     - qkv: QKV's output and the q, k and v heads split from it.
-    - fc1_out: fc1's output.
+    - fc1_out: fc1's output, in L1 block shards in L1_SHARDED_MLP_PLACEMENT.
     - gelu_out: GELU's output, fc2's input.
     """
 
@@ -275,9 +327,18 @@ L1_INTERLEAVED_PLACEMENT = BlockPlacement(
     fc1_out=ttnn.L1_MEMORY_CONFIG,
     gelu_out=ttnn.DRAM_MEMORY_CONFIG,
 )
-# M3VLVisionModel.activations: "l1" keeps the blocks' activations in L1 where block_placement proves they fit, "dram"
-# keeps every activation in DRAM.
-ACTIVATIONS = ("l1", "dram")
+# As L1_INTERLEAVED_PLACEMENT, but fc1 writes L1 block shards, the block of its program config on each core of its
+# split, GELU writes where its input is, and fc2 reads those shards (block_placement).
+L1_SHARDED_MLP_PLACEMENT = dataclasses.replace(
+    L1_INTERLEAVED_PLACEMENT,
+    name="l1_sharded_mlp",
+    fc1_out=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    gelu_out=None,
+)
+# M3VLVisionModel.activations: "l1" keeps the blocks' activations in L1 where block_placement proves they fit, with the
+# MLP's hidden activations in block shards where they fit those, "l1_interleaved" the same without the shards, and
+# "dram" keeps every activation in DRAM.
+ACTIVATIONS = ("l1", "l1_interleaved", "dram")
 # The core grids block_placement keeps activations in L1 on, those of Blackhole chips by harvesting: the host test walks
 # the L1 budget on each.
 L1_GRIDS = ((11, 10), (12, 10), (13, 10))
@@ -298,17 +359,29 @@ PROOF_L1_FOREIGN_BYTES = 64 * 1024
 
 def block_placement(block, rows: int, activations: str) -> BlockPlacement:
     """The BlockPlacement of an encoder block (M3VLBlock) for an input of `rows` rows, padded or not, with activations
-    one of ACTIVATIONS: L1_INTERLEAVED_PLACEMENT for "l1" where it is proven to fit, else DRAM_PLACEMENT.
+    one of ACTIVATIONS: for "l1" L1_SHARDED_MLP_PLACEMENT or L1_INTERLEAVED_PLACEMENT, for "l1_interleaved" the
+    latter, where it is proven to fit; else DRAM_PLACEMENT.
 
     L1_INTERLEAVED_PLACEMENT keeps the block's tensors in L1 interleaved, the layout every op of the block takes, but
     for the inputs of out_proj and fc2. On a P150 (12x10) at 2304 patches, with every tensor of a block in L1
     interleaved, the output was bit-identical and every op ran faster except out_proj and fc2, which use each input
     tile for 4 output tiles per core: their input reads slowed down, and they ran 40.5 and 108.5 us per block slower
-    than with their input in DRAM. So SDPA's and GELU's outputs stay in DRAM. "l1" gives it
+    than with their input in DRAM. So SDPA's and GELU's outputs stay in DRAM. It applies
     - on the grids of L1_GRIDS, up to L1_MAX_ROWS rows, where the host test walks the L1 budget;
     - where linear_program_config gives each of the block's four linears a config: ttnn's own matmul configs plan by
       the free L1, which activations in L1 would change.
     The interleaved LayerNorm plans by the free L1 too; the host test checks that it keeps its plan.
+
+    L1_SHARDED_MLP_PLACEMENT also keeps fc1's and GELU's outputs, fc2's input, in L1 block shards. On that P150 at
+    2304 patches, in a block that also kept its residual stream in block shards, fc1 writing block shards, GELU on
+    them and fc2 reading them ran 88.1, 6.4 and 65.7 us per block faster than with their operands in DRAM, each op's
+    output bit-identical to the DRAM op's on the same input. "l1" takes it where fc1 and fc2 both get a transposed
+    split with the same rows per core, fc1's width splits into whole blocks, fc2's K block divides fc1's block width
+    and fc1's blocks across its width are as many as fc2's: each core's block of fc1's output is then the shard of
+    fc2's input that core reads, with no partial block of K, which fc2 would add into its sums, and no shard on a core
+    without a block of fc2's output, which would take a buffer the host test does not count. Whole blocks across
+    fc1's width also keep GELU right on the last row of shards: it works on the first tiles of each shard, as many as
+    the shard holds of the tensor, and those are then whole tile rows.
 
     The widths come from the block's weights and fp32 accumulation from their compute configs, as linear() reads
     them, and the choice is cached on those numbers, the tile rows and the grid. "dram" reads nothing from block.
@@ -319,7 +392,7 @@ def block_placement(block, rows: int, activations: str) -> BlockPlacement:
         return DRAM_PLACEMENT
     grid = block_linears(block)[0][0].device().compute_with_storage_grid_size()
     widths = block_linear_widths(block)
-    return _l1_block_placement(math.ceil(rows / ttnn.TILE_SIZE), widths, grid.x, grid.y)
+    return _l1_block_placement(math.ceil(rows / ttnn.TILE_SIZE), widths, grid.x, grid.y, activations == "l1")
 
 
 def block_linears(block) -> tuple:
@@ -344,17 +417,35 @@ def block_linear_widths(block) -> tuple[tuple[int, int, bool], ...]:
 
 @functools.lru_cache(maxsize=None)
 def _l1_block_placement(
-    m_tiles: int, linears: tuple[tuple[int, int, bool], ...], grid_x: int, grid_y: int
+    m_tiles: int, linears: tuple[tuple[int, int, bool], ...], grid_x: int, grid_y: int, shard_mlp: bool
 ) -> BlockPlacement:
-    """block_placement's choice for "l1" at m_tiles tile rows, with linears the (in_features, out_features,
-    fp32_dest_acc) of the block's linears."""
+    """block_placement's choice at m_tiles tile rows, with linears the (in_features, out_features, fp32_dest_acc) of
+    the block's QKV, out_proj, fc1 and fc2, and shard_mlp for "l1"."""
     if (grid_x, grid_y) not in L1_GRIDS or m_tiles * ttnn.TILE_SIZE > L1_MAX_ROWS:
         return DRAM_PLACEMENT
+    n_tiles, blockings = [], []
     for in_features, out_features, fp32_dest_acc in linears:
-        k_tiles, n_tiles = math.ceil(in_features / ttnn.TILE_SIZE), math.ceil(out_features / ttnn.TILE_SIZE)
+        k_tiles = math.ceil(in_features / ttnn.TILE_SIZE)
+        n_tiles.append(math.ceil(out_features / ttnn.TILE_SIZE))
         # linear_program_config's choice: None leaves the config to ttnn.
-        if _linear_blocking(m_tiles, k_tiles, n_tiles, grid_x, grid_y, fp32_dest_acc) is None:
+        blockings.append(_linear_blocking(m_tiles, k_tiles, n_tiles[-1], grid_x, grid_y, fp32_dest_acc))
+        if blockings[-1] is None:
             return DRAM_PLACEMENT
+    if not shard_mlp:
+        return L1_INTERLEAVED_PLACEMENT
+    (fc1, fc2), (fc1_n_tiles, fc2_n_tiles) = blockings[2:], n_tiles[2:]
+    # fc2 reads fc1's output as a block-sharded input, which needs COL_MAJOR shards, so transposed splits, as high as
+    # fc2's per_core_M. With fc2's split transposed, on these grids fc1's transposed split and the equal rows per core
+    # imply each other.
+    if (
+        fc1.transpose_mcast
+        and fc2.transpose_mcast
+        and fc1.per_core_m == fc2.per_core_m
+        and fc1_n_tiles % fc1.per_core_n == 0
+        and fc1.per_core_n % fc2.in0_block_w == 0
+        and math.ceil(fc1_n_tiles / fc1.per_core_n) == math.ceil(fc2_n_tiles / fc2.per_core_n)
+    ):
+        return L1_SHARDED_MLP_PLACEMENT
     return L1_INTERLEAVED_PLACEMENT
 
 
