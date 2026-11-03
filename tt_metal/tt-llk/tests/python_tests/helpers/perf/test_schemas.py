@@ -1453,7 +1453,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_untilize_quasar": "perf_pack_untilize_quasar"},
     },
     "perf_reduce_quasar": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1470,6 +1470,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
+            "input_num_tiles_in_block",
             "is_reduce_to_one",
             "loop_factor",
             "marker",
@@ -1482,6 +1483,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_c_dim_B",
             "num_faces_r_dim_A",
             "num_faces_r_dim_B",
+            "num_tiles_in_block",
+            "output_num_tiles_in_block",
             "pool_type",
             "tile_cnt",
             "unpack_to_dest",
