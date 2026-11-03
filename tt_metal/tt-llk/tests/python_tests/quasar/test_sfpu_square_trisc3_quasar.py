@@ -21,6 +21,7 @@ from helpers.param_config import (
     generate_dest_depth_input_dimensions,
     generate_quasar_sfpu_format_variants,
     parametrize,
+    quasar_sfpu_fpu_route_variants,
     runtime,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -74,6 +75,20 @@ def generate_sfpu_square_combinations(formats_list):
                         dest_sync,
                         runtime(input_dimensions),
                     )
+                )
+    # The FPU datacopy route the dedup above drops, at the Dest-depth sizes.
+    same_formats = [
+        fmt for fmt in formats_list if fmt.input_format == fmt.output_format
+    ]
+    for format_variant in quasar_sfpu_fpu_route_variants(
+        MathOperation.Square, same_formats
+    ):
+        for dest_sync in dest_sync_modes:
+            for input_dimensions in generate_dest_depth_input_dimensions(
+                format_variant.dest_acc, dest_sync
+            ):
+                combinations.append(
+                    (format_variant, dest_sync, runtime(input_dimensions))
                 )
     return combinations
 

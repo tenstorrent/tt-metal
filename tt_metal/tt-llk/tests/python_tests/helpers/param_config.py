@@ -976,6 +976,31 @@ def generate_dest_depth_input_dimensions(
     ]
 
 
+def generate_parallel_matmul_dest_depth_profiles(dest_acc, dest_sync=DestSync.Half):
+    """(SFPU operand, matmul A, matmul B) dims for the SFPU-parallel-matmul dest-depth sweeps.
+
+    The matmul output (ct=2, kt=1) spans 4 and 8 full Dest sections beside an 8-tile SFPU operand.
+    """
+    rt_per_block = max_dest_tiles(dest_acc, dest_sync) // 2
+    return [
+        ([32, 256], [32 * blocks * rt_per_block, 32], [32, 64])
+        for blocks in DEST_DEPTH_BLOCK_COUNTS
+    ]
+
+
+def quasar_sfpu_fpu_route_variants(
+    op: Optional[MathOperation], formats_list: List[InputOutputFormat]
+) -> List[QuasarSfpuVariant]:
+    """FPU-datacopy routes of *op* over *formats_list*, which the default variant dedup drops for Unpack-to-Dest."""
+    return [
+        variant
+        for variant in generate_quasar_sfpu_format_variants(
+            op, formats_list, full_format_route_sweep=True
+        )
+        if variant.uses_fpu
+    ]
+
+
 PERF_INPUT_DIMENSIONS = (
     [256, 32],
     [32, 256],

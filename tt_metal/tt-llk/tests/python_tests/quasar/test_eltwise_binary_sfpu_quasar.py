@@ -29,6 +29,7 @@ from helpers.param_config import (
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
+    quasar_sfpu_fpu_route_variants,
     resolve_quasar_sfpu_variant,
     runtime,
 )
@@ -571,25 +572,29 @@ def test_eltwise_binary_sfpu_float_quasar(
     )
 
 
+# The float routes above plus the FPU datacopy route their dedup drops for Unpack-to-Dest.
+_DEST_DEPTH_FLOAT_VARIANTS = _FLOAT_VARIANTS + quasar_sfpu_fpu_route_variants(
+    MathOperation.SfpuElwadd,
+    input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+)
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats=[variant.formats for variant in _FLOAT_VARIANTS],
-    dest_acc=_dest_acc_for_float_formats,
+    format_variant=_DEST_DEPTH_FLOAT_VARIANTS,
     mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwmul],
     num_blocks=runtime(list(DEST_DEPTH_BLOCK_COUNTS)),
 )
-def test_eltwise_binary_sfpu_dest_depth_quasar(formats, dest_acc, mathop, num_blocks):
+def test_eltwise_binary_sfpu_dest_depth_quasar(format_variant, mathop, num_blocks):
     """4 and 8 operand sets, each staged, combined and packed in its own Dest section."""
     _run_sfpu_binary_llk_golden(
-        formats,
-        dest_acc,
+        format_variant.formats,
+        format_variant.dest_acc,
         DEFAULT_SFPU_BINARY_TILE_INDICES,
         mathop,
         mathop.cpp_enum_value,
         prepare_stimuli=_prepare_float_stimuli,
-        format_variant=resolve_quasar_sfpu_variant(
-            MathOperation.SfpuElwadd, formats, dest_acc
-        ),
+        format_variant=format_variant,
         num_blocks=num_blocks,
     )
 
