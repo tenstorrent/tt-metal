@@ -180,8 +180,8 @@ private:
     bool downstream_is_tensix_builder_ = false;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
     bool is_inter_mesh_;  // True if this router connects different meshes
-    // What create_kernel passed to CreateKernel, for the manifest.
-    RouterKernelInputs kernel_inputs_;
+    // What create_kernel built each ERISC's kernel with.
+    std::vector<KernelInputs> kernel_inputs_by_erisc_;
 };
 
 }  // namespace tt::tt_fabric

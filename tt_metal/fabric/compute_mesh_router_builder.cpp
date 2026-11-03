@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -945,7 +946,6 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 
     const auto num_enabled_risc_cores = get_configured_risc_count();
 
-    kernel_inputs_ = {.defines = defines, .processors = {}, .named_ct_args = {}};
     for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
         // Get compile-time args (positional + named) and append cluster-wide coordination info
         auto [ct_args, named_ct_args] = erisc_builder_->get_compile_time_args(risc_id);
@@ -965,9 +965,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         }
 
         auto opt_level = erisc_builder_->get_kernel_opt_level();
-
-        kernel_inputs_.processors.push_back(proc);
-        kernel_inputs_.named_ct_args.push_back(named_ct_args);
+        const auto noc = erisc_builder_->config.risc_configs[risc_id].get_configured_noc();
 
         // Create the kernel
         auto kernel = tt::tt_metal::CreateKernel(
@@ -975,7 +973,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             eth_logical_core,
             tt::tt_metal::EthernetConfig{
-                .noc = erisc_builder_->config.risc_configs[risc_id].get_configured_noc(),
+                .noc = noc,
                 .processor = proc,
                 .compile_args = ct_args,
                 .defines = defines,
@@ -983,6 +981,16 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 .opt_level = opt_level});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);
+
+        kernel_inputs_by_erisc_.push_back({
+            .kernel = kernel,
+            .processor = proc,
+            .noc = noc,
+            .compile_args = ct_args,
+            .named_compile_args = named_ct_args,
+            .defines = program.impl().get_kernel(kernel)->defines(),
+            .runtime_args = rt_args,
+        });
     }
 
     log_debug(
@@ -996,13 +1004,14 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRoutingFacts& chip_facts) const {
     const auto& builder_context = fabric_context_.get_builder_context();
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
+    const RouterKernelInputs kernel = make_router_kernel_inputs(kernel_inputs_by_erisc_);
     ManifestRouterInputs inputs{
         .erisc_builder = *erisc_builder_,
         .vc_shape = vc_shape_,
         .location = location_,
         .chip_facts = chip_facts,
         .addresses_to_clear = addresses_to_clear,
-        .kernel = kernel_inputs_,
+        .kernel = kernel,
         .hal = fabric_context_.get_hal(),
     };
     return tt::tt_fabric::collect_manifest_router(inputs);

@@ -61,13 +61,16 @@ struct KernelCreationContext {
 };
 
 /**
- * What a router's create_kernel passed to CreateKernel: the defines every RISC shares, and each RISC's processor and
- * named compile-time arguments.
+ * What inputs an ERISC's router kernel was created with.
  */
-struct RouterKernelInputs {
+struct KernelInputs {
+    tt::tt_metal::KernelHandle kernel;
+    tt::tt_metal::DataMovementProcessor processor;
+    tt::tt_metal::NOC noc;
+    std::vector<uint32_t> compile_args;
+    std::unordered_map<std::string, uint32_t> named_compile_args;
     std::map<std::string, std::string> defines;
-    std::vector<tt::tt_metal::DataMovementProcessor> processors;
-    std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args;
+    std::vector<uint32_t> runtime_args;
 };
 
 // ============ Router Builder Abstract Base Class ============
