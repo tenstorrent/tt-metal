@@ -109,8 +109,15 @@ class KDAProgramConfig:
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
+    # With the SP relay (one group per head), heads per TP rank whose output-gate columns the input projection keeps;
+    # the other heads' output gate is its own projection, run beside the relay on the worker columns it leaves idle,
+    # and the final carry runs beside the output projection (side_windows.py). None keeps the whole output gate in
+    # the input projection and runs the relay and the final carry on their own.
+    input_projection_gate_heads: int | None = None
 
     def __post_init__(self) -> None:
+        if self.input_projection_gate_heads is not None and self.input_projection_gate_heads < 0:
+            raise ValueError("input_projection_gate_heads must be nonnegative")
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
             raise ValueError(
                 "qkv_channel_chunk_size must be a positive multiple of "
@@ -205,6 +212,33 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # At 640 rows the input projection keeps 7 of 24 heads' output gate: 321 tiles fill its 27 tile columns per
+        # core on the 12 worker columns (all 24 take 33), and the other 17 heads' gate on the 9 columns beside the
+        # relay take about as long as the relay.
+        input_projection_gate_heads=7 if active_seq_len_local == _TUNED_PROJECTION_ROWS else None,
+    )
+
+
+def output_gate_program_config(
+    grid: ttnn.CoreCoord, rows: int, width: int
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """The output gate's projection beside the relay: one [rows, width] output block per core of ``grid``, K in 8-tile
+    blocks (bfloat8_b weights)."""
+    per_core_m = math.ceil(rows // ttnn.TILE_SIZE / grid.y)
+    per_core_n = math.ceil(width // ttnn.TILE_SIZE / grid.x)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=8,
+        out_subblock_h=1,
+        # FP32 accumulation holds four tiles in DST.
+        out_subblock_w=max(w for w in range(1, 5) if per_core_n % w == 0),
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
     )
 
 

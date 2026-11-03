@@ -25,9 +25,11 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     decay_projection_program_config,
     l1_when_it_fits,
+    output_gate_program_config,
     tuned_projection_matmul_configs,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence, _sp_links
+from models.demos.deepseek_v3_d_p.tt.kda.side_windows import SideWindows
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -222,6 +224,12 @@ class ttKDA:
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict is not None:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
+        # With the SP relay the output gate of the heads past input_projection_gate_heads is its own projection, run
+        # beside the relay (side_windows.py); load_kda_weights cuts it from the stored fused projection.
+        self._side_by_side = self._is_sequence_parallel and program_config.input_projection_gate_heads is not None
+        self.output_gate_split = (
+            program_config.input_projection_gate_heads * config.head_v_dim if self._side_by_side else None
+        )
         if weights is None:
             weights = load_kda_weights(
                 mesh_device,
@@ -231,6 +239,12 @@ class ttKDA:
                 cache_name_prefix=f"layer_{layer_idx}.kda",
                 tensor_parallel_axis=tp_axis,
                 projection_dtype=program_config.projection_dtype,
+                output_gate_split=self.output_gate_split,
+            )
+        if weights.output_gate_split != self.output_gate_split:
+            raise ValueError(
+                f"KDAWeights split the output gate at {weights.output_gate_split} columns; this layer needs "
+                f"{self.output_gate_split} (load_kda_weights(output_gate_split=...))"
             )
         expected_tp_size = tuple(mesh_device.shape)[tp_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         if weights.tensor_parallel_size != expected_tp_size or weights.tensor_parallel_axis != tp_axis:
@@ -328,6 +342,16 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        # The relay takes whole right-hand worker columns: a core per head and a sender per link.
+        grid = mesh_device.compute_with_storage_grid_size()
+        self._side_windows = (
+            SideWindows.shared(
+                mesh_device,
+                relay_columns=-(-(self.config.num_heads + _sp_links(mesh_device, sp_axis)) // grid.y),
+            )
+            if self._side_by_side
+            else None
+        )
         self.recurrence = KDARecurrence(
             mesh_device,
             program_config.recurrence,
@@ -338,7 +362,23 @@ class ttKDA:
             value_dim=self.config.head_v_dim,
             # The bounded gate's lower-bound scale is applied by chunk preparation.
             gate_scale=config.gate_lower_bound if self._bounded_gate else 1.0,
+            side_windows=self._side_windows,
         )
+        if self._side_windows is not None:
+            self.output_gate_program_config = output_gate_program_config(
+                self._side_windows.gate_grid,
+                self.active_seq_len_local,
+                self.weights.output_gate_projection.shape[-1],
+            )
+            # A single TP rank's output projection is a ttnn.linear, which needs its own schedule on the narrower block.
+            self.output_projection_program_config = tuned_projection_matmul_configs(
+                self._side_windows.projection_grid,
+                self.active_seq_len_local,
+                self.weights.input_projection.shape[-1],
+                *tuple(self.weights.output_projection.shape)[-2:],
+            )[1]
+            if self.output_projection_program_config is None:
+                raise ValueError("the final carry's side window needs a tuned output projection schedule")
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=program_config.output_projection_math_fidelity,
@@ -467,7 +507,10 @@ class ttKDA:
             projected=projected,
             decay_rank_offset=auxiliary_start,
             output_gate_offset=auxiliary_start + config.head_k_dim,
-            beta_offset=auxiliary_start + config.head_k_dim + config.v_dim,
+            # The projection holds only the first heads' output gate when the rest runs beside the relay.
+            beta_offset=auxiliary_start
+            + config.head_k_dim
+            + (config.v_dim if self.output_gate_split is None else self.output_gate_split),
         )
 
     def _compute_decay(self, projected: ttnn.Tensor, decay_rank_offset: int) -> ttnn.Tensor:
@@ -503,6 +546,7 @@ class ttKDA:
         output: ttnn.Tensor,
         output_gate: ttnn.Tensor,
         output_gate_offset: int,
+        output_gate_tail: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Apply the KDA gated RMSNorm epilogue."""
         config, weights = self.config, self.weights
@@ -516,15 +560,18 @@ class ttKDA:
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
+            gate_tail=output_gate_tail,
         )
 
     def _project_output(
         self,
         output: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """Project normalized heads and perform the required TP reduction."""
+        """Project normalized heads and perform the required TP reduction (beside the final carry with side windows,
+        on the worker columns it leaves)."""
         weights = self.weights
         if self._fused_output_reduce_scatter:
+            core_grid = {} if self._side_windows is None else {"core_grid": self._side_windows.projection_grid}
             return ttnn.experimental.matmul_reduce_scatter_prefill(
                 output,
                 weights.output_projection,
@@ -532,6 +579,7 @@ class ttKDA:
                 compute_kernel_config=self.fused_output_projection_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 staging_tensor=self._fused_output_staging,
+                **core_grid,
             )
         output = ttnn.linear(
             output,
@@ -610,10 +658,29 @@ class ttKDA:
             actual_start=actual_start,
             actual_end=actual_end,
             release_gate=True,
+            beside_relay=None if self._side_windows is None else lambda: self._project_output_gate(hidden_states),
         )
-        output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
-        ttnn.deallocate(result.output)
+        # With side windows the last heads' output gate comes from the projection beside the relay.
+        output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset, result.beside_relay)
+        for tensor in (result.output, result.beside_relay):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
-        output = self._project_output(output)
-        return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
+        if result.final_carry is None:
+            return self._project_output(output), KdaState(recurrent=result.final_state, convolution=new_convolution)
+        # The final carry mostly waits on the SP fabric: it runs on the last worker column, beside the projection.
+        with self._side_windows.final_carry():
+            final_state = result.final_carry()
+            output = self._project_output(output)
+        return output, KdaState(recurrent=final_state, convolution=new_convolution)
+
+    def _project_output_gate(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """The output gate of the heads the input projection leaves out, on the worker columns beside the relay."""
+        return ttnn.linear(
+            hidden_states,
+            self.weights.output_gate_projection,
+            program_config=self.output_gate_program_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.input_projection_compute_config,
+        )

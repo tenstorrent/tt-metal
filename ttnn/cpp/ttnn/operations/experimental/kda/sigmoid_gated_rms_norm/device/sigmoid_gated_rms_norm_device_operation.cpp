@@ -74,11 +74,24 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attrs.gate_column_offset % tt::constants::TILE_WIDTH == 0,
         "sigmoid_gated_rms_norm: gate_column_offset must be tile aligned");
-    const uint64_t gate_width = uint64_t{attrs.num_heads} * attrs.value_dim;
+    uint32_t gate_heads = attrs.num_heads;
+    if (in.gate_tail) {
+        check_tiled_device(*in.gate_tail, "gate_tail", {DataType::BFLOAT16});
+        TT_FATAL(in.gate_tail->device() == in.input.device(), "sigmoid_gated_rms_norm: gate_tail is on another device");
+        const auto& tail_shape = in.gate_tail->logical_shape();
+        TT_FATAL(
+            tail_shape.rank() == 3 && tail_shape[0] == attrs.batch && tail_shape[1] == attrs.sequence &&
+                tail_shape[2] > 0 && tail_shape[2] % attrs.value_dim == 0 &&
+                tail_shape[2] <= uint64_t{attrs.num_heads} * attrs.value_dim,
+            "sigmoid_gated_rms_norm: gate_tail {} must be [B, T, n*V] with 0 < n <= H",
+            tail_shape);
+        gate_heads -= tail_shape[2] / attrs.value_dim;
+    }
+    const uint64_t gate_width = uint64_t{gate_heads} * attrs.value_dim;
     TT_FATAL(
         gate_shape[0] == attrs.batch && gate_shape[1] == attrs.sequence &&
             gate_shape[2] >= attrs.gate_column_offset + gate_width,
-        "sigmoid_gated_rms_norm: gate {} must be [B, T, W] and hold H*V = {} columns at gate_column_offset {}",
+        "sigmoid_gated_rms_norm: gate {} must be [B, T, W] and hold {} columns at gate_column_offset {}",
         gate_shape,
         gate_width,
         attrs.gate_column_offset);
@@ -130,7 +143,8 @@ Tensor sigmoid_gated_rms_norm(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     DataType output_dtype,
-    uint32_t gate_column_offset) {
+    uint32_t gate_column_offset,
+    const std::optional<Tensor>& gate_tail) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
     TT_FATAL(num_heads > 0, "sigmoid_gated_rms_norm: num_heads must be positive");
@@ -148,7 +162,7 @@ Tensor sigmoid_gated_rms_norm(
             .output_dtype = output_dtype,
             .compute_kernel_config = compute_kernel_config,
             .gate_column_offset = gate_column_offset},
-        SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight});
+        SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight, .gate_tail = gate_tail});
     return results[0];
 }
 

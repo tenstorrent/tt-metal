@@ -15,7 +15,9 @@ template <
     uint32_t Mt,
     uint32_t epsilon_bits,
     uint32_t gate_row_tiles,
-    uint32_t gate_offset_tiles>
+    uint32_t gate_offset_tiles,
+    uint32_t gate_heads,
+    uint32_t tail_row_tiles>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto x_acc = TensorAccessor(tensor::input);
     const auto g_acc = TensorAccessor(tensor::gate);
@@ -41,28 +43,48 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     noc.async_read_barrier();
     weight.push_back(Vt);
 
-    for (uint32_t i = 0; i < wi_count; i++) {
-        const uint32_t wi = wi_start + i;
-        const uint32_t bh = wi / Mt;
-        const uint32_t mt = wi % Mt;
-        const uint32_t b = bh / H;
-        const uint32_t h = bh % H;
-        const uint32_t x_base = wi * Vt;
-        const uint32_t gate_base = (b * Mt + mt) * gate_row_tiles + gate_offset_tiles + h * Vt;
-        x.reserve_back(Vt);
-        gate.reserve_back(Vt);
-        for (uint32_t vt = 0; vt < Vt; vt++) {
-            noc.async_read(
-                x_acc, x, x.get_entry_size(), {.page_id = x_base + vt}, {.offset_bytes = vt * x.get_entry_size()});
-            noc.async_read(
-                g_acc,
-                gate,
-                gate.get_entry_size(),
-                {.page_id = gate_base + vt},
-                {.offset_bytes = vt * gate.get_entry_size()});
+    // Heads from gate_heads on read their gate from gate_tail, from its column 0.
+    const auto read_items = [&](const auto& tail_acc) {
+        for (uint32_t i = 0; i < wi_count; i++) {
+            const uint32_t wi = wi_start + i;
+            const uint32_t bh = wi / Mt;
+            const uint32_t mt = wi % Mt;
+            const uint32_t b = bh / H;
+            const uint32_t h = bh % H;
+            const uint32_t x_base = wi * Vt;
+            const uint32_t row = b * Mt + mt;
+            const bool in_tail = h >= gate_heads;
+            const uint32_t gate_base = in_tail ? row * tail_row_tiles + (h - gate_heads) * Vt
+                                               : row * gate_row_tiles + gate_offset_tiles + h * Vt;
+            x.reserve_back(Vt);
+            gate.reserve_back(Vt);
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                noc.async_read(
+                    x_acc, x, x.get_entry_size(), {.page_id = x_base + vt}, {.offset_bytes = vt * x.get_entry_size()});
+                if (in_tail) {
+                    noc.async_read(
+                        tail_acc,
+                        gate,
+                        gate.get_entry_size(),
+                        {.page_id = gate_base + vt},
+                        {.offset_bytes = vt * gate.get_entry_size()});
+                } else {
+                    noc.async_read(
+                        g_acc,
+                        gate,
+                        gate.get_entry_size(),
+                        {.page_id = gate_base + vt},
+                        {.offset_bytes = vt * gate.get_entry_size()});
+                }
+            }
+            noc.async_read_barrier();
+            x.push_back(Vt);
+            gate.push_back(Vt);
         }
-        noc.async_read_barrier();
-        x.push_back(Vt);
-        gate.push_back(Vt);
+    };
+    if constexpr (gate_heads < H) {
+        read_items(TensorAccessor(*tensor::get_token_if_present<"gate_tail">()));
+    } else {
+        read_items(g_acc);
     }
 }

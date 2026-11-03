@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -29,6 +30,8 @@ struct SigmoidGatedRmsNormInputs {
     Tensor input;
     Tensor gate;
     Tensor weight;
+    // The last heads' gate columns, from column 0, when the gate holds only the first heads'.
+    std::optional<Tensor> gate_tail;
 };
 
 }  // namespace ttnn::experimental::prim
