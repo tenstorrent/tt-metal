@@ -193,7 +193,7 @@ NoC0 footprint (multicast only the experts each column's rows touch, the deferre
 binds at small t), then a per-row-count share rule refit at t2048. Not done here because pruning is a topology
 change, outside this phase's knob-turn scope.
 
-### [ ] Refinement 4 - Model L1 occupancy: CB budget from the live allocator state, fast within it
+### [x] Refinement 4 - Model L1 occupancy: CB budget from the live allocator state, fast within it
 
 **Type**: perf
 
@@ -212,3 +212,18 @@ assumes free L1); an occupancy that cannot fit any blocking raises a support ref
 anything, not a crash; all six occupied t = 4096 rows pass and their device-ns is as low as possible within 853,568
 B (target 90.8 us, today 179-192 us stock); the unoccupied rows do not regress; the golden suite is green; and the
 precision gates hold.
+
+**Outcome**: the CB budget is read from the L1 allocator at call time (`cb_budget_bytes(device)`: base to lowest live
+buffer); `validate()` predicts the output's placement and raises `UnsupportedAxisValue` when no blocking fits, before
+anything is allocated. The six occupied t = 4096 rows pass: L0-L5 171.7 / 170.8 / 171.0 / 172.5 / 171.5 / 169.4 us
+(stock 175-192; the port-side cap measured 170-177; the live budget alone, at 2 waves k = 6, 176.8-178.6). The win
+inside the budget is a w issue quota floor of 8 tiles per step on multi-wave blockings (2 waves k = 6: 176.8 ->
+170.8 us). Unoccupied rows hold (t4096 L0 / L3 163.8 / 164.1, t3072 133.9, t2048 108.8, t1024 85-87 us); t3072 DRAM x
+and y improves 193.6 -> 188.2 us (two waves, now an explicit rule instead of a side effect of the old constant).
+Bottleneck: the empty-L1 blocking (2 waves k = 8, 993,984 B, 163.8 us) does not fit 853,568 B, and every fitting
+blocking pays more channel steps. Compute-stubbed ablation: 2 waves k = 8 152 us, k = 6 161.7 us, k = 4 with k = 8 x
+steps 172.9 us, so a w step costs about 0.9 us and an x step about 0.35 us of fixed sync. The split-x-step knob
+(`x_step_rounds`) is correct but loses here (179.6 us) and is parked at 1. Next lever: pipeline the multicast
+handshake (receivers signal ready for step s + 1 before waiting on step s), which makes smaller K blocks as cheap
+as k = 8. Not done because it changes the shared `kernel_lib` mcast protocol (the data-ready flag becomes a
+counter).

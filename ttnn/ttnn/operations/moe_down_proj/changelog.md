@@ -136,3 +136,41 @@
   four new t3072 placement rows).
 - Issues encountered: `git checkout <rev> -- <path>` for A/B baselines also staged the old files; reset the index.
 - Tests added: t3072_scaled in `PLACEMENT_CASES` (test_moe_down_proj_perf.py).
+
+## Refinement 4 - Model L1 occupancy: CB budget from the live allocator state, fast within it
+- Date: 2026-11-03
+- What was done: (1) `CB_BUDGET_BYTES` (976 KiB, tuned on an empty L1) is gone. `cb_budget_bytes(device)` reads the
+  L1 allocator (`ttnn.get_memory_view`; block addresses are relative to the allocator base where CBs start) and
+  returns the bytes below the lowest live buffer. `create_program_descriptor` uses it after the output exists.
+  `validate()` predicts the output's placement (charged unless a free block above the lowest live buffer holds it),
+  runs `select_blocking`, and raises `UnsupportedAxisValue` when nothing fits, before any allocation;
+  `footprint_bytes()` rounds each CB to 64 B. (2) `w_issue_quota()` moves the writer's w prefetch quota to the host
+  with a floor of 8 tiles per step on multi-wave blockings (`W_ISSUE_TILES_MIN_MULTI_WAVE`). (3)
+  `DRAM_Y_ONE_PASS_MAX_ROWS` = 16 makes the old constant's implicit "two waves at t >= 3072 with y in DRAM" explicit.
+  The live budget would otherwise pick one wave there. (4) `x_step_rounds`: an x step may carry several compute K
+  rounds (round-major stage layout, reader only), which shrinks the w CBs at a fixed x step count. It is correct but
+  measured slower at the occupied shape, so it is parked at `X_STEP_ROUNDS_MAX` = 1.
+  Reused: `select_blocking`, `cb_plan()`, the reader prefetch, compute and writer unchanged except the quota CT arg.
+  Added: the live budget, the refusal, the quota and DRAM-y knobs, `x_step_rounds`.
+- Device kernel time (us), occupied t4096 L0-L5 (853,568 B free): CB clash before; the live budget alone (2 waves
+  k = 6) 176.8-178.6; final 171.7 / 170.8 / 171.0 / 172.5 / 171.5 / 169.4 (stock 175.0-191.9, target 90.8).
+  Other blockings that fit: 3 waves k = 8 179.6-180.5, 2 waves k = 4 186-189, k = 4 with k = 8 x steps 179.6-180.8,
+  4 waves k = 8 189.9, 1 wave k = 3 185.6; 2 waves k = 8 with W_DEPTH 1 176.4. Unpaced store and X / W depth 3
+  at k = 6 182.6 / 183.0 / 179.5. The prefetch steps knob at k = 6 gives 12 -> 173.4-174.0 against 16 -> 176.0-177.2,
+  but at t3072 (one wave k = 6) 16 beats 12 (133.4-133.9 vs 135.2-135.3), and the w quota floor beats both.
+  Unoccupied: t4096 L0 / L3 163.8 / 164.1, t3072 133.9, t2048 108.8, t1024 85.3-87.3 (hold); t3072 DRAM y 158.6,
+  DRAM x 211.4 at t4096 and DRAM both 244.2 at t4096 (hold); t3072 DRAM both 193.6 -> 188.2.
+- Ablation (compute stubbed): 2 waves k = 8 152, k = 6 161.7, k = 4 with k = 8 x steps 172.9 us. About 0.9 us per
+  w step and 0.35 us per x step of fixed channel sync, so smaller K blocks cost dataflow time, not compute.
+- Remaining headroom: pipeline the multicast handshake (ready for step s + 1 before waiting on s) in the shared
+  mcast helper, which would make the k = 6 blocking about as fast as k = 8. Not done here because it changes the
+  `kernel_lib` protocol.
+- Accuracy achieved: occupied t4096 (k = 6) passes the golden PCC >= 0.9998 / rel_rms <= 2.0e-2 gates and
+  `test_model_l1_occupancy`; unoccupied summation order unchanged (precision baseline: PCC 0.99991, rel_rms 1.90e-2
+  LoFi; HiFi2 PCC 0.999999).
+- Golden test progress: 28/28 on the slice (t3072 / t2048 / t4096 layer 0 and 3 across placements, the six
+  occupied loose rows, t1 / t37 small); unit dir 78/78.
+- Issues encountered: a golden slice under inline precompile fails every cell with a zero reference (the known
+  stand-in leak in the golden helpers' case cache). Run golden slices with `--no-precompile`.
+- Tests added: `test_model_l1_occupancy`, `test_l1_occupancy_without_any_fit_refused` (test_moe_down_proj.py);
+  `probes/sweep_occupied.py` (forced-blocking sweep, run explicitly).

@@ -35,12 +35,13 @@ Pattern check (Rule 3):
 | `num_m_groups` | 9 (L layout, p100a), 11 (Rect, p100a), `grid.x` or `grid.y - 1` in general | `select_layout(grid, tensor_row_tiles)` |
 | `num_n_lines` | divisor of 24: 12 (L), 8 (Rect) | `select_layout` |
 | `core_n_tiles` | `24 / num_n_lines` in {2, 3} on p100a, <= 24 always | `select_layout` |
-| `num_waves` | 1..`MAX_WAVES` = 4 | `select_blocking`: with y in L1, the fewest waves at `k_block_tiles >= K_BLOCK_ONE_PASS_MIN` = 6 and `core_row_tiles_max <= ONE_PASS_MAX_ROWS` = 24 that fit; otherwise the largest `k_block_tiles`, then the fewest waves (Refinement 3: t = 3072 L1 / L1 is 1 wave at k = 6) |
+| `num_waves` | 1..`MAX_WAVES` = 4 | `select_blocking`: with y in L1, the fewest waves at `k_block_tiles >= K_BLOCK_ONE_PASS_MIN` = 6 and `core_row_tiles_max <= ONE_PASS_MAX_ROWS` = 24 that fit; otherwise the largest `k_block_tiles`, then the fewest waves, one wave with y in DRAM only up to `DRAM_Y_ONE_PASS_MAX_ROWS` = 16 rows per core (Refinement 3: t = 3072 L1 / L1 is 1 wave at k = 6; Refinement 4: t = 4096 under the model's occupancy is 2 waves at k = 6) |
 | `core_row_tiles_max` | `ceil(ceil(tensor_row_tiles / num_waves) / num_m_groups)` <= 24 on p100a (23 at t = 3072 one wave) | `select_blocking`; device `core_row_tiles <= core_row_tiles_max` because the device clamps `active_row_tiles <= tensor_row_tiles` |
 | `k_block_tiles` | divisor of 96, <= `K_BLOCK_MAX` = 8 | `select_blocking` |
+| `x_step_rounds` | 1..`X_STEP_ROUNDS_MAX` = 1 (parked knob: an x step carries that many compute K rounds; `cb_x_round` / `cb_x_stage` scale with it) | `select_blocking` tries 1 first, then splits the x K block |
 | `NUM_EXPERTS` | 8 | `validate()`: E == 8 |
 | `X_DEPTH`, `W_DEPTH`, `OUT_DEPTH` | 2 each (`cb_output_rows` grows to the wave block when `STORE_PACED` and `num_waves >= 2`) | host constants; `out_depth_blocks()` |
-| `CB_BUDGET_BYTES` | 976 KiB = 999,424 B (L1 x, L1 y; was 960 KiB, raised in Refinement 2 so the paced store keeps t = 4096 at 2 waves) | host constant; y's lowest L1 address measured 1,204,352 B at R = 8416 on p100a (x 250 KB + y 118 KB per bank above the CBs). `cb_budget_bytes()` adds the MAX_ROWS per-bank share of x (+250,240 B) and/or y (+118,272 B) when that tensor is in DRAM: 1,233,280 / 1,101,312 / 1,351,552 B for DRAM x / DRAM y / both. At the measured shapes the selected blocking is unchanged (one wave at t = 4096 needs 1,455,232 B at `k_block_tiles` = 8). |
+| CB budget | per-bank bytes from the L1 allocator base to the lowest live L1 buffer at call time (Refinement 4; replaces the 976 KiB `CB_BUDGET_BYTES` constant). Empty L1, R = 8416, x and y in L1 on p100a: 1,092,352 B. Nomic 8x512 model occupancy: 853,568 B. | `cb_budget_bytes(device)` reads `ttnn.get_memory_view` (block addresses are relative to the allocator base, where the CB region starts). `validate()` predicts the output's placement (`output_l1_bank_bytes`; charged unless a free block above the lowest live buffer holds it) and refuses (`UnsupportedAxisValue`) when no blocking fits. `footprint_bytes()` rounds each CB up to `CB_ADDR_ALIGN` = 64 B. |
 
 ## Footprint
 
@@ -68,6 +69,8 @@ p100a, L layout (`core_n_tiles` = 2, `num_m_groups` = 9, `k_block_tiles` = 8): t
 
 Implementation note: the w channel runs on the writer RISC (NoC0) and x on the reader RISC (NoC1), each sender multicasting from its staging buffer; w moves as one multicast per K round covering the wave's expert slot range. With one wave, `w_reader_share()` eighths of the w DRAM reads are issued by the reader RISC on NoC1 (4 down to 0 as rows per core grow, see the descriptor).
 
+p100a, t = 4096 under the model's occupancy (853,568 B free): 2 waves, `k_block_tiles` = 6, `core_row_tiles_max` = 15: 293,760 + 313,344 + 122,880 + 61,440 + 192 = 791,616 B (64 B-aligned CBs). 2 waves at k = 8 (993,984 B) does not fit, and every other fitting blocking measured slower (3 waves k = 8 179.6 us; 2 waves k = 4 with x steps of k = 8 179.6 us; 2 waves k = 4 186 us; vs 171-172 us).
+
 p100a, t = 3072 L1 / L1 (1 wave, `k_block_tiles` = 6, `core_row_tiles_max` = 23): 450,432 + 313,344 + 188,416 + 8,192 + 80 = 960,464 B.
 
 ## Data-movement budget
@@ -94,6 +97,8 @@ Totals per tier: DRAM 20.05 to 22.5 MB (w), plus 27.5 MB (x) and/or 12.9 MB (y) 
   measured a 130 us sync + multicast floor at t = 4096 (compute about 15 us of it), so the multicast scaffold, not
   the DRAM stream, binds there. The receive-byte reduction (R2 plus a layout re-solve) is filed as perf
   Refinement 2 in `op_requirements.md`.
+- Refinement 4: the budget is now read from the allocator at call time, so the clash below cannot happen; an occupancy
+  with no fitting blocking is refused in `validate()`.
 - The CB region ends at about 1,052,640 B (960 KiB budget above the unreserved base); after Refinement 2 (976 KiB
   budget, 993,856 B used at t = 4096) at about 1,063,500 B. Any L1 tensor below that
   address at call time makes program creation throw `Statically allocated circular buffers ... clash with L1
