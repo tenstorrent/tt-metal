@@ -751,6 +751,7 @@ def _thin_sweep(items):
         for item in items
         if item.get_closest_marker("llk_sweep") is None
         or zlib.crc32(item.nodeid.encode()) % stride == 0
+        or item.name in getattr(item.module, "LLK_SWEEP_KEEP", ())
     ]
 
 

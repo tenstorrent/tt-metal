@@ -8,6 +8,11 @@ the old shapes and formats are rows of perf_pack_tiny_tile_block and are not rep
 import pytest
 
 pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        'test_perf_pack_grid_tiny[formats:Float16_b->Bfp8_b-dest_acc:No-tile_dims:(16, 32)-block_tiles:1-dest_index:0-pack_mode:1-loop_factor:32]',
+    ]
+)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat

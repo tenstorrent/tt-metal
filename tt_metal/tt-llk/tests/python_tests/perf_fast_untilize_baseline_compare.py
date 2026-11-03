@@ -4,6 +4,12 @@
 import pytest
 
 pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        'test_perf_fast_untilize_baseline_compare[formats:Float16_b->Float16_b-dest_acc:No-rt_dim:1-ct_dim:5-loop_factor:16]',
+        'test_perf_fast_untilize_baseline_compare[formats:Float16_b->Float16_b-dest_acc:No-rt_dim:1-ct_dim:9-loop_factor:16]',
+    ]
+)
 from conftest import skip_for_quasar, skip_for_wormhole
 from fast_untilize_common import (
     FAST_UNTILIZE_CT_DIMS,

@@ -6,6 +6,21 @@
 import pytest
 
 pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        'test_perf_pack_grid_rows[formats:Bfp8_b->Bfp8_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:1-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:1-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:16-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:17-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:3-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:32-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:4-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:5-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:50-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:Float32->Float32-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:1-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_rows[formats:UInt16->UInt16-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-num_rows_to_pack:1-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+    ]
+)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat

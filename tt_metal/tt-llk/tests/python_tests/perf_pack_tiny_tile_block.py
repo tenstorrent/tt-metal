@@ -14,6 +14,12 @@ Float16_b and Float32 (16-bit and 32-bit DEST), and Bfp8_b output for the 16-row
 import pytest
 
 pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        'test_perf_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-tile_dims:(16, 32)-num_tiles:2-pack_mode:3-loop_factor:32]',
+        'test_perf_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-tile_dims:(4, 32)-num_tiles:2-pack_mode:0-loop_factor:32]',
+    ]
+)
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation

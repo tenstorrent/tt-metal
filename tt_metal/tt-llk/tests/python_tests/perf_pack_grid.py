@@ -12,6 +12,19 @@ The block size is in num_tiles_in_block and no key repeats one of the other pack
 import pytest
 
 pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        'test_perf_pack_grid_block[formats:Float16_b->Float16-dest_acc:Yes-relu_type:NoRelu-dest_sync:Half-block_tiles:3-input_dimensions:[64, 96]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:10-input_dimensions:[64, 320]-dest_index:6-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:15-input_dimensions:[64, 480]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:16-input_dimensions:[64, 512]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:4-input_dimensions:[64, 128]-dest_index:12-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:5-input_dimensions:[64, 160]-dest_index:11-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:9-input_dimensions:[64, 288]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:9-input_dimensions:[64, 288]-dest_index:7-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+        'test_perf_pack_grid_block[formats:UInt32->UInt32-dest_acc:Yes-relu_type:NoRelu-dest_sync:Half-block_tiles:3-input_dimensions:[64, 96]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
+    ]
+)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
