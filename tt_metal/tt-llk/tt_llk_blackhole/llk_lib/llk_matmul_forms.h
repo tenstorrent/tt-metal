@@ -679,6 +679,21 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 1, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float32, 1, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Float16, DataFormat::Float16, DataFormat::Float32, 1, 1, 1, 0, false, 1},
+    // LoFi, 32-bit DEST, half sync, a 2x1 block of one K tile to Bfp4_b: the rows form of the keyed unpack and math reads 0.5 to 3.4 cycles behind main's tile form
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp2_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
 };
 
 constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,

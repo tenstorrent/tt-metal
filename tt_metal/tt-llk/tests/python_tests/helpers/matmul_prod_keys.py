@@ -643,6 +643,21 @@ _GRID_MAIN_ROWS = (
     ('LoFi', True, False, 'B8x', 'B8x', 'F32', 1, 1, 1, 0, False, 1),
     ('LoFi', True, False, 'F16', 'B8x', 'F32', 1, 1, 1, 0, False, 1),
     ('LoFi', True, False, 'F16', 'F16', 'F32', 1, 1, 1, 0, False, 1),
+    # LoFi, 32-bit DEST, half sync, a 2x1 block of one K tile to Bfp4_b: the rows form of the keyed unpack and math reads 0.5 to 3.4 cycles behind main's tile form
+    ('LoFi', True, True, 'B4', 'B4', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'B4', 'B8', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'B4', 'F16b', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'B4', 'F32', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'B8', 'B4', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'B8', 'B8', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'B8', 'F16b', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'F16b', 'B2', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'F16b', 'B4', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'F16b', 'B8', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'F16b', 'F16b', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'F32', 'B4', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'F32', 'B8', 'B4', 2, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'F32', 'F16b', 'B4', 2, 1, 1, 0, False, 1),
 )
 _GRID_MAIN = frozenset(_GRID_MAIN_ROWS)
 _SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32", DataFormat.Float16: "F16", DataFormat.Bfp8: "B8x", DataFormat.Bfp2_b: "B2"}
