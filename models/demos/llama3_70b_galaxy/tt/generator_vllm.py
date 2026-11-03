@@ -219,8 +219,11 @@ class LlamaForCausalLM(Generator):
 class QwenForCausalLM(Generator):
     decode_input_update_contract = 1
 
-    # Class-level capabilities
+    # Class-level capabilities. Same Generator (and decode path) as LlamaForCausalLM above, so the same async decode
+    # support: without it vllm-tt-plugin disables async scheduling and serializes every decode step with its host
+    # input prep and output readback.
     model_capabilities = {
+        "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
     }
