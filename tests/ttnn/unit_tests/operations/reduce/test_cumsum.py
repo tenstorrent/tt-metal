@@ -270,6 +270,11 @@ def test_cumsum_failing_cases(
         ttnn.cumsum(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)
 
 
+def _compensated_sum_bound(x64, dim):
+    """K * eps32 * sum_{j<=i} |x_j| with K = 8, in float64: see test_cumsum_fp32_long_scan_accuracy."""
+    return 8.0 * 2.0**-23 * torch.cumsum(x64.abs(), dim=dim)
+
+
 @pytest.mark.parametrize(
     "size, dim",
     [
@@ -318,7 +323,7 @@ def test_cumsum_fp32_long_scan_accuracy(size, dim, sequence_type, device):
 
     x64 = torch_input.to(torch.float64)
     reference = torch.cumsum(x64, dim=dim)
-    bound = 8.0 * 2.0**-23 * torch.cumsum(x64.abs(), dim=dim)
+    bound = _compensated_sum_bound(x64, dim)
     err = (output - reference).abs()
 
     assert torch.isfinite(output).all()
@@ -348,7 +353,7 @@ def test_cumsum_disable_compensated_sum(device, n=8192):
 
     x64 = torch_input.to(torch.float64)
     reference = torch.cumsum(x64, dim=1)
-    bound = 8.0 * 2.0**-23 * torch.cumsum(x64.abs(), dim=1)
+    bound = _compensated_sum_bound(x64, 1)
 
     comp_err = (compensated - reference).abs()
     plain_err = (plain - reference).abs()
@@ -602,6 +607,12 @@ def _cumsum_calltrace(input_tensor, **kwargs):
     return output_tensor, ttnn.graph.extract_calltrace(captured_graph)
 
 
+def _skip_without_compensated_scan(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no compensated cumsum scan, so fp32 cumsum keeps the permuted path there")
+
+
+@pytest.mark.parametrize("torch_dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize(
     "size, dim",
     [
@@ -615,16 +626,19 @@ def _cumsum_calltrace(input_tensor, **kwargs):
         ([2, 3, 5, 33, 128], -1),
     ],
 )
-def test_cumsum_tile_axis_runs_in_place(size, dim, device):
-    """A forward bf16 cumsum along H or W must scan the tiles in place (#24824, #23264).
+def test_cumsum_tile_axis_runs_in_place(size, dim, torch_dtype, device):
+    """A forward bf16 or fp32 cumsum along H or W must scan the tiles in place (#24824, #23264).
 
     Before, the scan axis was permuted to dim 0, which pads every remaining element of a thin tensor
     out to its own row or tile: 32x the memory, and 1024x for a 1D tensor (a 10.8M-element int32
     scan tried to allocate 44 GB). The call trace checks the structure directly: no permute, and the
-    output is the only device tensor the op creates.
+    output is the only device tensor the op creates. fp32 keeps the compensated (Kahan) sum, so it
+    stays within the bound of test_cumsum_fp32_long_scan_accuracy.
     """
+    if torch_dtype == torch.float32:
+        _skip_without_compensated_scan(device)
     torch.manual_seed(29112024)
-    torch_input = torch.randn(size).to(torch.bfloat16)
+    torch_input = torch.randn(size).to(torch_dtype)
     input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
@@ -632,17 +646,59 @@ def test_cumsum_tile_axis_runs_in_place(size, dim, device):
 
     assert "PermuteDeviceOperation" not in calltrace, calltrace
     assert calltrace.count("tt::tt_metal::create_device_tensor") == 1, calltrace
-    assert_with_ulp(
-        expected_result=torch.cumsum(torch_input, dim),
-        actual_result=ttnn.to_torch(output_tensor),
-        ulp_threshold=1,
-    )
+    output = ttnn.to_torch(output_tensor)
+    if torch_dtype == torch.bfloat16:
+        assert_with_ulp(expected_result=torch.cumsum(torch_input, dim), actual_result=output, ulp_threshold=1)
+    else:
+        x64 = torch_input.to(torch.float64)
+        error = (output.to(torch.float64) - torch.cumsum(x64, dim=dim)).abs()
+        assert (error <= _compensated_sum_bound(x64, dim)).all()
+
+
+def _with_special_values(torch_input, dim):
+    # Puts 0, -0, +-inf, NaN, a huge and a tiny value each into scans of their own, at the first position and on
+    # both sides of each tile boundary (31/32 and 63/64). One more scan gets the huge value at 31 and 32, so its
+    # sum overflows across the boundary. In the last one, t - s at 31 is finite at the largest exponent and the
+    # compensation is -2^104: it has to be kept and carried into the next tile.
+    moved = torch_input.movedim(dim, -1).contiguous()
+    scans = moved.view(-1, moved.shape[-1])
+    k = 0
+    for value in (0.0, -0.0, float("inf"), float("-inf"), float("nan"), 3e38, 1e-38):
+        for position in (0, 31, 32, 63, 64):
+            scans[k, position] = value
+            k += 1
+    scans[k, 31] = scans[k, 32] = 3e38
+    scans[k + 1, 30], scans[k + 1, 31] = -(2.0**103), (2**23 + 2**22 + 1) * 2.0**104
+    return moved.movedim(-1, dim).contiguous()
+
+
+@pytest.mark.parametrize("compensated", [True, False])
+@pytest.mark.parametrize("values", ["randn", "special"])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_cumsum_fp32_tile_axis_matches_dim0_path(dim, values, compensated, device):
+    """Same bits as the permuted path's kernel (dim 0 of a 4D tensor needs no permute), with and without the
+    compensation, on full-precision inputs and on special values. NaNs only have to be at the same places."""
+    _skip_without_compensated_scan(device)
+    torch.manual_seed(29112024)
+    torch_input = torch.randn([5, 70, 70])
+    if values == "special":
+        torch_input = _with_special_values(torch_input, dim)
+    kwargs = {} if compensated else {"disable_compensated_sum": True}
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    moved = torch_input.movedim(dim, 0)
+    dim0_tensor = ttnn.from_torch(moved.unsqueeze(1).contiguous(), device=device, layout=ttnn.Layout.TILE)
+
+    tile_axis = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim, **kwargs))
+    dim0 = ttnn.to_torch(ttnn.cumsum(dim0_tensor, dim=0, **kwargs)).squeeze(1).movedim(0, dim)
+
+    nan = torch.isnan(dim0)
+    assert torch.equal(torch.isnan(tile_axis), nan)
+    assert torch.equal(tile_axis[~nan].view(torch.int32), dim0[~nan].view(torch.int32))
 
 
 @pytest.mark.parametrize(
     "torch_dtype, reverse_order",
     [
-        (torch.float32, False),  # keeps the compensated (Kahan) accumulation of the permuted path
         (torch.int32, False),  # cumsum_tile only adds floats
         (torch.bfloat16, True),  # cumsum_tile only scans forward
     ],

@@ -598,7 +598,6 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
         sender_program,
-        sender_mesh_device->impl().get_devices()[0],
         local_chip_edm_builder,
         eth_sender_core,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -607,7 +606,6 @@ bool RunWriteBWTest(
 
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
         receiver_program,
-        receiver_mesh_device->impl().get_devices()[0],
         remote_chip_edm_builder,
         eth_receiver_core,
         tt_metal::DataMovementProcessor::RISCV_0,

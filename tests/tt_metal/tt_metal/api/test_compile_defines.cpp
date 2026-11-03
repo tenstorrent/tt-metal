@@ -12,7 +12,7 @@
 
 namespace tt::tt_metal {
     TEST_F(MeshDispatchFixture, CreateKernelRejectsNullCharInDefineValue) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->devices_[0]);
         DataMovementConfig config{.defines = {
             {"UPSTREAM_NOC_X", "1"},
             {"UPSTREAM_NOC_Y", "0"},

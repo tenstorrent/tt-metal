@@ -2208,7 +2208,7 @@ void kernel_main() {
     con = _build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
     p = Parallel(Sequential(oa, ob), con)
-    cold = _time_cold(p.run, device)
+    p.run()
 
     [result_b_t, result_recv_t] = p.run(results=[ob, con])
     result_recv = ttnn.to_torch(result_recv_t)

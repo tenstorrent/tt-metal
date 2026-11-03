@@ -200,6 +200,9 @@ class RunTimeOptions {
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
+    tt::tt_fabric::MeshId fabric_mesh_id{0};
+    tt::tt_fabric::MeshHostRankId fabric_mesh_host_rank{tt::tt_fabric::MESH_HOST_RANK_UNSET};
+
     // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of the cluster's
     // topology, as opposed to the Physical System Descriptor (PSD) that tooling discovers live from the
     // running hardware. Users supply it via `tt-run --factory-system-descriptor <path>`, which is
@@ -320,6 +323,9 @@ class RunTimeOptions {
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
 
+    // Blackhole silicon: BRISC halts on an L1 ECC error and the host reports it.
+    bool disable_l1_ecc_halt = false;
+
     // Enable instruction gathering in Tensix core.
     bool enable_gathering = false;
 
@@ -343,6 +349,9 @@ class RunTimeOptions {
 
     // presence-based override to force-disable fabric 2-ERISC regardless of defaults
     bool disable_fabric_2_erisc_mode = false;
+
+    // Carry inter-mesh fabric traffic on VC0, with no VC1 (TT_METAL_FABRIC_DISABLE_INTERMESH_VC)
+    bool disable_fabric_intermesh_vc = false;
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
@@ -393,8 +402,8 @@ class RunTimeOptions {
 
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
-    // Timeout duration for operations
-    std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
+    // Timeout duration for operations in seconds (0 = off)
+    std::atomic<float> timeout_duration_for_operations = 0.0f;
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
     // Dispatch kernel progress update period in milliseconds (default 100ms)
@@ -422,13 +431,12 @@ class RunTimeOptions {
     // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
+    // Use the DRAM size the soc descriptor declares on the emulator models that back less
+    // (TT_METAL_SIMULATOR_DRAM_UNCAPPED=1).
+    bool simulator_dram_uncapped = false;
+
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
-
-    // Quasar IP variant from TT_METAL_QUASAR_VARIANT (horizon, trinity, saturn, ...). Selects the variant's
-    // register headers and, when tt_metal/tt-llk/tt_llk_quasar/arch/<variant> exists, the LLK headers that
-    // shadow the base Quasar ones. Empty means the base Quasar part.
-    std::string quasar_variant;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -691,7 +699,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -699,8 +707,7 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace(),
-            get_quasar_variant());
+            get_eth_ptp_trace());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -820,6 +827,8 @@ public:
     bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
+    // Callers also check for Blackhole; the option is arch-agnostic.
+    bool get_l1_ecc_halt_enabled() const { return !this->disable_l1_ecc_halt; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
     std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
@@ -873,12 +882,14 @@ public:
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
     bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 
     // Presence-based override to force-disable fabric 2-ERISC
     bool get_disable_fabric_2_erisc_mode() const { return disable_fabric_2_erisc_mode; }
+
+    // Inter-mesh fabric traffic on VC0, with no VC1
+    bool get_disable_fabric_intermesh_vc() const { return disable_fabric_intermesh_vc; }
 
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
@@ -895,6 +906,11 @@ public:
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    // TT_MESH_ID / TT_MESH_HOST_RANK. Mesh 0 / MESH_HOST_RANK_UNSET (resolved by the topology mapper) unless the
+    // launcher assigned this process a binding.
+    tt::tt_fabric::MeshId get_fabric_mesh_id() const { return fabric_mesh_id; }
+    tt::tt_fabric::MeshHostRankId get_fabric_mesh_host_rank() const { return fabric_mesh_host_rank; }
 
     // Factory System Descriptor (FSD) path. Empty when unset.
     bool has_factory_system_descriptor_path() const { return !factory_system_descriptor_path.empty(); }
@@ -1014,7 +1030,12 @@ public:
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
-    std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    std::chrono::duration<float> get_timeout_duration_for_operations() const {
+        return std::chrono::duration<float>(timeout_duration_for_operations.load(std::memory_order_relaxed));
+    }
+    void set_timeout_duration_for_operations(std::chrono::duration<float> timeout) {
+        timeout_duration_for_operations.store(timeout.count(), std::memory_order_relaxed);
+    }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
 
@@ -1037,8 +1058,9 @@ public:
     bool get_simulator_serve_over_sockets() const { return simulator_serve_over_sockets; }
     void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
 
+    bool get_simulator_dram_uncapped() const { return simulator_dram_uncapped; }
+
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
-    const std::string& get_quasar_variant() const { return quasar_variant; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

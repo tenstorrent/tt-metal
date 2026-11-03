@@ -681,3 +681,29 @@ def test_softmin_special_value_in_row(shape, dim, strategy, plant_pos, compute_k
         # would also accept only 0.98 there with the remaining 0.02 spread over the group, so check the
         # concentration itself.
         assert actual[tuple(plant_idx)] >= 0.9
+
+
+@pytest.mark.parametrize(
+    "shape, dim, strategy",
+    [
+        ([1, 1, 32, 4096], 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W),
+        ([1, 1, 4096, 32], 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H),
+        ([1, 64, 32, 32], 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_C),
+    ],
+)
+def test_softmin_bfloat8_b_intermediates(shape, dim, strategy, device):
+    """Regression test for Item 5 of #58406: bfloat8_b input keeps its intermediates in Float16_b."""
+    torch.manual_seed(0)
+    ttnn_input = ttnn.from_torch(torch.rand(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Use rounded input for the golden to minimize error
+    torch_input = ttnn.to_torch(ttnn_input).float()
+
+    torch_output = F.softmin(torch_input, dim)
+    rounded = ttnn.to_torch(ttnn.from_torch(torch_output, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).float()
+    rounding_floor = (rounded - torch_output).abs().max()
+
+    ttnn_output = ttnn.to_torch(ttnn.operations.moreh.softmin(ttnn_input, dim, strategy=strategy)).float()
+
+    passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0, atol=16 * rounding_floor)
+    logger.debug(out)
+    assert passing, out

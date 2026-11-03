@@ -61,13 +61,11 @@ void kernel_main() {
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t wt = 0; wt < Wt; wt += row_chunk) {
             const uint32_t chunk_end = std::min(wt + row_chunk, Wt);
-            int reduce_dst_idx = 0;
             const uint32_t ntiles = chunk_end - wt;
 
             // reduction for one chunk
             // accumulation of Ht results in separate DST indexes
             for (uint32_t ht = 0; ht < Ht; ++ht) {
-                reduce_dst_idx = 0;
                 tile_regs_acquire();
                 dfb_input.wait_front(static_cast<uint16_t>(ntiles));
 

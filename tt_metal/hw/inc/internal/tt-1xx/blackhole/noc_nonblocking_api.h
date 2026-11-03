@@ -11,6 +11,7 @@
 #include "hostdev/dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "api/debug/assert.h"
+#include "internal/debug/shared_noc_cmd_buf.h"
 
 #if defined(COMPILE_FOR_AERISC)
 #include "eth_fw_api.h"
@@ -161,6 +162,11 @@ inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     if (addr == NOC_CTRL) {
         auto* watcher_msg = GET_MAILBOX_ADDRESS_DEV(watcher);
         watcher_msg->noc_linked_status[noc] = (val & NOC_CMD_VC_LINKED) != 0;
+    }
+#endif
+#if defined(DEBUG_SANITIZE_SHARED_NOC_CMD_BUF)
+    if (addr == NOC_CMD_CTRL) {
+        debug_sanitize_shared_noc_cmd_buf(noc, buf);
     }
 #endif
     uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;

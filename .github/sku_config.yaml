@@ -165,27 +165,33 @@ skus:
       - in-service
     weights-cache-mode: yyz4-mnt-models
 
+  # Exabox Blackhole Galaxy pools are split by power cap so bh_sc* and
+  # bh_sc*_high_power never share a host (tt-orchestration MINFRA-1902):
+  #   exabox-multihost-ci-sc1-8kw   exabox.tenstorrent.com/power=8kw
+  #   exabox-multihost-ci-sc1-14kw  exabox.tenstorrent.com/power=14kw
+  # exabox-multihost-ci-sc1 (no power filter, any galaxy) is not used here on purpose.
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1:
     runs_on:
-      - exabox-multihost-ci-sc1
+      - exabox-multihost-ci-sc1-8kw
 
   # Like bh_sc1, but high-power pool (exabox.tenstorrent.com/power=14kw).
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1_high_power:
     runs_on:
-      - exabox-multihost-ci-sc1-hp
+      - exabox-multihost-ci-sc1-14kw
 
+  # 8kw quad pool; see bh_sc1.
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc4:
     runs_on:
-      - exabox-multihost-ci-sc4
+      - exabox-multihost-ci-sc4-8kw
 
   # Like bh_sc4, but high-power pool (exabox.tenstorrent.com/power=14kw).
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc4_high_power:
     runs_on:
-      - exabox-multihost-ci-sc4-hp
+      - exabox-multihost-ci-sc4-14kw
 
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc16:
@@ -206,9 +212,15 @@ skus:
   # self-hosted device runners only execute tests that actually need silicon.
   # No merge_queue_sku: GitHub-hosted capacity is not a contended prio pool
   # (same as the sim_* ubuntu-latest SKUs below).
+  #
+  # Pinned to ubuntu-24.04 instead of ubuntu-latest: this SKU runs the sanitizer
+  # test binaries, and on an ubuntu-26.04 host TSan aborts at startup because
+  # personality(ADDR_NO_RANDOMIZE) is denied inside the job container
+  # ("CHECK failed: tsan_platform_linux.cpp:290", exit 139). The sim_* SKUs below
+  # stay on ubuntu-latest; they carry no sanitizer binaries and pass on 26.04.
   github_hosted_cpu:
     runs_on:
-      - ubuntu-latest
+      - ubuntu-24.04
 
   # ---------------------------------------------------------------------------
   # Merge-queue prio SKUs (merge_group events only).

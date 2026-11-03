@@ -111,6 +111,10 @@ class DataFormat(Enum):
         """Returns the string representation of the data format."""
         return self.value.name
 
+    def __reduce_ex__(self, protocol):
+        # Pickled by name: a DataFormatInfo value has no equality to look a member up by.
+        return getattr, (type(self), self.name)
+
     def is_integer(self) -> bool:
         """Checks if the data format is an integer type."""
         return self in {
