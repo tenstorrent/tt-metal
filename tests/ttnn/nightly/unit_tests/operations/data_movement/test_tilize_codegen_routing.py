@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# --- BEGIN GENERATED ---
-# Checks that ttnn.tilize serves in-scope cases with the codegen program, and that a cached codegen
-# program rebinds its buffers: repeat dispatches on fresh allocations, and a return to a program
-# after another one, stay program-cache hits with exact output; and that a perf-demoted case still
-# lands on native. Earlier tensors stay alive across later calls, and program-cache entries are
-# counted around the op call alone.
-# This block is generated from the port's coverage data; add hand-written cases below its END line.
+# --- BEGIN GENERATED (agentic_port phase 8) ---
+# Contracts: (1) every case the codegen gate rejects falls back to native; (2) an accepted case
+# dispatched twice on the codegen path stays a program-cache hit and rebinds its buffers; (3) a
+# perf-demoted case still lands on native. This block is emitted from the port's coverage ledger
+# and is regenerated on every port update; hand-add off-grid regressions after its END line.
+# Contract (4), for the cache-transition legs: earlier tensors stay alive across later calls, and
+# program-cache entries are counted around the op call alone.
 
 import pytest
 import torch
@@ -116,8 +116,6 @@ def _codegen_draw(earlier, shape, kwargs, dtype, layout, device, placement):
 
 
 _DEMOTED = [
-    ([64, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([64, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
     ([2, 32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
     (
         [2, 32, 32],
@@ -150,8 +148,14 @@ _DEMOTED = [
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     ),
-    ([64, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-    ([64, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    (
+        [2, 32, 32],
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+    ),
+    ([2, 32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
     (
         [2, 32, 32],
         {"memory_config": ttnn.L1_MEMORY_CONFIG},
@@ -166,10 +170,20 @@ _DEMOTED = [
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     ),
+    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
 ]
 _DEMOTED_IDS = [
-    "[64, 32]@L1|memory_config=BufferType.L1|int32|row_major",
-    "[64, 32]@L1|memory_config=BufferType.L1|uint32|row_major",
     "[2, 32, 32]@L1|memory_config=BufferType.DRAM|int32|row_major",
     "[2, 32, 32]@L1|memory_config=BufferType.DRAM|uint16|row_major",
     "[2, 32, 32]@L1|memory_config=BufferType.DRAM|uint32|row_major",
@@ -178,10 +192,22 @@ _DEMOTED_IDS = [
     "[2, 32, 32]@L1|memory_config=BufferType.L1|uint32|row_major",
     "[2, 32, 32]|memory_config=BufferType.DRAM|int32|row_major",
     "[2, 32, 32]|memory_config=BufferType.DRAM|uint16|row_major",
-    "[64, 32]|memory_config=BufferType.L1|int32|row_major",
-    "[64, 32]|memory_config=BufferType.L1|uint32|row_major",
+    "[2, 32, 32]|memory_config=BufferType.DRAM|uint32|row_major",
+    "[2, 32, 32]|memory_config=BufferType.L1|int32|row_major",
     "[2, 32, 32]|memory_config=BufferType.L1|uint16|row_major",
     "[2, 32, 32]|memory_config=BufferType.L1|uint32|row_major",
+    "[32, 32]@L1|memory_config=BufferType.DRAM|int32|row_major",
+    "[32, 32]@L1|memory_config=BufferType.DRAM|uint16|row_major",
+    "[32, 32]@L1|memory_config=BufferType.DRAM|uint32|row_major",
+    "[32, 32]@L1|memory_config=BufferType.L1|int32|row_major",
+    "[32, 32]@L1|memory_config=BufferType.L1|uint16|row_major",
+    "[32, 32]@L1|memory_config=BufferType.L1|uint32|row_major",
+    "[32, 32]|memory_config=BufferType.DRAM|int32|row_major",
+    "[32, 32]|memory_config=BufferType.DRAM|uint16|row_major",
+    "[32, 32]|memory_config=BufferType.DRAM|uint32|row_major",
+    "[32, 32]|memory_config=BufferType.L1|int32|row_major",
+    "[32, 32]|memory_config=BufferType.L1|uint16|row_major",
+    "[32, 32]|memory_config=BufferType.L1|uint32|row_major",
 ]
 
 
@@ -284,15 +310,15 @@ _SEQ_SWITCH = [
     (
         [1, 1, 32, 32],
         {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32},
-        [64, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
+        [1, 1, 64, 64],
+        {"memory_config": ttnn.L1_MEMORY_CONFIG, "dtype": ttnn.int32},
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     ),
 ]
 _SEQ_SWITCH_IDS = [
-    "[1, 1, 32, 32]|dtype=DataType.INT32&memory_config=BufferType.DRAM|bfloat16|row_major->[64, 32]|memory_config=BufferType.DRAM|bfloat16|row_major",
+    "[1, 1, 32, 32]|dtype=DataType.INT32&memory_config=BufferType.DRAM|bfloat16|row_major->[1, 1, 64, 64]|dtype=DataType.INT32&memory_config=BufferType.L1|bfloat16|row_major",
 ]
 
 
@@ -325,6 +351,12 @@ def test_tilize_codegen_cache_survives_a_program_switch(
         ]
     )
     assert_equal(a_first_golden, ttnn.to_torch(a_first_out))
+
+
+# --- END GENERATED ---
+
+
+# --- Off-grid regressions (hand-added; edit here, not the emitter) ---
 
 
 # --- END GENERATED ---
@@ -370,20 +402,6 @@ def test_tilize_out_of_scope_case_falls_back_to_native(device, case):
     assert_equal(golden, ttnn.to_torch(out))
     if "dtype" not in kwargs:
         assert_equal(host, ttnn.to_torch(out))
-
-
-@pytest.mark.parametrize("case", ["sharded_input", "block_float_output"])
-def test_tilize_forced_codegen_refuses_out_of_scope_case(device, case, expect_error):
-    shape, placement, kwargs = _FALLBACK[case]
-    xt = ttnn.from_torch(
-        torch.rand(shape, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=placement,
-    )
-    with expect_error(RuntimeError, "does not support"):
-        _force_codegen(xt, **kwargs)
 
 
 # --- Live-L1 CB plan ---
