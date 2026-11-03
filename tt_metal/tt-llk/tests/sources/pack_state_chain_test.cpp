@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(4, formats.math);
+            _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
             if (kind == K_UNT)
             {
                 _llk_math_reconfig_remap_wrapper_(true);
@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_wait_for_dest_available_<dest_sync>();
             for (std::uint32_t t = 0; t < NT; t++)
             {
-                _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, false>(t, formats.math, formats.math, 4);
+                _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, false>(t, formats.math, formats.math, ckernel::DEFAULT_TENSOR_SHAPE);
             }
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             if (kind == K_UNT)
