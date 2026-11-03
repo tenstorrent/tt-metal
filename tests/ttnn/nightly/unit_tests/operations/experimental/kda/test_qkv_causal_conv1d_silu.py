@@ -13,12 +13,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_from_device_layout, convolution_tail_shape
+from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_shape
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_HISTORY_EXCHANGE_ROWS, KDA_HISTORY_EXCHANGE_SEMAPHORES
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    convolution_tail_from_device_layout,
     assert_accurate,
     assert_bit_identical,
     collect_accuracy_and_determinism_results,

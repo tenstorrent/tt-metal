@@ -8,7 +8,37 @@ from collections.abc import Callable, Sequence
 import torch
 import torch.nn.functional as F
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_to_device_layout
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CONVOLUTION_SEGMENT_CHANNELS, convolution_tail_shape
+
+
+def convolution_tail_to_device_layout(tail: torch.Tensor) -> torch.Tensor:
+    """`[..., K-1, W]` host rows -> `[..., W/64, (K-1)*64]`, the op's SEGMENTS layout."""
+    *lead, history_rows, width = tail.shape
+    _, segments, row = convolution_tail_shape(history_rows, width)
+    return (
+        tail.reshape(*lead, history_rows, segments, KDA_CONVOLUTION_SEGMENT_CHANNELS)
+        .transpose(-3, -2)
+        .reshape(*lead, segments, row)
+    )
+
+
+def convolution_tail_from_device_layout(tail: torch.Tensor, history_rows: int) -> torch.Tensor:
+    """`[..., W/64, (K-1)*64]` SEGMENTS layout -> `[..., K-1, W]` host rows, with `history_rows = K-1`.
+
+    Raises unless each page holds `history_rows` rows of one segment, so a `[..., K-1, W]` row tail is refused instead
+    of being decoded into permuted channels.
+    """
+    *lead, segments, row = tail.shape
+    if row != history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS:
+        raise ValueError(
+            f"page of {row} elements is not {history_rows} rows of a {KDA_CONVOLUTION_SEGMENT_CHANNELS}-channel "
+            "segment; not a device-layout convolution tail"
+        )
+    return (
+        tail.reshape(*lead, segments, history_rows, KDA_CONVOLUTION_SEGMENT_CHANNELS)
+        .transpose(-3, -2)
+        .reshape(*lead, history_rows, segments * KDA_CONVOLUTION_SEGMENT_CHANNELS)
+    )
 
 
 def _finiteness(name: str, tensor: torch.Tensor) -> tuple[list[str], str]:
