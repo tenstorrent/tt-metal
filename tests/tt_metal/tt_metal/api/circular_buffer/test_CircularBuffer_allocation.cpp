@@ -692,6 +692,37 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
     }
 }
 
+TEST_F(MeshDispatchFixture, TensixTestCircularBufferAllocationAvoidsOverlapOnSharedCores) {
+    auto& device = devices_.at(0);
+    Program program = CreateProgram(*device);
+    const CoreRangeSet group_a(CoreRange({0, 0}, {2, 0}));
+    const CoreRangeSet group_b(CoreRange({3, 0}, {4, 0}));
+    const CoreRangeSet all_cores = group_a.merge(group_b);
+    const auto a = CreateCircularBuffer(
+        program, group_a, CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, 2048));
+    const auto b = CreateCircularBuffer(
+        program, group_b, CircularBufferConfig(4096, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, 2048));
+    const auto ab = CreateCircularBuffer(
+        program, all_cores, CircularBufferConfig(2048, {{1, tt::DataFormat::Float16_b}}).set_page_size(1, 2048));
+    program.impl().prepare_ephemeral_allocation(device.get());
+    program.impl().allocate_circular_buffers(device.get());
+    const auto cb_a = program.impl().get_circular_buffer(a);
+    const auto cb_b = program.impl().get_circular_buffer(b);
+    const auto cb_ab = program.impl().get_circular_buffer(ab);
+    EXPECT_EQ(cb_a->address(), cb_b->address());
+    EXPECT_EQ(cb_ab->address(), cb_b->address() + cb_b->size());
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> occupied;
+    for (const auto& cb : {cb_a, cb_b, cb_ab}) {
+        for (const auto& core : corerange_to_cores(cb->core_ranges())) {
+            auto& intervals = occupied[core];
+            for (const auto& [begin, end] : intervals) {
+                EXPECT_TRUE(cb->address() + cb->size() <= begin || end <= cb->address()) << core.str();
+            }
+            intervals.emplace_back(cb->address(), cb->address() + cb->size());
+        }
+    }
+}
+
 // Regression test for CB config dispatch corruption bug (same pattern as argmax).
 // Replicates dispatch.cpp's CB config payload construction using
 // circular_buffers_unique_coreranges() and circular_buffers_on_corerange().

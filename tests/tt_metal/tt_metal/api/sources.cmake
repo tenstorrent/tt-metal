@@ -6,8 +6,10 @@ set(UNIT_TESTS_API_SOURCES
     allocator/test_l1_banking_allocator.cpp
     allocator/test_overlapped_bank_manager.cpp
     allocator/test_per_core_bank_manager.cpp
+    allocator/test_program_local_allocation.cpp
     circular_buffer/test_CircularBuffer_allocation.cpp
     circular_buffer/test_CircularBuffer_creation.cpp
+    circular_buffer/test_CircularBuffer_metal2_exclusion.cpp
     circular_buffer/test_CircularBuffer_non_blocking.cpp
     circular_buffer/test_CircularBuffer_wrapping.cpp
     core_coord/test_CoreRange_adjacent.cpp

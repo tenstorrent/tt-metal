@@ -40,6 +40,18 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
             return region.core_range == core_range;
         });
         if (val == regions.end()) {
+            TT_FATAL(
+                std::none_of(
+                    regions.begin(),
+                    regions.end(),
+                    [](const auto& region) {
+                        return std::any_of(
+                            region.l1_regions.begin(), region.l1_regions.end(), [](const auto& interval) {
+                                return interval.first < interval.second;
+                            });
+                    }),
+                "Cannot register core range {} while program-local allocations are live. Invalidate them first.",
+                core_range.str());
             regions.emplace_back(core_range);
         }
     }
@@ -58,15 +70,6 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
         const uint64_t base_address = persistent_l1.high_water_mark(cores);
         if (region.l1_regions.empty()) {
             region.l1_regions.emplace_back(base_address, base_address);
-        } else {
-            // TODO(#62451): The following assertion assumes a bump-only allocator. A DFB recorded into an intersecting
-            // CoreRange with uneven persistent L1 can sit below that range's base. Commented out for now.
-            // TT_ASSERT(
-            //     base_address <= region.l1_regions.front().first,
-            //     "Persistent L1 on core range {} grew to {}, above its program-local allocations starting at {}",
-            //     region.core_range.str(),
-            //     base_address,
-            //     region.l1_regions.front().first);
         }
     }
 
@@ -98,22 +101,21 @@ DeviceAddr allocate_dfb(
         computed_addr = std::max(computed_addr, it->l1_regions.back().second);
     }
     computed_addr = align(computed_addr, alignment);
-    for (const CoreRange& core_range : cores.ranges()) {
-        for (auto& region : regions) {
-            if (region.core_range.intersects(core_range)) {
-                // If any allocation happened on the region
-                const bool region_has_been_allocated =
-                    !region.l1_regions.empty() and region.l1_regions.back().second > region.l1_regions.front().first;
-
-                if (region.core_range != core_range and region_has_been_allocated and
-                    computed_addr < region.l1_regions.back().second) {
-                    // Intersecting core range has already been marked to have allocation at this address. This
-                    // could have been marked by an allocation on a core range disjoint from current `core_range`
-                    // but also intersecting `region.core_range`
-                    continue;
-                }
-                region.mark_address(computed_addr, size);
-            }
+    const uint64_t allocation_end = computed_addr + size;
+    for (auto& region : regions) {
+        if (!cores.intersects(region.core_range)) {
+            continue;
+        }
+        TT_FATAL(
+            !region.l1_regions.empty(),
+            "Base address of core range {} is unknown. Call prepare_ephemeral_allocation() before allocating.",
+            region.core_range.str());
+        const uint64_t region_end = region.l1_regions.back().second;
+        // An intersecting range can also cover disjoint allocations or higher persistent L1 on other cores.
+        // Its waterline must cover this allocation's END even when the start is below that waterline.
+        if (allocation_end > region_end) {
+            const uint64_t mark_begin = std::max(computed_addr, region_end);
+            region.mark_address(mark_begin, allocation_end - mark_begin);
         }
     }
     return computed_addr;
@@ -121,42 +123,7 @@ DeviceAddr allocate_dfb(
 
 DeviceAddr allocate_scratchpad(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment) {
-    if (cores.empty()) {
-        return metadata.empty_cores_high_water_mark;
-    }
-
-    auto& regions = metadata.regions;
-    for (const CoreRange& core_range : cores.ranges()) {
-        TT_FATAL(
-            std::any_of(
-                regions.begin(),
-                regions.end(),
-                [&core_range](const auto& region) { return region.core_range == core_range; }),
-            "Internal error: core range {} was not registered before allocation",
-            core_range.str());
-    }
-
-    // Take the max region end over EVERY region that intersects `cores` (not just exact-range matches), so the
-    // allocation cannot overlap one on an overlapping-but-different core range. Mark each such region exactly once.
-    std::vector<EphemeralAllocationMetadata::LockstepAllocationRegion*> touched;
-    for (auto& region : regions) {
-        if (cores.intersects(region.core_range)) {
-            touched.push_back(&region);
-        }
-    }
-    uint64_t addr = 0;
-    for (const auto* region : touched) {
-        TT_FATAL(
-            !region->l1_regions.empty(),
-            "Base address of core range {} is unknown. Call prepare_ephemeral_allocation() before allocating.",
-            region->core_range.str());
-        addr = std::max(addr, region->l1_regions.back().second);
-    }
-    addr = align(addr, alignment);
-    for (auto* region : touched) {
-        region->mark_address(addr, size);
-    }
-    return addr;
+    return allocate_dfb(metadata, cores, size, alignment);
 }
 
 void invalidate_ephemeral_allocation_metadata(EphemeralAllocationMetadata& metadata) {

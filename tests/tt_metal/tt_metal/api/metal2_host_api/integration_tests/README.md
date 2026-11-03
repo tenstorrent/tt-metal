@@ -13,6 +13,7 @@ Put a test here only if a mock device cannot cover it. Put it elsewhere when:
 | File | Test Category |
 |---|---|
 | `binding_loopbacks.cpp` | Resource bindings: DFB, semaphore and tensor accessor names |
+| `dfb_allocations.cpp` | Distinct patterns in overlapping-range DFBs remain intact in physical L1 after dispatch |
 | `kernel_args_loopbacks.cpp` | Kernel arguments: named args, array args, varargs, TT_KERNEL kernels and CRTA sections |
 | `scratchpad.cpp` | Scratchpads under slow dispatch |
 | `scratchpad_fast_dispatch.cpp` | Scratchpads under fast dispatch |
