@@ -292,9 +292,10 @@ TABLE = {
         "to 1e-5 (worst L03 0.99489 / 0.99490)",
     ),
     "EXPERTS_IMPL": Setting(
-        "bfp8",
+        "bfp4",
         ("bfp8", "bfp4", "bfp4_mse", "bfp8_down4"),
-        "P.27 (owner 2026-11-02, A/B by P.27 / P.28 / P.29; default stays bfp4, F241): bfp8 / bfp4_mse / bfp8_down4 on "
+        "P.27 (owner 2026-11-02, A/B by P.27 / P.28 / P.29; default stays bfp4, F241; P.27 had committed bfp8, P.28 "
+        "set it back): bfp8 / bfp4_mse / bfp8_down4 on "
         "MOE_IMPL=block too (the block takes the laid-out op in its dtype). bfp4_mse = bfloat4_b with each 16-value "
         "group's shared exponent (along K, inside one ue8m0 block) chosen on the host at load by least squared error "
         "between the group's largest exponent and one below (the large values saturate at 7; ties: the largest), handed "

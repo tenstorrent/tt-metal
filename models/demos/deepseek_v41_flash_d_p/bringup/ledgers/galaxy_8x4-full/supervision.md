@@ -1378,3 +1378,34 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   27.54 / 19.63 GiB. bfp8 passes tt-d-gen's 0.99 window-KV PCC at L35 / L38; the bfp4 side fails it (0.9891 / 0.9899,
   the known waived values since P.26: not a regression). ACCEPTED by the overseer under the owner's order (switch-only,
   default stays bfp4, F241); resumed 13:18 (gate, commit, then P.28).
+- 13:22 FRAMEWORK (F241, known, not yet fixed): the P.27 accept flipped the shipped default EXPERTS_IMPL bfp4 -> bfp8
+  (2853205d022), against the owner's order (default stays bfp4 until the owner picks after P.27-P.29). P.28 / P.29
+  measure through explicit ab env / change (EXPERTS_IMPL bfp4 vs bfp4_mse / bfp8_down4), so their tables are right
+  whatever the default; nothing else runs on the default before --until P.29. Paused 13:20, then withdrew the pause
+  (P.28 attempt 1 started 13:18 and is not affected). At P.28's decision wait (orchestrator idle): fix F241 in the
+  framework (an accept keeps the default for a switch-only pick, selftest), set the default back to bfp4, then accept
+  P.28 and resume.
+- 13:40 F241 fix written in a worktree (scratchpad wt-f241, patch f241.patch: ab.keep_default, accept_defaults(),
+  selftest, README / skill / BREADCRUMBS); A/B selftests 42 pass, full selftest running. To install at P.28's decision
+  wait (nothing running): apply the patch, add ab.keep_default: true to P.28 / P.29, set EXPERTS_IMPL back to bfp4,
+  commit, then accept P.28 and resume. Calculator (artifact 3yWQYDWMauxQzszq6H9JRh) v2: attention lever renamed
+  (projections replicated / split 4 ways), -4.1 GiB, P.27's measured speed.
+- 16:00 OWNER: queue the decoder skip, exact version first, after P.29. Queued P.30 DECODER_SKIP in tasks.yaml (switch
+  DECODER_SKIP off | exact, default off, ab.keep_default (F241); non-last chunks run layers 0-19 + layer 20's KV
+  projection; the last chunk runs all 40 layers, pulled back to >= 2688 tokens; A/B at 51200 / 512000, ladder last,
+  profile). X.3 deps += P.29, P.30. Held by run_ds41_8x4.sh --until P.29 (the task's `hold` text is a note, not read
+  by the framework). Before P.30 starts (overseer): the ladder / contract checks must compare layers 20-39 only on
+  computed rows (framework change + selftest), tell the tt-d-gen side the decoder window caches hold only the tail,
+  then --until P.30. Approximate (128-token replay) later behind the same switch.
+- 16:10 OWNER: queue the approximate version after P.30, behind the switch; do not test window KV (PCC / rel) for it.
+  Queued P.31 DECODER_SKIP=replay128 (A/B exact vs replay128, keep_default; a 128-token tail laid out without
+  32-chip padding; new test_short_turn.py: a 512-token suffix on a 51200-token cached prefix, short_turn_ms /
+  _device_ms recorded both sides). Gate metrics without err_state_window_kv_* (owner); the contract's window-KV
+  checks are not in its gate. X.3 deps += P.31. Held by --until.
+- 16:20 P.30 interface (owner asked who tells prefill a chunk is the last): tt-d-gen's header is {slot_id,
+  actual_start, actual_end} only (serving_contract.md Input); the server picks chunk starts and prefill has no ids
+  before actual_start. P.30's brief now: an explicit `last` argument per chunk (default True = today), passed by the
+  harness / runner, no inference, no pull-back of its own. To request from tt-d-gen: a last-chunk flag (or the prompt
+  length) in the header, the writer's pull-back generalised to >= 2688 tokens for a short last chunk and for a
+  prefix hit (128 for replay128), and the KV manager / launch_harness validation not shipping or checking decoder
+  window rows outside the tail.
