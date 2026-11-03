@@ -174,17 +174,14 @@ init_packages() {
                     gpp_package="g++-12"
                     echo "[INFO] Using g++-12 for Ubuntu 22.04 (gcc-12 will be installed as dependency)"
                     ;;
-                "noble") # 24.04
+                "noble"|"resolute") # 24.04, 26.04
+                    # Both carry g++-14 in their own archive. Naming it keeps the
+                    # compiler identical across the two LTS releases: 26.04's
+                    # default g++ is 15.2.0 against 24.04's 13.2.0, so without
+                    # this the OS upgrade would quietly bring a two-version
+                    # compiler bump along with it.
                     gpp_package="g++-14"
-                    echo "[INFO] Using g++-14 for Ubuntu 24.04 (gcc-14 will be installed as dependency)"
-                    ;;
-                "resolute") # 26.04
-                    # 26.04's default g++ is 15; stay on 14 so the compiler matches
-                    # what 22.04/24.04 build with and the upgrade doesn't drag a
-                    # compiler bump along with it. g++-14 is in resolute's own
-                    # archive, so no toolchain PPA is needed below.
-                    gpp_package="g++-14"
-                    echo "[INFO] Using g++-14 for Ubuntu 26.04 (gcc-14 will be installed as dependency)"
+                    echo "[INFO] Using g++-14 for Ubuntu $OS_VERSION (gcc-14 will be installed as dependency)"
                     ;;
                 *)
                     echo "[INFO] Using default g++ for $OS_ID $OS_VERSION"
@@ -282,17 +279,31 @@ prep_system() {
 # at all, and -23 only appeared on 2026-11-02. apt-get update exits 100 on a
 # source whose Release file 404s, so probe every version instead of assuming the
 # ones that happen to be there today. Returns 0 when the repository was added.
+#
+# Only a 404 means "not published". Any other probe failure is fatal: reading a
+# network blip as absence would quietly produce an image missing the LLVM
+# packages, which is far harder to diagnose later than failing here.
 add_llvm_apt_repo() {
     local version="$1"
     local keyring="$2"
+    local url="https://apt.llvm.org/$OS_CODENAME/dists/llvm-toolchain-$OS_CODENAME-$version/Release"
+    # Declared before the assignment on purpose: `local probe="$(...)"` would
+    # mask the exit status of the command substitution behind local's own.
+    local probe
 
-    if wget -q --spider "https://apt.llvm.org/$OS_CODENAME/dists/llvm-toolchain-$OS_CODENAME-$version/Release"; then
+    if probe="$(wget -S --spider --tries=3 --timeout=20 "$url" 2>&1)"; then
         echo "deb [signed-by=$keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-$version main" | tee "/etc/apt/sources.list.d/llvm-$version.list"
         return 0
     fi
 
-    echo "[INFO] apt.llvm.org has no LLVM $version repository for $OS_CODENAME; using the distro archive"
-    return 1
+    if echo "$probe" | grep -qE '404 Not Found|Remote file does not exist'; then
+        echo "[INFO] apt.llvm.org has no LLVM $version repository for $OS_CODENAME; using the distro archive"
+        return 1
+    fi
+
+    echo "[ERROR] Could not reach apt.llvm.org to check for LLVM $version ($OS_CODENAME):" >&2
+    echo "$probe" >&2
+    exit 1
 }
 
 prep_ubuntu_system() {
