@@ -11,7 +11,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"  // MulBinary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"         // Recip
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"         // Negative, Square
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"         // Negative
 
 namespace ckl = compute_kernel_lib;
 
@@ -60,7 +60,7 @@ void kernel_main() {
                 ckl::DataFormatReconfig::Enabled)>{cb_input_grad_obj});
 
         // Chain 2: other_grad = -grad * (input/other) / other. Pops grad, input, other.
-        // D2 = 1/other applied twice replaces Square(other) that underflows at |other|<1e-19 (#56601 review).
+        // D2 = 1/other, applied twice so other² is never formed (over/underflows at fp32 range edges).
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::CopyTile<

@@ -25,7 +25,7 @@ constexpr Spec kRsubBw{.compute_kernel_path = BW_COMPUTE("eltwise_bw_rsub.cpp"),
 
 // 3-input ops: ∂y/∂? uses operand values; kernel reads grad + input + other.
 constexpr Spec kMulBw{.compute_kernel_path = BW_COMPUTE("eltwise_bw_mul.cpp")};
-// div_bw: Recip + Square need fp32 dest acc for 1/other² accuracy.
+// div_bw: Recip + two chained multiplies accumulate in DEST; fp32 holds 1/other precision.
 constexpr Spec kDivBw{.compute_kernel_path = BW_COMPUTE("eltwise_bw_div.cpp"), .force_fp32_dest_acc = true};
 
 #undef BW_COMPUTE
