@@ -265,7 +265,11 @@ def compact_packed_cb_bytes(n):
 
 
 def moe_group_sizes():
-    """Serial prefill MoE group sizes up to QWEN_PREFILL_MOE_GROUP: 1024, 2048 (default) or 4096."""
+    """Serial prefill MoE group sizes up to QWEN_PREFILL_MOE_GROUP: 1024, 2048 (default) or 4096.
+
+    4096 adds a 4096-row prefill trace (8 x 512-row pieces per layer) that does not fit a 1 GB trace region
+    next to the other buckets at 48 layers; use it only with a larger trace_region_size.
+    """
     largest = int(os.environ.get("QWEN_PREFILL_MOE_GROUP", "2048"))
     if largest not in (1024, 2048, 4096):
         raise ValueError("QWEN_PREFILL_MOE_GROUP must be 1024, 2048 or 4096")
