@@ -31,8 +31,45 @@ constexpr uint64_t kAgmmProgramHashSalt = 0x41474d4d52544d31ull;  // "AGMM" runt
 
 using operations::common::folded_rows;
 
-// The checks that depend on M: cheap enough to run on every program-cache hit, and the only ones that
-// must, since the hash carries no row count for the input, the gather buffer or the ternaries.
+// Every operand the kernels address must be an allocated buffer on the activation's device. Checked on misses and
+// again on hits: the row-free hash does not pin where a same-spec tensor lives, and the hit path writes its raw
+// address into the program.
+void validate_operands_on_device(const AllGatherMinimalMatmulAsyncInputs& tensor_args) {
+    const auto& act_tensor = tensor_args.input_tensor;
+    TT_FATAL(
+        act_tensor.storage_type() == StorageType::DEVICE && act_tensor.is_allocated(),
+        "all_gather_minimal_matmul_async activation must be allocated in a device buffer");
+    const auto check = [&act_tensor](const Tensor& tensor, const char* name) {
+        TT_FATAL(
+            tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
+            "all_gather_minimal_matmul_async {} must be allocated in a device buffer",
+            name);
+        TT_FATAL(
+            tensor.device() == act_tensor.device(),
+            "all_gather_minimal_matmul_async {} must be on the same device as the activation",
+            name);
+    };
+    check(tensor_args.weight_tensor, "weight");
+    if (tensor_args.bias_tensor.has_value()) {
+        check(*tensor_args.bias_tensor, "bias");
+    }
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        check(*tensor_args.persistent_output_buffer, "persistent_output_buffer");
+    }
+    if (tensor_args.fused_ternary_input_a.has_value()) {
+        check(*tensor_args.fused_ternary_input_a, "fused_ternary_input_a");
+    }
+    if (tensor_args.fused_ternary_input_b.has_value()) {
+        check(*tensor_args.fused_ternary_input_b, "fused_ternary_input_b");
+    }
+    if (tensor_args.persistent_weight_buffer.has_value()) {
+        check(*tensor_args.persistent_weight_buffer, "persistent_weight_buffer");
+    }
+}
+
+// The checks that depend on M: cheap enough to run on every program-cache hit, and (with the device checks
+// above) the ones that must, since the hash carries no row count for the input, the gather buffer or the
+// ternaries.
 void validate_rows(
     const AllGatherMinimalMatmulAsyncParams& attributes, const AllGatherMinimalMatmulAsyncInputs& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
@@ -96,11 +133,14 @@ AllGatherMinimalMatmulAsyncOp::program_factory_t AllGatherMinimalMatmulAsyncOp::
 
 void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    validate_operands_on_device(tensor_args);
     validate_rows(attributes, tensor_args);
 }
 
 // Everything that changes the kernels, the CBs or the per-core layout, minus the row count of the
-// row-varying tensors. Sharded tensors keep their full spec: their accessor args carry the shape.
+// row-varying tensors. Sharded tensors keep their full spec: their accessor args carry the shape. The same
+// holds for the outputs the op creates: in a sharded memory config their accessor args carry the row count,
+// so the activation keeps its rows in the key there.
 ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
@@ -114,6 +154,7 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
         }
         return ttnn::operations::common::hash_spec_without_rows(tensor, kAgmmProgramHashSalt);
     };
+    const bool output_sharded = attributes.output_mem_config.value_or(act_tensor.memory_config()).is_sharded();
     const bool fp32_dest_acc_en =
         std::get<2>(get_compute_kernel_config_args(act_tensor.device()->arch(), attributes.compute_kernel_config));
     // Without a config the block sizes come from the shape, so fold the ones the factory would pick.
@@ -125,7 +166,8 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
         attributes,
         resolve_transpose_core_grid(attributes, M, N),
         block_sizes,
-        rows_free(act_tensor),
+        output_sharded ? ttsl::hash::hash_objects_with_default_seed(kAgmmProgramHashSalt, act_tensor.tensor_spec())
+                       : rows_free(act_tensor),
         weight_tensor.tensor_spec(),
         tensor_args.bias_tensor,
         rows_free(tensor_args.persistent_output_buffer),
@@ -142,27 +184,8 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     const bool has_bias = tensor_args.bias_tensor.has_value();
     const Tensor* bias_ptr = has_bias ? &tensor_args.bias_tensor.value() : nullptr;
 
-    // Basic device/storage checks
-    TT_FATAL(
-        act_tensor.storage_type() == StorageType::DEVICE && weight_tensor.storage_type() == StorageType::DEVICE,
-        "all_gather_minimal_matmul_async operands must be on device");
-    TT_FATAL(
-        act_tensor.device() == weight_tensor.device(),
-        "all_gather_minimal_matmul_async inputs must reside on the same device");
-    TT_FATAL(
-        act_tensor.is_allocated() && weight_tensor.is_allocated(),
-        "all_gather_minimal_matmul_async inputs must be allocated in device buffers");
-    if (has_bias) {
-        const auto& bias_tensor = *bias_ptr;
-        TT_FATAL(
-            bias_tensor.storage_type() == StorageType::DEVICE,
-            "all_gather_minimal_matmul_async bias must be on device");
-        TT_FATAL(
-            bias_tensor.device() == act_tensor.device(),
-            "all_gather_minimal_matmul_async bias must be on the same device");
-        TT_FATAL(
-            bias_tensor.is_allocated(), "all_gather_minimal_matmul_async bias must be allocated in a device buffer");
-    }
+    // Device/storage checks, repeated on every cache hit.
+    validate_operands_on_device(tensor_args);
 
     // Layout requirements: all inputs must be TILE layout
     TT_FATAL(
@@ -263,9 +286,6 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             tensor_args.persistent_weight_buffer.has_value(),
             "persistent_weight_buffer must be provided when fsdp_cluster_axis is set");
         const auto& pwb = tensor_args.persistent_weight_buffer.value();
-        TT_FATAL(
-            pwb.storage_type() == StorageType::DEVICE && pwb.is_allocated(),
-            "persistent_weight_buffer must be on device and allocated");
         TT_FATAL(pwb.layout() == Layout::TILE, "persistent_weight_buffer must be TILE layout");
         const auto& pwb_logical = pwb.logical_shape();
         TT_FATAL(pwb.dtype() == weight_tensor.dtype(), "persistent_weight_buffer dtype must match weight_tensor dtype");
@@ -372,13 +392,6 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
 
         const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
         const auto& ternary_b = tensor_args.fused_ternary_input_b.value();
-
-        TT_FATAL(ternary_a.storage_type() == StorageType::DEVICE, "fused_ternary_input_a must be on device");
-        TT_FATAL(ternary_b.storage_type() == StorageType::DEVICE, "fused_ternary_input_b must be on device");
-        TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
-        TT_FATAL(ternary_b.device() == act_tensor.device(), "fused_ternary_input_b must be on same device");
-        TT_FATAL(ternary_a.is_allocated(), "fused_ternary_input_a must be allocated");
-        TT_FATAL(ternary_b.is_allocated(), "fused_ternary_input_b must be allocated");
 
         TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
         TT_FATAL(ternary_b.layout() == Layout::TILE, "fused_ternary_input_b must be TILE layout");

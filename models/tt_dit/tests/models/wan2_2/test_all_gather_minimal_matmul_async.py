@@ -1445,15 +1445,16 @@ def test_linear_addcmul_folded_rows(
     broadcast_gate,
 ):
     """Fused addcmul with the activation's upper dims folded into its rows ([2, 1, M, K]) and with M not a
-    multiple of 32: the first call misses, the second must hit, and both match torch.addcmul on the logical rows."""
+    multiple of 32: the first call misses, the other row counts must hit its program, and every result matches
+    torch.addcmul on the logical rows."""
     submesh = _create_cluster_submesh(mesh_device, cluster_axis)
     results = []
 
-    def run(_):
+    def run(rows):
         results.append(
             run_test_linear(
                 submesh,
-                M=M,
+                M=rows,
                 topology=topology,
                 core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
                 num_workers_per_link=num_workers_per_link,
@@ -1467,7 +1468,7 @@ def test_linear_addcmul_folded_rows(
             )
         )
 
-    assert_program_cache_flat(submesh, run, ["miss", "hit"])
+    assert_program_cache_flat(submesh, run, [M, M + 32, M - 32])
     for check_result in results:
         for device_result in check_result[0][0]:
             assert device_result["pcc"] > 0.999_500, device_result
@@ -1499,6 +1500,7 @@ def test_linear_addcmul_folded_rows(
 )
 def test_linear_addcmul_per_batch_gate_refused(
     mesh_device,
+    expect_error,
     topology,
     num_links,
     num_workers_per_link,
@@ -1510,7 +1512,7 @@ def test_linear_addcmul_per_batch_gate_refused(
 ):
     """A [2, 1, 1, N] gate would be broadcast from its first batch only, so the op refuses it up front."""
     submesh = _create_cluster_submesh(mesh_device, cluster_axis)
-    with pytest.raises(RuntimeError, match="fused_ternary_input_b broadcasts over the rows"):
+    with expect_error(RuntimeError, "fused_ternary_input_b broadcasts over the rows"):
         run_test_linear(
             submesh,
             M=3072,
