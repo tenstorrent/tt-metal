@@ -75,6 +75,16 @@ def _rms_norm_config(arch):
     )
 
 
+@functools.lru_cache(maxsize=None)
+def _bf16_stats_rms_norm_config(arch):
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+    )
+
+
 def matmul_compute_config(device):
     """HiFi3, fp32 accumulation (bf16 activation x MXFP8-origin weight, exact products); None when off."""
     return _matmul_config(device.arch()) if precise_matmuls() else None
@@ -83,3 +93,8 @@ def matmul_compute_config(device):
 def rms_norm_compute_config(device):
     """fp32 statistics, exact rsqrt; None when off."""
     return _rms_norm_config(device.arch()) if precise_norms() else None
+
+
+def bf16_stats_rms_norm_compute_config(device):
+    """The previous ttnn.rms_norm default: bf16 statistics, so the row-major gain still fits in L1."""
+    return _bf16_stats_rms_norm_config(device.arch())

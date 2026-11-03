@@ -33,6 +33,13 @@ class RMSNorm(nn.Module):
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
+        # Previous ttnn.rms_norm default: fp32 accumulation overflows L1 with the row-major weight.
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+        )
 
     def forward(self, x):
         if self.is_distributed:
@@ -86,6 +93,7 @@ class RMSNorm(nn.Module):
                 weight=self.tt_weight,
                 epsilon=self.eps,
                 # program_config=program_config,
+                compute_kernel_config=self.compute_kernel_config,
             )
             return tt_output
 
@@ -100,4 +108,5 @@ class RMSNorm(nn.Module):
             epsilon=self.eps,
             program_config=sharded_norm_program_config(x.memory_config()),
             memory_config=x.memory_config(),
+            compute_kernel_config=self.compute_kernel_config,
         )

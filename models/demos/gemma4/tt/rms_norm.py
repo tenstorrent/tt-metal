@@ -100,6 +100,12 @@ class RMSNorm(nn.Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        self.decode_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+        )
         # Decode width-sharded fast path. The plain (interleaved) rms_norm runs
         # the RMS reduction over the full hidden width on few cores — ~76 us for
         # a single-token [1,1,32,hidden] norm on Gemma4-31B (hidden=5376). Width-
@@ -155,6 +161,7 @@ class RMSNorm(nn.Module):
             weight=self.tt_weight,
             epsilon=self.eps,
             program_config=self._sharded_cfg[1],
+            compute_kernel_config=self.decode_compute_kernel_config,
         )
         x_sh.deallocate(True)
         out_interleaved = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
@@ -166,7 +173,12 @@ class RMSNorm(nn.Module):
         the output left in that layout (no S2I; the DRAM-sharded decode matmul reads it without its own reshard)."""
         x_sh = ttnn.to_memory_config(x, mem)
         out = ttnn.rms_norm(
-            x_sh, weight=self.tt_weight, epsilon=self.eps, program_config=program_config, memory_config=mem
+            x_sh,
+            weight=self.tt_weight,
+            epsilon=self.eps,
+            program_config=program_config,
+            memory_config=mem,
+            compute_kernel_config=self.decode_compute_kernel_config,
         )
         x_sh.deallocate(True)
         return out
@@ -260,7 +272,9 @@ class RMSNorm(nn.Module):
                     return self._forward_sharded(x)
 
             is_prefill = prefill or (len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE)
-            compute_kernel_config = self.prefill_compute_kernel_config if is_prefill else None
+            compute_kernel_config = (
+                self.prefill_compute_kernel_config if is_prefill else self.decode_compute_kernel_config
+            )
             weight = self.tt_weight_tile if is_prefill and self.tt_weight_tile is not None else self.tt_weight
             if self.with_scale:
                 tt_output = ttnn.rms_norm(
