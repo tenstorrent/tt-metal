@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Multiplies each tile of in_a by the matching tile of in_b into out.
+// Multiplies each tile of in_a by the matching tile of in_b into out, or with BINARY_ADD defined, adds them.
 
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -18,14 +18,22 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
     compute_kernel_hw_startup(dfb::in_a, dfb::in_b, dfb::out);
+#ifdef BINARY_ADD
+    add_init(dfb::in_a, dfb::in_b);
+#else
     mul_init(dfb::in_a, dfb::in_b);
+#endif
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         dfb_a.wait_front(1);
         dfb_b.wait_front(1);
 
         tile_regs_acquire();
+#ifdef BINARY_ADD
+        add_tiles(dfb::in_a, dfb::in_b, 0, 0, 0);
+#else
         mul_tiles(dfb::in_a, dfb::in_b, 0, 0, 0);
+#endif
         tile_regs_commit();
 
         dfb_a.pop_front(1);
