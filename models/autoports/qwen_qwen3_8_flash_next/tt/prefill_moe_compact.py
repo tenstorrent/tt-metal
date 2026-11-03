@@ -136,9 +136,10 @@ void kernel_main() {
     const uint32_t worker=get_arg_val<uint32_t>(8);
     CircularBuffer cb(0);cb.reserve_back(1);const uint32_t base=cb.get_write_ptr();Noc noc;
     constexpr uint32_t SL=8,RB=SL*5120,scratch=RB+N*192,maps=scratch+64,cnts=maps+SL*16,invs=cnts+128*16,E=(128+W-1)/W;
-    for(uint32_t row=0;row<N;++row) {
-        noc.async_read(ids,CoreLocalMem<uint32_t>(base+RB+row*128),128,{.page_id=row},{});
-        noc.async_read(scores,CoreLocalMem<uint32_t>(base+RB+N*128+row*64),64,{.page_id=row},{});
+    // ids (uint32) and scores (bf16) arrive in TILE layout: one 32-row tile per page.
+    for(uint32_t t=0;t<(N+31)/32;++t) {
+        noc.async_read(ids,CoreLocalMem<uint32_t>(base+RB+t*4096),4096,{.page_id=t},{});
+        noc.async_read(scores,CoreLocalMem<uint32_t>(base+RB+N*128+t*2048),2048,{.page_id=t},{});
     }
     noc.async_read(rank_tensor,CoreLocalMem<uint32_t>(base+scratch),4,{.page_id=0},{});noc.async_read_barrier();
     const uint32_t rank=*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+scratch);
@@ -163,8 +164,9 @@ void kernel_main() {
         n=0;
     };
     for(uint32_t row=0;row<N;++row)for(uint32_t route=0;route<10;++route) {
-        const uint32_t v=id[row*32+route];
-        if(v/128!=rank || score[row*32+route]==0)continue;
+        const uint32_t at=(row/32)*1024+(row%32/16)*512+(route/16)*256+(row%16)*16+route%16;
+        const uint32_t v=id[at];
+        if(v/128!=rank || score[at]==0)continue;
         const uint32_t e=v%128;
         if(e%W!=worker)continue;
         noc.async_read(x,CoreLocalMem<uint32_t>(base+n*5120),5120,{.page_id=row},{});

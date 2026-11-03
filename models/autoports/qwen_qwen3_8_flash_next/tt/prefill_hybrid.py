@@ -37,8 +37,12 @@ def group1024(self, x):
     selected = ttnn.softmax(
         ttnn.add(values, self.mask), dim=-1, numeric_stable=True, compute_kernel_config=self.ops.compute
     )
-    ids = ttnn.to_layout(ttnn.typecast(indices, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
-    scores = ttnn.to_layout(selected, ttnn.ROW_MAJOR_LAYOUT)
+    ids_tile = ttnn.typecast(indices, ttnn.uint32)
+    pipelined = dispatch_pipe_enabled()
+    # The batched dispatch reads TILE ids/scores; row-major copies only for the serial kernels.
+    if not (pipelined and compact_pipe_enabled()):
+        ids = ttnn.to_layout(ids_tile, ttnn.ROW_MAJOR_LAYOUT)
+        scores = ttnn.to_layout(selected, ttnn.ROW_MAJOR_LAYOUT)
     counts = ttnn.empty((128,), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh)
     mapping = ttnn.empty((1, 1, n, 32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh)
     capacity = ttnn.empty(
@@ -49,7 +53,7 @@ def group1024(self, x):
     source = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     # The batched dispatch also writes inverse[e][packed] = row * 16 + route for the tile-once compaction.
     inverse = None
-    if dispatch_pipe_enabled():
+    if pipelined:
         inverse = ttnn.empty(
             (128, n),
             dtype=ttnn.uint32,
@@ -59,7 +63,9 @@ def group1024(self, x):
         )
     _expert_kernel(
         self.ops.mesh,
-        [source, ids, scores, self.rank, counts, mapping, capacity] + ([inverse] if inverse is not None else []),
+        [source, ids_tile, selected, self.rank, counts, mapping, capacity, inverse]
+        if inverse is not None
+        else [source, ids, scores, self.rank, counts, mapping, capacity],
         DISPATCH1024_PIPE if inverse is not None else DISPATCH1024,
         [n],
         workers=32,
