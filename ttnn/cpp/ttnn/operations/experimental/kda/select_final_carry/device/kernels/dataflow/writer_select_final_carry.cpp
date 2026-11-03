@@ -57,24 +57,32 @@ void kernel_main() {
     const uint8_t semaphore_route = unicast_peers ? 0 : PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric;
     open_connections(fabric, num_connections, arg);
+    // unicast_peers: one header per other rank, routed once, so a page goes to every peer before a single flush.
     const size_t peer_args = arg;
     constexpr size_t args_per_peer = 3;
-    auto* peer_route = PacketHeaderPool::allocate_header();
-    const auto to_peer = [&](uint32_t peer) -> auto& {
-        const size_t args = peer_args + peer * args_per_peer;
+    constexpr uint32_t peer_headers = unicast_peers ? line_targets : 0;
+    decltype(PacketHeaderPool::allocate_header()) peer_routes[peer_headers > 0 ? peer_headers : 1];
+    for (uint32_t peer = 0; peer < peer_headers; ++peer) {
+        peer_routes[peer] = PacketHeaderPool::allocate_header();
 #if defined(FABRIC_2D)
-        fabric_set_unicast_route(peer_route, get_arg_val<uint32_t>(args + 1), get_arg_val<uint32_t>(args + 2));
+        const size_t args = peer_args + peer * args_per_peer;
+        fabric_set_unicast_route(peer_routes[peer], get_arg_val<uint32_t>(args + 1), get_arg_val<uint32_t>(args + 2));
 #endif
-        return fabric.get(get_arg_val<uint32_t>(args)).sender;
+    }
+    const auto to_peer = [&](uint32_t peer) -> auto& {
+        return fabric.get(get_arg_val<uint32_t>(peer_args + peer * args_per_peer)).sender;
     };
     // Bump the semaphore at `address` on every other rank of the line.
     const auto increment_others = [&](uint64_t address) {
         if constexpr (unicast_peers) {
             for (uint32_t peer = 0; peer < line_targets; ++peer) {
                 fabric_unicast_noc_unicast_atomic_inc(
-                    &to_peer(peer), peer_route, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{address, 1, true}, 1);
-                noc_async_writes_flushed();
+                    &to_peer(peer),
+                    peer_routes[peer],
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{address, 1, true},
+                    1);
             }
+            noc_async_writes_flushed();
             return;
         }
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
@@ -126,14 +134,15 @@ void kernel_main() {
                     for (uint32_t peer = 0; peer < line_targets; ++peer) {
                         fabric_unicast_noc_unicast_write(
                             &to_peer(peer),
-                            peer_route,
+                            peer_routes[peer],
                             source,
                             page_size,
                             tt::tt_fabric::NocUnicastCommandHeader{
                                 linear::addrgen_detail::get_noc_address(output, page, 0)},
                             1);
-                        noc_async_writes_flushed();
                     }
+                    // The next page reuses every peer's header.
+                    noc_async_writes_flushed();
                 }
             } else if (packet_end - tile == 1) {
                 noc_async_write_page(tile, output, l1_address);
