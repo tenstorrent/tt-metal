@@ -131,6 +131,7 @@ static void validate_result(
         .face_c_dim = 16,
         .num_faces = static_cast<int>(test_config.tile_shape_in_faces_r * test_config.tile_shape_in_faces_c),
         .datum_bytes = tt::datum_size(test_config.input_fmt),
+        .num_faces_c_dim = static_cast<int>(test_config.tile_shape_in_faces_c),
     };
 
     std::visit(
