@@ -94,13 +94,12 @@ void assign_per_core_runtime_args(
             query_buffer->address(),
             key_buffer->address(),
             value_buffer->address(),
-            mask_buffer != nullptr ? mask_buffer->address() : 0,
-            gate_buffer != nullptr ? gate_buffer->address() : 0};
+            get_address_or_zero(mask_buffer),
+            get_address_or_zero(gate_buffer)};
         reader_args.insert(reader_args.end(), work_args.begin(), work_args.end());
         SetRuntimeArgs(program, kernels.reader, core, reader_args);
 
-        std::vector<uint32_t> writer_args = {
-            output_buffer->address(), intermediates_buffer != nullptr ? intermediates_buffer->address() : 0};
+        std::vector<uint32_t> writer_args = {output_buffer->address(), get_address_or_zero(intermediates_buffer)};
         writer_args.insert(writer_args.end(), work_args.begin(), work_args.end());
         SetRuntimeArgs(program, kernels.writer, core, writer_args);
 
@@ -515,16 +514,15 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
             runtime_args[kReaderArgValue] = value_buffer->address();
             // For causal mask, mask is generated on-chip (mask_buffer is nullptr)
             // For DRAM mask, use actual mask buffer address
-            runtime_args[kReaderArgMask] = (mask_buffer != nullptr) ? mask_buffer->address() : 0;
-            runtime_args[kReaderArgGate] = (gate_buffer != nullptr) ? gate_buffer->address() : 0;
+            runtime_args[kReaderArgMask] = get_address_or_zero(mask_buffer);
+            runtime_args[kReaderArgGate] = get_address_or_zero(gate_buffer);
         }
 
         // Update output buffer for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputBufferIdx] = output_buffer->address();
-            runtime_args[kIntermediateBufferIdx] =
-                intermediates_buffer != nullptr ? intermediates_buffer->address() : 0;
+            runtime_args[kIntermediateBufferIdx] = get_address_or_zero(intermediates_buffer);
         }
     });
 }
