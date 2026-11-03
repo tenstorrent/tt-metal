@@ -23,7 +23,6 @@ namespace {
 // Nested so the names cannot collide with the sibling factories' in the unity build (this op's
 // factories share one translation unit).
 namespace wh_sharded_rm {
-const DFBSpecName IN0{"in0"};
 const DFBSpecName OUT{"out"};
 const DFBSpecName IN{"in"};
 const DFBSpecName TILIZE{"tilize"};
@@ -113,40 +112,35 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     // a staging buffer and the writer copies each column into the output shard, instead of the
     // packer writing the shard directly. The compute and writer kernels select that path on the
     // OUT_STAGING define, which is emitted exactly when the staging buffer is bound.
-    const bool use_out_staging = ht > 8;
+    // Quasar has no narrow-row pack, so it always stages and the writer drops each row's padding.
+    const bool use_out_staging = ht > 8 || input_tensor.device()->arch() == tt::ARCH::QUASAR;
 
     ProgramSpec spec{.name = "transpose_wh_sharded_rm"};
 
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()});
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()});
 
-    // Both io buffers are built on the tensors' own sharded L1 memory rather than on
-    // Program-lifetime storage; override_runtime_arguments re-points them on a cache hit.
-    // in0: the reader only peeks its base pointer and reads the shard back through the NoC.
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = IN0,
-        .entry_size = stick_size_bytes,
-        .num_entries = shard_height,
-        .data_format_metadata = src0_dfb_data_format,
-        .borrowed_from = INPUT,
-    });
-
-    // out: paged by output_page_size over the whole output shard. The buffer's page count is derived
-    // from its total size, which must therefore be a whole number of pages (the legacy circular
-    // buffer configuration enforced the same divisibility).
-    const uint32_t output_total_bytes = stick_size_bytes * shard_height;
-    TT_FATAL(
-        output_total_bytes % output_page_size == 0,
-        "transpose_wh sharded RM: output shard size {} B must be divisible by output page size {} B",
-        output_total_bytes,
-        output_page_size);
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = OUT,
-        .entry_size = output_page_size,
-        .num_entries = output_total_bytes / output_page_size,
-        .data_format_metadata = dst_dfb_data_format,
-        .borrowed_from = OUTPUT,
-    });
+    // The data-movement kernels reach the resident shards through their tensor accessors: Quasar
+    // rejects a buffer that one data-movement kernel both produces and consumes.
+    // out: without staging, compute packs straight into the output shard, so it is built on the
+    // tensor's own sharded L1 memory; override_runtime_arguments re-points it on a cache hit. It is
+    // paged by output_page_size over the whole shard, so the shard must be a whole number of pages
+    // (the legacy circular buffer configuration enforced the same divisibility).
+    if (!use_out_staging) {
+        const uint32_t output_total_bytes = stick_size_bytes * shard_height;
+        TT_FATAL(
+            output_total_bytes % output_page_size == 0,
+            "transpose_wh sharded RM: output shard size {} B must be divisible by output page size {} B",
+            output_total_bytes,
+            output_page_size);
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = OUT,
+            .entry_size = output_page_size,
+            .num_entries = output_total_bytes / output_page_size,
+            .data_format_metadata = dst_dfb_data_format,
+            .borrowed_from = OUTPUT,
+        });
+    }
 
     // in (double-buffered intermediate): reader-filled sticks the compute kernel tilizes.
     uint32_t num_in_tiles = wt * 2;  // double buffer
@@ -167,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .data_format_metadata = src0_dfb_data_format,
     });
 
-    // Output staging buffer (only when ht > 8): compute packs each transposed column here and the
+    // Output staging buffer (ht > 8, or always on Quasar): compute packs each transposed column here and the
     // writer copies it into the output shard. The legacy factory also allocated an "untilize"
     // intermediate (c_26) on this path that no kernel referenced; it is not re-created here.
     if (use_out_staging) {
@@ -190,24 +184,12 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
                   "reader_unary_transpose_wh_sharded_rm.cpp",
-        .dfb_bindings =
-            {// Self-loop: the reader is the only kernel that touches the input shard (base-pointer
-             // peek, no FIFO ops).
-             DFBBinding{
-                 .dfb_spec_name = IN0,
-                 .accessor_name = "in0",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = IN0,
-                 .accessor_name = "in0",
-                 .endpoint_type = DFBEndpointType::CONSUMER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = IN,
-                 .accessor_name = "in",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             }},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IN,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args =
             {{"num_hw_blocks_per_core", num_hw_blocks_per_core},
              {"Ht", ht},
@@ -220,29 +202,18 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     });
 
     // ---- writer ----
-    // The writer always constructs the output-shard handle (and peeks its base pointer); it drains
-    // the staging buffer into it only on the OUT_STAGING path. With staging, nothing else touches the
-    // output shard, so it is self-looped onto the writer; without, the compute kernel packs into it
-    // directly and the writer is its (role-free) consumer.
+    // The writer drains the staging buffer into the output shard only on the OUT_STAGING path.
+    // Without staging, the compute kernel packs into the shard directly and the writer is its
+    // (role-free) consumer.
     Group<DFBBinding> writer_dfb_bindings;
+    Group<TensorBinding> writer_tensor_bindings;
     if (use_out_staging) {
-        writer_dfb_bindings = {
-            DFBBinding{
-                .dfb_spec_name = OUT,
-                .accessor_name = "out",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
-            DFBBinding{
-                .dfb_spec_name = OUT,
-                .accessor_name = "out",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            DFBBinding{
-                .dfb_spec_name = OUT_STAGING,
-                .accessor_name = "out_staging",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-        };
+        writer_dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_STAGING,
+            .accessor_name = "out_staging",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }};
+        writer_tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}};
     } else {
         writer_dfb_bindings = {DFBBinding{
             .dfb_spec_name = OUT,
@@ -256,6 +227,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
                   "writer_unary_transpose_wh_sharded_rm.cpp",
         .compiler_options = {.defines = out_staging_defines},
         .dfb_bindings = std::move(writer_dfb_bindings),
+        .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args =
             {{"num_hw_blocks_per_core", num_hw_blocks_per_core},
              {"Ht", ht},
@@ -346,8 +318,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     });
 
     // ---- run args ----
-    // All three kernels take compile-time args only, so the buffer addresses are the whole
-    // per-dispatch state; they ride on the two borrowed buffers.
+    // All three kernels take compile-time args only, so the shard addresses are the whole
+    // per-dispatch state; they ride on the two tensor arguments.
     ProgramRunArgs run_args;
     run_args.tensor_args.emplace(INPUT, input);
     run_args.tensor_args.emplace(OUTPUT, output);
@@ -361,9 +333,9 @@ ProgramRunArgs TransposeWHShardedRMProgramFactory::override_runtime_arguments(
     Tensor& output_tensor,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     using namespace wh_sharded_rm;
-    // All three kernels take compile-time args only, so the buffer addresses are the whole per-dispatch
-    // state; both ride on the borrowed buffers (in0, out), which re-resolve their L1 address from these
-    // tensor arguments.
+    // All three kernels take compile-time args only, so the shard addresses are the whole per-dispatch
+    // state; they ride on these tensor arguments (the borrowed out buffer re-resolves its L1 address
+    // from them).
     ProgramRunArgs run_args;
     run_args.tensor_args.emplace(INPUT, tensor_args.input.mesh_tensor());
     run_args.tensor_args.emplace(OUTPUT, output_tensor.mesh_tensor());
