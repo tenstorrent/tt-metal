@@ -19,16 +19,16 @@
 - name: runtime_perf_pgm_dispatch
   cmd: |
     mkdir -p generated/test_reports
-    filter='all_processors_all_cores_trace/|all_processors_all_cores_1cb/|all_processors_all_cores_32_rta/|all_processors_1_core_1_rta/|10000_kernel_all_cores_all_processors_32_cbs_trace/|vary_slow_cycles'
-    for r in 0 1 2; do
-      for arm in 0x80 0x87 0x88 0x8F; do
-        start=$(date +%s)
-        TT_METAL_RISC_PREFETCH_CTRL=$arm ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch \
-          --benchmark_filter="$filter" --benchmark_out_format=json \
-          --benchmark_out=generated/test_reports/${ARCH_NAME}_${arm}_r${r}.json
-        echo "PGM $arm r$r exit=$? secs=$(( $(date +%s) - start ))"
-      done
-    done
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch \
+      --benchmark_out_format=json --benchmark_out=pgm_bench.json --benchmark_repetitions=2
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py \
+        -g tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_blackhole_golden.json \
+        pgm_bench.json
+    else
+      ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py \
+        pgm_bench.json
+    fi
   skus:
     wh_n300_civ2:
       timeout: 30
