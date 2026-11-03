@@ -112,3 +112,13 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   evals, not this chain.
 * 21:46 pre-block profile on chip 8 (tracy over `test_mhc_pre_block.py::test_pre_block_real`, B = 1/4/32, FPU and
   exact variants): the op's device time per case.
+* 21:47 pre-block profile (chip 8, 1x1 mesh, no fabric): the generic op's device kernel time is **101.8 us for B = 1, 4
+  and 32 alike** (FPU projection; 183.8 us with the exact SFPU projection); the standalone `mhc_split_sinkhorn` op
+  51.9 us. The cost is serial latency, not work: projection passes, the 10 + 12 tile fan-in of two tree rounds on
+  single cores, 43 Sinkhorn dest passes with a CB round trip each, two multicasts. Plan for a v3 (per wrap, from 82-102
+  us): (C) fold the h-norm into round 1 through the 4x4 Gram matrix G_ij = x_i . x_j of each user (sum_c h_c^2 =
+  sum_ij pre_i pre_j G_ij, exact in real arithmetic; the coordinator finishes it and ships rsqrt in the pre multicast:
+  no second tree round, no second multicast, -15..20 us); (F) the projection without the 3-way bf16 split (-7 us, the
+  FPU rounds the operands anyway per the op's README); (A) a shallower fan-in (-5 us); (D) the attention post-mix and
+  the FFN pre-block as one program (-8 us per layer); (B) a DST-resident SFPU Sinkhorn (-15 us) last. C + F + A + D
+  = ~-35 us per wrap = -3.2 ms per step; with B -4.5 ms.
