@@ -66,9 +66,8 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | silu, swish  | |x| < 2*SNB            | exactly 0                | x/2 underflow FTZ                          |
 |              | -88.5 <= x <= -87.5    | exactly 0                | device sigmoid FTZ before torch's          |
 |              | elsewhere              | ULP ≤ 3                  | fp32 sigmoid exp/reciprocal error          |
-| softsign     | |x| > 1/SNB - 1        | exactly 0                | reciprocal(1 + |x|) FTZ                    |
-|              | |x| == 1/SNB - 1       | 0 or golden ±1           | arch-dependent rounding                    |
-|              | elsewhere              | ULP ≤ 2                  |                                            |
+| softsign     | all                    | ULP ≤ 2                  | reciprocal + multiply rounding             |
+|              | -0                     | -0                       | sign of zero preserved                     |
 | log_sigmoid  | x <= -4                | device returns x         | identity branch                            |
 |              | x <= -13               | ULP ≤ 2                  | identity within 2 ULP of golden            |
 |              | -4 < x <= 0            | abs ≤ 0.02               | degree-8 polynomial                        |
@@ -319,11 +318,10 @@ def test_softsign(device):
 
     The SFPU computes this via reciprocal(1 + |x|).
 
-    | Input range               | Check          | Reason                                           |
-    |---------------------------|----------------|--------------------------------------------------|
-    | |x| > 1/SNB - 1 (~8.5e37) | exactly 0      | reciprocal underflows and is FTZ'd instead of ±1 |
-    | |x| == 1/SNB - 1          | 0 or golden ±1 | arch-dependent rounding (WH: ±1, BH: 0)          |
-    | elsewhere                 | ULP ≤ 2        | reciprocal + multiply rounding                   |
+    | Input range | Check   | Reason                                                  |
+    |-------------|---------|---------------------------------------------------------|
+    | all         | ULP ≤ 2 | reciprocal + multiply rounding; ±1 up to ±bf16_max      |
+    | -0          | -0      | sign of zero preserved                                  |
 
     ULP rather than whole-domain PCC: the ~46% of inputs already saturating
     to exactly ±1 (|x| >= 512) would satisfy PCC ≥ 0.999 for a badly broken
@@ -339,22 +337,12 @@ def test_softsign(device):
     tt_result = ttnn.softsign(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    ftz_threshold = 1.0 / SMALLEST_NORMAL_BF16 - 1.0
-    abs_input = input_tensor.abs().float()
-    # Deep-subnormal band: unambiguous FTZ to 0 on every architecture.
-    near_max = abs_input > ftz_threshold
-    assert_ftz_band(result, near_max, "near-bf16_max FTZ band")
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
 
-    # Boundary magnitude (|x| == ftz_threshold exactly): normal/subnormal
-    # rounding of the reciprocal is architecture-dependent, so either the
-    # FTZ'd 0 or the mathematically-correct golden (±1) is accepted.
-    boundary = abs_input == ftz_threshold
-    assert boundary.any(), "expected near-bf16_max boundary magnitude to be non-empty for this exhaustive sweep"
-    boundary_ok = (result[boundary] == 0) | (result[boundary] == golden[boundary])
-    assert boundary_ok.all(), "boundary magnitude must be either FTZ'd to 0 or exactly the golden ±1"
-
-    ftz_safe = ~near_max & ~boundary
-    assert_with_ulp(expected_result=golden[ftz_safe], actual_result=result[ftz_safe], ulp_threshold=2)
+    # ULP distance treats ±0 as equal, so the sign of zero is checked on its own.
+    neg_zero = torch.full((32, 32), -0.0, dtype=torch.float32)
+    zero_result = ttnn.to_torch(ttnn.softsign(to_float32_tt_tensor(neg_zero, device)))
+    assert torch.all(zero_result == 0) and torch.all(torch.signbit(zero_result)), "softsign(-0) must be -0"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
