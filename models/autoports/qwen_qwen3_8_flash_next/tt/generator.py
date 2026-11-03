@@ -319,6 +319,10 @@ class QwenFlashNextGenerator(Generator):
 
             pool = {}
             self.decode_views = {batch: CompactDecodeView(self, batch, pool) for batch in DECODE_BUCKETS}
+            from .decode_view_one import SingleRowDecodeView, enabled
+
+            if enabled():
+                self.decode_views[1] = SingleRowDecodeView(self, pool)
         # Retain and warm the fixed-batch full-logit diagnostic route as well.
         # No new shape/program may first appear after a live trace is captured.
         for n in self.buckets:
@@ -641,7 +645,9 @@ class QwenFlashNextGenerator(Generator):
             self._positions(start_pos)
         from .decode_view import select_decode_batch
 
-        batch = select_decode_batch(self._active, enabled=self.compact_decode_enabled and bool(self.decode_views))
+        batch = select_decode_batch(
+            self._active, enabled=self.compact_decode_enabled and bool(self.decode_views), buckets=self.decode_views
+        )
         self.last_decode_execution_batch = batch
         self._replay(f"decode_compact_{batch}" if batch in self.decode_views else "decode")
         if self.sampling_mode == "host":

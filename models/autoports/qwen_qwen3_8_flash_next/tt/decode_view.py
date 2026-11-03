@@ -18,14 +18,14 @@ from .state_ops import advance_positions
 DECODE_BUCKETS = (4, 8, 16)
 
 
-def select_decode_batch(active, *, enabled=True):
+def select_decode_batch(active, *, enabled=True, buckets=DECODE_BUCKETS):
     """Use compact geometry only for a nonempty front-packed fixed32 batch."""
     if len(active) != 32:
         return len(active)
     count = sum(bool(value) for value in active)
     if not enabled or not count or list(active) != [True] * count + [False] * (32 - count):
         return 32
-    return next((batch for batch in DECODE_BUCKETS if count <= batch), 32)
+    return next((batch for batch in sorted(buckets) if count <= batch), 32)
 
 
 def _ops(owner):
