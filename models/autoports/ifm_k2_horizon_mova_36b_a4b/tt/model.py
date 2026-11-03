@@ -7,6 +7,7 @@ device tensors; the generator owns logical lengths, request state and tracing.
 """
 
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -24,9 +25,31 @@ HF_MODEL = "IFM/K2-Horizon-MoVA-36B-A4B"
 HF_REVISION = "e9ce717642b2074082875be233c02c729ba47960"
 
 
+def _mounted_snapshot():
+    """Serving harnesses (TTI) mount the checkpoint and export MODEL_WEIGHTS_DIR (or HF_MODEL) as a local snapshot
+    directory. Prefer it when it holds config.json and the safetensors, so the container needs no hub access."""
+    for name in ("MODEL_WEIGHTS_DIR", "HF_MODEL"):
+        value = os.environ.get(name)
+        if value and (Path(value) / "config.json").is_file() and any(Path(value).glob("*.safetensors")):
+            return Path(value)
+    return None
+
+
+MOUNTED_SNAPSHOT = _mounted_snapshot()
+
+
+def pretrained_source():
+    """(name_or_path, revision) for HF config / tokenizer loading: the mounted snapshot, else the pinned hub revision."""
+    if MOUNTED_SNAPSHOT is not None:
+        return str(MOUNTED_SNAPSHOT), None
+    return HF_MODEL, HF_REVISION
+
+
 class Checkpoint:
     def __init__(self, path=None):
-        self.path = Path(path or snapshot_download(HF_MODEL, revision=HF_REVISION, local_files_only=True))
+        if path is None:
+            path = MOUNTED_SNAPSHOT or snapshot_download(HF_MODEL, revision=HF_REVISION, local_files_only=True)
+        self.path = Path(path)
         self.index = json.loads((self.path / "model.safetensors.index.json").read_text())["weight_map"]
 
     def load(self, prefix):
@@ -53,8 +76,9 @@ class K2HorizonModel:
         self.mesh_device = mesh_device
         self.precision = load_precision(precision_config)
         self.kv_cache_dtype = getattr(ttnn, self.precision["kv_cache_dtype"])
+        source, revision = pretrained_source()
         self.config = AutoConfig.from_pretrained(
-            HF_MODEL, revision=HF_REVISION, trust_remote_code=True, local_files_only=True
+            source, revision=revision, trust_remote_code=True, local_files_only=True
         )
         if tuple(mesh_device.shape) != (1, 4):
             raise ValueError("The accepted model requires a 1x4 Blackhole mesh")
