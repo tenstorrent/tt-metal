@@ -544,9 +544,10 @@ def _anchor_lock(model: str = "", task: str = ""):
 def stage_repeats(model: str = "", task: str = "") -> dict:
     """{stage: N} for every stage pinned as running N > 1 times per request (KIND_STAGE_REPEATS).
 
-    THE ONE READER of that pin: the report's per-request note and the ranking's weights both ask
-    here. Stage keys are the lowercased names the pin is filed under; the first pinned value wins,
-    as with every anchor. {} when nothing was stated."""
+    THE READERS of that pin: the report's per-request note, the ranking's weights, and the roofline
+    headings -- a stage a request repeats is headed per step, not per request, or its row claims a
+    whole request over one step's numbers. Stage keys are the lowercased names the pin is filed
+    under; the first pinned value wins, as with every anchor. {} when nothing was stated."""
     out = {}
     for r in rows(KIND_STAGE_REPEATS, model=model, task=task):
         try:

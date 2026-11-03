@@ -1445,6 +1445,29 @@ def _retires_one_per_user(rf, batch: int) -> bool:
     return int((rf or {}).get("tokens") or 0) == int(batch)
 
 
+def _heading_and_unit(stage, rf, batch: int, repeats: dict, unit: str, step: str):
+    """A roofline row's heading and its rate unit, decided together so the two cannot disagree.
+
+    _retires_one_per_user still answers the first question -- "one item per user" -- which is the
+    invariant test_the_heading_and_the_unit_agree exists to protect. The declared repeat count adds
+    only the case that predicate cannot see: a stage retiring many items per call can still be
+    TIMED one step at a time, because the request runs it N times. Such a row is per step like the
+    first case; its rate counts steps rather than items, since items are not what it repeats.
+
+    Without it a repeated stage was headed "per request" over a single step's numbers --
+    Qwen-Image-Edit's denoise printed 34,640 ms under that heading for 1 of its 50 steps, 50x under
+    what the heading claimed, on the stage that is ~99% of a real edit. `repeats` is the pipeline's
+    own pin (KIND_STAGE_REPEATS), keyed by the names the model filed it under, so no stage name is
+    assumed here and a stage that states nothing is priced exactly as before.
+    """
+    name = str(stage).upper()
+    if _retires_one_per_user(rf, batch):
+        return "%s — per %s" % (name, step), unit
+    if int((repeats or {}).get(str(stage).strip().lower(), 1) or 1) > 1:
+        return "%s — per %s" % (name, step), "%s/s" % step
+    return "%s — per request" % name, "req/s"
+
+
 def _request_batch() -> int:
     """How many requests the prefill stage processed at once. 1 when nothing says otherwise.
 
@@ -2848,7 +2871,20 @@ def _roofline_tables(
     # a request-rate stage; it is still one token per user. Encode, retiring 1500 frames for a batch
     # it does not have, correctly stops claiming to emit tokens.
     _su_batch = max(1, _request_batch())
-    _STAGE_UNIT = {st: (unit if _retires_one_per_user(rf, _su_batch) else "req/s") for st, rf in _roofs.items()}
+    # A STAGE THE REQUEST REPEATS COVERS ONE STEP, NOT THE REQUEST. _retires_one_per_user answers
+    # "one item per user", which a repeated stage can fail while still being timed one step at a
+    # time -- so a stage the pipeline pinned as running N>1 times per request was headed "per
+    # request" over a single step's numbers. Qwen-Image-Edit's denoise printed 34,640 ms under that
+    # heading for 1 of its 50 steps: 50x under what the heading claimed, on the stage that is ~99%
+    # of a real edit. The count is the pipeline's own (KIND_STAGE_REPEATS, the same pin
+    # _per_request_note reads, whose names come from the model); no stage name is assumed here.
+    try:
+        _reps = _ledger().stage_repeats(model=model, task=task)
+    except Exception:  # noqa: BLE001 -- a count that cannot be read must not cost the whole table
+        _reps = {}
+
+    _HEAD_UNIT = {st: _heading_and_unit(st, rf, _su_batch, _reps, unit, _step) for st, rf in _roofs.items()}
+    _STAGE_UNIT = {st: _hu[1] for st, _hu in _HEAD_UNIT.items()}
     # A DECLARED STAGE GETS A UNIT TOO. Only prefill and decode were named here, so a third stage --
     # voxtral's audio encoder, measured at 12.79 ms -- had no unit, no title, and no row. Its unit is
     # one pass of that tower, which is what "per pass" says without pretending it emits tokens.
@@ -2856,14 +2892,7 @@ def _roofline_tables(
         _STAGE_UNIT.setdefault(_extra, "pass/s")
     # The recurring stage is named for the unit the model actually reports, so a diffusion run reads
     # "per step" rather than being told it decodes.
-    _STAGE_TITLE = {
-        st: (
-            "%s \u2014 per %s" % (str(st).upper(), _step)
-            if _retires_one_per_user(rf, _su_batch)
-            else "%s \u2014 per request" % str(st).upper()
-        )
-        for st, rf in _roofs.items()
-    }
+    _STAGE_TITLE = {st: _hu[0] for st, _hu in _HEAD_UNIT.items()}
     for _extra in _roofs:
         _STAGE_TITLE.setdefault(_extra, "%s \u2014 per pass" % str(_extra).upper())
     _rendered = []
