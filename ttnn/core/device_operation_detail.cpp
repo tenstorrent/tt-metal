@@ -250,8 +250,16 @@ std::optional<ttsl::SmallVector<bool>> sharded_per_mesh_axis(
     const size_t dims = mesh_shape.dims();
     ttsl::SmallVector<bool> sharded(dims, false);
     if (placements.size() == dims) {
+        const auto& distribution_shape = topology.distribution_shape();
+        if (distribution_shape.dims() != dims) {
+            return std::nullopt;
+        }
         for (size_t axis = 0; axis < dims; ++axis) {
-            sharded[axis] = is_shard(placements[axis]);
+            const auto extent = mesh_shape[static_cast<int>(axis)];
+            if (distribution_shape[static_cast<int>(axis)] > extent) {
+                return std::nullopt;
+            }
+            sharded[axis] = is_shard(placements[axis]) && extent > 1;
         }
         return sharded;
     }
@@ -282,7 +290,7 @@ std::string rejection_reason(
             return "an operand is distributed over a different set of mesh coordinates";
         }
         if (!caller.sharded.has_value() || !operand->sharded.has_value()) {
-            return "a label does not have one placement per mesh axis and is not a collapsed whole-mesh label";
+            return "a label cannot be read per mesh axis: its placements or its distribution shape do not fit the mesh";
         }
         for (size_t axis = 0; axis < mesh_dims; ++axis) {
             if ((*operand->sharded)[axis] && !(*caller.sharded)[axis]) {

@@ -62,9 +62,10 @@ compute_output_placements_and_shape(
     const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies);
 
 /**
- * Which mesh axes of `mesh_shape` a label says the data differs along. One placement per axis is read as is; a
- * collapsed 1-D label reads as Shard on every axis of size > 1 for a Shard and as Replicate everywhere for a
- * Replicate. Anything else is a label this rule cannot read: nullopt.
+ * Which mesh axes of `mesh_shape` a label says the data differs along: the axes of size > 1 it shards. One placement
+ * per axis is read axis by axis when the distribution shape has the mesh's rank and fits inside the mesh; a collapsed
+ * 1-D label reads as Shard on every axis for a Shard and as Replicate everywhere for a Replicate. Anything else is a
+ * label this rule cannot read: nullopt.
  */
 std::optional<ttsl::SmallVector<bool>> sharded_per_mesh_axis(
     const tt::tt_metal::TensorTopology& topology, const tt::tt_metal::distributed::MeshShape& mesh_shape);
