@@ -1002,7 +1002,6 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
-    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_kv_cache_guard.py
   model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
@@ -1022,6 +1021,7 @@
     export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
     pytest --timeout 420 models/demos/audio/qwen3_tts/tests/pcc/test_predictor_frame_trace.py
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/pcc/test_kv_cache_guard.py
   model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
