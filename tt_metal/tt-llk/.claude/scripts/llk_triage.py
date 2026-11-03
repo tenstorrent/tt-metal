@@ -69,7 +69,6 @@ from dataclasses import asdict
 KERNEL_COMPLETE = 0xFF
 KERNEL_STARTED = 0x00  # RESET_VAL written by BRISC/TRISC at kernel entry
 HOST_RESET = 0xA3  # written by reset_mailboxes() before each test
-KERNEL_THREAD_MAILBOXES = {"Unpacker", "Math", "Packer", "Sfpu"}
 
 # Maps each kernel-thread mailbox name to the RISC core that runs it.
 # Used to look up the right PC field when classifying "running vs stuck".
@@ -275,25 +274,16 @@ def _print_mailbox_state(
     for mb in mailbox_cls:
         try:
             val = read_word(location, mb.value, device_id=device_id)
-            if mb.name in KERNEL_THREAD_MAILBOXES:
-                # Kernel-thread mailbox: classify against the KERNEL_COMPLETE /
-                # RESET_VAL / HOST_RESET sentinels.
-                tag = _classify_mailbox(val)
-                print(f"  {mb.name:<14} @ 0x{mb.value:08X}  =  0x{val:08X}  ({tag})")
-                if tag == "KERNEL_STARTED":
-                    started.append(mb.name)
-                elif tag == "HOST_RESET":
-                    never_started.append(mb.name)
-                elif tag == "UNKNOWN":
-                    unknown.append(mb.name)
-            else:
-                # Host↔BRISC protocol slot (command buffer, counter, bread). These
-                # hold protocol values, not kernel-completion sentinels — printing
-                # them is useful for diagnosing the launch path, but classifying
-                # them against KERNEL_COMPLETE would be misleading.
-                print(
-                    f"  {mb.name:<14} @ 0x{mb.value:08X}  =  0x{val:08X}  (BRISC protocol)"
-                )
+            # Every mailbox is a kernel thread's: classify against the KERNEL_COMPLETE /
+            # RESET_VAL / HOST_RESET sentinels.
+            tag = _classify_mailbox(val)
+            print(f"  {mb.name:<14} @ 0x{mb.value:08X}  =  0x{val:08X}  ({tag})")
+            if tag == "KERNEL_STARTED":
+                started.append(mb.name)
+            elif tag == "HOST_RESET":
+                never_started.append(mb.name)
+            elif tag == "UNKNOWN":
+                unknown.append(mb.name)
         except Exception as exc:
             print(f"  {mb.name:<14} @ 0x{mb.value:08X}  =  READ_ERROR: {exc}")
     print()
