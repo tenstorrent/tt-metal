@@ -40,6 +40,8 @@ from models.demos.audio.qwen3_tts import audio as host_audio
 from models.demos.audio.qwen3_tts import frontend, sampling
 from models.demos.audio.qwen3_tts import weights as checkpoint
 from models.demos.audio.qwen3_tts.frontend import AUTO_LANGUAGE
+from models.demos.audio.qwen3_tts.reference.qwen3_codec_encoder_ref import CodecEncoderReference
+from models.demos.audio.qwen3_tts.reference.qwen3_speaker_ref import SpeakerReference
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
     DEVICE_TOP_K_LIMIT,
     TtCodePredictorCachedDecoder,
@@ -47,6 +49,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
 )
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_codec import TtCodecDecoder, preprocess_codec_parameters
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_codec_encoder import TtCodecEncoder, preprocess_codec_encoder_parameters
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_speaker import preprocess_speaker_parameters
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_speaker import speaker_embedding as run_speaker_encoder
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     TtTalkerCachedDecoder,
@@ -188,12 +191,44 @@ class CloneReference:
         return f"CloneReference({self.frames} frames, {self.frames / 12.5:.2f} s, text={self.text!r})"
 
 
-def build_clone_reference(device, audio, text=None, sample_rate=None, x_vector_only=False):
+class ReferenceEncoders:
+    """The speaker and codec encoders, built once for a caller that encodes many clips.
+
+    On the host by default, as the fp32 references: 16-31 ms (speaker) and 53-295 ms (codec)
+    a 3-10 s clip, compiling nothing. On device each new clip length compiles, 2.9 s for the
+    speaker and 25 s for the codec, which stalls everything else on that device. `device`
+    puts them there anyway; build that before any trace exists, since weights allocated
+    while a trace is live are corrupted when it replays.
+    """
+
+    def __init__(self, device=None):
+        self.device = device
+        if device is None:
+            self.speaker = SpeakerReference()
+            self.codec = CodecEncoderReference()
+        else:
+            self.speaker = preprocess_speaker_parameters(device)
+            self.codec = TtCodecEncoder(device, preprocess_codec_encoder_parameters(device))
+
+    def voice(self, mel):
+        """Speaker mel [1, T, 128] -> embedding [1, 2048] on host."""
+        if self.device is None:
+            return self.speaker(mel).float()
+        return run_speaker_encoder(self.device, mel, self.speaker)
+
+    def codes(self, audio):
+        """Waveform [N] -> codes [16, T] on host."""
+        if self.device is None:
+            return self.codec(audio)[0]
+        return self.codec.encode(audio)[0]
+
+
+def build_clone_reference(device, audio, text=None, sample_rate=None, x_vector_only=False, encoders=None):
     """A reference clip -> `CloneReference`, running the encoders it needs on device.
 
     `x_vector_only=True` skips the codec encoder and needs no transcript. Call this before
     a pipeline captures its traces, or release them first: eager work beside a live trace
-    hangs the card.
+    hangs the card. Without `encoders` the device encoders' weights are built for this call.
     """
     audio = torch.as_tensor(audio, dtype=torch.float32).reshape(-1)
     expected = checkpoint.codec_config()["input_sample_rate"]
@@ -205,10 +240,12 @@ def build_clone_reference(device, audio, text=None, sample_rate=None, x_vector_o
             "beside the codes; pass x_vector_only=True to clone from the voice alone"
         )
 
-    embedding = run_speaker_encoder(device, host_audio.speaker_mel(audio))
+    mel = host_audio.speaker_mel(audio)
+    embedding = encoders.voice(mel) if encoders else run_speaker_encoder(device, mel)
     if x_vector_only:
         return CloneReference(None, embedding, text)
-
+    if encoders:
+        return CloneReference(encoders.codes(audio), embedding, text)
     encoder = TtCodecEncoder(device, preprocess_codec_encoder_parameters(device))
     return CloneReference(encoder.encode(audio)[0], embedding, text)
 
@@ -586,10 +623,13 @@ class Qwen3TTSPipeline:
         kv_cache=None,
         codec=True,
         predictor_on_device=True,
+        batch=1,
     ):
         """`kv_cache` hands the talker a paged cache the caller owns (see
         `TtTalkerCachedDecoder`). `codec=False` skips the codec decoder, for a caller that only
-        wants frames: the `generate*` methods need it, `codes` and the frame steps do not."""
+        wants frames: the `generate*` methods need it, `codes` and the frame steps do not.
+        `batch` sizes the row steps (`start_row` and after) for that many requests at once;
+        everything else runs one request."""
         self.device = device
         self.max_frames = max_frames
         # Charges each block of the frame loop separately, and syncs the device between them
@@ -605,10 +645,13 @@ class Qwen3TTSPipeline:
         # tokenizer will hand back plus every frame plus the warmup slot past both.
         self.prompt_room = self.talker_config.get("max_position_embeddings", 2048)
         room = min(self.prompt_room, 512) + max_frames + 8
+        self.batch = batch
         self.talker = TtTalkerCachedDecoder(
-            device, preprocess_cached_talker_parameters(device), max_seq=room, kv_cache=kv_cache
+            device, preprocess_cached_talker_parameters(device), max_seq=room, kv_cache=kv_cache, batch=batch
         )
-        self.predictor = TtCodePredictorCachedDecoder(device, preprocess_cached_predictor_parameters(device))
+        self.predictor = TtCodePredictorCachedDecoder(
+            device, preprocess_cached_predictor_parameters(device), batch=batch
+        )
         self.codec = TtCodecDecoder(device, preprocess_codec_parameters(device)) if codec else None
         self.codec_head = ttnn.from_torch(
             self.tables.codec_head.t().contiguous(),
@@ -627,6 +670,13 @@ class Qwen3TTSPipeline:
         self.generation = checkpoint.generation_config()
         self.generator = None if seed is None else torch.Generator().manual_seed(seed)
         self.predictor_on_device = predictor_on_device and self._sample_predictor_on_device()
+        if batch > 1 and not self.predictor_on_device:
+            raise ValueError(f"a batch of {batch} samples the code predictor on device, which these settings rule out")
+        # Each row's last hidden state, kept apart from the talker trace's output, which the
+        # next step overwrites and a release frees.
+        self._last_rows = ttnn.from_torch(
+            torch.zeros(1, batch, self.talker.hidden), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
         # Filled in by every generate, so a caller can see where the time went. The first
         # utterance at any new prompt length or frame count also compiles its kernels, and
         # that lands inside whichever stage triggered it.
@@ -820,6 +870,75 @@ class Qwen3TTSPipeline:
         request.position += 1
         if watch is not None:
             watch.split("talker")
+
+    # ── rows: one request per talker row, for an adapter serving several at once ───────
+
+    def start_row(self, row, embeddings, limit):
+        """Prefill a prompt [1, P, hidden] into talker row `row`, whose page table the caller
+        has set, and keep its last hidden state. Returns P.
+
+        Eager, so it releases both traces; `capture` again before the next row step. The
+        other rows' state survives: their caches are theirs and their hidden states are kept.
+        """
+        prompt = embeddings.shape[1]
+        padded = -(-prompt // PROMPT_BUCKET) * PROMPT_BUCKET
+        if padded + limit + 1 > self.talker.max_seq:
+            raise ValueError(f"prompt of {prompt} plus {limit} frames exceeds the cache's {self.talker.max_seq}")
+        if padded > prompt:
+            embeddings = torch.cat([embeddings, self.tables.tts_pad.expand(1, padded - prompt, -1)], dim=1)
+        self.release()
+        hidden = self.talker.prefill(embeddings, row=row)
+        last = ttnn.to_torch(ttnn.slice(hidden, [0, prompt - 1, 0], [1, prompt, hidden.shape[2]]))
+        ttnn.deallocate(hidden)
+        rows = ttnn.to_torch(self._last_rows)
+        rows[0, row] = last.reshape(-1)
+        self._write_last_rows(rows)
+        return prompt
+
+    def capture(self):
+        """Capture both step traces, after the row prefills."""
+        self._capture()
+
+    def move_rows(self, order):
+        """Row `i` takes what row `order[i]` held."""
+        rows = ttnn.to_torch(self._last_rows)
+        self._write_last_rows(rows[:, list(order)])
+
+    def _write_last_rows(self, rows):
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(rows.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._last_rows
+        )
+
+    def codec_logits_rows(self):
+        """Codebook-0 logits for every row's next frame [batch, vocab], control ids but
+        end-of-speech at `-inf`."""
+        logits = ttnn.linear(
+            self._last_rows, self.codec_head, compute_kernel_config=self.talker.compute_config, dtype=ttnn.float32
+        )
+        rows = ttnn.to_torch(logits).float().reshape(self.batch, -1)
+        ttnn.deallocate(logits)  # released before the next trace runs, or it aliases trace memory
+        rows[:, self._control_ids] = -float("inf")
+        return rows
+
+    def predict_rows(self, firsts):
+        """Codebooks 1 to 15 of every row's frame, whose codebook 0 is `firsts[row]`. Returns
+        one 16-code frame per row."""
+        if not self.predictor_on_device:
+            # Only at batch 1, which the constructor ensures.
+            rest = self.predictor.generate(
+                self._last_rows, firsts[0], pick=self._inner_pick(), generator=self.generator
+            )
+            return [[int(firsts[0])] + list(rest)]
+        rest = self.predictor.generate_rows(self._last_rows, firsts, generator=self.generator)
+        return [[int(first)] + codes for first, codes in zip(firsts, rest)]
+
+    def feed_back_rows(self, frames, positions, feeds):
+        """Step every row over its completed frame at its position, keeping each new hidden
+        state. `feeds[row]` is that row's text track, or None."""
+        embeddings = torch.cat(
+            [self._frame_embedding(frame, feed).reshape(1, 1, -1) for frame, feed in zip(frames, feeds)], dim=1
+        )
+        ttnn.copy(self.talker.step(embeddings, positions), self._last_rows)
 
     def _decode_frames(self, embeddings, limit, on_frame=None, feed=None):
         """Prefill the prompt, then sample frames until end of speech. Returns codes [T, 16]."""

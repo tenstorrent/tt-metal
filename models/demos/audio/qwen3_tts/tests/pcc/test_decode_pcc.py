@@ -268,6 +268,52 @@ def test_the_talker_reads_and_writes_only_the_blocks_its_page_table_names(device
     assert small.max_blocks == per_request and small.max_seq == per_request * small.block_size
 
 
+# Rows stepped together against the same requests stepped alone. Measured 1.0 on Wormhole;
+# a batched matmul accumulates each row exactly as a one-row one does.
+BATCHED_STEP_PCC = 0.9999
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_batched_rows_step_as_each_request_would_alone(device, frame_tail):
+    """Three requests at three positions, on their own blocks of one cache, stepped as one
+    batch: each row's hidden states are the ones its request gets on its own."""
+    tables, tail = frame_tail
+    embeddings, positions = talker_prompt()
+    parameters = preprocess_cached_talker_parameters(device)
+    max_seq = embeddings.shape[1] + STEPS + 8
+    alone = TtTalkerCachedDecoder(device, parameters, max_seq=max_seq)
+    per_request = alone.max_blocks
+    batch = 3
+    batched = TtTalkerCachedDecoder(
+        device,
+        parameters,
+        max_seq=max_seq,
+        kv_cache=_external_cache(device, alone, batch * per_request + 1),
+        batch=batch,
+    )
+    # Shorter prompts per row, so the rows step at different positions.
+    lengths = [embeddings.shape[1] - 5 * row for row in range(batch)]
+    codes = [int(code) for code in code_predictor_prompt()[2][:STEPS]]
+    inputs = [talker_step_inputs(tables, tail, code) for code in codes]
+
+    expected = []
+    for length in lengths:
+        ttnn.deallocate(alone.prefill(embeddings[:, :length], positions[..., :length]))
+        expected.append([ttnn.to_torch(alone.step(nxt, length + step)).float() for step, nxt in enumerate(inputs)])
+
+    for row, length in enumerate(lengths):
+        # Block 0 is left out, as vLLM leaves its null block out of every request.
+        batched.set_page_table(torch.arange(1 + row * per_request, 1 + (row + 1) * per_request), row)
+        ttnn.deallocate(batched.prefill(embeddings[:, :length], positions[..., :length], row=row))
+    for step, nxt in enumerate(inputs):
+        rows = torch.cat([nxt.reshape(1, 1, -1)] * batch, dim=1)
+        got = ttnn.to_torch(batched.step(rows, [length + step for length in lengths])).float()
+        for row in range(batch):
+            score = pcc(got[:, row], expected[row][step])
+            print(f"  step {step} row {row}: PCC {score:.6f}")
+            assert score >= BATCHED_STEP_PCC, f"step {step} row {row}: PCC {score} < {BATCHED_STEP_PCC}"
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_a_long_prefill_seeds_every_position(device, frame_tail):
     """A prompt whose cache fill spans more head-runs than there are cores. An unseeded or
