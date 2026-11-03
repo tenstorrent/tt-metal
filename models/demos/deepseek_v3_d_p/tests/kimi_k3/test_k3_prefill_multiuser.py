@@ -568,6 +568,11 @@ def test_k3_packed_traced_matches_eager(variant, config_only, mesh_device, devic
 PIPELINE_LAYERS = 16
 PIPELINE_SPLIT = 12
 D2H_READ_TIMEOUT_S = 120
+# Past the boundary, two ranks round differently from one: the AttnRes stream crosses as a materialized tensor (the
+# handoff), where one rank keeps folding the pending write into its next read. Rank 0 stays bit-exact; rank 1 measured
+# PCC >= 0.999743 (job 169741), and Kimi-K3's own one-chunk split test (test_transformer_pipeline_split.py) likewise
+# gates on PCC rather than bit-exactness.
+PIPELINE_PCC = 0.9995
 
 
 def _read_d2h_records(service, count):
@@ -680,9 +685,9 @@ def test_k3_packed_pipeline_matches_one_rank(
     Rank 0 acks through a real D2H service: one 12 B (slot, start, end) record per non-empty chunk per layer, each
     chunk's records contiguous and in pack order (#63438's packed contract), after the forward's writes.
 
-    Eager: bit-exact against one rank. Packing puts every chunk at the same position on both sides, so AttnRes rounds
-    them identically, and the split changes no program. The one-rank reference runs first and is released before the
-    ranks are built, so the mesh never holds both. (The plain residual stream cannot cross a block boundary: its handoff
+    Eager: rank 0 bit-exact against one rank (packing puts every chunk at the same position on both sides, so AttnRes
+    rounds them identically), rank 1 at PIPELINE_PCC (the handoff rounds the AttnRes stream at the boundary). The
+    one-rank reference runs first and is released before the ranks are built, so the mesh never holds both. (The plain residual stream cannot cross a block boundary: its handoff
     has no sealed snapshot.) Traced: the ranks replay their captures into slots 0..3 against the same two ranks' models
     run eagerly into slots 4..7, at TRACED_PCC."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
@@ -790,7 +795,13 @@ def test_k3_packed_pipeline_matches_one_rank(
                     diff = (got - want).abs().max().item()
                     pcc = _pcc(want, got)
                     logger.info(f"[pipeline] slot {u} {kind} layer {layer} max|diff| {diff:.3e} PCC {pcc:.6f}")
-                    if (pcc < TRACED_PCC) if traced else (diff != 0):
+                    if traced:
+                        bad = pcc < TRACED_PCC
+                    elif layer < PIPELINE_SPLIT:
+                        bad = diff != 0
+                    else:
+                        bad = pcc < PIPELINE_PCC
+                    if bad:
                         failures.append(f"slot {u} {kind} layer {layer}: max|diff| {diff:.3e} PCC {pcc:.6f}")
         assert not failures, f"[pipeline] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
