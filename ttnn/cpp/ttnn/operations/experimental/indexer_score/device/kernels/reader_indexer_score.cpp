@@ -27,31 +27,15 @@
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 
-// Ring-fused indexer: the fused all-gather producer signals per-slab arrival into two direction semaphores;
-// the reader gates each band on ONLY the SP-shards that band's tiles land in (fine-grained overlap, see the
-// per-band gate in kernel_main) so scoring of already-arrived shards runs while farther slabs are in flight.
-// Reuses the ring-joint-SDPA receiver so the crossed direction-index swap + asymmetric thresholds stay identical.
-#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
-// Metadata reads invalidate the reused L1 address; causal geometry is shared with the host implementation.
-#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
-#include "indexer_score_metadata.hpp"
-#include "indexer_score_causal_geometry.hpp"
-#include "ttnn/operations/experimental/indexer_score/device/kernels/ring_attention_rank_mapping.hpp"
-
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
 constexpr uint32_t bf16_tile_bytes = get_tile_size(cb_w);  // w / mask: always bf16
 constexpr uint32_t k_tile_bytes = get_tile_size(cb_k);     // k: bf16 or bfp8_b (smaller tile)
 
-// CT arg layout after the common args: fused-ring flag, q/k/w/k_local TensorAccessors, then 8 multicast args.
-// The regular factory supplies an unused k accessor in the k_local slot, keeping all following offsets fixed.
-constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args) != 0;
-constexpr auto q_args = TensorAccessorArgs<num_common_ct_args + 1>();
+// CT arg layout after the common args: q/k/w TensorAccessors, then 8 multicast args.
+constexpr auto q_args = TensorAccessorArgs<num_common_ct_args>();
 constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
 constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-// Fused ring: the SP-sharded LOCAL K shard (the all-gather input) is read directly for this device's own slab
-// (the all-gather does NOT write the local band into the gathered buffer). Its accessor args sit after w's.
-constexpr auto kl_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
-constexpr uint32_t mc_ct_base = kl_args.next_compile_time_args_offset();
+constexpr uint32_t mc_ct_base = w_args.next_compile_time_args_offset();
 constexpr uint32_t k_mcast_on = get_compile_time_arg_val(mc_ct_base + 0);
 constexpr uint32_t q_mcast_on = get_compile_time_arg_val(mc_ct_base + 1);  // covers q and w (shared row mcast)
 constexpr uint32_t k_send_sem = get_compile_time_arg_val(mc_ct_base + 2);
@@ -73,70 +57,8 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
-constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5) != 0;
-constexpr auto snake_orientation =
-    static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(bc_ct_base + 6));
-constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
-constexpr uint32_t rank_mapping_mesh_cols = get_compile_time_arg_val(bc_ct_base + 8);
-constexpr bool partial_readiness_enabled = get_compile_time_arg_val(bc_ct_base + 9) != 0;
-constexpr uint32_t fused_physical_sp = get_compile_time_arg_val(bc_ct_base + 10);
-
-FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transport_rank) {
-    return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-        transport_rank, rank_mapping_mesh_rows, rank_mapping_mesh_cols, snake_orientation);
-}
-
-// +11, not +10 or +9: main's partial_readiness_enabled took bc_ct_base + 9 and #55617's
-// fused_physical_sp took bc_ct_base + 10. Both factories push both of those before this block, so this
-// base must clear them. A collision here does NOT produce a merge conflict -- the declarations sit in
-// different hunks -- and reads an unrelated word as the metadata flag, so re-check it whenever main
-// grows the block-cyclic block.
-constexpr uint32_t meta_ct_base = bc_ct_base + 11;
-// THE metadata-mode selector for this kernel. One flag, not one per metadata argument: the host
-// validates the metadata tensors as a group (validate_metadata_mode), so inside this mode every
-// metadata read is legal. valid_end stays optional WITHIN the mode via its address (0 = uncapped),
-// which costs one runtime compare instead of a second program variant.
-constexpr bool metadata_mode = get_compile_time_arg_val(meta_ct_base) != 0;
-constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
-constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
-constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(meta_ct_base + 3);
-constexpr uint32_t meta_Sq = get_compile_time_arg_val(meta_ct_base + 4);
-// Rotation-exact SP geometry: sp_axis set, OR a fused full-mesh ring. The host computes the
-// same predicate in rotation_exact_sp_geometry(), so both sides pick the same branch.
-constexpr uint32_t meta_rotation_exact = get_compile_time_arg_val(meta_ct_base + 5);
-// KV dedup splits the KEY stripes tp-times finer than the queries, so block_cyclic_ct carries the SPLIT
-// geometry (bc_sp == sp*split, bc_chunk_local == chunk_local/split) -- which is what the invP addressing
-// needs. The causal geometry is NOT invariant under that regrouping: the host's device_causal_geometry
-// passes the UNSPLIT sp/chunk_local, so feeding it the split pair here derives a different mask on the
-// metadata path than the scalar path uses. Carry the split factor so this side can undo it; it is
-// already hashed (structural), so it costs no extra program variant.
-constexpr uint32_t meta_key_stripe_split = get_compile_time_arg_val(meta_ct_base + 6);
-constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 7>();
-// Cache-slot select, appended with the same fixed-width discipline as the chunk-start block above: both
-// factories always push it (zero-filled, with a placeholder accessor, when off), so every index here is
-// valid unconditionally and no guarded-index trick is needed.
-constexpr uint32_t slot_ct_base = meta_args.next_compile_time_args_offset();
-// No presence flag: metadata mode is ONE flag (above), and the slot is optional WITHIN it -- the host
-// zeroes this block's common-arg address when there is no slot to select, so presence is a runtime
-// compare rather than a second program variant. Same discipline as valid_end.
-constexpr uint32_t slot_rt_base = get_compile_time_arg_val(slot_ct_base + 0);      // RT slot of this block
-constexpr uint32_t slot_local_pages = get_compile_time_arg_val(slot_ct_base + 1);  // pages per cache slot
-constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 2);      // NoC landing slot
-// Slot count of the local cache (k_local batch dim), so the on-device recomposition can be bounded the
-// same way the AG reader bounds the identical word. Shape-derived, hence already hashed.
-constexpr uint32_t slot_cache_extent = get_compile_time_arg_val(slot_ct_base + 3);
-constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 4>();
-// Real-token end (actual_end), same fixed-width discipline again: both factories always push
-// flag + rt base + a placeholder accessor, so these indices are valid unconditionally. When present the
-// derived kv_len below is capped at ceil32(valid_end), which is exactly the scalar path's
-// min(end_pos, ceil32(actual_end)); absent, the bound stays the padded-window end.
-constexpr uint32_t vend_ct_base = slot_meta_args.next_compile_time_args_offset();
-constexpr uint32_t vend_rt_base = get_compile_time_arg_val(vend_ct_base);
-constexpr auto vend_args = TensorAccessorArgs<vend_ct_base + 1>();
-
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
-// contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
-// the fused dual-source reads (both read byte-identically).
+// contiguous K, invP for the per-SP-shard block-cyclic layout.
 FORCE_INLINE uint32_t bc_ktile(uint32_t L) {
     return tt::block_cyclic::
         logical_to_physical_page<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(L);
@@ -150,7 +72,7 @@ struct McastDir {
 };
 
 /** Sender: data already at `addr` from DRAM; wait all receivers ready, mcast the block,
- *  then relay the valid flag into their recv semaphore. Mirrors chain_link. */
+ *  then relay the valid flag into their recv semaphore. */
 template <uint32_t send_sem, uint32_t recv_sem, uint32_t valid_sem>
 inline void mcast_send(Noc noc, const McastDir& d, uint32_t addr, uint32_t bytes) {
     Semaphore<> s(send_sem);
@@ -282,7 +204,7 @@ inline void fill_w_group_const() {
 }
 
 // Prepare gate columns after the first K read so their local preparation overlaps QK matmul.
-// The weight row multicast must still complete before any column multicast or fabric wait.
+// The weight row multicast must still complete before any column multicast.
 inline void expand_w_group() {
     constexpr uint32_t head_tiles = (num_heads + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
     using namespace tt::constants;
@@ -362,8 +284,7 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
 }
 
 /** Read one k tile's head_dim_tiles pages [base, base+head_dim_tiles) from `acc` into the CB at `ptr`,
- *  advancing ptr. The per-tile page loop shared by read_k_chunk and both (local / remote) branches of
- *  read_k_chunk_fused -- only the accessor and the page base differ. */
+ *  advancing ptr. */
 template <typename Acc>
 inline void read_ktile_dims(Noc noc, const Acc& acc, uint32_t& ptr, uint32_t base) {
     for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
@@ -394,152 +315,6 @@ inline void read_k_chunk(
             }
         });
 }
-
-/** Ring-fused shard-major K chunk. Every unit is a consecutive physical range inside one SP shard. Remote
- *  shards come from the gathered buffer; this device's own shard comes directly from the AG input cache. */
-template <typename KAcc, typename KLocalAcc>
-inline void read_k_chunk_fused(
-    Noc noc,
-    const KAcc& k_acc,
-    const KLocalAcc& k_local_acc,
-    uint32_t ring_index,
-    uint32_t tiles_per_shard,
-    uint32_t physical_tile_start,
-    uint32_t k_tiles_in_unit,
-    const McastDir& k_dir,
-    uint32_t gathered_batch_page_offset,
-    uint32_t local_batch_page_offset) {
-    read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
-        noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
-            uint32_t ptr = addr;
-            for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
-                const uint32_t physical_tile = physical_tile_start + k_col;
-                const uint32_t shard = physical_tile / tiles_per_shard;
-                if (shard == ring_index) {
-                    const uint32_t local_base =
-                        local_batch_page_offset + (physical_tile - ring_index * tiles_per_shard) * head_dim_tiles;
-                    read_ktile_dims(noc, k_local_acc, ptr, local_base);  // OWN shard from the SP-local cache
-                } else {
-                    read_ktile_dims(
-                        noc,
-                        k_acc,
-                        ptr,
-                        gathered_batch_page_offset + physical_tile * head_dim_tiles);  // remote shard
-                }
-            }
-        });
-}
-
-/** Per-band all-gather gate for the ring-fused path: encapsulates the fine-grained overlap machinery so
- *  kernel_main stays linear. Instead of waiting for the WHOLE gather, each band waits only on the SP-shards its
- *  tiles land in, so a band whose shards have already arrived scores immediately while farther slabs are still
- *  in flight. shard(logical tile L) = bc_ktile(L)/tiles_per_shard (the gathered buffer stores shard c at the
- *  physical band [c*tps,(c+1)*tps)). "shard c arrived" == semaphore[dir_c] >= val_c, where (dir_c,val_c) is
- *  what RingIdSequencer emits for the iteration delivering c -- we REPLAY it once to index (dir,val) by shard
- *  (inheriting the crossed direction swap + asymmetric fwd/bwd + forward-writer +1 pre-signal verbatim).
- *  wait_min is monotone/non-destructive, so re-waiting a resident shard is a no-op and the gate cannot deadlock
- *  (edge-device empty directions are never required -- a band never lands in a shard the device does not
- *  receive). */
-struct FusedRingGate {
-    static constexpr uint32_t max_ring_size = iscore::kMaxRingSize;
-    using KLocalAcc = decltype(TensorAccessor(kl_args, uint32_t{}, uint32_t{}));
-
-    uint32_t ring_index;
-    uint32_t ring_size;
-    uint32_t tiles_per_shard;                // tiles per SP shard in the gathered buffer
-    uint32_t sem_id[2];                      // the two direction semaphore ids
-    KLocalAcc k_local_acc;                   // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
-    uint32_t local_batch_page_offset;        // selected slot in k_local; gathered k may be batch-1
-    uint32_t shard_dir[max_ring_size];       // shard -> direction semaphore index
-    uint32_t shard_half_val[max_ring_size];  // shard -> midpoint-ready threshold
-    uint32_t shard_val[max_ring_size];       // shard -> wait threshold
-
-    // Metadata is common to every reader core; only the schedule lane is per-core.
-    // `local_offset_override` is the reader-derived slot base on the metadata path (0 elsewhere); it
-    // replaces the runtime argument, which a replay would have frozen at the captured slot.
-    // `slot_override_active` is passed explicitly rather than inferred from the override being non-zero:
-    // slot 0 is a legitimate slot whose offset is 0, and it must still replace the runtime argument.
-    FusedRingGate(
-        const RingSDPAOpReceiver& recv, uint32_t local_offset_override = 0, bool slot_override_active = false) :
-        // TENSOR rank, not the transport rank: on a full-mesh ring the two differ by the snake mapping,
-        // and both the slot recomposition and the causal geometry are defined over tensor ranks.
-        ring_index(tensor_rank_from_transport_rank(recv.seq.ring_index)),
-        ring_size(recv.seq.ring_size),
-        tiles_per_shard(k_len_tiles / recv.seq.ring_size),
-        sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
-        k_local_acc(
-            TensorAccessor(kl_args, get_common_arg_val<uint32_t>(indexer_common::reader::KLocal), k_tile_bytes)),
-        local_batch_page_offset(get_common_arg_val<uint32_t>(indexer_common::reader::LocalBatchOffset)),
-        shard_dir{},
-        shard_half_val{},
-        shard_val{} {
-        if (slot_override_active) {
-            local_batch_page_offset = local_offset_override;
-        }
-        RingIdSequencer s = recv.seq;  // fresh copy (received={0,0}); replay to index (dir,val) by shard id
-        for (uint32_t i = 0; i < ring_size; ++i) {
-            uint32_t cap_dir = 0, cap_val = 0;
-            const uint32_t rid = s.get_next_ring_id([&](uint32_t d, uint32_t v) {
-                cap_dir = d;
-                cap_val = v;
-            });
-            const uint32_t tensor_rank = tensor_rank_from_transport_rank(rid);
-            shard_dir[tensor_rank] = cap_dir;
-            if constexpr (partial_readiness_enabled) {
-                if (tensor_rank == ring_index) {
-                    continue;
-                }
-                // Partial-readiness AG emits midpoint + completion for every remote shard. Direction 0's
-                // semaphore also contains the existing local-slice pre-signal.
-                shard_half_val[tensor_rank] = cap_dir == 0 ? 2 * (cap_val - 1) : 2 * cap_val - 1;
-                shard_val[tensor_rank] = cap_dir == 0 ? 2 * cap_val - 1 : 2 * cap_val;
-            } else {
-                shard_val[tensor_rank] = cap_val;
-            }
-        }
-    }
-
-    void gate_shard(uint32_t physical_tile_start, uint32_t k_tiles_in_unit, uint32_t midpoint_tiles) const {
-        const uint32_t shard = physical_tile_start / tiles_per_shard;
-        if (shard != ring_index) {
-            if constexpr (partial_readiness_enabled) {
-                const uint32_t shard_offset = physical_tile_start - shard * tiles_per_shard;
-                const bool entirely_in_first_half = shard_offset + k_tiles_in_unit <= midpoint_tiles;
-                Semaphore<>(sem_id[shard_dir[shard]])
-                    .wait_min(entirely_in_first_half ? shard_half_val[shard] : shard_val[shard]);
-            } else {
-                Semaphore<>(sem_id[shard_dir[shard]]).wait_min(shard_val[shard]);
-            }
-        }
-    }
-
-    // Gate the band (sender / no-mcast role only -- receivers get K via the already-gated column mcast), then
-    // dual-source read: own shard from k_local, remote shards from the gathered buffer.
-    template <typename KAcc>
-    void read_k(
-        Noc noc,
-        const KAcc& k_acc,
-        uint32_t physical_tile_start,
-        uint32_t k_tiles_in_unit,
-        uint32_t midpoint_tiles,
-        const McastDir& k_dir,
-        uint32_t k_batch_page_offset) const {
-        if (k_mcast_on == 0 || k_dir.role == iscore::mcast_role_sender) {
-            gate_shard(physical_tile_start, k_tiles_in_unit, midpoint_tiles);
-        }
-        read_k_chunk_fused(
-            noc,
-            k_acc,
-            k_local_acc,
-            ring_index,
-            tiles_per_shard,
-            physical_tile_start,
-            k_tiles_in_unit,
-            k_dir,
-            k_batch_page_offset,
-            local_batch_page_offset);
-    }
-};
 
 /** Fused path: read the k chunk in mm_col_batch sub-chunks, pushing each as it lands so compute matmuls
  *  it while the next reads (overlap). Pushes the full k_chunk_tiles (pad cols stale, compute masks them).
@@ -586,8 +361,6 @@ void kernel_main() {
     constexpr uint32_t schedule_groups = get_named_compile_time_arg_val("schedule_groups");
     constexpr uint32_t schedule_group_rows = get_named_compile_time_arg_val("schedule_group_rows");
     constexpr uint32_t schedule_max_bands = get_named_compile_time_arg_val("schedule_max_bands");
-    constexpr uint32_t schedule_ring_size = get_named_compile_time_arg_val("schedule_ring_size");
-    constexpr uint32_t schedule_rotate = get_named_compile_time_arg_val("schedule_rotate");
     constexpr uint32_t schedule_units = get_named_compile_time_arg_val("schedule_units");
     const uint32_t q_addr = get_common_arg_val<uint32_t>(indexer_common::reader::Q);
     const uint32_t k_addr = get_common_arg_val<uint32_t>(indexer_common::reader::K);
@@ -596,17 +369,13 @@ void kernel_main() {
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     constexpr uint32_t group_stride = schedule_group_rows;
     constexpr uint32_t num_groups = schedule_groups;
-    const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
-        core_id,
-        group_stride,
-        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
+    const auto schedule =
+        indexer_schedule::for_core(core_id, group_stride, schedule_units, schedule_blocks, schedule_cols);
     const uint32_t row_group0 = schedule.row_group;
     const uint32_t band0 = schedule.band_start;
     const uint32_t num_bands = schedule.band_count;
     constexpr uint32_t max_bands = schedule_max_bands;
-    constexpr uint32_t fused_common_base = indexer_common::reader::Count + fused_physical_sp;
-    constexpr uint32_t x_base =
-        fused_ring_enabled ? fused_common_base + indexer_rt::reader::FusedRingWidth : indexer_common::reader::Count;
+    constexpr uint32_t x_base = indexer_common::reader::Count;
     constexpr uint32_t y_base = x_base + schedule_cols;
     const uint32_t block = schedule.block;
     const uint32_t col = schedule.col;
@@ -649,7 +418,7 @@ void kernel_main() {
     // Persistent-cache args remain common and are re-applied on every dispatch.
     const uint32_t k_batch_page_offset = get_common_arg_val<uint32_t>(
         indexer_common::reader::BatchOffset);  // indexed-cache page offset; 0 when not indexed
-    uint32_t kv_len_tiles =
+    const uint32_t kv_len_tiles =
         get_common_arg_val<uint32_t>(indexer_common::reader::KvLength);  // valid KV length in tiles (full when unset)
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
@@ -657,242 +426,59 @@ void kernel_main() {
     const auto w_acc = TensorAccessor(w_args, w_addr, bf16_tile_bytes);
 
     Noc noc;
-    // The fused path is DSA-only. Keep the invariant compile-time checked without preprocessor-specialized
-    // binaries; the regular path may still use head streaming or the single-head fuse.
-    static_assert(!fused_ring_enabled || !stream_heads, "fused ring requires all heads resident");
-    static_assert(!fused_ring_enabled || fuse_single == 0, "fused ring is incompatible with fuse_single");
-
-    // The gate exists only on the fused branch. Passing a pointer into one shared loop keeps all fused runtime
-    // argument reads behind if constexpr, so the regular binary never touches the fused-only tail.
-    const auto run = [&](const FusedRingGate* gate) {
-        build_mask_tiles(noc);
-        if constexpr (block_pool) {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                cb_scaler,
-                ckernel::PoolType::MAX,
-                ckernel::ReduceDim::REDUCE_ROW>();
-        }
-
-        WorkUnitSpan span;
-        span.set_valid_k_len_tiles(kv_len_tiles);
-        ShardMajorWorkUnitSpan<block_cyclic, bc_chunk_local, bc_sp, fused_physical_sp> shard_span;
-        shard_span.set_valid_k_len_tiles(kv_len_tiles);
-        const uint32_t band_iters = stream_heads ? max_bands : num_bands;
-        for (uint32_t phase = 0; phase < num_groups; ++phase) {
-            auto ring_schedule = indexer_ring_schedule::for_lane<
-                fused_physical_sp,
-                k_len_tiles,
-                k_tiles_per_unit,
-                schedule_blocks,
-                schedule_cols,
-                schedule_rotate>(band0);
-            const uint32_t group = row_group0 + phase * group_stride;
-            const uint32_t q_row_start = group * q_tiles_per_unit;
-            if constexpr (fuse_single) {
-                read_q_rows(noc, q_acc, q_row_start, q_dir);
-                read_w_group(noc, w_acc, q_row_start, q_dir);
-            }
-            if constexpr (stream_heads) {
-                read_w_group(noc, w_acc, q_row_start, q_dir);
-            }
-            if constexpr (fused_ring_enabled) {
-                // Complete q/w multicast before waiting on per-band fabric arrival.
-                read_q_rows(noc, q_acc, q_row_start, q_dir);
-                read_w_group(noc, w_acc, q_row_start, q_dir);
-            }
-            for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
-                if constexpr (fused_ring_enabled) {
-                    uint32_t physical_start = 0;
-                    ring_schedule.next(
-                        [](uint32_t shard) {
-                            return get_common_arg_val<uint32_t>(indexer_common::reader::Count + shard);
-                        },
-                        physical_start);
-                    shard_span.set(group, physical_start, gate->tiles_per_shard);
-                    const uint32_t k_tiles_in_unit = shard_span.k_tiles();
-                    // q/w were multicasted before this loop. Every row of this K-mcast column has
-                    // the same work list, so skipping an empty runtime-prefix unit preserves both
-                    // the fabric gate and the local CB protocol.
-                    if (k_tiles_in_unit == 0) {
-                        if (band_i == 0) {
-                            expand_w_group();
-                        }
-                        continue;
-                    }
-                    uint32_t gathered_shard_tiles = gate->tiles_per_shard;
-                    if constexpr (block_cyclic) {
-                        // Partial-height gathers are enabled only for the ordinary SP-only layout. A
-                        // TP-inner reconstructed cache (bc_sp > ring_size) gathers the full physical
-                        // shard, so its midpoint must stay at half that shard as well.
-                        if (bc_sp == gate->ring_size) {
-                            const uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
-                            const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
-                            gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
-                        }
-                    }
-                    // KEEP IN SYNC with the AG writer's row-aligned midpoint_prefix_pages() and the host's
-                    // gather_valid_height_tiles(). Units crossing this boundary wait for completion.
-                    const uint32_t midpoint_tiles = (gathered_shard_tiles + 1) / 2;
-                    gate->read_k(
-                        noc, k_acc, physical_start, k_tiles_in_unit, midpoint_tiles, k_dir, k_batch_page_offset);
-                } else {
-                    const uint32_t band = band_i;
-                    const bool real_band = band < num_bands;
-                    if (real_band) {
-                        span.set(group, band0 + band);
-                        // Resident q/w are multicasted once at each core's first band. This must
-                        // happen even if that core's band falls past kv_len, since another column
-                        // may still be waiting at the shared row rendezvous.
-                        if (band == 0 && !stream_heads && !fuse_single) {
-                            read_q_rows(noc, q_acc, q_row_start, q_dir);
-                            read_w_group(noc, w_acc, q_row_start, q_dir);
-                        }
-                        // Head streaming emits the q blocks below even for an empty K band; the
-                        // compute kernel drains them before moving to the next band.
-                        if (span.k_tiles() != 0) {
-                            if constexpr (fuse_single && fused_stream_k) {
-                                read_k_chunk_streaming(
-                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
-                            } else {
-                                read_k_chunk(
-                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
-                            }
-                        }
-                    }
-                    if constexpr (stream_heads) {
-                        for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
-                            for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
-                                read_q_block(noc, q_acc, q_row_start, first_head, q_dir);
-                            }
-                        }
-                    }
-                }
-                if constexpr (!synthesize_gate && !stream_heads && !fuse_single) {
-                    if (band_i == 0) {
-                        expand_w_group();
-                    }
-                }
-            }
-        }
-    };
-
-    if constexpr (fused_ring_enabled && metadata_mode) {
-        // Derive causal values before the blocking ring receiver so compute can consume them independently.
-        // The factory supplies meta_rt_base to keep this layout coupled to the runtime-argument builder.
-        CircularBuffer cb_derived(cb_meta_derived);
-        cb_derived.reserve_back(1);
-        const uint32_t derived_l1 = cb_derived.get_write_ptr();
-        // Lands at the page base, is consumed immediately, then the four derived words overwrite it -- so the
-        // one CB serves as both the NoC landing slot and the reader->compute mailbox.
-        const uint32_t chunk_start_idx = trace_metadata::read_metadata_scalar_u32(
-            noc, meta_args, get_common_arg_val<uint32_t>(meta_rt_base + 0), derived_l1);
-        // Match the SCALAR host contract, which validate_chunk_start states explicitly: the chunk must
-        // START inside the cache, but its causal window MAY end past the valid prefix and past T -- a
-        // chunked prefill runs a fixed chunk size, so a final chunk pads its query window beyond what the
-        // cache holds. Requiring start + sp*chunk_local <= T here was stricter than both that contract and
-        // the AG reader's bounded_kv_actual_isl (start < T, then clamp), so a legitimate padded window
-        // tripped this ASSERT under the watcher while the scalar path accepted it -- and it made the
-        // kv_len_tiles clamp below dead code. Both readers of this word now fall back identically.
-        constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
-        ASSERT(
-            chunk_start_idx % iscore::kCausalTileWidth == 0 &&
-            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles);
-        // Undo the key-stripe split so this matches device_causal_geometry's (unsplit) arguments exactly.
-        // Identity when key_stripe_split == 1, which is every non-dedup path.
-        // Guard the divisor: the non-fused factory zero-fills this block (it rejects the metadata path),
-        // and `bc_sp / 0` is an ill-formed constant expression even in a discarded branch.
-        constexpr uint32_t geom_split = meta_key_stripe_split != 0 ? meta_key_stripe_split : 1;
-        constexpr uint32_t geom_sp = bc_sp / geom_split;
-        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split;
-        const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
-            chunk_start_idx,
-            block_cyclic,
-            meta_rotation_exact != 0,
-            geom_sp,
-            geom_chunk_local_elems,
-            get_common_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
-            get_common_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
-            meta_Sq);
-        // Derive kv_len from the same position used for causal geometry.
-        uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
-        // Cap at the REAL token end when the host supplied it. Uncapped, this is the padded-window end, so
-        // on a partial chunk the score covers columns this request never wrote: harmless for real query
-        // rows (those keys sit at s > t and the causal edge masks them) but NOT for pad rows, whose top-k
-        // then differs from the scalar path's. Reading actual_end here reproduces the scalar bound exactly,
-        // and narrows the scored extent at the same time. ceil to the 32-row write grid, matching
-        // write_k's clamp and the scalar path's own rounding.
-        // 0 = no bound supplied (full chunk): the host zeroes this slot rather than compiling a second
-        // variant, so presence costs a compare here instead of a program hash split.
-        const uint32_t valid_end_addr = get_common_arg_val<uint32_t>(vend_rt_base);
-        if (valid_end_addr != 0) {
-            // derived_l1 is reused as the NoC landing slot: chunk_start_idx has already been consumed into
-            // a local above, and the four mailbox words are not written until below, so the page is free.
-            const uint32_t valid_end =
-                trace_metadata::read_metadata_scalar_u32(noc, vend_args, valid_end_addr, derived_l1);
-            const uint32_t valid_end_tiles = (valid_end + 31) / 32;
-            if (valid_end_tiles < derived_kv_len_tiles) {
-                derived_kv_len_tiles = valid_end_tiles;
-            }
-        }
-        kv_len_tiles = derived_kv_len_tiles < k_len_tiles ? derived_kv_len_tiles : k_len_tiles;
-
-        const IndexerScoreMetadataBounds bounds{
-            .kv_len_tiles = kv_len_tiles,
-            .chunk_start_tiles = geom.chunk_start_tiles,
-            .straddle_q_tile = geom.straddle_q_tile,
-            .straddle_jump_tiles = geom.straddle_jump_tiles,
-        };
-        CoreLocalMem<IndexerScoreMetadataBounds> mailbox(derived_l1);
-        mailbox->kv_len_tiles = bounds.kv_len_tiles;
-        mailbox->chunk_start_tiles = bounds.chunk_start_tiles;
-        mailbox->straddle_q_tile = bounds.straddle_q_tile;
-        mailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
-        clobber_all_memory();
-        cb_derived.push_back(1);
-
-        // Second copy for the writer (one derivation, two consumers -- see the factory note).
-        CircularBuffer cb_wmeta(cb_meta_writer);
-        cb_wmeta.reserve_back(1);
-        CoreLocalMem<IndexerScoreMetadataBounds> wmailbox(cb_wmeta.get_write_ptr());
-        wmailbox->kv_len_tiles = bounds.kv_len_tiles;
-        wmailbox->chunk_start_tiles = bounds.chunk_start_tiles;
-        wmailbox->straddle_q_tile = bounds.straddle_q_tile;
-        wmailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
-        clobber_all_memory();
-        cb_wmeta.push_back(1);
+    build_mask_tiles(noc);
+    if constexpr (block_pool) {
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     }
 
-    if constexpr (fused_ring_enabled) {
-        // Ring/dir/semaphore fields are common arguments in the compact fused layout.
-        // The receiver waits for the producer signal before the gate consumes k_local;
-        // band visits come from the compact lane schedule.
-        uint32_t fused_argidx = fused_common_base;
-        RingSDPAOpReceiver fused_recv(
-            /*wait_for_op_signal=*/true, fused_argidx, [](uint32_t index) {
-                return get_common_arg_val<uint32_t>(index);
-            });
-        // TRACE-SAFE slot select. cache_batch_idx is a host runtime arg the override re-patches per
-        // dispatch, which a replay cannot do -- so a captured program would score every request against
-        // the slot live at capture time (capture warms user 0). Recompose it here from the on-device user
-        // id, mirroring TtIndexer's host formula.
-        uint32_t local_slot_offset = 0;
-        // 0 = no slot to select (the deduped path hands the op a rebuilt batch-1 slab).
-        const uint32_t slot_addr = get_common_arg_val<uint32_t>(slot_rt_base + 0);
-        const bool slot_active = slot_addr != 0;
-        if (slot_active) {
-            CircularBuffer cb_slot(cb_meta_slot);
-            cb_slot.reserve_back(1);
-            const uint32_t user_id =
-                trace_metadata::read_metadata_scalar_u32(noc, slot_meta_args, slot_addr, cb_slot.get_write_ptr());
-            const uint32_t num_layers = get_common_arg_val<uint32_t>(slot_rt_base + 1);
-            const uint32_t layer_idx = get_common_arg_val<uint32_t>(slot_rt_base + 2);
-            local_slot_offset =
-                trace_metadata::bounded_cache_batch_idx(user_id, num_layers, layer_idx, slot_cache_extent) *
-                slot_local_pages;
+    WorkUnitSpan span;
+    span.set_valid_k_len_tiles(kv_len_tiles);
+    const uint32_t band_iters = stream_heads ? max_bands : num_bands;
+    for (uint32_t phase = 0; phase < num_groups; ++phase) {
+        const uint32_t group = row_group0 + phase * group_stride;
+        const uint32_t q_row_start = group * q_tiles_per_unit;
+        if constexpr (fuse_single) {
+            read_q_rows(noc, q_acc, q_row_start, q_dir);
+            read_w_group(noc, w_acc, q_row_start, q_dir);
         }
-        const FusedRingGate gate(fused_recv, local_slot_offset, slot_active);
-        run(&gate);
-    } else {
-        run(nullptr);
+        if constexpr (stream_heads) {
+            read_w_group(noc, w_acc, q_row_start, q_dir);
+        }
+        for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
+            const uint32_t band = band_i;
+            const bool real_band = band < num_bands;
+            if (real_band) {
+                span.set(group, band0 + band);
+                // Resident q/w are multicasted once at each core's first band. This must
+                // happen even if that core's band falls past kv_len, since another column
+                // may still be waiting at the shared row rendezvous.
+                if (band == 0 && !stream_heads && !fuse_single) {
+                    read_q_rows(noc, q_acc, q_row_start, q_dir);
+                    read_w_group(noc, w_acc, q_row_start, q_dir);
+                }
+                // Head streaming emits the q blocks below even for an empty K band; the
+                // compute kernel drains them before moving to the next band.
+                if (span.k_tiles() != 0) {
+                    if constexpr (fuse_single && fused_stream_k) {
+                        read_k_chunk_streaming(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
+                    } else {
+                        read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                    }
+                }
+            }
+            if constexpr (stream_heads) {
+                for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
+                    for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
+                        read_q_block(noc, q_acc, q_row_start, first_head, q_dir);
+                    }
+                }
+            }
+            if constexpr (!synthesize_gate && !stream_heads && !fuse_single) {
+                if (band_i == 0) {
+                    expand_w_group();
+                }
+            }
+        }
     }
 }

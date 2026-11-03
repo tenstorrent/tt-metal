@@ -21,8 +21,6 @@ struct IndexerScoreDeviceOperation {
     using tensor_args_t = indexer_score::tensor_args_t;
     using spec_return_value_t = indexer_score::spec_return_value_t;
     using tensor_return_value_t = indexer_score::tensor_return_value_t;
-    // Classic factory only: the ring-fused factory (which subsumed the SP all-gather) was removed for agent
-    // evaluation (TODO(nuked-op ccl)); select_program_factory rejects attrs.fused_ring.
     using program_factory_t = std::variant<program::IndexerScoreProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

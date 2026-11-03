@@ -25,7 +25,7 @@ struct IndexerScoreSharedVariables {
 };
 
 // Native mesh-workload factory: one program per mesh coordinate so each device derives its own
-// chunk_start from its coordinate (mirrors ring_joint_sdpa). A single device is a 1x1 mesh, so the
+// chunk_start from its coordinate. A single device is a 1x1 mesh, so the
 // single-chip path flows through the same code with one coordinate (index 0).
 struct IndexerScoreProgramFactory {
     using shared_variables_t = IndexerScoreSharedVariables;

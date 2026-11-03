@@ -51,9 +51,8 @@ void kernel_main() {
             noc, meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), scratch);
         // Validate before addition so the offset cannot wrap and no malformed metadata can produce a NoC read
         // outside the input row. ASSERT is watcher-gated, so it compiles to nothing in a normal build; pair it
-        // with a clamp, as bounded_kv_actual_isl / bounded_cache_batch_idx do, or the bound would hold only
-        // under the watcher. Clamping to input_width also matches the score kernel's coupled derivation, which
-        // saturates its own extent (kv_len_tiles is clamped to k_len_tiles) rather than reading past the row.
+        // with a clamp, or the bound would hold only under the watcher. Clamping to input_width saturates the
+        // search extent rather than reading past the row.
         const bool metadata_valid = meta_offset <= input_width && metadata_length <= input_width - meta_offset &&
                                     (metadata_length != 0 || meta_offset != 0);
         ASSERT(metadata_valid);

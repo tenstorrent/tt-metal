@@ -4,10 +4,9 @@
 
 #pragma once
 
-// Host-side helpers shared by BOTH indexer_score program factories (the classic Program-model factory and the
-// ring-fused ProgramDescriptor-model factory): per-device causal geometry, the SP-ring index lookup, and the
-// persistent-cache runtime args. Kept in one place so the two factories can never drift (they produce
-// byte-identical values by construction). Pure host math -- no kernel/program-model dependency.
+// Host-side helpers for the indexer_score program factory and device op: per-device causal geometry, the
+// SP-ring index lookup, and the persistent-cache runtime args. Pure host math -- no kernel/program-model
+// dependency.
 
 #include <algorithm>
 #include <cstdint>
@@ -24,20 +23,11 @@
 
 namespace ttnn::operations::experimental::indexer_score::program {
 
-// This device's SP-ring size: the mesh extent along seq_shard_axes[0], or the whole mesh when the SP axis is
-// unset (both-axes block-cyclic). Shared by the fused factory (schedule/AG) and the op's validate so they
-// cannot disagree on the ring extent.
-inline uint32_t ring_size_for(const operation_attributes_t& args, const Tensor& q) {
-    return args.sp_axis().has_value() ? static_cast<uint32_t>(q.device()->get_view().shape()[*args.sp_axis()])
-                                      : static_cast<uint32_t>(q.device()->get_view().shape().mesh_size());
-}
-
 // relu(q.kT) gate-mul batching that sizes cb_qk (and the compute kernel's DEST batch): batch a tile-row of
 // heads (QC>1, capped at TILE_HEIGHT) or the whole plane's heads (QC==1), and — only on the single-chunk
 // full-strip path (the whole plane batched, KC>=2, no head streaming) — batch the whole k chunk's columns per
-// matmul<->mul switch. `subblock_basis` is the per-plane head count. Identical derivation in both factories
-// (classic + fused), so it lives here; each factory keeps its own cb_qk make-call (the classic overrides it to
-// 1 tile on its fuse_single path). The divisibility invariant is asserted here (only reachable at QC>1 with a
+// matmul<->mul switch. `subblock_basis` is the per-plane head count. The factory overrides cb_qk to 1 tile on
+// its fuse_single path. The divisibility invariant is asserted here (only reachable at QC>1 with a
 // >32-head plane; deployed cases never hit the 32-cap).
 struct DsaQkBatching {
     uint32_t qk_batch_heads;  // heads batched per matmul<->mul switch (multiple of qk_subblock_h)
@@ -58,7 +48,7 @@ inline DsaQkBatching dsa_qk_batching(uint32_t subblock_basis, uint32_t QC, uint3
 }
 
 // Shared physical axis tables preserve harvested/non-contiguous coordinates.
-// Both readers reconstruct identical row/column multicast geometry from them.
+// The reader reconstructs the row/column multicast geometry from them.
 template <typename Args>
 inline void append_multicast_axes(Args& args, const std::vector<std::vector<CoreCoord>>& phys) {
     for (const auto& row : phys) {
@@ -87,10 +77,9 @@ inline void append_multicast_axes(Args& args, const std::vector<std::vector<Core
 //       (chunk_global - chunk_local) tiles at q-row (chunk_local - offset).
 // The linear form only misses (a) when boundary_chip != 0 -- exactly the mid-slab, non-chip-0-start case
 // (e.g. the multi-turn rotated prefill). Chunk-aligned (offset == 0, boundary_chip == 0) reduces to linear.
-// No block_cyclic -> plain linear. The classic both-axes case (SP axis unset,
-// block_cyclic_chunk_local == tp*Sq) keeps the prior linear+straddle form; fused full-mesh is the exception and
-// uses rotation-exact SP ownership. Shared by create_at (device_index from the coordinate) and override (stored
-// device_index).
+// No block_cyclic -> plain linear. The both-axes case (SP axis unset, block_cyclic_chunk_local == tp*Sq) keeps
+// the linear+straddle form; a named SP axis uses rotation-exact SP ownership. Shared by create_at (device_index
+// from the coordinate) and override (stored device_index).
 using DeviceCausalGeometry = CausalGeometryTiles;
 
 // Unpack and validate host attributes before calling the shared causal-geometry implementation.
@@ -99,55 +88,12 @@ static_assert(
     "indexer_score causal geometry assumes TILE_WIDTH == 32 (the shared kernel-includable header cannot "
     "include tt-metalium constants)");
 
-// A fused full-mesh ring has no named SP axis, but every canonical tensor rank is an SP rank and
-// block-cyclic ownership is the same rotation-exact mapping as the named-axis case, so it must NOT go
-// through the flat both-axes approximation. The metadata path hands this same predicate to the reader as a
-// compile-time argument, so host and device select the same branch by construction.
-inline bool rotation_exact_sp_geometry(const operation_attributes_t& args) {
-    return args.sp_axis().has_value() || (args.has_fused_ring() && args.fused_ring->full_mesh);
-}
-
-// Query ownership on a fused full-mesh ring follows the model's SP x TP layout, not the key cache's
-// sp*tp stripes: a chunk's queries are rotated at SP granularity along mesh rows (mesh_cols stripes per SP
-// slab) and each mesh column then takes its Sq-row window of that rotated slab. The two agree only when the
-// chunk starts on an SP-slab boundary, so causal geometry regroups the canonical tensor rank into
-// (row, col) and rotates over mesh_rows slabs of mesh_cols * chunk_local. 1 everywhere else. The metadata
-// path folds this into the reader's geometry split, so host and device regroup identically.
-inline uint32_t query_geometry_split(const operation_attributes_t& args) {
-    return (args.has_fused_ring() && args.fused_ring->full_mesh) ? args.fused_ring->mesh_cols : 1u;
-}
-
-struct QueryGeometryRanks {
-    uint32_t device_index;
-    uint32_t tp_index;
-};
-
-// (SP rank, TP window) that causal geometry sees for a canonical row-major tensor rank.
-inline QueryGeometryRanks query_geometry_ranks(
-    const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index) {
-    const uint32_t split = query_geometry_split(args);
-    if (split == 1) {
-        return {device_index, tp_index};
-    }
-    return {device_index / split, device_index % split};
-}
-
 inline DeviceCausalGeometry device_causal_geometry(
     const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
     const bool has_bc = args.block_cyclic.has_value();
-    const bool rotation_exact = rotation_exact_sp_geometry(args);
-    const uint32_t split = has_bc ? query_geometry_split(args) : 1u;
-    TT_FATAL(
-        !has_bc || args.block_cyclic->sp % split == 0,
-        "indexer_score: full-mesh block-cyclic sp={} must be a multiple of mesh_cols={}",
-        has_bc ? args.block_cyclic->sp : 0u,
-        split);
-    const uint32_t sp = has_bc ? args.block_cyclic->sp / split : 1u;
-    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local * split : 0u;
-    const auto ranks =
-        has_bc ? query_geometry_ranks(args, device_index, tp_index) : QueryGeometryRanks{device_index, tp_index};
-    device_index = ranks.device_index;
-    tp_index = ranks.tp_index;
+    const bool rotation_exact = args.sp_axis().has_value();
+    const uint32_t sp = has_bc ? args.block_cyclic->sp : 1u;
+    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local : 0u;
     TT_FATAL(
         !(has_bc && rotation_exact) || device_index < sp,
         "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "
@@ -165,26 +111,6 @@ inline uint32_t device_index_for(
         return 0;
     }
     return ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.sp_axis());
-}
-
-// The fused full-mesh ring communicates in snake order while K ownership and causal geometry stay in
-// canonical row-major order. Axis mode keeps the historical identity mapping.
-inline uint32_t transport_rank_for(
-    const operation_attributes_t& args, const ttnn::MeshCoordinate& coord, const Tensor& q) {
-    if (!args.has_fused_ring() || !args.fused_ring->full_mesh) {
-        return device_index_for(args, coord, q);
-    }
-    TT_FATAL(coord.dims() == 2, "indexer_score fused full-mesh transport mapping requires a 2D coordinate");
-    return ttnn::ccl::snake_ring::index_from_coordinate(
-        coord[0], coord[1], args.fused_ring->mesh_rows, args.fused_ring->mesh_cols, args.fused_ring->snake_orientation);
-}
-
-inline uint32_t transport_to_tensor_rank(const operation_attributes_t& args, uint32_t transport_rank) {
-    if (!args.has_fused_ring() || !args.fused_ring->full_mesh) {
-        return transport_rank;
-    }
-    return ttnn::ccl::snake_ring::row_major_index(
-        transport_rank, args.fused_ring->mesh_rows, args.fused_ring->mesh_cols, args.fused_ring->snake_orientation);
 }
 
 // The two non-hashed runtime args derived from k's shape + the optionals. Single source for both create()

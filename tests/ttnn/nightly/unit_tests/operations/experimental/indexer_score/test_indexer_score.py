@@ -19,8 +19,7 @@ visible to query ``s`` iff ``t <= chunk_start + s``; future columns/blocks are -
 
 Deployments are Galaxy chunked prefill (50K history + 5K chunk = 55K keys; the chunk is SP=8
 -> 640 q/device): GLM5 (8h), M3 (MSA per-GQA-group, block-max-pooled). These tests run on one
-chip with explicit ``chunk_start`` (``sp_rank`` = ring position). Multi-device coverage lives in
-``test_ring_indexer_score_dsa_4d.py``.
+chip with explicit ``chunk_start`` (``sp_rank`` = ring position).
 
 Run all (the perf-check needs the real-time profiler, i.e. a host-IOMMU sku; it fails fast otherwise):
     scripts/run_safe_pytest.sh --run-all <this file>
@@ -1211,8 +1210,8 @@ def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expect
     jobs exclude it; an inactive profiler here is therefore a regression -> fail."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU globs exclude it by marker), so an inactive
-        # profiler means it regressed on a sku that should have it -- fail (not skip), matching the sprint /
-        # ring-joint perf checks.
+        # profiler means it regressed on a sku that should have it -- fail (not skip), matching the sprint
+        # perf checks.
         pytest.fail("Real-time profiler must be active for indexer_score perf checks (needs IOMMU)")
     _, perf_record = profile_realtime_program(device, lambda: run_fn(device))
     duration_ns = perf_record["duration_ns"]
