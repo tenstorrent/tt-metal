@@ -6,10 +6,12 @@ the steps a row engine runs at long context with 1..4 requests decoding, MTP spe
 MIMO_SPEC_GROUPS as in serving) or plain decode (``--modes``).
 
 Run on one Galaxy row as a row engine does: TT_VISIBLE_DEVICES=<the row's chips>, a (1, 8) mesh, FABRIC_1D_RING. Each
-request gets its own prompt of ``--ctx`` tokens of real text (source files of this checkout: varied routing and
-natural acceptance) and its own blocks, prefilled through prefill_forward. Then for each ``--users`` count the first
-n requests decode ``--steps`` steps: a verify (fused_sample, greedy) and the chained propose per step, synchronously,
-or a traced plain decode step. Every step's wall time is measured; the first ``--warm`` are dropped.
+request gets its own prompt of ``--ctx`` tokens (or its entry of ``--ctxs``: unequal contexts) of real text (source
+files of this checkout: varied routing and natural acceptance) and its own blocks, prefilled through prefill_forward.
+Then for each ``--users`` count the first n requests decode ``--steps`` steps: a verify (fused_sample, greedy unless
+``--sample``) and the chained propose per step, synchronously, or a traced plain decode step; ``--interleave`` puts a
+prefill chunk of another request before each spec step. Every step's wall time is measured; the first ``--warm`` are
+dropped.
 
     VSB users=<n> mode=<spec K | plain> step_ms=<median> mean=<mean> tokens_per_step=<per request> tok_s=<per request>
 
@@ -71,14 +73,12 @@ def say(msg):
     print(f"VSB {msg}", flush=True)
 
 
-def prompts(path, n, users):
-    """``users`` prompts of ``n`` tokens of this checkout's source text, each from its own stretch of files."""
-    from transformers import AutoTokenizer
-
-    tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+def prompts(tok, lengths):
+    """A prompt of ``lengths[u]`` tokens of this checkout's source text per request, each from its own stretch of
+    files."""
     files = sorted(glob.glob(CORPUS, recursive=True))
     out, i = [], 0
-    for u in range(users):
+    for n in lengths:
         ids = []
         while len(ids) < n:
             ids += tok.encode(open(files[i % len(files)], errors="ignore").read(), add_special_tokens=False)
@@ -120,6 +120,8 @@ def breakdown(m, n=20):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ctx", type=int, default=150_000)
+    p.add_argument("--ctxs", default=None, help="each request's context (comma-separated), instead of --ctx for all")
+    p.add_argument("--show", type=int, default=0, help="print each request's first SHOW committed characters")
     p.add_argument("--users", default="1,2,3,4")
     p.add_argument("--steps", type=int, default=96)
     p.add_argument("--warm", type=int, default=16)
@@ -128,28 +130,46 @@ def main():
     p.add_argument("--modes", default="spec,plain", help="spec (verify + propose) and / or plain decode steps")
     p.add_argument("--k", type=int, default=MAX_DRAFTS, help="drafts per request (at most MAX_DRAFTS)")
     p.add_argument("--breakdown", action="store_true", help="also time each captured trace alone on idle inputs")
+    p.add_argument(
+        "--interleave",
+        type=int,
+        default=0,
+        help="before every spec step, a prefill chunk of this many tokens of an extra request in the next free slot "
+        "(later chunks replay the chunk traces), as a row engine interleaves prefill with decode",
+    )
+    p.add_argument("--interleave-ctx", type=int, default=65536, help="the extra request restarts at 0 past this")
+    p.add_argument(
+        "--sample",
+        action="store_true",
+        help="sample the decoding requests (temperature 1, top_p 0.95, the plugin's spec_sampling with fresh uniforms "
+        "each step) instead of greedy",
+    )
     a = p.parse_args()
     users_list = [int(x) for x in a.users.split(",")]
     users = max(users_list)
+    ctxs = [int(x) for x in a.ctxs.split(",")] if a.ctxs else [a.ctx] * users
+    assert len(ctxs) >= users, "--ctxs needs a context per request"
     assert users <= a.per_lane and 1 <= a.k <= MAX_DRAFTS
+    assert not a.interleave or users < a.per_lane, "--interleave needs a free slot"
+    holders = users + (1 if a.interleave else 0)  # requests that own blocks (the extra one last)
     path = default_model_path()
     cfg = MiMoConfig.from_model_path(path)
     pair = generator_vllm.KV_PAIR_SPLIT
     groups, buffers = vllm_kv_layout(cfg)
     MiMoV2ForCausalLM._layer_groups = groups
     MiMoV2ForCausalLM.prefill_token_budget = a.budget
-    max_seq_len = -(-(a.ctx + 8192) // 128) * 128  # whole blocks of the pair-split global group
+    max_seq_len = -(-(max(ctxs + [a.interleave_ctx]) + 8192) // 128) * 128  # pair-split global blocks
 
     global_span = 2 * BLOCK_SIZE if pair else BLOCK_SIZE
     global_blocks = -(-max_seq_len // global_span)
     num_groups = max(groups) + 1
     swa_groups = sorted({g for i, g in enumerate(groups) if cfg.is_swa(i)})
     per_request = global_blocks + len(swa_groups) * SWA_RING
-    num_blocks = max(1 + users * per_request, -(-max_seq_len // BLOCK_SIZE) + 1)
+    num_blocks = max(1 + holders * per_request, -(-max_seq_len // BLOCK_SIZE) + 1)
     rows = a.per_lane
     width = -(-max_seq_len // BLOCK_SIZE)
     tables = {g: torch.zeros(rows, width, dtype=torch.int32) for g in range(num_groups)}
-    for u in range(users):
+    for u in range(holders):
         for g in range(num_groups):
             if g in swa_groups:
                 base = 1 + u * per_request + global_blocks + swa_groups.index(g) * SWA_RING
@@ -180,13 +200,18 @@ def main():
         model.warmup_model_decode(kv, enable_trace=True)
         say(f"built and warmed up in {time.time() - t0:.0f} s, {num_blocks} blocks")
 
-        texts = prompts(path, a.ctx, users)
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+        texts = prompts(tokenizer, ctxs[:users] + ([a.interleave_ctx] if a.interleave else []))
+        extra = {"slot": users, "pos": 0, "chunks": 0}
+        rng = torch.Generator().manual_seed(1234)
         last = []
         t0 = time.time()
         for u in range(users):
             pos = 0
-            while pos < a.ctx:
-                end = min(pos + a.budget, a.ctx)
+            while pos < ctxs[u]:
+                end = min(pos + a.budget, ctxs[u])
                 logits = model.prefill_forward(
                     texts[u][None],
                     torch.tensor([pos], dtype=torch.int32),
@@ -198,7 +223,7 @@ def main():
                 )
                 pos = end
             last.append(int(logits[0, -1].argmax()))
-        say(f"prefilled {users} x {a.ctx} tokens in {time.time() - t0:.0f} s")
+        say(f"prefilled {users} requests ({','.join(map(str, ctxs[:users]))} tokens) in {time.time() - t0:.0f} s")
         if PROFILING:
             read_profiler(model)
 
@@ -206,7 +231,7 @@ def main():
         for plain, n in [(m == "plain", n) for m in a.modes.split(",") for n in users_list]:
             # Each run continues every request from where the last run left it (its own KV, its own positions).
             # pos[r]: the position of request r's last committed token tok[r] (not yet in the cache).
-            pos = getattr(main, "_pos", [a.ctx] * users)
+            pos = getattr(main, "_pos", list(ctxs[:users]))
             tok = getattr(main, "_tok", list(last))
             times, per_step_tokens = [], []
             emitted = [[] for _ in range(n)]  # each request's committed tokens (the run's digest)
@@ -245,6 +270,20 @@ def main():
                     committed[r, 0], cpos[r, 0] = tok[r], pos[r]
                 drafts = model.propose_draft_tokens(k, committed, cpos, ones)
                 for s in range(a.steps):
+                    if a.interleave:
+                        xs, x0 = extra["slot"], extra["pos"]
+                        x1 = min(x0 + a.interleave, a.interleave_ctx)
+                        model.prefill_forward(
+                            texts[xs][None],
+                            torch.tensor([x0], dtype=torch.int32),
+                            torch.tensor([x1], dtype=torch.int32),
+                            tables[0][xs : xs + 1],
+                            kv,
+                            empty_slots=[xs],
+                            page_tables_per_layer=[t[xs : xs + 1] for t in layer_tables],
+                        )
+                        extra["pos"] = 0 if x1 >= a.interleave_ctx else x1
+                        extra["chunks"] += 1
                     tokens = torch.zeros(rows, 1 + k, dtype=torch.int32)
                     positions = torch.full((rows, 1 + k), -1, dtype=torch.int32)
                     valid = torch.zeros(rows, dtype=torch.int32)
@@ -254,6 +293,17 @@ def main():
                         tokens[r, 1 : 1 + nv] = drafts.draft_token_ids[r, :nv]
                         positions[r, : 1 + nv] = torch.arange(pos[r], pos[r] + 1 + nv, dtype=torch.int32)
                         valid[r] = nv
+                    sampling = {}
+                    if a.sample:
+                        greedy = torch.ones(rows, dtype=torch.bool)
+                        greedy[:n] = False
+                        sampling["spec_sampling"] = {
+                            "temperature": torch.where(greedy, 0.0, 1.0).to(torch.float32),
+                            "top_k": torch.zeros(rows, dtype=torch.int32),
+                            "top_p": torch.full((rows,), 0.95, dtype=torch.float32),
+                            "greedy": greedy,
+                            "uniforms": torch.rand(rows, k + 2, generator=rng).clamp(max=0.999999),
+                        }
                     t1 = time.perf_counter()
                     out = model.decode_forward(
                         tokens,
@@ -264,6 +314,7 @@ def main():
                         spec_mode="fused_sample",
                         num_valid_drafts=valid,
                         accepted_counts=ones,
+                        **sampling,
                     )
                     counts = out.accepted_counts.to(torch.int32).clone()
                     ids = out.accepted_token_ids
@@ -297,6 +348,10 @@ def main():
             # Greedy: the same arithmetic commits the same tokens (compare runs of two builds).
             digest = [f"{zlib.crc32(str(e).encode()):08x}:{len(e)}" for e in emitted]
             say(f"users={n} mode={mode} tokens {' '.join(digest)}")
+            if a.interleave and not plain:
+                say(f"users={n} mode={mode} interleaved {extra['chunks']} prefill chunks so far")
+            for r in range(n if a.show else 0):
+                say(f"users={n} mode={mode} text {r} {tokenizer.decode(emitted[r])[: a.show]!r}")
         if a.breakdown:
             breakdown(model.models[0])
         if PERF_JSON:
