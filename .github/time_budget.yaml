@@ -123,6 +123,7 @@ ttnn:
     bh_p150b_civ2: 9
     wh_n150: 10
     wh_llmbox_perf: 8
+    wh_n300_civ2: 2
   integration:
     wh_llmbox: 30
     wh_galaxy: 100
