@@ -126,6 +126,31 @@ VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "auto")
 # rows past them as zeros, what padding them with idle slots (output 0, NO_KEY_LSE) gave, without the nine small ops.
 # MIMO_VERIFY_PAD_IDLE=1 pads.
 PAD_IDLE_SLOTS = os.environ.get("MIMO_VERIFY_PAD_IDLE", "0") == "1"
+# Every K / V row the cache stores is finite and within +-KV_LIMIT (MIMO_KV_SANITIZE=0: written as computed). The
+# decode SDPA masks the rows a query must not see (past its position, before its sliding window, a table's null
+# block) by adding -inf to their scores, which leaves a NaN or infinite key's score NaN, and a masked NaN value row
+# still enters the weighted sum as 0 * NaN: one non-finite row anywhere in a page the SWA decode reads poisons every
+# query that reads that page, including other requests' (a freed block keeps its rows; the null block 0 is every SWA
+# table's out-of-window entry and shares its page with the global layers). Finite masked rows contribute nothing.
+# Real K / V stay well inside the limit (|x| < 50).
+KV_SANITIZE = os.environ.get("MIMO_KV_SANITIZE", "1") == "1"
+KV_LIMIT = 65280.0
+
+
+def finite_kv(t, keep=False):
+    """``t`` as the cache stores it (KV_SANITIZE): non-finite values 0, the rest clamped to +-KV_LIMIT, in ``t``'s
+    memory config; ``t`` is deallocated unless ``keep``. Unchanged without KV_SANITIZE."""
+    if not KV_SANITIZE:
+        return t
+    mc = t.memory_config()
+    ok = ttnn.isfinite(t, memory_config=mc)
+    kept = ttnn.where(ok, t, 0.0, memory_config=mc)
+    ok.deallocate(True)
+    if not keep:
+        t.deallocate(True)
+    out = ttnn.clamp(kept, min=-KV_LIMIT, max=KV_LIMIT, memory_config=mc)
+    kept.deallocate(True)
+    return out
 
 
 def verify_variants():
@@ -393,6 +418,7 @@ class SwaDecodeQkv:
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=ranges,
                         compile_time_args=ct,
+                        defines=[("SWA_KV_SANITIZE", "1" if KV_SANITIZE else "0")],
                         runtime_args=rt,
                         config=config,
                     )
@@ -900,13 +926,20 @@ class TtMiMoAttention:
         batch = {"batch_idx": batch_idx}
         if isinstance(tables, BatchFillTables):  # input batch entry r writes through row r of tables.fill
             batch = {"batch_idx_tensor": tables.rows}
-        k_fill = ttnn.typecast(k_rot, k_cache.dtype)
+        k_src = finite_kv(k_rot, keep=True)  # the chunk's attention still reads k_rot and v
+        k_fill = ttnn.typecast(k_src, k_cache.dtype)
+        if k_src is not k_rot:
+            k_src.deallocate(True)
         if v_cache.shape[-1] < v.shape[-1]:
             v_real = ttnn.slice(v, (0, 0, 0, 0), (v.shape[0], v.shape[1], seq_len, v_cache.shape[-1]))
-            v_fill = ttnn.typecast(v_real, v_cache.dtype)
-            v_real.deallocate(True)
+            v_src = finite_kv(v_real)
+            v_fill = ttnn.typecast(v_src, v_cache.dtype)
+            v_src.deallocate(True)
         else:
-            v_fill = ttnn.typecast(v, v_cache.dtype)
+            v_src = finite_kv(v, keep=True)
+            v_fill = ttnn.typecast(v_src, v_cache.dtype)
+            if v_src is not v:
+                v_src.deallocate(True)
         ttnn.experimental.paged_fill_cache(k_cache, k_fill, table, **batch)
         ttnn.experimental.paged_fill_cache(v_cache, v_fill, table, **batch)
         k_fill.deallocate(True)
@@ -1481,7 +1514,8 @@ class TtMiMoAttention:
             q.deallocate(True)
             k.deallocate(True)
 
-            v_cached = self._cache_width_v(v, x.shape[-2], v_cache.shape[-1])
+            v_cached = finite_kv(self._cache_width_v(v, x.shape[-2], v_cache.shape[-1]))
+            k_rot = finite_kv(k_rot)
             for pos in writes:
                 update = dict(update_idxs_tensor=pos, page_table=page_table)
                 ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
@@ -1549,7 +1583,8 @@ class TtMiMoAttention:
         q.deallocate(True)
         k.deallocate(True)
 
-        v_shard = self._cache_width_v(v, batch, self.v_head_dim)
+        v_shard = finite_kv(self._cache_width_v(v, batch, self.v_head_dim))
+        k_rot = finite_kv(k_rot)
 
         k_cache, v_cache = kv_cache
         for pos in serial or [pos_owned if pos_update is None else pos_update]:
@@ -1601,7 +1636,8 @@ class TtMiMoAttention:
         k_rot = ttnn.experimental.rotary_embedding_llama(k, rot_mats[0], rot_mats[1], trans, is_decode_mode=True)
         q.deallocate(True)
         k.deallocate(True)
-        v_shard = self._cache_width_v(v, batch, self.v_head_dim)
+        v_shard = finite_kv(self._cache_width_v(v, batch, self.v_head_dim))
+        k_rot = finite_kv(k_rot)
 
         k_cache, v_cache = kv_cache
         for pos in positions.get("pair_serial") or [positions["pair_write"]]:
