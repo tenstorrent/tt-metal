@@ -319,7 +319,9 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         tt::tt_metal::num_cores_to_corerangeset(num_active_cores, compute_grid_size, /*row_wise=*/true);
     auto cores = grid_to_cores(num_active_cores, num_cores_x, num_cores_y, /*row_wise=*/true);
 
-    uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(dfb_data_format);
+    // A pixel is its logical channels. A sharded row-major input pads each pixel to a multiple of the shard width,
+    // and the output row must not take that padding.
+    uint32_t stick_nbytes = input_tensor.logical_shape()[3] * tt::datum_size(dfb_data_format);
     // Align to DRAM read alignment.
     uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
 

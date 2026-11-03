@@ -523,3 +523,83 @@ def test_fold_transpose_rejects_empty_grid(device, expect_error):
     tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_sharded_memory_config)
     with expect_error(RuntimeError, "core_grid must contain at least one core"):
         ttnn.fold(tt_in, 2, 2, use_transpose_as_fold=True, padding=[0, 0, 0, 0, 0, 1], grid_size=ttnn.CoreRangeSet([]))
+
+
+def _grid(cores):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*cores[0]), ttnn.CoreCoord(*cores[1]))})
+
+
+def _legacy_config(memory_layout, buffer_type, cores, shard_shape):
+    spec = ttnn.ShardSpec(_grid(cores), shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(memory_layout, buffer_type, spec)
+
+
+def _nd_config(cores, shard_shape):
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape),
+        _grid(cores),
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+
+
+HEIGHT, WIDTH, BLOCK = (
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+)
+L1, DRAM = ttnn.BufferType.L1, ttnn.BufferType.DRAM
+TWO_CORES, SQUARE, ONE_CORE = ((0, 0), (1, 0)), ((0, 0), (1, 1)), ((0, 0), (0, 0))
+
+
+@pytest.mark.parametrize(
+    "shape, dtype, memory_config",
+    [
+        ((1, 4, 8, 3), ttnn.bfloat16, _legacy_config(HEIGHT, L1, TWO_CORES, [16, 8])),
+        ((1, 4, 8, 8), ttnn.bfloat16, _legacy_config(HEIGHT, L1, TWO_CORES, [16, 16])),
+        ((1, 4, 8, 3), ttnn.float32, _legacy_config(HEIGHT, L1, TWO_CORES, [16, 8])),
+        ((1, 4, 8, 3), ttnn.bfloat16, _legacy_config(HEIGHT, DRAM, TWO_CORES, [16, 8])),
+        ((1, 4, 8, 24), ttnn.bfloat16, _legacy_config(WIDTH, L1, TWO_CORES, [32, 16])),
+        ((1, 4, 8, 24), ttnn.float32, _legacy_config(WIDTH, L1, TWO_CORES, [32, 16])),
+        ((1, 4, 8, 48), ttnn.bfloat16, _legacy_config(WIDTH, DRAM, TWO_CORES, [32, 32])),
+        ((1, 4, 8, 24), ttnn.bfloat16, _legacy_config(BLOCK, L1, SQUARE, [16, 16])),
+        ((1, 4, 8, 3), ttnn.bfloat16, _nd_config(TWO_CORES, [1, 2, 8, 8])),
+        ((1, 4, 8, 24), ttnn.bfloat16, _nd_config(TWO_CORES, [1, 4, 8, 16])),
+        ((1, 12, 6, 1), ttnn.bfloat16, _nd_config(ONE_CORE, [1, 12, 12, 16])),
+    ],
+    ids=[
+        "height_l1_c3",
+        "height_l1_c8_shard16",
+        "height_l1_c3_fp32",
+        "height_dram_c3",
+        "width_l1_c24",
+        "width_l1_c24_fp32",
+        "width_dram_c48",
+        "block_l1_c24",
+        "nd_c3",
+        "nd_c24_split_rows",
+        "nd_c1",
+    ],
+)
+def test_fold_padded_pixels(device, shape, dtype, memory_config):
+    """A sharded row-major tensor pads C up to a multiple of the shard width. Fold must put only the logical C of
+    each pixel into the output row."""
+    n = math.prod(shape)
+    if dtype == ttnn.float32:
+        torch_input = (torch.arange(n, dtype=torch.float32) + 1).reshape(shape)
+    else:
+        # Multiples of 1/8 in [1/8, 29/8], exact in bfloat16.
+        torch_input = ((torch.arange(n) % 29 + 1) / 8).reshape(shape).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert tt_input.padded_shape[-1] > tt_input.shape[-1], "the case must have padded pixels"
+
+    tt_out = ttnn.fold(tt_input, 2, 2)
+
+    expected = fold_torch(ttnn.to_torch(tt_input), 2, 2)
+    actual = ttnn.to_torch(tt_out)
+    assert actual.shape == expected.shape
+    wrong = int((actual != expected).sum())
+    assert wrong == 0, f"{wrong} of {expected.numel()} values wrong"
