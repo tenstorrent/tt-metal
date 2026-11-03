@@ -431,6 +431,19 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
         q_shape[1],
         k_shape[1],
         v_shape[1]);
+    // The per-chip length word and the output allocation both follow the logical rows, so rows padded beyond
+    // them would be computed and written past the output.
+    TT_FATAL(
+        q_shape[2] == tensor_args.input_q.padded_shape()[2] && k_shape[2] == tensor_args.input_k.padded_shape()[2] &&
+            v_shape[2] == tensor_args.input_v->padded_shape()[2],
+        "dynamic_local_n requires Q/K/V without padding beyond the logical sequence length. Got logical/padded Q: "
+        "{}/{}, K: {}/{}, V: {}/{}",
+        q_shape[2],
+        tensor_args.input_q.padded_shape()[2],
+        k_shape[2],
+        tensor_args.input_k.padded_shape()[2],
+        v_shape[2],
+        tensor_args.input_v->padded_shape()[2]);
     // The one-K-head shared-K batch chain is host-built per length; the hit path cannot rebuild it.
     TT_FATAL(
         tensor_args.gathered_k.logical_shape()[1] > 1,
