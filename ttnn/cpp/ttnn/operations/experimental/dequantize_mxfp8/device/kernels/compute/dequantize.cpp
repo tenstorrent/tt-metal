@@ -18,9 +18,9 @@
 // 2 for UINT16), 1 UINT8 input, 2 BFLOAT16 output, 3 fp32_dest_acc_en.
 // Runtime arg 0: packed tiles assigned to this core.
 //
-// The harness's isolated-math diagnostic repeats the code between the
-// MXFP8_MATH_SWEEP_BEGIN/END markers; keep both markers around the complete
-// per-packed-tile decode sweep.
+// The harness's isolated-math diagnostic repeats the code between the sweep
+// BEGIN/END marker comments below (each must appear exactly once); keep them
+// around the complete per-packed-tile decode sweep.
 void kernel_main() {
     compute_kernel_hw_startup(0, 16);
     constexpr uint32_t planes = get_compile_time_arg_val(0);
