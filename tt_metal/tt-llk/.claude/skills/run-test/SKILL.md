@@ -42,7 +42,7 @@ Examples:
 - `--compile-only` — compile-producer only, no simulate
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
 - `--port <N>` — simulator port (default 5556)
-- `--stall <secs>` — log-stall seconds that mark a hang (default 180 emulator, 300 silicon)
+- `--stall <secs>` — log-stall seconds that mark a hang (default 180 emulator, 1800 emulator with `ENABLE_WAVEFORM=1`, 300 silicon)
 
 ## Blocking call, hang-bounded
 

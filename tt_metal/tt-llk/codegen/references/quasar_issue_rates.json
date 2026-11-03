@@ -1,0 +1,17 @@
+{
+  "_doc": "Issue cost (cycles a thread's issue slot is occupied) per Quasar Tensix instruction, for the no-stall floor in perf_headroom.py. Issue cost is NOT result latency: a dependent instruction waiting on a result shows up as a stall in the wave breakdown, not here. Every entry must cite a public source. Numbers known only from internal docs or measured on waves go in the private override (llk_code_gen tools/llk_wave_debug/codegen/llk_wave_debug/rates/quasar_issue_rates.private.json), passed as a later --rates.",
+  "default": {
+    "cycles": 1,
+    "source": "assumption: one instruction issued per thread per cycle; NOP descriptions in tt_llk_quasar/instructions/assembly.yaml ('consume an instruction slot and cycle'). Opcodes that fall back to this are listed in the verdict's defaulted_opcodes."
+  },
+  "opcodes": {
+    "SFPSWAP": {
+      "cycles": 2,
+      "source": "tt_llk_quasar/instructions/assembly.yaml SFPSWAP.description: 'this is a two cycle operation'"
+    },
+    "CFGSHIFTMASK": {
+      "cycles": 2,
+      "source": "tt_llk_quasar/instructions/assembly.yaml CFGSHIFTMASK.description: 'This instruction takes two cycles to complete'"
+    }
+  }
+}

@@ -825,6 +825,27 @@ def num(k):
     except (TypeError, ValueError): return None
 def s_(k):
     v = s.get(k); return v if v not in (None, "") else None
+def diagnosis():
+    # Measure-only wave diagnosis (execute_step_perf_diagnose); the summary fields come from diag.json.
+    if not s_("PERF_DIAG_STATUS"):
+        return None
+    d = {"status": s_("PERF_DIAG_STATUS"), "line": s_("PERF_DIAG_LINE"), "dir": s_("PERF_DIAG_DIR"),
+         "first_line": s_("PERF_DIAG_FIRST_LINE")}
+    try:
+        full = json.load(open((s_("PERF_DIAG_DIR") or "") + "/diag.json"))
+    except (OSError, ValueError):
+        full = {}
+    for key in ("run_type", "measured", "floor", "stall_headroom_pct", "bottleneck", "top_causes", "reason"):
+        if key in full:
+            d[key] = full[key]
+    return d
+def tuning():
+    # Step 6c: diagnosis-guided tuning (execute_step_perf_tune_gate / _next).
+    if not s_("PERF_TUNE_STATUS"):
+        return None
+    return {"status": s_("PERF_TUNE_STATUS"), "attempts": int(num("PERF_TUNE_ATTEMPTS") or 0),
+            "kept": int(num("PERF_TUNE_KEPT") or 0), "max_attempts": int(num("PERF_TUNE_MAX_ATTEMPTS") or 0),
+            "last_result": s_("PERF_TUNE_LAST_RESULT"), "min_headroom_pct": num("PERF_TUNE_MIN_HEADROOM_PCT")}
 print(json.dumps({"perf": {
     "enabled": s.get("PERF_ENABLED") is True,
     "verdict": s_("PERF_VERDICT") or "not_measured",       # follows the median variant
@@ -846,7 +867,37 @@ print(json.dumps({"perf": {
     "attempts": int(num("PERF_ATTEMPTS") or 0),
     "kept": int(num("PERF_KEPT") or 0),
     "baseline_csv": s_("PERF_BASELINE_CSV"), "best_csv": s_("PERF_BEST_CSV"),
+    "diagnosis": diagnosis(),
+    "tuning": tuning(),
 }}))'
+}
+
+# Attempt accounting shared by measure/keep/revert. Optimizer labels (attempt_N) use
+# PERF_ATTEMPTS/PERF_KEPT; Step 6c tuning labels (tune_N) have their own budget
+# (PERF_TUNE_ATTEMPTS) and also count as kept changes (PERF_KEPT, PERF_TUNE_KEPT).
+# A label counts once: re-measuring it (after an env_error) is free.
+_perf_count_attempt() {
+    local label="$1"
+    [ "$(sg PERF_LAST_LABEL)" = "$label" ] && return 0
+    case "$label" in
+        attempt*) ss PERF_ATTEMPTS "$(( $(sg PERF_ATTEMPTS) + 1 ))" --json ;;
+        tune*)    ss PERF_TUNE_ATTEMPTS "$(( $(sg PERF_TUNE_ATTEMPTS) + 1 ))" --json ;;
+    esac
+    return 0
+}
+_perf_count_keep() {
+    case "$1" in
+        attempt*) ss PERF_KEPT "$(( $(sg PERF_KEPT) + 1 ))" --json ;;
+        tune*)
+            ss PERF_KEPT "$(( $(sg PERF_KEPT) + 1 ))" --json
+            ss PERF_TUNE_KEPT "$(( $(sg PERF_TUNE_KEPT) + 1 ))" --json
+            ss PERF_TUNE_LAST_RESULT kept ;;
+    esac
+    return 0
+}
+_perf_count_revert() {
+    case "$1" in tune*) ss PERF_TUNE_LAST_RESULT reverted ;; esac
+    return 0
 }
 
 # What the optimizer does after a keep or revert:
@@ -963,7 +1014,7 @@ execute_step_perf_measure() {
     if [ "$(sg PERF_ENABLED)" != "true" ]; then echo "PERF label=${label} status=disabled ($(sg PERF_REASON)) action=none"; return 0; fi
     case "$kind" in full|variant) ;; *) echo "PERF label=${label} status=bad_args (kind must be full|variant) action=none"; return 0 ;; esac
     # Re-measuring the same label (after an env_error) does not consume another attempt.
-    case "$label" in attempt*) [ "$(sg PERF_LAST_LABEL)" = "$label" ] || ss PERF_ATTEMPTS "$(( $(sg PERF_ATTEMPTS) + 1 ))" --json ;; esac
+    _perf_count_attempt "$label"
     ss PERF_LAST_LABEL "$label"
     ss PERF_LAST_KIND  "$kind"
     local rc; _perf_run "$label" "$kind"; rc=$?
@@ -1032,7 +1083,7 @@ execute_step_perf_keep() {
     local vb vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
     vb="$(_perf_set_best "$label" "$csv" "$_L/perf/${label}_vs_baseline.json" "$full")"
     IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
-    case "$label" in attempt*) ss PERF_KEPT "$(( $(sg PERF_KEPT) + 1 ))" --json ;; esac
+    _perf_count_keep "$label"
     local tally=""
     if [ "$full" = "true" ]; then
         # A full sweep confirms this kernel: it is what a later final sweep is judged against
@@ -1073,18 +1124,183 @@ execute_step_perf_revert() {
         return 0
     fi
     case "$label" in
-        attempt*)
+        attempt*|tune*)
             if [ "$(sg PERF_LAST_LABEL)" != "$label" ]; then
-                ss PERF_ATTEMPTS "$(( $(sg PERF_ATTEMPTS) + 1 ))" --json
+                _perf_count_attempt "$label"
                 ss PERF_LAST_LABEL "$label"; ss PERF_LAST_KIND none
                 ss PERF_LAST_VS_BEST functional_failed; ss PERF_LAST_VS_BASELINE functional_failed
             fi ;;
     esac
+    _perf_count_revert "$label"
     local best; best="$(sg PERF_BEST_LABEL)"
     [ -n "$best" ] || { echo "PERF_REVERT: no best snapshot recorded — nothing restored next=done"; return 1; }
     _perf_restore best
     rj message --message "Perf: reverted $(sg PERF_LAST_LABEL) — kept best=${best} ($(sg PERF_LAST_VS_BEST) vs best)"
     echo "PERF_REVERT: restored best=${best} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
+}
+
+# ===========================================================================
+# Step 6b — measure-only wave diagnosis of the kernel in the tree (the final one).
+# One capture of the PERF_TEST_ID variant on the emulator: per-cycle breakdown,
+# floor, stall headroom and ranked causes (codegen/skills/llk-perf-headroom).
+# Records PERF_DIAG_STATUS/LINE/DIR in state; execute_step_perf_finalize puts it in
+# run.json. Never changes the kernel, the perf verdict or STATUS, and every outcome
+# (including skipped/failed) prints one PERF_DIAG line and returns 0.
+# Space: the emulator dump (~1 GB) and the wave file (~2 MB) are deleted; ~20 KB is
+# kept under $LOG_DIR/perf/diag. Skipped when the emulator filesystem has < 20 GB
+# free, when PERF_DIAG=false, or off the emulator. Run before execute_step_perf_finalize.
+# ===========================================================================
+execute_step_perf_diagnose() {
+    local _L; _L="$(_LOG)"
+    local label="${1:-}" name=diag
+    [ -n "$label" ] && name="diag_${label}"
+    local why="" backend
+    backend="$(sg QSR_SIM_BACKEND)"
+    if [ "$(sg PERF_ENABLED)" != "true" ]; then why="perf not enabled ($(sg PERF_REASON))"
+    elif [ "$(sg PERF_DIAG)" = "false" ]; then why="PERF_DIAG=false"
+    elif [ "$(sg TARGET_ARCH)" != "quasar" ] || [ "${backend:-emu}" != "emu" ]; then
+        why="waves are captured on the Quasar emulator only (arch=$(sg TARGET_ARCH) backend=${backend:-emu})"
+    elif [ -z "$(sg PERF_TEST_ID)" ]; then why="no perf variant recorded (PERF_TEST_ID)"
+    fi
+    if [ -n "$why" ]; then
+        local skip="PERF_DIAG status=skipped reason='${why}'"
+        ss PERF_DIAG_STATUS skipped
+        ss PERF_DIAG_LINE "$skip"
+        echo "$skip"
+        return 0
+    fi
+    local rt=L1_TO_L1 llk
+    [ "$(sg PERF_METRIC)" = "mean(MATH_ISOLATE)" ] && rt=MATH_ISOLATE
+    llk="$(_wt)/tt_metal/tt-llk"
+    _disk_guard mkdir -p "$_L/perf" || return $?
+    rm -f "$_L/perf/${name}.out"
+    rj message --message "Perf diagnosis${label:+ after ${label}}: capturing waves of $(sg PERF_TEST_ID), ${rt}"
+    # Detached: a capture can outlast one foreground Bash call, and must never be killed
+    # half-way (it cleans up the emulator dump itself). _perf_diag_wait polls it in slices.
+    setsid nohup python "${PERF_DIAGNOSE_PY:-$_ORCH_SCRIPTS/perf_diagnose.py}" --llk "$llk" \
+        --module "$(sg PERF_MODULE)" --test-id "$(sg PERF_TEST_ID)" --run-type "$rt" \
+        --out-dir "$_L/perf/${name}" >"$_L/perf/${name}.out" 2>"$_L/perf/${name}.stderr.txt" </dev/null &
+    ss PERF_DIAG_PID "$!"
+    ss PERF_DIAG_STATUS running
+    ss PERF_DIAG_DIR "$_L/perf/${name}"
+    ss PERF_DIAG_OUT "$_L/perf/${name}.out"
+    _perf_diag_wait
+}
+
+# Wait for a running diagnosis for up to PERF_DIAG_WAIT_SECS (default 540, under one
+# 10-minute Bash call). Prints the PERF_DIAG line, or status=running with what to call next.
+execute_step_perf_diagnose_wait() {
+    local _L; _L="$(_LOG)"
+    _perf_diag_wait
+}
+
+_perf_diag_wait() {
+    local pid line st waited=0 budget="${PERF_DIAG_WAIT_SECS:-540}"
+    if [ "$(sg PERF_DIAG_STATUS)" != "running" ]; then
+        line="$(sg PERF_DIAG_LINE)"
+        echo "${line:-PERF_DIAG status=skipped reason='no diagnosis was started'}"
+        return 0
+    fi
+    local out; out="$(sg PERF_DIAG_OUT)"; out="${out:-$_L/perf/diag.out}"
+    pid="$(sg PERF_DIAG_PID)"
+    while :; do
+        line="$(grep '^PERF_DIAG ' "$out" 2>/dev/null | tail -1)"
+        [ -n "$line" ] && break
+        if ! kill -0 "$pid" 2>/dev/null; then
+            sleep 1   # let a just-exited writer's output land
+            line="$(grep '^PERF_DIAG ' "$out" 2>/dev/null | tail -1)"
+            [ -n "$line" ] || line="PERF_DIAG status=failed reason='perf_diagnose.py exited without a result (see perf/diag.stderr.txt)'"
+            break
+        fi
+        if [ "$waited" -ge "$budget" ]; then
+            echo "PERF_DIAG status=running pid=${pid} waited=${waited}s next=execute_step_perf_diagnose_wait"
+            return 0
+        fi
+        sleep 2; waited=$((waited + 2))
+    done
+    st="$(printf '%s' "$line" | sed -n 's/^PERF_DIAG status=\([a-z_]*\).*/\1/p')"
+    ss PERF_DIAG_STATUS "${st:-failed}"
+    ss PERF_DIAG_LINE   "$line"
+    [ -n "$(sg PERF_DIAG_FIRST_LINE)" ] || ss PERF_DIAG_FIRST_LINE "$line"
+    rj message --message "Perf diagnosis: ${line#PERF_DIAG }"
+    echo "$line"
+}
+
+# ===========================================================================
+# Step 6c — diagnosis-guided tuning, after the cheap optimizer (Step 6a) and the
+# diagnosis of its result (Step 6b). The llk-perf-tuner agent makes up to
+# PERF_TUNE_MAX_ATTEMPTS (default 2) changes, each aimed at the top cause, each
+# judged by execute_step_perf_measure tune_N full against best-so-far, and each kept
+# change re-diagnosed (execute_step_perf_diagnose tune_N). Runs only for SFPU kernels
+# with an ok diagnosis and stall headroom >= PERF_TUNE_MIN_HEADROOM_PCT (default 5).
+# PERF_TUNE=false opts out.
+# ===========================================================================
+
+# Field of the latest diagnosis' diag.json (empty when missing).
+_diag_field() {
+    python - "$(sg PERF_DIAG_DIR)/diag.json" "$1" <<'PY' 2>/dev/null
+import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get(sys.argv[2])
+except Exception:
+    v = None
+if isinstance(v, list) and v and isinstance(v[0], list):
+    v = v[0][0]                      # top cause name
+elif isinstance(v, dict) and "kind" in v:
+    v = f"{v['kind']}-bound ({v.get('thread', '?')})"   # bound
+print("" if v is None else v)
+PY
+}
+
+# 0 when $1 < $2 (floats).
+_lt() { python -c 'import sys; sys.exit(0 if float(sys.argv[1]) < float(sys.argv[2]) else 1)' "$1" "$2" 2>/dev/null; }
+
+execute_step_perf_tune_gate() {
+    local _L; _L="$(_LOG)"
+    local why="" min max hr
+    min="$(sg PERF_TUNE_MIN_HEADROOM_PCT)"; [ -n "$min" ] || { min=5; ss PERF_TUNE_MIN_HEADROOM_PCT "$min" --json; }
+    max="$(sg PERF_TUNE_MAX_ATTEMPTS)";     [ -n "$max" ] || { max=2; ss PERF_TUNE_MAX_ATTEMPTS "$max" --json; }
+    ss PERF_TUNE_ATTEMPTS 0 --json
+    ss PERF_TUNE_KEPT 0 --json
+    ss PERF_TUNE_LAST_RESULT ""
+    hr="$(_diag_field stall_headroom_pct)"
+    local bound; bound="$(_diag_field bound)"
+    if [ "$(sg PERF_ENABLED)" != "true" ]; then why="perf not enabled"
+    elif [ "$(sg PERF_TUNE)" = "false" ]; then why="PERF_TUNE=false"
+    elif [ "$(sg KERNEL_TYPE)" != "sfpu" ]; then why="tuning is sfpu-only (KERNEL_TYPE=$(sg KERNEL_TYPE))"
+    elif [ "$(sg PERF_DIAG_STATUS)" != "ok" ]; then why="diagnosis status $(sg PERF_DIAG_STATUS) (need ok)"
+    elif [ -n "$bound" ] && [ "${bound#issue-bound}" = "$bound" ]; then
+        why="kernel is ${bound}; the issue floor does not describe it, so there is nothing to tune against"
+    elif [ -z "$hr" ] || _lt "$hr" "$min"; then why="stall headroom ${hr:-?}% below ${min}%"
+    fi
+    if [ -n "$why" ]; then
+        ss PERF_TUNE_STATUS skipped
+        rj message --message "Perf tuning skipped: ${why}"
+        echo "PERF_TUNE: skip reason='${why}'"
+        return 0
+    fi
+    ss PERF_TUNE_STATUS run
+    rj message --message "Perf tuning: stall headroom ${hr}% — up to ${max} diagnosis-guided attempts"
+    echo "PERF_TUNE: run next=tune_1 headroom=${hr}% top=$(_diag_field top_causes) attempts=0/${max}"
+}
+
+# After each tune attempt (and the re-diagnosis of a kept one): next=tune_N or next=done.
+execute_step_perf_tune_next() {
+    local _L; _L="$(_LOG)"
+    local n max min last hr why=""
+    n="$(sg PERF_TUNE_ATTEMPTS)"; n="${n:-0}"; max="$(sg PERF_TUNE_MAX_ATTEMPTS)"; min="$(sg PERF_TUNE_MIN_HEADROOM_PCT)"
+    last="$(sg PERF_TUNE_LAST_RESULT)"; hr="$(_diag_field stall_headroom_pct)"
+    if [ "$(sg PERF_TUNE_STATUS)" != "run" ]; then why="tuning not running ($(sg PERF_TUNE_STATUS))"
+    elif [ "$n" -ge "${max:-2}" ]; then why="all ${max} attempts used"
+    elif [ "$last" = "reverted" ]; then why="the last change did not help"
+    elif [ "$(sg PERF_DIAG_STATUS)" != "ok" ]; then why="no ok diagnosis of the kept change ($(sg PERF_DIAG_STATUS))"
+    elif [ -z "$hr" ] || _lt "$hr" "${min:-5}"; then why="stall headroom ${hr:-?}% below ${min:-5}%"
+    fi
+    if [ -n "$why" ]; then
+        echo "PERF_TUNE: next=done reason='${why}' attempts=${n}/${max} kept=$(sg PERF_TUNE_KEPT)"
+        return 0
+    fi
+    echo "PERF_TUNE: next=tune_$((n + 1)) headroom=${hr}% top=$(_diag_field top_causes) attempts=${n}/${max}"
 }
 
 # ===========================================================================
@@ -1259,6 +1475,7 @@ PY
     cp "$SRC/llk-tester.md"           "$_L/instructions/"
     cp "$SRC/llk-analysis-refiner.md" "$_L/instructions/"
     cp "$SRC/llk-optimizer.md"        "$_L/instructions/"
+    cp "$SRC/llk-perf-tuner.md"       "$_L/instructions/"
 
     refresh_cost   # capture the initial spend in run.json
 }

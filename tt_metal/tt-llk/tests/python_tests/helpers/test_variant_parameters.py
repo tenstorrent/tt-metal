@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
@@ -1297,6 +1298,14 @@ class INPUT_DIMENSIONS(RuntimeParameter):
 @dataclass
 class LOOP_FACTOR(RuntimeParameter):
     loop_factor: int = 1
+
+    def __post_init__(self):
+        # LLK_PERF_LOOP_FACTOR shortens a perf run without changing its test id. A Quasar
+        # emulator wave dump holds ~3.4 ms of design time, so wave captures of slow kernels
+        # use a smaller factor. The perf CSV's loop_factor column records the value used.
+        override = os.environ.get("LLK_PERF_LOOP_FACTOR", "").strip()
+        if override:
+            self.loop_factor = int(override)
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t LOOP_FACTOR = {self.loop_factor};"
