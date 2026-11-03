@@ -34,6 +34,11 @@ jobs:
           run:
             - mkdir -p "$HOME"
             - ls -l /dev/tenstorrent/
+            # Where does the time go? vCPUs, CPU model, memory, and what backs
+            # the workspace and /tmp (kernel builds go to /tmp/tt-llk-build).
+            - nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\n' ' '; echo
+            - free -g; df -hT . /tmp; grep -E ' (/|/tmp|/workspace[^ ]*) ' /proc/mounts || true
+            - python3 -c 'import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))'
             # llk-ci is Ubuntu 22.04 (Python 3.10); the tests' dataclasses use
             # defaults that Python 3.11+ refuses, so pin 3.10 through uv.
             - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
