@@ -113,8 +113,8 @@ def _infer_board_type_from_arch(arch_str):
 def _infer_board_type_from_series(series):
     """Map a tt-smi board series (e.g. ``"n150"``, ``"p150b"``) to a board type.
 
-    Current tt-smi snapshots carry no ``arch`` key, so when pyluwen is not importable
-    the series is the only arch signal left.
+    Some tt-smi versions (e.g. 6.7) omit ``arch`` from the snapshot, so when pyluwen is
+    not importable the series is the only arch signal left.
     """
     lower = (series or "").lower()
     if lower.startswith(("n150", "n300")) or lower.endswith("-wh"):
@@ -190,6 +190,8 @@ def get_machine_info(tt_smi_snapshot=None):
     detection), then falls back to ``tt-smi -s --snapshot_no_tty``
     (structured JSON) so that machine metadata is available even when
     pyluwen is not installed.
+
+    ``board_type`` comes from pyluwen, then the tt-smi ``arch`` key, then the board series.
     """
     board_type = None
     pyluwen_device_count = None

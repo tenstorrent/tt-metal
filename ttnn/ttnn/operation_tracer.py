@@ -46,6 +46,9 @@ _SWEEP_SOURCE_HASH: Optional[str] = None
 # Command-line flag constant
 _TRACE_PARAMS_FLAG = "--trace-params"
 
+# Type names whose str() already failed, so each type is warned about only once
+_STR_FAILURE_WARNED_TYPES: set = set()
+
 
 def enable_tracing(enable: bool = True) -> None:
     """Enable or disable operation parameter tracing.
@@ -387,7 +390,9 @@ def serialize_operation_parameters(
                 try:
                     text = str(value)
                 except Exception as e:
-                    logger.debug(f"str() failed for {type_name}: {e}")
+                    if type_name not in _STR_FAILURE_WARNED_TYPES:
+                        _STR_FAILURE_WARNED_TYPES.add(type_name)
+                        logger.warning(f"str() failed for {type_name}, tracing it as a placeholder: {e}")
                     text = f"<unserializable {type_name}>"
                 if hasattr(value, "__dict__"):
                     return {"type": type(value).__name__, "repr": text}

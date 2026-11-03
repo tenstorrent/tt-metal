@@ -603,7 +603,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     # Snowflake enforces no UNIQUE keys and the loader does lookup-then-insert, so two
-    # loads at once can duplicate rows.
+    # loads at once can duplicate rows. Overlapping loads therefore queue behind each
+    # other instead of running concurrently or cancelling one another.
     concurrency:
       group: ttnn-ops-v6-trace-load
       cancel-in-progress: false
@@ -613,6 +614,10 @@ jobs:
       pull-requests: write
     env:
       PYTHONPATH: ${{ github.workspace }}
+      # Load writes the ttnn-ops dataset to Snowflake (SELF_SERVE.TTNN_OPS_V6) via the
+      # SVC_TTOPS_SWEEPS service account (RSA keypair). Only the private key is a secret
+      # (repo secret SWEEPS_SNOWFLAKE_KEY); the rest is non-sensitive config.
+      # This job writes, so it uses the OWNER role; readers use SELF_SERVE_READER_TTNN_OPS_V6.
       SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
       SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
       SNOWFLAKE_ROLE: SELF_SERVE_OWNER_TTNN_OPS_V6
