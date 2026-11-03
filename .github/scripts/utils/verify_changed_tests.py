@@ -760,7 +760,7 @@ def scope_file(
         added_skus = {sku for sku in new_skus if sku not in old_skus}
         changed_skus = {
             sku for sku in new_skus if sku in old_skus and canonical(new_skus[sku]) != canonical(old_skus[sku])
-        }
+        } - added_skus  # guard: keep these disjoint even if the conditions above are ever loosened.
         # Removed SKUs need nothing proven; an untouched sibling SKU needs nothing either.
         if added_skus:
             touched.append((key, entry, "added", added_skus))
