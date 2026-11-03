@@ -75,6 +75,26 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     return pipes;
 }
 
+std::vector<TensorPrefetcherReceiverShard> GetTensorPrefetcherReceiverShards(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& pipes) {
+    std::vector<TensorPrefetcherReceiverShard> shards;
+    for (size_t p = 0; p < pipes.size(); ++p) {
+        const PrefetcherPipe& pipe = pipes[p];
+        TT_FATAL(
+            pipe.sender_core_type() == SenderCoreType::Dram,
+            "GetTensorPrefetcherReceiverShards requires pipes from CreatePrefetcherPipesForTensorPrefetcher, but pipe "
+            "{} (sender {}) has a worker sender",
+            p,
+            pipe.sender_core().str());
+        const auto bank = static_cast<uint32_t>(pipe.sender_core().x);
+        uint32_t bank_local_shard = pipe.impl().recv_index_base();
+        for (const CoreCoord& receiver : pipe.impl().dram_sender_receiver_table()) {
+            shards.push_back({.receiver = receiver, .bank = bank, .bank_local_shard = bank_local_shard++});
+        }
+    }
+    return shards;
+}
+
 DeviceAddr sender_state_drisc_l1_base(const PrefetcherPipe& pipe) { return pipe.impl().sender_state_drisc_l1_base(); }
 
 std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation(const PrefetcherPipe& pipe) {

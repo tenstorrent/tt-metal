@@ -10,6 +10,7 @@
 #include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -60,7 +61,7 @@ namespace ttml::metal::ops::moe_ungroup::device {
 MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     const operation_attributes_t& attrs, const tensor_args_t& args, tensor_return_value_t& output) {
     auto* device = args.expert_out.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     const uint32_t h = attrs.h;
     const uint32_t e_local = attrs.e_local;

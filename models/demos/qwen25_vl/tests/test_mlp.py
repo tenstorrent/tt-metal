@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import pytest
 import torch
@@ -10,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.model_config import VisionModelArgs, qwen25_vl_mesh_shape
 from models.demos.qwen25_vl.tt.vision_mlp import MLP
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 
@@ -18,11 +17,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [qwen25_vl_mesh_shape()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -37,7 +32,8 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
+def test_mlp_inference(rows, batch_size, mesh_device, qwen25_vl_mesh_device, reset_seeds, ensure_gc):
+    mesh_device = qwen25_vl_mesh_device
     dtype = ttnn.bfloat8_b
     mode = "prefill"  # Vision processing is prefill only (generating token embeddings)
 
@@ -64,7 +60,7 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 3) if model_args.is_galaxy else (None, None),
+            dims=(None, None),
             mesh_shape=model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
@@ -75,14 +71,17 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
     logger.info("Run MLP")
     tt_output = tt_model(tt_input, mode)
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
-            dims=(1, 3) if model_args.is_galaxy else (3, 1),
-            mesh_shape=model_args.cluster_shape,
-        ),
-    )
+    if model_args.is_galaxy:
+        tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output.cpu())[0])
+    else:
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device,
+                dims=(3, 1),
+                mesh_shape=model_args.cluster_shape,
+            ),
+        )
 
     tt_output_torch = tt_output_torch[:, :1, :, :]
 

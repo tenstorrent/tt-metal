@@ -10,7 +10,9 @@ import os
 import random
 import struct
 import sys
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -20,7 +22,23 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens, rotated_chunk_positions
+from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotate_chunk_tokens
+from models.demos.common.prefill.prefill_chunk import (
+    SHUTDOWN_WORD,
+    PrefillChunk,
+    check_packed_forward_support,
+    metadata_size_bytes,
+    pack_forward_metadata,
+    packed_forward_capabilities,
+    pad_chunks,
+    sentinel_metadata,
+)
+from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+    chunk_key,
+    connect_layer_completion_channel,
+    start_layer_completion_drain,
+    wait_for_layer_completions,
+)
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -33,6 +51,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     num_mtp_tokens,
     resolve_trace_dir,
 )
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -57,6 +76,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     sd("PREFILL_NUM_LAYERS", model.get("num_layers"))
     sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
     sd("PREFILL_CHUNK_SIZE", model.get("chunk_size"))
+    sd("PREFILL_FORWARD_TOKENS_BUDGET", model.get("forward_tokens_budget"))
 
     transport = manifest.get("transport") or {}
     sd("PREFILL_SP", transport.get("sp"))
@@ -88,31 +108,34 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
-METADATA_SIZE_BYTES = 12
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
-
-
-def _load_env_config() -> None:
+def _load_env_config(check_budget: bool = True) -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
+    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    # Tokens per forward, a multiple of the chunk size; must match the runner's.
+    forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
+    assert not check_budget or (
+        forward_tokens_budget >= CHUNK_SIZE and forward_tokens_budget % CHUNK_SIZE == 0
+    ), f"PREFILL_FORWARD_TOKENS_BUDGET={forward_tokens_budget} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
+    FORWARD_CHUNKS = max(forward_tokens_budget // CHUNK_SIZE, 1)
+    CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
-    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
+    # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
+    MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
     # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
-    # One ack fires per layer that WRITES KV, not per layer. Dense stacks are the same number, but a
-    # hybrid one is not: Kimi-K3 at 93 layers acks only its 24 full-attention layers, so draining
-    # NUM_LAYERS * pushes waits for acks that are never sent and burns the full 600 s timeout twice,
-    # once after warmup and once after the measured request.
-    NUM_ACK_LAYERS = getattr(ADAPTER, "num_kv_cache_layers", lambda n: n)(NUM_LAYERS)
+    NUM_ACK_LAYERS = NUM_LAYERS
 
 
-_load_env_config()
+# At import the manifest may still set the chunk size; the entry points reload and check after applying it.
+_load_env_config(check_budget=False)
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
@@ -152,17 +175,60 @@ def _h2d_rows(tokens, actual_start: int = 0):
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
 
 
-def _mtp_rows(pool, actual_start: int, actual_isl=None):
+def _h2d_forward_rows(chunks, starts):
+    """``[sp, 1, FORWARD_CHUNKS * CHUNK_SIZE / sp]`` rows of one packed forward: chip c gets slice c of every
+    chunk's rotated tokens, in chunk order (pack_forward_tokens). One chunk gives _h2d_rows."""
+    sp = GLOBAL_MESH_SHAPE[0]
+    assert all(len(t) == CHUNK_SIZE for t in chunks), f"every chunk is {CHUNK_SIZE} tokens"
+    tokens = pack_forward_tokens(chunks, starts, sp)
+    return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, len(tokens) // sp))
+
+
+class ChunkPush(NamedTuple):
+    slot_id: int
+    chunk_idx: int
+    actual_start: int
+    actual_end: int
+    actual_isl: int
+
+
+def _forward_payload(pushes: list, pool_of) -> tuple:
+    """(token rows, MTP rows, metadata) of one forward of ``pushes`` (at most FORWARD_CHUNKS chunks; the rest are
+    empty chunks). ``pool_of(slot_id)`` is that slot's token pool."""
+    if FORWARD_CHUNKS == 1:
+        (p,) = pushes
+        pool = pool_of(p.slot_id)
+        return (
+            _h2d_rows(_chunk_slice(pool, p.actual_start, p.actual_isl), p.actual_start),
+            _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
+            _pack_metadata(p.slot_id, p.actual_start, p.actual_end),
+        )
+    chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
+    tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
+    tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
+    rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
+    return rows, None, pack_forward_metadata(chunks, FORWARD_CHUNKS)
+
+
+def _shutdown_payload() -> tuple:
+    """(token rows, MTP rows, metadata) of the SHUTDOWN sentinel: every metadata word is SHUTDOWN_WORD."""
+    rows = _h2d_forward_rows([[1] * CHUNK_SIZE] * FORWARD_CHUNKS, [0] * FORWARD_CHUNKS)
+    return rows, _mtp_rows([], 0), sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS)
+
+
+def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
+    """``[sp, 1, num_mtp_tokens]`` lookahead ids sent after each chip's chunk ids: the ``MTP_LEVELS`` ids after the
+    chip's last position, then pad; a split chip whose second run lies at or past ``actual_end`` takes the next
+    chip's first ids."""
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
+    actual_end = actual_start + CHUNK_SIZE if actual_end is None else actual_end
+    slots = mtp_lookahead_positions(actual_start, sp, stride, actual_end, MTP_LEVELS)
     align_pad = [MTP_PAD_TOKEN_ID] * (n_mtp - MTP_LEVELS)
-    # Each chip's lookahead follows its own last row: actual_start + (c + 1) * stride for a chunk-aligned start,
-    # the rotated last position otherwise (see _h2d_rows).
-    last = [row[-1] for row in rotated_chunk_positions(actual_start, sp, stride)]
-    rows = [_pool_slice(pool, last[c] + 1, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
+    rows = [_pool_slice(pool, chip_slots[0], MTP_LEVELS, actual_isl) + align_pad for chip_slots in slots]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
@@ -272,55 +338,26 @@ def _read_device_map(timeout_s: int, rank: int | None = None, num_ranks: int = 1
     return device_map
 
 
-def _connect_layer_ack_channel(timeout_s: int):
-    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    shm_name = f"/tt_prefill_layer_acks_{service_id}"
-    try:
-        channel = ttnn.InterProcessCounterChannel.connect(shm_name, connect_timeout_ms=timeout_s * 1000)
-    except Exception as e:
-        logger.warning(f"[producer] could not connect LayerAck channel {shm_name}: {e}; skipping ack wait.")
-        return None
-    logger.info(f"[producer] connected LayerAck channel {shm_name}")
-    return channel
-
-
-def _ack_layers_per_chunk(kv_table) -> int:
-    """Layer acks one chunk produces across all ranks.
+def _completion_layers_per_chunk(kv_table) -> int:
+    """Layer completions one chunk produces across all ranks.
 
     NUM_ACK_LAYERS counts only what the model's own layers emit; DFlash acks the drafter's context K/V
-    past the verifier's last layer, so the runner emits more. Read the wider count off the published
-    table rather than re-deriving the drafter's depth here: a drafter config spans the same global layer
-    axis the acks are numbered on, and the table is the only thing this device-less process and the
-    runner both see.
+    past the verifier's last layer, so the runner emits more. The drafter config's rows continue the model's
+    layer axis, so its depth is the config's extent past NUM_LAYERS -- read off the published table, the only
+    thing this device-less process and the runner both see.
     """
-    base = NUM_ACK_LAYERS + MTP_LEVELS
+    base = NUM_ACK_LAYERS + MTP_DECODE_LEVELS
     if kv_table is None:
         return base
     dflash = [name for name in _config_names(kv_table) if name.startswith("dflash_")]
     if not dflash:
         return base
-    return kv_table.config(kv_table.config_id_of(dflash[0])).num_layers
+    return base + kv_table.config(kv_table.config_id_of(dflash[0])).num_layers - NUM_LAYERS
 
 
-def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
-    if ack_channel is None:
-        return 0
-    drained = 0
-    last_logged = -1
-    start = time.perf_counter()
-    while drained < expected:
-        drained += ack_channel.try_consume_all()
-        if drained != last_logged:
-            logger.info(f"[producer] layer acks {drained}/{expected}")
-            last_logged = drained
-        if drained >= expected:
-            break
-        if time.perf_counter() - start > timeout_s:
-            logger.warning(f"[producer] timed out at {drained}/{expected} acks after {timeout_s}s")
-            break
-        time.sleep(0.01)
-    logger.info(f"[producer] drained {drained}/{expected} layer acks in {(time.perf_counter() - start):.2f}s")
-    return drained
+def _completion_layer_bound(chunk_layers: int) -> int:
+    """Global ack-layer axis per chunk: the model's layers plus the rows acked past them (MTP, DFlash)."""
+    return NUM_LAYERS + (chunk_layers - NUM_ACK_LAYERS)
 
 
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
@@ -442,6 +479,7 @@ class ProducerConfig:
     interleave: str = "random"
     slot_lengths: dict = None
     multi_turn_prob: float = 0.0
+    forward_chunks: int = 1
 
 
 def _config_from_env() -> ProducerConfig:
@@ -454,15 +492,22 @@ def _config_from_env() -> ProducerConfig:
     interleave = os.environ.get("PREFILL_PRODUCER_INTERLEAVE", "random")
     if interleave not in ("random", "round_robin"):
         raise ValueError(f"PREFILL_PRODUCER_INTERLEAVE must be 'random' or 'round_robin', got {interleave!r}")
+    p_burst = float(os.environ.get("PREFILL_PRODUCER_P_BURST", "0.0"))
+    check_packed_forward_support(FORWARD_CHUNKS, mtp_levels=MTP_LEVELS, **packed_forward_capabilities(ADAPTER))
+    if FORWARD_CHUNKS > 1 and p_burst > 0:
+        raise ValueError(
+            "PREFILL_PRODUCER_P_BURST must be 0 with more than one chunk per forward (packing already bursts)"
+        )
 
+    num_users = int(os.environ.get("PREFILL_NUM_USERS", "1"))
     return ProducerConfig(
-        num_users=int(os.environ.get("PREFILL_NUM_USERS", "1")),
+        num_users=num_users,
         chunks_min=chunks_min,
         chunks_max=chunks_max,
         max_requests=int(os.environ.get("PREFILL_PRODUCER_MAX_REQUESTS", "1")),
         duration_s=float(os.environ.get("PREFILL_PRODUCER_DURATION_S", "inf")),
         p_gap=float(os.environ.get("PREFILL_PRODUCER_P_GAP", "0.0")),
-        p_burst=float(os.environ.get("PREFILL_PRODUCER_P_BURST", "0.0")),
+        p_burst=p_burst,
         gap_ms=(gap_lo, gap_hi),
         mid_chunk_end_prob=float(os.environ.get("PREFILL_PRODUCER_MID_END_PROB", "0.0")),
         seed=int(os.environ.get("PREFILL_PRODUCER_SEED", "1234")),
@@ -470,7 +515,31 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        slot_lengths=_slot_lengths_from_env(num_users, max_chunks),
+        forward_chunks=FORWARD_CHUNKS,
     )
+
+
+def _slot_lengths_from_env(num_users: int, max_chunks: int):
+    """PREFILL_PRODUCER_SLOT_LENGTHS=n0,n1,...: slot s's prompts are n_s tokens (one shared trace), else None.
+    Slots past the list keep random lengths."""
+    spec = os.environ.get("PREFILL_PRODUCER_SLOT_LENGTHS", "").strip()
+    if not spec:
+        return None
+    entries = spec.split(",")
+    try:
+        lengths = [int(e) for e in entries]
+    except ValueError:
+        lengths = None
+    # The last chunk is padded to CHUNK_SIZE, so a prompt must fit in whole chunks: a padded chunk past
+    # MAX_SEQ_LEN would reach the runner, whose validation stops the device-owning process.
+    max_len = max_chunks * CHUNK_SIZE
+    if len(entries) > num_users or lengths is None or not all(0 < n <= max_len for n in lengths):
+        raise ValueError(
+            f"PREFILL_PRODUCER_SLOT_LENGTHS={spec!r}: want at most {num_users} token counts in [1, {max_len}]"
+            " (whole PREFILL_CHUNK_SIZE chunks within PREFILL_MAX_SEQ_LEN), comma-separated"
+        )
+    return dict(enumerate(lengths))
 
 
 class _Slot:
@@ -501,10 +570,11 @@ def _new_request(
     slot.turn_idx = turn_idx
     if cfg.slot_lengths is not None and slot.slot_id in cfg.slot_lengths:
         real_len = cfg.slot_lengths[slot.slot_id]
-        if prefix_len + real_len > MAX_SEQ_LEN:
+        slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        # The last chunk is padded, so the turn needs whole chunks of room past its prefix.
+        if prefix_len + slot.target_chunks * CHUNK_SIZE > MAX_SEQ_LEN:
             prefix_len = slot.prefix_len = 0
             slot.turn_idx = 0
-        slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
         slot.actual_isl = prefix_len + real_len
         return
     remaining_chunks = (MAX_SEQ_LEN - prefix_len) // CHUNK_SIZE
@@ -525,10 +595,65 @@ class RunStats:
     push_ms: list
     completed: int
     wall_s: float
+    total_chunks: int = 0
+
+
+class _ChunkRetireClock:
+    """Producer-clock span of each chunk: the drain seeing its first layer ack to seeing its last.
+
+    Every stamp is time.perf_counter() on this process, so chunk time and retire cadence need no cross-host clock
+    and no per-chunk device sync. One CHUNK_RETIRE line per chunk feeds the summarizer; its layers= field
+    (layer span @ ms after the first ack) feeds the pipeline gantt.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pushed = {}
+        self._first_ack = {}
+        self._acks = {}
+        self._layer_acks = {}
+        self.warmup = False
+
+    def on_push(self, key: tuple) -> None:
+        with self._lock:
+            self._pushed.setdefault(key, deque()).append(self.warmup)
+
+    def on_ack(self, c) -> None:
+        key = chunk_key(c)
+        with self._lock:
+            now = time.perf_counter()
+            self._first_ack.setdefault(key, now)
+            self._acks[key] = self._acks.get(key, 0) + 1
+            self._layer_acks.setdefault(key, []).append((c.layer_start, c.layer_end, now))
+
+    def on_retire(self, key: tuple, retire_ts: float) -> None:
+        with self._lock:
+            queued = self._pushed.get(key)
+            warmup = queued.popleft() if queued else None
+            if queued is not None and not queued:
+                del self._pushed[key]
+            first_ts = self._first_ack.pop(key, None)
+            acks = self._acks.pop(key, 0)
+            layer_acks = self._layer_acks.pop(key, [])
+        if warmup is None or first_ts is None:
+            logger.warning(f"[producer] CHUNK_RETIRE for unpushed chunk {key}")
+            return
+        slot_id, pos_start, pos_end = key
+        logger.info(
+            f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} first={first_ts:.6f} "
+            f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks} "
+            f"layers={','.join(f'{a}-{b}@{(t - first_ts) * 1000.0:.1f}' for a, b, t in layer_acks)}"
+        )
 
 
 def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
+    """Push cfg's requests as forwards: ``push_fn(pushes) -> ms`` gets one forward's ChunkPush list, a single chunk
+    at forward_chunks == 1. Above that, each forward takes one run of consecutive chunks per slot (round-robin or
+    shuffled slot order) until it is full or no slot has chunks left; runs ending in a full chunk come first."""
     rng = rng if rng is not None else random.Random(cfg.seed)
+    forward_chunks = cfg.forward_chunks
+    assert forward_chunks >= 1, f"forward_chunks must be >= 1, got {forward_chunks}"
+    assert forward_chunks == 1 or cfg.p_burst == 0, "p_burst must be 0 with forward_chunks > 1"
     slots = [_Slot(i) for i in range(cfg.num_users)]
     resident: dict = {}
 
@@ -539,19 +664,21 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
     push_ms: list = []
     total_pushes = 0
+    total_chunks = 0
     completed = 0
     round_robin_cursor = -1
     start = now_fn()
 
-    def send_chunk(slot: _Slot) -> None:
-        nonlocal total_pushes, completed, next_req_id
-        chunk_idx = slot.next_chunk
+    def chunk_of(slot: _Slot, ahead: int = 0) -> ChunkPush:
+        chunk_idx = slot.next_chunk + ahead
         actual_start = slot.prefix_len + chunk_idx * CHUNK_SIZE
         actual_end = min(actual_start + CHUNK_SIZE, slot.actual_isl)
-        push_ms.append(push_fn(slot.slot_id, chunk_idx, actual_start, actual_end, slot.actual_isl))
-        total_pushes += 1
+        return ChunkPush(slot.slot_id, chunk_idx, actual_start, actual_end, slot.actual_isl)
+
+    def advance(slot: _Slot, push: ChunkPush) -> None:
+        nonlocal completed, next_req_id
         slot.next_chunk += 1
-        resident[slot.slot_id] = _SlotFill(real_len=actual_end)
+        resident[slot.slot_id] = _SlotFill(real_len=push.actual_end)
         if slot.done:
             completed += 1
             if next_req_id < cfg.max_requests:
@@ -566,6 +693,42 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
                     _new_request(slot, next_req_id, cfg, rng)
                 next_req_id += 1
 
+    def send(runs: list) -> None:
+        nonlocal total_pushes, total_chunks
+        pushes = [push for _, run in runs for push in run]
+        push_ms.append(push_fn(pushes))
+        total_pushes += 1
+        total_chunks += len(pushes)
+        for slot, run in runs:
+            for push in run:
+                advance(slot, push)
+
+    def send_chunk(slot: _Slot) -> None:
+        send([(slot, [chunk_of(slot)])])
+
+    def packed_runs(active_slots: list) -> list:
+        nonlocal round_robin_cursor
+        if cfg.interleave == "round_robin":
+            order = [slots[(round_robin_cursor + 1 + i) % len(slots)] for i in range(len(slots))]
+            order = [s for s in order if not s.done]
+        else:
+            order = list(active_slots)
+            rng.shuffle(order)
+        # A forward can finish several requests; past max_requests the slots' initial requests stay unsent.
+        order = [s for s in order if s.req_id < cfg.max_requests]
+        runs = []
+        filled = 0
+        for slot in order:
+            if filled == forward_chunks:
+                break
+            take = min(slot.target_chunks - slot.next_chunk, forward_chunks - filled)
+            runs.append((slot, [chunk_of(slot, k) for k in range(take)]))
+            filled += take
+        if cfg.interleave == "round_robin":
+            round_robin_cursor = runs[-1][0].slot_id
+        runs.sort(key=lambda run: run[1][-1].actual_end < run[1][-1].actual_start + CHUNK_SIZE)
+        return runs
+
     while (now_fn() - start) < cfg.duration_s and completed < cfg.max_requests:
         active_slots = [s for s in slots if not s.done]
         if not active_slots:
@@ -574,6 +737,10 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         roll = rng.random()
         if roll < cfg.p_gap:
             sleep_fn(rng.uniform(*cfg.gap_ms) / 1000.0)
+            continue
+
+        if forward_chunks > 1:
+            send(packed_runs(active_slots))
             continue
 
         if cfg.interleave == "round_robin":
@@ -594,11 +761,18 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
             send_chunk(slot)
 
     return RunStats(
-        resident=resident, total_pushes=total_pushes, push_ms=push_ms, completed=completed, wall_s=now_fn() - start
+        resident=resident,
+        total_pushes=total_pushes,
+        push_ms=push_ms,
+        completed=completed,
+        wall_s=now_fn() - start,
+        total_chunks=total_chunks,
     )
 
 
-def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
@@ -611,7 +785,7 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     if ADAPTER.name == "llama_3p1_8b":
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir, num_ranks)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -623,16 +797,22 @@ def _num_model_configs(table) -> int:
     return sum(1 for name in _config_names(table) if name.isdigit())
 
 
-def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode):
+def _has_index_config(table) -> bool:
+    """Whether config 1 is a DSA indexer key cache. Asked of the adapter, not inferred from the count:
+    Kimi-K3 publishes three decimal configs (kvpe + two KDA state configs) and none is an index."""
+    return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
+
+
+def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
     rows = []
-    for pos in range(0, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+    for pos in range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         loc = table.lookup(layer, pos, slot_id, config_id)
         unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
         raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
         rows.append(decode(raw, head_dim))
-    return torch.cat(rows, dim=0)[:read_len]
+    return torch.cat(rows, dim=0)[: read_len - start]
 
 
 def _golden_pe_as_device(golden_pe, layout: str):
@@ -663,16 +843,31 @@ def _mtp_golden_source(trunk_trace_dir):
 
 
 def _check_mtp_kv_slots(
-    table, device_map: dict, slot_id: int, real_len: int, read_len: int, head_dim: int, kv_lora: int, trace_dir
+    table, device_map: dict, slot_id: int, window, read_end: int, head_dim: int, kv_lora: int, trace_dir
 ):
+    first_pos, skip_rows, cmp_len, golden_offset = window
+    span = f"[{first_pos + skip_rows},{first_pos + skip_rows + cmp_len})"
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post, kvpe_golden_present
 
     declared = table.config(0).num_layers
-    assert declared == NUM_LAYERS + MTP_LEVELS, (
-        f"PREFILL_MTP_LEVELS={MTP_LEVELS} but config 0 declares {declared} layers, not "
-        f"{NUM_LAYERS}+{MTP_LEVELS}. The runner sized its KV cache / migration stage without the MTP "
+    assert declared == NUM_LAYERS + MTP_DECODE_LEVELS, (
+        f"PREFILL_MTP_DECODE_LEVELS={MTP_DECODE_LEVELS} but config 0 declares {declared} layers, not "
+        f"{NUM_LAYERS}+{MTP_DECODE_LEVELS}. The runner sized its KV cache / migration stage without the MTP "
         f"tail, so every slot but 0 addresses the wrong region."
     )
+    # Decode levels past the computed ones share level 0's cache, so their rows must be its addresses.
+    for k in range(MTP_LEVELS, MTP_DECODE_LEVELS):
+        for pos in range(first_pos, read_end, table.config(0).chunk_n_tokens):
+            alias, source = table.lookup(NUM_LAYERS + k, pos, slot_id), table.lookup(NUM_LAYERS, pos, slot_id)
+            assert (alias.noc_addr, alias.size_bytes, alias.device_group_index) == (
+                source.noc_addr,
+                source.size_bytes,
+                source.device_group_index,
+            ), f"MTP decode level {k} (layer {NUM_LAYERS + k}) is not an alias of level 0's row at position {pos}"
+    if MTP_DECODE_LEVELS > MTP_LEVELS:
+        logger.info(
+            f"[producer] slot {slot_id} MTP: decode levels {MTP_LEVELS}..{MTP_DECODE_LEVELS - 1} alias level 0's rows"
+        )
     per_level = []
     for k in range(MTP_LEVELS):
         layer = NUM_LAYERS + k
@@ -681,10 +876,12 @@ def _check_mtp_kv_slots(
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
         except KeyError:
             continue
-        kv = _read_kv_slice(table, device_map, 0, layer, slot_id, read_len, head_dim, _decode_kv_chunk)[:real_len]
+        kv = _read_kv_slice(
+            table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
+        )[skip_rows : skip_rows + cmp_len]
         assert torch.isfinite(kv).all(), f"MTP level {k} KV (layer {layer}) has non-finite entries"
         assert kv.abs().max() > 0, (
-            f"MTP level {k} KV slot (layer {layer}) is all zeros over [0,{real_len}): the level never "
+            f"MTP level {k} KV slot (layer {layer}) is all zeros over {span}: the level never "
             f"wrote it (cache slot never reached, or the level did not run)."
         )
         logger.info(f"[producer] slot {slot_id} MTP level {k} (layer {layer:>2}) KV max|.|={kv.abs().max():.4f}")
@@ -693,13 +890,30 @@ def _check_mtp_kv_slots(
         for j in range(i + 1, len(per_level)):
             (a, ka), (b, kb) = per_level[i], per_level[j]
             assert not torch.equal(ka, kb), (
-                f"MTP levels {a} and {b} wrote IDENTICAL KV over [0,{real_len}): they are sharing one "
+                f"MTP levels {a} and {b} wrote IDENTICAL KV over {span}: they are sharing one "
                 f"cache slot (level k must write slot NUM_LAYERS+k)."
             )
     logger.info(
         f"[producer] slot {slot_id} MTP: {len(per_level)}/{MTP_LEVELS} local level slots written and "
         f"pairwise distinct"
     )
+    # Decode reads its later levels through their own rows, so read them that way too: they must return
+    # level 0's KV bit for bit, which is what the golden scores below.
+    level0_kv = dict(per_level).get(0)
+    if level0_kv is not None and MTP_DECODE_LEVELS > MTP_LEVELS:
+        for k in range(MTP_LEVELS, MTP_DECODE_LEVELS):
+            layer = NUM_LAYERS + k
+            alias_kv = _read_kv_slice(
+                table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
+            )[skip_rows : skip_rows + cmp_len]
+            assert torch.equal(alias_kv, level0_kv), (
+                f"MTP decode level {k} (layer {layer}) reads back different KV than level 0's row over {span}, "
+                f"though the table gives both the same addresses: something wrote that memory between the reads."
+            )
+        logger.info(
+            f"[producer] slot {slot_id} MTP: decode levels {MTP_LEVELS}..{MTP_DECODE_LEVELS - 1} read back "
+            f"through their own rows bit-identical to level 0's KV over {span}"
+        )
 
     if not per_level:
         return None
@@ -721,7 +935,7 @@ def _check_mtp_kv_slots(
     min_pcc = 1.0
     for k, kv in per_level:
         layer = NUM_LAYERS + k
-        golden = _load_golden_kv_post(golden_dir, layer, real_len)
+        golden = _load_golden_kv_post(golden_dir, layer, cmp_len, start=golden_offset)
         pcc_nope, pcc_pe = _kvpe_pcc_vs_golden(golden, kv, kv_lora, pe_layout)
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
         _, pe_rejected = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], rejected), kv[:, kv_lora:])
@@ -730,18 +944,21 @@ def _check_mtp_kv_slots(
             f"nope={pcc_nope:.5f} pe={pcc_pe:.5f} (pe as {rejected}: {pe_rejected:.5f})"
         )
     logger.info(
-        f"[producer] slot {slot_id} MTP KV PCC over [0,{real_len}) across {len(per_level)}/{MTP_LEVELS} "
+        f"[producer] slot {slot_id} MTP KV PCC over {span} across {len(per_level)}/{MTP_LEVELS} "
         f"levels -> {min_pcc:.6f}"
     )
     return min_pcc
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_gpt_oss(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     from pathlib import Path
 
     from safetensors import safe_open
 
     from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.gpt_oss_d_p.tt.runners.acceptance import validate_kv_for_pcc
     from tests.ttnn.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
@@ -785,6 +1002,8 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
             g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
             g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
 
+        validate_kv_for_pcc(g_k, dev_k)
+        validate_kv_for_pcc(g_v, dev_v)
         pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
         pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
         mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
@@ -797,6 +1016,9 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+    # A single rank holds every layer, so a layer missing from its device map is a broken map, not another rank's.
+    if num_ranks == 1 and checked != NUM_LAYERS:
+        raise RuntimeError(f"slot {slot_id}: only {checked}/{NUM_LAYERS} layers resolved against the device map")
     return mins
 
 
@@ -986,6 +1208,49 @@ def _full_indexer_layer_indices(num_layers: int):
     return [layer for layer in range(num_layers) if not indexer_layer_is_reused(hf_config, layer)]
 
 
+def _resolve_pcc_window(trace_dir, real_len: int, tokens_per_block: int) -> tuple:
+    from models.demos.common.prefill.runners.runner_utils import load_trace_golden_span
+
+    tail_window = int(os.environ.get("PREFILL_PCC_TAIL_WINDOW", "0"))
+    win_start = int(os.environ.get("PREFILL_PCC_WINDOW_START", "0"))
+    win_end = int(os.environ.get("PREFILL_PCC_WINDOW_END", "0"))
+    if (win_end or tail_window) and "PREFILL_PCC_GOLDEN_OFFSET" not in os.environ:
+        raise ValueError(
+            "a PCC window is set (PREFILL_PCC_WINDOW_END or PREFILL_PCC_TAIL_WINDOW) but "
+            "PREFILL_PCC_GOLDEN_OFFSET is not; set it to the golden row the window starts at "
+            "(0 is valid and must be passed explicitly)."
+        )
+    golden_offset = int(os.environ.get("PREFILL_PCC_GOLDEN_OFFSET", "0"))
+    if win_end:
+        for name, value in (("PREFILL_PCC_WINDOW_START", win_start), ("PREFILL_PCC_WINDOW_END", win_end)):
+            if value % tokens_per_block:
+                raise ValueError(f"{name}={value} must be a multiple of {tokens_per_block} (the DRAM block)")
+        return win_start, 0, min(win_end, real_len) - win_start, golden_offset
+    if tail_window:
+        cmp_len = min(tail_window, real_len)
+        first_pos = ((real_len - cmp_len) // tokens_per_block) * tokens_per_block
+        return first_pos, (real_len - cmp_len) - first_pos, cmp_len, golden_offset
+
+    gold_start, gold_end = load_trace_golden_span(trace_dir)
+    if not gold_start:
+        return 0, 0, min(gold_end, real_len), golden_offset
+    if os.environ.get("PREFILL_PCC_GOLDEN_LEN"):
+        raise ValueError(
+            f"PREFILL_PCC_GOLDEN_LEN caps the compare at a length, but {trace_dir} is a windowed "
+            f"golden covering positions [{gold_start},{gold_end}); a length means nothing against it. "
+            f"Drop the cap, or state the window with PREFILL_PCC_WINDOW_START/END + "
+            f"PREFILL_PCC_GOLDEN_OFFSET."
+        )
+    if real_len <= gold_start:
+        raise ValueError(
+            f"{trace_dir} covers positions [{gold_start},{gold_end}) but this slot holds only "
+            f"{real_len}; the prompt never reaches the captured window. Push the full prompt the "
+            f"trace was captured from, or point PREFILL_TRACE_DIR at a golden that starts at 0."
+        )
+    first_pos = (gold_start // tokens_per_block) * tokens_per_block
+    return first_pos, gold_start - first_pos, min(gold_end, real_len) - gold_start, 0
+
+
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
@@ -1008,48 +1273,8 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     KV_LORA = ADAPTER.model_config.KV_LORA_RANK
     HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
-
-    # PREFILL_PCC_TAIL_WINDOW=W scores the LAST W tokens instead of the first real_len. A head+tail
-    # capture holds only two windows of a long prompt, so at 1M context the golden has no rows for
-    # the middle and [0,real_len) cannot be scored at all -- but the tail is exactly the interesting
-    # part, since it is the only evidence the model is still correct at full context depth. The
-    # device holds every position, so only the read has to move; PREFILL_PCC_GOLDEN_OFFSET says
-    # where the golden's tail window starts (the head length, not the prompt position).
-    tail_window = int(os.environ.get("PREFILL_PCC_TAIL_WINDOW", "0"))
-    golden_offset = int(os.environ.get("PREFILL_PCC_GOLDEN_OFFSET", "0"))
-    # An explicit [START, END) beats the "last W tokens" form, because the interesting window does
-    # not always end at real_len. At 1M with 5120-token chunks it must not: 1,048,576 = 204*5120 +
-    # 4096, so the final chunk carries 1024 padding tokens, and a window ending at real_len scores
-    # KV that was produced in a padded chunk. Scoring only whole, fully-real chunks means
-    # [993280, 1044480) -- chunks 194..203 -- which also drops chunk 193, of which just 1024 tokens
-    # fall inside the tail.
-    win_start = int(os.environ.get("PREFILL_PCC_WINDOW_START", "0"))
-    win_end = int(os.environ.get("PREFILL_PCC_WINDOW_END", "0"))
-    # Moving the device read without moving the golden read scores unrelated positions, and the
-    # result looks exactly like a broken model rather than a misconfiguration: every layer lands
-    # near zero. There is no safe default to infer -- a head+tail capture wants the head length,
-    # a full-length capture wants the window start itself -- so require it to be stated.
-    if (win_end or tail_window) and "PREFILL_PCC_GOLDEN_OFFSET" not in os.environ:
-        raise ValueError(
-            "a PCC window is set (PREFILL_PCC_WINDOW_END or PREFILL_PCC_TAIL_WINDOW) but "
-            "PREFILL_PCC_GOLDEN_OFFSET is not; set it to the golden row the window starts at "
-            "(0 is valid and must be passed explicitly)."
-        )
-    if win_end:
-        for name, v in (("PREFILL_PCC_WINDOW_START", win_start), ("PREFILL_PCC_WINDOW_END", win_end)):
-            if v % tokens_per_block:
-                raise ValueError(f"{name}={v} must be a multiple of {tokens_per_block} (the DRAM block)")
-        first_pos, last_pos = win_start, min(win_end, real_len)
-        cmp_len, skip_rows = last_pos - first_pos, 0
-    elif tail_window:
-        cmp_len = min(tail_window, real_len)
-        first_pos = ((real_len - cmp_len) // tokens_per_block) * tokens_per_block
-        last_pos = real_len
-        skip_rows = (real_len - cmp_len) - first_pos
-    else:
-        cmp_len, first_pos, skip_rows, last_pos = real_len, 0, 0, real_len
-    read_end = ((last_pos + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
+    first_pos, skip_rows, cmp_len, golden_offset = _resolve_pcc_window(trace_dir, real_len, tokens_per_block)
+    read_end = ((first_pos + skip_rows + cmp_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
 
     # Which layers own a KV slab according to the MODEL, not according to what happens to be on
     # disk. A hybrid stack legitimately has goldens for only some layers, but a mispointed or partial
@@ -1134,7 +1359,16 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
 
     mtp_min = (
-        _check_mtp_kv_slots(table, device_map, slot_id, real_len, read_len, HEAD_DIM, KV_LORA, trace_dir)
+        _check_mtp_kv_slots(
+            table,
+            device_map,
+            slot_id,
+            (first_pos, skip_rows, cmp_len, golden_offset),
+            read_end,
+            HEAD_DIM,
+            KV_LORA,
+            trace_dir,
+        )
         if MTP_LEVELS
         else None
     )
@@ -1142,17 +1376,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     mins = {"kvpe": min_pcc}
     if mtp_min is not None:
         mins["mtp"] = mtp_min
-    if _num_model_configs(table) > 1:
-        if first_pos + skip_rows != 0 or cmp_len != real_len:
-            # The window flags move the KVPE read only; the loop below still walks from 0 and asks
-            # the golden for [0,real_len). Half-windowing one gate is worse than refusing: both
-            # halves fold into the same `mins`, so the verdict would mix two token ranges.
-            raise RuntimeError(
-                f"a PCC window ([{first_pos + skip_rows},{first_pos + skip_rows + cmp_len}) of "
-                f"[0,{real_len})) is set on a table that also carries an index config, but the "
-                f"indexer-key half is not windowed. Score the index cache unwindowed, or extend "
-                f"the window to it."
-            )
+    if _has_index_config(table):
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers
@@ -1202,25 +1426,32 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 continue
 
             decoded_rows = []
-            for pos in range(0, read_len, tokens_per_block):
+            for pos in range(first_pos, read_end, tokens_per_block):
                 loc = table.lookup(layer, pos, slot_id, 1)
                 unique_id = _resolve_unique_id(
                     table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
                 )
                 raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
                 decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
-            dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
+            dev_ik = torch.cat(decoded_rows, dim=0)[skip_rows : skip_rows + cmp_len]
 
             is_mtp_row = layer == mtp_index_layer
             golden_ik = _load_golden_index_k(
-                golden_dir, layer, real_len, rope_layout=mtp_index_layout if is_mtp_row else "interleaved"
+                golden_dir,
+                layer,
+                cmp_len,
+                start=golden_offset,
+                rope_layout=mtp_index_layout if is_mtp_row else "interleaved",
+                position0=first_pos + skip_rows,
             )
             dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
                 if mtp_index_layout != "interleaved":
-                    _, pcc_stored = comp_pcc(_load_golden_index_k(golden_dir, layer, real_len), dev_ik)
+                    _, pcc_stored = comp_pcc(
+                        _load_golden_index_k(golden_dir, layer, cmp_len, start=golden_offset), dev_ik
+                    )
                     logger.info(
                         f"[producer]   mtp_index golden as-stored ({mtp_index_layout}) {pcc_stored:.6f} -> "
                         f"re-based onto the device's rope pairing {pcc_index:.6f}"
@@ -1232,7 +1463,9 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
         if checked_index:
             logger.info(
-                f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
+                f"[producer] slot {slot_id} index PCC over "
+                f"[{first_pos + skip_rows},{first_pos + skip_rows + cmp_len}) vs golden "
+                f"[{golden_offset},{golden_offset + cmp_len}) across "
                 f"{checked_index}/{n_trunk_rows} local layers -> {min_index:.6f}"
             )
             mins["index"] = min_index
@@ -1330,7 +1563,9 @@ def _verify_resident_slots(
         real_len = res.real_len
         if real_len <= 0:
             continue
-        slot_mins = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
+        slot_mins = _read_slot_kv_and_check_pcc(
+            kv_table, device_map, slot_id, real_len, slot_traces[slot_id], num_ranks=num_ranks
+        )
         for cache, value in slot_mins.items():
             per_cache[cache] = value if cache not in per_cache else min(per_cache[cache], value)
         pcc = min(slot_mins.values())
@@ -1351,7 +1586,7 @@ def _verify_resident_slots(
                 read_config_slice=read_dflash_slice,
                 golden_dir=os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR") or ADAPTER.dflash_golden_default,
                 threshold=dflash_threshold,
-                rope_convention="interleaved",
+                rope_convention=ADAPTER.dflash_rope_convention,
             )
             if dflash_pcc is not None:
                 min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)
@@ -1416,13 +1651,26 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
             "and its golden defines a single turn, so a resumed turn would read past its pool and mismatch "
             "the golden. Use one shared trace (unset SLOT_TRACES) for multi-turn runs."
         )
+    if spec and cfg.slot_lengths:
+        raise ValueError(
+            "PREFILL_PRODUCER_SLOT_LENGTHS cuts each slot's prompt from the one shared trace, so it can't be combined "
+            "with PREFILL_PRODUCER_SLOT_TRACES, whose traces set each slot's length. Unset one of them."
+        )
     max_chunks = MAX_SEQ_LEN // CHUNK_SIZE
 
     if not spec:
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
         pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
-        return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
+        if cfg.slot_lengths:
+            longest, trace_tokens = max(cfg.slot_lengths.values()), len(load_trace_token_ids(trace))
+            # Past the trace the pool repeats it, and the golden has nothing to check those tokens against.
+            if longest > trace_tokens:
+                raise ValueError(
+                    f"PREFILL_PRODUCER_SLOT_LENGTHS asks for {longest} tokens, but the trace {trace} has {trace_tokens}"
+                )
+            pool_tokens = max(pool_tokens, longest)
+        return slot_traces, cfg.slot_lengths, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
     resolved = [resolve_trace_dir(e) for e in entries]
@@ -1563,8 +1811,9 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
-    if cfg.verify and ack_channel is None:
+    # Without verification the completions are left to whatever consumer owns the channel.
+    completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify else None
+    if cfg.verify and completion_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
             "prefill (H2D push return ≠ layers done). The master rank always owns this channel, so "
@@ -1573,48 +1822,76 @@ def main() -> None:
         sys.exit(1)
     if not cfg.verify:
         logger.info(
-            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
-            "channel (pure token feeder; the runner's migration self-test owns it)"
+            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the completion "
+            "channel (pure token feeder; the real consumer owns it). Some consumer must be attached, or "
+            "the runner waits on its full completion ring."
         )
 
-    ack_layers = _ack_layers_per_chunk(kv_table)
+    chunk_layers = _completion_layers_per_chunk(kv_table)
+    layer_bound = _completion_layer_bound(chunk_layers)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
-        pool = pools_by_trace[slot_traces[slot_id]]
-        tokens = _chunk_slice(pool, actual_start, actual_isl)
-        metadata = _pack_metadata(slot_id, actual_start, actual_end)
-        logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
+    retire_clock = _ChunkRetireClock()
+
+    def push_forward(pushes: list) -> float:
+        for p in pushes:
+            logger.info(
+                f"[producer] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
+            )
+        for p in pushes:
+            retire_clock.on_push((p.slot_id, p.actual_start, p.actual_end))
         push_start = time.perf_counter()
-        _push(
-            service, payload_bytes, _h2d_rows(tokens, actual_start), _mtp_rows(pool, actual_start, actual_isl), metadata
-        )
+        _push(service, payload_bytes, *_forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]))
         return (time.perf_counter() - push_start) * 1000.0
 
-    warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
-    if warmup_chunks > 0:
-        logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
-        for cidx in range(warmup_chunks):
-            push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
-        service.barrier()
-        if ack_channel is not None:
-            _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
-        logger.info("[producer] warmup complete; starting the measured request")
+    # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
+    # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
+    drain = start_layer_completion_drain(
+        completion_channel,
+        num_layers=layer_bound,
+        chunk_layers=chunk_layers,
+        on_completion=retire_clock.on_ack,
+        on_chunk_complete=lambda key, cov: retire_clock.on_retire(key, time.perf_counter()),
+    )
+    try:
+        warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
+        if warmup_chunks > 0:
+            logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+            retire_clock.warmup = True
+            warmup = [
+                ChunkPush(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
+                for cidx in range(warmup_chunks)
+            ]
+            for i in range(0, warmup_chunks, FORWARD_CHUNKS):
+                push_forward(warmup[i : i + FORWARD_CHUNKS])
+            service.barrier()
+            wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
+            retire_clock.warmup = False
+            logger.info("[producer] warmup complete; starting the measured request")
 
-    stats = run_schedule(cfg, push_fn=push_chunk)
-    service.barrier()
+        stats = run_schedule(cfg, push_fn=push_forward)
+        service.barrier()
+        # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
+        # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
+        expected_completions = chunk_layers * (max(warmup_chunks, 0) + stats.total_chunks)
+        received_completions = wait_for_layer_completions(drain, expected_completions)
+    finally:
+        if drain is not None:
+            drain.stop()
 
     sorted_ms = sorted(stats.push_ms)
-    total_tokens = stats.total_pushes * CHUNK_SIZE
+    total_tokens = stats.total_chunks * CHUNK_SIZE
+    packing = ""
+    if FORWARD_CHUNKS > 1:
+        fill = stats.total_chunks / (stats.total_pushes * FORWARD_CHUNKS) if stats.total_pushes else 0.0
+        packing = f"chunks={stats.total_chunks} forward_chunks={FORWARD_CHUNKS} fill={fill:.2f} "
     logger.info(
         f"[producer] DONE wall={stats.wall_s:.1f}s pushes={stats.total_pushes} requests={stats.completed} "
-        f"tokens={total_tokens} throughput={total_tokens / stats.wall_s if stats.wall_s else 0:.0f} tok/s "
+        f"{packing}tokens={total_tokens} throughput={total_tokens / stats.wall_s if stats.wall_s else 0:.0f} tok/s "
         f"push_ms p50={_percentile(sorted_ms, 0.5):.1f} p90={_percentile(sorted_ms, 0.9):.1f} "
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
-
-    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
@@ -1631,6 +1908,9 @@ def main() -> None:
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
         verify_ok = False
+    if cfg.verify and ADAPTER.verify_layer_completions and received_completions != expected_completions:
+        logger.error(f"[producer] layer completions: received {received_completions}/{expected_completions}")
+        verify_ok = False
 
     if world_size > 1:
         verdicts = _mr_allgather_verdict(verify_ok)
@@ -1639,11 +1919,10 @@ def main() -> None:
         verify_ok = all(verdicts)
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
-        nwords = CHUNK_METADATA_SIZE_BYTES // 4
-        sentinel = struct.pack(f"<{nwords}i", *([-1] * nwords))
+        rows, mtp_rows, sentinel = _shutdown_payload()
         assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        _push(service, payload_bytes, _h2d_rows(_chunk_slice([], 0)), _mtp_rows([], 0), sentinel)
+        _push(service, payload_bytes, rows, mtp_rows, sentinel)
         service.barrier()
         logger.info("[producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.")
     else:

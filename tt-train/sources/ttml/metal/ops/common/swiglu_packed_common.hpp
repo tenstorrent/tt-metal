@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <enchantum/enchantum.hpp>
 #include <string_view>
 #include <tt_stl/assert.hpp>
 
@@ -19,42 +18,6 @@ namespace ttml::metal::ops::swiglu_packed {
 // packed's shape with the two halves collapsed into one. packed must already be known 4D.
 inline ttnn::Shape halve_last_dim(const ttnn::Shape& shape) {
     return ttnn::Shape({shape[0], shape[1], shape[2], shape[-1] / 2U});
-}
-
-// Every tensor the packed ops touch: on device, TILE, bf16, interleaved.
-inline void check_tensor(const ttnn::Tensor& tensor, std::string_view name, std::string_view op) {
-    TT_FATAL(
-        tensor.storage_type() == ttnn::StorageType::DEVICE,
-        "{}: {} must be on device, got storage type {}",
-        op,
-        name,
-        enchantum::to_string(tensor.storage_type()));
-    TT_FATAL(tensor.buffer() != nullptr, "{}: {} buffer is null", op, name);
-    TT_FATAL(
-        tensor.layout() == tt::tt_metal::Layout::TILE,
-        "{}: {} must be TILE, got layout {}",
-        op,
-        name,
-        enchantum::to_string(tensor.layout()));
-    TT_FATAL(
-        tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "{}: {} must be BFLOAT16, got {}",
-        op,
-        name,
-        enchantum::to_string(tensor.dtype()));
-    TT_FATAL(
-        tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
-        "{}: {} must be INTERLEAVED, got {}",
-        op,
-        name,
-        enchantum::to_string(tensor.memory_config().memory_layout()));
-}
-
-// Both tensors must already have passed check_tensor. The kernels take every buffer address as
-// local to packed's device, so a tensor elsewhere would be read through the wrong device.
-inline void check_same_device(
-    const ttnn::Tensor& tensor, const ttnn::Tensor& reference, std::string_view name, std::string_view op) {
-    TT_FATAL(tensor.device() == reference.device(), "{}: {} is not on packed's device", op, name);
 }
 
 // 4D, with both the padded and the logical last dim splitting into two tile-aligned halves.

@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.hpp"
+#include "ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_spec_factory.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 namespace ttnn::prim {
@@ -18,7 +19,11 @@ struct SparseMatmulDeviceOperation {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
-    using program_factory_t = std::variant<SparseMatmulMultiCoreReuseMcast1DProgramFactory>;
+    using program_factory_t =
+        std::variant<SparseMatmulMultiCoreReuseMcast1DProgramFactory, SparseMatmulMultiCoreReuseMcast1DSpecFactory>;
+    // The spec factory when in1 arrives over prefetcher_pipes, else the ProgramDescriptor factory.
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_hit(
@@ -61,7 +66,8 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
     const std::optional<Tensor>& indices = std::nullopt,
-    const std::optional<Tensor>& bias = std::nullopt);
+    const std::optional<Tensor>& bias = std::nullopt,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {});
 
 SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const Tensor& input_tensor_a,
@@ -80,6 +86,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
     const std::optional<Tensor>& indices = std::nullopt,
-    const std::optional<Tensor>& bias = std::nullopt);
+    const std::optional<Tensor>& bias = std::nullopt,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {});
 
 }  // namespace ttnn::prim

@@ -37,7 +37,7 @@
 // After the last batch: push an end-of-plan sentinel — ROUTE_INFO_SENTINEL to
 // compute (cb_signal_id, TILE only) and a zero-entry sentinel plan page to the writer.
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -486,4 +486,8 @@ void kernel_main() {
     sentinel_plan->entry_count = 0;
     sentinel_entries[0].flags = PLAN_FLAG_END;
     cb_push_back(cb_plan_id, 1);
+
+    // next_turn_sem.up() is a non-posted atomic. If its response lands after the next kernel on this RISC has
+    // snapshotted the NoC counters, that kernel's atomic barrier can hang or return before its own atomics land.
+    noc.async_atomic_barrier();
 }

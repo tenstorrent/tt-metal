@@ -61,6 +61,9 @@ class LlamaConfig:
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
     sharding) and is ignored when tensor parallelism is disabled.
+
+    ``use_composite_sdpa`` runs attention through ``scaled_dot_product_attention_composite``,
+    which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
     """
 
     hidden_size: int = 384
@@ -72,6 +75,7 @@ class LlamaConfig:
     max_position_embeddings: int = 256
     rope_theta: float = 10000.0
     attention_bias: bool = False
+    rms_norm_eps: float = 1e-5
     attention_dropout: float = 0.0
     mlp_dropout: float = 0.0
     runner_type: RunnerType = RunnerType.Default
@@ -79,6 +83,7 @@ class LlamaConfig:
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
     tp_strategy: TPStrategy = TPStrategy.NONE
     embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
+    use_composite_sdpa: bool = False
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -150,25 +155,35 @@ class LlamaConfig:
         model_type = hf_config.get("model_type", "llama")
         if model_type != "llama":
             raise ValueError(f"model_type {model_type!r} is not a Llama checkpoint")
-        if hf_config.get("mlp_bias", False):
-            raise ValueError("mlp_bias=true is not supported")
+        if (quantization := hf_config.get("quantization_config")) is not None:
+            method = quantization.get("quant_method", "unknown") if isinstance(quantization, Mapping) else "unknown"
+            raise ValueError(f"quantized checkpoints ({method}) are not supported")
+        # The model has no MLP bias, and the loader cannot load attention biases.
+        for bias in ("attention_bias", "mlp_bias"):
+            if hf_config.get(bias, False):
+                raise ValueError(f"{bias}=true is not supported")
+        if (hidden_act := hf_config.get("hidden_act", "silu")) != "silu":
+            raise ValueError(f"hidden_act {hidden_act!r} is not supported, only 'silu'")
         hidden_size = hf_config["hidden_size"]
         num_heads = hf_config["num_attention_heads"]
         head_dim = hf_config.get("head_dim", hidden_size // num_heads)
         if head_dim * num_heads != hidden_size:
             raise ValueError(f"head_dim {head_dim} * num_attention_heads {num_heads} != hidden_size {hidden_size}")
 
-        rope_scaling = LlamaRopeScalingConfig()
-        if hf_rope_scaling := hf_config.get("rope_scaling"):
-            rope_type = hf_rope_scaling.get("rope_type", hf_rope_scaling.get("type"))
-            if rope_type != "llama3":
-                raise ValueError(f"rope_scaling type {rope_type!r} is not supported, only 'llama3'")
+        # transformers v5 writes rope_theta and the scaling as rope_parameters; v4 as rope_theta and rope_scaling.
+        rope = hf_config.get("rope_parameters") or hf_config.get("rope_scaling") or {}
+        rope_type = rope.get("rope_type", rope.get("type", "default"))
+        if rope_type == "llama3":
             rope_scaling = LlamaRopeScalingConfig(
-                scaling_factor=hf_rope_scaling["factor"],
-                high_freq_factor=hf_rope_scaling["high_freq_factor"],
-                low_freq_factor=hf_rope_scaling["low_freq_factor"],
-                original_context_length=hf_rope_scaling["original_max_position_embeddings"],
+                scaling_factor=rope["factor"],
+                high_freq_factor=rope["high_freq_factor"],
+                low_freq_factor=rope["low_freq_factor"],
+                original_context_length=rope["original_max_position_embeddings"],
             )
+        elif rope_type == "default":
+            rope_scaling = LlamaRopeScalingConfig()
+        else:
+            raise ValueError(f"rope type {rope_type!r} is not supported, only 'llama3' and 'default'")
 
         architecture = dict(
             hidden_size=hidden_size,
@@ -178,8 +193,8 @@ class LlamaConfig:
             num_key_value_heads=hf_config.get("num_key_value_heads", num_heads),
             vocab_size=hf_config["vocab_size"],
             max_position_embeddings=max_position_embeddings,
-            rope_theta=hf_config.get("rope_theta", 10000.0),
-            attention_bias=hf_config.get("attention_bias", False),
+            rope_theta=rope.get("rope_theta", hf_config.get("rope_theta", 10000.0)),
+            rms_norm_eps=hf_config.get("rms_norm_eps", 1e-6),  # HF's default
             weight_tying=(
                 WeightTyingType.Enabled if hf_config.get("tie_word_embeddings", False) else WeightTyingType.Disabled
             ),
@@ -281,13 +296,16 @@ class Llama(AbstractModuleBase):
         )
 
         # Depth-scaled init for the residual-writing projections (attention out-proj, MLP
-        # down-proj): every block adds into the residual stream, so its variance grows
-        # ~linearly with depth. Std is the usual 1/sqrt(fan_in) damped by 1/sqrt(num_layers),
-        # which keeps residual-stream variance depth-independent. fan_in differs between the
-        # two: hidden_size for out-proj, intermediate_size for down-proj.
+        # down-proj): each of them adds its output into the residual stream, so the stream's
+        # variance at init grows ~linearly with the number of such additions.
+        # Std is the usual 1/sqrt(fan_in) damped by 1/sqrt(N), where N is the total number of
+        # residual additions. Each block adds into the stream twice (after attention and after
+        # the MLP), so N = 2 * num_hidden_layers. fan_in differs between the two: hidden_size
+        # for out-proj, intermediate_size for down-proj.
         intermediate_size = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
-        out_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * config.num_hidden_layers))
-        down_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(intermediate_size * config.num_hidden_layers))
+        num_residual_writes = 2 * config.num_hidden_layers
+        out_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * num_residual_writes))
+        down_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(intermediate_size * num_residual_writes))
 
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(
@@ -301,15 +319,17 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
+                    rms_norm_eps=config.rms_norm_eps,
                     tp_strategy=config.tp_strategy,
                     out_proj_init=out_proj_init,
                     down_proj_init=down_proj_init,
+                    use_composite_sdpa=config.use_composite_sdpa,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
         )
 
-        self.ln_fc = RMSNormLayer(config.hidden_size)
+        self.ln_fc = RMSNormLayer(config.hidden_size, config.rms_norm_eps)
         if sequence_parallel:
             mark_sequence_parallel(self.ln_fc)
 

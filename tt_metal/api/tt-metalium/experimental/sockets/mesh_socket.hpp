@@ -4,11 +4,26 @@
 
 #pragma once
 
-#include <enchantum/enchantum.hpp>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <enchantum/entries.hpp>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <vector>
 
 namespace tt::tt_fabric {
 class ControlPlane;

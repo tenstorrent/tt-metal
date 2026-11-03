@@ -17,29 +17,28 @@
 #include <tt_stl/assert.hpp>
 
 #include "context/metal_context.hpp"
+#include "debug/l1_ecc_halt.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
-#include "dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
+#include "jit_build/jit_device_config.hpp"
 #include "llrt/llrt.hpp"
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
-#include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "tt_align.hpp"
-#include <umd/device/types/blackhole_eth.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-umd/types/blackhole_eth.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -59,18 +58,20 @@ bool mock_firmware_sources_available_for(tt::ARCH arch) {
     }
 }
 
-int firmware_wait_timeout_ms() {
+int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
     // Default timeout for real silicon.
     constexpr int kDefaultTimeoutMs = 10'000;
     // Functional sim (.so) is slower than silicon; sometimes 10s is not enough, so use half a minute.
     constexpr int kFunctionalSimTimeoutMs = 30'000;
 
-    const auto& rtoptions = MetalContext::instance().rtoptions();
     if (rtoptions.get_simulator_enabled()) {
         // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
-        // llrt treats timeout_ms==0 on sim as infinite wait.
+        // llrt treats timeout_ms==0 on sim as infinite wait; TT_METAL_OPERATION_TIMEOUT_SECONDS bounds it.
         if (rtoptions.get_simulator_path().extension() != ".so") {
-            return 0;
+            const auto bound = rtoptions.get_timeout_duration_for_operations();
+            return bound.count() > 0.0f
+                       ? static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(bound).count())
+                       : 0;
         }
         return kFunctionalSimTimeoutMs;
     }
@@ -150,8 +151,12 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
              &worker_logical_row_to_virtual_row_[device_id]});
     }
 
+    MetalContext& metal_context = descriptor_->metal_context();
+    BuildEnvManager& build_env_manager = metal_context.build_env_manager();
     for (auto refs : table_refs) {
-        futures.emplace_back(detail::async([this, refs]() {
+        // Built here rather than in the task: create_jit_device_config() may write rtoptions.
+        JitDeviceConfig jit_device_config = create_jit_device_config(refs.device_id, num_hw_cqs_, metal_context);
+        futures.emplace_back(detail::async([this, refs, jit_device_config, &metal_context, &build_env_manager]() {
             tt::ChipId device_id = refs.device_id;
             // Clear L1/DRAM if requested - skip for mock devices (no memory), but do for emulated (memory-backed)
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
@@ -178,8 +183,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
-            const ContextId ctx_id = descriptor_->metal_context().get_context_id();
-            BuildEnvManager::get_instance(ctx_id).add_build_env(device_id, num_hw_cqs_, ctx_id);
+            build_env_manager.add_build_env(device_id, jit_device_config, metal_context.rtoptions());
             // build_firmware() is a pure compile/link step that doesn't touch hardware, and the
             // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
             // depend on -- without them, JIT-compiling kernels on a mock device fails with
@@ -194,7 +198,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                                        (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
                                         !mock_firmware_sources_available_for(cluster_.arch()));
             if (!skip_fw_build) {
-                BuildEnvManager::get_instance(ctx_id).build_firmware(device_id);
+                build_env_manager.build_firmware(device_id);
             }
             if (!cluster_.is_mock_or_emulated()) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
@@ -234,8 +238,21 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                         virtual_core.y);
                 }
             }
+            // 1. Find BRISCs an earlier process left in an interrupt handler, before their halt records are cleared.
+            const std::vector<internal::LatchedBrisc> released_briscs =
+                internal::find_latched_briscs(descriptor_->metal_context(), device_id);
+            internal::clear_l1_ecc_halt_records(descriptor_->metal_context(), device_id);
+            // 2. With every core held in reset, point those interrupts at code that returns from the handler.
             reset_cores(device_id);
-            initialize_and_launch_firmware(device_id);
+            internal::release_latched_briscs(descriptor_->metal_context(), device_id, released_briscs);
+            // 3. Load firmware and release the cores. A latched BRISC returns from the handler first, then boots.
+            try {
+                initialize_and_launch_firmware(device_id);
+            } catch (const std::exception&) {
+                // A BRISC that stayed in its interrupt handler is the likelier cause of a firmware init timeout.
+                internal::check_briscs_released(descriptor_->metal_context(), device_id, released_briscs);
+                throw;
+            }
         }
     }
     initialized_ = true;
@@ -280,6 +297,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 log_warning(
                     tt::LogMetal, "Skipping RISC reset on device {} during teardown: {}", device_id, e.what());
             }
+            try {
+                internal::report_l1_ecc_at_close(descriptor_->metal_context(), device_id);
+            } catch (const std::runtime_error& e) {
+                log_warning(
+                    tt::LogMetal, "Skipping L1 ECC report on device {} during teardown: {}", device_id, e.what());
+            }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
         // Must be last
@@ -316,13 +339,19 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         }
     }
 
-    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
-        static uint32_t zero_vec_size = hal::get_erisc_l1_unreserved_size();
-        auto zero_vec_addr = hal::get_erisc_l1_unreserved_base();
-        static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
-        CoreCoord virtual_core =
-            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        cluster_.write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
+    const auto active_eth_cores = this->get_control_plane_().get_active_ethernet_cores(device_id);
+    if (!active_eth_cores.empty()) {
+        // Resolved from this context's HAL, once per call (not cached across contexts).
+        const uint32_t eth_zero_vec_size =
+            hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        const uint32_t eth_zero_vec_addr =
+            hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        const std::vector<uint32_t> eth_zero_vec(eth_zero_vec_size / sizeof(uint32_t), 0);
+        for (const auto& eth_core : active_eth_cores) {
+            CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+            cluster_.write_core(device_id, virtual_core, eth_zero_vec, eth_zero_vec_addr);
+        }
     }
 
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
@@ -502,7 +531,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = firmware_wait_timeout_ms();
+        const int timeout_ms = firmware_wait_timeout_ms(rtoptions_);
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
@@ -1091,7 +1120,7 @@ void RiscFirmwareInitializer::initialize_firmware(
     std::optional<CoreCoord> end_core) {
     ZoneScoped;
 
-    const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+    BuildEnvManager& build_env_manager = descriptor_->metal_context().build_env_manager();
 
     TT_FATAL(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
@@ -1175,11 +1204,11 @@ void RiscFirmwareInitializer::initialize_firmware(
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto [_, num_build_states] = BuildEnvManager::get_instance(ctx_id).get_build_index_and_state_count(
-                    core_type_idx, processor_class, true);
+                auto [_, num_build_states] =
+                    build_env_manager.get_build_index_and_state_count(core_type_idx, processor_class, true);
                 for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
-                    auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
-                        device_id, core_type_idx, processor_class, riscv_id);
+                    auto fw_path =
+                        build_env_manager.get_firmware_binary_path(device_id, core_type_idx, processor_class, riscv_id);
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
                     hal_.set_iram_text_size(
@@ -1250,7 +1279,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
-                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
+                        auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
@@ -1269,6 +1298,22 @@ void RiscFirmwareInitializer::initialize_firmware(
                                                     : dev_msgs::DISPATCH_MODE_DEV;
             prepare_initial_launch_msg();
             write_initial_go_launch_msg();
+            // Initialize the always-on ethernet firmware stage breadcrumb to UNKNOWN (0) before the core
+            // starts. The Metal application FW stamps its own stage as it runs, so an erisc that never reaches
+            // application FW reads back as UNKNOWN. Only the slots of the eriscs Metal FW runs on are cleared: in single-erisc mode base FW keeps
+            // running on erisc0 and stamps its own stages into slot 0.
+            if (hal_.get_dev_size(core_type, HalL1MemAddrType::FW_STAGE) != 0) {
+                const DeviceAddr fw_stage_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::FW_STAGE);
+                const uint32_t unknown_stage = 0;
+                for (uint32_t processor = 0; processor < hal_.get_num_risc_processors(core_type); processor++) {
+                    const uint32_t slot = llrt::eth_fw_stage_slot(hal_, core_type, processor);
+                    cluster_.write_core(
+                        &unknown_stage,
+                        sizeof(unknown_stage),
+                        tt_cxy_pair(device_id, virtual_core),
+                        fw_stage_addr + (slot * sizeof(uint32_t)));
+                }
+            }
             if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
                 DeviceAddr mailbox_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
                 auto factory = hal_.get_dev_msgs_factory(core_type);
@@ -1309,7 +1354,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
-                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
+                        auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
@@ -1355,7 +1400,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t dm_id = 0; dm_id < num_build_states; dm_id++) {
-                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
+                        auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, dm_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
@@ -1582,7 +1627,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
-    const int timeout_ms = firmware_wait_timeout_ms();
+    const int timeout_ms = firmware_wait_timeout_ms(rtoptions_);
     try {
         llrt::internal_::wait_until_cores_done(
             descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);

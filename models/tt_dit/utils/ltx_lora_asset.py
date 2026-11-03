@@ -36,7 +36,10 @@ def resolve_lora(*, download_dir=None):
     if local.is_file():
         return stage(local)
     try:
-        return stage(hf_hub_download(REPO_ID, FILENAME, revision=REVISION, local_files_only=True))
+        # A hit in the HF cache is already on the shared HF_HOME mount (/mnt/models in CI), which every
+        # worker reads. Return it in place: copying the 7.6 GB adapter into job storage fills the
+        # launcher's ephemeral disk (ENOSPC on bh_sc1).
+        return hf_hub_download(REPO_ID, FILENAME, revision=REVISION, local_files_only=True)
     except LocalEntryNotFoundError:
         if download_dir is None:
             if not constants.HF_HUB_OFFLINE:

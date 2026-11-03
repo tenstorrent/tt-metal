@@ -50,9 +50,3 @@ template <typename... Ts>
 overloaded(Ts&&...) -> overloaded<Ts...>;
 
 }  // namespace ttsl
-
-namespace tt {
-namespace [[deprecated("Use ttsl namespace instead")]] stl {
-using namespace ::ttsl;
-}  // namespace stl
-}  // namespace tt

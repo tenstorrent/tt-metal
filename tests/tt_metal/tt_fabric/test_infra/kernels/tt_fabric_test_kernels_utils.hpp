@@ -8,7 +8,7 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -19,11 +19,9 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-// Maximum number of fabric connections supported per kernel.
-// This is used to size FabricConnectionArray storage without template proliferation.
+// Fixed per-core connection storage shared by all kernel configurations.
 #ifdef ARCH_BLACKHOLE
-// 4 NESW directions + up to 2 Z-link destinations
-static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 6;
+static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 5;
 #else
 static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 4;
 #endif
@@ -31,12 +29,10 @@ static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 4;
 struct LocalArgsBuffer {
     uint32_t base_address = 0;
     uint32_t buffer_size = 0;
-    uint32_t end_address = 0;
 
     void init(uint32_t base_addr, uint32_t buf_size) {
         base_address = base_addr;
         buffer_size = buf_size;
-        end_address = base_address + buffer_size;
     }
 
     template <typename T>
@@ -44,7 +40,7 @@ struct LocalArgsBuffer {
         static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
 
         uint32_t current_offset = arg_idx * sizeof(T);
-        ASSERT(current_offset + sizeof(T) <= end_address);  // Check bounds
+        ASSERT(current_offset + sizeof(T) <= buffer_size);
 
         tt_l1_ptr T* local_args_ptr = reinterpret_cast<tt_l1_ptr T*>(base_address);
         return local_args_ptr[arg_idx];
@@ -241,20 +237,16 @@ struct ChipUnicastFields1D {
 
 struct ChipUnicastFields2D {
     static ChipUnicastFields2D build_from_args(size_t& arg_idx) {
-        uint16_t src_device_id = get_local_arg_val<uint32_t>(arg_idx++);
         uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx++);
         uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx++);
-        uint16_t ew_dim = get_local_arg_val<uint32_t>(arg_idx++);
-        return ChipUnicastFields2D(src_device_id, dst_device_id, dst_mesh_id, ew_dim);
+        return ChipUnicastFields2D(dst_device_id, dst_mesh_id);
     }
 
-    ChipUnicastFields2D(uint16_t src_device_id, uint16_t dst_device_id, uint16_t dst_mesh_id, uint16_t ew_dim) :
-        src_device_id(src_device_id), dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id), ew_dim(ew_dim) {}
+    ChipUnicastFields2D(uint16_t dst_device_id, uint16_t dst_mesh_id) :
+        dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id) {}
 
-    uint16_t src_device_id;
     uint16_t dst_device_id;
     uint16_t dst_mesh_id;
-    uint16_t ew_dim;
 };
 
 struct ChipMulticastFields1D {
@@ -349,7 +341,11 @@ struct NocUnicastWriteAtomicIncFields {
     static NocUnicastWriteAtomicIncFields build_from_args(size_t& arg_idx) {
         const auto write_fields = NocUnicastWriteFields::build_from_args<IS_SOURCE>(arg_idx);
         const auto atomic_inc_fields = NocUnicastAtomicIncFields::build_from_args<IS_SOURCE>(arg_idx);
-        return NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+        auto fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+        if constexpr (IS_SOURCE) {
+            fields.flush = get_local_arg_val<uint32_t>(arg_idx++) != 0;
+        }
+        return fields;
     }
 
     NocUnicastWriteAtomicIncFields(NocUnicastWriteFields write_fields, NocUnicastAtomicIncFields atomic_inc_fields) :
@@ -357,16 +353,17 @@ struct NocUnicastWriteAtomicIncFields {
 
     NocUnicastWriteFields write_fields;
     NocUnicastAtomicIncFields atomic_inc_fields;
+    bool flush = false;  // Flush the write before the increment (sender only)
 };
 
 struct NocUnicastScatterWriteFields {
-    static constexpr uint32_t MAX_CHUNKS = 2;
+    static constexpr uint32_t MAX_CHUNKS = NOC_SCATTER_WRITE_MAX_CHUNKS;
 
     template <bool IS_SOURCE>
     static NocUnicastScatterWriteFields build_from_args(size_t& arg_idx) {
         uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t chunk_count = get_local_arg_val<uint32_t>(arg_idx++);
-        ASSERT(chunk_count == MAX_CHUNKS);
+        ASSERT(chunk_count >= NOC_SCATTER_WRITE_MIN_CHUNKS && chunk_count <= MAX_CHUNKS);
 
         std::array<uint32_t, MAX_CHUNKS> dst_addresses{};
         for (uint32_t i = 0; i < chunk_count; i++) {
@@ -383,8 +380,21 @@ struct NocUnicastScatterWriteFields {
             chunk_sizes[i] = static_cast<uint16_t>(get_local_arg_val<uint32_t>(arg_idx++));
         }
 
-        return NocUnicastScatterWriteFields(
+        auto fields = NocUnicastScatterWriteFields(
             payload_size_bytes, static_cast<uint8_t>(chunk_count), dst_addresses, chunk_sizes, dst_noc_encoding);
+
+        // Optional trailing semaphore increment (ntype option atomic_inc)
+        fields.has_atomic_inc = get_local_arg_val<uint32_t>(arg_idx++) != 0;
+        if (fields.has_atomic_inc) {
+            const auto atomic_inc_fields = NocUnicastAtomicIncFields::build_from_args<IS_SOURCE>(arg_idx);
+            ASSERT(!IS_SOURCE || atomic_inc_fields.dst_noc_encoding == dst_noc_encoding);
+            fields.atomic_inc_val = atomic_inc_fields.atomic_inc_val;
+            fields.atomic_inc_dst_address = atomic_inc_fields.dst_address;
+            if constexpr (IS_SOURCE) {
+                fields.atomic_inc_flush = get_local_arg_val<uint32_t>(arg_idx++) != 0;
+            }
+        }
+        return fields;
     }
 
     NocUnicastScatterWriteFields(
@@ -404,23 +414,15 @@ struct NocUnicastScatterWriteFields {
     std::array<uint32_t, MAX_CHUNKS> dst_addresses;
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
     uint32_t dst_noc_encoding;
+    bool has_atomic_inc = false;
+    uint32_t atomic_inc_val = 0;
+    uint32_t atomic_inc_dst_address = 0;
+    bool atomic_inc_flush = false;  // Flush the scatter writes before the increment (sender only)
 };
 
 template <typename T>
-void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFields2D& unicast_fields) {
-    // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
-    fabric_set_unicast_route(
-        (T*)packet_header_address,
-        unicast_fields.src_device_id,
-        unicast_fields.dst_device_id,
-        unicast_fields.dst_mesh_id,
-        unicast_fields.ew_dim);
-}
-
-template <typename T>
 void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFields2D& mcast_fields) {
-    // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
-    fabric_set_mcast_route(
+    (void)fabric_set_2d_mcast_route(
         (T*)packet_header_address,
         mcast_fields.dst_device_id,
         mcast_fields.dst_mesh_id,
@@ -524,6 +526,7 @@ template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocScatterWriteSenderOperations {
     static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
     static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
+    static void write_header(SenderKernelTrafficConfig<EdmSenderT>* config, uint32_t buffer_offset);
 };
 
 /* ****************************************************************************
@@ -550,7 +553,7 @@ struct FabricConnectionArray {
     using MuxConnectionType = tt::tt_fabric::WorkerToFabricMuxSender<NUM_BUFFERS>;
     static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(EdmSenderT), sizeof(MuxConnectionType));
 
-    // Type-erased storage for connections (sized for maximum)
+    // Type-erased storage for connections (sized for maximum).
     alignas(std::max(alignof(EdmSenderT), alignof(MuxConnectionType)))
         std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
     std::array<bool, MAX_NUM_FABRIC_CONNECTIONS> is_mux;
@@ -741,32 +744,37 @@ struct FabricConnectionArray {
     }
 };
 
-// Line sync for each fabric connection (used by SyncKernelConfig)
+// Maximum root outputs a 2D multicast config can inject into.
+constexpr uint8_t MAX_MCAST_INJECTIONS = MAX_NUM_FABRIC_CONNECTIONS;
+
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct LineSyncConfig {
     LineSyncConfig(
         FabricConnectionArray<EdmSenderT>* connection_array,
-        uint8_t connection_idx,
+        const uint8_t* connection_indices,
+        uint8_t num_connections,
         const uint32_t packet_header_address,
         const uint32_t line_sync_val) :
-        connection_manager_(connection_array), connection_idx_(connection_idx), line_sync_val(line_sync_val) {
+        connection_manager_(connection_array), num_connections_(num_connections), line_sync_val(line_sync_val) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
 
-        // Cache connection pointer during initialization
-        if (connection_manager_->is_mux[connection_idx_]) {
-            connection_ptr_ = &connection_manager_->get_mux_connection(connection_idx_);
-        } else {
-            connection_ptr_ = &connection_manager_->get_fabric_connection(connection_idx_);
+        ASSERT(num_connections_ > 0 && num_connections_ <= MAX_MCAST_INJECTIONS);
+        for (uint8_t i = 0; i < num_connections_; i++) {
+            const uint8_t idx = connection_indices[i];
+            connection_indices_[i] = idx;
+            if (connection_manager_->is_mux[idx]) {
+                connection_ptrs_[i] = &connection_manager_->get_mux_connection(idx);
+            } else {
+                connection_ptrs_[i] = &connection_manager_->get_fabric_connection(idx);
+            }
         }
     }
 
     template <bool IS_2D_FABRIC, ChipSendType CHIP_SEND_TYPE>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
-        // setup header fields. 2 rt args for 1D
         ChipSendTypeHandler<CHIP_SEND_TYPE, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header);
 
-        // set up noc fields, 4 rt args
         auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
         line_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fields.dst_address);
 
@@ -775,9 +783,11 @@ struct LineSyncConfig {
     }
 
     void global_sync_start() {
-        connection_manager_->template wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
-        connection_manager_->template send_header_non_blocking<false>(
-            connection_ptr_, connection_idx_, (uint32_t)packet_header);
+        for (uint8_t i = 0; i < num_connections_; i++) {
+            connection_manager_->template wait_for_empty_write_slot<false>(connection_ptrs_[i], connection_indices_[i]);
+            connection_manager_->template send_header_non_blocking<false>(
+                connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+        }
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -787,8 +797,13 @@ struct LineSyncConfig {
 
 private:
     FabricConnectionArray<EdmSenderT>* connection_manager_;
-    void* connection_ptr_;    // Cached connection pointer
-    uint8_t connection_idx_;  // Index into the connection array
+
+    // Every connection this sync config injects into. Length 1 unless this is an express multicast
+    // root whose canonical action names more than one output edge.
+    void* connection_ptrs_[MAX_MCAST_INJECTIONS];
+    uint8_t connection_indices_[MAX_MCAST_INJECTIONS];
+    uint8_t num_connections_;
+
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     volatile tt_l1_ptr uint32_t* line_sync_ptr;
     uint32_t line_sync_val;
@@ -986,22 +1001,29 @@ template <typename EdmSenderT>
 struct SenderKernelTrafficConfig {
     SenderKernelTrafficConfig(
         FabricConnectionArray<EdmSenderT>* connection_array,
-        uint8_t connection_idx,
+        const uint8_t* connection_indices,
+        uint8_t num_connections,
         const SenderTrafficConfigMetadata& metadata,
         const uint32_t packet_header_address) :
         connection_manager_(connection_array),
-        connection_idx_(connection_idx),
+        num_connections_(num_connections),
         metadata(metadata),
         noc_send_type_(static_cast<NocSendType>(0)),
         payload_buffer_(nullptr) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
 
-        // Cache connection pointer during initialization
-        if (connection_manager_->is_mux[connection_idx_]) {
-            connection_ptr_ = &connection_manager_->get_mux_connection(connection_idx_);
-        } else {
-            connection_ptr_ = &connection_manager_->get_fabric_connection(connection_idx_);
+        ASSERT(num_connections_ > 0 && num_connections_ <= MAX_MCAST_INJECTIONS);
+        for (uint8_t i = 0; i < num_connections_; i++) {
+            const uint8_t idx = connection_indices[i];
+            connection_indices_[i] = idx;
+            if (connection_manager_->is_mux[idx]) {
+                connection_ptrs_[i] = &connection_manager_->get_mux_connection(idx);
+            } else {
+                connection_ptrs_[i] = &connection_manager_->get_fabric_connection(idx);
+            }
         }
+        connection_idx_ = connection_indices_[0];
+        connection_ptr_ = connection_ptrs_[0];
 
         // Initialize function pointers to null (will be set in parse_and_setup_noc_send_type)
         noc_ops_.parse_and_setup = nullptr;
@@ -1075,6 +1097,9 @@ struct SenderKernelTrafficConfig {
     template <bool BENCHMARK_MODE>
     FORCE_INLINE void send_packets_stateful(const uint32_t num_packets, const uint32_t num_warmup) {
         ASSERT(connection_ptr_ != nullptr);
+        // The stateful path holds NOC state for one connection, so it cannot fan a packet out to
+        // several. Only benchmark flows take it, and those are unicast.
+        ASSERT(num_connections_ == 1);
         auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
 
         // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
@@ -1114,18 +1139,26 @@ struct SenderKernelTrafficConfig {
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
         } else {
-            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
-            // STEP 3: Send packet
-            if (payload_size_bytes > 0 && payload_buffer_) {
+            const bool has_payload = payload_size_bytes > 0 && payload_buffer_;
+            if (has_payload) {
                 payload_buffer_->fill_data(metadata.seed);
-
-                // Send payload without header
-                connection_manager_->template send_payload_without_header<BENCHMARK_MODE>(
-                    connection_ptr_, connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
-            // Send header
-            connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
-                connection_ptr_, connection_idx_, (uint32_t)packet_header);
+            // STEP 3: Send packet, once per connection.
+            for (uint8_t i = 0; i < num_connections_; i++) {
+                connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(
+                    connection_ptrs_[i], connection_indices_[i]);
+                if (has_payload) {
+                    // Send payload without header
+                    connection_manager_->template send_payload_without_header<BENCHMARK_MODE>(
+                        connection_ptrs_[i],
+                        connection_indices_[i],
+                        payload_buffer_->get_physical_address(),
+                        payload_size_bytes);
+                }
+                // Send header
+                connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
+                    connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+            }
         }
 
         // STEP 4: Update state (after successful send)
@@ -1178,8 +1211,13 @@ private:
 
 public:
     FabricConnectionArray<EdmSenderT>* connection_manager_;
-    void* connection_ptr_;    // Cached connection pointer
-    uint8_t connection_idx_;  // Index into the connection array
+    void* connection_ptr_;    // Cached connection pointer (== connection_ptrs_[0])
+    uint8_t connection_idx_;  // Index into the connection array (== connection_indices_[0])
+
+    // Every connection this config injects into. Length 1 unless this is an express multicast root
+    void* connection_ptrs_[MAX_MCAST_INJECTIONS];
+    uint8_t connection_indices_[MAX_MCAST_INJECTIONS];
+    uint8_t num_connections_;
 
     SenderTrafficConfigMetadata metadata;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
@@ -1252,7 +1290,7 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
     auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
 
     // Test infra allocates the payload and atomic counter on the same core, so NOC ordering preserves
-    // write-before-atomic without flushing the write pipeline.
+    // write-before-atomic without flushing the write pipeline (the ntype option `flush` flushes anyway).
     ASSERT(fields.write_fields.dst_noc_encoding == fields.atomic_inc_fields.dst_noc_encoding);
 
     uint64_t write_noc_addr =
@@ -1262,7 +1300,7 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{
-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
+            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, fields.flush},
         fields.write_fields.payload_size_bytes);
 
     config->noc_fields_.write_atomic_inc_fields = fields;
@@ -1280,42 +1318,50 @@ inline void NocFusedSenderOperations<EdmSenderT>::update_header_impl(SenderKerne
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{
-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
+            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, fields.flush},
         fields.write_fields.payload_size_bytes);
+}
+
+template <typename EdmSenderT>
+inline void NocScatterWriteSenderOperations<EdmSenderT>::write_header(
+    SenderKernelTrafficConfig<EdmSenderT>* config, uint32_t buffer_offset) {
+    const auto& fields = config->noc_fields_.scatter_write_fields;
+    std::array<uint64_t, NocUnicastScatterWriteFields::MAX_CHUNKS> chunk_noc_addrs{};
+    for (uint32_t i = 0; i < fields.chunk_count; i++) {
+        chunk_noc_addrs[i] = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[i] + buffer_offset);
+    }
+
+    if (fields.has_atomic_inc) {
+        ASSERT(fields.chunk_count == NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS);
+        const uint64_t atomic_noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.atomic_inc_dst_address);
+        config->packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
+            NocUnicastScatterAtomicIncFusedCommandHeader(
+                {chunk_noc_addrs[0], chunk_noc_addrs[1]},
+                atomic_noc_addr,
+                {fields.chunk_sizes[0]},
+                static_cast<uint16_t>(fields.atomic_inc_val),
+                fields.atomic_inc_flush),
+            fields.payload_size_bytes);
+    } else {
+        config->packet_header->to_noc_unicast_scatter_write(
+            NocUnicastScatterCommandHeader(chunk_noc_addrs.data(), fields.chunk_sizes.data(), fields.chunk_count),
+            fields.payload_size_bytes);
+    }
 }
 
 template <typename EdmSenderT>
 inline void NocScatterWriteSenderOperations<EdmSenderT>::parse_and_setup_impl(
     SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastScatterWriteFields::build_from_args<true>(arg_idx);
-
-    ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
-    const auto scatter_header = NocUnicastScatterCommandHeader(
-        {
-            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[0]),
-            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[1]),
-        },
-        {fields.chunk_sizes[0]});
-
-    config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
     config->noc_fields_.scatter_write_fields = fields;
     config->payload_size_bytes = fields.payload_size_bytes;
+    write_header(config, 0);
 }
 
 template <typename EdmSenderT>
 inline void NocScatterWriteSenderOperations<EdmSenderT>::update_header_impl(
     SenderKernelTrafficConfig<EdmSenderT>* config) {
-    const auto& fields = config->noc_fields_.scatter_write_fields;
-    uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
-    ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
-
-    const auto scatter_header = NocUnicastScatterCommandHeader(
-        {
-            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[0] + buffer_offset),
-            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[1] + buffer_offset),
-        },
-        {fields.chunk_sizes[0]});
-    config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
+    write_header(config, config->payload_buffer_->get_current_offset());
 }
 
 struct CommonMemoryMap {
@@ -1630,7 +1676,9 @@ struct SenderKernelConfig {
 
     alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
-    std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
+    // Per-config connection indices use fixed MAX_MCAST_INJECTIONS strides.
+    std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_connection_counts;
+    std::array<uint8_t, NUM_TRAFFIC_CONFIGS * MAX_MCAST_INJECTIONS> traffic_config_to_fabric_connection_map;
 
     using TrafficConfigType = SenderKernelTrafficConfig<EdmSenderT>;
 
@@ -1680,7 +1728,13 @@ private:
             local_sync_config().setup_core_coordinates(local_args_idx);
         }
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            traffic_config_to_fabric_connection_map[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+            const uint8_t num_conns = get_local_arg_val<uint32_t>(local_args_idx++);
+            ASSERT(num_conns > 0 && num_conns <= MAX_MCAST_INJECTIONS);
+            traffic_config_connection_counts[i] = num_conns;
+            for (uint8_t j = 0; j < num_conns; j++) {
+                traffic_config_to_fabric_connection_map[i * MAX_MCAST_INJECTIONS + j] =
+                    get_local_arg_val<uint32_t>(local_args_idx++);
+            }
         }
 
         // Initialize traffic config pointers
@@ -1690,8 +1744,12 @@ private:
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             auto metadata = SenderTrafficConfigMetadata::build_from_args(local_args_idx);
-            const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
-            ASSERT(fabric_connection_idx < connections.num_connections);
+            const uint8_t num_conns = traffic_config_connection_counts[i];
+            const uint8_t* fabric_connection_indices =
+                &traffic_config_to_fabric_connection_map[i * MAX_MCAST_INJECTIONS];
+            for (uint8_t j = 0; j < num_conns; j++) {
+                ASSERT(fabric_connection_indices[j] < connections.num_connections);
+            }
 
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
 
@@ -1699,8 +1757,9 @@ private:
             TrafficConfigType* config_ptr = traffic_configs(i);
             traffic_config_ptrs[i] = config_ptr;
 
-            // Initialize traffic config with connection array pointer and index
-            new (config_ptr) TrafficConfigType(&connections, fabric_connection_idx, metadata, packet_header_address);
+            // Initialize traffic config with connection array pointer and indices
+            new (config_ptr)
+                TrafficConfigType(&connections, fabric_connection_indices, num_conns, metadata, packet_header_address);
 
             traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC>(
                 local_args_idx, packet_header_address);
@@ -1962,21 +2021,18 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         expected_atomic_value = atomic_inc_val;
     }
 
+    // Strict: poll() only looks at the semaphore and never waits for the payload. Once the increment for a packet
+    // is visible its write must already have landed, so validate() checks it in one pass and an increment that
+    // overtakes its write fails as a data mismatch instead of being waited out.
     static bool poll_impl(TrafficValidationConfigBase* base_config) {
         auto* config = static_cast<WriteAtomicIncValidationConfig*>(base_config);
-
-        // Check atomic increment first
-        uint32_t atomic_value = *config->atomic_inc_address;
-        if (atomic_value < config->expected_atomic_value) {
-            return false;
-        }
-
-        return config->payload_buffer_->poll_for_data(config->metadata.seed);
+        // Also drops any cached payload lines from a previous lap, so validate() reads what is in L1 now.
+        invalidate_l1_cache();
+        return *config->atomic_inc_address >= config->expected_atomic_value;
     }
 
     static bool validate_impl(TrafficValidationConfigBase* base_config) {
         auto* config = static_cast<WriteAtomicIncValidationConfig*>(base_config);
-        // Atomic validation is implicit (polling confirms it completed)
         return config->payload_buffer_->validate_data(config->metadata.seed);
     }
 
@@ -2005,21 +2061,18 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
         ops.validate = validate_impl;
         ops.update = update_impl;
 
-        // Store base addresses and chunk sizes
-        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+        // Store base addresses and chunk sizes; the last chunk size is implicit (remaining payload)
+        chunk_count = scatter_write_fields.chunk_count;
+        uint32_t explicit_chunk_bytes = 0;
+        for (uint32_t i = 0; i < chunk_count; i++) {
             base_dst_addresses[i] = scatter_write_fields.dst_addresses[i];
             dst_addresses[i] = scatter_write_fields.dst_addresses[i];
+            if (i + 1 < chunk_count) {
+                chunk_sizes[i] = scatter_write_fields.chunk_sizes[i];
+                explicit_chunk_bytes += chunk_sizes[i];
+            }
         }
-        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-            chunk_sizes[i] = scatter_write_fields.chunk_sizes[i];
-        }
-
-        // Last chunk size is implicit (remaining payload)
-        uint32_t chunk_size = 0;
-        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-            chunk_size += chunk_sizes[i];
-        }
-        last_chunk_size = scatter_write_fields.payload_size_bytes - chunk_size;
+        chunk_sizes[chunk_count - 1] = scatter_write_fields.payload_size_bytes - explicit_chunk_bytes;
 
         payload_size_bytes = scatter_write_fields.payload_size_bytes;
         current_offset = 0;
@@ -2030,48 +2083,30 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
 
         // Check if all chunks have been written by polling the last word of each chunk
         uint32_t offset = 0;
-        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-            uint32_t chunk_size = config->chunk_sizes[i];
+        for (uint32_t i = 0; i < config->chunk_count; i++) {
+            const uint32_t chunk_size = config->chunk_sizes[i];
             if (!SequentialDataPattern::poll(
                     config->dst_addresses[i], chunk_size, config->metadata.seed + offset / sizeof(uint32_t))) {
                 return false;
             }
             offset += chunk_size;
         }
-
-        // Check the last chunk
-        if (!SequentialDataPattern::poll(
-                config->dst_addresses[NocUnicastScatterWriteFields::MAX_CHUNKS - 1],
-                config->last_chunk_size,
-                config->metadata.seed + offset / sizeof(uint32_t))) {
-            return false;
-        }
-
         return true;
     }
 
     static bool validate_impl(TrafficValidationConfigBase* base_config) {
         auto* config = static_cast<ScatterWriteValidationConfig*>(base_config);
 
-        // Validate all chunks
+        // Each chunk carries the pattern from its offset in the payload, wherever it was placed
         uint32_t offset = 0;
-        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-            uint32_t chunk_size = config->chunk_sizes[i];
+        for (uint32_t i = 0; i < config->chunk_count; i++) {
+            const uint32_t chunk_size = config->chunk_sizes[i];
             if (!SequentialDataPattern::validate(
                     config->dst_addresses[i], chunk_size, config->metadata.seed + offset / sizeof(uint32_t))) {
                 return false;
             }
             offset += chunk_size;
         }
-
-        // Validate the last chunk
-        if (!SequentialDataPattern::validate(
-                config->dst_addresses[NocUnicastScatterWriteFields::MAX_CHUNKS - 1],
-                config->last_chunk_size,
-                config->metadata.seed + offset / sizeof(uint32_t))) {
-            return false;
-        }
-
         return true;
     }
 
@@ -2087,17 +2122,49 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
         }
 
         // Update all destination addresses based on new offset
-        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+        for (uint32_t i = 0; i < config->chunk_count; i++) {
             config->dst_addresses[i] = config->base_dst_addresses[i] + config->current_offset;
         }
     }
 
+    uint32_t chunk_count;
     std::array<uint32_t, NocUnicastScatterWriteFields::MAX_CHUNKS> base_dst_addresses;
     std::array<uint32_t, NocUnicastScatterWriteFields::MAX_CHUNKS> dst_addresses;
-    std::array<uint16_t, NocUnicastScatterWriteFields::MAX_CHUNKS - 1> chunk_sizes;
-    uint32_t last_chunk_size;
+    std::array<uint32_t, NocUnicastScatterWriteFields::MAX_CHUNKS> chunk_sizes;  // All chunks, in payload order
     uint32_t payload_size_bytes;
     uint32_t current_offset;
+};
+
+// Strict validation for a scatter write whose last chunk is a semaphore increment, same as
+// WriteAtomicIncValidationConfig: poll() only looks at the semaphore, and validate() checks every chunk in one pass.
+struct ScatterWriteAtomicIncValidationConfig : public ScatterWriteValidationConfig {
+    ScatterWriteAtomicIncValidationConfig(
+        const NocUnicastScatterWriteFields& scatter_write_fields, const ReceiverTrafficConfigMetadata& metadata) :
+        ScatterWriteValidationConfig(scatter_write_fields, metadata) {
+        ops.poll = poll_impl;
+        ops.update = update_impl;
+
+        atomic_inc_address = reinterpret_cast<tt_l1_ptr uint32_t*>(scatter_write_fields.atomic_inc_dst_address);
+        atomic_inc_val = scatter_write_fields.atomic_inc_val;
+        expected_atomic_value = atomic_inc_val;
+    }
+
+    static bool poll_impl(TrafficValidationConfigBase* base_config) {
+        auto* config = static_cast<ScatterWriteAtomicIncValidationConfig*>(base_config);
+        // Also drops any cached payload lines from a previous lap, so validate() reads what is in L1 now.
+        invalidate_l1_cache();
+        return *config->atomic_inc_address >= config->expected_atomic_value;
+    }
+
+    static void update_impl(TrafficValidationConfigBase* base_config) {
+        auto* config = static_cast<ScatterWriteAtomicIncValidationConfig*>(base_config);
+        ScatterWriteValidationConfig::update_impl(base_config);
+        config->expected_atomic_value += config->atomic_inc_val;
+    }
+
+    volatile tt_l1_ptr uint32_t* atomic_inc_address;
+    uint32_t atomic_inc_val;
+    uint32_t expected_atomic_value;
 };
 
 /* Layout for the run time args for receiver
@@ -2148,7 +2215,8 @@ private:
         {sizeof(WriteValidationConfig),
          sizeof(AtomicIncValidationConfig),
          sizeof(WriteAtomicIncValidationConfig),
-         sizeof(ScatterWriteValidationConfig)});
+         sizeof(ScatterWriteValidationConfig),
+         sizeof(ScatterWriteAtomicIncValidationConfig)});
 
     alignas(TrafficValidationConfigBase)
         std::array<char, NUM_TRAFFIC_CONFIGS * MAX_VALIDATION_CONFIG_SIZE> validation_configs_storage;
@@ -2193,7 +2261,13 @@ private:
                     new (config_storage) WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata);
             } else if (noc_send_type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
                 const auto scatter_write_fields = NocUnicastScatterWriteFields::build_from_args<false>(local_args_idx);
-                traffic_configs_[i] = new (config_storage) ScatterWriteValidationConfig(scatter_write_fields, metadata);
+                if (scatter_write_fields.has_atomic_inc) {
+                    traffic_configs_[i] =
+                        new (config_storage) ScatterWriteAtomicIncValidationConfig(scatter_write_fields, metadata);
+                } else {
+                    traffic_configs_[i] =
+                        new (config_storage) ScatterWriteValidationConfig(scatter_write_fields, metadata);
+                }
             } else {
                 ASSERT(false);
             }
@@ -2223,7 +2297,8 @@ template <
     uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
     bool IS_2D_FABRIC,
     uint8_t NUM_LOCAL_SYNC_CORES,
-    bool USE_UNICAST_SYNC_PACKETS>
+    bool USE_UNICAST_SYNC_PACKETS,
+    uint8_t NUM_SYNC_CONFIGS>
 struct SyncKernelConfig {
     static SyncKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2235,7 +2310,7 @@ struct SyncKernelConfig {
         sync_connections.open_all();
 
         // Send sync start packets
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+        for (uint8_t i = 0; i < NUM_SYNC_CONFIGS; i++) {
             line_sync_configs()[i].global_sync_start();
         }
 
@@ -2257,13 +2332,14 @@ struct SyncKernelConfig {
     FabricConnectionArray<> sync_connections;
 
     using LineSyncConfigType = LineSyncConfig<>;
-    alignas(LineSyncConfigType)
-        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfigType)> line_sync_configs_storage;
+    alignas(
+        LineSyncConfigType) std::array<char, NUM_SYNC_CONFIGS * sizeof(LineSyncConfigType)> line_sync_configs_storage;
     alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
 
-    // Mapping from sync config index to fabric connection index (same pattern as sender)
-    std::array<uint8_t, NUM_SYNC_FABRIC_CONNECTIONS> sync_config_to_fabric_connection_map;
+    // Per-config connection indices use fixed MAX_MCAST_INJECTIONS strides.
+    std::array<uint8_t, NUM_SYNC_CONFIGS> sync_config_connection_counts;
+    std::array<uint8_t, NUM_SYNC_CONFIGS * MAX_MCAST_INJECTIONS> sync_config_to_fabric_connection_map;
 
     // Helper accessors
     LineSyncConfigType* line_sync_configs() {
@@ -2286,15 +2362,25 @@ private:
         uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
 
         // Parse sync config to fabric connection mapping (same pattern as sender traffic configs)
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            sync_config_to_fabric_connection_map[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+        for (uint8_t i = 0; i < NUM_SYNC_CONFIGS; i++) {
+            const uint8_t num_conns = get_local_arg_val<uint32_t>(local_args_idx++);
+            ASSERT(num_conns > 0 && num_conns <= MAX_MCAST_INJECTIONS);
+            sync_config_connection_counts[i] = num_conns;
+            for (uint8_t j = 0; j < num_conns; j++) {
+                sync_config_to_fabric_connection_map[i * MAX_MCAST_INJECTIONS + j] =
+                    get_local_arg_val<uint32_t>(local_args_idx++);
+            }
         }
 
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+        for (uint8_t i = 0; i < NUM_SYNC_CONFIGS; i++) {
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
-            uint8_t connection_idx = sync_config_to_fabric_connection_map[i];
-            new (&line_sync_configs()[i])
-                LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
+            const uint8_t num_conns = sync_config_connection_counts[i];
+            const uint8_t* connection_indices = &sync_config_to_fabric_connection_map[i * MAX_MCAST_INJECTIONS];
+            for (uint8_t j = 0; j < num_conns; j++) {
+                ASSERT(connection_indices[j] < sync_connections.num_connections);
+            }
+            new (&line_sync_configs()[i]) LineSyncConfigType(
+                &sync_connections, connection_indices, num_conns, packet_header_address, line_sync_val);
 
             // setup packet header fields
             constexpr ChipSendType CHIP_SEND_TYPE =

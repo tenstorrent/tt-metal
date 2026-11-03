@@ -10,7 +10,7 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 
 using namespace sfpi;
 

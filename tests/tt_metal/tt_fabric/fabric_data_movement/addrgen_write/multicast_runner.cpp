@@ -84,18 +84,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
-    tt::tt_metal::IDevice* dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
-        return;
-    }
-
     if (!validate_workload_or_fail(p)) {
         return;
     }
-
-    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // --- IO buffers & initialization ---
     namespace Dist = tt::tt_metal::distributed;
@@ -214,7 +205,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
 
     for (size_t i = 0; i < dst_coords.size(); ++i) {
-        receiver_progs.emplace_back(tt::tt_metal::CreateProgram());
+        receiver_progs.emplace_back(tt::tt_metal::CreateProgram(*mesh));
         auto rx_wait_k = tt::tt_metal::CreateKernel(
             receiver_progs.back(),
             std::string(KDIR) + "rx_addrgen.cpp",  // Unified receiver kernel
@@ -228,6 +219,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             receiver_progs.back(), rx_wait_k, p.receiver_core, {gsem_done->address(), sem_wait_value});
     }
 
+    tt::tt_metal::CoreCoord rx_xy = mesh->worker_core_from_logical_core(p.receiver_core);
     // Ensure the same logical worker maps to the same physical XY across all receiver chips
     for (const auto& mc : dst_coords) {
         auto* dev_i = view.impl().get_device(mc);
@@ -239,7 +231,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     }
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
-    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram(*mesh);
     const uint32_t CB_ID = tt::CBIndex::c_0;
     // CB holds 8 pages total so the reader can fill 4 while the writer drains 4.
     // Use source aligned page size (reader reads from DRAM buffer with DRAM alignment)
@@ -325,7 +317,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
         auto dst_fn = coord_to_fabric_id(std::move(mc));
-        auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
+        auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, src_fn, dst_fn);
         if (links.empty()) {
             ADD_FAILURE() << "No forwarding link from src to representative";
             return false;

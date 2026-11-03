@@ -79,7 +79,7 @@ struct KernelSpec {
     // Invariant:
     // - semaphore_spec_name must be unique across all semaphore_bindings.
     // - accessor_name must be unique across all semaphore_bindings.
-    // - Gen 2 & wormhole: Must be empty if is_compute_kernel().
+    // - Wormhole: Must be empty if is_compute_kernel().
     Group<SemaphoreBinding> semaphore_bindings;
 
     struct ScratchpadBinding {
@@ -103,12 +103,19 @@ struct KernelSpec {
     // - accessor_name must be unique across all tensor_bindings.
     Group<TensorBinding> tensor_bindings;
 
-    using CompileTimeArgs = Table<std::string, uint32_t>;
+    using CompileTimeArgs = Table<std::string, ArgValue>;
     // Table key represents the accessor name of the CTA.
     // Invariant:
     // - The key must be a valid C++ identifier.
-    // - Must not have repeated name with runtime_arg_schema.
+    // - Must not have repeated name with compile_time_array_args or runtime_arg_schema.
     CompileTimeArgs compile_time_args;
+
+    using CompileTimeArrayArgs = Table<std::string, ArrayArgValue>;
+    // Invariant:
+    // - The key must be a valid C++ identifier.
+    // - The value must be non-empty.
+    // - Must not have repeated name with compile_time_args or runtime_arg_schema.
+    CompileTimeArrayArgs compile_time_array_args;
 
     struct RuntimeArgSchema {
         // Invariant:
@@ -120,10 +127,24 @@ struct KernelSpec {
         // - Must not have repeated names.
         // - All argument names must be valid C++ identifiers.
         Group<std::string> common_runtime_arg_names;
+
+        struct ArrayArgDecl {
+            // Invariant: A valid C++ identifier.
+            std::string name;
+            // Invariant: Must be > 0.
+            uint32_t size;
+        };
+        // Invariant: Must not have repeated names.
+        Group<ArrayArgDecl> runtime_array_args;
+
+        // Invariant: Must not have repeated names.
+        Group<ArrayArgDecl> common_runtime_array_args;
     };
     // Invariant:
-    // - No repeated names across runtime_arg_names and common_runtime_arg_names.
-    // - Must not have repeated names with compile_time_args.
+    // - No repeated names across runtime_arg_names, common_runtime_arg_names, runtime_array_args and
+    //   common_runtime_array_args.
+    // - Must not have repeated names with compile_time_args or compile_time_array_args.
+    // - The scalar names plus the array sizes total at most 4096 words.
     RuntimeArgSchema runtime_arg_schema{};
 
     // Invariant for ComputeHardwareConfig:

@@ -45,12 +45,17 @@ void kernel_main() {
     const auto cat_out_generator =
         CatAddrGenerator(out_writer, output_tile_logical, padded_Nqt, joint_out_writer, joint_tile_logical, padded_Lqt);
 
+    DataflowBuffer dfb_out(dfb::out);
+#ifdef USE_JOINT_MASK
+    DataflowBuffer dfb_mask(dfb::mask_in);
+#endif
     DataflowBuffer dfb_col(dfb::col_identity);
+    DataflowBuffer dfb_identity_scale(dfb::identity_scale_in);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb::identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_identity_scale);
     generate_bcast_col_scalar(dfb_col, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
@@ -59,6 +64,7 @@ void kernel_main() {
 #ifdef USE_JOINT_MASK
                 generate_mask<false, 0, true, dfb::mask_in>(
                     noc,
+                    dfb_mask,
                     Sq_chunk_t,
                     Sk_chunk_t,
                     q_chunk,
@@ -73,7 +79,7 @@ void kernel_main() {
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
                 const auto out_row_end_tile = out_row_start_tile + Sq_chunk_t;
-                write_block(noc, cat_out_generator, dst_slice, out_row_end_tile, dfb::out, tile_bytes);
+                write_block(noc, cat_out_generator, dst_slice, out_row_end_tile, dfb_out, tile_bytes);
             }
         }
     }

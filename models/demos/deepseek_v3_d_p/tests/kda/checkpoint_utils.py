@@ -65,6 +65,20 @@ def resolve_model_root(checkpoint_dir: Path) -> str:
     return KIMI_K3_WRAPPED_ROOT
 
 
+def load_checkpoint_tensor(checkpoint_dir: Path, key: str) -> torch.Tensor:
+    """Read one tensor by its full key from the shard the index assigns it to."""
+    checkpoint_dir = Path(checkpoint_dir)
+    with (checkpoint_dir / "model.safetensors.index.json").open(encoding="utf-8") as index_file:
+        weight_map = json.load(index_file).get("weight_map", {})
+    if key not in weight_map:
+        raise ValueError(f"{checkpoint_dir} index has no {key}")
+    shard = checkpoint_dir / weight_map[key]
+    if not shard.is_file():
+        raise FileNotFoundError(f"{key} lives in {shard.name}, which is not in {checkpoint_dir}")
+    with safe_open(shard, framework="pt", device="cpu") as shard_file:
+        return shard_file.get_tensor(key)
+
+
 def resolve_kda_layer_shards(
     checkpoint_dir: Path, layer_idx: int, config: KDAConfig, model_root: str | None = None
 ) -> tuple[Path, ...]:

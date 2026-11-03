@@ -47,7 +47,7 @@ class _LogStartPlugin:
             raw += f"  ({', '.join(params)})"
 
         width = shutil.get_terminal_size()[0]
-        print(f"\n\n{'━' * width}\n{label}\n")  # noqa: T201
+        print(f"\n\n{'━' * width}\n{label}\n", flush=True)  # noqa: T201
 
 
 num_torch_threads = max(1, os.cpu_count())

@@ -4,13 +4,16 @@
 
 #pragma once
 
+#include <exception>
 #include <memory>
 #include <optional>
+#include <string>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <complex>
+#include <type_traits>
 
 namespace tt::tt_metal::distributed::multihost {
 

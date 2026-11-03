@@ -8,8 +8,8 @@
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -17,9 +17,12 @@ constexpr std::uint32_t NUM_SEMAPHORES = 16;
 
 class Semaphore {
 public:
-    Semaphore(const CoreRangeSet& core_range_set, uint32_t id, uint32_t initial_value);
-
-    Semaphore(const CoreRangeSet& core_range_set, uint32_t id, uint32_t initial_value, CoreType core_type);
+    Semaphore(
+        const CoreRangeSet& core_range_set,
+        uint32_t id,
+        uint32_t initial_value,
+        uint32_t l1_alignment,
+        CoreType core_type);
 
     Semaphore(const Semaphore& other);
 
@@ -46,6 +49,7 @@ private:
     uint32_t id_;
     uint32_t initial_value_;  // Initial value of semaphore
     CoreType core_type_;
+    uint32_t l1_alignment_;
 };
 
 class Program;

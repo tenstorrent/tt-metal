@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 #include <limits>
 
 namespace ttnn::operations::ccl {
@@ -58,7 +59,8 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
         axis.has_value() ? (axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()) : num_devices;
 
     constexpr uint32_t buffering_factor = 2;
-    constexpr uint32_t num_packet_headers = 2;
+    // Headers: payload, metadata (Ring: also the positive-arc completion credit), negative-arc completion credit.
+    constexpr uint32_t num_packet_headers = 3;
 
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 

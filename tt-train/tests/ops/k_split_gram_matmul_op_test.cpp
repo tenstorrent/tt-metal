@@ -206,7 +206,7 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     auto preallocated = ttnn::create_device_tensor(output_spec, device);
 
     auto output =
-        ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, MathFidelity::HiFi4, preallocated);
+        ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, tt::tt_metal::MathFidelity::HiFi4, preallocated);
 
     EXPECT_EQ(output.buffer()->address(), preallocated.buffer()->address());
 

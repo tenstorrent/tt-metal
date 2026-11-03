@@ -4,6 +4,7 @@
 
 import ttnn
 from typing import Tuple
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 
 def golden_maxpool2d(
@@ -18,6 +19,7 @@ def golden_maxpool2d(
     dilation: Tuple[int, int],
     ceil_mode: bool = False,
     return_indices: bool = False,
+    dtype=None,
     **_,
 ):
     import torch
@@ -37,7 +39,7 @@ def golden_maxpool2d(
         return_indices=True,
     )
 
-    output_tensor = pool_output_to_flat_nhwc(output_tensor)
+    output_tensor = golden_to_output_dtype(pool_output_to_flat_nhwc(output_tensor), dtype)
     indices = pool_output_to_flat_nhwc(indices)
 
     if return_indices:
@@ -212,6 +214,7 @@ def golden_avg_pool2d(
     ceil_mode: bool = False,
     count_include_pad: bool = True,
     divisor_override: int = None,
+    dtype=None,
     **_,
 ):
     """
@@ -250,7 +253,7 @@ def golden_avg_pool2d(
         divisor_override=divisor_override,
     )
 
-    return pool_output_to_flat_nhwc(output_tensor)
+    return golden_to_output_dtype(pool_output_to_flat_nhwc(output_tensor), dtype)
 
 
 ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)

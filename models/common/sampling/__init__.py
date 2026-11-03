@@ -5,8 +5,8 @@
 """Legacy sampling public surface with lazy compatibility exports.
 
 Importing this package must not eagerly load the TTTv1 sampling generator,
-penalties, or trace state. Common TTTv2 code imports neutral value modules
-directly; legacy callers retain the aggregate API and trigger only the module
+penalties, or trace state. Shared code such as models.common.warmup imports
+the neutral value modules directly; legacy callers retain the aggregate API and trigger only the module
 that owns the requested attribute.
 """
 

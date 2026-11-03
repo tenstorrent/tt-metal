@@ -145,7 +145,6 @@ public:
     virtual void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
         const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
         ttsl::Span<const uint32_t> workers_per_sub_device) = 0;
 
@@ -166,6 +165,8 @@ public:
     virtual void wait_for_completion(bool) {}
     // May only be called after wait_for_completion has been called on both command queues on the device.
     virtual void finish_and_reset_in_use() {}
+    // Rethrows an exception stored by the completion-queue reader thread, if any.
+    virtual void throw_if_reader_failed() {}
 };
 
 }  // namespace tt::tt_metal::distributed

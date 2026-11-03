@@ -100,6 +100,7 @@ device_config:
 | ------------- | ----------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `enable_ddp`  | `bool`            | `false`   | Enable distributed data-parallel training across the trainer's mesh.                                                                                                     |
 | `enable_fsdp` | `bool`            | `false`   | Enable fully-sharded data parallel. Supported by `Qwen3GRPOCompleter`; shards params / grads / optimizer state across the `"fsdp"` mesh axis.                            |
+| `fsdp_replicate_params` | `list[str]` | `[]` | Regex patterns of parameters FSDP keeps replicated instead of sharding. Meant for params too small to shard into whole tiles; see [Keeping parameters replicated](../../../docs/FSDP.md#keeping-parameters-replicated). |
 | `mesh_shape`  | `list[int]`       | `[1, 1]`  | Shape of the device mesh `[rows, cols]`. Total devices = `rows * cols`.                                                                                                  |
 | `device_ids`  | `list[int]`       | `null`    | Specific device IDs to use (default: auto-select).                                                                                                                       |
 

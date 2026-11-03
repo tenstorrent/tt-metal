@@ -15,7 +15,6 @@ from typing import Optional
 import torch
 
 import ttnn
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
 
 
 @dataclass
@@ -369,14 +368,14 @@ def create_expert_mapping_tensors(
         mesh_rows, mesh_cols = mesh_device.shape
         num_replicated_devices = mesh_cols if cluster_axis == 0 else mesh_rows
         experts_per_cluster = num_experts_global // num_replicated_devices
-        mapping = gen_expert_mapping(
-            num_devices,
-            num_replicated_devices,
-            cluster_axis,
-            num_experts_global,
-            experts_per_cluster,
-            num_experts_per_device,
-        )
+        expert_ids = torch.arange(num_experts_global, dtype=torch.int64)
+        if cluster_axis == 0:
+            cluster_ids = expert_ids // experts_per_cluster
+            devices_in_cluster = (expert_ids % experts_per_cluster) // num_experts_per_device
+            owners = devices_in_cluster * num_replicated_devices + cluster_ids
+        else:
+            owners = expert_ids // num_experts_per_device
+        mapping = owners.to(torch.uint16).unsqueeze(0).repeat(num_devices, 1)
     else:
         mapping = (
             torch.eye(num_devices, dtype=torch.int32)

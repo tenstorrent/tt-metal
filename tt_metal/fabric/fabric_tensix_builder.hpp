@@ -21,6 +21,10 @@
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "core_coord.hpp"
 
+namespace tt::tt_metal {
+class Device;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 // Core type enum for fabric tensix datamover (identifies MUX vs RELAY cores)
@@ -41,9 +45,21 @@ struct hash<tt::tt_fabric::FabricTensixCoreType> {
 
 namespace tt::tt_fabric {
 
+class FabricContext;
+
+// Runtime-session state that FabricTensixDatamoverConfig needs, gathered by the MetalContext that opens the
+// devices. Read only during construction; the config must not keep references to it.
+struct FabricTensixSessionInputs {
+    std::vector<tt::tt_metal::Device*> active_devices;
+    // Logical tensix cores reserved for fabric mux and for dispatch mux; identical on every device.
+    std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_dispatch_mux_cores;
+};
+
 class FabricTensixDatamoverConfig {
 public:
-    FabricTensixDatamoverConfig();
+    // fabric_context owns this config (through its FabricBuilderContext) and outlives it.
+    FabricTensixDatamoverConfig(const FabricContext& fabric_context, const FabricTensixSessionInputs& inputs);
 
     // Getters for core and channel configuration
     size_t get_num_configs_per_core() const { return num_configs_per_core_; }
@@ -141,6 +157,8 @@ public:
     WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const tt::tt_metal::CoreCoord& worker_coord) const;
 
 private:
+    const FabricContext& fabric_context_;
+
     std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores_;
     std::vector<tt::tt_metal::CoreCoord> logical_dispatch_mux_cores_;
     std::unordered_set<tt::tt_metal::CoreCoord> translated_fabric_mux_cores_;
@@ -233,7 +251,7 @@ private:
      * which are later used by calculate_buffer_allocations() to determine buffer sizing
      * and channel configuration.
      */
-    void find_min_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_devices);
+    void find_min_max_eth_channels(const std::vector<tt_metal::Device*>& all_active_devices);
 
     /**
      * Builds per-device channel mappings using real ethernet channel IDs.
@@ -241,7 +259,7 @@ private:
      * For each device, creates round-robin mapping of ethernet channels to tensix cores,
      * populating eth_chan_to_core_index_ and eth_chan_to_core_id_ maps.
      */
-    void build_per_device_channel_mappings(const std::vector<tt_metal::IDevice*>& all_active_devices);
+    void build_per_device_channel_mappings(const std::vector<tt_metal::Device*>& all_active_devices);
 
     /**
      * Builds the fabric_router_noc_coords_map_ to track which routers/tensix exist in each direction
@@ -250,10 +268,10 @@ private:
      * For each active device and its ethernet channels, this function records the tensix NOC
      * coordinates in the map, keyed by fabric node ID, routing plane ID, and direction.
      */
-    void build_fabric_tensix_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
+    void build_fabric_tensix_noc_coords_map(const std::vector<tt_metal::Device*>& all_active_devices);
 
-    bool initialize_channel_mappings();
-    void calculate_buffer_allocations();
+    bool initialize_channel_mappings(const FabricTensixSessionInputs& inputs);
+    void calculate_buffer_allocations(const std::vector<tt_metal::Device*>& all_active_devices);
     void create_configs();  // Creates mode-aware configs based on FabricTensixConfig
 
     // Helper to track missing directions for UDM mode
@@ -261,7 +279,7 @@ private:
     // pairs are missing and assigns core indices for the missing direction tensix builders
     // Also populates fabric_tensix_noc_coords_map_ for the missing directions
     void track_missing_directions_for_udm(
-        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Device* device,
         const FabricNodeId& fabric_node_id,
         const std::set<std::pair<chan_id_t, eth_chan_directions>>& active_channels,
         size_t& channel_index);
@@ -273,13 +291,13 @@ private:
     // Helper to calculate number of channels for mux (handles both UDM and Legacy modes)
     // Also builds worker_to_tensix_core_map_ in UDM mode
     std::map<ChannelTypes, uint32_t> calculate_mux_channel_counts(
-        const std::vector<tt_metal::IDevice*>& all_active_devices);
+        const std::vector<tt_metal::Device*>& all_active_devices);
 
     // UDM mode helper: builds list of workers sorted by column (y first, then x)
-    std::vector<tt::tt_metal::CoreCoord> build_workers_by_column(tt::tt_metal::IDevice* device) const;
+    std::vector<tt::tt_metal::CoreCoord> build_workers_by_column(tt::tt_metal::Device* device) const;
 
     // UDM mode helper: gets unique tensix cores for worker assignment (excludes dispatch routing plane)
-    std::vector<tt::tt_metal::CoreCoord> get_tensix_cores_for_workers(tt::tt_metal::IDevice* device) const;
+    std::vector<tt::tt_metal::CoreCoord> get_tensix_cores_for_workers(tt::tt_metal::Device* device) const;
 
     // UDM mode helper: assigns workers to tensix cores in contiguous chunks
     void assign_workers_to_tensix_cores(
@@ -299,6 +317,7 @@ class FabricTensixDatamoverBuilder : public FabricDatamoverBuilderBase {
 public:
     // Static builder method called from topology to construct a tensix builder
     static FabricTensixDatamoverBuilder build(
+        const FabricContext& fabric_context,
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
@@ -312,6 +331,7 @@ public:
     // This is used for edge devices that need tensix builders in all 4 directions for inter-mux communication
     // routing_plane_id specifies which routing plane (link index) this tensix builder belongs to
     static FabricTensixDatamoverBuilder build_for_missing_direction(
+        const FabricContext& fabric_context,
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,

@@ -18,6 +18,13 @@
 
 namespace ttnn::experimental::prim {
 
+namespace detail {
+// The combine writer, and moe_compute's dm1 on a cluster axis of extent 1, write the row-major [k, T, H] output one
+// token row per TensorAccessor page (plus the column offset of the writer's slice), so the output needs one-row pages.
+void validate_combine_output_memory_config(
+    const tt::tt_metal::MemoryConfig& memory_config, uint32_t num_rows, uint32_t hidden_size, const char* what);
+}  // namespace detail
+
 struct SelectiveReduceCombineDeviceOperation {
     using operation_attributes_t = SelectiveReduceCombineParams;
     using tensor_args_t = SelectiveReduceCombineTensors;

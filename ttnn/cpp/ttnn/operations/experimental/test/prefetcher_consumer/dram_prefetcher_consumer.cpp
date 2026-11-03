@@ -4,6 +4,7 @@
 
 #include "dram_prefetcher_consumer.hpp"
 
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 
 #include <filesystem>
@@ -44,7 +45,8 @@ void DramPrefetcherConsumerDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(attrs.global_cb->receiver_cores().num_cores() > 0, "GCB has no receiver cores");
     } else {
         TT_FATAL(
-            metal_exp::GetPrefetcherPipeReceiverCores(prefetcher_pipe_refs(attrs.prefetcher_pipes)).num_cores() > 0,
+            metal_exp::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(attrs.prefetcher_pipes)).num_cores() >
+                0,
             "The PrefetcherPipes have no receiver cores");
     }
 }
@@ -76,6 +78,11 @@ ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
         attrs.num_iters,
         attrs.page_size_bytes,
         attrs.hold_cycles,
+        // The receiver cores and CB size come from the GCB's structure, and the remote CB bakes both of its
+        // addresses, so a GCB reallocated at the same config address with another shape must still miss.
+        attrs.global_cb.has_value() ? std::hash<tt::tt_metal::experimental::GlobalCircularBuffer>{}(*attrs.global_cb)
+                                    : std::size_t{0},
+        attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->buffer_address()) : 0ull,
         attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull,
         attrs.prefetcher_pipes);
 }
@@ -92,7 +99,8 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
 
     if (!operation_attributes.prefetcher_pipes.empty()) {
         const auto& pipes = operation_attributes.prefetcher_pipes;
-        const CoreRangeSet receiver_cores = metal_exp::GetPrefetcherPipeReceiverCores(prefetcher_pipe_refs(pipes));
+        const CoreRangeSet receiver_cores =
+            metal_exp::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(pipes));
         std::vector<metal_exp::PrefetcherPipeParamName> names;
         std::vector<metal_exp::PrefetcherPipeParameter> parameters;
         metal_exp::ProgramRunArgs run_args;
