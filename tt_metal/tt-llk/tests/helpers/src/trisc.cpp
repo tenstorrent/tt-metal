@@ -148,12 +148,26 @@ extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_pr
         {
         }
     }
+    // RC experiment (warmup-agent, Versim): LLK_MUTEX_MODE in L1 word 0x1FFCC: 1 = math takes and releases REG_RMW last,
+    // 2 = pack does (before it wakes the math tail), 0 = nobody. Same ELFs for every mode.
+    if ((*reinterpret_cast<volatile std::uint32_t*>(0x1FFCCU) & 0xFFU) == 1U)
+    {
+        ckernel::t6_mutex_acquire(ckernel::mutex::REG_RMW);
+        ckernel::t6_mutex_release(ckernel::mutex::REG_RMW);
+        ckernel::tensix_sync();
+    }
     const std::uint64_t settle_start = ckernel::read_wall_clock();
     while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
     {
     }
     (void)ckernel::load_blocking(pack_mailbox);
 #elif defined(LLK_TRISC_PACK)
+    if ((*reinterpret_cast<volatile std::uint32_t*>(0x1FFCCU) & 0xFFU) == 2U)
+    {
+        ckernel::t6_mutex_acquire(ckernel::mutex::REG_RMW);
+        ckernel::t6_mutex_release(ckernel::mutex::REG_RMW);
+        ckernel::tensix_sync();
+    }
     // After main's completion store (its last L1 access): wake the math tail through the hardware mailbox (not L1).
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, ckernel::KERNEL_COMPLETE);
 #endif

@@ -1020,6 +1020,16 @@ class PerfConfig(TestConfig):
 
         PerfConfig.TEST_COUNTER += 1
 
+        # RC experiment (warmup-agent): REG_RMW mutex end action mode (trisc.cpp) in L1 word 0x1FFCC, once per process.
+        if PerfConfig.TEST_COUNTER == 1:
+            from helpers.device_io import write_words_to_device
+
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                0x1FFCC,
+                [int(os.environ.get("LLK_MUTEX_MODE", "0"))],
+            )
+
         # RC experiment (warmup-agent): LLK_WARMUP=1 brings back a40b624e1a9 (one unrecorded pass over the run types
         # of the test before the measured pass), without changing any ELF.
         # LLK_RC_PRE: comma list of this test's run types run unrecorded after the warm-up (if any);
