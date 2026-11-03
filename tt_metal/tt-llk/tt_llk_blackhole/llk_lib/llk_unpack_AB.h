@@ -22,10 +22,10 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 /**
- * @brief Rows per face that unpacker B reads: the rows math uses.
+ * @brief Rows per face that unpacker B reads.
  *
- * ROW and SCALAR read one row, since math uses only SrcB row 0. NONE and COL read A's face rows, so B needs at
- * least that many.
+ * ROW and SCALAR read B's own face rows: math uses only SrcB row 0, and a B shaped like A keeps both unpacks the
+ * same length. NONE and COL read A's face rows, so B needs at least that many.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape_a: Tensor shape of source A
@@ -36,7 +36,7 @@ inline std::uint32_t _llk_unpack_AB_srcb_face_r_dim_(const ckernel::TensorShape 
 {
     if constexpr (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
     {
-        return 1;
+        return tensor_shape_b.face_r_dim;
     }
     else
     {
@@ -136,7 +136,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  * @brief Initialize unpacker to unpack two source operands A and B into SrcA and SrcB registers
  *
  * Configures two-operand unpacking with optional broadcast and transpose. A reads full faces; B reads the rows
- * math uses (see @ref _llk_unpack_AB_srcb_face_r_dim_).
+ * set by @ref _llk_unpack_AB_srcb_face_r_dim_.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape_a: Tensor shape of source A
