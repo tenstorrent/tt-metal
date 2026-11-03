@@ -1,15 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// moe_down_proj writer RISC: the w channel plus store_wave.
+// moe_down_proj writer RISC: the w channel plus store_wave (moe_down_proj_store.h) unless store_on_reader.
 // deliver_w_round, w step s = (wave s / num_k_rounds, K round s % num_k_rounds) over the non-empty waves: the
 //   n-line's rotating sender multicasts the slot range of the wave's experts (each a k_block_tiles x core_n_tiles
 //   chunk in [k][n] order at slot e) from its private staging buffer into the round slots along the line, in one
 //   transfer (wa: rect lines, wb: the L strip line). After a send the sender starts the DRAM reads of its next
 //   owned step into staging, a quota per step, so every line keeps several steps of w reads in flight. The whole
 //   NUM_EXPERTS-slot round is pushed at once.
-// store_wave: per tile row m of this core's rows, one untilized block of core_n_tiles tiles -> 32 row segments of y,
-//   row 32 * m + i at byte offset line * seg_bytes; one flush per block before the pop.
 // Wave p's store runs after wave p + 1's first w_depth w rounds, so compute starts wave p + 1 while the store
 // drains (more would deadlock: those slots free only once compute has finished untilizing wave p).
 
@@ -19,6 +17,7 @@
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "moe_down_proj_plan.h"
+#include "moe_down_proj_store.h"
 
 void kernel_main() {
     constexpr uint32_t cb_output_rows = get_compile_time_arg_val(0);
@@ -37,7 +36,9 @@ void kernel_main() {
     constexpr uint32_t w_depth = get_compile_time_arg_val(13);
     constexpr uint32_t cb_w_stage = get_compile_time_arg_val(14);
     constexpr uint32_t prefetch_issue_steps = get_compile_time_arg_val(15);
-    constexpr auto out_args = TensorAccessorArgs<16>();
+    // The reader RISC (the other NoC) owns store_wave instead.
+    constexpr bool store_on_reader = get_compile_time_arg_val(16) != 0;
+    constexpr auto out_args = TensorAccessorArgs<17>();
     constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto wa_mcast = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("wa_ct_offset"), get_named_compile_time_arg_val("wa_rt_offset")>();
@@ -49,13 +50,10 @@ void kernel_main() {
     const uint32_t group = get_arg_val<uint32_t>(2);
     const uint32_t line = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t tile_rows = 32;
-    constexpr uint32_t seg_bytes = core_n_tiles * tile_rows * sizeof(uint16_t);
     constexpr uint32_t w_chunk_tiles = k_block_tiles * core_n_tiles;
     constexpr uint32_t w_chunk_bytes = w_chunk_tiles * w_tile_bytes;
     constexpr uint32_t w_round_tiles = MOE_NUM_EXPERTS * w_chunk_tiles;
     constexpr uint32_t w_prefetch_rounds = w_depth < num_k_rounds ? w_depth : num_k_rounds;
-    const uint32_t seg_offset = line * seg_bytes;
     const uint32_t n_first = line * core_n_tiles;
 
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_page_bytes);
@@ -81,18 +79,8 @@ void kernel_main() {
     const bool on_wa = wa_mcast.can_send() || wa_mcast.can_receive();
 
     auto store_wave = [&](uint32_t wave) {
-        const uint32_t row_lo = plan.group_first(wave, group);
-        const uint32_t my_rows = plan.group_rows(wave, group);
-        for (uint32_t r = 0; r < my_rows; ++r) {
-            cb_wait_front(cb_output_rows, core_n_tiles);
-            const uint32_t block_l1 = get_read_ptr(cb_output_rows);
-            const uint32_t first_row = (row_lo + r) * tile_rows;
-            for (uint32_t i = 0; i < tile_rows; ++i) {
-                noc_async_write(
-                    block_l1 + i * seg_bytes, out_accessor.get_noc_addr(first_row + i, seg_offset), seg_bytes);
-            }
-            noc_async_writes_flushed();
-            cb_pop_front(cb_output_rows, core_n_tiles);
+        if constexpr (!store_on_reader) {
+            moe_store_wave<cb_output_rows, core_n_tiles>(plan, out_accessor, wave, group, line);
         }
     };
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// moe_down_proj reader (x channel; the w channel runs on the writer RISC).
+// moe_down_proj reader (x channel; the w channel runs on the writer RISC), plus store_wave when store_on_reader.
 // D0: counts page -> cb_counts_compute and cb_counts_writer (parsed from the landing copy for the plan).
 // deliver_x_round, x step s = (wave s / num_k_rounds, K round s % num_k_rounds) over the non-empty waves:
 //   the step's rotating sender of the m-group multicasts its rows' K block of x from its private staging buffer
@@ -16,6 +16,7 @@
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "moe_down_proj_plan.h"
+#include "moe_down_proj_store.h"
 
 void kernel_main() {
     constexpr uint32_t cb_x_round = get_compile_time_arg_val(0);
@@ -32,8 +33,15 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t counts_page_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t prefetch_issue_steps = get_compile_time_arg_val(13);
-    constexpr auto x_args = TensorAccessorArgs<14>();
+    // store_wave runs here (on this RISC's NoC) instead of on the writer RISC.
+    constexpr bool store_on_reader = get_compile_time_arg_val(14) != 0;
+    constexpr uint32_t cb_output_rows = get_compile_time_arg_val(15);
+    constexpr uint32_t core_n_tiles = get_compile_time_arg_val(16);
+    constexpr uint32_t out_page_bytes = get_compile_time_arg_val(17);
+    constexpr uint32_t x_depth = get_compile_time_arg_val(18);
+    constexpr auto x_args = TensorAccessorArgs<19>();
     constexpr auto counts_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     constexpr auto xa_mcast = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("xa_ct_offset"), get_named_compile_time_arg_val("xa_rt_offset")>();
     constexpr auto xb_mcast = dataflow_kernel_lib::
@@ -42,6 +50,8 @@ void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t counts_addr = get_arg_val<uint32_t>(1);
     const uint32_t group = get_arg_val<uint32_t>(2);
+    const uint32_t out_addr = get_arg_val<uint32_t>(3);
+    const uint32_t line = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t x_round_tiles = core_row_tiles_max * k_block_tiles;
 
@@ -112,8 +122,22 @@ void kernel_main() {
         }
     };
 
+    // Wave p's store runs after wave p + 1's first x_store_round x rounds (the x slots compute can fill before it
+    // has untilized wave p), so compute starts wave p + 1 while the store drains.
+    const auto out_accessor = TensorAccessor(out_args, out_addr, out_page_bytes);
+    constexpr uint32_t x_store_round = x_depth < num_k_rounds ? x_depth : num_k_rounds;
+    auto store_wave = [&](uint32_t wave) {
+        if constexpr (store_on_reader) {
+            moe_store_wave<cb_output_rows, core_n_tiles>(plan, out_accessor, wave, group, line);
+        }
+    };
+
     start_prefetch(0);
     for (uint32_t step = 0; step < num_steps; ++step) {
+        const uint32_t round = step % num_k_rounds;
+        if (step >= num_k_rounds && round == x_store_round) {
+            store_wave(step / num_k_rounds - 1);
+        }
         const uint32_t group_rows = plan.group_rows(step / num_k_rounds, group);
         const bool owned = on_xa && xa_mcast.should_send(step);
         issue_prefetch(owned ? pf_total : issue_quota);
@@ -137,5 +161,14 @@ void kernel_main() {
             start_prefetch(step + 1);
         }
         cb_push_back(cb_x_round, x_round_tiles);
+        if (step >= num_k_rounds && round == num_k_rounds - 1 && num_k_rounds <= x_store_round) {
+            store_wave(step / num_k_rounds - 1);
+        }
+    }
+    if (num_steps > 0) {
+        store_wave(num_steps / num_k_rounds - 1);
+    }
+    if constexpr (store_on_reader) {
+        noc_async_write_barrier();
     }
 }

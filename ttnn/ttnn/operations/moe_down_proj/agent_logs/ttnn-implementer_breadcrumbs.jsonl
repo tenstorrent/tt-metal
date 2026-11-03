@@ -1,3 +1,4 @@
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-03T01:35:19+00:00"}
 {"event":"test_run","result":"perf","notes":"ablation t4096/t1024: sync+mcast floor 130/46us, w reads +50us at t1024, x reads +16us at t4096; NoC swap w->NoC0 229->176us; staged prefetch with issue quota; K_BLOCK>8 hurts fill","ts":"2026-11-03T01:35:19+00:00"}
 {"event":"test_run","status":"pass","test":"test_dram_placement","detail":"6/6 after SUPPORTED gate flip","ts":"2026-11-03T01:53:12+00:00"}
+{"event":"test_run","status":"pass","test":"unit dir --no-precompile","detail":"55 passed; store_on_reader for DRAM y: t4096 dram_out 254->220, t1024 124->113","ts":"2026-11-03T02:06:12+00:00"}

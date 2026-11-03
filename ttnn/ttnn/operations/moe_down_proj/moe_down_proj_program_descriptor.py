@@ -54,6 +54,8 @@ X_MAIN, X_STRIP, W_MAIN, W_STRIP = "xa", "xb", "wa", "wb"
 # on NoC0 measured 8x512 layer 0 229 -> 176 us, t = 1024 125 -> 107 us against the swapped assignment.
 READER_NOC = ttnn.NOC.NOC_1
 WRITER_NOC = ttnn.NOC.NOC_0
+# A DRAM y store runs on the reader RISC (NoC1, the DRAM-write NoC): 8x512 layer 0 / t = 1024 L1 x, DRAM y
+# 254 -> 220 / 124 -> 113 us. An L1 y store stays on the writer RISC (moving it measured 172 -> 179 us at 8x512).
 
 
 def _div_up(a, b):
@@ -224,6 +226,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     in_tile = ttnn.tile_size(ttnn.bfloat8_b)
     cores = layout.cores
 
+    store_on_reader = output.memory_config().buffer_type == ttnn.BufferType.DRAM
     plan_ct = [tensor_row_tiles, blocking.num_waves, layout.num_m_groups]
     reader_ct = [
         CB_X_ROUND,
@@ -238,8 +241,13 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         in_tile,
         counts_page_bytes,
         PREFETCH_ISSUE_STEPS,
+        int(store_on_reader),
+        CB_OUTPUT_ROWS,
+        core_n_tiles,
+        output.buffer_page_size(),
+        X_DEPTH,
     ]
-    for tensor in (input_tensor, expert_counts):
+    for tensor in (input_tensor, expert_counts, output):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
     writer_ct = [
         CB_OUTPUT_ROWS,
@@ -256,6 +264,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         W_DEPTH,
         CB_W_STAGE,
         PREFETCH_ISSUE_STEPS,
+        int(store_on_reader),
     ]
     for tensor in (output, weight):
         writer_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -276,7 +285,13 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     for (x, y), (line, group) in layout.roles.items():
-        reader_rt[x][y] = [input_tensor.buffer_address(), expert_counts.buffer_address(), group]
+        reader_rt[x][y] = [
+            input_tensor.buffer_address(),
+            expert_counts.buffer_address(),
+            group,
+            output.buffer_address(),
+            line,
+        ]
         writer_rt[x][y] = [output.buffer_address(), weight.buffer_address(), group, line]
         compute_rt[x][y] = [group]
 

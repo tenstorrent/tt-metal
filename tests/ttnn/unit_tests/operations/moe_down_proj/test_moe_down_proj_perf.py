@@ -45,3 +45,21 @@ def test_moe_down_proj_perf(device, name, tokens, counts, stock_us, target_us):
     x_dev, w_dev, counts_dev, xq, wq = make_operands(device, tokens, counts)
     out = run(x_dev, w_dev, counts_dev, memory_config=ttnn.L1_MEMORY_CONFIG)
     check(out, xq, wq, counts, ttnn.L1_MEMORY_CONFIG)
+
+
+PLACEMENTS = {
+    "l1_l1": (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    "dram_x": (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    "dram_out": (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    "dram_both": (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+}
+PLACEMENT_CASES = [("t4096_layer0", 4096, LAYERS[0]), ("t1024_scaled", 1024, SCALED[1024])]
+
+
+@pytest.mark.parametrize("placement", list(PLACEMENTS), ids=list(PLACEMENTS))
+@pytest.mark.parametrize("name, tokens, counts", PLACEMENT_CASES, ids=[c[0] for c in PLACEMENT_CASES])
+def test_moe_down_proj_perf_placement(device, name, tokens, counts, placement):
+    x_memory_config, out_memory_config = PLACEMENTS[placement]
+    x_dev, w_dev, counts_dev, xq, wq = make_operands(device, tokens, counts, x_memory_config)
+    out = run(x_dev, w_dev, counts_dev, memory_config=out_memory_config)
+    check(out, xq, wq, counts, out_memory_config)
