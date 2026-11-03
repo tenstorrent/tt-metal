@@ -918,3 +918,73 @@ device 182.8 ms, chunk wall 202.0 ms; p51200 chunk wall 210.0 ms (spread 23.4), 
 and the comparison are the orchestrator's A/B.
 
 Re-run: warm (above) if the cache is cold, then `python -m models.demos.common.bringup.orchestrator measure --task P.29`.
+
+## P.30 DECODER_SKIP=exact: the decoder skipped on every chunk but the request's last
+
+Owner pick 2026-11-03 (arXiv 2609.19969, exact version). Switch `DECODER_SKIP` (tt/settings.py, off | exact,
+default off: the owner decides; the A/B sets it on both sides).
+
+What changed (tt/ only, no fork, no new Python-built op: OV-23 has nothing to prepare):
+- `TtDS41Model.begin_chunk(tokens, start, last=True)`: the per-chunk argument (the caller knows; the model never
+  infers it and never pulls back). Default True = every layer, today's path; ignored under off. The framework harness
+  (ladder, profile) calls `begin_chunk(tokens, start)`, so the gate's rung `last` and profile take last=True and run
+  the same work on both sides; only tests/bringup/test_decoder_skip.py and tests/perf/test_decoder_skip_time.py
+  pass False. `tt/runners/adapter.py` `prefill_chunk(.., last=True)` passes it through (tt-d-gen's header has no flag yet).
+- Decoder = the loaded layers from the candidate source on (20-39). On a skipped chunk `layer(20)` runs
+  `TtDS41Block.kv_only` (attn_hc, attn_collapse, attn_norm, compressor: the compressed KV and index keys, written
+  into the served caches and the attention table as in the full block, the same modules); layers 21-39 return the
+  `Skipped` marker; every decoder layer's `TtWindowCache.skip(start, end)` notes the positions as missing (host only)
+  and drops the kept tail. `final_norm(Skipped)` returns it.
+- Mask (DS41-201): `TtWindowCache.carry_masked(start)` (the carry [start - 128, start) touches `missing`) ->
+  `carry_class(start)` = 0: TtWindowAttention / TtSparseAttention use the window index lists of position 0 (positions
+  before the chunk dropped, sentinel tail), and no carry is read (`carry`, `carry_blocks`, `carry_owner`, the region's
+  chip-0 carry return zero / none). The index memo key carries the class. A zero carry alone would not be a mask (a zero
+  key still takes softmax weight). `computed` (after a full run) and `load_host` / `load_ring` / `free` trim or clear
+  `missing`, so a golden prefix (rung last) is not masked: the gate's ladder is the off path's.
+
+Exactness: decoder layer 20 + k is exact from chunk start + (k + 1) x 127 (window 128); the last token and every
+layer's last 128 window rows need a last chunk >= 20 x 127 + 128 = 2668 rows (the caller's >= 2688).
+
+Accuracy (test_decoder_skip.py, s10240: chunk 0 last=False, chunk 1 last=True; limits calib x the rung's drift):
+skip and off agree to every printed digit on the checked rows (the class-0 lists equal class 128's from row 127 on).
+| metric | skip | off | limit |
+|---|---|---|---|
+| skip_err_final_hidden (rows [7660, 10240)) | 0.19732 | 0.19732 | 0.25615 |
+| skip_top5_overlap (191 sampled rows) | 1.0 | 1.0 | >= 0.9943 |
+| worst skip_err_window_kv (L27) | 0.17080 | 0.17080 | 0.21494 |
+| skip_err_window_kv_L39 | 0.15318 | 0.15318 | 0.22105 |
+| skip_err_compress_kv_L20 / index_k_L20 | 0.18861 / 0.11569 | same | drift limits |
+Top-1 1.0 over the rows, last token top-1 match. Structural checks pass (decoder window rows of chunk 0 zero on the
+skip path, layer 20's compressed KV of chunk 0 written).
+
+Timing (tests/perf/test_decoder_skip_time.py, 8x4, one model load (216 s), a fresh state per start, random ids,
+steady_state(start), 5 warm synced runs (median) + one rt-profiler run (device: every program, slowest chip a call)):
+| chunk at | nonlast (last=False): wall / device ms | last (after skipped chunks, carry masked) | full (= off) |
+|---|---|---|---|
+| 51200 | 108.3 / 83.61 | 194.9 / 167.06 | 194.5 / 167.89 |
+| 512000 | 112.7 / 91.83 | 225.4 / 205.89 | 229.8 / 206.00 |
+A non-last chunk costs 50 % (51200) / 55 % (512000) of the full chunk's device time and 56 % / 49 % of its wall;
+the masked last chunk equals the full one (its decoder layers read no carry: -0.8 / -0.1 ms device). A prompt of n
+chunks takes (n - 1) non-last + 1 last chunk (plus the caller's pull-back of a last chunk shorter than 2688).
+The gate's ladder / profile pass no `last` (framework harness): both A/B sides run the full chunk there, so the A/B
+table shows no difference by design; these numbers are the change.
+
+Gate units: test_decoder_skip PASS (gate --check); measure --part test (test_decoder_skip) rc 0, --part last (ladder,
+change on) rc 0 (final hidden 0.190 / 0.242, top5 1.0). Re-run: the two test commands in their docstrings; `measure
+--task P.30`.
+Attempt 2 (2026-11-03): no code change. DS41-201's bullet got its Found: and its detail section (the knowledge check refused attempt 1). `measure --task P.30` rc 0, every part reused on the same code: test_decoder_skip, last (final hidden 0.190 / 0.242, top5 1.0), profile (159.79 ms device, 199.4 ms wall), p51200 (200.0 ms wall), p512000 (228.9 ms wall); the ladder and profile run last=True on both sides (framework harness), so they show no A/B difference by design.
+
+## Masking a window carry whose rows were never computed: start class 0, not a zero carry
+
+DS41-201 (P.30 DECODER_SKIP=exact). On a request's last chunk after skipped chunks, the decoder layers (20-39) have no
+window rows for the positions before the chunk. Zeroing the carry is not a mask: a zero key still enters the softmax
+(score 0, weight exp(-max)) and dilutes the real rows. The mask is the window index lists of position 0 (class 0): they
+drop every position before the chunk start (sentinel tail), and no carry is read (`carry`, `carry_blocks`,
+`carry_owner`, the region's chip-0 carry return zero / none). `TtWindowCache.missing` (host-only interval set by
+`skip(start, end)`) drives `carry_masked(start)` -> `carry_class(start)` = 0; `computed`, `load_host` / `load_ring`,
+`free` trim or clear it, so a golden prefix is never masked. The index memo key carries the class.
+Result (s10240, chunk 0 last=False, chunk 1 last=True): the class-0 lists equal class 128's from row 127 on, so decoder
+layer 20 + k is exact from start + (k + 1) x 127; the checked rows agree with the off path to every printed digit
+(final hidden 0.19732 both, limit 0.25615; worst window KV L27 0.17080 both, limit 0.21494; top-5 1.0).
+Test gotcha: `testing/e2e_limits.check` takes the limit kind from the metric's `err_` prefix; a `skip_err_*` name gets
+the overlap limit (KeyError 'overlap'), so the test calls `err_limit` / `overlap_limit` directly.

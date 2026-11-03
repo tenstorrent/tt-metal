@@ -445,6 +445,10 @@ class TtWindowCache:
         # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the kept tail (load time; written by the last chip only): the carry of
         # chip 0's region, [1, 1, 4, WINDOW_BLOCK_BYTES] uint8, and the start it is the carry of (None: not valid)
         self.rtail, self.rtail_end = None, None
+        # DECODER_SKIP=exact (P.30): positions [lo, hi) whose rows this layer skipped (never computed; the cache holds
+        # zeros or another request's rows there), None = none. A chunk whose carry [start - 128, start) touches them
+        # masks its whole carry (``carry_class`` 0: the window index lists of position 0) and reads no carry rows
+        self.missing = None
         if window_region():
             _, page, carry = region_geometry()  # (bf16_tiles, P.26: [1, 1, 128, 512] bf16 rows)
             bf = region_bf16()
@@ -480,10 +484,41 @@ class TtWindowCache:
             )
             self._tail_blocks = (end, self._tail_buf)
 
+    # ------------------------------------------------------------------ DECODER_SKIP=exact (P.30)
+    def skip(self, start: int, end: int) -> None:
+        """This layer did not run positions [start, end) (host only, no device work): they join ``missing`` (one
+        interval: a skip not adjoining the last one replaces it) and the kept tail is dropped."""
+        m = self.missing
+        self.missing = (m[0], int(end)) if m is not None and m[1] == start else (int(start), int(end))
+        self._drop_tail()
+
+    def computed(self, start: int, end: int) -> None:
+        """This layer wrote positions [start, end): ``missing`` trimmed (host only)."""
+        m = self.missing
+        if m is None or end <= m[0] or start >= m[1]:
+            return
+        if start <= m[0] and end >= m[1]:
+            self.missing = None
+        elif start <= m[0]:
+            self.missing = (int(end), m[1])
+        elif end >= m[1]:
+            self.missing = (m[0], int(start))
+        # (a hole inside: ``missing`` stays the whole interval, conservative)
+
+    def carry_masked(self, start: int) -> bool:
+        """True when a position of the carry [start - 128, start) was skipped: the chunk reads no carry row."""
+        m = self.missing
+        return m is not None and m[0] < start and m[1] > start - WINDOW
+
+    def carry_class(self, start: int) -> int:
+        """The window index lists' start class of a chunk at ``start``: WindowGeometry.start_class, or 0 (every carry
+        row masked, as at position 0) when ``carry_masked``."""
+        return 0 if self.carry_masked(start) else self.geo.start_class(start)
+
     def carry_blocks(self, start: int) -> ttnn.Tensor | None:
         """The kept carry blocks of positions [start - 128, start), or None (not kept: read the rows, ``carry``)."""
         tail = self._tail_blocks
-        if tail is not None and tail[0] == start and start >= WINDOW:
+        if tail is not None and tail[0] == start and start >= WINDOW and not self.carry_masked(start):
             return tail[1]
         return None
 
@@ -491,7 +526,7 @@ class TtWindowCache:
         """(owner chip q (chip-linear), its local row) when the carry rows [start - 128, start) are 128 rows of ONE
         owner stripe (``carry``'s single-piece case), else None."""
         g = self.geo
-        if start < WINDOW:
+        if start < WINDOW or self.carry_masked(start):
             return None
         s_idx, u = divmod(start - WINDOW, g.stripe)
         if g.stripe - u < WINDOW:
@@ -611,7 +646,7 @@ class TtWindowCache:
         kept."""
         g = self.geo
         n = min(WINDOW, start)
-        if n == 0:
+        if n == 0 or self.carry_masked(start):  # (DECODER_SKIP=exact: skipped rows are never read; masked anyway)
             return self.tables.zero_carry
         tail = self._tail
         if tail is not None and tail[0] == start and n == WINDOW:  # GLUE_FOLD=on: the previous chunk's last rows
@@ -668,6 +703,7 @@ class TtWindowCache:
         g = self.geo
         assert p0 % 32 == 0, p0
         self._drop_tail()
+        self.computed(p0, p0 + rows.shape[0])  # (host rows of those positions: they exist)
         n = rows.shape[0]
         for a in range(0, n, g.chunk):
             m = min(g.chunk, n - a)
@@ -721,6 +757,7 @@ class TtWindowCache:
     def free(self) -> None:
         """Frees the tensor only when it is the cache's own (never the engine's)."""
         self._drop_tail()
+        self.missing = None
         if self._tail_buf is not None and self._tail_buf.is_allocated():
             dealloc(self._tail_buf)
         self._tail_buf = None
@@ -1056,7 +1093,7 @@ class TtWindowAttention:
             dealloc(own)
         # 3. chip 0's carry: the kept tail, or the served rows packed into it (start 0: no carry is read)
         ct = None
-        if cache.rtail_end != start and start > 0:
+        if cache.rtail_end != start and start > 0 and not cache.carry_masked(start):  # (P.30: a masked carry unread)
             owner = cache.carry_owner(start)
             if owner is not None and owner[0] == g.n - 1:
                 loc = owner[1]
@@ -1539,11 +1576,12 @@ class TtWindowAttention:
         assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
         end = start + s if end is None else int(end)
         cos, sin = self._rope_rows(start, s)
-        index = self.tables.index[g.start_class(start)]
+        cls = cache.carry_class(start)  # (DECODER_SKIP=exact, P.30: 0 when the carry rows were skipped)
+        index = self.tables.index[cls]
         if self.region is not None:  # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the chip's own region, ROW_BFP8 (bf16_tiles,
             # P.26: bf16 rows)
             self._window_region(kv, start, end, cache)
-            table, index = self.region, self.tables.region_index[g.start_class(start)]
+            table, index = self.region, self.tables.region_index[cls]
         elif self.win8:  # WINDOW_KV_FORMAT=bfp8_blocks: the window blocks, read as kv_format ROW_BFP8
             if self._packs(start):  # CKV_PACK_BEFORE_GATHER=on (P.11)
                 self._window_packed(kv, start, end, cache)

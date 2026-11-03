@@ -858,6 +858,19 @@ TABLE = {
         "for the tail's rows; the deep layers' served window rows outside it are never written. Not for serving (the "
         "runner refuses it)",
     ),
+    "DECODER_SKIP": Setting(
+        "off",
+        ("off", "exact"),
+        "P.30 (owner 2026-11-03, the Causal Encoder-Decoder's decoder skip, arXiv 2609.19969; default off until the "
+        "owner decides). off = every layer on every chunk (the caller's ``last`` is ignored). exact = on a chunk the "
+        "caller marks not the request's last (TtDS41Model.begin_chunk(tokens, start, last=False)) layers 0-19 run in "
+        "full and layer 20 (the candidate / KV source) only its KV projection (attn_hc, attn_collapse, attn_norm, "
+        "compressor: the compressed KV and index keys layers 20-39 read); layer 20's attention / MoE and layers 21-39 "
+        "are skipped (their window caches note the positions as missing). On the last chunk (last=True, the default) "
+        "every layer runs; a decoder layer whose window rows before the chunk were skipped masks them (the window "
+        "index lists of position 0: never reads them). Exact for rows >= chunk start + 20 x 127: the caller starts a "
+        "last chunk >= 2688 tokens before its end (the model does not pull back)",
+    ),
     "HOST_GLUE": Setting(
         "on",
         ("on", "off"),

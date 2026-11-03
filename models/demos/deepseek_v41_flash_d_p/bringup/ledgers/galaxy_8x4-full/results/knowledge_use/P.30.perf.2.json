@@ -1,0 +1,76 @@
+{
+ "used": [
+  {
+   "id": "DS41-181",
+   "how": "the per-chip region's chip-0 carry (kept tail or served rows) is the read a masked chunk skips: _window_region step 3 gated on carry_masked",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md is at the 500 KB hook limit: P.30's notes went to known_issues_detail.md, the BREADCRUMBS pointer line only extended (FIX.20/P.27-30)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-146",
+   "how": "the skip allocates nothing at load or per chunk (host-only missing interval, the Skipped marker), so no load-time address moves",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "kv_only frees each step output after its last reader with the inputs' ids protected, as TtDS41Block.__call__ does",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-201",
+   "how": "the decoder's carry mask is start class 0 with no carry read (TtWindowCache.carry_class), never a zero carry; entry completed with Found: + detail section in attempt 2",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "testing/e2e_limits.check picks the limit kind from the metric's err_ prefix; a model test's skip_err_* metric gets overlap_limit (KeyError 'overlap'): call err_limit / overlap_limit directly (DS41-201)",
+  "the framework harness (ladder, profile) calls begin_chunk(tokens, start) only: a per-chunk 'last' flag cannot reach the gate's ladder / profile without a framework change, so their A/B shows the last-chunk path on both sides"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: a skipped chunk runs fewer steps at the same shapes; the mask reuses the position-0 index lists built at load"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added or touched; kv_only calls the full block's own (prepared) modules"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; attempt 2 ran only measure --task P.30 (all parts reused)"
+  }
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.30",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-03T23:04:42",
+  "head": "b2f8d8c6cd7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.30.perf.2.json"
+  ]
+ },
+ "cited_only": [
+  "DS41-120",
+  "DS41-125",
+  "DS41-132"
+ ]
+}

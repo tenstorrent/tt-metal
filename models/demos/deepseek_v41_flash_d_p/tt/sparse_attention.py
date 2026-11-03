@@ -242,15 +242,16 @@ class TtSparseAttention(TtWindowAttention):
         assert rows == g.w, (rows, g.w, g.q_rows)
         return ttnn.mesh_partition(topk, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
 
-    def _index(self, topk: ttnn.Tensor, ckv_cache, nb: int, start: int) -> ttnn.Tensor:
-        """The chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR: [window | top-k rows], sentinels last."""
+    def _index(self, topk: ttnn.Tensor, ckv_cache, nb: int, start: int, cls: int | None = None) -> ttnn.Tensor:
+        """The chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR: [window | top-k rows], sentinels last.
+        ``cls``: the window's start class (default the start's; DECODER_SKIP=exact, P.30: the cache's carry_class)."""
         g = self.geo
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
         mine = self._mine(topk)
         rows = self._topk_rows(mine, ckv_cache, nb, WINDOW + g.chunk)
         if mine is not topk:
             dealloc(mine)
-        cls = g.start_class(start)
+        cls = g.start_class(start) if cls is None else cls
         src = ttnn.concat([self.tables.index[cls], rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         dealloc(rows)
         if cls == WINDOW:  # every window full: the top-k's own sentinel tail ends the list
@@ -259,14 +260,14 @@ class TtSparseAttention(TtWindowAttention):
         dealloc(src)
         return out
 
-    def _index_static(self, topk: ttnn.Tensor, table: AttnTable, start: int) -> ttnn.Tensor:
+    def _index_static(self, topk: ttnn.Tensor, table: AttnTable, start: int, cls: int | None = None) -> ttnn.Tensor:
         """STATIC_TABLES=on: the chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR = [window ids + base |
         the top-k group ids as they are] (group j is table row j; 0xFFFFFFFF stays the sentinel), compacted for
         starts < 128 as ``_index``."""
         g = self.geo
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
         mine = self._mine(topk)
-        cls = g.start_class(start)
+        cls = g.start_class(start) if cls is None else cls
         # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the window ids in the chip's own region
         win = self.tables.region_index[cls] if self.region is not None else table.index[cls]
         src = ttnn.concat([win, mine], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
@@ -309,10 +310,11 @@ class TtSparseAttention(TtWindowAttention):
                 window = table.win
             self._release_window(carry, kv_rm, cache, start, end)
         shared = memo is not None and sources is not None
-        ikey = (start, id(ckv_cache), ckv_cache.version)
+        cls = cache.carry_class(start)  # (DECODER_SKIP=exact, P.30: 0 when the carry rows were skipped)
+        ikey = (start, id(ckv_cache), ckv_cache.version, cls)
         index = memo.get(("index", sources[1]), ikey) if shared else None
         if index is None:
-            index = self._index_static(topk, table, start)
+            index = self._index_static(topk, table, start, cls)
             if shared:
                 memo.put(("index", sources[1]), ikey, index)
         q_rm = self._q(q_resid, cos, sin)
@@ -363,11 +365,12 @@ class TtSparseAttention(TtWindowAttention):
         dealloc(window)
         if not shared:
             dealloc(comp)
-        index = memo.get(("index", sources[1]), ckey) if shared else None
+        cls = cache.carry_class(start)  # (DECODER_SKIP=exact, P.30)
+        index = memo.get(("index", sources[1]), ckey + (cls,)) if shared else None
         if index is None:
-            index = self._index(topk, ckv_cache, nb, start)
+            index = self._index(topk, ckv_cache, nb, start, cls)
             if shared:
-                memo.put(("index", sources[1]), ckey, index)
+                memo.put(("index", sources[1]), ckey + (cls,), index)
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, index)
         for t in (q_rm, table) + (() if shared else (index,)):
