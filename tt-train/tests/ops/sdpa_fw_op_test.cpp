@@ -1731,7 +1731,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     // With the knobs at 0 the shape rule picks the chunking: larger than main's one Q row / four K tiles
     // where L1 allows, and always something that fits.
     using namespace ttml::metal::ops::sdpa_fw::device;
-    constexpr uint64_t kBudget = 1'300'000U;  // a Blackhole core's usable L1
+    constexpr uint64_t kBudget = 1'300'000U;  // a test budget a little under a Blackhole core's L1
     constexpr uint32_t kCores = 130U;         // the Blackhole p150 compute grid
     const SDPAForwardShape tinyllama{
         .batch = 1U,
