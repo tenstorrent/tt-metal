@@ -248,7 +248,10 @@ def build_route_constants(
     # Shard-row selectors for the route moment exchange ((head, shard) units): gather tile t holds shard ps = 4t + q at
     # rows q*8 + n (n = moment tile 0..7: DT sums, DT sums of squares); selector tile n has ones at row 0, columns
     # q*8 + n, so selector[n] @ gather[t] puts the sum over that tile's shards of moment n in row 0, accumulated over t.
-    assert S in (4, 8), S  # other counts leave never-written rows in the gather tiles (0 * stale NaN = NaN)
+    # Each gather tile holds 4 shards, so S must fill those tiles (a partial tile's unread rows are stale: 0 * NaN = NaN).
+    # The exchange itself runs only for 4 or 8 shards. 32 shards (a 4x32 mesh) are a full 8 tiles, but that mesh uses
+    # the all-shard layout instead; this selector is uploaded and not read there.
+    assert S in (4, 8, 32), S
     shsel = torch.zeros(1, 1, 8 * TILE, TILE)
     for n in range(8):
         for q in range(min(4, S)):
@@ -541,8 +544,9 @@ class SolPrepass(Module):
         # Unit = (head, shard): H*S units, which keeps the core grid filled when NQCT is small. The chunk-form mask
         # (MODE 0) assembles whole rows from every shard in the writer's L1 row buffer (their per-shard word ranges
         # are not NoC-aligned), so it keeps the (head, Q-chunk tile row) unit with H*NQCT units; the kernels
-        # static_assert the same rule.
-        units_per_shard = int(mode == 1 and H * S <= nx * ny) # True if the block mask units fit the core grid else false for Wormhole
+        # static_assert the same rule. The partial-moment exchange packs at most 8 shards, so a 32-shard mesh
+        # (4x32) stays on the all-shard layout, which reads every shard's pooled K.
+        units_per_shard = int(mode == 1 and S <= 8 and H * S <= nx * ny)
         units = H * S if units_per_shard else H * NQCT
         self.route_units = (units, units_per_shard)
         ct += [nx, ny, units, units_per_shard]  # grid + unit count + unit kind; kernels derive their range per core

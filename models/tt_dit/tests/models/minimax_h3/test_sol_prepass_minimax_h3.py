@@ -219,6 +219,15 @@ def test_sol_prepass_extremes(mesh_device, sp_axis, tp_axis, num_links, topology
     assert r["agree_all"] == 1.0, r
 
 
+def _rows_for_shards(rows_8: int, shards: int) -> int:
+    """Local rows for this shard count. `rows_8` is the 8-shard working point; a 32-shard mesh splits that same
+    global length, padded up to a tile so the pool program's row count stays aligned."""
+    if shards <= 8:
+        return rows_8
+    local = -(-(rows_8 * 8) // shards)
+    return -(-local // 32) * 32
+
+
 @GALAXY_RING
 @pytest.mark.parametrize(
     ("rows", "logical_n", "q_chunk", "k_chunk"),
@@ -226,7 +235,7 @@ def test_sol_prepass_extremes(mesh_device, sp_axis, tp_axis, num_links, topology
         (4736, 37800, 320, 384),
         (9184, 73425, 256, 512),
         (13664, 109101, 256, 512),
-    ],  # the module's chunking per working point
+    ],  # the module's chunking per working point, as the 8-shard local length
     ids=["5s", "10s", "15s"],
 )
 def test_sol_prepass_bench(
@@ -234,11 +243,12 @@ def test_sol_prepass_bench(
 ):
     """Production geometries, random data: correctness vs mirror, then wall time of the pre-pass and its parts."""
     S = tuple(mesh_device.shape)[sp_axis]
-    geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
+    local_rows = _rows_for_shards(rows, S)
+    geo = SolGeometry(shards=S, rows=local_rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
     scale = D**-0.5
     sink_tokens = {13664: 1245, 9184: 849, 4736: 453}[rows]  # real t2va prefix lengths (text + audio) per working point
     torch.manual_seed(0)
-    q, k, v = (torch.randn(S, H, rows, D).bfloat16().float() for _ in range(3))
+    q, k, v = (torch.randn(S, H, local_rows, D).bfloat16().float() for _ in range(3))
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     r = _check(
         mesh_device,
@@ -275,11 +285,11 @@ def test_sol_prepass_bench(
     enq = sorted(t[0] for t in times)[len(times) // 2]
     tot = sorted(t[1] for t in times)[len(times) // 2]
     logger.info(
-        f"pre-pass rows {rows} chunks {q_chunk}x{k_chunk}: median wall {tot:.2f} ms (host enqueue {enq:.2f} ms) over {reps} reps"
+        f"pre-pass rows {local_rows} (working point {rows}) chunks {q_chunk}x{k_chunk}: median wall {tot:.2f} ms (host enqueue {enq:.2f} ms) over {reps} reps"
     )
     rows_out = [
         {
-            "rows": rows,
+            "rows": local_rows,
             "logical_n": logical_n,
             "q_chunk": q_chunk,
             "k_chunk": k_chunk,
@@ -323,13 +333,13 @@ def test_sol_prepass_bench(
     med = lambda xs, i: sorted(x[i] for x in xs)[len(xs) // 2]
     breakdown = {k: {"enqueue_ms": med(v, 0), "wall_ms": med(v, 1)} for k, v in parts.items()}
     logger.info(
-        f"breakdown rows {rows}: "
+        f"breakdown rows {local_rows}: "
         + ", ".join(f"{k} enq {d['enqueue_ms']:.2f} / wall {d['wall_ms']:.2f} ms" for k, d in breakdown.items())
     )
     rows_out.append(
         {
             "prepass": "breakdown",
-            "rows": rows,
+            "rows": local_rows,
             "logical_n": logical_n,
             "q_chunk": q_chunk,
             "k_chunk": k_chunk,
