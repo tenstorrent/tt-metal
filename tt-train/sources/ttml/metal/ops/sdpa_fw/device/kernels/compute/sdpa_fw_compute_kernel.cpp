@@ -58,14 +58,20 @@ constexpr uint32_t out_tiles = rows * vWt;                // output / accumulato
 constexpr uint32_t k_tiles = Sk_chunk_t * qWt;            // K tiles of one step
 constexpr uint32_t v_tiles = Sk_chunk_t * vWt;            // V tiles of one step
 
-static_assert(rows % qk_block_h == 0U && Sk_chunk_t % qk_block_w == 0U, "QK^T block must tile the item rows");
+// DST holds sm_block_size tiles per pass. The QK^T block fills it; the PV block and the finalize block
+// each leave one slot for the broadcast factor (alpha, 1/sum) they multiply by, or it would land on a
+// live tile without any error.
+static_assert(rows % qk_block_h == 0U && Sk_chunk_t % qk_block_w == 0U, "QK^T block must tile the scores");
+static_assert(qk_block_h * qk_block_w <= sm_block_size, "QK^T block must fit DST");
+static_assert(rows % pv_block_h == 0U && vWt % pv_block_w == 0U, "PV block must tile the output");
+static_assert(pv_block_h * pv_block_w < sm_block_size, "PV block must leave the alpha slot free");
+static_assert(vWt % block_size == 0U && block_size < sm_block_size, "finalize block must leave the 1/sum slot free");
 
 // Per-row state passes (max, alpha, sums, finalize) batch up to a DST's worth of rows into one pass.
 constexpr uint32_t kRowsPerPass = sm_block_size;
 constexpr uint32_t rows_in_pass(uint32_t row0, uint32_t per_pass) {
     return (rows - row0 < per_pass) ? (rows - row0) : per_pass;
 }
-static_assert(rows % pv_block_h == 0U, "PV block must tile the item rows");
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
