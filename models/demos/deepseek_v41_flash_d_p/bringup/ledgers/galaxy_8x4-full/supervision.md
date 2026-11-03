@@ -1423,3 +1423,11 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   and the A/B then skipped both sides ("changed nothing under the task's paths": F233 only exempted ab.flip), so the
   gate failed on missing metrics. FRAMEWORK F245 (533dc41180c): keep_default counts as switch-only like flip;
   selftest. decide --task P.29 --rerun, resumed 19:02 (the agent's measured side should be reused: same code key).
+- 19:40 P.29 A/B (bfp8_down4 on / bfp4 off, rung last, 50k): device +25.8 ms (194.7 / 168.9; experts +25.3), wall
+  +8.5 (210.0 / 201.5); DRAM at 1M, 1 slot: load 20.84 GiB (experts 14.17), peak 24.91 (fits 27.2; bfp8 27.54, bfp4
+  19.63). Accuracy: err_final_hidden 0.117 / 0.190 (share 0.48 / 0.79), L09 0.089, L29 0.094, window KV L28 0.092;
+  top-5 1.0. ACCEPTED as a switch (owner's order), default stays bfp4. The commit was refused (state.json 506 KB >
+  500 KB hook): FRAMEWORK F246 (3108d45800d: commit_pending beside state.json, state metrics at 6 significant
+  digits; selftest); `gate P.29 --commit-only` -> 75bf294c1bc, nothing re-run; state.json 430 KB. Run stopped at
+  --until P.29. Waiting for the owner: the experts' default from P.27 / P.28 / P.29; P.30 needs the overseer's
+  ladder change first.
