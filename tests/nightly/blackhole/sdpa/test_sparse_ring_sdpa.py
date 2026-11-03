@@ -20,9 +20,10 @@ dense op's own accuracy on the same inputs (_check_vs_dense_floor). The cases co
 partial last blocks, a logical_n tail and a shard with less than one block of live tokens, mask structures (random,
 band, clustered, uneven rows), minimal masks, masks without block 0, Q blocks that keep nothing (zero output
 kept-only), kept partial blocks, padding inside the sequence (the block_counts input: ragged and empty blocks at
-random and VSA's ragged 4x4x4 layout), block-float inputs, per-head masks, determinism, new inputs on a cached
-program, several Q passes, pair steps (r1024k256: three blocks of one head per core) and the kept-only mode. Runs on a
-single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring); production lengths are skipped on CI.
+random and VSA's ragged 4x4x4 layout), block-float inputs, frame-sparse masks (the old frame allow table), per-head
+masks, determinism, new inputs on a cached program, several Q passes, pair steps (r1024k256: three blocks of one head
+per core) and the kept-only mode. Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring); production
+lengths are skipped on CI.
 """
 
 import math
@@ -188,6 +189,56 @@ def make_structured_mask(geo, S, H, *, structure, density, seed=0, keep_block0=T
     mask = keep.to(torch.int64) * full.to(torch.int64)  # full blocks only
     mask[:, :, nb:] = 0  # padding Q rows
     return mask
+
+
+def window_allow(num_frames, num_frames_padded, window, add_last_frame):
+    """[num_frames_padded, num_frames_padded] frame allow table of the frame-sparse ring_joint path
+    (sosborne/sparse-ring-sdpa): query frame i attends frames [i - window // 2, i + window - window // 2) and, with
+    add_last_frame, the last real frame. Padding frames attend and are attended by nothing."""
+    hl, hr = window // 2, window - window // 2
+    allow = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.int64)
+    for i in range(num_frames):
+        allow[i, max(0, i - hl) : min(num_frames, i + hr)] = 1
+        if add_last_frame:
+            allow[i, num_frames - 1] = 1
+    return allow
+
+
+def frame_block_mask(allow, tokens_per_frame, geo, S, H):
+    """The sparse op's block mask for a frame allow table (allow[qf, kf] != 0: query frame qf attends key frame kf),
+    the same for every head: Q block qb of shard s keeps global block (s', b) iff their frames are allowed. Frames
+    are tokens_per_frame consecutive tokens of the whole sequence and may straddle shards; each block lies in one
+    frame when tokens_per_frame and the shard rows are multiples of the block."""
+    assert tokens_per_frame % BLOCK == 0 and geo.rows % BLOCK == 0, "a block must lie inside one frame"
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    nf = allow.shape[0]
+    first_tok = torch.arange(S)[:, None] * geo.rows + torch.arange(nb_pad)[None, :] * BLOCK  # [S, nb_pad]
+    frame = (first_tok // tokens_per_frame).clamp(max=nf - 1)
+    live = (torch.arange(nb_pad) < nb).expand(S, nb_pad)  # padding blocks past each shard's nb
+    mask = allow[frame][:, :, frame.reshape(-1)]  # [S, nb_pad, S * nb_pad]
+    mask = mask * live[:, :, None] * live.reshape(-1)[None, None, :]
+    return (mask != 0).to(torch.int64)[:, None].expand(S, H, nb_pad, S * nb_pad).contiguous()
+
+
+def frame_reference(q, k, v, allow, tokens_per_frame, logical_n, scale, heads):
+    """fp64 frame-sparse attention straight from the allow table (independent of frame_block_mask): every real
+    query token attends the real tokens of its frame's allowed frames; nothing allowed gives zero. NaN for the
+    heads not computed and for rows past logical_n."""
+    out = torch.full(q.shape, float("nan"))
+    tok_frame = torch.arange(q.shape[2]) // tokens_per_frame
+    real = torch.arange(q.shape[2]) < logical_n
+    for qf in range(allow.shape[0]):
+        rows = torch.nonzero((tok_frame == qf) & real).flatten()
+        if rows.numel() == 0:
+            continue
+        keys = torch.nonzero(allow[qf][tok_frame.clamp(max=allow.shape[0] - 1)].bool() & real).flatten()
+        for h in heads:
+            if keys.numel() == 0:
+                out[0, h, rows] = 0.0
+                continue
+            w = torch.softmax((q[0, h, rows].double() @ k[0, h, keys].double().T) * scale, dim=1)
+            out[0, h, rows] = (w @ v[0, h, keys].double()).float()
+    return out
 
 
 def pool(x, geo, S, counts=None):
@@ -694,6 +745,58 @@ def test_block_float_inputs(runtime, dtype, pooled):
     r = case.run(*case.inputs(25), mask, want_dense=False, pooled=pooled)
     mode = "pooled" if pooled else "kept-only"
     _check(f"{dtype} {mode}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+
+
+# Frame-sparse attention (the frame allow table of the closed frame-sparse ring_joint path, sosborne/sparse-ring-sdpa),
+# expressed as a block mask (frame_block_mask), kept blocks only. Frames of 2048 tokens straddle shards (two shards
+# per frame), 256-token frames give 32 frames; one padding frame each, as the frame counts were padded to the ring.
+@pytest.mark.parametrize("allow_all", [False, True], ids=["window", "allow_all"])
+@pytest.mark.parametrize("tokens_per_frame", [256, 512, 2048])
+def test_frame_mask(runtime, tokens_per_frame, allow_all):
+    """A windowed frame mask (window 5 and the last frame, as the old tests) or every real frame allowed, against
+    an fp64 frame-level reference built from the allow table alone (checks the conversion too)."""
+    S = MESH_CONFIG.sp_size
+    rows = 1024
+    if (S * rows) % tokens_per_frame:
+        pytest.skip(f"{S} shards of {rows} rows are not whole {tokens_per_frame}-token frames")
+    nf_pad = S * rows // tokens_per_frame
+    nf = nf_pad - 1
+    geo = Geometry(rows, nf * tokens_per_frame, 256)
+    case = Case(runtime, geo)
+    if allow_all:
+        allow = torch.zeros(nf_pad, nf_pad, dtype=torch.int64)
+        allow[:nf, :nf] = 1
+    else:
+        allow = window_allow(nf, nf_pad, window=5, add_last_frame=True)
+    mask = frame_block_mask(allow, tokens_per_frame, geo, case.S, case.H)
+    q, k, v = case.inputs(26)
+    r = case.run(q, k, v, mask, want_dense=allow_all, pooled=False)
+    heads = sorted({0, 1, case.H // 2, case.H - 1})
+    ref = frame_reference(q, k, v, allow, tokens_per_frame, geo.logical_n, case.scale, heads)[:, :, : geo.logical_n]
+    tag = f"frames {tokens_per_frame} {'allow-all' if allow_all else 'window'}"
+    p_frames = _pcc(ref, r["sparse"])
+    logger.info(f"[{tag}] {nf} of {nf_pad} frames real: pcc vs frame reference {p_frames:.5f}")
+    assert _pcc(ref, r["ref"]) > 0.99999, f"{tag}: the block mask does not express the frame table"
+    _check(tag, r, _density(mask, geo, case.S), dense_min=0.9995 if allow_all else None, ref_min=0.999)
+    assert p_frames > 0.999, f"{tag}: pcc vs frame reference {p_frames:.5f}"
+
+
+@SLOW
+@pytest.mark.parametrize("tokens_per_frame", [3840, 1920], ids=["720p", "480p"])
+def test_frame_mask_video(runtime, tokens_per_frame):
+    """The old frame-sparse video shapes: 21 frames padded to 24, window 5 and the last frame. Gated against the
+    dense op's accuracy floor on the same inputs."""
+    S = MESH_CONFIG.sp_size
+    nf, nf_pad = 21, -(-21 // S) * S
+    if (nf_pad * tokens_per_frame) % (S * BLOCK):
+        pytest.skip(f"{nf_pad} frames of {tokens_per_frame} tokens do not split into {S} shards of whole blocks")
+    rows = nf_pad * tokens_per_frame // S
+    geo = Geometry(rows, nf * tokens_per_frame, 256, dense_chunks=(256, 512))
+    case = Case(runtime, geo)
+    allow = window_allow(nf, nf_pad, window=5, add_last_frame=True)
+    mask = frame_block_mask(allow, tokens_per_frame, geo, case.S, case.H)
+    r = case.run(*case.inputs(27), mask, want_ref="slice", dense_floor=True, pooled=False)
+    _check_vs_dense_floor(f"frames video {tokens_per_frame}", r, _density(mask, geo, case.S))
 
 
 def test_determinism(runtime):
