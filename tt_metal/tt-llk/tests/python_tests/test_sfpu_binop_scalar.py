@@ -94,13 +94,17 @@ def _run_sfpu_binop_scalar(
     perf_report=None,
     run_types=None,
     loop_factor=1,
-    iterations=32,
+    iterations=8,
 ):
     """Drive one scalar binop variant.
 
-    *spec_A* overrides the tensor operand. The scalar axis has been swept since the
-    presubmit/nightly split, but the tensor operand had no knob at all and was pinned to
-    the default above, so the only way to reach an edge on it was to edit this function.
+    Functional runs use ``spec_A`` (or the default bounded tensor), generate a golden,
+    and check the full result. Perf runs require ``perf_report`` and skip stimuli,
+    golden generation, and result checks, so ``spec_A`` is ignored.
+
+    ``input_dimensions`` and ``loop_factor`` set the shared kernel's tile and outer
+    loops. ``run_types`` selects measured perf paths. ``iterations`` is a catalog
+    placeholder; the SFPU operation itself uses eight iterations per face.
     """
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -130,20 +134,22 @@ def _run_sfpu_binop_scalar(
             mathop, src_A, scalar_bits, formats.output_format, dest_acc
         )
 
+    templates = [
+        SFPU_BINOP_MODE(mathop),
+        SFPU_UNARY_SCALAR(scalar_bits),
+        APPROX_MODE(_APPROX_MODE),
+        ITERATIONS(iterations),
+        TILE_COUNT(tile_cnt_A),
+        LOOP_FACTOR(loop_factor),
+        NUM_FACES(num_faces=faces_to_generate),
+        UNPACK_TRANS_FACES(Transpose.No),
+        UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+    ]
+
     test_config_kwargs = {
         "test_name": "sources/sfpu_binop_scalar_test.cpp",
         "formats": formats,
-        "templates": [
-            SFPU_BINOP_MODE(mathop),
-            SFPU_UNARY_SCALAR(scalar_bits),
-            APPROX_MODE(_APPROX_MODE),
-            ITERATIONS(iterations),
-            TILE_COUNT(tile_cnt_A),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
+        "templates": templates,
         "runtimes": [],
         "variant_stimuli": StimuliConfig(
             None if src_A is None else src_A.flatten(),
@@ -155,9 +161,8 @@ def _run_sfpu_binop_scalar(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        # The perf sweep deliberately retains Float32 with a 16-bit Dest. That
-        # combination is performance-only and must unpack directly to Dest; routing
-        # it through SrcA is rejected by the LLK. The functional sweep skips it.
+        # Perf retains Float32 with a 16-bit Dest, which must unpack directly to Dest;
+        # the functional sweep skips that unsupported comparison pipeline.
         "unpack_to_dest": formats.input_format.is_32_bit(),
         "dest_acc": dest_acc,
         "compile_time_formats": True,
@@ -237,9 +242,28 @@ def test_sfpu_binop_scalar(formats, dest_acc, mathop):
 
 @pytest.mark.nightly
 @parametrize(
-    formats=_SCALAR_FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=_SCALAR_OPS,
+    **SFPU_BINOP_SCALAR_SWEEP,
+    input_dimensions=[[96, 96]],
+    loop_factor=[4],
+)
+def test_sfpu_binop_scalar_multi_tile(
+    formats, dest_acc, mathop, input_dimensions, loop_factor
+):
+    """Check full and partial DEST blocks across repeated functional tile loops."""
+    _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
+    _run_sfpu_binop_scalar(
+        formats,
+        dest_acc,
+        mathop,
+        scalar=_PRESUBMIT_SCALAR,
+        input_dimensions=input_dimensions,
+        loop_factor=loop_factor,
+    )
+
+
+@pytest.mark.nightly
+@parametrize(
+    **SFPU_BINOP_SCALAR_SWEEP,
     scalar=list(_NIGHTLY_SCALARS),
 )
 def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
@@ -266,11 +290,7 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
 # only meaningful while the result stays in range: |scalar| > 8, and +/-tiny / +/-large on the
 # tensor operand. That is the pattern sfpu_accuracy_budget_*.yaml uses for pow and xlogy.
 @pytest.mark.nightly
-@parametrize(
-    formats=_SCALAR_FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=_SCALAR_OPS,
-)
+@parametrize(**SFPU_BINOP_SCALAR_SWEEP)
 def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
     """Drive IEEE specials through the tensor operand of each scalar binop."""
     _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)

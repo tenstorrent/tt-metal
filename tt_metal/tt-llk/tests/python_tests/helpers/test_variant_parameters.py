@@ -312,7 +312,7 @@ class SFPU_BINOP_MODE(TemplateParameter):
     """Select the float unary-with-scalar binop at compile time.
 
     Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
-    ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
+    ``sfpu_binop_scalar_test.cpp``, matching the BINOP_MODE enum in
     ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
     """
 
