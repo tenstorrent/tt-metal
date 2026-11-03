@@ -574,7 +574,7 @@ void kernel_main() {
     // chunk steps; only S_i / v_new / dS / dv_new leave to DRAM.
     // =====================================================================
     for (uint32_t oi = 0; oi < num_owned; ++oi) {
-        for (uint32_t vb = 0; vb < NVB; ++vb) {
+        {  // one scan unit: a value head's V-block
             if constexpr (HAS_DHT) {
                 cb_wait_front(cb_vin, MAXV);
                 PCOPY(cb_vin, cb_sb, 0, KtVb, KtVb);

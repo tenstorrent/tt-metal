@@ -240,9 +240,10 @@ void kernel_main() {
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t item_start = get_arg_val<uint32_t>(arg++);
     const uint32_t num_items = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_release_groups = get_arg_val<uint32_t>(arg++);
+    const uint32_t num_releases = get_arg_val<uint32_t>(arg++);  // scan units of the groups this core has G work in
     const uint32_t scale_bits = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_owned = get_arg_val<uint32_t>(arg++);
+    const uint32_t num_owned = get_arg_val<uint32_t>(arg++);         // scan units owned
+    const uint32_t num_owned_groups = get_arg_val<uint32_t>(arg++);  // distinct groups among them
     const uint32_t owned_base = arg;
 
     constexpr uint32_t in_tile = 32 * 32 * ESZ;
@@ -326,17 +327,20 @@ void kernel_main() {
     // ------------------------------------------------------------------
     if (num_owned > 0) {
         volatile tt_l1_ptr uint32_t* sem = get_sem_ptr(SEM_PREP);
-        noc_semaphore_wait_min(sem, NC * num_owned);
+        noc_semaphore_wait_min(sem, NC * num_owned_groups);
 
         // -------------------------------------------------------------
-        // Stage S: the sequential scan, one core per (b, h).
+        // Stage S: the sequential scan.  A scan unit is one value head's V-block (u = bh * NVB + vb): a serial
+        // chain over the chunks of that head, independent of every other unit.
         // -------------------------------------------------------------
         for (uint32_t oi = 0; oi < num_owned; ++oi) {
-            const uint32_t bh = get_arg_val<uint32_t>(owned_base + oi);
+            const uint32_t u = get_arg_val<uint32_t>(owned_base + oi);
+            const uint32_t bh = u / NVB;
+            const uint32_t vb = u % NVB;
             const uint32_t b = bh / gH;
             const uint32_t h = bh % gH;
 
-            for (uint32_t vb = 0; vb < NVB; ++vb) {
+            {
                 if constexpr (HAS_DHT) {
                     read_state_block(dht_acc, b, h, vb);
                 }
@@ -366,7 +370,7 @@ void kernel_main() {
     // ------------------------------------------------------------------
     {
         volatile tt_l1_ptr uint32_t* sem = get_sem_ptr(SEM_SCAN);
-        noc_semaphore_wait_min(sem, num_release_groups);
+        noc_semaphore_wait_min(sem, num_releases);
     }
 
     // ------------------------------------------------------------------

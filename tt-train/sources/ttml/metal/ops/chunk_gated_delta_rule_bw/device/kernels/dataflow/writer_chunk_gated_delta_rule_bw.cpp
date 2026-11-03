@@ -167,8 +167,12 @@ void kernel_main() {
     const uint32_t item_start = get_arg_val<uint32_t>(arg++);
     const uint32_t num_items = get_arg_val<uint32_t>(arg++);
     const uint32_t num_groups = get_arg_val<uint32_t>(arg++);
+    // Per group: bh, the number of scan owners n, then n (NoC x, y) pairs.
     const uint32_t group_base = arg;
-    const uint32_t owned_cnt_idx = group_base + 3 * num_groups;
+    uint32_t owned_cnt_idx = group_base;
+    for (uint32_t gidx = 0; gidx < num_groups; ++gidx) {
+        owned_cnt_idx += 2 + 2 * get_arg_val<uint32_t>(owned_cnt_idx + 1);
+    }
     const uint32_t num_owned = get_arg_val<uint32_t>(owned_cnt_idx);
     const uint32_t owned_base = owned_cnt_idx + 1;
     const uint32_t release_base = owned_base + num_owned;
@@ -207,30 +211,37 @@ void kernel_main() {
             drain_strided(sc_acc, SC_C + wi * ST_C, Kt, Vt, vb * Vb, Vb);
         }
 
-        // Barrier-1 fan-in: +1 on the owner of this item's group.
+        // Barrier-1 fan-in: +1 on every scan owner of this item's group.
         const uint32_t bh = wi / NC;
+        uint32_t entry = group_base;
         for (uint32_t gidx = 0; gidx < num_groups; ++gidx) {
-            if (get_arg_val<uint32_t>(group_base + 3 * gidx) == bh) {
-                const uint32_t ox = get_arg_val<uint32_t>(group_base + 3 * gidx + 1);
-                const uint32_t oy = get_arg_val<uint32_t>(group_base + 3 * gidx + 2);
-                noc_semaphore_inc(get_noc_addr(ox, oy, sem_prep_addr), 1);
+            const uint32_t nown = get_arg_val<uint32_t>(entry + 1);
+            if (get_arg_val<uint32_t>(entry) == bh) {
+                for (uint32_t o = 0; o < nown; ++o) {
+                    const uint32_t ox = get_arg_val<uint32_t>(entry + 2 + 2 * o);
+                    const uint32_t oy = get_arg_val<uint32_t>(entry + 3 + 2 * o);
+                    noc_semaphore_inc(get_noc_addr(ox, oy, sem_prep_addr), 1);
+                }
                 break;
             }
+            entry += 2 + 2 * nown;
         }
     }
     noc_async_atomic_barrier();
 
     // ------------------------------------------------------------------
-    // Stage S: drain the scan, then release the group.
+    // Stage S: drain the scan, then release the unit's group.
     // ------------------------------------------------------------------
     {
         uint32_t rcursor = release_base;
         for (uint32_t oi = 0; oi < num_owned; ++oi) {
-            const uint32_t bh = get_arg_val<uint32_t>(owned_base + oi);
+            const uint32_t u = get_arg_val<uint32_t>(owned_base + oi);
+            const uint32_t bh = u / NVB;
+            const uint32_t vb = u % NVB;
             const uint32_t b = bh / gH;
             const uint32_t h = bh % gH;
 
-            for (uint32_t vb = 0; vb < NVB; ++vb) {
+            {
                 for (int32_t i = (int32_t)NC - 1; i >= 0; --i) {
                     const uint32_t wi = bh * NC + (uint32_t)i;
                     drain_strided(sc_acc, SC_DS + wi * ST_DS, Kt, Vt, vb * Vb, Vb);
@@ -255,7 +266,7 @@ void kernel_main() {
                 }
             }
 
-            // Barrier-2 fan-out: +1 to every core with stage-G work in this group.
+            // Barrier-2 fan-out: +1 to every core with stage-G work in this unit's group.
             const uint32_t ntargets = get_arg_val<uint32_t>(rcursor);
             ++rcursor;
             for (uint32_t t = 0; t < ntargets; ++t) {

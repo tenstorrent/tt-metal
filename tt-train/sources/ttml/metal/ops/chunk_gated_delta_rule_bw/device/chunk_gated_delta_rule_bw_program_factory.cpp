@@ -200,7 +200,20 @@ Geometry make_geometry(const operation_attributes_t& args, const tensor_args_t& 
         .gate = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_args.g.dtype())),
         .f32 = tt::tile_size(tt::DataFormat::Float32)};
     const uint64_t budget = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - kL1KernelConfigReserve;
-    for (uint32_t vb = geo.Vt; vb > 0U; --vb) {
+    // The stage-S scan is a serial chain over the chunks of one value head, but its V-blocks are independent
+    // (every step contracts over K and C, never over V), so the blocks are the unit of scan parallelism.  With
+    // fewer value heads than cores the scan would leave most of the grid idle, so split V into as many blocks as
+    // keep BH * NVB within the grid; with at least a core per head this is one block and Vb is only L1-bound.
+    const auto grid = tensor_args.q.device()->compute_with_storage_grid_size();
+    const uint32_t num_grid_cores = static_cast<uint32_t>(grid.x * grid.y);
+    uint32_t vb_start = geo.Vt;
+    for (uint32_t nvb = geo.Vt; nvb > 1U; --nvb) {
+        if (geo.Vt % nvb == 0U && geo.BH * nvb <= num_grid_cores) {
+            vb_start = geo.Vt / nvb;
+            break;
+        }
+    }
+    for (uint32_t vb = vb_start; vb > 0U; --vb) {
         if (geo.Vt % vb == 0U && cb_bytes(geo.Ct, geo.Kt, vb, tiles) <= budget) {
             geo.Vb = vb;
             break;
@@ -258,7 +271,7 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
     const uint32_t dest_limit = dst_full_sync_en ? (fp32_dest_acc_en ? 8U : 16U) : (fp32_dest_acc_en ? 4U : 8U);
 
     // ---------------- work distribution -----------------------------------
-    // Work item wi = bh * NC + chunk.  The scan owner of group bh is the core holding item bh * NC.
+    // Work item wi = bh * NC + chunk.
     const auto grid = device->compute_with_storage_grid_size();
     const auto [num_cores, all_cores, group1, group2, items1, items2] =
         tt::tt_metal::split_work_to_cores(grid, geo.NI, /*row_wise=*/true);
@@ -281,16 +294,26 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
     }
     TT_FATAL(cursor == geo.NI, "chunk_gated_delta_rule_bw: work split lost items: {} != {}", cursor, geo.NI);
 
-    std::vector<tt::tt_metal::CoreCoord> owner_of(geo.BH);
+    // The cores with stage-G work in each group.
     std::vector<std::vector<tt::tt_metal::CoreCoord>> members_of(geo.BH);
     for (const auto& a : assign) {
-        for (uint32_t wi = a.start; wi < a.start + a.count; ++wi) {
-            if (wi % geo.NC == 0U) {
-                owner_of[wi / geo.NC] = a.core;
-            }
-        }
         for (uint32_t bh = a.start / geo.NC; bh <= (a.start + a.count - 1U) / geo.NC; ++bh) {
             members_of[bh].push_back(a.core);
+        }
+    }
+
+    // Scan units: unit u = bh * NVB + vb is one value head's V-block, a serial chain over its NC chunks.  The
+    // units are dealt round-robin over the cores (a core with several runs them back to back), so the chains of
+    // one head, and of different heads, run on different cores.
+    const uint32_t num_units = geo.BH * geo.NVB;
+    std::vector<std::vector<uint32_t>> units_of(assign.size());  // per assignment: its scan units
+    std::vector<std::vector<size_t>> owners_of(geo.BH);          // per group: its distinct owner assignments
+    for (uint32_t u = 0; u < num_units; ++u) {
+        const size_t owner = u % assign.size();
+        units_of[owner].push_back(u);
+        auto& owners = owners_of[u / geo.NVB];
+        if (std::find(owners.begin(), owners.end(), owner) == owners.end()) {
+            owners.push_back(owner);
         }
     }
 
@@ -417,10 +440,12 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
         for (uint32_t bh = a.start / geo.NC; bh <= (a.start + a.count - 1U) / geo.NC; ++bh) {
             groups.push_back(bh);
         }
-        std::vector<uint32_t> owned;
-        for (uint32_t bh = 0; bh < geo.BH; ++bh) {
-            if (owner_of[bh] == a.core) {
-                owned.push_back(bh);
+        const size_t idx = static_cast<size_t>(&a - assign.data());
+        const std::vector<uint32_t>& owned = units_of[idx];  // this core's scan units
+        std::vector<uint32_t> owned_groups;                  // the distinct groups of those units
+        for (const uint32_t u : owned) {
+            if (std::find(owned_groups.begin(), owned_groups.end(), u / geo.NVB) == owned_groups.end()) {
+                owned_groups.push_back(u / geo.NVB);
             }
         }
 
@@ -439,9 +464,11 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
             a_buffer->address(),
             a.start,
             a.count,
-            static_cast<uint32_t>(groups.size()),
+            // One release per scan unit of every group this core has stage-G work in.
+            static_cast<uint32_t>(groups.size()) * geo.NVB,
             scale_bits,
-            static_cast<uint32_t>(owned.size())};
+            static_cast<uint32_t>(owned.size()),
+            static_cast<uint32_t>(owned_groups.size())};
         reader_rt.insert(reader_rt.end(), owned.begin(), owned.end());
         tt::tt_metal::SetRuntimeArgs(program, reader_id, a.core, reader_rt);
 
@@ -458,15 +485,20 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
             a.start,
             a.count,
             static_cast<uint32_t>(groups.size())};
-        // For each group this core produces prep for: (bh, owner NoC x, owner NoC y).
+        // For each group this core produces prep for: bh, the number of owners, then each owner's NoC x, y.
         for (const uint32_t bh : groups) {
-            const auto owner = device->worker_core_from_logical_core(owner_of[bh]);
-            writer_rt.insert(writer_rt.end(), {bh, static_cast<uint32_t>(owner.x), static_cast<uint32_t>(owner.y)});
+            writer_rt.push_back(bh);
+            writer_rt.push_back(static_cast<uint32_t>(owners_of[bh].size()));
+            for (const size_t owner : owners_of[bh]) {
+                const auto noc = device->worker_core_from_logical_core(assign[owner].core);
+                writer_rt.insert(writer_rt.end(), {static_cast<uint32_t>(noc.x), static_cast<uint32_t>(noc.y)});
+            }
         }
         writer_rt.push_back(static_cast<uint32_t>(owned.size()));
         writer_rt.insert(writer_rt.end(), owned.begin(), owned.end());
-        // For each owned group, the stage-G cores to release.
-        for (const uint32_t bh : owned) {
+        // For each owned unit, the stage-G cores of its group to release.
+        for (const uint32_t u : owned) {
+            const uint32_t bh = u / geo.NVB;
             writer_rt.push_back(static_cast<uint32_t>(members_of[bh].size()));
             for (const auto& member : members_of[bh]) {
                 const auto phys = device->worker_core_from_logical_core(member);
