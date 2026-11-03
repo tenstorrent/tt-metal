@@ -82,7 +82,10 @@ enum class BinaryOperation : std::uint8_t
 };
 
 template <typename Operand>
-class OperandTraits;
+class OperandTraits
+{
+    static_assert(!sizeof(Operand), "Scalar-unit rhs must be a hal::Gpr or a hal::scalar::Immediate");
+};
 
 template <std::uint32_t Index>
 class OperandTraits<hal::Gpr<Index>>
@@ -258,11 +261,11 @@ constexpr void validate_gpr(const hal::Gpr<Index> operand)
 {
     if constexpr (Index == hal::detail::DynamicGprIndex)
     {
-        require_valid(operand.index < 64u, "Scalar-unit GPR index must be in [0, 63]");
+        require_valid(operand.index < hal::detail::GprCount, "Scalar-unit GPR index must be in [0, 63]");
     }
     else
     {
-        static_assert(Index < 64u, "Scalar-unit GPR index must be in [0, 63]");
+        static_assert(Index < hal::detail::GprCount, "Scalar-unit GPR index must be in [0, 63]");
     }
 }
 
@@ -318,15 +321,15 @@ inline constexpr std::uint32_t static_binary_operation()
 {
     using Traits = OperandTraits<OperandType<Rhs>>;
     static_assert(all_static_operands<Destination, Lhs, Rhs>);
-    static_assert(Destination < 64u, "Scalar-unit destination GPR index must be in [0, 63]");
-    static_assert(Lhs < 64u, "Scalar-unit lhs GPR index must be in [0, 63]");
+    static_assert(Destination < hal::detail::GprCount, "Scalar-unit destination GPR index must be in [0, 63]");
+    static_assert(Lhs < hal::detail::GprCount, "Scalar-unit lhs GPR index must be in [0, 63]");
     if constexpr (Traits::is_immediate)
     {
         validate_static_immediate<Operation, Traits::static_value>();
     }
     else
     {
-        static_assert(Traits::static_value < 64u, "Scalar-unit rhs GPR index must be in [0, 63]");
+        static_assert(Traits::static_value < hal::detail::GprCount, "Scalar-unit rhs GPR index must be in [0, 63]");
     }
     return encode<Operation>(Destination, Lhs, Traits::static_value, Traits::is_immediate);
 }
@@ -384,7 +387,8 @@ inline constexpr BinaryOperation compare_operation = []
 template <std::uint32_t Index>
 inline constexpr std::uint32_t half_index(const bool high)
 {
-    static_assert(Index < 64u, "Scalar-unit GPR index must be in [0, 63]");
+    static_assert(Index != hal::detail::DynamicGprIndex, "Scalar-unit GPR half write requires a compile-time GPR index: use hal::gpr<Index>()");
+    static_assert(Index < hal::detail::GprCount, "Scalar-unit GPR index must be in [0, 63]");
     return Index * 2u + high;
 }
 
