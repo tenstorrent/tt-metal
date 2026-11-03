@@ -39,7 +39,8 @@ void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
     // never be drawn and the rest of the tail was under-sampled (unit test
     // test_sampling_distribution.py). Each element is drawn in [0, 256] and FLOORED on the SFPU
     // before packing, so every element is an exact integer digit 0..256 in BF16 (integers up to
-    // 256 are exact). The writer combines two such digits into a 16-bit lattice threshold.
+    // 256 are exact). The writer combines three such digits (tile elements 0, 1 and 64: one lane,
+    // three consecutive PRNG steps) into a 24-bit lattice threshold, the FP32 ulp on [0.5, 1).
     constexpr uint32_t rand_scale = 0x43800000U;  // 256.0f
     constexpr uint32_t rand_from = 0;
 

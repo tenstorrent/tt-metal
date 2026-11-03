@@ -23,6 +23,9 @@ pytestmark = pytest.mark.skipif(
 USERS, W = 32, 128  # production candidate row: max_top_k 32 x 4 devices
 K, P = 20, 0.95  # the gpqa eval's sampling parameters, temperature 1
 N = int(os.environ.get("SAMPLING_DRAWS", "3000"))
+# Calls for the below-2^-16 tail tests: a zero-vs-nonzero check on a token of probability q < 2^-16
+# needs q * USERS * TAIL_N >> 1, so 2^16 calls (2^21 draws) give ~21 expected hits.
+TAIL_N = int(os.environ.get("SAMPLING_TAIL_DRAWS", "65536"))
 
 
 def _rows():
@@ -186,13 +189,13 @@ def test_sampling_threshold_uniformity(device):
 
 
 def test_sampling_low_digit_reaches_the_tail(device):
-    """Direct check of the threshold's low digit. Every user is the same two-token row with
+    """Direct check of the threshold's second digit. Every user is the same two-token row with
     P(second) just under 1/512, i.e. inside the last 1/256 of the mass: a threshold built from the
-    high digit alone (max 255/256) can never land there and draws the second token 0 times, and a
-    low digit that merely copies the high one lands there only when hi = 255 (1/256, twice the
-    expected rate). Only an independent 16-bit lattice gives the expected count, asserted within
-    4 sigma over USERS * N draws. The writer's low digit is element 1 of the random tile, written
-    by the compute kernel's second SFPU store, so this test also catches a random tile stored under
+    high digit alone (max 255/256 + 255/2^24) can never land there and draws the second token 0
+    times, and a second digit that merely copies the high one lands there only when hi = 255 (1/256,
+    twice the expected rate). Only an independent second digit gives the expected count, asserted
+    within 4 sigma over USERS * N draws. The writer's second digit is element 1 of the random tile,
+    written by the compute kernel's second SFPU store, so this test also catches a random tile stored under
     a stale dest address mode (only the first store lands): on Wormhole nothing in this kernel after
     top_k restores that mode, so a seedless draw after ttnn.manual_seed depends on rand_tile
     programming it; on Blackhole recip_tile_init re-programs it before the next draw, so the
@@ -212,6 +215,95 @@ def test_sampling_low_digit_reaches_the_tail(device):
         abs(hits - draws * expected) <= 4 * sigma
     ), f"{hits:.0f} hits vs {draws * expected:.0f} expected: the low digit is not independent of the high one"
     assert emp[:, 2:].sum() == 0
+
+
+# The kernel accumulates the kept probabilities in descending order, so the smallest kept token owns
+# the top slice [1 - q, 1) of the threshold range. A threshold capped at 1 - 2^-16 (a 16-bit lattice)
+# can never reach it when q < 2^-16 and draws it exactly 0 times however many draws are made; the
+# 24-bit lattice (max 1 - 2^-24) draws it ~ Poisson(q * draws). The two tests below use that
+# structural zero as the regression signal. The reference q is the float64 softmax of the BF16
+# logits; the kernel's approximate exp can move its own q, so each case keeps q <= 2^-16 / 1.45 and
+# the pass bands are wide enough not to grade the exp: lower bound 1 hit, upper bound 4 * lambda.
+TAIL_BELOW_2_POW_16_HEADROOM = 1.45
+
+
+def _tail_hits(emp, index, n):
+    return round(emp[:, index].sum().item() * n)
+
+
+def test_sampling_two_candidate_tail_below_2_pow_16(device):
+    """Two candidates, logits [0, -11.5] (BF16-exact), top-k 2, p 1.0, temperature 1.
+
+    Reference: P(second) = 1 / (1 + e^11.5) = 1.013e-5 = 0.66 x 2^-16.
+    Draws: D = USERS * TAIL_N (default 2^21), per-user ttnn.manual_seed streams; lambda = q * D = 21.2.
+    Pass: 1 <= hits <= 4 * lambda, and nothing outside the two candidates. A 16-bit threshold gives
+    exactly 0 hits. Under the 24-bit lattice P(0 hits) = e^-lambda = 6e-10 (2.4e-5 even if the kernel's
+    q were half the reference), and P(hits > 4 * lambda) < 1e-8 even at twice the reference q."""
+    gap = 11.5
+    values = torch.full((1, 1, USERS, W), -30.0)
+    values[..., 0] = 0.0
+    values[..., 1] = -gap
+    q = torch.softmax(values[0, 0, 0, :2].to(torch.bfloat16).double(), dim=-1)[1].item()
+    assert q * TAIL_BELOW_2_POW_16_HEADROOM <= 2.0**-16, "the case must sit below the 16-bit lattice step"
+    emp = _draw(device, values, k=2, p=1.0, n=TAIL_N)
+    draws = USERS * TAIL_N
+    lam = q * draws
+    hits = _tail_hits(emp, 1, TAIL_N)
+    print(
+        f"\ntwo-candidate tail: q {q:.4e} (2^-16 = {2.0**-16:.4e}), {draws} draws, expected {lam:.1f} hits, device {hits}"
+    )
+    assert hits >= 1, (
+        f"the q = {q:.3e} candidate was never drawn in {draws} draws (expected {lam:.1f}): "
+        "the threshold is capped at or below 1 - 2^-16"
+    )
+    assert hits <= 4 * lam, f"{hits} hits vs {lam:.1f} expected: the tail is over-drawn (stuck threshold digit?)"
+    assert emp[:, 2:].sum() == 0, "a token outside the top-k was drawn"
+
+
+def test_sampling_multi_candidate_tail_below_2_pow_16(device):
+    """Four equal-probability candidates plus one tail candidate: logits [0, 0, 0, 0, -10.125]
+    (BF16-exact), top-k 5, p 1.0, temperature 1.
+
+    Four heads, not three: each head's probability is (1 - q) / 4, which BF16 holds as exactly 0.25
+    (or just below it), so the heads sum to at most 1.0 and the nucleus (keep until the sum exceeds p)
+    keeps the tail. BF16(1/3) rounds up to 0.333984, so three heads would already exceed p = 1.0 and
+    the kernel would cut the tail before sampling.
+
+    Reference: tail q = e^-10.125 / (4 + e^-10.125) = 1.002e-5 = 0.66 x 2^-16; each head (1 - q) / 4.
+    Draws: D = USERS * TAIL_N (default 2^21); lambda = q * D = 21.0.
+    Pass:
+      * homogeneity: every head frequency within 4 sigma of (1 - q) / 4, sigma = sqrt(p (1 - p) / D)
+        (3.0e-4, i.e. 0.48% relative, at the default D; family-wise false-alarm rate ~2.5e-4);
+      * tail: 1 <= hits <= 4 * lambda (exactly 0 under a 16-bit threshold; P(0) = 8e-10 under 24-bit);
+      * nothing outside the five candidates."""
+    gap = 10.125
+    heads_n = 4
+    values = torch.full((1, 1, USERS, W), -30.0)
+    values[..., :heads_n] = 0.0
+    values[..., heads_n] = -gap
+    ref = torch.softmax(values[0, 0, 0, : heads_n + 1].to(torch.bfloat16).double(), dim=-1)
+    q = ref[heads_n].item()
+    assert q * TAIL_BELOW_2_POW_16_HEADROOM <= 2.0**-16, "the case must sit below the 16-bit lattice step"
+    emp = _draw(device, values, k=heads_n + 1, p=1.0, n=TAIL_N)
+    draws = USERS * TAIL_N
+    heads = emp[:, :heads_n].mean(0).double()  # pooled over the 32 users' independent streams
+    p_head = ref[:heads_n]
+    sigma = (p_head * (1 - p_head) / draws).sqrt()
+    lam = q * draws
+    hits = _tail_hits(emp, heads_n, TAIL_N)
+    print(
+        f"\nmulti-candidate: heads {[f'{h:.5f}' for h in heads.tolist()]} (expected {p_head[0].item():.5f} "
+        f"+- {4 * sigma[0].item():.5f}); tail q {q:.4e}, expected {lam:.1f} hits, device {hits}"
+    )
+    assert torch.all(
+        (heads - p_head).abs() <= 4 * sigma
+    ), f"equal-probability heads {heads.tolist()} are not homogeneous around {p_head[0].item():.5f}"
+    assert hits >= 1, (
+        f"the q = {q:.3e} tail candidate was never drawn in {draws} draws (expected {lam:.1f}): "
+        "the threshold is capped at or below 1 - 2^-16"
+    )
+    assert hits <= 4 * lam, f"{hits} hits vs {lam:.1f} expected: the tail is over-drawn (stuck threshold digit?)"
+    assert emp[:, heads_n + 1 :].sum() == 0, "a token outside the top-k was drawn"
 
 
 def test_sampling_softmax_gap(device):
