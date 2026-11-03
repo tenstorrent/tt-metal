@@ -14,12 +14,12 @@ from ..common import (
 )
 from .decode_prefetch import (
     DECODE_LAYOUTS,
-    KV_GCB,
-    ROUTER_GATE_GCB,
+    KV_RING,
+    ROUTER_GATE_RING,
     check_decode_layout,
     decode_prefetch_rings,
-    ensure_named_gcb,
-    ensure_q_a_gcb,
+    ensure_named_ring,
+    ensure_q_a_ring,
     kv_page_bytes,
     make_decode_prefetch_buffers,
     q_a_page_bytes,
@@ -720,18 +720,18 @@ def _compressor_projections(
         # :meth:`DeepSeekV4Attention.prefetch_weights`. Indexer kv/gate is the
         # router-gate cut (``n_blocks=8``) and cannot ride q_a's 32-receiver ring.
         if layout_name == "indexer.kv_proj":
-            prefetch["global_cb"] = ensure_named_gcb(
-                prefetch_buffers, ROUTER_GATE_GCB, device, [DECODE_LAYOUTS["router_gate"]], weight_dtype
+            prefetch["prefetcher_pipes"] = ensure_named_ring(
+                prefetch_buffers, ROUTER_GATE_RING, device, [DECODE_LAYOUTS["router_gate"]], weight_dtype
             )
-            prefetch["global_cb_page_bytes"] = router_gate_page_bytes(weight_dtype)
+            prefetch["prefetch_page_bytes"] = router_gate_page_bytes(weight_dtype)
         elif layout_name == "compressed_sparse_attention" or layer_type == "compressed_sparse_attention":
-            prefetch["global_cb"] = ensure_q_a_gcb(prefetch_buffers, device, weight_dtype)
-            prefetch["global_cb_page_bytes"] = q_a_page_bytes(weight_dtype)
+            prefetch["prefetcher_pipes"] = ensure_q_a_ring(prefetch_buffers, device, weight_dtype)
+            prefetch["prefetch_page_bytes"] = q_a_page_bytes(weight_dtype)
         else:
-            prefetch["global_cb"] = ensure_named_gcb(
-                prefetch_buffers, KV_GCB, device, [DECODE_LAYOUTS["kv_proj"]], weight_dtype
+            prefetch["prefetcher_pipes"] = ensure_named_ring(
+                prefetch_buffers, KV_RING, device, [DECODE_LAYOUTS["kv_proj"]], weight_dtype
             )
-            prefetch["global_cb_page_bytes"] = kv_page_bytes(weight_dtype)
+            prefetch["prefetch_page_bytes"] = kv_page_bytes(weight_dtype)
 
     def projection(name):
         """``LinearDecode`` for ``{weight_prefix}.<name>.weight`` ``[D, N]``."""
@@ -783,7 +783,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     full-hidden partials.
 
     ``use_prefetcher=True`` (the model's default) switches the decode projections
-    that fit the shared 64-receiver GCB (q_b, batched o_a, row-parallel o_b) onto
+    that fit the shared 64-receiver ring (q_b, batched o_a, row-parallel o_b) onto
     DRISC-prefetched weights. The compressor pair rides q_a's 32-core ring (CSA) or kv's
     16-core ring (HCA). Each prefetched weight stays DRAM ND-sharded and the tensor
     prefetcher pushes it into the matmul's in1 buffer, instead of copying DRAM -> L1 before
@@ -794,14 +794,14 @@ class DeepSeekV4Attention(DeepSeekV4Module):
       ``wait_for_cq_on_tensor_prefetcher`` after the weights are written), because one
       session should span a whole model step rather than a single block. Check
       ``ttnn.experimental.is_tensor_prefetcher_supported(device)`` first.
-    * A GCB is a permanent L1 allocation, not a transient staging copy. Pass
+    * A ring is a permanent L1 allocation, not a transient staging copy. Pass
       ``prefetch_buffers`` from :func:`~.decode_prefetch.make_decode_prefetch_buffers` so one
       buffer is shared by every layer on the device: left to build its own, each block costs
       288 KB per receiver core plus a slice of a DRISC state zone that only fits about six
-      GCBs, neither of which scales past a handful of layers.
+      rings, neither of which scales past a handful of layers.
 
     Subclasses for other checkpoints override ``decode_layouts`` (the q_a / q_b / kv / o_b
-    cuts), ``prefetch_rings`` (``tp_size -> {name: PrefetchRing}``, the GCB each of those
+    cuts), ``prefetch_rings`` (``tp_size -> {name: PrefetchRing}``, the ring each of those
     streams through) and ``q_head_norm`` (whether q_b's output gets a per-head unweighted
     RMSNorm).
     """
@@ -831,7 +831,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         ``sinks``, ...), each projection weight ``[K, N]`` (DRAM ND-sharded under the
         prefetcher); ``device`` is a 1xTP mesh when ``tp_size > 1``, with
         ``num_attention_heads`` and ``o_groups`` split evenly across the ranks.
-        ``prefetch_buffers`` is the device-wide GCB set from
+        ``prefetch_buffers`` is the device-wide ring set from
         :func:`~.decode_prefetch.make_decode_prefetch_buffers`.
         """
         # SDPA program config and the prefetch ring depth come from the system profile
@@ -882,7 +882,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             TP-sharded by the branches below (q_b head-sharded, o_b K-split, q_a/kv
             replicated). Every prefetched projection has a ring that matches its B-core
             count: q_a and kv get their own full-width rings, the rest share the
-            64-receiver decode GCB.
+            64-receiver decode ring.
             """
             prefetch = (
                 ring_prefetch(rings, name, prefetch_buffers, device, weight_dtype)
@@ -970,7 +970,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # expects. The raw torch weight is [g*o_lora_rank, (H*Dh)//g]; ``preprocess`` normalizes it
         # to the per-group [g, K, N] the class folds from (applied only on a cache miss).
         #
-        # Under the prefetcher it streams through the device's one shared GCB like every other
+        # Under the prefetcher it streams through the device's one shared ring like every other
         # decode weight, at the fixed b_blocks/n_blocks the registry sizes that buffer against
         # -- passed explicitly rather than left to the class's own defaults, so a device with a
         # different grid still gets the geometry the buffer was actually built for.
@@ -1007,7 +1007,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             **o_a_prefetch,
         )
         # Mcast the folded ``[1, g * o_lora_rank]`` result onto o_b's B-grid bounding box so
-        # o_b can consume it as replicated ROW_MAJOR HEIGHT_SHARDED A. GCB receiver sets can
+        # o_b can consume it as replicated ROW_MAJOR HEIGHT_SHARDED A. ring receiver sets can
         # omit cores inside that box; NOC mcast still requires a filled rectangle.
         bbox = self.o_b_proj.b_core_grid().bounding_box()
         self.o_a_proj.set_output_core_grid(ttnn.CoreRangeSet({bbox}))
@@ -1081,11 +1081,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     def prefetch_weights(self, *, index_sparse: bool = False):
         """Stage this block's projection weights ahead of the :meth:`decode` that uses them.
 
-        Queues every projection configured for a GCB. The weights stay DRAM ND-sharded
+        Queues every projection configured for a ring. The weights stay DRAM ND-sharded
         ``[K, N]`` pages; FIFO order is part of the contract and
         is checked nowhere -- a matmul that runs out of turn pops another weight's page and
         computes wrong results rather than erroring -- so each ring is queued in the order
-        :meth:`decode` consumes it. On the shared 64-receiver GCB that is q_b, then the
+        :meth:`decode` consumes it. On the shared 64-receiver ring that is q_b, then the
         indexer's q_b when scoring, then ``_attend``'s o_a before o_b. On q_a's 32-receiver
         ring it is q_a, then CSA's kv/gate, after the attention hyper-connection's ``fn``. On
         kv's private 16-receiver ring it is kv, then HCA's kv/gate. The FFN hyper-connection's
@@ -1454,7 +1454,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         assert self.fuse_q_b_norm or not self.q_head_norm, "q_b_norm must be fused"
 
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim, head_dim=self.head_dim)
-        # kv_proj runs here rather than beside q_a_proj: one GCB is one FIFO, so a
+        # kv_proj runs here rather than beside q_a_proj: one ring is one FIFO, so a
         # prefetched matmul that runs out of turn pops another weight's page (see
         # ``prefetch_weights``). Reuse the same replicated activation; kv's B cores are a
         # subset of that grid. The caller still owns ``tokens`` (the compressor reads it).

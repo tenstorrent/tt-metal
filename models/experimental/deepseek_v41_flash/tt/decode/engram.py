@@ -73,7 +73,7 @@ def rows_page_bytes(config) -> int:
 def open_rows_sockets(device, page_bytes: int, fifo_pages: int = 2, socket_core: tuple = ROWS_SOCKET_CORE) -> list:
     """One H2D socket per device of the ``device`` mesh, each a ``fifo_pages``-page L1 FIFO on ``socket_core``.
 
-    The FIFOs live as long as the layer. Open them before ``device``'s decode GCB rings are built: L1 is
+    The FIFOs live as long as the layer. Open them before ``device``'s decode rings are built: L1 is
     allocated top-down, so FIFOs opened after the rings sit below them and, once the rings are released for
     prefill, are left in the middle of L1, capping the circular buffers prefill can place.
     """

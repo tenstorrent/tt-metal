@@ -5,69 +5,65 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
-#ifdef ENABLE_GLOBAL_CB
-#include "api/remote_circular_buffer.h"
+#include "api/semaphore.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "internal/local_mem/address_access.h"
+#include "experimental/kernel_args.h"
+#ifdef IN1_PIPE
+#include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
 #endif
 
-// Gathers width(K)-sharded A onto every core via two-hub gather/broadcast.
+// Gathers width(K)-sharded A onto every core via two-hub gather/broadcast. Shared by the full and the
+// partial width-sharded factories; for partial a weight core's slab is [Kc, Nc] rather than [K, Nc].
 //
 // IN0_REPLICATED: A is ROW_MAJOR HEIGHT_SHARDED and already holds the full [M, K] on this core.
 // Fill full_in0 from the local shard as 1x32 tiles (K-major) instead of the hub gather.
 //
 // IN0_ROW_RESTRIPE: A is ROW_MAJOR width-sharded with several rows. The gather lands sender-major
-// ([sender][M][K / senders] 1x32 tiles) in cb_gather_in0, and each compute core copies it into
+// ([sender][M][K / senders] 1x32 tiles) in gather_in0, and each compute core copies it into
 // full_in0 as [M][K], the whole-K rows custom_mm takes one at a time.
 //
-// in1 (weights) arrive one of three ways:
-//   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
-//     reader only has to declare its tiles available.
-//   - IN1_FROM_DRAM: the weight is DRAM ND-sharded, one [K, N/num_weight_cores] slab per B core.
-//     The reader issues the slab's read before the gather so the two overlap, and waits for it
+// IN1_RECEIVER marks the weight cores, where compute runs; the rest of the bounding box only takes
+// part in the gather, and a drain kernel consumes the A it receives. On a weight core in1 (weights) arrive one of three
+// ways:
+//   - default: in1 borrows the L1-resident weight shard, so the reader only has to declare its tiles
+//     available. A packed weight starts in1_tile_offset tiles into the shard; compute skips those.
+//   - IN1_FROM_DRAM: the weight is DRAM ND-sharded, one [K, N/num_weight_cores] slab per weight
+//     core. The reader issues the slab's read before the gather so the two overlap, and waits for it
 //     before publishing full_in0: compute takes in1 only after full_in0, so that gates it.
-//   - ENABLE_GLOBAL_CB: the weights are pushed into a DRAM-sender GlobalCircularBuffer by the
-//     tensor prefetcher. This receiver's [K, N/num_receivers] slab arrives as num_k_blocks
-//     remote pages, each a whole number of K-rows (num_k_blocks == 1 is the whole slab in one
-//     page). The reader waits for a page, hands its tiles to compute through the local alias CB,
-//     and releases it only after compute signals (via the sync CB) that it has finished reading
-//     -- releasing earlier would let the prefetcher overwrite weights still in use.
+//   - IN1_PIPE: the tensor prefetcher streams this core's [K, N/num_weight_cores] slab over a
+//     PrefetcherPipe as num_k_blocks entries, each a whole number of K-rows, and in1 is a relay over
+//     the pipe's ring. An entry goes back to the prefetcher only once compute has popped its tiles.
+// OUT_CONSUMER: no writer drains compute's output, so the reader waits for it, giving the buffer
+// the consumer every buffer needs.
 void kernel_main() {
-    // CB indices come in as named args so op fusion can remap them onto the hardware slots it
-    // pool-allocates across phases (see models/experimental/ops/descriptors/fusion/docs/op_fusion.md).
-    constexpr uint32_t in0_cb_index = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t full_in0_cb_index = get_named_compile_time_arg_val("cb_full_in0");
-    constexpr uint32_t in1_cb_index = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t remote_cb_index = get_named_compile_time_arg_val("cb_in1_remote");
-    constexpr uint32_t sync_cb_index = get_named_compile_time_arg_val("cb_sync");
-
-    constexpr uint32_t shard_num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t num_senders = get_compile_time_arg_val(2);
-    constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
-    uint32_t mcast_x_start = get_compile_time_arg_val(4);
-    uint32_t mcast_y_start = get_compile_time_arg_val(5);
-    uint32_t mcast_x_end = get_compile_time_arg_val(6);
-    uint32_t mcast_y_end = get_compile_time_arg_val(7);
-    constexpr uint32_t stage_sem_id = get_compile_time_arg_val(8);
-    constexpr uint32_t done_sem_id = get_compile_time_arg_val(9);
-    constexpr uint32_t hub0_noc_x = get_compile_time_arg_val(10);
-    constexpr uint32_t hub0_noc_y = get_compile_time_arg_val(11);
-    constexpr uint32_t hub1_noc_x = get_compile_time_arg_val(12);
-    constexpr uint32_t hub1_noc_y = get_compile_time_arg_val(13);
-    constexpr uint32_t split_H = get_compile_time_arg_val(14);
-    constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(15);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(16);
-    constexpr uint32_t in0_M_tiles = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_K_tiles = get_compile_time_arg_val(18);
-#ifdef IN1_FROM_DRAM
-    constexpr auto in1_args = TensorAccessorArgs<19>();
+    constexpr uint32_t shard_num_tiles = get_arg(args::shard_num_tiles);
+    constexpr uint32_t tile_size_bytes = get_arg(args::tile_size_bytes);
+    constexpr uint32_t num_senders = get_arg(args::num_senders);
+    constexpr uint32_t num_receivers = get_arg(args::num_receivers);
+    constexpr uint32_t hub0_noc_x = get_arg(args::hub0_noc_x);
+    constexpr uint32_t hub0_noc_y = get_arg(args::hub0_noc_y);
+    constexpr uint32_t hub1_noc_x = get_arg(args::hub1_noc_x);
+    constexpr uint32_t hub1_noc_y = get_arg(args::hub1_noc_y);
+    constexpr uint32_t split_H = get_arg(args::split_H);
+    constexpr uint32_t in0_M_tiles = get_arg(args::in0_M_tiles);
+    constexpr uint32_t in0_K_tiles = get_arg(args::in0_K_tiles);
+#ifdef IN1_RECEIVER
+    constexpr uint32_t in1_page_tiles = get_arg(args::in1_page_tiles);
+#ifdef IN1_PIPE
+    constexpr uint32_t num_k_blocks = get_arg(args::num_k_blocks);
+#else
+    constexpr uint32_t in1_tile_offset = get_arg(args::in1_tile_offset);
+#endif
+#ifdef OUT_CONSUMER
+    constexpr uint32_t out_num_tiles = get_arg(args::out_num_tiles);
+#endif
 #endif
 
-    const uint32_t is_sender = get_arg_val<uint32_t>(0);
-    const uint32_t sender_id = get_arg_val<uint32_t>(1);
-    const uint32_t role = get_arg_val<uint32_t>(2);
-    const uint32_t is_in1_receiver = get_arg_val<uint32_t>(3);
+    const uint32_t is_sender = get_arg(args::is_sender);
+    const uint32_t sender_id = get_arg(args::sender_id);
+    const uint32_t role = get_arg(args::role);
 
 #ifdef IN0_REPLICATED
     constexpr uint32_t full_num_tiles = in0_M_tiles * in0_K_tiles;
@@ -76,53 +72,56 @@ void kernel_main() {
 #endif
     const uint32_t shard_size_bytes = shard_num_tiles * tile_size_bytes;
 
-    // NOC_1 uses an inverted coordinate system.
+    // The two hubs are the corners of the multicast rectangle. NOC_1 uses an inverted coordinate system.
+    uint32_t mcast_x_start = hub0_noc_x;
+    uint32_t mcast_y_start = hub0_noc_y;
+    uint32_t mcast_x_end = hub1_noc_x;
+    uint32_t mcast_y_end = hub1_noc_y;
     if (noc_index == 1) {
         std::swap(mcast_x_start, mcast_x_end);
         std::swap(mcast_y_start, mcast_y_end);
     }
 
     Noc noc;
-    CircularBuffer in0_cb(in0_cb_index);
-    CircularBuffer in1_cb(in1_cb_index);
-    CircularBuffer full_in0_cb(full_in0_cb_index);
-    Semaphore<> stage_sem(stage_sem_id);
-    Semaphore<> done_sem(done_sem_id);
+    const LocalTensorAccessor<uint32_t> in0(tensor::in0);
+    CircularBuffer full_in0_cb(dfb::full_in0);
+    Semaphore<> stage_sem(sem::stage);
+    Semaphore<> done_sem(sem::done);
     UnicastEndpoint hub;
 
-#ifdef ENABLE_GLOBAL_CB
-    if (is_in1_receiver) {
-        // Publish the first page before the gather so the prefetcher's transfer overlaps it.
-        in1_cb.reserve_back(in1_page_tiles);
-        experimental::remote_cb_wait_front(remote_cb_index, 1);
-        in1_cb.push_back(in1_page_tiles);
-    }
+#ifdef IN1_RECEIVER
+    CircularBuffer in1_cb(dfb::in1);
+#ifdef IN1_PIPE
+    // One accessor names every pipe; the one whose receiver is this core is the one bound here.
+    experimental::PrefetcherPipe pipe(pipe::in1);
+    auto in1_relay = pipe.bind_relay();
+    // Publish the first K-block before the gather so the prefetcher's transfer overlaps it.
+    publish_in1_block_from_pipe(pipe, in1_relay, noc, 0, in1_page_tiles);
 #elif defined(IN1_FROM_DRAM)
-    if (is_in1_receiver) {
-        const auto in1 = TensorAccessor(in1_args, get_arg_val<uint32_t>(4), in1_cb.get_tile_size());
-        in1_cb.reserve_back(in1_page_tiles);
-        noc_async_read_shard(get_arg_val<uint32_t>(5), in1, in1_cb.get_write_ptr());
-    }
-#else
+    const auto in1 = TensorAccessor(tensor::in1);
     in1_cb.reserve_back(in1_page_tiles);
-    in1_cb.push_back(in1_page_tiles);
+    noc_async_read_shard(get_arg(args::in1_shard_id), in1, in1_cb.get_write_ptr());
+#else
+    in1_cb.reserve_back(in1_tile_offset + in1_page_tiles);
+    in1_cb.push_back(in1_tile_offset + in1_page_tiles);
+#endif
 #endif
     full_in0_cb.reserve_back(full_num_tiles);
 
 #ifdef IN0_REPLICATED
+    const uint32_t in0_read_addr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(in0.local_mem()));
 #ifdef USE_CUSTOM_MM
     // The replicated row-major shard is already M-major in 1x32 faces, which is
     // the layout consumed by custom_mm (one complete K row per invocation).
-    noc_async_write(in0_cb.get_read_ptr(), get_noc_addr(full_in0_cb.get_write_ptr()), full_num_tiles * tile_size_bytes);
+    noc_async_write(in0_read_addr, get_noc_addr(full_in0_cb.get_write_ptr()), full_num_tiles * tile_size_bytes);
     noc.async_write_barrier();
 #else
     // General matmul_block consumes the replicated input in K-major order.
     {
-        const uint32_t src_base = in0_cb.get_read_ptr();
         const uint32_t dst_base = full_in0_cb.get_write_ptr();
         for (uint32_t k = 0; k < in0_K_tiles; ++k) {
             for (uint32_t m = 0; m < in0_M_tiles; ++m) {
-                const uint32_t src = src_base + (m * in0_K_tiles + k) * tile_size_bytes;
+                const uint32_t src = in0_read_addr + (m * in0_K_tiles + k) * tile_size_bytes;
                 const uint32_t dst = dst_base + (k * in0_M_tiles + m) * tile_size_bytes;
                 noc_async_write(src, get_noc_addr(dst), tile_size_bytes);
             }
@@ -130,16 +129,14 @@ void kernel_main() {
         noc.async_write_barrier();
     }
 #endif
-#ifdef IN1_FROM_DRAM
-    if (is_in1_receiver) {
-        noc.async_read_barrier();
-        in1_cb.push_back(in1_page_tiles);
-    }
+#if defined(IN1_RECEIVER) && defined(IN1_FROM_DRAM)
+    noc.async_read_barrier();
+    in1_cb.push_back(in1_page_tiles);
 #endif
     full_in0_cb.push_back(full_num_tiles);
 #else
 #ifdef IN0_ROW_RESTRIPE
-    CircularBuffer gather_cb(get_named_compile_time_arg_val("cb_gather_in0"));
+    CircularBuffer gather_cb(dfb::gather_in0);
 #else
     CircularBuffer& gather_cb = full_in0_cb;
 #endif
@@ -154,7 +151,7 @@ void kernel_main() {
         // gather_cb is at the same L1 offset on every core, so the local write ptr is the remote dst addr.
         const uint32_t dst_l1_addr = gather_cb.get_write_ptr() + dst_offset_bytes;
         noc.async_write(
-            in0_cb, hub, shard_size_bytes, {.offset_bytes = 0}, {.noc_x = hub_x, .noc_y = hub_y, .addr = dst_l1_addr});
+            in0, hub, shard_size_bytes, {.offset_bytes = 0}, {.noc_x = hub_x, .noc_y = hub_y, .addr = dst_l1_addr});
         noc.async_write_barrier();
         stage_sem.up(noc, hub_x, hub_y, 1);
         noc.async_atomic_barrier();
@@ -192,9 +189,9 @@ void kernel_main() {
     }
 
     done_sem.wait(2);
-#ifdef IN0_ROW_RESTRIPE
-    // Only the B cores run compute; the rest of the bounding box just relays the multicast.
-    if (is_in1_receiver) {
+#if defined(IN0_ROW_RESTRIPE) && defined(IN1_RECEIVER)
+    // Only the weight cores run compute; the rest of the bounding box just relays the multicast.
+    {
         constexpr uint32_t k_tiles_per_sender = shard_num_tiles / in0_M_tiles;
         constexpr uint32_t row_chunk_bytes = k_tiles_per_sender * tile_size_bytes;
         const uint32_t src_base = gather_cb.get_write_ptr();
@@ -209,38 +206,26 @@ void kernel_main() {
         noc.async_write_barrier();
     }
 #endif
-#ifdef IN1_FROM_DRAM
-    if (is_in1_receiver) {
-        noc.async_read_barrier();
-        in1_cb.push_back(in1_page_tiles);
-    }
+#if defined(IN1_RECEIVER) && defined(IN1_FROM_DRAM)
+    noc.async_read_barrier();
+    in1_cb.push_back(in1_page_tiles);
 #endif
     full_in0_cb.push_back(full_num_tiles);
 #endif  // IN0_REPLICATED
 
-#ifdef ENABLE_GLOBAL_CB
-    if (is_in1_receiver) {
-        CircularBuffer sync_cb(sync_cb_index);
-        // Page p-1's credit is returned only after page p has been published, so the reader runs a
-        // page ahead of the credit return and the remote read pointer lags by one page. That is
-        // what makes the wait below mean "the page I still owe a credit for, plus the new one":
-        // it can never reach past this weight's own pages into a transfer nobody has queued.
-        for (uint32_t page = 1; page < num_k_blocks; ++page) {
-            in1_cb.reserve_back(in1_page_tiles);
-            experimental::remote_cb_wait_front(remote_cb_index, 2);
-            in1_cb.push_back(in1_page_tiles);
-            sync_cb.wait_front(1);
-            sync_cb.pop_front(1);
-            experimental::remote_cb_pop_front(remote_cb_index, 1);
-        }
-        // Compute signals here once it has finished reading every in1 tile of the last page.
-        sync_cb.wait_front(1);
-        sync_cb.pop_front(1);
-        experimental::remote_cb_pop_front(remote_cb_index, 1);
-        // Persist the remote read pointer so the next invocation resumes at the right ring offset.
-        experimental::update_remote_cb_config_in_l1(remote_cb_index);
-        noc.async_atomic_barrier();
+#if defined(IN1_RECEIVER) && defined(IN1_PIPE)
+    for (uint32_t block = 1; block < num_k_blocks; ++block) {
+        publish_in1_block_from_pipe(pipe, in1_relay, noc, block, in1_page_tiles);
     }
+    drain_in1_pipe_window(pipe, noc, num_k_blocks);
+    // pop_front acks the prefetcher with non-posted NOC atomics; retire them before the kernel exits.
+    noc.async_atomic_barrier();
+#endif
+
+#if defined(IN1_RECEIVER) && defined(OUT_CONSUMER)
+    CircularBuffer out_cb(dfb::out);
+    out_cb.wait_front(out_num_tiles);
+    out_cb.pop_front(out_num_tiles);
 #endif
 
     noc.async_write_barrier();

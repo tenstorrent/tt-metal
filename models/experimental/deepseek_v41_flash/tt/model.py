@@ -257,7 +257,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
         self._prefetch_buffers_by_device: dict[int, tuple] = {}
         self._gcb_headroom: dict[int, ttnn.Tensor] = {}
-        self._released_gcbs = None
+        self._prefetch_released = False
         self._evicted_l1: list = []
         self._l1_holders: list = []
         self._pre_release = None

@@ -10,46 +10,41 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/noc_semaphore.h"
+#include "api/semaphore.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 // Stats transport for the fused RMSNorm epilogue, run by the writer RISC on every producer core.
 //
-// Runtime metadata at metadata_arg_base:
+// The producer's topology is the kernel's runtime varargs:
 //   [local_group_count, hub_group_count, hub_contributor_count]
 //   local group: [local_tile_offset, tile_count, hub_x, hub_y, hub_gathered_slot, hub_row_stride]
 //   hub group:   [contributor_count, gathered_slot_base,
 //                 contributor_x, contributor_y, contributor_scale_slot, contributor_row_stride, ...]
 //
-// CB ownership remains single-producer / single-consumer. Compute publishes local group statistics;
-// writers move them into group-hub gather slots; hub compute publishes scales; writers return each
-// scale only to that group's contributors.
-inline void run_full_width_rms_norm_transport(uint32_t metadata_arg_base) {
-    constexpr uint32_t cb_rms_local = get_named_compile_time_arg_val("cb_rms_local");
-    constexpr uint32_t cb_rms_gathered = get_named_compile_time_arg_val("cb_rms_gathered");
-    constexpr uint32_t cb_rms_scale_src = get_named_compile_time_arg_val("cb_rms_scale_src");
-    constexpr uint32_t cb_rms_scale = get_named_compile_time_arg_val("cb_rms_scale");
-    constexpr uint32_t cb_rms_reduce_scaler = get_named_compile_time_arg_val("cb_rms_reduce_scaler");
-    constexpr uint32_t arrival_sem_id = get_named_compile_time_arg_val("rms_arrival_sem");
-    constexpr uint32_t scale_ready_sem_id = get_named_compile_time_arg_val("rms_scale_ready_sem");
-    constexpr uint32_t M_tiles = get_named_compile_time_arg_val("rms_m_tiles");
-    constexpr uint32_t local_tile_size = get_named_compile_time_arg_val("rms_local_tile_size");
-    constexpr uint32_t reduce_tile_size = get_named_compile_time_arg_val("rms_reduce_tile_size");
+// Buffer ownership remains single-producer / single-consumer. Compute publishes local group
+// statistics; writers move them into group-hub gather slots; hub compute publishes scales; writers
+// return each scale only to that group's contributors.
+inline void run_full_width_rms_norm_transport() {
+    constexpr uint32_t cb_rms_reduce_scaler = dfb::rms_reduce_scaler;
+    constexpr uint32_t M_tiles = get_arg(args::rms_m_tiles);
+    constexpr uint32_t local_tile_size = get_arg(args::rms_local_tile_size);
+    constexpr uint32_t reduce_tile_size = get_arg(args::rms_reduce_tile_size);
     constexpr uint32_t local_group_arg_words = 6;
 
     Noc noc;
-    CircularBuffer rms_local(cb_rms_local);
-    CircularBuffer rms_gathered(cb_rms_gathered);
-    CircularBuffer rms_scale_src(cb_rms_scale_src);
-    CircularBuffer rms_scale(cb_rms_scale);
-    Semaphore<> arrival_sem(arrival_sem_id);
-    Semaphore<> scale_ready_sem(scale_ready_sem_id);
+    CircularBuffer rms_local(dfb::rms_local);
+    CircularBuffer rms_gathered(dfb::rms_gathered);
+    CircularBuffer rms_scale_src(dfb::rms_scale_src);
+    CircularBuffer rms_scale(dfb::rms_scale);
+    Semaphore<> arrival_sem(sem::rms_arrival);
+    Semaphore<> scale_ready_sem(sem::rms_scale_ready);
     UnicastEndpoint endpoint;
 
-    uint32_t arg = metadata_arg_base;
-    const uint32_t local_group_count = get_arg_val<uint32_t>(arg++);
-    const uint32_t hub_group_count = get_arg_val<uint32_t>(arg++);
-    const uint32_t hub_contributor_count = get_arg_val<uint32_t>(arg++);
+    uint32_t arg = 0;
+    const uint32_t local_group_count = get_vararg(arg++);
+    const uint32_t hub_group_count = get_vararg(arg++);
+    const uint32_t hub_contributor_count = get_vararg(arg++);
     const uint32_t local_groups_arg_base = arg;
     const uint32_t hub_groups_arg_base = local_groups_arg_base + local_group_arg_words * local_group_count;
 
@@ -63,11 +58,11 @@ inline void run_full_width_rms_norm_transport(uint32_t metadata_arg_base) {
 
         uint32_t hub_arg = hub_groups_arg_base;
         for (uint32_t hg = 0; hg < hub_group_count; ++hg) {
-            const uint32_t contributor_count = get_arg_val<uint32_t>(hub_arg++);
+            const uint32_t contributor_count = get_vararg(hub_arg++);
             hub_arg++;  // gathered_slot_base
             for (uint32_t c = 0; c < contributor_count; ++c) {
-                const uint32_t contributor_x = get_arg_val<uint32_t>(hub_arg++);
-                const uint32_t contributor_y = get_arg_val<uint32_t>(hub_arg++);
+                const uint32_t contributor_x = get_vararg(hub_arg++);
+                const uint32_t contributor_y = get_vararg(hub_arg++);
                 hub_arg += 2;  // contributor_scale_slot, contributor_row_stride
                 scale_ready_sem.up(noc, contributor_x, contributor_y, 1);
             }
@@ -81,10 +76,10 @@ inline void run_full_width_rms_norm_transport(uint32_t metadata_arg_base) {
     rms_local.wait_front(M_tiles * local_group_count);
     for (uint32_t lg = 0; lg < local_group_count; ++lg) {
         const uint32_t fragment_arg = local_groups_arg_base + lg * local_group_arg_words;
-        const uint32_t hub_x = get_arg_val<uint32_t>(fragment_arg + 2);
-        const uint32_t hub_y = get_arg_val<uint32_t>(fragment_arg + 3);
-        const uint32_t hub_gathered_slot = get_arg_val<uint32_t>(fragment_arg + 4);
-        const uint32_t hub_row_stride = get_arg_val<uint32_t>(fragment_arg + 5);
+        const uint32_t hub_x = get_vararg(fragment_arg + 2);
+        const uint32_t hub_y = get_vararg(fragment_arg + 3);
+        const uint32_t hub_gathered_slot = get_vararg(fragment_arg + 4);
+        const uint32_t hub_row_stride = get_vararg(fragment_arg + 5);
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
             const uint32_t src_offset = (mt * local_group_count + lg) * local_tile_size;
             const uint32_t dst_offset = (mt * hub_row_stride + hub_gathered_slot) * reduce_tile_size;
@@ -115,13 +110,13 @@ inline void run_full_width_rms_norm_transport(uint32_t metadata_arg_base) {
         rms_scale_src.wait_front(M_tiles * hub_group_count);
         uint32_t hub_arg = hub_groups_arg_base;
         for (uint32_t hg = 0; hg < hub_group_count; ++hg) {
-            const uint32_t contributor_count = get_arg_val<uint32_t>(hub_arg++);
+            const uint32_t contributor_count = get_vararg(hub_arg++);
             hub_arg++;  // gathered_slot_base
             for (uint32_t c = 0; c < contributor_count; ++c) {
-                const uint32_t contributor_x = get_arg_val<uint32_t>(hub_arg++);
-                const uint32_t contributor_y = get_arg_val<uint32_t>(hub_arg++);
-                const uint32_t contributor_scale_slot = get_arg_val<uint32_t>(hub_arg++);
-                const uint32_t contributor_row_stride = get_arg_val<uint32_t>(hub_arg++);
+                const uint32_t contributor_x = get_vararg(hub_arg++);
+                const uint32_t contributor_y = get_vararg(hub_arg++);
+                const uint32_t contributor_scale_slot = get_vararg(hub_arg++);
+                const uint32_t contributor_row_stride = get_vararg(hub_arg++);
                 for (uint32_t mt = 0; mt < M_tiles; ++mt) {
                     const uint32_t src_offset = (mt * hub_group_count + hg) * local_tile_size;
                     const uint32_t dst_offset =
@@ -142,11 +137,11 @@ inline void run_full_width_rms_norm_transport(uint32_t metadata_arg_base) {
         // Signal only after every scale payload is committed at its contributor destination.
         hub_arg = hub_groups_arg_base;
         for (uint32_t hg = 0; hg < hub_group_count; ++hg) {
-            const uint32_t contributor_count = get_arg_val<uint32_t>(hub_arg++);
+            const uint32_t contributor_count = get_vararg(hub_arg++);
             hub_arg++;  // gathered_slot_base
             for (uint32_t c = 0; c < contributor_count; ++c) {
-                const uint32_t contributor_x = get_arg_val<uint32_t>(hub_arg++);
-                const uint32_t contributor_y = get_arg_val<uint32_t>(hub_arg++);
+                const uint32_t contributor_x = get_vararg(hub_arg++);
+                const uint32_t contributor_y = get_vararg(hub_arg++);
                 hub_arg += 2;
                 scale_ready_sem.up(noc, contributor_x, contributor_y, 1);
             }

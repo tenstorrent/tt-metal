@@ -107,7 +107,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         # its [K/cores, N] weight slab, and the partials are tree-reduced onto core (0, 0) --
         # the core the fused op reads ``fused_w`` from.
         #
-        # The op reads its weight from L1 rather than a GlobalCircularBuffer, so ``fn`` stays off
+        # The op reads its weight from L1 rather than through prefetcher pipes, so ``fn`` stays off
         # the prefetcher (``use_prefetcher`` / ``prefetch_buffers`` are accepted for the other
         # projections' sake) and copies DRAM -> L1 per call instead.
         k = hc * self.hidden

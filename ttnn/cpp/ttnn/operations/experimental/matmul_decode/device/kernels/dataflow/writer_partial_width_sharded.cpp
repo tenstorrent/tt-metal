@@ -5,41 +5,37 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "api/semaphore.h"
+#include "experimental/kernel_args.h"
 
 // Cross-core K-reduction: each core unicasts its partial to slot k_idx on the base core.
+// IS_BASE: this core is the base of its N block. It collects the K_blocks partials for compute and
+// then waits for compute's output, giving that buffer the consumer every buffer needs.
 void kernel_main() {
-    // CB indices come in as named args so op fusion can remap them onto the hardware slots it
-    // pool-allocates across phases (see models/experimental/ops/descriptors/fusion/docs/op_fusion.md).
-    constexpr uint32_t partial_cb_index = get_named_compile_time_arg_val("cb_partial");
-    constexpr uint32_t reduce_cb_index = get_named_compile_time_arg_val("cb_reduce");
+    constexpr uint32_t block_num_tiles = get_arg(args::block_num_tiles);
+    constexpr uint32_t tile_size_bytes = get_arg(args::tile_size_bytes);
+    constexpr uint32_t K_blocks = get_arg(args::K_blocks);
 
-    constexpr uint32_t block_num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t K_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t reduce_sem_id = get_compile_time_arg_val(3);
-
-    const uint32_t k_idx = get_arg_val<uint32_t>(0);
-    const uint32_t base_noc_x = get_arg_val<uint32_t>(1);
-    const uint32_t base_noc_y = get_arg_val<uint32_t>(2);
-    const uint32_t is_base = get_arg_val<uint32_t>(3);
+    const uint32_t k_idx = get_arg(args::k_idx);
+    const uint32_t base_noc_x = get_arg(args::base_noc_x);
+    const uint32_t base_noc_y = get_arg(args::base_noc_y);
 
     constexpr uint32_t block_size_bytes = block_num_tiles * tile_size_bytes;
 
     Noc noc;
-    CircularBuffer partial_cb(partial_cb_index);
-    CircularBuffer reduce_cb(reduce_cb_index);
-    Semaphore<> reduce_sem(reduce_sem_id);
+    CircularBuffer partial_cb(dfb::partial);
+    CircularBuffer reduce_cb(dfb::reduce);
+    Semaphore<> reduce_sem(sem::reduce);
     UnicastEndpoint base_core;
 
-    if (is_base) {
-        reduce_cb.reserve_back(K_blocks * block_num_tiles);
-    }
+#ifdef IS_BASE
+    reduce_cb.reserve_back(K_blocks * block_num_tiles);
+#endif
 
     partial_cb.wait_front(block_num_tiles);
 
-    // reduce_cb is at the same L1 offset on every core.
+    // reduce is at the same L1 offset on every weight core.
     const uint32_t dst_addr = reduce_cb.get_write_ptr() + k_idx * block_size_bytes;
     noc.async_write(
         partial_cb,
@@ -53,10 +49,14 @@ void kernel_main() {
     noc.async_atomic_barrier();
 
     partial_cb.pop_front(block_num_tiles);
-    if (is_base) {
-        reduce_sem.wait(K_blocks);
-        reduce_cb.push_back(K_blocks * block_num_tiles);
-    }
+#ifdef IS_BASE
+    reduce_sem.wait(K_blocks);
+    reduce_cb.push_back(K_blocks * block_num_tiles);
+
+    CircularBuffer out_cb(dfb::out);
+    out_cb.wait_front(block_num_tiles);
+    out_cb.pop_front(block_num_tiles);
+#endif
     noc.async_write_barrier();
     noc.async_read_barrier();
 }

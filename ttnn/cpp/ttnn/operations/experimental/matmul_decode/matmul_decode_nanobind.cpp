@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -14,6 +15,7 @@
 #include "ttnn/operations/experimental/matmul_decode/device/matmul_decode_descriptor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 namespace ttnn::operations::experimental::matmul_decode::detail {
 
@@ -53,7 +55,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[Union[float, ttnn.Tensor]] = None, rms_norm_epsilon: float = 1e-6, rms_norm_group_size: int = 0, weight_core_grid: Optional[ttnn.CoreRangeSet] = None) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, prefetcher_pipes: List[ttnn.experimental.PrefetcherPipe] = [], prefetch_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[Union[float, ttnn.Tensor]] = None, rms_norm_epsilon: float = 1e-6, rms_norm_group_size: int = 0, weight_core_grid: Optional[ttnn.CoreRangeSet] = None) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -69,9 +71,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 ROW_MAJOR as well, so it can feed the next decode without a relayout.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Either L1
                 width-sharded on the weight cores, or a DRAM ND-sharded tensor laid out exactly as
-                `global_cb` requires (one contiguous slab per weight core, see the table under
-                `global_cb`). A DRAM weight without `global_cb` is read by the op itself: every
-                weight core loads its own slab from DRAM into L1 while the activation is gathered.
+                `prefetcher_pipes` requires (one contiguous slab per weight core). A DRAM weight
+                without `prefetcher_pipes` is read by the op itself: every weight core loads its
+                own slab from DRAM into L1 while the activation is gathered.
 
         Keyword Args:
             partial_width_sharded (bool, optional): force the partial width-sharded program
@@ -80,37 +82,27 @@ void bind_matmul_decode_operation(nb::module_& mod) {
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to None.
             output_mem_config (ttnn.MemoryConfig, optional): memory config for the output tensor.
                 Defaults to None.
-            global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender global circular buffer
-                supplying the weights from the tensor prefetcher. Supported by all three program
-                factories; requires a DRAM ND-sharded (receiver-contiguous) weight, whose ND
-                shard is exactly one receiver's slab. Defaults to None.
-
-                Each mode delivers one whole slab per receiver per invocation, and assigns
-                weight blocks to receiver cores in the GCB's receiver-core order (row-major
-                within the receiver grid):
-
-                    mode     receivers             slab shape        slab idx -> block
-                    full     N_blocks              [K, N/N_blocks]   n_idx = idx
-                    partial  K_blocks*N_blocks     [Kc, Nc]          k_idx = idx / N_blocks, n_idx = idx % N_blocks
-                    batched  b_blocks*n_blocks     [Bc*K, Nc]        b_idx = idx / n_blocks, n_idx = idx % n_blocks
-
-                N is the fast-varying dimension in the two two-dimensional modes.
+            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): every pipe of one
+                ``create_prefetcher_pipes_for_tensor_prefetcher`` call, supplying the weights from the
+                tensor prefetcher. Full width-sharded factory only for now (two-hub gather, no
+                `ring_gather`, `all_gather` or `mesh_coords`); requires a DRAM ND-sharded
+                (receiver-contiguous) weight, whose ND shard is exactly one receiver's slab, shape
+                ``[K, N / num_receivers]``. Slab ``idx`` goes to the ``idx``-th receiver in row-major
+                order over the union of the pipes' receivers.
 
                 The caller owns this ordering contract and it is not checked at runtime: the
                 weight's ND shard order and the prefetcher's ring order must both agree with
                 the receiver order. When they disagree the result is silently wrong rather
-                than an error -- each core multiplies against another core's weights. Prefer
-                building the pair with
-                `ttnn._experimental.tensor_prefetcher_matmul_decode.make_matmul_decode_gcb`,
-                which derives the ring layout from the receiver grid for you.
-            global_cb_k_blocks (int, optional): how many GCB pages carry one receiver's slab.
-                Defaults to 1, one page per slab, which requires the GCB to hold a whole slab
-                per receiver. A higher value cuts the slab into that many equal K-blocks, which
-                the reader streams and the compute kernel accumulates over, so the GCB only has
-                to hold two pages -- letting one small GCB feed weights whose slabs differ in
-                size, as long as they agree on the page size.
+                than an error -- each core multiplies against another core's weights. Keep the
+                pipes alive for as long as the program cache may hold a program built against
+                them. Defaults to an empty list (none).
+            prefetch_k_blocks (int, optional): how many pipe entries carry one receiver's slab.
+                Defaults to 1, one entry per slab, which requires the ring to hold a whole slab.
+                A higher value cuts the slab into that many equal K-blocks, which the reader
+                streams and the compute kernel accumulates over, so the ring only has to hold
+                two entries.
 
-                It must equal the `block_count` of the prefetch request filling this GCB. A
+                It must equal the `block_count` of the prefetch request filling these pipes. A
                 mismatch is a device hang, not an error, so derive both from
                 `ttnn._experimental.tensor_prefetcher_matmul_decode.matmul_decode_k_blocks`
                 rather than by hand.
@@ -126,20 +118,20 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 -- `k_blocks > 1` selects the partial width-sharded factory, `batch > 1` the
                 batched factory (with `b_blocks`), otherwise full width-sharded with N split
                 across the cores. `partial_width_sharded` is ignored when this is set. Mutually
-                exclusive with `global_cb`. Defaults to None.
+                exclusive with `prefetcher_pipes`. Defaults to None.
             all_gather (bool, optional): fuse a fabric all-gather of the local N-shard into
                 the same program. Every device then holds `[..., M, N_local * ring_size]`,
                 where the ring is the full mesh of `input_tensor_a`. Requires a multi-device
-                mesh. Not supported with `global_cb` or the batched factory. Defaults to False.
+                mesh. Not supported with `prefetcher_pipes` or the batched factory. Defaults to False.
             mesh_coords (list[ttnn.MeshCoordinate], optional): dispatch the matmul only on
                 these mesh coordinates while retaining output storage on the complete mesh.
                 Intended for an explicit point-to-point broadcast of the selected rank's
-                result. Not supported with `global_cb`, `all_gather`, or the batched factory.
+                result. Not supported with `prefetcher_pipes`, `all_gather`, or the batched factory.
                 Defaults to None (all coordinates).
             ring_gather (bool, optional): gather in0 over a pipelined closed ring on the
                 union of the source and compute grids instead of the two-hub gather.
                 Full- and partial-width L1-resident paths only (plain or packed_weight).
-                Not supported with `global_cb` or the batched factory. Defaults to False.
+                Not supported with `prefetcher_pipes` or the batched factory. Defaults to False.
             output_core_grid (ttnn.CoreRangeSet, optional): multicast a replica of the
                 full output row onto every core of this filled rectangle (HEIGHT_SHARDED).
                 Full-width: ``[M, N]``. Batched (``Bc == 1``): packed
@@ -163,11 +155,16 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 (the default) preserves legacy full-row normalization. Requires
                 ``rms_norm``; nonzero values are rejected when ``rms_norm`` is False.
             weight_core_grid (ttnn.CoreRangeSet, optional): for a DRAM ND-sharded
-                `input_tensor_b` without `global_cb`, the cores that each load one weight slab;
-                slab ``p`` goes to the ``p``-th core in row-major order, following the same
-                per-mode slab table as `global_cb`. Defaults to the first ``num_shards`` cores of
-                the compute grid, row-wise. Rejected for any other weight. Not supported with
-                `ring_gather` or `all_gather`.
+                `input_tensor_b` without `prefetcher_pipes`, the cores that each load one weight slab;
+                slab ``p`` goes to the ``p``-th core in row-major order:
+
+                    mode     weight cores          slab shape        slab idx -> block
+                    full     N_blocks              [K, N/N_blocks]   n_idx = idx
+                    partial  K_blocks*N_blocks     [Kc, Nc]          k_idx = idx / N_blocks, n_idx = idx % N_blocks
+                    batched  b_blocks*n_blocks     [Bc*K, Nc]        b_idx = idx / n_blocks, n_idx = idx % n_blocks
+
+                Defaults to the first ``num_shards`` cores of the compute grid, row-wise. Rejected
+                for any other weight. Not supported with `ring_gather` or `all_gather`.
 
                 When `input_tensor_a` is ROW_MAJOR and HEIGHT_SHARDED, it must be replicated
                 on a core grid that contains `input_tensor_b`'s cores (shard width = K,
@@ -186,8 +183,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("partial_width_sharded") = false,
         nb::arg("dtype") = nb::none(),
         nb::arg("output_mem_config") = nb::none(),
-        nb::arg("global_cb") = nb::none(),
-        nb::arg("global_cb_k_blocks") = 1,
+        nb::arg("prefetcher_pipes") = ttnn::PrefetcherPipeList{},
+        nb::arg("prefetch_k_blocks") = 1,
         nb::arg("packed_weight") = nb::none(),
         nb::arg("all_gather") = false,
         nb::arg("mesh_coords") = nb::none(),
@@ -274,8 +271,6 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("batch", &ttnn::prim::MatmulDecodeParams::batch)
         .def_rw("b_blocks", &ttnn::prim::MatmulDecodeParams::b_blocks)
         .def_rw("n_blocks", &ttnn::prim::MatmulDecodeParams::n_blocks)
-        .def_rw("global_cb", &ttnn::prim::MatmulDecodeParams::global_cb)
-        .def_rw("global_cb_k_blocks", &ttnn::prim::MatmulDecodeParams::global_cb_k_blocks)
         .def_rw("packed_weight", &ttnn::prim::MatmulDecodeParams::packed_weight)
         .def_rw("all_gather", &ttnn::prim::MatmulDecodeParams::all_gather)
         .def_rw("ring_size", &ttnn::prim::MatmulDecodeParams::ring_size)
@@ -325,35 +320,38 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
     // Each program factory's create_descriptor, mirroring the MatmulMultiCoreReuse*ProgramFactory
     // bindings in matmul_nanobind.cpp. matmul_decode has no "core_range_set" override argument --
     // unlike plain matmul, core placement is entirely derived from where the caller already
-    // sharded input_tensor_a / input_tensor_b / the output tensor (or, on the prefetcher path,
-    // from the GlobalCircularBuffer's receiver set), so there is nothing extra to pass here.
+    // sharded input_tensor_a / input_tensor_b / the output tensor, so there is nothing extra to pass
+    // here. The two-hub full and partial width-sharded factories and the batched one are Metal 2.0
+    // ProgramSpecs with no descriptor; they are bound only so matmul_decode_select_program_factory
+    // can return them.
     nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::FullWidthSharded>(
-        mod, "MatmulDecodeFullWidthShardedProgramFactory")
+        mod, "MatmulDecodeFullWidthShardedProgramFactory");
+
+    nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::FullWidthRingGather>(
+        mod, "MatmulDecodeFullWidthRingGatherProgramFactory")
         .def_static(
             "create_descriptor",
-            &ttnn::prim::matmul_decode_full_width_sharded_create_descriptor,
+            &ttnn::prim::matmul_decode_full_width_ring_gather_create_descriptor,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"),
             nb::arg("tensor_return_value"),
             nb::arg("mesh_dispatch_coordinate") = nb::none());
 
     nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::PartialWidthSharded>(
-        mod, "MatmulDecodePartialWidthShardedProgramFactory")
+        mod, "MatmulDecodePartialWidthShardedProgramFactory");
+
+    nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::PartialWidthRingGather>(
+        mod, "MatmulDecodePartialWidthRingGatherProgramFactory")
         .def_static(
             "create_descriptor",
-            &ttnn::prim::matmul_decode_partial_width_sharded_create_descriptor,
+            &ttnn::prim::matmul_decode_partial_width_ring_gather_create_descriptor,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
+            nb::arg("tensor_return_value"),
+            nb::arg("mesh_dispatch_coordinate") = nb::none());
 
     nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::BatchedWidthSharded>(
-        mod, "MatmulDecodeBatchedWidthShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            &ttnn::prim::matmul_decode_batched_width_sharded_create_descriptor,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
+        mod, "MatmulDecodeBatchedWidthShardedProgramFactory");
 
     mod.def(
         "matmul_decode_select_program_factory",

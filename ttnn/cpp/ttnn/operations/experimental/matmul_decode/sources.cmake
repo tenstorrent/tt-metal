@@ -24,9 +24,11 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_SRCS
 # globbed in CMakeLists.txt so add/remove/rename does not touch infra-owned build logic.
 set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_KERNELS
     device/kernels/compute/compute_batched_width_sharded.cpp
+    device/kernels/compute/compute_full_width_in0_drain.cpp
     device/kernels/compute/compute_full_width_ring_gather.cpp
     device/kernels/compute/compute_full_width_sharded.cpp
     device/kernels/compute/compute_large_k_tree_reduce.cpp
+    device/kernels/compute/compute_partial_width_ring_gather.cpp
     device/kernels/compute/compute_partial_width_sharded.cpp
     device/kernels/dataflow/all_gather_local_output.hpp
     device/kernels/dataflow/full_width_rms_norm_transport.hpp
@@ -35,12 +37,12 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_KERNELS
     device/kernels/dataflow/reader_full_width_sharded.cpp
     device/kernels/dataflow/reader_large_k_tree_reduce.cpp
     device/kernels/dataflow/reader_partial_width_ring_gather.cpp
-    device/kernels/dataflow/reader_partial_width_sharded.cpp
     device/kernels/dataflow/writer_batched_width_sharded.cpp
     device/kernels/dataflow/writer_full_width_all_gather.cpp
     device/kernels/dataflow/writer_full_width_output_mcast.cpp
     device/kernels/dataflow/writer_full_width_rms_norm.cpp
     device/kernels/dataflow/writer_large_k_tree_reduce.cpp
+    device/kernels/dataflow/writer_partial_width_ring_gather.cpp
     device/kernels/dataflow/writer_partial_width_sharded.cpp
 )
 
