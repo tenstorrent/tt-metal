@@ -2788,7 +2788,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
     if (this->fabric_context_ == nullptr) {
         log_warning(
             tt::LogFabric,
-            "ControlPlane: Fabric context is not set, cannot write fabric connections to Tensix cores for M%dD%d",
+            "ControlPlane: Fabric context is not set, cannot write fabric connections to Tensix cores for M{}D{}",
             *mesh_id,
             chip_id);
         return;
@@ -2812,7 +2812,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
             if (num_eth_endpoint >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
                 log_warning(
                     tt::LogFabric,
-                    "ControlPlane: Maximum number of fabric endpoints exceeded for M%dD%d, skipping further "
+                    "ControlPlane: Maximum number of fabric endpoints exceeded for M{}D{}, skipping further "
                     "connections",
                     *mesh_id,
                     chip_id);
