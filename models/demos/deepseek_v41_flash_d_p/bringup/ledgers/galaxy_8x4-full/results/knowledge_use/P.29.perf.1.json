@@ -1,0 +1,78 @@
+{
+ "used": [
+  {
+   "id": "DS41-199",
+   "how": "warmed the bfp8_down4 expert cache for all 40 layers with tests/perf/test_experts_cache_warm.py (39 misses, 1 h 35 min) before test_dram and the measure; the measure then loaded every layer as a 4-5 s hit",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md is at 511999 B: no new section; heading renamed FIX.20/P.27/28 -> FIX.20/P.27-29 (same length), P.29's section went to known_issues_detail.md",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-200",
+   "how": "checked the CPU emulation: tt/experts.py:expert_weight_round('bfp8_down4') follows the value; bringup/hooks.py:1074 and reference/ds41_ref.py still do not; both outside P.29's allowed paths, reported, not changed",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-198",
+   "how": "the w2 rounding under test: 6.51-7.66 % of w2 changed, worst ||dW||/||W|| 0.063-0.107 over 40 layers, lossless packing held",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every device run (warm, measure --part test, measure) through devjob start / wait, never killed",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the brief names the knowledge-use report at bringup/results/knowledge_use/ but the allowed path is bringup/ledgers/galaxy_8x4-full/results/knowledge_use/ (written there)",
+  "the default `measure --task P.29` also runs the profile and p51200 (not only rung last), ~45 min with a warm cache; worth one line next to DS41-199"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no code change; no padding or inflated work"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched (no code change)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suites run; only the cache warmer, test_dram and the orchestrator measure"
+  },
+  {
+   "id": "OV-38",
+   "answer": "done",
+   "evidence": "test_experts_cache_warm.py with DS41_EXPERTS_IMPL=bfp8_down4 rc 0 (40/40 markers) before test_dram and the measure; EXPERTS_IMPL default stays bfp4 in tt/settings.py"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.29",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-03T18:57:00",
+  "head": "d0ab11a193c",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.29.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md"
+  ]
+ }
+}

@@ -1419,3 +1419,7 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   tests/perf/test_experts_cache_warm.py (framework gap F243: a new weight format's cache must be warmed before timed
   tests). OV note to P.29: warm the bfp8_down4 cache first. Also seen: the full selftest run printed UMD cluster
   open / close lines at its end (some selftest touches the device; F244, to find). Resumed --until P.29 at 16:31.
+- 19:00 P.29: the agent changed nothing (P.27 built bfp8_down4), measured the 'new' side via orchestrator measure,
+  and the A/B then skipped both sides ("changed nothing under the task's paths": F233 only exempted ab.flip), so the
+  gate failed on missing metrics. FRAMEWORK F245 (533dc41180c): keep_default counts as switch-only like flip;
+  selftest. decide --task P.29 --rerun, resumed 19:02 (the agent's measured side should be reused: same code key).
