@@ -9,23 +9,27 @@ last four are partial-face tiles) and the one-face 16x16 tile, two, four and eig
   * the closed block _llk_pack_block_closed_, one close per tile (mode 1),
   * the dense replay block _llk_pack_block_dense_, one close per run (mode 3),
   * the experimental contiguous block (mode 0) for plain formats.
-Float16_b and Float32 (16-bit and 32-bit DEST), and Bfp8_b output for the 16-row faces, the only block-float tiles the packer writes correctly."""
+Float16_b and Float32 (16-bit and 32-bit DEST), and Bfp8_b output for the 16-row faces, the only block-float tiles the packer writes correctly.
+"""
 
 import pytest
-
-pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
-LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
-    [
-        'test_perf_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-tile_dims:(16, 32)-num_tiles:2-pack_mode:3-loop_factor:32]',
-        'test_perf_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-tile_dims:(4, 32)-num_tiles:2-pack_mode:0-loop_factor:32]',
-    ]
-)
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.perf.core import PerfRunType
 from test_pack_tiny_tile_block import _make_config
+
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-tile_dims:(16, 32)-num_tiles:2-pack_mode:3-loop_factor:32]",
+        "test_perf_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-tile_dims:(4, 32)-num_tiles:2-pack_mode:0-loop_factor:32]",
+    ]
+)
+
 
 F = DataFormat
 TINY_PERF_FORMATS = [
@@ -47,8 +51,12 @@ TINY_PERF_RUN_TYPES = [PerfRunType.PACK_ISOLATE, PerfRunType.L1_TO_L1]
     pack_mode=[0, 1, 2, 3, 4],
     loop_factor=[32],
 )
-def test_perf_pack_tiny_tile_block(perf_report, formats, dest_acc, tile_dims, num_tiles, pack_mode, loop_factor):
-    if formats.output_format.is_block_float() and (tile_dims[0] != 16 or tile_dims[1] != 32 or pack_mode in (0, 3)):
+def test_perf_pack_tiny_tile_block(
+    perf_report, formats, dest_acc, tile_dims, num_tiles, pack_mode, loop_factor
+):
+    if formats.output_format.is_block_float() and (
+        tile_dims[0] != 16 or tile_dims[1] != 32 or pack_mode in (0, 3)
+    ):
         pytest.skip("Block-float tiles need two 16-row faces and keep the tile close")
     configuration, _, _ = _make_config(
         tile_dims,

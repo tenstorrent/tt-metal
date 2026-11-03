@@ -8,46 +8,59 @@ perf_pack sweeps Float16_b, Float32, Int32 and Bfp8_b in and out at dest index 0
   * dest indices 1 and 3 for the per-tile pack (the pack starts mid DEST);
   * the 32x128 shape (four tiles in a row);
 for both the per-tile pack (_llk_pack_) and the block packs (pack_block=True): the dense fast block for 16-bit and 32-bit outputs and the closed
-fast block, replayed per tile, for the block-float outputs. Tiny tiles and partial faces are in perf_pack_tiny.py."""
+fast block, replayed per tile, for the block-float outputs. Tiny tiles and partial faces are in perf_pack_tiny.py.
+"""
 
 import pytest
-
-pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
-LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
-    [
-        'test_perf_pack_cov2[formats:Bfp4_b->Bfp4_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Bfp4_b->Float16-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Bfp4_b->Int32-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Bfp8_b->Float16-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Float16->Bfp4_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Float16->Bfp8_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Float16->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Float16->Int32-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Float16_b->Bfp4_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Float16_b->Float16-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Float32->Bfp4_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Float32->Float32-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Int32->Bfp4_b-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Int32->Bfp8_b-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Int32->Float16-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_cov2[formats:Int32->Float32-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-    ]
-)
 from conftest import skip_for_wormhole
-from helpers.constraints import get_valid_dest_accumulation_modes, get_valid_dest_indices
+from helpers.constraints import (
+    get_valid_dest_accumulation_modes,
+    get_valid_dest_indices,
+)
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestSync, PackerReluType
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_pack import test_pack as run_pack
 
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_pack_cov2[formats:Bfp4_b->Bfp4_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Bfp4_b->Float16-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Bfp4_b->Int32-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Bfp8_b->Float16-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Float16->Bfp4_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Float16->Bfp8_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Float16->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Float16->Int32-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Float16_b->Bfp4_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Float16_b->Float16-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Float32->Bfp4_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Float32->Float32-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Int32->Bfp4_b-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Int32->Bfp8_b-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Int32->Float16-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_cov2[formats:Int32->Float32-dest_acc:Yes-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+    ]
+)
+
+
 F = DataFormat
-COV2_FORMATS = input_output_formats([F.Float16_b, F.Float16, F.Float32, F.Int32, F.Bfp8_b, F.Bfp4_b])
+COV2_FORMATS = input_output_formats(
+    [F.Float16_b, F.Float16, F.Float32, F.Int32, F.Bfp8_b, F.Bfp4_b]
+)
 COV2_DIMS = [[64, 64], [32, 128], [128, 64]]
 
 
 def _dest_indices(dest_acc, dest_sync, formats, input_dimensions):
-    return [i for i in get_valid_dest_indices(dest_sync, dest_acc, formats, input_dimensions) if i in (0, 1, 3)]
+    return [
+        i
+        for i in get_valid_dest_indices(dest_sync, dest_acc, formats, input_dimensions)
+        if i in (0, 1, 3)
+    ]
 
 
 COV2_SWEEP = dict(
@@ -66,7 +79,18 @@ COV2_SWEEP = dict(
 @pytest.mark.perf
 @skip_for_wormhole
 @parametrize(**COV2_SWEEP)
-def test_perf_pack_cov2(perf_report, formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index, run_types, loop_factor, is_perf):
+def test_perf_pack_cov2(
+    perf_report,
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    run_types,
+    loop_factor,
+    is_perf,
+):
     run_pack(
         formats,
         dest_acc,
@@ -90,7 +114,16 @@ COV2_BLOCK_SWEEP = {**COV2_SWEEP, "dest_index": [0]}
 @skip_for_wormhole
 @parametrize(**COV2_BLOCK_SWEEP)
 def test_perf_pack_cov2_block(
-    perf_report, formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index, run_types, loop_factor, is_perf
+    perf_report,
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
     run_pack(
         formats,
@@ -112,7 +145,9 @@ COV2_BLOCK_IDX_SWEEP = {
     "formats": input_output_formats([F.Float16_b, F.Float32, F.Bfp8_b]),
     "input_dimensions": [[64, 64]],
     "dest_index": lambda dest_acc, dest_sync, formats, input_dimensions: [
-        i for i in (1, 2, 3) if i in get_valid_dest_indices(dest_sync, dest_acc, formats, input_dimensions)
+        i
+        for i in (1, 2, 3)
+        if i in get_valid_dest_indices(dest_sync, dest_acc, formats, input_dimensions)
     ],
     "block_tiles": [2, 4],
     "pack_block": [False, 2, 3],
@@ -123,10 +158,28 @@ COV2_BLOCK_IDX_SWEEP = {
 @skip_for_wormhole
 @parametrize(**COV2_BLOCK_IDX_SWEEP)
 def test_perf_pack_cov2_block_idx(
-    perf_report, formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index, block_tiles, pack_block, run_types, loop_factor, is_perf
+    perf_report,
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
-    if pack_block == 2 and formats.output_format.is_block_float() and block_tiles == 2 and dest_index % 4 == 3:
-        pytest.skip("two block-float tiles that straddle a four tile boundary of DEST: slower as a closed block than per tile (llk_pack_block guard_dest_straddle takes the per-tile path), not run as block rows")
+    if (
+        pack_block == 2
+        and formats.output_format.is_block_float()
+        and block_tiles == 2
+        and dest_index % 4 == 3
+    ):
+        pytest.skip(
+            "two block-float tiles that straddle a four tile boundary of DEST: slower as a closed block than per tile (llk_pack_block guard_dest_straddle takes the per-tile path), not run as block rows"
+        )
     run_pack(
         formats,
         dest_acc,
@@ -147,7 +200,16 @@ def test_perf_pack_cov2_block_idx(
 @skip_for_wormhole
 @parametrize(**COV2_BLOCK_SWEEP)
 def test_perf_pack_cov2_block_w(
-    perf_report, formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index, run_types, loop_factor, is_perf
+    perf_report,
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
     """The block packs of test_perf_pack_cov2_block with the W offset forms (no destination write per call)."""
     run_pack(

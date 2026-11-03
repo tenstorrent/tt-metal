@@ -7,13 +7,6 @@ and Tf32 and Bfp8_b inputs, with the per-tile pack (pack_block False), the defau
 16 tiles from dest index 0 and the last tile that fits."""
 
 import pytest
-
-pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
-LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
-    [
-        'test_perf_pack_llkx[formats:Float16_b->Tf32-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:1-input_dimensions:[64, 32]-dest_index:15-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-    ]
-)
 from conftest import skip_for_wormhole
 from helpers.llk_params import DestSync, PackerReluType
 from helpers.param_config import parametrize
@@ -21,6 +14,16 @@ from helpers.perf.core import ALL_PERF_RUN_TYPES
 from llk_pack_space import llkx_accs, llkx_formats
 from perf_pack_grid import _grid_dims, _grid_indices
 from test_pack import test_pack as run_pack
+
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_pack_llkx[formats:Float16_b->Tf32-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:1-input_dimensions:[64, 32]-dest_index:15-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+    ]
+)
+
 
 LLKX_BLOCKS = [1, 2, 4, 8, 16]
 
@@ -57,7 +60,18 @@ def _llkx_indices(dest_acc, dest_sync, formats, block_tiles):
     is_perf=[True],
 )
 def test_perf_pack_llkx(
-    perf_report, formats, dest_acc, relu_type, dest_sync, block_tiles, input_dimensions, dest_index, pack_block, run_types, loop_factor, is_perf
+    perf_report,
+    formats,
+    dest_acc,
+    relu_type,
+    dest_sync,
+    block_tiles,
+    input_dimensions,
+    dest_index,
+    pack_block,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
     """Per-tile, default block and W offset packs of block_tiles tiles from dest_index for the packer conversions of the LLK matrix."""
     run_pack(

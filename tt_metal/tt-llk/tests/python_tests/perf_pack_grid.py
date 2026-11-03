@@ -7,24 +7,10 @@
     same key as the twin, the llk_pack_block default calls (pack_block 2: blocks under four tiles take the per-tile pack, block-float blocks the closed form) and
     the W offset calls (pack_block 3), from dest index 0, 1, 3 and the last tile that fits;
   * the integer outputs UInt16, UInt32, UInt8 and Int8 that cov3 does not run, same-format, at the same sizes and forms.
-The block size is in num_tiles_in_block and no key repeats one of the other pack perf modules. perf_pack_grid_rows holds the row pack, perf_pack_grid_tiny the tiny tiles."""
+The block size is in num_tiles_in_block and no key repeats one of the other pack perf modules. perf_pack_grid_rows holds the row pack, perf_pack_grid_tiny the tiny tiles.
+"""
 
 import pytest
-
-pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
-LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
-    [
-        'test_perf_pack_grid_block[formats:Float16_b->Float16-dest_acc:Yes-relu_type:NoRelu-dest_sync:Half-block_tiles:3-input_dimensions:[64, 96]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:10-input_dimensions:[64, 320]-dest_index:6-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:15-input_dimensions:[64, 480]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:16-input_dimensions:[64, 512]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:4-input_dimensions:[64, 128]-dest_index:12-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:5-input_dimensions:[64, 160]-dest_index:11-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:9-input_dimensions:[64, 288]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:9-input_dimensions:[64, 288]-dest_index:7-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-        'test_perf_pack_grid_block[formats:UInt32->UInt32-dest_acc:Yes-relu_type:NoRelu-dest_sync:Half-block_tiles:3-input_dimensions:[64, 96]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]',
-    ]
-)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -32,6 +18,24 @@ from helpers.llk_params import DestAccumulation, DestSync, PackerReluType
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, effective_dest_acc, parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_pack import test_pack as run_pack
+
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_pack_grid_block[formats:Float16_b->Float16-dest_acc:Yes-relu_type:NoRelu-dest_sync:Half-block_tiles:3-input_dimensions:[64, 96]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:10-input_dimensions:[64, 320]-dest_index:6-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:15-input_dimensions:[64, 480]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:16-input_dimensions:[64, 512]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:4-input_dimensions:[64, 128]-dest_index:12-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:5-input_dimensions:[64, 160]-dest_index:11-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:9-input_dimensions:[64, 288]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_grid_block[formats:Float16_b->Float16_b-dest_acc:No-relu_type:NoRelu-dest_sync:Full-block_tiles:9-input_dimensions:[64, 288]-dest_index:7-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+        "test_perf_pack_grid_block[formats:UInt32->UInt32-dest_acc:Yes-relu_type:NoRelu-dest_sync:Half-block_tiles:3-input_dimensions:[64, 96]-dest_index:0-pack_block:False-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]",
+    ]
+)
+
 
 F = DataFormat
 IO = InputOutputFormat
@@ -52,14 +56,23 @@ GRID_FLOAT_FORMATS = [
     IO(F.Float16_b, F.Float16),
     IO(F.Float32, F.Float16),
 ]
-GRID_INT_FORMATS = [IO(F.UInt16, F.UInt16), IO(F.UInt32, F.UInt32), IO(F.UInt8, F.UInt8), IO(F.Int8, F.Int8)]
+GRID_INT_FORMATS = [
+    IO(F.UInt16, F.UInt16),
+    IO(F.UInt32, F.UInt32),
+    IO(F.UInt8, F.UInt8),
+    IO(F.Int8, F.Int8),
+]
 GRID_NEW_BLOCKS = [3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]
 GRID_DEFAULT_BLOCKS = [4, 8, 16]
 GRID_BLOCKS = sorted(GRID_NEW_BLOCKS + GRID_DEFAULT_BLOCKS)
 
 
 def _section_tiles(dest_sync, dest_acc, formats):
-    wide = effective_dest_acc(formats.input_format, formats.output_format, dest_acc) == DestAccumulation.Yes or formats.input_format.is_32_bit()
+    wide = (
+        effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+        == DestAccumulation.Yes
+        or formats.input_format.is_32_bit()
+    )
     return DEST_SYNC_TILE_LIMITS[dest_sync] // (2 if wide else 1)
 
 
@@ -67,7 +80,9 @@ def _grid_indices(dest_acc, dest_sync, formats, block_tiles):
     section = _section_tiles(dest_sync, dest_acc, formats)
     if block_tiles > section:
         return []
-    return sorted({i for i in (0, 1, 3, section - block_tiles) if i + block_tiles <= section})
+    return sorted(
+        {i for i in (0, 1, 3, section - block_tiles) if i + block_tiles <= section}
+    )
 
 
 def _grid_dims(block_tiles):
@@ -103,7 +118,18 @@ GRID_SWEEP = dict(
 @skip_for_wormhole
 @parametrize(**GRID_SWEEP)
 def test_perf_pack_grid_block(
-    perf_report, formats, dest_acc, relu_type, dest_sync, block_tiles, input_dimensions, dest_index, pack_block, run_types, loop_factor, is_perf
+    perf_report,
+    formats,
+    dest_acc,
+    relu_type,
+    dest_sync,
+    block_tiles,
+    input_dimensions,
+    dest_index,
+    pack_block,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
     """Per-tile, default block and W offset packs of block_tiles tiles from dest_index."""
     run_pack(

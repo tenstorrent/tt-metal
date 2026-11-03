@@ -32,12 +32,12 @@ import atexit
 import collections
 import datetime
 import json
-import zlib
 import logging
 import os
 import re
 import signal
 import sys
+import zlib
 from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
@@ -741,9 +741,12 @@ def _select_tests_by_op(config, items):
     )
 
 
-def _thin_sweep(items):
-    """Keep one id in LLK_SWEEP_STRIDE (default 50, chosen by a hash of the node id) of the tests marked llk_sweep; LLK_SWEEP_ALL=1 keeps every id."""
-    if os.environ.get("LLK_SWEEP_ALL") == "1":
+def _thin_sweep(config, items):
+    """In the perf CI runner (--perf-splits), keep one id in LLK_SWEEP_STRIDE (default 50, chosen by a hash of the node id) of the tests marked llk_sweep; LLK_SWEEP_ALL=1 keeps every id."""
+    if (
+        config.getoption("--perf-splits") is None
+        or os.environ.get("LLK_SWEEP_ALL") == "1"
+    ):
         return
     stride = int(os.environ.get("LLK_SWEEP_STRIDE", "50"))
     items[:] = [
@@ -850,7 +853,7 @@ def pytest_collection_modifyitems(config, items):
     # Choose compile representatives only after other plugins apply selection filters.
     result = yield
     _select_tests_by_op(config, items)
-    _thin_sweep(items)
+    _thin_sweep(config, items)
     _split_by_cost(config, items)
     _restore_test_order(config, items)
 

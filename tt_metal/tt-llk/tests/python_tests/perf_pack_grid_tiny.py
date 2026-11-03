@@ -3,23 +3,27 @@
 
 """Tiny tiles and partial faces that perf_pack_tiny_tile_block does not run: 2x32 and 32x16 tiles, block sizes of 1 to 8 tiles, the first or the last dest tile that
 fits as the start, Float16 and UInt16 outputs, and Bfp4_b for the 16x32 tile; modes 1 (closed block, library form), 2 (per-tile), 3 (dense block) and 4 (the closed block llk_pack_block makes, with the W offset). Four tile blocks from index 0 of
-the old shapes and formats are rows of perf_pack_tiny_tile_block and are not repeated."""
+the old shapes and formats are rows of perf_pack_tiny_tile_block and are not repeated.
+"""
 
 import pytest
-
-pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
-LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
-    [
-        'test_perf_pack_grid_tiny[formats:Float16_b->Bfp8_b-dest_acc:No-tile_dims:(16, 32)-block_tiles:1-dest_index:0-pack_mode:1-loop_factor:32]',
-    ]
-)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation
-from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.param_config import parametrize
+from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_pack_tiny_tile_block import _make_config as _run_tiny_config
+
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_pack_grid_tiny[formats:Float16_b->Bfp8_b-dest_acc:No-tile_dims:(16, 32)-block_tiles:1-dest_index:0-pack_mode:1-loop_factor:32]",
+    ]
+)
+
 
 F = DataFormat
 IO = InputOutputFormat
@@ -38,12 +42,20 @@ TINY_OLD = {("Float16_b", "Float16_b"), ("Float32", "Float32"), ("Float16_b", "B
 
 
 def _tiny_blocks(formats, dest_acc, tile_dims):
-    wide = dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit() or formats.output_format.is_32_bit()
+    wide = (
+        dest_acc == DestAccumulation.Yes
+        or formats.input_format.is_32_bit()
+        or formats.output_format.is_32_bit()
+    )
     return [n for n in TINY_GRID_BLOCKS if n <= (4 if wide else 8)]
 
 
 def _tiny_indices(formats, dest_acc, tile_dims, block_tiles):
-    wide = dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit() or formats.output_format.is_32_bit()
+    wide = (
+        dest_acc == DestAccumulation.Yes
+        or formats.input_format.is_32_bit()
+        or formats.output_format.is_32_bit()
+    )
     section = 4 if wide else 8
     return sorted({i for i in (0, section - block_tiles) if i + block_tiles <= section})
 
@@ -51,7 +63,12 @@ def _tiny_indices(formats, dest_acc, tile_dims, block_tiles):
 def _tiny_modes(formats, tile_dims, block_tiles, dest_index):
     if formats.output_format.is_block_float():
         return [1, 2, 4] if tile_dims == (16, 32) else []
-    if (formats.input_format.name, formats.output_format.name) in TINY_OLD and dest_index == 0 and block_tiles == 4 and tile_dims in TINY_OLD_DIMS:
+    if (
+        (formats.input_format.name, formats.output_format.name) in TINY_OLD
+        and dest_index == 0
+        and block_tiles == 4
+        and tile_dims in TINY_OLD_DIMS
+    ):
         return []
     return [1, 2, 3, 4]
 
@@ -67,7 +84,16 @@ def _tiny_modes(formats, tile_dims, block_tiles, dest_index):
     pack_mode=_tiny_modes,
     loop_factor=[32],
 )
-def test_perf_pack_grid_tiny(perf_report, formats, dest_acc, tile_dims, block_tiles, dest_index, pack_mode, loop_factor):
+def test_perf_pack_grid_tiny(
+    perf_report,
+    formats,
+    dest_acc,
+    tile_dims,
+    block_tiles,
+    dest_index,
+    pack_mode,
+    loop_factor,
+):
     """Tiny tiles and partial faces: per-tile (mode 2), closed block (mode 1) and dense block (mode 3) of block_tiles tiles from dest_index."""
     configuration, _, _ = _run_tiny_config(
         tile_dims,
