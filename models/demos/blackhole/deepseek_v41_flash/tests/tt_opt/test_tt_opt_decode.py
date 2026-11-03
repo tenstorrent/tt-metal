@@ -91,6 +91,13 @@ def _setup(md, minimal=False, tracy_layers=True):
             [[30744, 9237, 4, 362], [80365, 6306, 29, 270], [66117, 223, 21, 38], [37969, 7812, 33330, 14]]
         )
         base = torch.tensor([68, 30, 53, 38]) if not BASE_POS else BASE_POS + torch.tensor([0, 7, 13, 21])
+        if B == 8:  # overlap2: B=8 minimal gate (no prefill): 4 more users
+            X = torch.cat(
+                [X, torch.tensor([[5, 1291, 77, 4044], [9021, 18, 600, 31], [250, 4096, 12, 9], [777, 14, 8123, 56]])]
+            )
+            base = torch.cat(
+                [base, torch.tensor([111, 58, 45, 69]) if not BASE_POS else BASE_POS + torch.tensor([29, 37, 41, 53])]
+            )
         for b in range(B):  # pages of the users (a prefill admits them)
             m.pool.release(b)
             m.pool.admit(b, int(base[b]) + 64)

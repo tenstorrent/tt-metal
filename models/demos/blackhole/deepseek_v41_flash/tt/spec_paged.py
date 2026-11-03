@@ -191,7 +191,7 @@ class SpecIndexer(DSV41DecodeIndexer):
         key = ("ent_cs_lists", self.R)
         if key not in st:
             U, n, cols = self.T, self.n, self.cols
-            if os.environ.get("DSV41_ENT_FUSED", "0") == "1" and U * n <= 64 and U <= 16:
+            if os.environ.get("DSV41_ENT_FUSED", "1") == "1" and U * n <= 64 and U <= 16:
                 from models.demos.blackhole.deepseek_v41_flash.tt.ent_lists import ent_lists_fused
 
                 st[key] = ent_lists_fused(
