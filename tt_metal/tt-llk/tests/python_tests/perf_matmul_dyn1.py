@@ -1,5 +1,6 @@
 # Dynamic throttle emulation, mode 1 (see perf_matmul_dyn_base.py).
 import pytest
+from conftest import skip_for_wormhole
 from perf_matmul_dyn_base import CASES, run_dyn
 
 pytestmark = (
@@ -14,6 +15,7 @@ LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value o
 )
 
 
+@skip_for_wormhole
 @pytest.mark.perf
 @pytest.mark.parametrize("fmt,sync,dims,mf", CASES)
 def test_perf_matmul_dyn1(perf_report, fmt, sync, dims, mf):
