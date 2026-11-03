@@ -34,7 +34,7 @@ source:
   # default merged, the multi pool fix) + this manifest. Build prerequisites in the worktree: submodules
   # initialised (git submodule update --init --recursive) and `runtime` a real directory, not a symlink (the docker
   # build context drops a symlink that points outside it).
-  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal-res-pkg
+  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal-res-pkg2
   code:                                # import closure of qwen36_resident.generator_vllm (the adapters) + the DFlash2 drafter
     - qwen36_resident                  # resident engine, kernels, PP prefill, adapters + vllm_models bundle, spec serving
     - models/demos/blackhole/qwen36    # the ttnn DFlash2 drafter (tt/dflash2_tp.py, dflash2.py) and what it imports
