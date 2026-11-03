@@ -39,7 +39,9 @@ class OpProfile:
     fw_span: int | None = None
 
     def by_risc_type(self):
-        """Average busy fraction per RISC label (QUASAR_DM2, QUASAR_NEO0_TRISC2, ...) over the active cores."""
+        """Kernel lifetime per RISC label (QUASAR_DM2, QUASAR_NEO0_TRISC2, ...) as a fraction of the program span,
+        averaged over the active cores. The KERNEL zone runs from kernel entry to exit, so blocking waits count:
+        a value near 1 means the hart stayed alive to the end of the program, not that it was busy."""
         agg = defaultdict(lambda: [0, 0])
         for (core, risc), st in self.riscs.items():
             agg[risc][0] += st.busy
