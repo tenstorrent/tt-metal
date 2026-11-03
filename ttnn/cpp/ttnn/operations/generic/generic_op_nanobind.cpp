@@ -165,7 +165,7 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         R"doc(
         Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range, and
         an optional custom_program_hash that replaces the hash of the specs in the program cache key (which still
-        includes the names the run args refer to, each kernel's cores and its vararg counts). One value replaces the
+        includes the names the run args refer to, and each kernel's cores and array lengths). One value replaces the
         hash of every range's spec, so it must stand for all of them. The ranges must not overlap.
         Lists are copied in and out.
         )doc")
@@ -243,7 +243,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
 
         The first call with a given program compiles its kernels; later calls with the same program write only the
         new argument values. Every call checks the run args against the spec: each kernel gets exactly its declared
-        arguments and varargs, and each tensor parameter gets a tensor from io_tensors that matches its spec.
+        arguments, each array with its declared length, and each tensor parameter gets a tensor from io_tensors that
+        matches its spec.
         Whether every core got its per-core values is checked on later calls only when
         ttnn.CONFIG.validate_program_args is on.
 
@@ -258,7 +259,7 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 call, or of each range's program.
             custom_program_hash (int, optional): With a ProgramSpec only (a MeshProgramSpec has its own field):
                 replaces the hash of the spec in the program cache key, which still includes the names the run args
-                refer to, each kernel's cores and its vararg counts. A non-negative int below 2**64; keeping keys
+                refer to, and each kernel's cores and array lengths. A non-negative int below 2**64; keeping keys
                 unique is then the caller's job. Defaults to None.
 
         Returns:

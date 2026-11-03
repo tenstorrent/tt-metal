@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <unordered_set>
 #include <variant>
@@ -79,6 +80,7 @@ bool has_runtime_arguments(const m2::KernelSpec& kernel) {
     const auto& schema = kernel.runtime_arg_schema;
     const auto& options = kernel.advanced_options;
     return !schema.runtime_arg_names.empty() || !schema.common_runtime_arg_names.empty() ||
+           !schema.runtime_array_args.empty() || !schema.common_runtime_array_args.empty() ||
            options.num_runtime_varargs > 0 || options.num_common_runtime_varargs > 0 ||
            std::ranges::any_of(
                options.num_runtime_varargs_per_node, [](const auto& entry) { return entry.second > 0; });
@@ -94,18 +96,23 @@ std::vector<std::string> names_of(const m2::Table<std::string, Value>& values) {
     return names;
 }
 
-std::string join_names(const std::vector<std::string>& names) {
+// A schema declares arguments by name and arrays by ArrayArgDecl; for arrays, name is &ArrayArgDecl::name.
+template <typename Declaration, typename Name = std::identity>
+std::string join_names(const m2::Group<Declaration>& declarations, Name name = {}) {
     std::string joined;
-    for (const auto& name : names) {
-        joined += joined.empty() ? name : ", " + name;
+    for (const auto& declaration : declarations) {
+        const std::string& declared = std::invoke(name, declaration);
+        joined += joined.empty() ? declared : ", " + declared;
     }
     return joined;
 }
 
-template <typename Value>
-bool has_exactly(const m2::Table<std::string, Value>& values, const m2::Group<std::string>& names) {
-    return values.size() == names.size() &&
-           std::ranges::all_of(names, [&values](const std::string& name) { return values.contains(name); });
+template <typename Value, typename Declaration, typename Name = std::identity>
+bool has_exactly(
+    const m2::Table<std::string, Value>& values, const m2::Group<Declaration>& declarations, Name name = {}) {
+    return values.size() == declarations.size() &&
+           std::ranges::all_of(
+               declarations, [&values](const std::string& declared) { return values.contains(declared); }, name);
 }
 
 void check_kernel_run_args(
@@ -123,6 +130,45 @@ void check_kernel_run_args(
         kernel.unique_id,
         join_names(schema.common_runtime_arg_names),
         join_names(names_of(run_args.common_runtime_arg_values)));
+    TT_FATAL(
+        has_exactly(run_args.runtime_array_arg_values, schema.runtime_array_args, &m2::ArrayArgDecl::name),
+        "generic_op: kernel '{}' declares the runtime arrays [{}], but its run args give [{}]",
+        kernel.unique_id,
+        join_names(schema.runtime_array_args, &m2::ArrayArgDecl::name),
+        join_names(names_of(run_args.runtime_array_arg_values)));
+    TT_FATAL(
+        has_exactly(
+            run_args.common_runtime_array_arg_values, schema.common_runtime_array_args, &m2::ArrayArgDecl::name),
+        "generic_op: kernel '{}' declares the common runtime arrays [{}], but its run args give [{}]",
+        kernel.unique_id,
+        join_names(schema.common_runtime_array_args, &m2::ArrayArgDecl::name),
+        join_names(names_of(run_args.common_runtime_array_arg_values)));
+
+    // On a later call Metal checks an array's length only as it writes the array, after writing the arrays before it,
+    // so every call checks the lengths first.
+    for (const auto& array : schema.common_runtime_array_args) {
+        const std::size_t length = run_args.common_runtime_array_arg_values.find(array.name)->second.size();
+        TT_FATAL(
+            length == array.size,
+            "generic_op: kernel '{}' declares common runtime array '{}' with {} values, but its run args give {}",
+            kernel.unique_id,
+            array.name,
+            array.size,
+            length);
+    }
+    for (const auto& array : schema.runtime_array_args) {
+        for (const auto& [node, value] : run_args.runtime_array_arg_values.find(array.name)->second) {
+            TT_FATAL(
+                value.size() == array.size,
+                "generic_op: kernel '{}' declares runtime array '{}' with {} values, but its run args give {} on node "
+                "{}",
+                kernel.unique_id,
+                array.name,
+                array.size,
+                value.size(),
+                node.str());
+        }
+    }
 
     // Metal writes varargs by position on a later call without checking their count, so every call checks it. When the
     // nodes are checked too, varargs for a node the kernel does not run on are reported as that, not as a wrong count.
@@ -155,14 +201,24 @@ void check_kernel_run_args(
         return;
     }
     // A later call keeps the previous value of a node it leaves out, and Metal does not report it.
+    const auto covers_nodes = [&nodes](const auto& values) {
+        return values.size() == nodes.size() &&
+               std::ranges::all_of(values, [&nodes](const auto& entry) { return nodes.contains(entry.first); });
+    };
     for (const auto& [name, values] : run_args.runtime_arg_values) {
-        const bool covers_nodes =
-            values.size() == nodes.size() &&
-            std::ranges::all_of(values, [&nodes](const auto& entry) { return nodes.contains(entry.first); });
         TT_FATAL(
-            covers_nodes,
+            covers_nodes(values),
             "generic_op: kernel '{}' runs on {} nodes, but runtime argument '{}' does not have exactly one value "
             "for each of them",
+            kernel.unique_id,
+            nodes.size(),
+            name);
+    }
+    for (const auto& [name, values] : run_args.runtime_array_arg_values) {
+        TT_FATAL(
+            covers_nodes(values),
+            "generic_op: kernel '{}' runs on {} nodes, but runtime array '{}' does not have exactly one value for "
+            "each of them",
             kernel.unique_id,
             nodes.size(),
             name);
@@ -352,15 +408,16 @@ ttsl::hash::hash_t hash_data_formats_set(const m2::ProgramSpec& spec) {
     return hash;
 }
 
-// Everything that run args refer to by name, the nodes each kernel runs on, and each kernel's vararg counts. On a later
-// call Metal writes run args into the cached program by these names, keeps whatever they leave out, and writes varargs
-// by position into a buffer sized from the counts. So the key includes them even when a custom hash replaces the spec
-// hash, and a cached program whose arguments, tensor parameters, buffers, pipes, nodes or vararg counts differ from the
-// spec's is never reused.
+// Everything that run args refer to by name, the nodes each kernel runs on, and each kernel's array lengths and vararg
+// counts. On a later call Metal writes run args into the cached program by these names, keeps whatever they leave out,
+// and places arrays and varargs by the lengths and counts it compiled. So the key includes them even when a custom hash
+// replaces the spec hash, and a cached program whose arguments, array lengths, vararg counts, tensor parameters,
+// buffers, pipes or nodes differ from the spec's is never reused.
 ttsl::hash::hash_t hash_run_args_schema(const m2::ProgramSpec& spec) {
     ttsl::hash::hash_t hash = spec.kernels.size();
     for (const auto& kernel : spec.kernels) {
         const auto& options = kernel.advanced_options;
+        // The schema holds the argument names, and each array's name and length.
         hash = ttsl::hash::hash_objects(
             hash,
             kernel.unique_id,
