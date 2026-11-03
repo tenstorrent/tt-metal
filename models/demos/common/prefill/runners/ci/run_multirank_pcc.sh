@@ -311,6 +311,8 @@ RANKLOGS="${MR_DIR}/ranklogs"
 PRODUCER_LOG="${MR_DIR}/producer.log"
 # Written by the rank-crash watchdog: the rank logs that showed a traceback.
 CRASH_FLAG="${MR_DIR}/rank_crashed"
+# Written by the stall watchdog: when it fired and what it collected.
+STALL_FLAG="${MR_DIR}/stalled"
 
 SUMMARY_DONE=0
 emit_summary() {
@@ -325,9 +327,9 @@ emit_summary() {
 }
 
 cleanup() {
-  if [ -n "${WATCHDOG_PID:-}" ]; then
-    kill "${WATCHDOG_PID}" 2>/dev/null || true
-  fi
+  for pid in ${WATCHDOG_PID:-} ${STALL_WATCHDOG_PID:-}; do
+    kill "${pid}" 2>/dev/null || true
+  done
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     kill -- "-${RUNNER_PID}" 2>/dev/null || true
     timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
@@ -348,7 +350,7 @@ cleanup() {
       || echo "no drafter PCC lines -- were the dflash_* configs in the table?"
   fi
   mkdir -p "${EVIDENCE_DIR}"
-  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}" "${CRASH_FLAG}"; do
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}" "${CRASH_FLAG}" "${STALL_FLAG}"; do
     [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
   done
   # A failed request leaves the Inspector's dump (written on a dispatch timeout) on each host's
@@ -583,6 +585,61 @@ if [ -f "${CRASH_FLAG}" ]; then
   echo "a rank crashed before the producer launched; tracebacks in: $(tr '\n' ' ' < "${CRASH_FLAG}")" >&2
   exit 1
 fi
+
+# A hang that raises nothing -- no traceback for the crash watchdog, no op timeout -- otherwise runs to
+# the job timeout, which kills the container before the EXIT trap uploads a single rank log (run
+# 41537414509: all 8 GLM 4x4 ranks went silent in the first warmup chunk for two hours). Once the
+# request starts, the producer logs a push per chunk and the ranks keep writing, so no log growth for
+# PREFILL_STALL_SECS means the run is stuck. Then, before stopping it: every runner and producer prints
+# its Python stacks (faulthandler on SIGUSR1) into its rank log, and tt-triage dumps each host's devices
+# into TRIAGE_OUTPUT_DIR, which the job uploads. 0 disables it. Keep stall + triage under the leg's timeout.
+STALL_SECS="${PREFILL_STALL_SECS:-600}"
+STALL_TRIAGE_SECS="${PREFILL_STALL_TRIAGE_SECS:-600}"
+if [ "${STALL_SECS}" -gt 0 ]; then
+  (
+    # find fails until both paths exist, which pipefail and set -e would make fatal here.
+    log_bytes() { { find "${RANKLOGS}" "${PRODUCER_LOG}" -type f -printf '%s\n' 2>/dev/null || true; } | awk '{n += $1} END {print n + 0}'; }
+    on_hosts() {
+      IFS=, read -r -a STALL_HOSTS <<< "${RESOLVED_HOSTS}"
+      "${MPIRUN}" -np "${#STALL_HOSTS[@]}" --host "$(printf '%s:1,' "${STALL_HOSTS[@]}" | sed 's/,$//')" \
+        --map-by slot --bind-to none --tag-output --allow-run-as-root bash -lc "$1"
+    }
+    last=$(log_bytes)
+    since=$(date +%s)
+    while kill -0 "${RUNNER_PID}" 2>/dev/null; do
+      sleep 30
+      now=$(log_bytes)
+      if [ "${now}" != "${last}" ]; then
+        last=${now}
+        since=$(date +%s)
+        continue
+      fi
+      idle=$(($(date +%s) - since))
+      [ "${idle}" -ge "${STALL_SECS}" ] || continue
+      echo "STALL: no rank or producer log output for ${idle}s; collecting stacks and tt-triage, then stopping the run" >&2
+      echo "no log output for ${idle}s at $(date -u +%FT%TZ)" > "${STALL_FLAG}"
+      # Anchored on the interpreter, so the mpirun / bash wrappers whose command lines name the module
+      # are not signalled (SIGUSR1 would kill them).
+      on_hosts "pkill -USR1 -f '^python3 -m models.demos.common.prefill.runners.prefill_(runner|producer)' || true" \
+        || echo "stack dump signal failed (non-fatal)" >&2
+      sleep 15
+      on_hosts "D='${TRIAGE_OUTPUT_DIR:-${PREFILL_SUMMARIES}/triage}'/\$(hostname); mkdir -p \"\${D}\"; \
+        echo '${RUN_NAME}/${CONFIG} stall watchdog' > \"\${D}/job_info.txt\"; \
+        timeout ${STALL_TRIAGE_SECS} /opt/venv/bin/python3 '${TT_METAL_HOME}/tools/tt-triage.py' --disable-progress \
+          --triage-summary-path=\"\${D}/triage_summary.txt\" > \"\${D}/triage_output.txt\" 2>&1; \
+        echo \"tt-triage rc=\$? -> \${D}\"" \
+        || echo "tt-triage collection failed (non-fatal)" >&2
+      echo "stacks in the rank logs; tt-triage in ${TRIAGE_OUTPUT_DIR:-${PREFILL_SUMMARIES}/triage}" >> "${STALL_FLAG}"
+      kill -- "-${RUNNER_PID}" 2>/dev/null || true
+      while :; do
+        pkill -f -- "--output-filename ${RANKLOGS}/producer" 2>/dev/null || true
+        sleep 10
+      done
+    done
+  ) &
+  STALL_WATCHDOG_PID=$!
+fi
+
 set +e
 "${MPIRUN}" \
   --host "${HOSTS}" "${PRODUCER_PLACEMENT[@]}" --bind-to none --tag-output --allow-run-as-root \
@@ -611,6 +668,10 @@ set +e
 PROD_RC=${PIPESTATUS[0]}
 set -e
 
+if [ -f "${STALL_FLAG}" ]; then
+  echo "stopped by the stall watchdog (producer rc=${PROD_RC}): $(tr '\n' ' ' < "${STALL_FLAG}")" >&2
+  exit 1
+fi
 if [ "${PROD_RC}" -ne 0 ] && [ -f "${CRASH_FLAG}" ]; then
   echo "stopped after a rank crashed (producer rc=${PROD_RC}); tracebacks in: $(tr '\n' ' ' < "${CRASH_FLAG}")" >&2
   exit 1

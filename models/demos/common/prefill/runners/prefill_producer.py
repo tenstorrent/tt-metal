@@ -4,10 +4,12 @@
 
 
 import argparse
+import faulthandler
 import json
 import math
 import os
 import random
+import signal
 import struct
 import sys
 import threading
@@ -1769,6 +1771,9 @@ def _run_validator(rank: int, world_size: int) -> None:
 
 
 def main() -> None:
+    # SIGUSR1 prints every thread's Python stack to stderr and keeps running: run_multirank_pcc.sh's
+    # stall watchdog sends it to a hung run before tearing it down.
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     parser = argparse.ArgumentParser(
         prog="prefill_producer",
         description="H2D producer for the prefill runner. Config comes from a YAML manifest "

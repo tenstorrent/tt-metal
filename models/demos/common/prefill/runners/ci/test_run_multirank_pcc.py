@@ -143,7 +143,7 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
     sys.exit(int(os.environ.get("TEST_RUNNER_RC", "0")))
 elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
     record("producer")
-    if os.environ.get("TEST_RUNNER_CRASH"):
+    if os.environ.get("TEST_RUNNER_CRASH") or os.environ.get("TEST_PRODUCER_HANG"):
         # Blocked on layer completions that never come; exits only when its launcher is killed.
         (root / "producer_started").touch()
         parent = os.getppid()
@@ -566,6 +566,26 @@ class MultirankPccHarnessTests(unittest.TestCase):
             [path.name for path in (evidence / "inspector").glob("*/dispatch.yaml")], ["dispatch.yaml"], output
         )
         return output, records
+
+    def test_a_silent_hang_dumps_stacks_and_triage_then_stops_the_run(self):
+        summaries = tempfile.TemporaryDirectory()
+        self.addCleanup(summaries.cleanup)
+        result, records = self.run_harness(
+            "glm53",
+            hosts=self.SC4_HOSTS,
+            extra_env={"TEST_PRODUCER_HANG": "1", "PREFILL_STALL_SECS": "1", "PREFILL_SUMMARIES": summaries.name},
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("STALL: no rank or producer log output", output)
+        self.assertIn("stopped by the stall watchdog", output)
+        commands = [r["args"][-1] for r in records if r["kind"] == "mpi" and r["args"][-2:-1] == ["-lc"]]
+        # Stacks first, on every host, then tt-triage into the triage dir the job uploads.
+        signal = next(i for i, c in enumerate(commands) if "pkill -USR1" in c)
+        triage = next(i for i, c in enumerate(commands) if "tt-triage.py" in c)
+        self.assertLess(signal, triage)
+        self.assertIn(f"{summaries.name}/triage", commands[triage])
+        self.assertIn("no log output for", (Path(summaries.name) / "pcc" / "glm53" / "stalled").read_text())
 
     def test_a_rank_crash_mid_request_stops_the_producer_and_keeps_the_evidence(self):
         output, records = self.run_with_a_rank_crash("request")

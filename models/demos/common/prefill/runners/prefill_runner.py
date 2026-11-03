@@ -4,6 +4,7 @@
 
 
 import contextlib
+import faulthandler
 import json
 import os
 import signal
@@ -1160,6 +1161,9 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
+    # SIGUSR1 prints every thread's Python stack to stderr and keeps running: run_multirank_pcc.sh's
+    # stall watchdog sends it to a hung run before tearing it down.
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
 
     _print_config()
 
