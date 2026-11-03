@@ -2,30 +2,47 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The per-segment join and the decode tokens after a packed prefill (``TT_V41_PACK`` with ``TT_V41_PACK_LAYOUTS``), through ``DeepseekV41ForCausalLM`` as the generator and short-chunk tests.
+"""The per-segment join and the decode tokens after a packed prefill (``TT_V41_PACK`` with
+``TT_V41_PACK_LAYOUTS``), through ``DeepseekV41ForCausalLM`` as the generator and short-chunk tests.
 
-For each ``k`` of ``V41_PJ_KS`` (``2,4``): ``k`` distinct ``V41_PJ_PROMPT``-token (1,028) windows of the book are
+For each ``k`` of ``V41_PJ_KS`` (``2,4``): ``k`` distinct ``V41_PJ_PROMPT``-token (1,028) windows of the book
+are
 prefilled one by one through ``prefill_forward`` (the single path on the 5,120-row chunk, eagerly)
-and joined into decode slots, then the same ``k`` prompts as one packed call (``k x 1028`` listed) whose rows join
-from their segments of the packed state, at the same pool step. Compared per prompt: the prefill logits returned
-per row, the slot's pool rows after the join (the compressed KV and index-K rows of every source, the window rings
-of every layer, the candidate source's block pages; scaled-FP8 rows decoded) and ``V41_PJ_STEPS`` (8) free-running
-greedy decode steps of all ``2k`` slots in one step each, then of each slot alone (the c1 variant under the fused decode flags: the live-user index reads the slot's position, which must be the segment's length). Segment 0's prefill
+and joined into decode slots, then the same ``k`` prompts as one packed call (``k x 1028`` listed) whose rows
+join
+from their segments of the packed state, at the same pool step. Compared per prompt: the prefill logits
+returned
+per row, the slot's pool rows after the join (the compressed KV and index-K rows of every source, the window
+rings
+of every layer, the candidate source's block pages; scaled-FP8 rows decoded) and ``V41_PJ_STEPS`` (8)
+free-running
+greedy decode steps of all ``2k`` slots in one step each, then of each slot alone (the c1 variant under the
+fused decode flags: the live-user index reads the slot's position, which must be the segment's length).
+Segment 0's prefill
 state is bit-identical to the single run's, so its logits, pool rows and tokens are asserted
-equal; the later segments' are reported (PCC, argmax, the first differing step; the TP all-reduce's row-dependent
+equal; the later segments' are reported (PCC, argmax, the first differing step; the TP all-reduce's
+row-dependent
 summation order) and asserted under ``V41_PJ_STRICT=1``. Then the ownership case: a second pack of
-``kmax`` other prompts before any decode forces the first pack's pending segments to join (one allocation shared
-by its segments), and the decode after it. ``V41_PJ_TRACE=1`` (default 0: the packs eager) captures the layouts
-at warm-up (``V41PackTrace``, the segment joins per slot) and checks a replayed pack against the eager pack of the
-same prompts bit for bit (logits and pool rows), alternating layouts and a single prompt between them, with the
-replays' device time. ``V41_PJ_LONG=1`` adds the ``2 x 2052`` layout. ``V41_PJ_MAX_SEQ`` (16,384) is the context,
+``kmax`` other prompts before any decode forces the first pack's pending segments to join (one allocation
+shared
+by its segments), and the decode after it. ``V41_PJ_TRACE=1`` (default 0: the packs eager) captures the
+layouts
+at warm-up (``V41PackTrace``, the segment joins per slot) and checks a replayed pack against the eager pack of
+the
+same prompts bit for bit (logits and pool rows), alternating layouts and a single prompt between them, with
+the
+replays' device time. ``V41_PJ_LONG=1`` adds the ``2 x 2052`` layout. ``V41_PJ_MAX_SEQ`` (16,384) is the
+context,
 ``V41_PJ_BATCH`` (16) the slots. Results: ``V41_PJ_RESULT {json}``, ``V41_PJ_OUT``.
 
 With the drafter on (``TT_V41_SPEC=K``, the served catalog) the join also loads the
-slot's drafter rings from the packed chunk's per-segment seeding (``V41PrefillState.segment_rings[g]``): the rows
+slot's drafter rings from the packed chunk's per-segment seeding (``V41PrefillState.segment_rings[g]``): the
+rows
 compared per slot then include each drafter stage's ring rows of the prompt's last 128 positions
-(``drafter_ring[s]``), which must equal the single prefill's for segment 0, and the free-running tokens come from
-the speculative round through the ``[B, 1]`` contract (one token a call, the round's others buffered), with the
+(``drafter_ring[s]``), which must equal the single prefill's for segment 0, and the free-running tokens come
+from
+the speculative round through the ``[B, 1]`` contract (one token a call, the round's others buffered), with
+the
 device rounds each slot took recorded beside them (``rounds``: equal rings and rows give equal drafts)."""
 
 import json
@@ -59,8 +76,10 @@ def _down(mesh_device, t) -> torch.Tensor:
 
 def _slot_rows(mesh_device, pool: V41DecodePool, slot: int, length: int) -> dict:
     """What a prompt of ``length`` tokens holds in pool slot ``slot`` on its rank's first chip: per source the
-    compressed rows (decoded values) and every consumer layer's ring, the index keys (and the candidate source's
-    block pages). Reads every pool tensor whole (all chips) to the host: at the served 1M context with 32 slots that
+    compressed rows (decoded values) and every consumer layer's ring, the index keys (and the candidate
+    source's
+    block pages). Reads every pool tensor whole (all chips) to the host: at the served 1M context with 32
+    slots that
     is hundreds of GB and the OOM killer ends the test, so ``V41_PJ_ROWS=0`` skips the rows there (the
     logits and the tokens are still compared; the rows are the 16K runs' gate)."""
     if os.environ.get("V41_PJ_ROWS", "1") == "0":
@@ -79,7 +98,15 @@ def _slot_rows(mesh_device, pool: V41DecodePool, slot: int, length: int) -> dict
                 rows = reconstruct_scaled_fp8_kv_cache(rows.contiguous(), pool.kv_geometry).float()
             out[f"kv[{src}] compressed"] = rows
         for layer in pool.slots[src].layers:
-            rows = every[base + pool.ring_row(layer) : base + pool.ring_row(layer) + RING]
+            # the ring rows of the prompt's last RING positions: slot ``q % ring_slots`` with position-based
+            # rings
+            # (the verify decoder's 160 slots, where a join of ``length`` rows leaves the other 32 to an
+            # earlier
+            # occupant), the whole RING-row ring otherwise (its slot is the pool step's)
+            ring = every[base + pool.ring_row(layer) : base + pool.ring_row(layer) + pool.ring_slots]
+            if pool.position_rings:
+                ring = ring[[q % pool.ring_slots for q in range(length - RING, length)]]
+            rows = ring[:RING]
             if t.dtype == MlaKvCacheFormat.SCALED_FP8.storage_dtype:
                 rows = reconstruct_scaled_fp8_kv_cache(rows.contiguous(), pool.kv_geometry).float()
             out[f"ring[{layer}]"] = rows
@@ -94,15 +121,18 @@ def _slot_rows(mesh_device, pool: V41DecodePool, slot: int, length: int) -> dict
         cap = pool.slots[src].cap + 32
         every = _down(mesh_device, t)[chip]  # [users * (cap + 32) / BLOCK_ROWS, BLOCK_ROWS * idim]
         pages = every[u * cap // BLOCK_ROWS : u * cap // BLOCK_ROWS + n]
-        # the written rows only: a join scatters ``rows`` rows, so the last page's tail past them is the slot's
+        # the written rows only: a join scatters ``rows`` rows, so the last page's tail past them is the
+        # slot's
         # previous occupant's (fresh slots agree, reused ones do not), as for the single path
         out[f"index_k_blocks[{src}]"] = pages.reshape(-1, pages.shape[-1] // BLOCK_ROWS)[:rows]
     return out
 
 
 def _drafter_rings(mesh_device, model, slot: int, length: int) -> dict:
-    """The slot's drafter rings on its rank's first chip after the join: per stage the rows of the prompt's last
-    ``RING`` positions (slot ``q % ring_slots`` of the slot's user; the other rows of a position-based ring are
+    """The slot's drafter rings on its rank's first chip after the join: per stage the rows of the prompt's
+    last
+    ``RING`` positions (slot ``q % ring_slots`` of the slot's user; the other rows of a position-based ring
+    are
     whatever an earlier occupant left), ``[RING, head_dim]`` bf16. Empty without the drafter."""
     drafter = model.drafter
     if drafter is None:
@@ -192,9 +222,12 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
     kmax = max(ks)
     layouts = ",".join(f"{k}x{prompt}" for k in ks) + (f",2x{long}" if with_long else "")
     monkeypatch.setenv("TT_V41_CHUNK", str(chunk))
+    monkeypatch.setenv("TT_V41_PACK_CHUNK", os.environ.get("TT_V41_PACK_CHUNK", "0"))
     monkeypatch.setenv("TT_V41_LAYERS", ",".join(str(l) for l in layers))
-    # the single prompts eager on the full chunk (reference); ``V41_PJ_TRACE_LENGTHS`` lists lengths to capture
-    # as the served catalog does (with TT_V41_SHORT_CHUNK=2048 the references then replay on the short chunk, which
+    # the single prompts eager on the full chunk (reference); ``V41_PJ_TRACE_LENGTHS`` lists lengths to
+    # capture
+    # as the served catalog does (with TT_V41_SHORT_CHUNK=2048 the references then replay on the short chunk,
+    # which
     # differs from the full one: segment 0 is reported, not asserted, against it)
     monkeypatch.setenv("TT_V41_TRACE_PREFILL_LENGTHS", os.environ.get("V41_PJ_TRACE_LENGTHS", ""))
     monkeypatch.setenv("TT_V41_PREFILL_GENERIC", "1")
@@ -312,8 +345,10 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
     rounds: dict[int, int] = {}  # key -> the device rounds its slot took in the last ``free_run`` (the drafter on)
 
     def free_run(keys: list[int], first: list[int], lengths: list[int], n: int) -> list[list[int]]:
-        """``n`` greedy steps of every key together, each fed its own previous token -> per key its tokens. With
-        the drafter on, a call whose slot holds buffered tokens of its last round hands one over without a device
+        """``n`` greedy steps of every key together, each fed its own previous token -> per key its tokens.
+        With
+        the drafter on, a call whose slot holds buffered tokens of its last round hands one over without a
+        device
         step: ``rounds[key]`` counts the calls that stepped."""
         fed = list(first)
         out = [[] for _ in keys]
@@ -349,7 +384,10 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         ref_keys = new_keys(k)
         ref_logits = [prefill([(key, p)])[0] for key, p in zip(ref_keys, prompts)]
         assert model.prefill_last.get("pack") is None, model.prefill_last  # the single path
-        ref_full = model.prefill_last["chunk"] == chunk  # the reference on the full chunk: segment 0 bit-identical
+        # the reference on the pack's own geometry (the pack state's chunk: TT_V41_PACK_CHUNK's view, or the
+        # full
+        # chunk): segment 0 is then bit-identical; on another chunk it is reported
+        ref_full = model.prefill_last["chunk"] == model.models[id(model.pack_state)].chunk
         checks[f"{tag} reference"] = dict(model.prefill_last)
         ref_slots = join(ref_keys)
         ref_rows = [
@@ -362,8 +400,10 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         pack_logits = prefill(list(zip(pack_keys, prompts)))
         checks[f"{tag} pack_call"] = {**model.pack_last, "wall_s": round(time.time() - t0, 3)}
         pack_logits_by_k[k] = pack_logits
-        # the same prompt packed under another layout (the kmax pack's first k segments hold these prompts): the
-        # single path is deterministic and segment 0 equals it, so segment 0 of every pack is one tensor; the other
+        # the same prompt packed under another layout (the kmax pack's first k segments hold these prompts):
+        # the
+        # single path is deterministic and segment 0 equals it, so segment 0 of every pack is one tensor; the
+        # other
         # segments are reported (their TP all-reduce order differs with the layout's total)
         for other, logits_o in pack_logits_by_k.items():
             if other == k:
@@ -372,7 +412,11 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
                 rec = _logits_record(logits_o[g], pack_logits[g])
                 checks[f"{tag} vs k{other} logits[{g}]"] = rec
                 if not rec["equal"]:
-                    judge(f"{tag} vs k{other} logits[{g}]", [f"{tag}: segment {g} vs the k{other} pack's {rec}"], must=g == 0)
+                    judge(
+                        f"{tag} vs k{other} logits[{g}]",
+                        [f"{tag}: segment {g} vs the k{other} pack's {rec}"],
+                        must=g == 0,
+                    )
         assert model.pack_last.get("rows") == list(range(k)), model.pack_last
         assert model.prefill_last.get("mode") == ("replay" if traced else "eager"), model.prefill_last
         assert all(model.pending[key][0] is model.pack_state for key in pack_keys)
@@ -408,18 +452,22 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
             if model.drafter is not None and rec["rounds"][0] != rec["rounds"][1]:
                 # the same rows and rings draft the same tokens, so the slots take the same rounds
                 judge(f"{tag} rounds[{g}]", [f"{tag}: segment {g} rounds {rec['rounds']}"], must=g == 0 and ref_full)
-        # the c1 variant: fresh prefills, each slot alone for a few steps (one live row: the c1 capture and the
+        # the c1 variant: fresh prefills, each slot alone for a few steps (one live row: the c1 capture and
+        # the
         # live-user index under FD's flags, bound by the slot's position)
         c1_steps = min(steps, 4)
         ref_keys2, pack_keys2 = new_keys(k), new_keys(k)
         ref_logits2 = [prefill([(key, p)])[0] for key, p in zip(ref_keys2, prompts)]
-        # the references are stable: the single path of the same prompt after the decode replays equals its run
+        # the references are stable: the single path of the same prompt after the decode replays equals its
+        # run
         # before them (a padding config built lazily after the decode capture drifted here)
         for g in range(k):
             rec = _logits_record(ref_logits[g], ref_logits2[g])
             checks[f"{tag} reference_stable[{g}]"] = rec
             if not rec["equal"]:
-                judge(f"{tag} reference_stable[{g}]", [f"{tag}: reference {g} after the decode replays {rec}"], must=True)
+                judge(
+                    f"{tag} reference_stable[{g}]", [f"{tag}: reference {g} after the decode replays {rec}"], must=True
+                )
         join(ref_keys2)
         pack_logits2 = prefill(list(zip(pack_keys2, prompts)))
         join(pack_keys2)
@@ -428,8 +476,10 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
             b = free_run([pack_keys2[g]], [int(pack_logits2[g].argmax())], [prompt], c1_steps)[0]
             rec = _tokens_record(a, b)
             checks[f"{tag} c1_tokens[{g}]"] = {**rec, "ref": a, "pack": b, "variant": model.decoder.last.get("variant")}
-            # reported, not asserted: the two slots step alone at different pool steps, so their ring rows sit at
-            # different physical slots and the window's reduction order differs by rotation (a near-tie flips at
+            # reported, not asserted: the two slots step alone at different pool steps, so their ring rows sit
+            # at
+            # different physical slots and the window's reduction order differs by rotation (a near-tie flips
+            # at
             # step 3 of the 7-layer model; the 40-layer tokens were equal); the same-step
             # comparison above is the bit-exact one
             if not rec["equal"]:
@@ -496,7 +546,10 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
             finally:
                 model.pack_traces = saved
             for g in range(k):
-                rows_e = {**_slot_rows(mesh_device, pool, slots_e[g], n), **_drafter_rings(mesh_device, model, slots_e[g], n)}
+                rows_e = {
+                    **_slot_rows(mesh_device, pool, slots_e[g], n),
+                    **_drafter_rings(mesh_device, model, slots_e[g], n),
+                }
                 lines, record = _compare(f"{tag} {turn} k{k} rows[{g}]", rows_e, rows_r[g])
                 if not torch.equal(logits_e[g], logits_r[g]):
                     lines.append(
