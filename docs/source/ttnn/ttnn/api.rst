@@ -256,7 +256,6 @@ Pointwise Unary
    ttnn.relu6
    ttnn.relu_max
    ttnn.relu_min
-   ttnn.remainder
    ttnn.round
    ttnn.rsqrt
    ttnn.selu

@@ -34,7 +34,7 @@ What steps are needed to add TT-NN operation in Python?
 Example of Adding a new Device Operation
 ****************************************
 
-Let's implement `ttnn.example` (It will just copy the input tensor to the output tensor on the device)
+Let's implement `ttnn.composite_example` (It will just copy the input tensor to the output tensor on the device)
 
 C++ Implementation
 ------------------
@@ -52,7 +52,8 @@ In order to add a new device operation, follow the directory structure shown bel
  Add as many program factories as needed. But the minimum requirement is one program factory.
 
 .. note::
- **All new operations must use the ProgramDescriptor pattern** (see below).
+ This guide uses the **ProgramDescriptor** pattern (``create_descriptor``).
+ The framework also supports **ProgramSpec** factories (``create_program_artifacts``).
  The old ``CachedProgram`` / ``shared_variables_t`` pattern is legacy and should not
  be used for new operations.
 
@@ -69,7 +70,7 @@ then handles program construction, caching, and buffer address patching on cache
 **Key benefits:**
 
 - **No ``shared_variables_t``** — you don't need to store kernel handles or core lists.
-- **No manual buffer address patching** — the framework auto-patches buffer addresses on cache hits.
+- **No manual buffer address patching** — pass ``Buffer*`` arguments through ``emplace_runtime_args`` to register bindings that the framework patches on cache hits.
 - **Cleaner code** — the declarative style is easier to read and less error-prone.
 
 **Single-descriptor operations (recommended):**
@@ -158,8 +159,7 @@ with ``create_descriptor`` and put them in a variant:
    };
 
    // 3. Add runtime args per core
-   reader_desc.runtime_args.emplace_back(
-       core, KernelDescriptor::CoreRuntimeArgs{buffer_addr, tiles_per_core, offset});
+   reader_desc.emplace_runtime_args(core, {src_buffer, tiles_per_core, offset});
 
    // 4. Push kernels in a fixed order (reader=0, compute=1 here).
    desc.kernels.push_back(std::move(reader_desc));
@@ -232,15 +232,15 @@ Step 1: Add Python binding
 
 In order to add a python binding for the operation, follow the directory structure shown below:
 
-`ttnn/python/ttnn/operations/<category>/<operation_name>/<operation_name>_nanobind.hpp`
-`ttnn/python/ttnn/operations/<category>/<category>_nanobind.hpp`
+`ttnn/cpp/ttnn/operations/<category>/<operation_name>/<operation_name>_nanobind.hpp`
+`ttnn/cpp/ttnn/operations/<category>/<operation_name>/<operation_name>_nanobind.cpp`
 
 A concrete example:
 
-.. literalinclude::  examples/example/example_nanobind.hpp
+.. literalinclude::  examples/example/example_nanobind.cpp
    :language: cpp
    :linenos:
-   :caption: ttnn/cpp/ttnn/operations/examples/example/example_nanobind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/example/example_nanobind.cpp
 
 
 .. literalinclude::  examples/examples_nanobind.hpp
@@ -248,7 +248,7 @@ A concrete example:
    :linenos:
    :caption: ttnn/cpp/ttnn/operations/examples/examples_nanobind.hpp
 
-Finally, call the module defined in `examples/example/example_nanobind.hpp` wherever you want it to be added.
+Finally, call ``bind_example_operation(mod)`` from ``ttnn/cpp/ttnn/operations/examples/examples_nanobind.cpp`` to add the operation to the module.
 
 
 
@@ -290,14 +290,14 @@ Add the following code in a python file:
         return ttnn.from_torch(torch_output_tensor, dtype=ttnn_input_tensor.dtype, device=ttnn_input_tensor.device)
 
     ttnn.attach_golden_function(
-        ttnn.example,
+        ttnn.composite_example,
         golden_function=golden_function,
         preprocess_golden_function_inputs=preprocess_golden_function_inputs, # Optional
         postprocess_golden_function_outputs=postprocess_golden_function_outputs # Optional
     )
 
 .. note::
-   `ttnn.example` is the name of the operation in Python because the operation was registered as `ttnn::example` in C++.
+   `ttnn.composite_example` is the name of the operation in Python because the operation was registered as `ttnn::composite_example` in C++.
 
 
 Step 3: (Optional) Add example usage to docs
@@ -318,7 +318,7 @@ Add the new operation to the ``FUNCTION_TO_EXAMPLES_MAPPING_DICT`` dictionary, a
 
     FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
         ...
-        "ttnn.example": example.test_example,
+        "ttnn.composite_example": example.test_example,
         ...
     }
 
@@ -344,6 +344,6 @@ Implement the example as a standard ``ttnn`` pytest:
         tensor = ttnn.rand((2, 3), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         # Call the new operation
-        output_tensor = ttnn.example(tensor)
+        output_tensor = ttnn.composite_example(tensor)
 
 This ensures that all example code snippets are executed and validated in the TT-NN CI pipeline.

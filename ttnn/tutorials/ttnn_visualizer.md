@@ -71,12 +71,12 @@ Initially, you’ll only see the **Reports** tab active. Once the memory and per
 
 ## Model Profiling
 
-In this tutorial, we’ll profile the YOLOv4 model (320x320 input) trained on the COCO dataset. The model can be found in:
+In this tutorial, we’ll profile MobileNetV2 (224x224 input) trained on ImageNet on a Wormhole device. Follow the model README prerequisites before running the commands from the tt-metal repository root:
 
-[`tt-metal/models/demos/yolov4`](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)
+[`tt-metal/models/demos/vision/classification/mobilenetv2`](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/classification/mobilenetv2)
 
-> [!NOTE}
-> This tutorial uses the predefined YOLOv4 model as an example, but you can profile any model by wrapping it in a pytest test case and following the same steps. For more information on creating custom test cases, refer to the [tt-metal documentation](https://github.com/tenstorrent/tt-metal).
+> [!NOTE]
+> This tutorial uses the predefined MobileNetV2 model as an example, but you can profile any model by wrapping it in a pytest test case and following the same steps. For more information on creating custom test cases, refer to the [tt-metal documentation](https://github.com/tenstorrent/tt-metal).
 
 ### Generating the Memory Report
 
@@ -113,7 +113,7 @@ Each configuration option has a specific purpose:
 * **enable_detailed_tensor_report** (if *report_name* and *enable_graph_report* are set) - Records the Python source file and line of the operations that produce, last use and deallocate each tensor (the tensor lifetime view). It does not dump tensor values.
 * **enable_comparison_mode** (if *report_name* is set) - Enable to test the output of operations against their golden implementation. Operations inside a metal trace capture are not compared, since their inputs and outputs cannot be read back there.
 
-> [NOTE]
+> [!NOTE]
 > This config file corresponds to the recommended setup in TT-NN Visualizer docs, feel free to adjust it to your needs.
 
 2. **Set the path** to the following file in your environment:
@@ -128,35 +128,17 @@ export TTNN_CONFIG_PATH=path/to/vis.setup
 3. Run the profiling by simply running pytest:
 
 ```bash
-pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
+pytest models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2
 ```
 
-At the start of execution, you should see logs similar to the following sample output:
+At the start of execution, the configuration log shows the selected settings. A shortened example is:
 
-```bash
-(python_env) /root/tt-metal$ pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
-2025-08-01 09:20:51.664 | DEBUG    | ttnn:<module>:73 - Loading ttnn configuration from /root/tt-metal/vis.setup
-2025-08-01 09:20:51.665 | DEBUG    | ttnn:<module>:83 - Initial ttnn.CONFIG:
-Config{cache_path=/root/.cache/ttnn,model_cache_path=/root/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false, \
-   enable_fast_runtime_mode=false,throw_exception_on_fallback=false,enable_logging=true,enable_graph_report=true,enable_graph_python_stack_traces=true,enable_detailed_buffer_report=true, \
-   enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false, \
-   comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tutorial,4042956046390500517}
-2025-08-01 09:20:51.754 | info     |   SiliconDriver | Opened PCI device 4; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:197)
-2025-08-01 09:20:51.758 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:192)
-2025-08-01 09:20:51.758 | info     |   SiliconDriver | Opened PCI device 4; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:197)
-2025-08-01 09:20:51.761 | info     |   SiliconDriver | Opened PCI device 4; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:197)
-2025-08-01 09:20:51.764 | info     |   SiliconDriver | Harvesting mask for chip 0 is 0x80 (NOC0: 0x80, simulated harvesting mask: 0x0). (cluster.cpp:295)
-2025-08-01 09:20:51.776 | info     |   SiliconDriver | Opened PCI device 4; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:197)
-2025-08-01 09:20:51.836 | info     |   SiliconDriver | Opening local chip ids/pci ids: {0}/[4] and remote chip ids {} (cluster.cpp:157)
+```text
+... | DEBUG | ttnn:<module>:... - Initial ttnn.CONFIG:
+Config{...,enable_fast_runtime_mode=false,...,enable_logging=true,enable_graph_report=true,...,root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tutorial,...}
 ```
 
-In the configuration output, look for the report path at the end:
-
-```bash
-Config{...root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tutorial,4042956046390500517}
-```
-
-The final number (`4042956046390500517`) indicates the memory report output directory. Once execution completes, navigate to `generated/ttnn/reports/4042956046390500517/` which will contain:
+The report directory uses the sanitized report name and a timestamp, for example `generated/ttnn/reports/ttnn_visualizer_tutorial_nov02_1200/`. The exact path is available as `ttnn.CONFIG.report_path` in the test process. Once execution completes, that directory contains:
 
 * `config.json` (single-process; distributed runs use `config_<rank>_of_<world_size>.json` when world_size > 1)
 * `db.sqlite`
@@ -182,13 +164,13 @@ unset TTNN_CONFIG_OVERRIDES
 Run profiling using Tracy:
 
 ```bash
-python -m tracy -p -r -v -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
+python -m tracy -p -r -v -m pytest models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2
 ```
 
-Tracy will output the path to a directory:
+Tracy prints the report CSV path. The timestamp and checkout path vary by run:
 
-```bash
-2025-08-01 10:51:02.731 | INFO     | tt_metal.tools.profiler.process_ops_logs:generate_reports:905 - OPs csv generated at: /root/tt-metal/generated/profiler/reports/2025_08_01_10_51_02/ops_perf_results_2025_08_01_10_51_02.csv
+```text
+... | INFO | ... - OPs csv generated at: /path/to/tt-metal/generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv
 ```
 
 This diredtory contains the following output files:
@@ -304,7 +286,7 @@ Visualize performance on graphs.
 
 ![Performance Graph](https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/10_performance_graph.jpg?raw=true)
 
-> [NOTE]
+> [!NOTE]
 > A comprehensive performance report analysis guide can be found in the official [tt-perf-report](https://github.com/tenstorrent/tt-perf-report) repository.
 
 ---
