@@ -8,10 +8,7 @@ the ethernet-core timeout seen when the acceptance suite switches fabric configs
 import pytest
 import ttnn
 
-from eval.golden_tests.ring_joint_scaled_dot_product_attention.conftest import (  # noqa: F401 — fixtures
-    _fabric_mesh_cache,
-    mesh_device,
-)
+# mesh_device / _fabric_mesh_cache come from this directory's conftest.py (one session-wide fabric-mesh cache).
 from eval.golden_tests.ring_joint_scaled_dot_product_attention.topology import system_mesh_shape
 
 

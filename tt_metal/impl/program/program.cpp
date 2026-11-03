@@ -2240,6 +2240,11 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         devices_to_track.push_back(device);
     }
 
+    // A MeshWorkload program that covers only part of the mesh reports its CBs only on its own devices.
+    auto graph_tracks = [this](const IDevice* dev) {
+        return this->graph_tracked_devices_.empty() || this->graph_tracked_devices_.contains(dev);
+    };
+
     // Track which devices are NEW (not already tracked)
     std::vector<const IDevice*> new_devices;
     new_devices.reserve(devices_to_track.size());
@@ -2256,7 +2261,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         if (!new_devices.empty() && !this->circular_buffers_.empty()) {
             for (const IDevice* dev : new_devices) {
                 for (const auto& circular_buffer : this->circular_buffers_) {
-                    if (!circular_buffer->globally_allocated()) {
+                    if (!circular_buffer->globally_allocated() && graph_tracks(dev)) {
                         tt::tt_metal::GraphTracker::instance().track_allocate_cb(
                             circular_buffer->core_ranges(),
                             circular_buffer->address(),
@@ -2288,6 +2293,9 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         if (circular_buffer->globally_allocated()) {
             // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
             for (const IDevice* dev : devices_to_track) {
+                if (!graph_tracks(dev)) {
+                    continue;
+                }
                 tt::tt_metal::GraphTracker::instance().track_allocate_cb(
                     circular_buffer->core_ranges(),
                     circular_buffer->address(),
@@ -2326,6 +2334,9 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         }
         // Report CB allocation for ALL devices being tracked
         for (const IDevice* dev : devices_to_track) {
+            if (!graph_tracks(dev)) {
+                continue;
+            }
             tt::tt_metal::GraphTracker::instance().track_allocate_cb(
                 circular_buffer->core_ranges(),
                 computed_addr,

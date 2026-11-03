@@ -81,3 +81,26 @@ refinement is filed: the measured transport already runs at the link bound and i
 **Done when**: `fp32_dest_acc_en=False` and `bfloat8_b` (dtype and kv_dtype) are in SUPPORTED, the golden suite (`EVAL_CAPTURE_L1=0`) shows 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode, and the perf-flagged LOOSE_CASE passes its golden gate.
 
 **Outcome**: SUPPORTED widened only (dtype/kv_dtype += bfloat8_b, fp32_dest_acc_en += False): every CB format, the landing buffers, the port CB and `run_pages` already followed the dtypes and `T_acc` already followed `fp32_dest_acc_en`, so no kernel or descriptor change. Golden slice (bf8b or bf16-DEST cells, EVAL_CAPTURE_L1=0): 280 passed / 0 failed / 0 XPASS; `test_op_loose` (Wan2.2 FOCUS) passes at Sq=16, Sk=8. `test_large_logits` at bf16 DEST (not a golden cell) measures rel-RMS 0.067 out / 0.085 joint (gate 0.05) at HiFi2 and 0.071 at HiFi4: Q·Kᵀ accumulating in 16-bit DEST at logit std ~36 (host model of 16-bit per-face accumulation reproduces 0.058–0.066). Inherent to the config; held to a 0.10 regression ceiling in the unit precision test.
+
+
+### [x] Refinement 1b — Numerical configurability: bf16 DEST (perf-focus enabler) + bfloat8_b Q and K/V (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 36/391). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: not an op defect. The gate runs with `EVAL_CAPTURE_L1=1`, and graph capture could not see this op's CBs: the
+op is a heterogeneous (one program per chip) MeshWorkload, which `MeshWorkloadImpl::compile` built on the mesh thread
+pool while the GraphTracker is `thread_local`. `peak_total` was then 0 (-> `L1ProfilingError`) unless the call happened to
+create the cached global semaphores, so which cells "passed" depended on order (36/391 both phases, a different 36). Fixed
+in the runtime, capture-only: compile on the calling thread while a capture is active; report a workload program's CBs
+only on the devices of its range; key the per-core peak by (device, core). Harness runner (`eval/eval_test_runner.sh`,
+L1 capture on): 391/391 supported pass, 0 regressions, 0 hangs, real per-chip L1 peak 113 KB - 1.27 MB. Also bullet 2:
+the unit-test files each imported the session fabric-mesh fixture, giving one session cache per module and a
+`!devices_still_open` setup error when run together; the fixtures now live in the directory conftest (91/91 pass).

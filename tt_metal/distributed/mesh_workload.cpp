@@ -7,6 +7,7 @@
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include <cstdint>
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_metal/impl/program/program_command_sequence.hpp>
@@ -132,6 +133,14 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     auto& program = programs_.at(device_range);
+    if (programs_.size() > 1) {
+        // Each program of a heterogeneous workload occupies only its own range: report its CBs there only.
+        std::unordered_set<const IDevice*> range_devices;
+        for (const auto& coord : device_range) {
+            range_devices.insert(mesh_device->get_device(coord));
+        }
+        program.impl().set_graph_tracked_devices(std::move(range_devices));
+    }
     program.impl().compile_and_allocate(mesh_device, false);
 }
 
@@ -144,8 +153,10 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
     // first compile of a multi-program workload does enough to be worth parallelizing.
-    if (programs_.size() == 1 || this->is_finalized()) {
-        // Compile from main thread for homogeneous workloads
+    // GraphTracker's processor stack is thread_local: a graph capture active on this thread would miss the
+    // CB allocations of programs compiled on the thread pool, so compile on this thread while capturing.
+    if (programs_.size() == 1 || this->is_finalized() || GraphTracker::instance().is_enabled()) {
+        // Compile from main thread for homogeneous workloads (or under graph capture)
         for (auto& [device_range, _] : programs_) {
             this->compile_program(device_range, mesh_device);
         }

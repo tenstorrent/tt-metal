@@ -56,3 +56,28 @@
 - Tests added: `test_ring_joint_scaled_dot_product_attention_precision_baseline.py` now parametrizes 7 (dtype, kv_dtype,
   DEST width) configs gated on the golden TOLERANCES, plus `test_large_logits_config` (fp32 DEST: golden gate; bf16 DEST:
   0.10 regression ceiling).
+
+## Refinement 1b — Numerical configurability: bf16 DEST (perf-focus enabler) + bfloat8_b Q and K/V (debug: fix gate violations)
+- Date: 2026-11-03
+- What was done: fixed the harness's bullet-3 regression and a bullet-2 setup error. Neither was in the op's kernels or
+  descriptor (both unchanged).
+  - Bullet 3: the gate runs the golden suite with `EVAL_CAPTURE_L1=1`. This op dispatches a heterogeneous MeshWorkload
+    (one program per chip). `MeshWorkloadImpl::compile` compiled those on the mesh thread pool, but the GraphTracker is
+    `thread_local`, so the capture saw no CBs. `peak_total` was 0 (`L1ProfilingError`) unless the call happened to
+    allocate the cached global semaphores (32 B). The passing set therefore depended on test order, and one Phase-0-passing
+    cell flipped. Runtime fixes, active only while a graph capture is running:
+    `tt_metal/distributed/mesh_workload.cpp` compiles on the calling thread while capturing, and each program reports its
+    CBs only on the devices in its range (`ProgramImpl::set_graph_tracked_devices`, used in `program.cpp`
+    `allocate_circular_buffers`). `ttnn/core/graph/graph_trace_utils.cpp` `extract_resource_usage_per_core` now keys
+    per-core usage by (device, core), so chips' CBs are no longer summed together.
+  - Bullet 2: every unit-test module imported the golden suite's session-scoped `_fabric_mesh_cache`/`mesh_device`. That
+    registers one session cache per module, so the first module's mesh stayed open and the next module's
+    `set_fabric_config` failed with `!devices_still_open`. Both fixtures are now registered once in the directory
+    `conftest.py`.
+- Accuracy achieved: unchanged from Refinement 1. No numerics were touched.
+- Golden test progress: full suite through `eval/eval_test_runner.sh` (the gate's runner, L1 capture on): 391 passed /
+  0 failed / 0 hangs (1424 xfail_expected, 5984 invalid_skipped). 0 regressions against Phase 0 and Refinement 1.
+  Recorded L1 peak per chip: 113 KB to 1.27 MB.
+- Issues encountered: the regression was a harness-instrumentation gap, not an op defect.
+- Tests added: none. The unit directory runs as one session, 91/91 pass. `test_graph_trace_utils.py` 19/19 pass after the
+  extraction change.

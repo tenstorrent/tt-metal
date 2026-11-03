@@ -13,3 +13,13 @@ import pytest
 def pytest_collection_modifyitems(items):
     for item in items:
         item.add_marker(pytest.mark.use_module_device)
+
+
+# The multi-device fabric fixtures, registered ONCE for the whole directory. Importing them into each test module
+# instead registers one session-scoped `_fabric_mesh_cache` per module: the first module's mesh then stays open
+# while the next module's cache calls set_fabric_config, which fails with `!devices_still_open` when the files run
+# in one session (as the acceptance gate runs them).
+from eval.golden_tests.ring_joint_scaled_dot_product_attention.conftest import (  # noqa: E402,F401 — fixtures
+    _fabric_mesh_cache,
+    mesh_device,
+)
