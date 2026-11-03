@@ -34,7 +34,8 @@ class SpeedrunScheduler:
         else:
             # linear decay from lr_max at (w+h) to min_lr at T
             s2 = min(s, T)
-            frac = (s2 - (w + h)) / max(1, (T - (w + h)))
+            # Clamp: if T <= w + h there is no decay window, and the LR stays at lr_max.
+            frac = min(1.0, max(0.0, (s2 - (w + h)) / max(1, (T - (w + h)))))
             return peak + (min_lr - peak) * frac
 
     def beta1_at(self, step: int) -> Optional[float]:
