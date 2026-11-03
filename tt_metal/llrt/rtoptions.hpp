@@ -734,6 +734,7 @@ public:
     void set_test_mode_enabled(bool enable) { test_mode_enabled.store(enable, std::memory_order_relaxed); }
 
     bool get_profiler_enabled() const { return profiler_enabled; }
+    void set_profiler_enabled(bool enable) { profiler_enabled = enable; }
     bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }

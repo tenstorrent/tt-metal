@@ -374,6 +374,7 @@ public:
     KernelRtaLayout get_rta_layout() const override { return rta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
+    std::string get_precompiled_header() const override { return precompiled_header_; }
 
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
@@ -517,6 +518,10 @@ protected:
     //  - Relative paths are resolved against the current working directory
     void set_compiler_include_paths(const std::vector<std::filesystem::path>& paths);
 
+    // DataMovementConfig::precompiled_header, made absolute; empty when the kernel names none.
+    std::string precompiled_header_;
+    void set_precompiled_header(const std::filesystem::path& header);
+
     virtual std::string config_hash() const = 0;
 
     std::vector<std::string> file_paths(const IDevice& device, const std::string& binary_root) const;
@@ -563,6 +568,7 @@ public:
             MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
             "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead.");
         this->set_compiler_include_paths(config_.compiler_include_paths);
+        this->set_precompiled_header(config_.precompiled_header);
     }
 
     ~DataMovementKernel() override = default;
@@ -771,6 +777,7 @@ public:
             MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
             "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead.");
         this->set_compiler_include_paths(config_.compiler_include_paths);
+        this->set_precompiled_header(config_.precompiled_header);
     }
 
     ~ComputeKernel() override = default;

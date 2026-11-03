@@ -83,6 +83,17 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
     return defines;
 }
 
+std::string HalJitBuildQueryBase::kernel_prefix_header(const HalJitBuildQueryInterface::Params& params) const {
+    if (params.is_fw || params.core_type != HalProgrammableCoreType::TENSIX) {
+        return {};
+    }
+    if (params.processor_class == HalProcessorClassType::COMPUTE) {
+        return "tt_metal/hw/firmware/src/tt-1xx/trisck_prefix.h";
+    }
+    return params.processor_id == 0 ? "tt_metal/hw/firmware/src/tt-1xx/brisck_prefix.h"
+                                    : "tt_metal/hw/firmware/src/tt-1xx/ncrisck_prefix.h";
+}
+
 std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterface::Params& params) const {
     std::vector<std::string> srcs;
 

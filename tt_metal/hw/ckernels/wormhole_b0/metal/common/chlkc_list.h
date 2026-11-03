@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include "internal/debug/fw_debug.h"
-#include "ckernel.h"
-#include "ckernel_gpr_map.h"
-#include "llk_param_structs.h"
-
-using namespace ckernel;
+#include "chlkc_list_prefix.h"
 
 #ifdef UCK_CHLKC_MATH
 #include "chlkc_descriptors.h"

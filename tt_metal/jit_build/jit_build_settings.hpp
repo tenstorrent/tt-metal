@@ -270,6 +270,10 @@ public:
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
 
+    // Absolute path of the header the kernel source includes first and wants precompiled
+    // (DataMovementConfig::precompiled_header), or empty.
+    virtual std::string get_precompiled_header() const { return {}; }
+
     // Fence for Metal 2.0 kernel machinery. When false, the JIT build path must not emit or
     // reference any Metal 2.0 generated headers (kernel_bindings_generated.h, kernel_args_generated.h).
     // Legacy kernels created via the old host API default to false; kernels created via

@@ -304,4 +304,6 @@ bool dependencies_up_to_date_file(const std::string& hash_file_path) {
 
 void clear_file_hash_cache() { FileHashCache::instance().clear(); }
 
+void ensure_file_hash_cache() { FileHashCache::instance(); }
+
 }  // namespace tt::jit_build

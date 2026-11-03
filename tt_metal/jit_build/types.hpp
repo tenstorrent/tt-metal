@@ -24,6 +24,9 @@ struct TargetRecipe {
     std::string includes;
     // Source umbrella path; the PCH artifact is built and cached on the compiling machine.
     std::string pch_umbrella;
+    // The processor's kernel prefix header, then the kernel's own precompiled header
+    // (DataMovementConfig::precompiled_header); empty to use the standard-library PCH alone.
+    std::vector<std::string> kernel_pch_headers;
     std::string compiler_opt_level;
     std::vector<std::string> srcs;
     std::vector<std::string> objs;

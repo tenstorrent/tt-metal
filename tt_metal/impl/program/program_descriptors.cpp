@@ -145,6 +145,7 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         kernel.opt_level.has_value(),
         kernel.opt_level.value_or(KernelBuildOptLevel{}),
         kernel.compiler_include_paths,
+        kernel.precompiled_header,
         kernel.common_runtime_args.size(),
         kernel.runtime_args.size(),
         // Blaze-only experimental named args (issue #50953): hash compile-time names/values

@@ -61,6 +61,10 @@ void fill_target_recipe(rpc::TargetRecipe::Builder& builder, const TargetRecipe&
     }
     builder.setIncludes(target.includes);
     builder.setPchUmbrella(target.pch_umbrella);
+    auto kernel_pch_headers = builder.initKernelPchHeaders(target.kernel_pch_headers.size());
+    for (std::size_t i = 0; i < target.kernel_pch_headers.size(); ++i) {
+        kernel_pch_headers.set(i, target.kernel_pch_headers[i]);
+    }
     builder.setCompilerOptLevel(target.compiler_opt_level);
     auto srcs = builder.initSrcs(target.srcs.size());
     for (std::size_t i = 0; i < target.srcs.size(); ++i) {

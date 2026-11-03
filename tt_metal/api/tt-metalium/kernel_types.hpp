@@ -83,6 +83,21 @@ struct DataMovementConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
     // Provide include paths for the kernel compiler (-I)
     std::vector<std::filesystem::path> compiler_include_paths;
+    // Optional header that the kernel source includes before anything else (absolute, or relative to the
+    // current working directory). The JIT precompiles it after the firmware headers that precede every
+    // kernel, once for the kernels that share its inputs, in the background from the second such kernel
+    // on; the kernels compiled once it is ready skip parsing it:
+    //  - A PCH is shared only by kernels with the same compiler flags, include paths, defines,
+    //    compile_args and (on TRISC) compute config and thread, so the header may depend on all of them.
+    //  - The header must have an include guard, and must not read other generated per-kernel headers
+    //    (named compile-time args, Metal 2.0 bindings or args) or FULL_KERNEL_NAME. It may read the CB
+    //    tables of chlkc_descriptors.h (directly or through accessors such as get_tile_size) only in
+    //    function templates or at runtime, never in a namespace-scope initializer or a non-template
+    //    constexpr function: the PCH declares the tables without values.
+    //  - Kernels with named_compile_args, and all kernels while the device profiler is on, parse the
+    //    header as usual. The header never changes the generated code. Supported on Tensix
+    //    data-movement and compute kernels of Wormhole and Blackhole.
+    std::filesystem::path precompiled_header;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
@@ -133,6 +148,8 @@ struct ComputeConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
     // Provide include paths for the kernel compiler (-I)
     std::vector<std::filesystem::path> compiler_include_paths;
+    // Optional header that the kernel source includes first; see DataMovementConfig::precompiled_header.
+    std::filesystem::path precompiled_header;
 };
 
 // These are only used in op_profiler, are unstable and have not been designed for general use.

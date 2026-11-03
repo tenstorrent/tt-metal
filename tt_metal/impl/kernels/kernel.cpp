@@ -432,6 +432,10 @@ void Kernel::set_compiler_include_paths(const std::vector<std::filesystem::path>
     }
 }
 
+void Kernel::set_precompiled_header(const std::filesystem::path& header) {
+    this->precompiled_header_ = header.empty() ? "" : fs::absolute(header).string();
+}
+
 bool Kernel::binaries_exist_on_disk(const IDevice* device, const std::string& binary_root) const {
     TT_ASSERT(this->expected_num_binaries() > 0, "Kernel {} expected at least one binary", this->name());
     const uint32_t core_type = MetalContext::instance(this->get_context_id())

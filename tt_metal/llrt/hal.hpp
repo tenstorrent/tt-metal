@@ -401,6 +401,11 @@ public:
     // (Hal::get_supports_rvv). Applied per kernel at recipe-export time, never to firmware or default
     // kernel builds.
     virtual std::string rvv_compile_flags(const Params& /*params*/) const { return {}; }
+    // Returns the header, relative to the tt-metal root, that holds what this processor's kernel entry
+    // source includes ahead of the kernel's own code, or an empty string when kernels of this processor
+    // cannot have a precompiled header. A kernel's PCH holds this header and then the kernel's own one
+    // (see DataMovementConfig::precompiled_header).
+    virtual std::string kernel_prefix_header(const Params& /*params*/) const { return {}; }
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
     // Returns a string of linker flags to be added to linker command line.

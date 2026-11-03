@@ -33,6 +33,9 @@ struct TargetRecipe {
 
     # Source umbrella path; empty means no PCH. Ignored for preprocessed inputs.
     pchUmbrella @13 :Text;
+
+    # Kernel prefix header, then the kernel's precompiled header; empty means the umbrella PCH alone.
+    kernelPchHeaders @14 :List(Text);
 }
 
 struct CompileRequest {
