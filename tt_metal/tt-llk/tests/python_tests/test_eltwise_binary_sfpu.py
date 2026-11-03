@@ -1364,6 +1364,32 @@ def _run_sfpu_binary_word_pairs(
     return words[:, 0, :].reshape(-1).copy()
 
 
+@parametrize(approx_mode=[ApproximationMode.No, ApproximationMode.Yes])
+def test_eltwise_binary_sfpu_xlogy_nan(approx_mode):
+    (approx_mode,) = approx_mode
+    # Preserve NaN signs and payloads through a raw Int32 unpack into FP32 DEST.
+    # Casting float32 NaNs to bf16 can set their sign bit and hide the missed payloads.
+    nan_words = np.array(
+        [0x7FC00000, 0x7FA00000, 0x7FFFFFFF, 0xFFC00000], dtype=np.uint32
+    )
+    in0 = np.resize(np.array([0.0, 1.0, -2.0, float("inf")], dtype=np.float32), 1024)
+    in1 = np.resize(np.repeat(nan_words, 4), 1024)
+    words = _run_sfpu_binary_word_pairs(
+        MathOperation.SfpuXlogy,
+        in0.view(np.int32),
+        in1.view(np.int32),
+        0,
+        DataFormat.Int32,
+        approx_mode=approx_mode,
+    )
+    # Inspect raw exponent and mantissa; no pack conversion can turn a NaN into Inf.
+    magnitude = words.view(np.uint32) & 0x7FFFFFFF
+    assert np.all(magnitude > 0x7F800000), (
+        "xlogy(x, NaN) must be NaN for every x and either NaN sign; "
+        f"got {[hex(int(w)) for w in words.view(np.uint32)[:16]]}"
+    )
+
+
 def _run_quant(mathop, sign_magnitude, **run_kwargs):
     """Stage the Quasar quant stimuli on the shared WH/BH binary kernel."""
     n = _ELEMENTS_PER_TILE

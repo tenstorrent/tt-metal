@@ -80,7 +80,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
 constexpr std::uint32_t TILES_PER_SEQ     = (TOPK_XL_K + ELEMENTS_PER_TILE - 1) / ELEMENTS_PER_TILE;
-constexpr std::uint32_t SLOT0             = 0;
+constexpr std::uint32_t SLOT0             = TOPK_XL_DST_INDEX;
 
 constexpr bool INDEX_OP_ROW_MAJOR  = (TOPK_XL_INDEX_OP == 0);
 constexpr bool INDEX_OP_SEPARATE   = (TOPK_XL_INDEX_OP == 1);

@@ -9,6 +9,11 @@
 #include "llk_pack_common.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
 
+// Supply the Metal wrapper defaults; the tested call passes its sync mode explicitly.
+constexpr bool DST_ACCUM_MODE   = true;
+constexpr DstSync DST_SYNC_MODE = DstSync::SyncFull;
+#include "experimental/llk_sfpu/llk_math_eltwise_unary_sfpu_topk_xl.h"
+
 namespace ckernel::test
 {
 
@@ -28,11 +33,8 @@ inline void topk_xl_pack_remove_msb_values(std::uint32_t dst_index)
         sfpu::_topk_xl_remove_msb_values_init_();
     }
 
-    // Match the Metal wrapper's destination setup before invoking the raw LLK.
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH | p_stall::PACK);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    sfpu::_topk_xl_remove_msb_values_<K, Dst>();
+    // Exercise the production wrapper, including its tile-to-row address conversion.
+    ckernel::llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values<K, Dst>(dst_index);
 
     if constexpr (sfpu::topk_xl_blaze_compat)
     {

@@ -227,6 +227,7 @@ def _variant(
     reinit_after_copy=False,
     blaze_compat=False,
     dest_sync=DestSync.Full,
+    dst_index=0,
     formats=FORMATS,
     extra_templates=(),
 ):
@@ -258,6 +259,7 @@ def _variant(
         templates=[
             DEST_SYNC(dest_sync),  # K=2048 uses Dest tiles 0-7 (fp32 with SyncFull).
             TOPK_XL(
+                dst_index=dst_index,
                 k=K,
                 num_chunks=num_chunks,
                 tail_elements=tail_elements,
@@ -621,6 +623,23 @@ def test_topk_xl_remove_msb(K):
     (K,) = K
 
     result, rows = _run(K, index_op=TopKXLIndexOp.RemoveMsb)
+    _check_remove_msb(result, K, rows)
+
+
+@parametrize(
+    K=[512, 1024, 2048],
+    dst_index=[1, 3],
+    formats=[FORMATS, InputOutputFormat(DataFormat.Float32, DataFormat.UInt32)],
+)
+def test_topk_xl_remove_msb_nonzero_destination(K, dst_index, formats):
+    # PACK uses the shared SFPU, so the API requires SyncFull to keep MATH quiescent.
+    result, rows = _run(
+        K,
+        index_op=TopKXLIndexOp.RemoveMsb,
+        dst_index=dst_index,
+        formats=formats,
+        num_rows=2,
+    )
     _check_remove_msb(result, K, rows)
 
 

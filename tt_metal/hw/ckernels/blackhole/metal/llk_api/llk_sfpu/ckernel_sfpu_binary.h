@@ -147,7 +147,10 @@ inline void calculate_sfpu_binary(
                     sfpi::as<sfpi::vFloat>((sfpi::as<sfpi::vUInt>(log_in1) >> kBf16DroppedBits) << kBf16DroppedBits);
             }
             result = log_in1 * in0;
-            v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
+            v_if(in1 < 0.0f) { result = nan; }
+            v_endif;
+            // The log polynomial does not propagate NaN inputs, including when x is zero.
+            v_if(sfpi::is_nan(in1)) { result = nan; }
             v_endif;
         } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
             // Step in0 one representable value toward in1. Consecutive floats of one sign are

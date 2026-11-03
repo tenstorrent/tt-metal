@@ -158,7 +158,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init() {
 template <std::uint32_t K, DstSync Dst>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values(std::uint32_t dst_index) {
     SAN_HOOK(unsupported());
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH | p_stall::PACK);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     ckernel::sfpu::_topk_xl_remove_msb_values_<K, Dst>();

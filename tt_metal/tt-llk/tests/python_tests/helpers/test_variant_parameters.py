@@ -1308,9 +1308,11 @@ class TOPK_XL(TemplateParameter):
     lsb_row_major: bool = False
     reinit_after_copy: bool = False
     blaze_compat: bool = False
+    dst_index: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
+            f"constexpr std::uint32_t TOPK_XL_DST_INDEX = {self.dst_index};",
             f"constexpr std::uint32_t TOPK_XL_K = {self.k};",
             f"constexpr std::uint32_t TOPK_XL_NUM_CHUNKS = {self.num_chunks};",
             f"constexpr std::uint32_t TOPK_XL_TAIL_ELEMENTS = {self.tail_elements};",

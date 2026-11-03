@@ -194,12 +194,15 @@ inline void calculate_sfpu_binary(
         } else if constexpr (BINOP == BinaryOp::POW) {
             result = calculate_sfpu_binary_power(in0, in1);
         } else if constexpr (BINOP == BinaryOp::XLOGY) {
-            v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
+            v_if(in1 < 0.0f) { result = nan; }
             v_else {
                 sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
                 _calculate_log_body_(log_c, log_d, dst_index_out);
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
+            v_endif;
+            // The log polynomial does not propagate NaN inputs, including when x is zero.
+            v_if(sfpi::is_nan(in1)) { result = nan; }
             v_endif;
         } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
             // Step in0 one representable value toward in1. Consecutive floats of one sign are
