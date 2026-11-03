@@ -289,8 +289,7 @@ class ttKDA:
             KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
         )
         self._fused_output_reduce_scatter = (
-            program_config.fused_output_reduce_scatter
-            and self.tensor_parallel_size > 1
+            self.tensor_parallel_size > 1
             and self.gated_rms_output_dtype == ttnn.bfloat16
             and self.weights.output_projection.shape[-1] % (ttnn.TILE_SIZE * self.tensor_parallel_size) == 0
         )
