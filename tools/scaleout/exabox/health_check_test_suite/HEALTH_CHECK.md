@@ -58,9 +58,10 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 - Tokens and credentials reach the container through a 0600 `--env-file`, never
   a command line.
 - `--output` is not forwardable — the wrapper owns the bind mount. Use
-  `--output-dir`. Everything else in [Flags](#flags) is forwarded; host paths
-  (`--input-snapshot`, `--qsfp-descriptor`, `--triage-dir`) are mounted
-  read-only for you.
+  `--output-dir`. Most flags in [Flags](#flags) are forwarded directly; pass
+  `--tt-metal-path` after a `--` separator, using an in-container repo path.
+  Host paths (`--input-snapshot`, `--qsfp-descriptor`, `--triage-dir`) supplied
+  before the separator are mounted read-only for you.
 - The exit code is the suite's own: `1` on FAIL, `0` on PASS/WARN.
 
 ## Tiers
