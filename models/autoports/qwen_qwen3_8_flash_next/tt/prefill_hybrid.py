@@ -11,12 +11,18 @@ import ttnn
 
 from .multichip_decoder import _EXPERT_COMPACT_PACKED, _EXPERT_DISPATCH_PACKED, _expert_capacity_source, _expert_kernel
 from .prefill_moe_compact import (
+    COMPACT1024_PACKED,
     COMPACT1024_PIPE,
+    DISPATCH1024_PACKED,
     DISPATCH1024_PIPE,
     compact_cb_bytes,
+    compact_packed_cb_bytes,
     compact_pipe_enabled,
     dispatch_cb_bytes,
+    dispatch_packed_cb_bytes,
     dispatch_pipe_enabled,
+    moe_packed_enabled,
+    packed_capacity_rows,
 )
 
 DISPATCH1024 = _expert_capacity_source(_EXPERT_DISPATCH_PACKED, "e*128+count", "e*1024+count")
@@ -45,10 +51,21 @@ def group1024(self, x):
         scores = ttnn.to_layout(selected, ttnn.ROW_MAJOR_LAYOUT)
     counts = ttnn.empty((128,), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh)
     mapping = ttnn.empty((1, 1, n, 32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh)
-    capacity = ttnn.empty(
-        (1, 1, 128 * 1024, 2560), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh
-    )
-    self.hybrid_capacity_rows = int(capacity.shape[2]) // 128
+    # Packed capacity (QWEN_PREFILL_MOE_PACKED): expert regions at device-computed 32-row-aligned offsets,
+    # 10 * n + 4096 rows instead of 128 * 1024.
+    packed = pipelined and compact_pipe_enabled() and moe_packed_enabled()
+    rows = packed_capacity_rows(n) if packed else 128 * 1024
+    capacity = ttnn.empty((1, 1, rows, 2560), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh)
+    region = None
+    if packed:
+        region = ttnn.empty(
+            (128,),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.ops.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    self.hybrid_capacity_rows = 1024
     counts = ttnn.to_memory_config(counts, ttnn.DRAM_MEMORY_CONFIG)
     source = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     # The batched dispatch also writes inverse[e][packed] = row * 16 + route for the tile-once compaction.
@@ -61,19 +78,29 @@ def group1024(self, x):
             device=self.ops.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    _expert_kernel(
-        self.ops.mesh,
-        [source, ids_tile, selected, self.rank, counts, mapping, capacity, inverse]
-        if inverse is not None
-        else [source, ids, scores, self.rank, counts, mapping, capacity],
-        DISPATCH1024_PIPE if inverse is not None else DISPATCH1024,
-        [n],
-        workers=32,
-        cb_size=dispatch_cb_bytes(n) if inverse is not None else 5120 + n * 192 + 64,
-    )
+    if packed:
+        _expert_kernel(
+            self.ops.mesh,
+            [source, ids_tile, selected, self.rank, counts, mapping, capacity, inverse, region],
+            DISPATCH1024_PACKED,
+            [n],
+            workers=32,
+            cb_size=dispatch_packed_cb_bytes(n),
+        )
+    else:
+        _expert_kernel(
+            self.ops.mesh,
+            [source, ids_tile, selected, self.rank, counts, mapping, capacity, inverse]
+            if inverse is not None
+            else [source, ids, scores, self.rank, counts, mapping, capacity],
+            DISPATCH1024_PIPE if inverse is not None else DISPATCH1024,
+            [n],
+            workers=32,
+            cb_size=dispatch_cb_bytes(n) if inverse is not None else 5120 + n * 192 + 64,
+        )
     down = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
         capacity,
-        self.offsets1024,
+        region if packed else self.offsets1024,
         counts,
         self.ids,
         self.gates,
@@ -89,7 +116,16 @@ def group1024(self, x):
         device=self.ops.mesh,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    if compact_pipe_enabled() and inverse is not None:
+    if packed:
+        _expert_kernel(
+            self.ops.mesh,
+            [down, counts, inverse, self.rank, compact, region],
+            COMPACT1024_PACKED,
+            [n],
+            workers=80,
+            cb_size=compact_packed_cb_bytes(n),
+        )
+    elif compact_pipe_enabled() and inverse is not None:
         _expert_kernel(
             self.ops.mesh,
             [down, counts, inverse, self.rank, compact],
