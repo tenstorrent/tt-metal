@@ -65,7 +65,10 @@ SEMAPHORE_SECTION_SHAPES = [(4, 1), (1, 4), (4, 4), (8, 1), (8, 2)]
     zero_tiles=lambda formats: (
         [False, True] if formats.input_format.is_32_bit() else [False]
     ),
-    sections=runtime(SEMAPHORE_SECTION_SHAPES),
+    # With zero tiles every section shape runs the same empty kernel, so one shape covers it.
+    sections=runtime(
+        lambda zero_tiles: [(1, 1)] if zero_tiles else SEMAPHORE_SECTION_SHAPES
+    ),
 )
 def test_semaphore_sync_quasar(
     formats,

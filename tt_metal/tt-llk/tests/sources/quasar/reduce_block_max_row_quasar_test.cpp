@@ -29,10 +29,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
-    const Operand& buffer_A      = params.buffer_A;
-    const Operand& buffer_B      = params.buffer_B;
-    const std::uint32_t NUM_ROWS = params.NUM_BLOCKS;
+    const std::uint32_t TILE_CNT   = params.TILE_CNT;
+    const Operand& buffer_A        = params.buffer_A;
+    const Operand& buffer_B        = params.buffer_B;
+    const std::uint32_t NUM_BLOCKS = params.NUM_BLOCKS;
 #endif
     // no op for unpack thread.
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -50,7 +50,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Per row: block of TILE_CNT operand tiles (SrcA) + one scaler face (SrcB) -> one reduced result tile.
     _llk_unpack_AB_reduce_block_max_row_init_runtime_(TILE_CNT, false /*respect_trigger*/, bfd_a, bfd_b, tensor_shape_A);
-    for (std::uint32_t row = 0; row < static_cast<std::uint32_t>(NUM_ROWS); ++row)
+    for (std::uint32_t row = 0; row < NUM_BLOCKS; ++row)
     {
         _llk_unpack_AB_reduce_block_max_row_runtime_(TILE_CNT, row * TILE_CNT /*operand tile start*/, 0 /*scaler tile*/, bfd_b, tensor_shape_A);
     }
@@ -72,8 +72,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
-    const std::uint32_t NUM_ROWS = params.NUM_BLOCKS;
+    const std::uint32_t TILE_CNT   = params.TILE_CNT;
+    const std::uint32_t NUM_BLOCKS = params.NUM_BLOCKS;
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -85,7 +85,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(TILE_CNT, tensor_shape_A);
     // One Dest section per row.
-    for (std::uint32_t row = 0; row < static_cast<std::uint32_t>(NUM_ROWS); ++row)
+    for (std::uint32_t row = 0; row < NUM_BLOCKS; ++row)
     {
         _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /*dst_index*/, tensor_shape_A);
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
@@ -107,8 +107,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const Operand& buffer_Res    = params.buffer_Res;
-    const std::uint32_t NUM_ROWS = params.NUM_BLOCKS;
+    const Operand& buffer_Res      = params.buffer_Res;
+    const std::uint32_t NUM_BLOCKS = params.NUM_BLOCKS;
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>(tensor_shape_A);
 
     // Each row's block reduce produces a single result tile.
-    for (std::uint32_t row = 0; row < static_cast<std::uint32_t>(NUM_ROWS); ++row)
+    for (std::uint32_t row = 0; row < NUM_BLOCKS; ++row)
     {
         _llk_pack_(0 /* start_math_dest_tile_idx */, row /* start_l1_tile_idx */, tensor_shape_A);
         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

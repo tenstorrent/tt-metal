@@ -71,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT        = params.TILE_CNT;
 #endif
     const std::uint32_t section_tiles = reduce_section_tiles(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     {
         START_PERF_MEASURE("INIT")
@@ -148,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_INDEX   = params.DST_INDEX;
 #endif
     const std::uint32_t section_tiles = reduce_section_tiles(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     {
         START_PERF_MEASURE("INIT")
@@ -248,7 +248,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_INDEX       = params.DST_INDEX;
 #endif
     const std::uint32_t section_tiles = reduce_section_tiles(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     {
         START_PERF_MEASURE("INIT")

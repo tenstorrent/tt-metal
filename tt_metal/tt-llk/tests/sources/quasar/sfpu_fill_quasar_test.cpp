@@ -70,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_dest_init_();
     _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
     for (std::uint32_t section = 0; section < num_sections; ++section)
     {
         _llk_unpack_unary_operand_to_dest_block_(section * section_tiles /*l1_tile_idx*/, 0 /*dst_tile_idx*/, section_tiles);
@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
 
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
     for (std::uint32_t section = 0; section < num_sections; ++section)
     {
         if (is_int_fill)
@@ -185,7 +185,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Configure pack engine 0 → init → per section: pack tiles from DST_INDEX into buffer_Res → release section.
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
     for (std::uint32_t section = 0; section < num_sections; ++section)
     {

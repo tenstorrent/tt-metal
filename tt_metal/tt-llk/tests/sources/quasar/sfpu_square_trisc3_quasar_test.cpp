@@ -56,7 +56,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
     if constexpr (unpack_to_dest)
     {
         _llk_unpack_dest_init_();
@@ -116,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1 /*num_matrices*/);
 
         const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-        const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+        const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
         for (std::uint32_t section = 0; section < num_sections; ++section)
         {
             for (std::uint32_t i = 0; i < section_tiles; ++i)
@@ -172,7 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     init_square();
 
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
     for (std::uint32_t section = 0; section < num_sections; ++section)
     {
         for (std::uint32_t i = 0; i < section_tiles; ++i)
@@ -222,7 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
     for (std::uint32_t section = 0; section < num_sections; ++section)
     {

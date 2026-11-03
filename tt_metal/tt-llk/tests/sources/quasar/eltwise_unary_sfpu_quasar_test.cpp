@@ -36,7 +36,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A             = params.buffer_A;
 #endif
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     {
         START_PERF_MEASURE("INIT")
@@ -156,7 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B             = params.buffer_B;
 #endif
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     const DataFormat src_format     = static_cast<DataFormat>(formats.math);
     const DataFormat sfpu_in_format = static_cast<DataFormat>(formats.sfpu_src);
@@ -291,7 +291,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = section_tiles == 0 ? 0 : TILE_CNT / section_tiles;
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     {
         START_PERF_MEASURE("INIT")

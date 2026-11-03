@@ -64,12 +64,15 @@ def test_reduce_block_max_row_quasar(
     tile_shape = construct_tile_shape(tile_dimensions)
 
     # DIAGNOSTIC stimulus: each of the block_ct_dim tiles is a distinct ASCENDING constant
-    # (tile k = 0.1*(k+1), offset by the row index). Constant tiles are layout-invariant, so no
-    # tilize is needed.
+    # (tile k = 0.1*(k+1)). Constant tiles are layout-invariant, so no tilize is needed. Each row's
+    # max is below every earlier row's, so a stale max left in Dest by an earlier row wins and fails.
     tile_size = tile_shape.total_tile_size()
     row_inputs = [
         torch.cat(
-            [torch.full((tile_size,), 0.1 * (k + 1) + row) for k in range(block_ct_dim)]
+            [
+                torch.full((tile_size,), 0.1 * (k + 1) + (num_rows - 1 - row))
+                for k in range(block_ct_dim)
+            ]
         )
         for row in range(num_rows)
     ]

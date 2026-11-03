@@ -26,24 +26,37 @@ inline std::uint32_t tiles_per_dest_section(const std::uint32_t tile_cnt)
 }
 
 /**
+ * @brief Dest sections in a run of tile_cnt tiles split into sections of section_tiles.
+ *
+ * @param tile_cnt: Tiles in the run; must be a whole number of sections.
+ * @param section_tiles: Tiles per section, e.g. from @ref tiles_per_dest_section.
+ */
+inline std::uint32_t dest_section_count(const std::uint32_t tile_cnt, const std::uint32_t section_tiles)
+{
+    LLK_ASSERT(section_tiles == 0 || tile_cnt % section_tiles == 0, "A run longer than one Dest section must be a whole number of sections");
+    return section_tiles == 0 ? 0 : tile_cnt / section_tiles;
+}
+
+/**
  * @brief Matmul output rows per Dest section: the tallest divisor of rt_dim whose rows x ct_dim fit one section.
  *
  * @tparam DST_SYNC: Destination synchronization mode, values = <SyncHalf/SyncFull>
  * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
  * @param rt_dim: Output row tiles.
- * @param ct_dim: Output column tiles.
+ * @param ct_dim: Output column tiles; one output row must fit a Dest section.
  */
 template <ckernel::DstSync DST_SYNC, bool EN_32BIT_DEST>
 inline std::uint32_t matmul_rows_per_dest_section(const std::uint32_t rt_dim, const std::uint32_t ct_dim)
 {
     constexpr std::uint32_t section_tiles = ckernel::trisc::get_dest_max_tiles<DST_SYNC, EN_32BIT_DEST, ckernel::trisc::DstTileShape::Tile32x32>();
-    std::uint32_t rows                    = ct_dim == 0 ? rt_dim : section_tiles / ct_dim;
-    rows                                  = rows < rt_dim ? rows : rt_dim;
+    LLK_ASSERT(ct_dim <= section_tiles, "One matmul output row must fit a Dest section");
+    std::uint32_t rows = ct_dim == 0 ? rt_dim : section_tiles / ct_dim;
+    rows               = rows < rt_dim ? rows : rt_dim;
     while (rows > 1 && rt_dim % rows != 0)
     {
         rows--;
     }
-    return rows == 0 ? rt_dim : rows;
+    return rows;
 }
 
 inline void perf_unpack_set_srcb_once_then_srca_per_face(std::uint32_t srcb_once_count, std::uint32_t srca_per_face_count)
