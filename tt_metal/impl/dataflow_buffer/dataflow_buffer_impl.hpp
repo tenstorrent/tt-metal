@@ -177,7 +177,7 @@ uint32_t compute_dfb_config_serialized_size(
 // DFB on the core uses implicit sync.
 uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
-// DM1 remapper blob: ready-flag line + contiguous remapper slots across all DFBs on core; 0 if the
+// DM1 remapper blob: contiguous remapper slots across all DFBs on core; 0 if the
 // core has no remapper slots.
 uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 

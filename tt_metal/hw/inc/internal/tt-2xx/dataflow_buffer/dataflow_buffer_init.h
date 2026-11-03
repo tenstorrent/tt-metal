@@ -224,6 +224,20 @@ inline uint32_t rdcycle() {
     return 0;
 }
 
+// Busy-waits for `iters` iterations of a two-instruction loop (addi + bnez). It touches no memory
+// and no register block, so it is not contended, and it does not need the cycle CSR (ttsim doesn't
+// support it yet).
+FORCE_INLINE void dfb_spin(uint32_t iters) {
+    // Unrolling would copy only the (empty) asm and drop branches, shortening the wait.
+#pragma GCC unroll 1
+    for (uint32_t i = iters; i != 0u; i--) {
+        asm volatile("");
+    }
+}
+
+// Backoff between a remapped producer's polls of its pair's ClientL register, ~100 DM cycles.
+constexpr uint32_t kDfbRemapperPollBackoffIters = 50u;
+
 // Poll until all producers for DFB `dfb_id` have published their signal byte and
 // (for DMs with implicit sync) DM0 has armed the ISR.
 //
@@ -449,8 +463,6 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     const dfb_dm1_remapper_slot_t* slots =
         reinterpret_cast<const dfb_dm1_remapper_slot_t*>(config_cached + (dm1_slots_word & 0xFFFFu));
     const uint16_t num_slots = static_cast<uint16_t>(dm1_slots_word >> 16);
-    volatile uint8_t* const ready_flags =
-        dfb_l1_uncached_byte_ptr(config_cached + DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET);
 
     WAYPOINT("RS");
 
@@ -472,8 +484,6 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
         WRITE_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(pair_idx), clientR_val);
         const uint32_t t_clientL = rdcycle();
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), clientL_val);
-        asm volatile("fence" ::: "memory");
-        ready_flags[pair_idx] = 1u;
         const uint32_t t_done = rdcycle();
         if constexpr (kDfbInitInnerTiming) {
             blob_l1_read_sw += t_clientR - t_read;
@@ -579,11 +589,6 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 #if defined(COMPILE_FOR_TRISC)
     uint8_t compact_dfb_count = 0;
     uint8_t trisc_tc_slot_count = 0;
-#endif
-#if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
-    // Uncached alias of DM1's ready-flag line.
-    const volatile uint8_t* const dm1_ready_flags =
-        dfb_l1_uncached_byte_ptr(config_cached + DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET);
 #endif
 
     // Inner timers and counters (0 unless kDfbInitInnerTiming).
@@ -774,12 +779,15 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
                 packer_rmp.hi = static_cast<uint8_t>(remapper_pair_index + 1u);
             }
 #endif
-            // Remapped producers: spin until DM1 has programmed this pair. No global remapper-enable
-            // wait is needed.
+            // Remapped producers: wait until DM1 has programmed this pair, by polling the pair's
+            // ClientL valid bits in the remapper itself. A register read is non-posted, so valid
+            // bits read back as set mean the ClientL write has landed. Back off between polls so
+            // the producers do not contend on the remapper.
             if (flags & DFB_HART_FLAG_REMAPPER_WAIT_DM1) {
                 const uint32_t t_spin = rdcycle();
                 WAYPOINT("RMSW");
-                while (dm1_ready_flags[remapper_pair_index] == 0u) {
+                while (overlay::RemapperAPI::get_clientL_valid_hw(remapper_pair_index) == 0u) {
+                    dfb_spin(kDfbRemapperPollBackoffIters);
                 }
                 WAYPOINT("RMSD");
                 total_remapper_spin += rdcycle() - t_spin;

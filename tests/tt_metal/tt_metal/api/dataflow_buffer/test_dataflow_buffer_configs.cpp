@@ -335,7 +335,7 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(dfb_config_header_size(), 120u);
 
     // Header is at offset 0 and the DM1 blob would start on the next cache line. A STRIDED DM-to-DM
-    // DFB uses no remapper, so DM1 has no slots and its blob (the ready-flag line + slots) is omitted.
+    // DFB uses no remapper, so DM1 has no slots and its blob is omitted.
     EXPECT_EQ(DFB_DM1_REMAPPER_BLOB_OFFSET, 128u);
     EXPECT_EQ(ghdr->dm1_slots >> 16, 0u);
     EXPECT_EQ(experimental::dfb::detail::dm1_remapper_blob_core_size(dfbs), 0u);
@@ -2552,14 +2552,8 @@ static uint32_t expect_dm_cached_lines_disjoint(const std::vector<uint8_t>& buf,
     }
 
     const uint32_t signal_bytes = DFB_SIGNAL_REGION_BYTES;
-    // DM1's ready flags are written and polled through the uncached alias, so no DM may read their line cached.
-    // They exist only when DM1 has slots: otherwise the DM1 blob is omitted, nothing touches that address,
-    // and the line belongs to whichever region follows.
-    const bool has_ready_flags = (ghdr->dm1_slots >> 16) > 0;
     const std::pair<uint32_t, uint32_t> uncached[] = {
-        {0u, static_cast<uint32_t>(sizeof(dfb_global_header_t))},
-        {DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET, has_ready_flags ? DFB_DM1_READY_FLAGS_BYTES : 0u},
-        {ghdr->dfb_signal_region_off, signal_bytes}};
+        {0u, static_cast<uint32_t>(sizeof(dfb_global_header_t))}, {ghdr->dfb_signal_region_off, signal_bytes}};
     for (const auto& [off, len] : uncached) {
         if (len == 0) {
             continue;
@@ -2663,24 +2657,13 @@ TEST_F(UnitMeshFixture, DfbConfigDmCachedLinesDisjoint) {
             }
         }
 
-        // The DM1 blob (ready-flag line + slots, no header) exists exactly when DM1 has slots; without
-        // it the next region takes its place.
+        // The DM1 blob exists exactly when DM1 has slots; without it the next region takes its place.
         if (topology.expect_dm1_slots) {
             const uint32_t num_slots = ghdr->dm1_slots >> 16;
-            EXPECT_EQ(ghdr->dm1_slots & 0xFFFFu, DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_CACHED_PAYLOAD_OFFSET);
-            EXPECT_EQ(
-                next_region,
-                (DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_CACHED_PAYLOAD_OFFSET +
-                 num_slots * static_cast<uint32_t>(sizeof(dfb_dm1_remapper_slot_t)) + 63u) &
-                    ~63u);
-            // Producers poll the ready flags, so they must be written as zeros, not left as whatever
-            // the buffer held.
-            std::vector<uint8_t> dirty(buf.size(), 0xA5u);
-            ASSERT_EQ(experimental::dfb::detail::serialize_dfb_config_for_core(core, dfbs, dirty), nbytes);
-            for (uint32_t i = 0; i < DFB_DM1_READY_FLAGS_BYTES; i++) {
-                EXPECT_EQ(dirty[DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET + i], 0u)
-                    << "ready flag " << i;
-            }
+            const uint32_t slot_bytes = num_slots * static_cast<uint32_t>(sizeof(dfb_dm1_remapper_slot_t));
+            EXPECT_EQ(ghdr->dm1_slots & 0xFFFFu, DFB_DM1_REMAPPER_BLOB_OFFSET);
+            EXPECT_EQ(experimental::dfb::detail::dm1_remapper_blob_core_size(dfbs), slot_bytes);
+            EXPECT_EQ(next_region, (DFB_DM1_REMAPPER_BLOB_OFFSET + slot_bytes + 63u) & ~63u);
         } else {
             EXPECT_EQ(next_region, DFB_DM1_REMAPPER_BLOB_OFFSET);
         }

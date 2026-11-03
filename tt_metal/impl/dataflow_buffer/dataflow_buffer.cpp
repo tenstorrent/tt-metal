@@ -290,10 +290,6 @@ std::vector<uint8_t> serialize_dm1_remapper_core_blob(
     std::vector<uint8_t> data;
     data.reserve(dm1_remapper_blob_core_size(dfbs_on_core));
 
-    // The ready-flag line, written as zeros so every launch starts with every flag clear; the slot
-    // array the device walks starts on the next line.
-    data.resize(DFB_DM1_CACHED_PAYLOAD_OFFSET, 0u);
-
     for (const auto& dfb : dfbs_on_core) {
         dfb->append_dm1_remapper_slots_for_core(core, data);
     }
@@ -746,7 +742,7 @@ size_t serialize_dfb_config_for_core(
             : std::vector<uint8_t>{};
 
     // The region offsets are uint16_t: TT_FATAL rather than let a static_cast truncate silently.
-    // The device locates the DM1 blob (ready flags) by the constant; DM0 finds its blob in dm0_packed.
+    // DM1 finds its slot array in dm1_slots and DM0 its blob in dm0_packed.
     const uint32_t dm1_off = DFB_DM1_REMAPPER_BLOB_OFFSET;
     const uint32_t dm0_off = dfb_align_cl(dm1_off + total_dm1_blob_size);
     TT_FATAL(dm0_off <= 0xFFFFu, "DFB config: DM0 ISR blob offset {} does not fit uint16", dm0_off);

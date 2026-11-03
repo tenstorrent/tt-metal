@@ -325,8 +325,8 @@ Firmware enables the remapper globally during DM FW initialization (`g_remapper_
 
 - If a pair’s ClientL **valid** bits are clear (ClientR[0] not valid), HW keeps **default mirroring**.
 - Kernel launch **programs only needed pairs**, setting ClientL valid.
-- After the kernel, **clear valid** on programmed pairs so they do not leak:
-  - DM1: `clear_clientL_valid_up_to_high_watermark_hw()`
+- After the kernel, **clear valid** on programmed pairs so they do not leak. Remapped producers wait for their pair's valid bits at the next launch, so this clear is also what keeps them from seeing the previous launch's pair:
+  - DM0, up to DM1's pair watermark: `clear_clientL_valid_up_to_high_watermark_hw()`
   - Packer: `dfb_clear_packer_remapper_window([lo, hi))`
 
 
@@ -542,10 +542,9 @@ sequenceDiagram
   Host->>Other: per_hart_iface_blobs
   DM0->>DM0: thresholds_IE_masks_enable_ISR_dm0_isr_ready
   DM1->>DM1: write_ClientR_then_ClientL_set_valid
-  DM1->>Prod: per_pair_ready_flag
   Other->>Other: g_dfb_interface
   Note over Other: Packer_programs_intra_alias_pairs
-  Prod->>Prod: remapped_wait_DM1_ready_flag
+  Prod->>Prod: remapped_poll_ClientL_valid
   Prod->>Prod: reset_TCs_set_capacity
   Prod->>Other: dfb_signal_hart_byte
   Other->>Other: DataflowBuffer_ctor_dfb_ensure_ready
@@ -557,9 +556,9 @@ sequenceDiagram
 1. FW already enabled the remapper globally.
 2. Host packs: DM1 remapper blob (only when the core has remapper slots) → DM0 ISR blob (only with implicit sync) → per-hart iface blobs → signal region.
 3. **DM0:** txn descriptors, thresholds, IE masks, enable tile ISR, `dm0_isr_ready`.
-4. **DM1:** ClientR then ClientL for each slot (sets valid bits), then sets that pair's ready flag at the start of its blob.
+4. **DM1:** ClientR then ClientL for each slot (sets valid bits). It publishes nothing in L1: remapper register writes are posted, so an L1 flag could be seen before the pair is live.
 5. **Other DMs / TRISCs:** `setup_local_dfb_interfaces`. Packer programs intra alias pairs itself (Tensix-only TCs invisible to DM1).
-6. **Producers:** a remapped producer first spins on DM1's ready flag for its pair (`RMSW` / `RMSD`). Every producer then resets its TCs and sets capacities, and after its whole init walk writes its own byte in `dfb_signal[]` once.
+6. **Producers:** a remapped producer first polls its pair's ClientL valid bits in the remapper (`RMSW` / `RMSD`), with a ~100-cycle `dfb_spin` backoff between reads so producers do not contend with DM1's writes. A register read is non-posted, so valid bits that read back as set mean the pair is live. Every producer then resets its TCs and sets capacities, and after its whole init walk writes its own byte in `dfb_signal[]` once.
 7. `DataflowBuffer` **constructor / `dfb_ensure_ready`:** poll the signal byte of every hart in the DFB's expected producer mask; on DMs of a core with implicit sync, also wait for `dm0_isr_ready`.
 8. After kernel: clear ClientL valid (DM1 watermark + packer window).
 
@@ -646,7 +645,7 @@ See [Part D](#part-d--common-debugging).
 | `WFW` / `WFD`   | `wait_front`         | Waiting for / got consumer tiles                    |
 | `RBW` / `RBD`   | `reserve_back`       | Waiting for / got producer space                    |
 | `DFW` / `DFD`   | `dfb_ensure_ready`   | Constructor sync (producer signals / DM0 ISR ready) |
-| `RMSW` / `RMSD` | DFB init walk        | Remapped producer waiting for / got DM1's pair ready flag |
+| `RMSW` / `RMSD` | DFB init walk        | Remapped producer polling for / saw its pair's ClientL valid bits |
 | `UPTW` / `UPTD` | unpack tilize/reduce | Unpack stalled on tiles / done                      |
 | `AAW` / `AAD`   | firmware, kernel exit | Draining until posted==acked                       |
 | `DXW` / `DXD`   | DM firmware, kernel exit | Waiting for implicit-sync traffic, then handing progress to DM0 |
