@@ -4,6 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <array>
 #include <functional>
 #include <optional>
 #include <string>
@@ -485,6 +486,74 @@ TEST_F(MeshWatcherFixture, QuasarHostSemaphoreReadIsNarrow) {
                 aligned_8b);
             EXPECT_EQ(returned, init_value) << "read +0x" << std::hex << offset;
             EXPECT_EQ(measured, exact) << "read +0x" << std::hex << offset;
+        }
+    }
+}
+
+// Device side of #63895: the same measurement as QuasarHostSemaphoreReadIsNarrow, made by a DM through a NoC read of
+// its own core's register and through a plain load, so no host transactor is involved. No watcher: its NoC sanitizer
+// rejects register addresses.
+TEST_F(DebugToolsMeshFixture, QuasarDeviceSemaphoreReadIsNarrow) {
+    const auto& hal = MetalContext::instance().hal();
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "NEO cluster semaphores are Quasar only";
+    }
+    constexpr uint32_t init_value = 100;
+    constexpr std::array<uint32_t, 7> offsets = {0x0C, 0x20, 0x24, 0x28, 0x2C, 0x30, 0x34};
+    auto count_change = [](uint32_t offset) -> int32_t {
+        return offset < 0x20 ? -static_cast<int32_t>(offset / 4) : static_cast<int32_t>((offset - 0x20) / 4);
+    };
+    const auto scratch_addr =
+        static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED));
+    const uint32_t results_addr = scratch_addr + 64;
+    const experimental::KernelSpecName probe_kernel_name{"sem_read_probe"};
+    for (auto& mesh_device : this->devices_) {
+        auto* device = mesh_device->impl().get_devices()[0];
+        const CoreCoord logical_core{0, 0};
+
+        experimental::KernelSpec kernel_spec{
+            .unique_id = probe_kernel_name, .source = "tests/tt_metal/tt_metal/test_kernels/misc/sem_read_probe.cpp"};
+        kernel_spec.num_threads = 1;
+        kernel_spec.compile_time_args["scratch_addr"] = scratch_addr;
+        kernel_spec.compile_time_args["results_addr"] = results_addr;
+        kernel_spec.hw_config = experimental::DataMovementHardwareConfig{};
+        experimental::WorkUnitSpec wu{
+            .name = "main", .kernels = {probe_kernel_name}, .target_nodes = experimental::NodeCoord{logical_core}};
+        experimental::ProgramSpec spec{.name = "sem_read_probe", .kernels = {kernel_spec}, .work_units = {wu}};
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        workload.add_program(
+            distributed::MeshCoordinateRange(zero_coord, zero_coord),
+            experimental::MakeProgramFromSpec(*mesh_device, spec));
+        this->RunProgram(mesh_device, workload);
+
+        std::array<uint32_t, offsets.size() * 3> results{};
+        MetalContext::instance().get_cluster().read_core(
+            results.data(),
+            sizeof(results),
+            {static_cast<size_t>(device->id()), device->worker_core_from_logical_core(logical_core)},
+            results_addr);
+        for (size_t i = 0; i < offsets.size(); i++) {
+            const uint32_t offset = offsets[i];
+            const uint32_t returned = results[i * 3 + 0];
+            const auto noc_change = static_cast<int32_t>(results[i * 3 + 1]);
+            const auto load_change = static_cast<int32_t>(results[i * 3 + 2]);
+            const int32_t exact = count_change(offset);
+            const int32_t next_4b = exact + (offset + 4 < 0x40 ? count_change(offset + 4) : 0);
+            log_info(
+                LogTest,
+                "device read +0x{:02x}: NoC read returned {} (expect {}), count change NoC {:+} / load {:+} | "
+                "exact 4 B {:+}, next 4 B {:+}",
+                offset,
+                returned,
+                init_value,
+                noc_change,
+                load_change,
+                exact,
+                next_4b);
+            EXPECT_EQ(returned, init_value) << "NoC read +0x" << std::hex << offset;
+            EXPECT_EQ(noc_change, exact) << "NoC read +0x" << std::hex << offset;
+            EXPECT_EQ(load_change, exact) << "load +0x" << std::hex << offset;
         }
     }
 }
