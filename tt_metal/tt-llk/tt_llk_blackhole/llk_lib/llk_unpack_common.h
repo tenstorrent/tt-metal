@@ -74,9 +74,9 @@ inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_tile_size = 0,
     const std::uint32_t unpB_tile_size = 0)
 {
-    // No LLK_VALIDATE_TENSOR_SHAPE_UNPACK here: this only programs face_r_dim and the face count, which works for
-    // any face_r_dim with 1, 2 or 4 faces on main (test_unpack_canonical_baseline sweeps face_r_dim x num_faces,
-    // including grids that are not tiles, such as 4 faces of 4 rows). The unpack op inits validate the tile shape.
+    // No LLK_VALIDATE_TENSOR_SHAPE_UNPACK here: this only programs face_r_dim (X-dim) and the total face count
+    // (Z-dim, 1/2/4). The face count covers grids beyond real tiles, which tests/python_tests/test_unpack_canonical_baseline.py
+    // sweeps on purpose (e.g. 4 faces of 4 rows); the unpack op inits validate the tile shape.
     const std::uint32_t unpA_num_faces = unpA_tensor_shape.total_num_faces();
     const std::uint32_t unpB_num_faces = unpB_tensor_shape.total_num_faces();
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");

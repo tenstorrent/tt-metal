@@ -113,8 +113,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src, // unpB_src : in0 (SrcB)
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        ckernel::make_tensor_shape_from_legacy(params.in1_face_r_dim, params.num_faces_A),
-        ckernel::make_tensor_shape_from_legacy(params.in0_face_r_dim, params.num_faces_B), // unpB_num_faces  : in0 = 2
+        ckernel::make_tensor_shape_from_legacy(params.in1_face_r_dim, params.num_faces_A), // unpA: in1 [32,32]
+        ckernel::make_tensor_shape_from_legacy(params.in0_face_r_dim, params.num_faces_B), // unpB: in0 [M,32]
         params.TILE_SIZE_UNPACK_A,                                                         // unpA_tile_size  : in1 [32,32]
         params.TILE_SIZE_UNPACK_B);                                                        // unpB_tile_size  : in0 [M,32]
 

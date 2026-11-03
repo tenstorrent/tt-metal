@@ -1199,8 +1199,8 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
  * @param unpA_dst_format   Expected output data format for unpacker A (context 0)
  * @param unpB_src_format   Expected input data format for unpacker B (context 1)
  * @param unpB_dst_format   Expected output data format for unpacker B (context 1)
- * @param unpA_tensor_shape Expected tile shape for unpacker A; checks face_r_dim and total_num_faces() (default 32x32)
- * @param unpB_tensor_shape Expected tile shape for unpacker B; checks face_r_dim and total_num_faces() (default 32x32)
+ * @param unpA_tensor_shape Expected tile shape for unpacker A; checks face_r_dim (ProgramByTile) or total_num_faces() (ProgramByFace) (default 32x32)
+ * @param unpB_tensor_shape Expected tile shape for unpacker B; checks face_r_dim (ProgramByTile) or total_num_faces() (ProgramByFace) (default 32x32)
  * @param nop_count         Number of nop operations to ensure configuration writes complete (default 80)
  */
 template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile>
