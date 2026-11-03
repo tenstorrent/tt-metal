@@ -82,9 +82,9 @@ def test_eltwise_unary_typecast_quasar(
 
 
 # Int32 is two's complement in L1 and in Dest (unpack-to-dest copies the bits; tenstorrent/tt-metal#59016),
-# so these pairs stage and read back Int32 as two's complement, with negative values. The harness has one
-# twos_complement switch for every integer operand and Quasar Int16 stays sign-magnitude in L1, so the Int16
-# pairs keep their stimuli non-negative, where the two encodings coincide.
+# so these pairs stage and read back Int32 as two's complement, with negative values. The Int16 pairs keep
+# their stimuli non-negative (the harness has one twos_complement switch for every integer operand and Quasar
+# Int16 stays sign-magnitude in L1), and so do the UInt16 pairs (a negative golden is unrepresentable there).
 _INT32_TYPECAST_PAIRS = [
     InputOutputFormat(DataFormat.Int32, DataFormat.Float32),
     InputOutputFormat(DataFormat.Float32, DataFormat.Int32),
@@ -104,7 +104,8 @@ def _prepare_int32_typecast_input(src_A, src_B, formats: InputOutputFormat):
     values = _prepare_typecast_input(
         src_A, src_B, formats.input_format, formats.output_format
     )
-    if DataFormat.Int16 in (formats.input_format, formats.output_format):
+    endpoints = (formats.input_format, formats.output_format)
+    if DataFormat.Int16 in endpoints or DataFormat.UInt16 in endpoints:
         return values.abs()
     flat = values.flatten()
     for i, seed in enumerate(_INT32_SIGN_SEEDS):
