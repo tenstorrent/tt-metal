@@ -1246,6 +1246,8 @@ except Exception:
     v = None
 if isinstance(v, list) and v and isinstance(v[0], list):
     v = v[0][0]                      # top cause name
+elif isinstance(v, dict) and "kind" in v:
+    v = f"{v['kind']}-bound ({v.get('thread', '?')})"   # bound
 print("" if v is None else v)
 PY
 }
@@ -1262,10 +1264,13 @@ execute_step_perf_tune_gate() {
     ss PERF_TUNE_KEPT 0 --json
     ss PERF_TUNE_LAST_RESULT ""
     hr="$(_diag_field stall_headroom_pct)"
+    local bound; bound="$(_diag_field bound)"
     if [ "$(sg PERF_ENABLED)" != "true" ]; then why="perf not enabled"
     elif [ "$(sg PERF_TUNE)" = "false" ]; then why="PERF_TUNE=false"
     elif [ "$(sg KERNEL_TYPE)" != "sfpu" ]; then why="tuning is sfpu-only (KERNEL_TYPE=$(sg KERNEL_TYPE))"
     elif [ "$(sg PERF_DIAG_STATUS)" != "ok" ]; then why="diagnosis status $(sg PERF_DIAG_STATUS) (need ok)"
+    elif [ -n "$bound" ] && [ "${bound#issue-bound}" = "$bound" ]; then
+        why="kernel is ${bound}; the issue floor does not describe it, so there is nothing to tune against"
     elif [ -z "$hr" ] || _lt "$hr" "$min"; then why="stall headroom ${hr:-?}% below ${min}%"
     fi
     if [ -n "$why" ]; then

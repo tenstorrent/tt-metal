@@ -210,3 +210,47 @@ def test_results_already_on_disk_are_in_the_table_from_the_start(tmp_path):
     assert (
         "perf_pack_quasar" in seen[1]
     ), "a finished op stays listed before the loop reaches it"
+
+
+def test_candidates_come_from_the_bound_not_the_test_name(tmp_path):
+    collected = {
+        UNARY: [_id(UNARY, "Exp", "Float16_b")],
+        "perf_pack_quasar.py": [
+            "quasar/perf_pack_quasar.py::test_perf_pack[Float16_b-b]"
+        ],
+        "perf_matmul_quasar.py": ["quasar/perf_matmul_quasar.py::test_mm[Float16_b]"],
+    }
+    bounds = {
+        "Exp": {"kind": "issue", "thread": "math", "occupancy_pct": 80.0},
+        "perf_pack_quasar": {"kind": "unit", "thread": "pack", "occupancy_pct": 97.0},
+        "perf_matmul_quasar": {
+            "kind": "issue",
+            "thread": "math",
+            "occupancy_pct": 70.0,
+        },
+    }
+
+    def run(entry, out_dir):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        issue = bounds[entry.op]["kind"] == "issue"
+        diag = {
+            "status": "ok",
+            "run_type": entry.run_type,
+            "measured": 50.0,
+            "floor": 12.0,
+            "stall_headroom_pct": 20.0 if issue else None,
+            "bound": bounds[entry.op],
+            "top_causes": [["x", 1.0]],
+        }
+        (out_dir / "diag.json").write_text(json.dumps(diag))
+
+    rows = {
+        r["op"]: r for r in survey.run_survey(survey.plan(collected), tmp_path, run)
+    }
+    assert rows["Exp"]["candidate"] == "yes"
+    assert (
+        rows["perf_matmul_quasar"]["candidate"] == "yes"
+    ), "an issue-bound non-SFPU kernel can be a candidate"
+    assert rows["perf_pack_quasar"]["candidate"] == "no"
+    assert rows["perf_pack_quasar"]["bound"] == "unit(pack)"
+    assert "| unit(pack) |" in (tmp_path / "survey.md").read_text()

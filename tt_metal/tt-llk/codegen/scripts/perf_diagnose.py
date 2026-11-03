@@ -70,10 +70,13 @@ def _finish(out: Path, diag: dict) -> int:
     if diag.get("run_type"):
         fields.append(f"run_type={diag['run_type']}")
     if "measured" in diag:
+        bound = diag.get("bound") or {}
+        hr = diag["stall_headroom_pct"]
         fields += [
             f"measured={diag['measured']}",
             f"floor={diag['floor']}",
-            f"stall_headroom={diag['stall_headroom_pct']}%",
+            f"bound={bound.get('kind', 'issue')}({bound.get('thread', diag.get('bottleneck', '?'))})",
+            f"stall_headroom={'n/a' if hr is None else f'{hr}%'}",
             f"reconcile={diag['reconcile']['delta_pct']:+.2f}%",
             "top=" + ",".join(f"{name}:{value}" for name, value in diag["top_causes"]),
         ]
@@ -231,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
             "stall_headroom_pct": verdict["stall_headroom_pct"],
             "reconcile": verdict["reconcile"],
             "bottleneck": verdict["bottleneck"],
+            "bound": verdict["bound"],
+            "occupancy_pct": verdict["occupancy_pct"],
             "top_causes": verdict["causes"][:TOP_CAUSES],
             "capture_rc": rc,
         },

@@ -315,3 +315,72 @@ def test_floor_above_measured_is_flagged_with_the_multi_cycle_opcodes(tmp_path):
 def test_floor_check_is_ok_normally(tmp_path):
     report = _report(6400, {"math": _thread(2560, idle=3840)})
     assert _verdict(tmp_path, report, _csv_row(50.0))["floor_check"]["ok"] is True
+
+
+# ── what limits the kernel: only issue-bound kernels get a stall-headroom verdict ──
+
+
+def _bound_verdict(threads, per_tile, run_type="L1_TO_L1"):
+    tiles = 128
+    report = _report(int(per_tile * tiles), threads)
+    return perf_headroom.headroom_verdict(
+        report,
+        {"loop_factor": "32", "tile_cnt": "4", f"mean({run_type})": str(per_tile)},
+        {"default": {"cycles": 1, "source": "s"}, "opcodes": {}},
+        run_type=run_type,
+    )
+
+
+def test_pack_bound_kernel_is_not_judged_on_the_issue_floor():
+    # pack_untilize: math issues 12/tile, pack issues 9 and is held 43 by its busy packer.
+    t = 128
+    v = _bound_verdict(
+        {
+            "math": _thread(12 * t, stall={"instissue": 1 * t}, idle=40 * t),
+            "pack": _thread(9 * t, stall={"instissue": 43 * t}, idle=1 * t),
+            "unpack": _thread(1 * t, idle=52 * t),
+        },
+        53.0,
+    )
+    assert v["bound"] == {"kind": "unit", "thread": "pack", "occupancy_pct": 98.113}
+    assert v["stall_headroom_pct"] is None
+    assert v["occupancy_pct"]["math"] == 24.528
+    summary = perf_headroom._summary(v)
+    assert "unit-bound (pack" in summary and "not judged" in summary
+
+
+def test_issue_saturated_math_stays_the_bottleneck_even_if_unpack_waits_longer():
+    # sigmoid L1_TO_L1: math issues 230/272.8, unpack is held 254 waiting on math.
+    t = 128
+    v = _bound_verdict(
+        {
+            "math": _thread(230 * t, stall={"sfpu": 4 * t}, idle=39 * t),
+            "unpack": _thread(1 * t, stall={"instissue": 254 * t}, idle=18 * t),
+        },
+        273.0,
+    )
+    assert v["bound"]["kind"] == "issue" and v["bound"]["thread"] == "math"
+    assert v["stall_headroom_pct"] == round(100 * (273 - 230) / 273, 3)
+
+
+def test_isolated_math_run_is_issue_bound_even_with_long_gaps():
+    # ReduceRow-like MATH_ISOLATE: math issues only 37 % of the time; the rest are its own gaps.
+    t = 128
+    v = _bound_verdict(
+        {"math": _thread(37 * t, idle=63 * t)}, 100.0, run_type="MATH_ISOLATE"
+    )
+    assert v["bound"]["kind"] == "issue"
+    assert v["stall_headroom_pct"] == 63.0
+
+
+def test_no_thread_busy_most_of_the_time_is_sync_bound():
+    t = 128
+    v = _bound_verdict(
+        {
+            "math": _thread(10 * t, idle=30 * t),
+            "pack": _thread(4 * t, stall={"instissue": 11 * t}, idle=25 * t),
+        },
+        40.0,
+    )
+    assert v["bound"]["kind"] == "sync"
+    assert v["stall_headroom_pct"] is None

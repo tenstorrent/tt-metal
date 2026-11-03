@@ -44,6 +44,14 @@ FAKE_LAUNCHER = textwrap.dedent(
                                    "instructions_by_opcode": {},
                                    "bubbles": [{"after": "SFPNONLINEAR", "before": "SFPSTORE",
                                                 "count": 32 * t, "cycles": 32 * t}]}}}
+    if mode == "pack_bound":  # pack_untilize-like L1_TO_L1: pack held by its busy packer
+        report["window"]["cycles"] = int(267.3 * t)
+        report["threads"] = {
+            "math": {"issue": 58 * t, "stall": {}, "idle": int(209.3 * t), "unknown": 0,
+                     "instructions_issued": 58 * t, "instructions_by_opcode": {}, "bubbles": []},
+            "pack": {"issue": 40 * t, "stall": {"instissue": 222 * t}, "idle": int(5.3 * t), "unknown": 0,
+                     "instructions_issued": 40 * t, "instructions_by_opcode": {}, "bubbles": []},
+        }
     (out / f"perf_{rt}.json").write_text(json.dumps(report))
     (out / "perf_capture.json").write_text(json.dumps({"status": "ok"}))
     """
@@ -175,3 +183,17 @@ def test_rerun_replaces_the_previous_diagnosis(env):
     (env["out"] / "stale.txt").write_text("old")
     _run(env)
     assert not (env["out"] / "stale.txt").exists()
+
+
+def test_a_unit_bound_kernel_is_reported_but_not_judged(env):
+    line = _run(env, "--run-type", "L1_TO_L1", mode="pack_bound")
+    assert "status=ok" in line
+    assert "bound=unit(pack)" in line
+    assert "stall_headroom=n/a" in line
+    diag = json.loads((env["out"] / "diag.json").read_text())
+    assert diag["bound"]["kind"] == "unit" and diag["stall_headroom_pct"] is None
+
+
+def test_an_issue_bound_kernel_reports_its_bound(env):
+    line = _run(env)
+    assert "bound=issue(math)" in line

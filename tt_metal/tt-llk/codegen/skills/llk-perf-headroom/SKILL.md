@@ -52,6 +52,14 @@ bubbles. Measured issue costs: `$PRIV/codegen/llk_wave_debug/rates/quasar_issue_
 | `idle` not between issues | TRISC not feeding instructions (loop or branch overhead, per-tile setup) | Unroll or replay **only if** this is large |
 | `waiting_threads` | Another thread is stalled on the bottleneck | Not a cause: optimize the bottleneck |
 
+**Read `bound` first.** `issue` means the kernel is limited by instruction issue: an isolated
+thread, or a math/SFPU thread issuing at least half the time. Only then is `stall_headroom_pct`
+judged and the table above applies. `unit` means pack or unpack is the busiest thread: one
+PACR/UNPACR keeps its unit busy for tens of cycles, so the issue floor understates the work. `sync`
+means no thread is busy most of the time: the time goes into waits between threads or RISC-V
+code. For `unit` and `sync` the verdict reports `stall headroom: not judged` and `thread busy`
+per thread. Look at the busy thread, not at the issue floor.
+
 **Stop** when `stall_headroom_pct` is small and `instruction_headroom` (against a cited best count) is small.
 
 ## Common mistakes

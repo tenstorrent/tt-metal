@@ -13,7 +13,8 @@ and skipped ones), so the survey can be stopped and resumed.
     python codegen/scripts/perf_survey.py --out-dir /proj_sw/.../survey [--module perf_x_quasar.py ...]
 
 Each op keeps ~50 KB; the emulator dump and wave file are deleted by perf_diagnose.
-A row is a ``candidate`` when the diagnosis is ok, the test is an SFPU one and the
+A row is a ``candidate`` when the diagnosis is ok, the kernel is issue-bound (its stall
+headroom is judged; unit- and sync-bound kernels are reported but not judged) and the
 stall headroom is at least --candidate-pct (default 5, the Step 6c threshold).
 """
 
@@ -68,6 +69,7 @@ COLUMNS = [
     "measured",
     "floor",
     "stall_headroom_pct",
+    "bound",
     "top_cause",
     "candidate",
     "reason",
@@ -125,11 +127,12 @@ def _row(entry: Entry, out_dir: Path, candidate_pct: float) -> dict:
     )
     top = (diag.get("top_causes") or [[None, None]])[0]
     hr = diag.get("stall_headroom_pct")
+    bound = diag.get("bound")
+    # Only an issue-bound kernel has a meaningful stall headroom. Results written before the
+    # bound existed fall back to the old rule (SFPU tests only).
+    judged = bound["kind"] == "issue" if bound else entry.sfpu
     candidate = (
-        diag.get("status") == "ok"
-        and entry.sfpu
-        and hr is not None
-        and hr >= candidate_pct
+        diag.get("status") == "ok" and judged and hr is not None and hr >= candidate_pct
     )
     return {
         "module": entry.module,
@@ -139,6 +142,7 @@ def _row(entry: Entry, out_dir: Path, candidate_pct: float) -> dict:
         "measured": diag.get("measured"),
         "floor": diag.get("floor"),
         "stall_headroom_pct": hr,
+        "bound": f"{bound['kind']}({bound['thread']})" if bound else "",
         "top_cause": f"{top[0]}: {top[1]}" if top[0] else "",
         "candidate": "yes" if candidate else "no",
         "reason": diag.get("reason", ""),
@@ -170,12 +174,12 @@ def _write_tables(root: Path, rows: list[dict]) -> None:
         w.writeheader()
         w.writerows(rows)
     lines = [
-        "| op | module | status | measured cyc/tile | floor | stall headroom % | top cause | candidate |",
-        "|---|---|---|---|---|---|---|---|",
+        "| op | module | status | bound | measured cyc/tile | floor | stall headroom % | top cause | candidate |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append(
-            f"| {r['op']} | {r['module']} | {r['status']} | {r['measured'] or ''} | {r['floor'] or ''} | "
+            f"| {r['op']} | {r['module']} | {r['status']} | {r['bound']} | {r['measured'] or ''} | {r['floor'] or ''} | "
             f"{r['stall_headroom_pct'] if r['stall_headroom_pct'] is not None else ''} | "
             f"{r['top_cause'] or r['reason']} | {r['candidate']} |"
         )

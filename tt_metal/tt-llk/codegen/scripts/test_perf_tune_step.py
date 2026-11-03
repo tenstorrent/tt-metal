@@ -228,3 +228,19 @@ def test_perf_json_reports_tuning(run):
         "last_result": "kept",
         "min_headroom_pct": 5.0,
     }
+
+
+def test_gate_skips_a_kernel_that_is_not_issue_bound(run):
+    d = run["log"] / "perf" / "diag"
+    (d / "diag.json").write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "stall_headroom_pct": None,
+                "bound": {"kind": "unit", "thread": "pack", "occupancy_pct": 97.0},
+                "top_causes": [["math.bubble.MOVA2D->MOVA2D", 37.6]],
+            }
+        )
+    )
+    line = run["sh"]("execute_step_perf_tune_gate")
+    assert line.startswith("PERF_TUNE: skip") and "unit-bound (pack)" in line

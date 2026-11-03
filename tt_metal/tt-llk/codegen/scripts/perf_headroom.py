@@ -42,6 +42,16 @@ from pathlib import Path
 from typing import Any
 
 RECONCILE_TOLERANCE_PCT = 2.0
+# Run types that leave one thread working on its own (the others are mocked).
+ISOLATED_THREAD = {
+    "MATH_ISOLATE": "math",
+    "SFPU_ISOLATE": "sfpu",
+    "UNPACK_ISOLATE": "unpack",
+    "PACK_ISOLATE": "pack",
+}
+ISSUE_BOUND_FRACTION = (
+    0.5  # a math/SFPU issuer busy issuing at least half the time limits the kernel
+)
 _DEFAULT_ASSEMBLY = (
     Path(__file__).resolve().parents[2]
     / "tt_llk_quasar"
@@ -258,7 +268,39 @@ def headroom_verdict(
         "ok": b["floor_per_tile"] <= csv_per_tile * 1.005,
         "multi_cycle_opcodes": multi,
     }
+    # What limits the kernel. The issue floor (one slot per instruction) only describes a
+    # kernel limited by instruction issue: an isolated thread, or a math/SFPU thread issuing
+    # most of the time. When pack/unpack is the busiest thread the time goes into its unit's
+    # long instructions (one PACR keeps the packer busy for tens of cycles), and when no
+    # thread is busy most of the time it goes into waits between threads or in RISC-V code.
+    # Neither has a meaningful issue floor, so their stall headroom is not judged.
+    occupancy = {
+        name: (u["issue_per_tile"] + sum(u["stall_per_tile"].values())) / csv_per_tile
+        for name, u in units.items()
+    }
+    isolated = ISOLATED_THREAD.get(run_type)
+    issue_fraction = b["issue_per_tile"] / csv_per_tile if csv_per_tile else 0.0
+    if isolated == bottleneck or (
+        bottleneck in ("math", "sfpu") and issue_fraction >= ISSUE_BOUND_FRACTION
+    ):
+        bound = {"kind": "issue", "thread": bottleneck}
+    else:
+        busiest = max(occupancy, key=lambda n: (occupancy[n], n))
+        kind = (
+            "unit"
+            if busiest in ("pack", "unpack") and occupancy[busiest] >= 0.5
+            else "sync"
+        )
+        bound = {"kind": kind, "thread": busiest}
+    bound["occupancy_pct"] = _round(100.0 * occupancy[bound["thread"]])
+    stall_headroom = (
+        _round(100.0 * (csv_per_tile - b["floor_per_tile"]) / csv_per_tile)
+        if bound["kind"] == "issue"
+        else None
+    )
     return {
+        "bound": bound,
+        "occupancy_pct": {n: _round(100.0 * o) for n, o in occupancy.items()},
         "floor_check": floor_check,
         "run_type": run_type,
         "wave_status": status,
@@ -272,9 +314,7 @@ def headroom_verdict(
         "units": units,
         "bottleneck": bottleneck,
         "waiting_threads": waiting,
-        "stall_headroom_pct": _round(
-            100.0 * (csv_per_tile - b["floor_per_tile"]) / csv_per_tile
-        ),
+        "stall_headroom_pct": stall_headroom,
         "instruction_headroom": instruction,
         "causes": causes,
     }
@@ -311,9 +351,32 @@ def _summary(v: dict) -> str:
         f"reconcile       : wave {r['wave_per_tile']} vs csv {r['csv_per_tile']} cyc/tile "
         f"({r['delta_pct']:+.2f} %) -> {'OK' if r['ok'] else 'NOT RECONCILED'}",
         f"bottleneck      : {v['bottleneck']}",
-        f"stall headroom  : {v['stall_headroom_pct']} % (measured vs no-stall floor "
-        f"{v['units'][v['bottleneck']]['floor_per_tile']} cyc/tile)",
     ]
+    bound = v.get("bound") or {"kind": "issue", "thread": v["bottleneck"]}
+    occ = ", ".join(
+        f"{n} {o}%"
+        for n, o in sorted((v.get("occupancy_pct") or {}).items(), key=lambda x: -x[1])
+    )
+    if bound["kind"] == "issue":
+        lines.append(f"bound           : issue-bound ({bound['thread']})")
+        lines.append(
+            f"stall headroom  : {v['stall_headroom_pct']} % (measured vs no-stall floor "
+            f"{v['units'][v['bottleneck']]['floor_per_tile']} cyc/tile)"
+        )
+    else:
+        why = (
+            f"its unit's long instructions, not issue slots"
+            if bound["kind"] == "unit"
+            else "waits between threads or in RISC-V code; no thread is busy most of the time"
+        )
+        lines.append(
+            f"bound           : {bound['kind']}-bound ({bound['thread']} busy {bound['occupancy_pct']} %): {why}"
+        )
+        lines.append(
+            "stall headroom  : not judged (the issue floor does not describe this kernel)"
+        )
+    if occ:
+        lines.append(f"thread busy     : {occ}")
     fc = v.get("floor_check") or {"ok": True}
     if not fc["ok"]:
         lines.append(
