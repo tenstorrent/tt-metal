@@ -334,6 +334,35 @@ def _from_sm(x, memory_config=None):
     return ttnn.concat([x[:, j : j + 1] for j in range(4)], dim=-1, memory_config=memory_config)
 
 
+_STREAM_MEAN = {}
+
+
+def _stream_mean(ops):
+    """One-hot [2560,640] 0.25 matrix (exact in bfloat8_b), shared by all layers on a mesh: stream mean."""
+    if id(ops.mesh) not in _STREAM_MEAN:
+        import torch  # Setup only.
+
+        m = torch.zeros(2560, 640)
+        for j in range(4):
+            m[j * 640 : (j + 1) * 640] = 0.25 * torch.eye(640)
+        _STREAM_MEAN[id(ops.mesh)] = ops.upload(m.reshape(1, 1, 2560, 640), ttnn.bfloat8_b)
+    return _STREAM_MEAN[id(ops.mesh)]
+
+
+def _fast_partial_program(b):
+    """1D multicast over the 11 output tiles of the HC down projection, 40-tile K blocks."""
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(11, 1),
+        in0_block_w=40,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=math.ceil(b / 32),
+        per_core_N=1,
+        fuse_batch=True,
+        mcast_in0=True,
+    )
+
+
 def _sm_prefill(x):
     """Single-request prefill rows ([1,1,S,2560], S > 1) take the stream-major HC implementation."""
     shape = tuple(x.shape)
@@ -480,12 +509,34 @@ class ParallelHyperConnection:
         """
         b = x.shape[-2]
         streams = self.ops.norm(x, self.norm_sm, self.eps)
-        # The default program's K blocking (in0_block_w=2) is required: wider blocks accumulate in the FPU dest
-        # differently and change the result on real (heavy-tailed) activations.
-        partial = self.ops.linear(
-            _from_sm(streams), self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
-        )
+        flat = _from_sm(streams)
+        # The default program's K blocking (in0_block_w=2) is bit-identical to read(); QWEN_FLASH_HC_FAST_PARTIAL
+        # uses 40-tile K blocks (~3x faster, different FPU dest accumulation order: not bit-identical).
+        lean = os.environ.get("QWEN_FLASH_HC_LEAN", "0") == "1"
+        if lean or os.environ.get("QWEN_FLASH_HC_FAST_PARTIAL", "1") == "1":
+            partial = ttnn.linear(
+                flat,
+                self.read_weight,
+                program_config=_fast_partial_program(b),
+                compute_kernel_config=self.compute,
+                dtype=ttnn.float32,
+            )
+        else:
+            partial = self.ops.linear(
+                flat, self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
+            )
         packed = ttnn.typecast(self.ops.reduce(partial), ttnn.bfloat16)
+        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
+        if lean:
+            # Not bit-identical: flat mix and a one-hot 0.25 matmul for the stream mean (correctly rounded,
+            # unlike the FPU reduce), ~50 us less per read than the stream-major mix/mean below.
+            mix = ttnn.sigmoid(
+                self.ops.linear(ttnn.silu(packed[..., :320]), self.up, compute_kernel_config=self.compute, max_cores=5)
+            )
+            mixed = ttnn.matmul(
+                ttnn.multiply(mix, flat), _stream_mean(self.ops), compute_kernel_config=self.ops.exact_compute
+            )
+            return self.ops.gather(mixed), ttnn.transpose(inject, 1, 3)
         # One K=320 product per stream (same sequential accumulation as the flat projection); the explicit
         # 4x row batch lets the matmul spread over 20 cores (a broadcast in0 runs single-core).
         mix = ttnn.sigmoid(
@@ -497,7 +548,6 @@ class ParallelHyperConnection:
             )
         )
         mixed = ttnn.mean(ttnn.multiply(mix, streams), dim=1, keepdim=True)
-        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
         return self.ops.gather(mixed), ttnn.transpose(inject, 1, 3)
 
     def _lane_mean(self, prod):
