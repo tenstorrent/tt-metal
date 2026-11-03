@@ -114,6 +114,7 @@ def run_case(
     a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     w_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     l1_headroom=None,
+    grid=None,
 ):
     mesh_shape = tuple(mesh_device.shape)
     a = random_stacked(mesh_shape, a_shape, seed=0)
@@ -128,6 +129,7 @@ def run_case(
         num_links=num_links,
         compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2),
         l1_headroom=l1_headroom,
+        grid=grid,
     )
     preallocated = None
     if output_tensor:
@@ -163,6 +165,8 @@ MODEL_CASES = {
     "llama_70b_w2_decode": ((1, 1, 32, 3584), (3584, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "llama_70b_ff1_decode_bf4b": ((1, 1, 32, 2048), (2048, 3840), -1, ttnn.bfloat16, ttnn.bfloat4_b),
     "decode_narrow_n": ((1, 1, 32, 1024), (1024, 512), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    # batched decode (four tile rows): the folded grid, taken without weighing chunk splits
+    "kimi_k27_o_proj_decode_m128": ((1, 1, 128, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
 
 
@@ -238,6 +242,42 @@ def dram_width_sharded(mesh_device, K, N):
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(grid, [K, width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+# The caller's grid (grid=): every grid on a block that can take it, against the planner's choice. The transposed decode
+# block (56 x 1 tiles) is where the fold along M wins: the 2D grid gives it one line of cores.
+GRID = ttnn.MatmulReduceScatterPrefillGrid
+FORCED_GRID_CASES = [
+    pytest.param(MODEL_CASES["kimi_k27_o_proj_decode"], GRID.GRID_2D, id="decode-grid_2d"),
+    pytest.param(MODEL_CASES["kimi_k27_o_proj_decode"], GRID.FOLDED_N, id="decode-folded_n"),
+    pytest.param(MODEL_CASES["kimi_k27_o_proj"], GRID.FOLDED_N, id="kimi_k27_o_proj-folded_n"),
+    pytest.param(
+        ((1, 1, 1792, 2048), (2048, 128), -1, ttnn.bfloat16, ttnn.bfloat8_b), GRID.FOLDED_M, id="tall-folded_m"
+    ),
+    pytest.param(((1, 1, 1792, 2048), (2048, 128), -1, ttnn.bfloat16, ttnn.bfloat8_b), GRID.GRID_2D, id="tall-grid_2d"),
+    pytest.param(MODEL_CASES["glm5_indexer_wk_narrow_n"], GRID.FOLDED_M, id="glm5_indexer_wk-folded_m"),
+    pytest.param(MODEL_CASES["chunked_n"], GRID.FOLDED_N, id="chunked_n-folded_n"),
+]
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("case, grid", FORCED_GRID_CASES)
+def test_forced_grid(mesh_device, case, grid):
+    a_shape, w_shape, scatter_dim, dtype, weight_dtype = case
+    run_case(
+        mesh_device,
+        a_shape,
+        w_shape,
+        cluster_axis=1,
+        scatter_dim=scatter_dim,
+        topology=ttnn.Topology.Ring,
+        dtype=dtype,
+        weight_dtype=weight_dtype,
+        num_links=2,
+        grid=grid,
     )
 
 
@@ -394,6 +434,11 @@ def test_staging_tensor(mesh_device, expect_error):
         (dict(w_shape=(1024, 7168)), "K mismatch"),
         (dict(memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG), "sharded"),
         (dict(l1_headroom=1 << 24), "l1_headroom"),
+        # a one-tile-row block folded along M is one core, and a balanced ring needs two
+        (
+            dict(a_shape=(1, 1, 32, 2048), grid=ttnn.MatmulReduceScatterPrefillGrid.FOLDED_M),
+            "the grid the call forces",
+        ),
     ],
     ids=[
         "scatter_dim",
@@ -403,6 +448,7 @@ def test_staging_tensor(mesh_device, expect_error):
         "k_mismatch",
         "sharded_output",
         "l1_headroom",
+        "forced_grid_misfit",
     ],
 )
 def test_refusals(mesh_device, expect_error, overrides, message):

@@ -46,7 +46,6 @@ constexpr uint32_t kMaxAutoChunks = 256;
 constexpr uint32_t kKbMax = 16;
 constexpr uint32_t kKbMaxChunked = 32;
 constexpr uint32_t kKbMinResident = 8;
-constexpr uint32_t kFoldedMaxM = 1;             // block tile rows up to which the folded 1D flow is considered
 constexpr uint32_t kDestTilesFp32FullSync = 8;  // subblock area cap
 // chunk_cost_us() fit
 constexpr double kCostFpuEff = 0.93;
@@ -292,18 +291,18 @@ GridChoice choose_grid(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t bloc
     return best->second;
 }
 
-// The folded 1D grid of a block with at most kFoldedMaxM tile rows: every core holds all block_m rows and the fewest
-// columns (core_n) whose core count folds exactly into a rows x cols rectangle of the matmul area, the row strip first
-// and as tall as it fits (measured on decode rows: a tall fold with W read on both NoCs beats the short, wide one by
-// up to 18%); nothing when the block is taller or no rectangle fits.
-std::optional<GridChoice> choose_grid_folded(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L) {
-    if (block_m > kFoldedMaxM) {
-        return std::nullopt;
-    }
-    for (uint32_t core_n = 1; core_n <= block_n; ++core_n) {
-        const uint32_t n = tt::div_up(block_n, core_n);
-        if (tt::div_up(block_n, n) != core_n) {
-            continue;  // the same core count as a narrower core_n
+// The folded 1D grid along `flow`'s axis (FoldedN: N, FoldedM: M): every core holds the whole block on the other axis
+// and the thinnest slice of this one whose core count folds exactly into a rows x cols rectangle of the matmul area,
+// the row strip first and as tall as it fits (measured on decode rows: a tall fold with W read on both NoCs beats the
+// short, wide one by up to 18%); nothing when no rectangle fits.
+std::optional<GridChoice> choose_grid_folded(
+    uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L, Flow flow) {
+    const bool along_n = flow == Flow::FoldedN;
+    const uint32_t len = along_n ? block_n : block_m;
+    for (uint32_t slice = 1; slice <= len; ++slice) {
+        const uint32_t n = tt::div_up(len, slice);
+        if (tt::div_up(len, n) != slice) {
+            continue;  // the same core count as a thinner slice
         }
         for (Strip strip : {Strip::Row, Strip::Col}) {
             const uint32_t strip_len = strip == Strip::Row ? gx : gy;
@@ -318,12 +317,12 @@ std::optional<GridChoice> choose_grid_folded(uint32_t gx, uint32_t gy, uint32_t 
                 }
                 GridChoice c;
                 c.strip = strip;
-                c.grid_m = 1;
-                c.grid_n = n;
-                c.core_m = block_m;
-                c.core_n = core_n;
+                c.grid_m = along_n ? 1 : n;
+                c.grid_n = along_n ? n : 1;
+                c.core_m = along_n ? block_m : slice;
+                c.core_n = along_n ? slice : block_n;
                 c.subblock = choose_subblock(c.core_m, c.core_n);
-                c.flow = Flow::Folded1D;
+                c.flow = flow;
                 c.fold_rows = rows;
                 c.fold_cols = n / rows;
                 return c;
@@ -331,6 +330,44 @@ std::optional<GridChoice> choose_grid_folded(uint32_t gx, uint32_t gy, uint32_t 
         }
     }
     return std::nullopt;
+}
+
+// The grids a block can take, best first. The caller's forced grid is the only one. Otherwise an unchunked block
+// (`unchunked`) takes the fold along N ahead of the 2D grid when it gives each core fewer output tiles. Scatter on N
+// keeps A resident and streams W once per output block, so the fold along N spreads the stream that moves; the fold
+// along M spreads A, read once, and is left to the caller's grid (measured, QB2 1x4 ring: against an unchunked 2D plan
+// it ran 1-6% slower). Chunk splits keep the 2D grid: chunk_cost_us charges a cross-chip handoff per core, so a fold's
+// many cores misrank them (a thin-chunk fold ran 1.34x slower on a large prefill shape).
+std::vector<GridChoice> grid_candidates(
+    uint32_t gx,
+    uint32_t gy,
+    uint32_t block_m,
+    uint32_t block_n,
+    uint32_t L,
+    std::optional<Flow> forced,
+    bool unchunked) {
+    const GridChoice grid_2d = choose_grid(gx, gy, block_m, block_n, L);
+    if (forced.has_value()) {  // the caller's grid only
+        if (*forced == Flow::Grid2D) {
+            return {grid_2d};
+        }
+        if (auto folded = choose_grid_folded(gx, gy, block_m, block_n, L, *forced)) {
+            return {*folded};
+        }
+        throw GeometryMiss(fmt::format(
+            "matmul_reduce_scatter_prefill: no {} grid of the {}x{}-tile block fits the matmul area",
+            *forced == Flow::FoldedN ? "FOLDED_N" : "FOLDED_M",
+            block_m,
+            block_n));
+    }
+    const auto tiles = [](const GridChoice& c) { return uint64_t{c.core_m} * c.core_n; };
+    if (unchunked) {
+        if (auto folded = choose_grid_folded(gx, gy, block_m, block_n, L, Flow::FoldedN);
+            folded.has_value() && tiles(*folded) < tiles(grid_2d)) {
+            return {*folded, grid_2d};
+        }
+    }
+    return {grid_2d};
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> chunk_candidates(uint32_t block_m, uint32_t block_n, int32_t scatter_dim) {
@@ -361,7 +398,7 @@ std::vector<std::pair<uint32_t, uint32_t>> chunk_candidates(uint32_t block_m, ui
     return out;
 }
 
-Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in) {
+Plan plan_on_grid(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in, const GridChoice& grid) {
     Plan pl;
     pl.chunk_m = tt::div_up(in.block_m, n_m_req);
     pl.chunk_n = tt::div_up(in.block_n, n_n_req);
@@ -369,12 +406,7 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     pl.n_n = tt::div_up(in.block_n, pl.chunk_n);
     const uint32_t chunks = pl.n_m * pl.n_n;
     pl.zone_sets = chunks == 1 ? 1 : std::max(1u, std::min(kZoneSets, chunks));
-    pl.grid = choose_grid(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L);
-    // a short block puts every core of the 2D grid on one m-line; the folded 1D grid spreads it over more cores
-    if (auto folded = choose_grid_folded(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L);
-        folded.has_value() && folded->grid_n > pl.grid.grid_m * pl.grid.grid_n) {
-        pl.grid = *folded;
-    }
+    pl.grid = grid;
     const GridChoice& gd = pl.grid;
     if (in.kind == ScheduleKind::RingBalanced && gd.grid_m * gd.grid_n < 2) {
         throw GeometryMiss("matmul_reduce_scatter_prefill: a balanced ring needs >= 2 matmul cores (two halves)");
@@ -425,6 +457,26 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     pl.P = pl.waves.P;
     pl.footprint = footprint(kblk.kb, kblk.resident, kblk.depth, in.Kt, geo, pl.depths);
     return pl;
+}
+
+// The chunk split's plan on the best grid that fits L1 and lays out (grid_candidates order); the last miss throws.
+Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in) {
+    const auto grids = grid_candidates(
+        in.gx,
+        in.gy,
+        tt::div_up(in.block_m, n_m_req),
+        tt::div_up(in.block_n, n_n_req),
+        in.L,
+        in.forced_flow,
+        n_m_req * n_n_req == 1);
+    for (size_t i = 0; i + 1 < grids.size(); ++i) {
+        try {
+            return plan_on_grid(n_m_req, n_n_req, in, grids[i]);
+        } catch (const L1Miss&) {
+        } catch (const GeometryMiss&) {
+        }
+    }
+    return plan_on_grid(n_m_req, n_n_req, in, grids.back());
 }
 
 double chunk_cost_us(const Plan& pl, const PlanInputs& in) {
@@ -610,10 +662,11 @@ Plan solve_plan_uncached(const PlanInputs& in) {
     // Scatter on N: the unchunked plan (when it fits) competes with the chunk splits in chunk_cost_us (measured on 50
     // prefill shapes, QB2 1x4 ring: an unchunked plan whose K-block shrank to fit loses to a chunked one by up to 1.8x,
     // and the model never picked a split slower than the unchunked plan). Scatter on M keeps whatever fits unchunked:
-    // the model misranks it there.
+    // the model misranks it there. A folded unchunked plan is taken too: chunk_cost_us misranks the fold's many cores
+    // (measured: Kimi K3 dense FFN at M = 96 / 128 lost 9% to a 2D chunk split, where the fold wins by 27% / 12%).
     std::optional<std::pair<double, Plan>> best;
     if (auto unchunked = plan_if_fits(in)) {
-        if (in.scatter_dim == -2) {
+        if (in.scatter_dim == -2 || (unchunked->grid.flow != Flow::Grid2D && !in.forced_flow.has_value())) {
             return std::move(*unchunked);
         }
         const double cost = chunk_cost_us(*unchunked, in);
@@ -665,7 +718,8 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.tW,
         in.scatter_dim,
         in.budget,
-        in.staging_floor);
+        in.staging_floor,
+        in.forced_flow);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
     const std::lock_guard<std::mutex> lock(solved_mutex);
@@ -674,9 +728,9 @@ const Plan& solve_plan(const PlanInputs& in) {
         try {
             it = solved.emplace(key, solve_plan_uncached(in)).first;  // a refusal throws and caches nothing
         } catch (const L1Miss& miss) {
-            TT_THROW("{}", miss.what());
+            TT_THROW("{}{}", miss.what(), in.forced_flow.has_value() ? " (on the grid the call forces)" : "");
         } catch (const GeometryMiss& miss) {
-            TT_THROW("{}", miss.what());
+            TT_THROW("{}{}", miss.what(), in.forced_flow.has_value() ? " (on the grid the call forces)" : "");
         }
     }
     return it->second;

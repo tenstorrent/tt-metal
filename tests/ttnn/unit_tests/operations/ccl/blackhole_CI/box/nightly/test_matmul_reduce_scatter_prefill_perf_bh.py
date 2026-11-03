@@ -5,10 +5,11 @@
 
 A representative set of per-device prefill shapes (TP=4 row-parallel linears of DeepSeek-V3, Kimi K2.7 / K3, GLM 5.x,
 MiniMax-M3 and MiMo-V2, two output-chunked shapes that miss L1, Llama-70B WO and Flux2 FF2 chunked by the cost model, and
-two Kimi decode rows on the folded 1D grid) runs traced on the whole box as a 1x4 ring, and one shape as a 1x4 line. Each case: an eager call (compile), one traced call, one
-discarded replay, then REPLAYS back-to-back replays in one real-time profiler window; the gate is the median device time
-of the op's program (the slowest chip per replay) within +/- MARGIN of the case's expected time. A case faster than the
-band fails too: update its number, so the gate stays tight.
+three Kimi decode shapes (M = 32 and 96) on the folded 1D grid) runs traced on the whole box as a 1x4 ring, and one
+shape as a 1x4 line. Each case: an eager call (compile), one traced call, one discarded replay, then REPLAYS
+back-to-back replays in one real-time profiler window; the gate is the median device time of the op's program (the
+slowest chip per replay) within +/- MARGIN of the case's expected time. A case faster than the band fails too: update
+its number, so the gate stays tight.
 
 A and W are replicated on every device, so the group sum is G * (A @ W) and every device's output is checked against it
 (PCC), at the cost of one host matmul per case.
@@ -51,9 +52,10 @@ PERF_CASES = {
     # chunked although the block fits L1 unchunked (with a 1-2 tile K-block): 3 x 1 and 3 x 2 chunks
     "llama_70b_wo_prefill": ((1, 1, 8192, 1024), (1024, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "flux2_ff2": ((1, 1, 4224, 2304), (2304, 6144), -1, ttnn.bfloat16, ttnn.bfloat16),
-    # decode rows (M = 32): the folded 1D grid (56 cores)
+    # decode (M = 32 and a batch of 96 rows): the folded 1D grid (56 cores)
     "kimi_k27_o_proj_decode": ((1, 1, 32, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "kimi_k3_dense_ffn_decode": ((1, 1, 32, 8448), (8448, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "kimi_k3_dense_ffn_decode_m96": ((1, 1, 96, 8448), (8448, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
 
 # Expected device time [ns] per (topology, case): QuietBox 2 (1x4, 2 links), medians of back-to-back traced replays.
@@ -70,6 +72,7 @@ EXPECTED_NS = {
     ("ring", "flux2_ff2"): 641_000,
     ("ring", "kimi_k27_o_proj_decode"): 46_800,
     ("ring", "kimi_k3_dense_ffn_decode"): 178_500,
+    ("ring", "kimi_k3_dense_ffn_decode_m96"): 288_000,
     ("line", "kimi_k27_o_proj"): 157_000,
 }
 

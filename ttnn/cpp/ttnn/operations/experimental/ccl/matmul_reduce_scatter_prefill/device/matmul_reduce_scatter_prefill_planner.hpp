@@ -26,10 +26,11 @@ enum class Direction : uint8_t { Fwd, Bwd, Fin };
 enum class Strip : uint8_t { Row, Col };
 enum class Orient : uint8_t { MOnX, MOnY };
 // The matmul flow. Grid2D: a grid_m x grid_n rectangle, A multicast along its m-lines and W along its n-lines.
-// Folded1D (a block of at most kFoldedMaxM tile rows): one m-line of grid_n cores folded row-major into a
-// rows x cols rectangle; every core holds the whole block's rows, A is multicast to the whole rectangle and each
-// core reads its own W columns.
-enum class Flow : uint8_t { Grid2D, Folded1D };
+// FoldedN: one m-line of grid_n cores folded row-major into a rows x cols rectangle; every core holds all the block's
+// rows, A is multicast to the whole rectangle and each core reads its own W columns. FoldedM: the transpose, one
+// n-line of grid_m cores; every core holds all the block's columns, W is multicast to the rectangle and each core
+// reads its own A rows.
+enum class Flow : uint8_t { Grid2D, FoldedN, FoldedM };
 // How the matmul cores split into halves ("k": row-major core index, "n"/"m": along that grid axis).
 enum class HalfSplit : uint8_t { K, N, M };
 
@@ -67,7 +68,7 @@ struct GridChoice {
     uint32_t core_n = 0;
     std::array<uint32_t, 2> subblock{};  // (sb_h, sb_w)
     Flow flow = Flow::Grid2D;
-    uint32_t fold_rows = 0;  // Folded1D: logical core gn sits at (gn % fold_cols, gn / fold_cols) of the rectangle
+    uint32_t fold_rows = 0;  // folded: logical core g (gn, or gm for FoldedM) sits at (g % fold_cols, g / fold_cols)
     uint32_t fold_cols = 0;
 };
 
@@ -125,6 +126,7 @@ struct PlanInputs {
     // bytes per core of a caller-held staging larger than the plan without it needs (0: the op allocates the staging
     // exactly): the footprint counts the staging at this size, and only plans whose staging fits in it qualify
     uint64_t staging_floor = 0;
+    std::optional<Flow> forced_flow;  // the caller's grid: the only one every plan may take
 };
 
 // Planner constants the factory needs too.

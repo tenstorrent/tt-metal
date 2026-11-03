@@ -124,9 +124,11 @@ MatmulReduceScatterPrefillParams resolve_params(
     const std::optional<int32_t>& num_links,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<uint32_t>& l1_headroom) {
+    const std::optional<uint32_t>& l1_headroom,
+    const std::optional<ttnn::experimental::MatmulReduceScatterPrefillGrid>& forced_grid) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
+    using ttnn::experimental::MatmulReduceScatterPrefillGrid;
 
     // the supported inputs, scatter_dim canonical
     const auto rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
@@ -177,7 +179,7 @@ MatmulReduceScatterPrefillParams resolve_params(
         "matmul_reduce_scatter_prefill: l1_headroom={} must be smaller than the L1 bank size ({} bytes)",
         headroom,
         l1_bank);
-    const detail::PlanInputs plan_inputs{
+    detail::PlanInputs plan_inputs{
         .G = G,
         .kind = kind,
         .L = L,
@@ -193,6 +195,13 @@ MatmulReduceScatterPrefillParams resolve_params(
         .scatter_dim = canonical_dim,
         .budget = l1_bank - headroom,
     };
+    if (forced_grid.has_value()) {
+        switch (*forced_grid) {
+            case MatmulReduceScatterPrefillGrid::GRID_2D: plan_inputs.forced_flow = detail::Flow::Grid2D; break;
+            case MatmulReduceScatterPrefillGrid::FOLDED_N: plan_inputs.forced_flow = detail::Flow::FoldedN; break;
+            case MatmulReduceScatterPrefillGrid::FOLDED_M: plan_inputs.forced_flow = detail::Flow::FoldedM; break;
+        }
+    }
 
     return MatmulReduceScatterPrefillParams{
         .cluster_axis = static_cast<uint32_t>(cluster_axis),
@@ -238,7 +247,8 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
     const std::optional<uint32_t>& l1_headroom,
-    const std::optional<Tensor>& staging_tensor) {
+    const std::optional<Tensor>& staging_tensor,
+    const std::optional<MatmulReduceScatterPrefillGrid>& grid) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
     MatmulReduceScatterPrefillParams params = resolve_params(
         input_tensor,
@@ -249,7 +259,8 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         num_links,
         compute_kernel_config,
         memory_config,
-        l1_headroom);
+        l1_headroom,
+        grid);
     if (staging_tensor.has_value()) {
         plan_for_held_staging(params, *staging_tensor);
     }
@@ -271,10 +282,20 @@ Tensor experimental::matmul_reduce_scatter_prefill_staging(
     int32_t scatter_dim,
     ttnn::ccl::Topology topology,
     const std::optional<int32_t>& num_links,
-    const std::optional<uint32_t>& l1_headroom) {
+    const std::optional<uint32_t>& l1_headroom,
+    const std::optional<MatmulReduceScatterPrefillGrid>& grid) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
     const MatmulReduceScatterPrefillParams params = resolve_params(
-        input_tensor, weight, cluster_axis, scatter_dim, topology, num_links, std::nullopt, std::nullopt, l1_headroom);
+        input_tensor,
+        weight,
+        cluster_axis,
+        scatter_dim,
+        topology,
+        num_links,
+        std::nullopt,
+        std::nullopt,
+        l1_headroom,
+        grid);
     return allocate_staging(input_tensor.device(), detail::staging_tiles(params.plan()));
 }
 

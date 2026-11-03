@@ -421,10 +421,13 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const uint32_t x0 = 0;
     const uint32_t y0 = gd.strip == detail::Strip::Row ? 1 : 0;
     const bool m_on_x = gd.orient == detail::Orient::MOnX;
-    const bool folded = gd.flow == detail::Flow::Folded1D;  // grid_m == 1: gn folds row-major into the rectangle
+    // folded: the grid's one line (gn for FoldedN, gm for FoldedM) folds row-major into the rectangle
+    const bool folded = gd.flow != detail::Flow::Grid2D;
+    const bool fold_m = gd.flow == detail::Flow::FoldedM;
     auto mm_core = [&](uint32_t gm, uint32_t gn) {
         if (folded) {
-            return CoreCoord(x0 + gn % gd.fold_cols, y0 + gn / gd.fold_cols);
+            const uint32_t g = fold_m ? gm : gn;
+            return CoreCoord(x0 + g % gd.fold_cols, y0 + g / gd.fold_cols);
         }
         return m_on_x ? CoreCoord(x0 + gm, y0 + gn) : CoreCoord(x0 + gn, y0 + gm);
     };
@@ -531,13 +534,13 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_ct[args::reader_ct::A_SPLIT] = a_split;
     reader_ct[args::reader_ct::W_SPLIT] = w_split;
     reader_ct[args::reader_ct::PREFETCH_STEPS] = detail::kPrefetchSteps;
-    // Folded: A moves once (entry 0), so nothing competes with the W reads for the fill; every step's W window is a
-    // DRAM stream, read ahead before the barrier and alternately on both NoCs (decode rows, measured: NoC1 alone
-    // 1.3-1.8x slower)
+    // Folded: the multicast operand moves through one group, so nothing competes with every core's own reads (W for
+    // FoldedN, A for FoldedM) for the fill; those are a DRAM stream, read ahead before the barrier and alternately on
+    // both NoCs (decode rows, measured: W on NoC1 alone 1.3-1.8x slower)
     reader_ct[args::reader_ct::LOOKAHEAD_AFTER_BARRIER] = (resident && !folded) ? 1 : 0;
-    reader_ct[args::reader_ct::A_READ_NOC] = args::read_noc::NOC0;
-    reader_ct[args::reader_ct::W_READ_NOC] =
-        folded ? args::read_noc::ALTERNATE : (resident ? args::read_noc::NOC1 : args::read_noc::NOC0);
+    reader_ct[args::reader_ct::A_READ_NOC] = fold_m ? args::read_noc::ALTERNATE : args::read_noc::NOC0;
+    reader_ct[args::reader_ct::W_READ_NOC] = folded ? (fold_m ? args::read_noc::NOC0 : args::read_noc::ALTERNATE)
+                                                    : (resident ? args::read_noc::NOC1 : args::read_noc::NOC0);
     reader_ct[args::reader_ct::NUM_WAVES] = W;
     reader_ct[args::reader_ct::NUM_CHUNKS] = num_chunks;
     reader_ct[args::reader_ct::N_INNER] = n_inner;
@@ -764,11 +767,11 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
             continue;
         }
         // One group per grid line, ordered along the line; Staggered advances the sender by one per line. Folded: the
-        // single m-line (A) is the whole rectangle, and every core is its own n-line (W).
+        // grid's single line is the whole rectangle (A's for FoldedN, W's for FoldedM), every core its own other line.
         const bool per_row = fam.shape == McastLine::PerRow;
         uint32_t line_len = per_row ? mm_box.grid_size().x : mm_box.grid_size().y;
         if (folded) {
-            line_len = fam.prefix[0] == 'a' ? n_cores : 1;
+            line_len = (fam.prefix[0] == 'a') != fold_m ? n_cores : 1;
         }
         const McastFixedSenderConfig sender{.sender_index = *fam.start, .placement = McastSenderPlacement::Staggered};
         const std::array kernels{std::ref(reader)};

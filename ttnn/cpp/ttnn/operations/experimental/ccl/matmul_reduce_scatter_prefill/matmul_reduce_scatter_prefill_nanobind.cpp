@@ -48,7 +48,9 @@ nb::dict last_plan_dict() {
     out["hold_depth"] = plan.depth_hold;
     out["grid"] = nb::make_tuple(plan.grid.grid_m, plan.grid.grid_n);
     out["strip"] = plan.grid.strip == detail::Strip::Row ? "row" : "col";
-    out["flow"] = plan.grid.flow == detail::Flow::Folded1D ? "folded_1d" : "grid_2d";
+    out["flow"] = plan.grid.flow == detail::Flow::FoldedN   ? "folded_n"
+                  : plan.grid.flow == detail::Flow::FoldedM ? "folded_m"
+                                                            : "grid_2d";
     out["fold"] = nb::make_tuple(plan.grid.fold_rows, plan.grid.fold_cols);
     out["half_split"] = half_split_name(plan.half_split);
     out["waves"] = plan.waves.n;
@@ -68,6 +70,19 @@ nb::dict last_plan_dict() {
 namespace ttnn::operations::experimental::ccl {
 
 void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
+    using ttnn::experimental::MatmulReduceScatterPrefillGrid;
+    nb::enum_<MatmulReduceScatterPrefillGrid>(
+        mod, "MatmulReduceScatterPrefillGrid", "The matmul grid a matmul_reduce_scatter_prefill call may force.")
+        .value("GRID_2D", MatmulReduceScatterPrefillGrid::GRID_2D, "M and N split over a 2D grid of matmul cores")
+        .value(
+            "FOLDED_N",
+            MatmulReduceScatterPrefillGrid::FOLDED_N,
+            "one line of cores along N, folded into a rectangle: every core holds all the block's rows")
+        .value(
+            "FOLDED_M",
+            MatmulReduceScatterPrefillGrid::FOLDED_M,
+            "one line of cores along M, folded into a rectangle: every core holds all the block's columns");
+
     ttnn::bind_function<"matmul_reduce_scatter_prefill", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -104,6 +119,10 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
                 L1 the op does not see (raise ``l1_headroom``). Keep it alive while calls that use it run, traced
                 replays included.
 
+            grid (ttnn.MatmulReduceScatterPrefillGrid, optional): forces the matmul grid on every plan the planner
+                weighs (GRID_2D, FOLDED_N or FOLDED_M); a shape that cannot take it is refused. None (default):
+                the planner picks per shape.
+
         Returns:
             ttnn.Tensor: bfloat16 TILE output, the scattered dim divided by the group size.
 
@@ -123,7 +142,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
         nb::arg("l1_headroom") = nb::none(),
-        nb::arg("staging_tensor") = nb::none());
+        nb::arg("staging_tensor") = nb::none(),
+        nb::arg("grid") = nb::none());
 
     ttnn::bind_function<"matmul_reduce_scatter_prefill_staging", "ttnn.experimental.">(
         mod,
@@ -142,6 +162,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
             topology (ttnn.Topology, optional): Linear or Ring. Defaults to Linear.
             num_links (int, optional): fabric links per hop (1 or 2); None uses every usable link, up to 2.
             l1_headroom (int, optional): as the op takes it. Defaults to 64 KiB.
+            grid (ttnn.MatmulReduceScatterPrefillGrid, optional): as the op takes it. Defaults to the planner's
+                choice.
 
         Returns:
             ttnn.Tensor: the staging, sized exactly for these arguments.
@@ -154,7 +176,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("scatter_dim") = -2,
         nb::arg("topology") = ttnn::ccl::Topology::Linear,
         nb::arg("num_links") = nb::none(),
-        nb::arg("l1_headroom") = nb::none());
+        nb::arg("l1_headroom") = nb::none(),
+        nb::arg("grid") = nb::none());
 
     mod.def(
         "_matmul_reduce_scatter_prefill_last_plan",

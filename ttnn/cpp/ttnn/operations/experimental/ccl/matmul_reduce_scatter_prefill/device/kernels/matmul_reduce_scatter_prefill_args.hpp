@@ -59,7 +59,7 @@ constexpr uint32_t FIN = 2;
 namespace read_noc {
 constexpr uint32_t NOC0 = 0;
 constexpr uint32_t NOC1 = 1;
-constexpr uint32_t ALTERNATE = 2;  // W only
+constexpr uint32_t ALTERNATE = 2;  // alternate NoC0 / NoC1 per tile
 }  // namespace read_noc
 
 // ---------------------------------------------------------------------------------------------------------------
