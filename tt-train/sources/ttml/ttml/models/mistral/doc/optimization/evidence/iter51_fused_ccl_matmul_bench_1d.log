@@ -1,0 +1,670 @@
+2026-11-03 09:01:10.966 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-03 09:01:11.019 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-03 09:01:11.019 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-03 09:01:11.020 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-03 09:01:11.020 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-03 09:01:11.031 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-03 09:01:11.031 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-03 09:01:11.110 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-03 09:01:11.110 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-03 09:01:11.110 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-03 09:01:11.110 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-03 09:01:11.112 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-03 09:01:11.374 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-11-03 09:01:11.374 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-03 09:01:11.409 | info     |     Distributed | Using custom mesh graph descriptor: /home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto (metal_env.cpp:533)
+2026-11-03 09:01:11.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-03 09:01:11.410 | warning  |          Fabric | Physical groupings: Mesh graph descriptor 'M0': no PGD grouping could be placed on the PSD (4 topology match(es)); continuing without pinning hints for this mesh (physical_grouping_descriptor_matching.cpp:1848)
+2026-11-03 09:01:11.454 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-11-03 09:01:14.218 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-11-03 09:01:14.219 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+MGD validated: dims=[1, 4], file=/home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto
+fabric: FABRIC_1D_RING
+AG qkv fw         K=5120 N=1536: today ag     204 + mm2d     242 =     446 us
+   mm11x9 k8 n8 2x2       minimal_mm     227  fused ag+mm     286 us  ( 64.1 % of today)
+   mm11x9 k8 n4 2x2       minimal_mm     237  fused ag+mm     338 us  ( 75.8 % of today)
+   mm11x9 k10 n8 2x2      minimal_mm     233  fused ag+mm     289 us  ( 64.7 % of today)
+   mm11x8 k8 n8 2x2       minimal_mm     224  fused ag+mm     286 us  ( 64.1 % of today)
+AG wo bw dX       K=5120 N=1024: today ag     200 + mm2d     115 =     316 us
+   mm11x9 k8 n8 2x2       minimal_mm     157  fused ag+mm     260 us  ( 82.4 % of today)
+   mm11x9 k8 n4 2x2       minimal_mm     155  fused ag+mm     261 us  ( 82.7 % of today)
+   mm11x9 k10 n8 2x2      minimal_mm     160  fused ag+mm     260 us  ( 82.5 % of today)
+   mm11x8 k8 n8 2x2       minimal_mm     155  fused ag+mm     259 us  ( 82.0 % of today)
+AG w2 bw dX       K=5120 N=8192: today ag     202 + mm2d    1072 =    1274 us
+   mm11x9 k8 n8 2x2       minimal_mm     977  fused ag+mm    1246 us  ( 97.8 % of today)
+   mm11x9 k8 n4 2x2       minimal_mm     975  fused ag+mm    1311 us  (102.9 % of today)
+   mm11x9 k10 n8 2x2      minimal_mm     953  fused ag+mm    1246 us  ( 97.8 % of today)
+   mm11x8 k8 n8 2x2       minimal_mm     931  fused ag+mm    1289 us  (101.2 % of today)
+AG gate_up fw     K=5120 N=16384: today ag     200 + mm2d    1997 =    2197 us
+   mm11x9 k8 n8 2x2       minimal_mm    2027  fused ag+mm    2600 us  (118.4 % of today)
+   mm11x9 k8 n4 2x2       minimal_mm    2098  fused ag+mm    2705 us  (123.1 % of today)
+   mm11x9 k10 n8 2x2      minimal_mm    2031  fused ag+mm    2560 us  (116.6 % of today)
+   mm11x8 k8 n8 2x2       minimal_mm    1987  fused ag+mm    2664 us  (121.3 % of today)
+2026-11-03 09:01:51.646 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+info:
+Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x780754a78c38]
+ --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricContext const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::ControlPlane const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x2d53) [0x780754926d43]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+2026-11-03 09:01:51.998 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+info:
+Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x780754a78c38]
+ --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricContext const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::ControlPlane const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x2d53) [0x780754926d43]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+2026-11-03 09:01:52.359 | critical |          Always | TT_FATAL: Core grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a smaller offset. (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:501: selection.all_placeable()
+info:
+Core grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a smaller offset.
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0xc4c513) [0x780753c4c513]
+ --- ttnn::ccl::choose_worker_cores(unsigned long, unsigned long, tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, tt::xy_pair, std::optional<tt::tt_metal::CoreRangeSet> const&, ttnn::ccl::CoreAllocationStrategy)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x173) [0x780754924163]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+  fused mm11x8 k8 n8 2x2 w4: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D0) to dst (M0, D3)\nbacktrace:\n --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x
+  fused mm11x8 k8 n4 2x2 w4: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D0) to dst (M0, D3)\nbacktrace:\n --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x
+  fused mm11x9 k8 n8 2x2 w2: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:501: selection.all_placeable()\ninfo:\nCore grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a sm
+RS wo fw          K=1024 N=5120: today mm2d     158 + rs     230 =     388 us
+   mm11x8 k8 n8 2x2 w4    minimal_mm     137  fused mm+rs     nan us  (  nan % of today)
+   mm11x8 k8 n4 2x2 w4    minimal_mm     148  fused mm+rs     nan us  (  nan % of today)
+   mm11x9 k8 n8 2x2 w2    minimal_mm     139  fused mm+rs     nan us  (  nan % of today)
+2026-11-03 09:01:53.674 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+info:
+Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x780754a78c38]
+ --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricContext const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::ControlPlane const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x2d53) [0x780754926d43]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+2026-11-03 09:01:54.029 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+info:
+Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x780754a78c38]
+ --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricContext const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::ControlPlane const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x2d53) [0x780754926d43]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+2026-11-03 09:01:54.386 | critical |          Always | TT_FATAL: Core grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a smaller offset. (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:501: selection.all_placeable()
+info:
+Core grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a smaller offset.
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0xc4c513) [0x780753c4c513]
+ --- ttnn::ccl::choose_worker_cores(unsigned long, unsigned long, tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, tt::xy_pair, std::optional<tt::tt_metal::CoreRangeSet> const&, ttnn::ccl::CoreAllocationStrategy)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x173) [0x780754924163]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+  fused mm11x8 k8 n8 2x2 w4: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D0) to dst (M0, D3)\nbacktrace:\n --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x
+  fused mm11x8 k8 n4 2x2 w4: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D0) to dst (M0, D3)\nbacktrace:\n --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x
+  fused mm11x9 k8 n8 2x2 w2: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:501: selection.all_placeable()\ninfo:\nCore grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a sm
+RS qkv bw dX      K=1536 N=5120: today mm2d     186 + rs     230 =     416 us
+   mm11x8 k8 n8 2x2 w4    minimal_mm     190  fused mm+rs     nan us  (  nan % of today)
+   mm11x8 k8 n4 2x2 w4    minimal_mm     195  fused mm+rs     nan us  (  nan % of today)
+   mm11x9 k8 n8 2x2 w2    minimal_mm     195  fused mm+rs     nan us  (  nan % of today)
+2026-11-03 09:01:56.163 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+info:
+Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x780754a78c38]
+ --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricContext const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::ControlPlane const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x2d53) [0x780754926d43]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+2026-11-03 09:01:56.538 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+info:
+Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x780754a78c38]
+ --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricContext const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::ControlPlane const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x2d53) [0x780754926d43]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+2026-11-03 09:01:56.911 | critical |          Always | TT_FATAL: Core grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a smaller offset. (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:501: selection.all_placeable()
+info:
+Core grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a smaller offset.
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0xc4c513) [0x780753c4c513]
+ --- ttnn::ccl::choose_worker_cores(unsigned long, unsigned long, tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, tt::xy_pair, std::optional<tt::tt_metal::CoreRangeSet> const&, ttnn::ccl::CoreAllocationStrategy)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x173) [0x780754924163]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+  fused mm11x8 k8 n8 2x2 w4: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D0) to dst (M0, D3)\nbacktrace:\n --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x
+  fused mm11x8 k8 n4 2x2 w4: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D0) to dst (M0, D3)\nbacktrace:\n --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x
+  fused mm11x9 k8 n8 2x2 w2: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:501: selection.all_placeable()\ninfo:\nCore grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a sm
+RS w2 fw          K=8192 N=5120: today mm2d    1057 + rs     230 =    1287 us
+   mm11x8 k8 n8 2x2 w4    minimal_mm     984  fused mm+rs     nan us  (  nan % of today)
+   mm11x8 k8 n4 2x2 w4    minimal_mm    1008  fused mm+rs     nan us  (  nan % of today)
+   mm11x9 k8 n8 2x2 w2    minimal_mm    1088  fused mm+rs     nan us  (  nan % of today)
+2026-11-03 09:01:59.233 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+info:
+Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x780754a78c38]
+ --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricContext const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::ControlPlane const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x2d53) [0x780754926d43]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+2026-11-03 09:01:59.629 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+info:
+Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x780754a78c38]
+ --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricContext const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::ControlPlane const&, tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- std::vector<unsigned int, std::allocator<unsigned int> > tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x2d53) [0x780754926d43]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+2026-11-03 09:02:00.029 | critical |          Always | TT_FATAL: Core grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a smaller offset. (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 154, in bench_rs
+    t_f = timed(fused)
+          ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 49, in timed
+    fn()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_fused_ccl_matmul_bench.py", line 146, in fused
+    return ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:501: selection.all_placeable()
+info:
+Core grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a smaller offset.
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0xc4c513) [0x780753c4c513]
+ --- ttnn::ccl::choose_worker_cores(unsigned long, unsigned long, tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, tt::xy_pair, std::optional<tt::tt_metal::CoreRangeSet> const&, ttnn::ccl::CoreAllocationStrategy)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn57build_ring_strided_reduce_scatter_async_program_artifactsERN2tt8tt_metal17ProgramDescriptorERKNS_6TensorES6_RKNS1_11distributed14MeshCoordinateERKSt8optionalIS8_ESE_RS4_jjjjNS0_9tt_fabric8TopologyERKSt6vectorINS1_15GlobalSemaphoreESaISJ_EERKSB_ISJ_EbRKSB_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSB_INS_12experimental3ccl28ReduceScatterFusedOpSignalerEERSB_INSZ_35StridedReduceScatterFusedOpSignalerEESB_IjES16_NS0_7xy_pairES16_jjS16_S16_S16_S16_RKSB_IS5_ESB_IfES1A_S1A_S1A_+0x173) [0x780754924163]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim51minimal_matmul_strided_reduce_scatter_async_programERKNS_6TensorES4_RS2_S5_S5_RKN2tt8tt_metal11distributed14MeshCoordinateERKSt8optionalIS9_ESF_jjjjNS6_9tt_fabric8TopologyERKSt6vectorINS7_15GlobalSemaphoreESaISJ_EERKSC_ISJ_EbRKSC_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEESC_IjESY_NS6_7xy_pairESY_SY_RKSC_IS3_ES12_RKSC_INS_10operations5unary19BasicUnaryWithParamIJfEEEENS1_19MinimalMatmulConfigENS_19ComputeKernelConfigESC_IfES12_S12_S12_S12_+0x321) [0x780754a287f1]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental4prim52MinimalMatmulStridedReduceScatterAsyncProgramFactory26create_workload_descriptorERKNS1_44MinimalMatmulStridedReduceScatterAsyncParamsERKNS1_44MinimalMatmulStridedReduceScatterAsyncInputsERSt6vectorINS_6TensorESaISA_EERKN2tt8tt_metal11distributed22MeshCoordinateRangeSetE+0x336) [0x780754a29336]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d95b) [0x780754a4d95b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a4d289) [0x780754a4d289]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x132) [0x780754a44912]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x780754a40e81]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38MinimalMatmulStridedReduceScatterAsyncEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x780754a30078]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn4prim43minimal_matmul_strided_reduce_scatter_asyncERKNS_6TensorES3_jRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaIS7_EENS5_7xy_pairEjRKSt8optionalINS6_12MemoryConfigEERKSE_SH_NS5_9tt_fabric8TopologyESD_IjERKSD_IS2_ESD_INS_10operations5unary19BasicUnaryWithParamIJfEEEESD_IKNS_12experimental4prim19MinimalMatmulConfigEENS_19ComputeKernelConfigERKSD_IS7_EbSD_IN4ttsl10StrongTypeIhNS6_14SubDeviceIdTagEEEESM_SM_SM_RKSD_IS1_ES1B_SD_IfESP_SP_SD_INS6_8DataTypeEESP_SM_SP_SP_+0x7a7) [0x780754a23f57]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn12experimental43minimal_matmul_strided_reduce_scatter_asyncERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_jRKS3_IN2tt8tt_metal15GlobalSemaphoreESaISD_EENSB_7xy_pairERKNS_19ComputeKernelConfigEjRKSt8optionalINSC_12MemoryConfigEESQ_SQ_NSB_9tt_fabric8TopologyESM_IjERKSM_IS9_ERKSM_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSM_IKNS0_4prim19MinimalMatmulConfigEERKSM_ISD_EbSM_IN4ttsl10StrongTypeIhNSC_14SubDeviceIdTagEEEEST_ST_ST_RKSM_IS2_ESM_IfESW_SW_SM_INSC_8DataTypeEESW_ST_SW_+0x649) [0x780754a233d9]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x62fda1) [0x78075682fda1]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x7807565d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78079a7271ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78079a72728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+  fused mm11x8 k8 n8 2x2 w4: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D0) to dst (M0, D3)\nbacktrace:\n --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x
+  fused mm11x8 k8 n4 2x2 w4: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D0) to dst (M0, D3)\nbacktrace:\n --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1a78c38) [0x
+  fused mm11x9 k8 n8 2x2 w2: RuntimeError RuntimeError('TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:501: selection.all_placeable()\ninfo:\nCore grid offset 0-9 pushed 1 of the 12 selected worker cores (first: 0-10) off the worker grid; kernels cannot be placed there. Request fewer cores or use a sm
+RS gate_up bw dX  K=16384 N=5120: today mm2d    2271 + rs     232 =    2504 us
+   mm11x8 k8 n8 2x2 w4    minimal_mm    2097  fused mm+rs     nan us  (  nan % of today)
+   mm11x8 k8 n4 2x2 w4    minimal_mm    2143  fused mm+rs     nan us  (  nan % of today)
+   mm11x9 k8 n8 2x2 w2    minimal_mm    2242  fused mm+rs     nan us  (  nan % of today)
+2026-11-03 09:02:00.283 | info     |    BuildKernels | JIT cache stats: 228/822 hits (27.7%) [228 cached, 205 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-03 09:02:00.283 | info     |    BuildKernels | JIT telemetry: 46 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-03 09:02:00.299 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-03 09:02:00.299 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-03 09:02:00.476 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-03 09:02:00.476 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-03 09:02:00.476 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

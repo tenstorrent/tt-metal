@@ -1,0 +1,60 @@
+# the torus-fabric run of iter51_fused_ccl_matmul_bench.py, filtered to the result lines and the first copy of each error (the raw log repeated a 4 MB kernel-build error dump per call)
+/home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/matmul_dataflow_common.hpp:1002:57: error: cannot convert 'volatile tt::tt_fabric::HybridMeshPacketHeader*' {aka 'volatile tt::tt_fabric::HybridMeshPacketHeaderT<36>*'} to 'volatile tt::tt_fabric::LowLatencyPacketHeader*' {aka 'volatile tt::tt_fabric::LowLatencyPacketHeaderT<1>*
+/home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/matmul_dataflow_common.hpp:1003:57: error: cannot convert 'volatile tt::tt_fabric::HybridMeshPacketHeader*' {aka 'volatile tt::tt_fabric::HybridMeshPacketHeaderT<36>*'} to 'volatile tt::tt_fabric::LowLatencyPacketHeader*' {aka 'volatile tt::tt_fabric::LowLatencyPacketHeaderT<1>*
+/home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/matmul_dataflow_common.hpp:1004:57: error: cannot convert 'volatile tt::tt_fabric::HybridMeshPacketHeader*' {aka 'volatile tt::tt_fabric::HybridMeshPacketHeaderT<36>*'} to 'volatile tt::tt_fabric::LowLatencyPacketHeader*' {aka 'volatile tt::tt_fabric::LowLatencyPacketHeaderT<1>*
+  fused mm11x9 k8 n8 2x2: RuntimeError RuntimeError("TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/program/program.cpp:423: tt::exception\ninfo:\nFailed to generate binaries for dm_in0_sender TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\nbrisc build failed. Log: In file incl
+  fused mm11x9 k8 n4 2x2: RuntimeError RuntimeError("TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/program/program.cpp:423: tt::exception\ninfo:\nFailed to generate binaries for dm_in0_sender TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\nbrisc build failed. Log: In file incl
+  fused mm11x9 k10 n8 2x2: RuntimeError RuntimeError("TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/program/program.cpp:423: tt::exception\ninfo:\nFailed to generate binaries for dm_in0_sender TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\nbrisc build failed. Log: In file incl
+  fused mm11x8 k8 n8 2x2: RuntimeError RuntimeError("TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/program/program.cpp:423: tt::exception\ninfo:\nFailed to generate binaries for dm_in0_sender TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\nbrisc build failed. Log: In file incl
+AG qkv fw         K=5120 N=1536: today ag     115 + mm2d     239 =     354 us
+   mm11x9 k8 n8 2x2       minimal_mm     227  fused ag+mm     nan us  (  nan % of today)
+   mm11x9 k8 n4 2x2       minimal_mm     236  fused ag+mm     nan us  (  nan % of today)
+   mm11x9 k10 n8 2x2      minimal_mm     233  fused ag+mm     nan us  (  nan % of today)
+   mm11x8 k8 n8 2x2       minimal_mm     224  fused ag+mm     nan us  (  nan % of today)
+AG wo bw dX       K=5120 N=1024: today ag     114 + mm2d     116 =     230 us
+   mm11x9 k8 n8 2x2       minimal_mm     158  fused ag+mm     nan us  (  nan % of today)
+   mm11x9 k8 n4 2x2       minimal_mm     157  fused ag+mm     nan us  (  nan % of today)
+   mm11x9 k10 n8 2x2      minimal_mm     160  fused ag+mm     nan us  (  nan % of today)
+   mm11x8 k8 n8 2x2       minimal_mm     155  fused ag+mm     nan us  (  nan % of today)
+AG w2 bw dX       K=5120 N=8192: today ag     114 + mm2d    1077 =    1191 us
+   mm11x9 k8 n8 2x2       minimal_mm     948  fused ag+mm     nan us  (  nan % of today)
+   mm11x9 k8 n4 2x2       minimal_mm    1005  fused ag+mm     nan us  (  nan % of today)
+   mm11x9 k10 n8 2x2      minimal_mm     951  fused ag+mm     nan us  (  nan % of today)
+   mm11x8 k8 n8 2x2       minimal_mm     939  fused ag+mm     nan us  (  nan % of today)
+AG gate_up fw     K=5120 N=16384: today ag     114 + mm2d    1932 =    2046 us
+   mm11x9 k8 n8 2x2       minimal_mm    2076  fused ag+mm     nan us  (  nan % of today)
+   mm11x9 k8 n4 2x2       minimal_mm    2095  fused ag+mm     nan us  (  nan % of today)
+   mm11x9 k10 n8 2x2      minimal_mm    2045  fused ag+mm     nan us  (  nan % of today)
+   mm11x8 k8 n8 2x2       minimal_mm    1990  fused ag+mm     nan us  (  nan % of today)
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  minimal_matmul_strided_reduce_scatter_async(input_tensor: ttnn.Tensor | collections.abc.Sequence[ttnn.Tensor], weight_tensor: ttnn.Tensor, dim: int, multi_device_global_semaphore: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore], reduce_scatter_core_grid_offset: ttnn.CoreCoord, *, compute_kernel_config: ttnn.core.WormholeComputeKernelConfig, num_links: int = 1, memory_confi
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  fused mm11x8 k8 n8 2x2 w4: TypeError TypeError('\nttnn.experimental.minimal_matmul_strided_reduce_scatter_async(): incompatible function arguments.\n\nCalled with:\n  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=Memo
+  fused mm11x8 k8 n4 2x2 w4: TypeError TypeError('\nttnn.experimental.minimal_matmul_strided_reduce_scatter_async(): incompatible function arguments.\n\nCalled with:\n  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=Memo
+  fused mm11x9 k8 n8 2x2 w2: TypeError TypeError('\nttnn.experimental.minimal_matmul_strided_reduce_scatter_async(): incompatible function arguments.\n\nCalled with:\n  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=Memo
+RS wo fw          K=1024 N=5120: today mm2d     158 + rs     121 =     279 us
+   mm11x8 k8 n8 2x2 w4    minimal_mm     137  fused mm+rs     nan us  (  nan % of today)
+   mm11x8 k8 n4 2x2 w4    minimal_mm     149  fused mm+rs     nan us  (  nan % of today)
+   mm11x9 k8 n8 2x2 w2    minimal_mm     139  fused mm+rs     nan us  (  nan % of today)
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+RS qkv bw dX      K=1536 N=5120: today mm2d     185 + rs     121 =     306 us
+   mm11x8 k8 n8 2x2 w4    minimal_mm     192  fused mm+rs     nan us  (  nan % of today)
+   mm11x8 k8 n4 2x2 w4    minimal_mm     195  fused mm+rs     nan us  (  nan % of today)
+   mm11x9 k8 n8 2x2 w2    minimal_mm     193  fused mm+rs     nan us  (  nan % of today)
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+RS w2 fw          K=8192 N=5120: today mm2d    1073 + rs     121 =    1194 us
+   mm11x8 k8 n8 2x2 w4    minimal_mm    1117  fused mm+rs     nan us  (  nan % of today)
+   mm11x8 k8 n4 2x2 w4    minimal_mm    1006  fused mm+rs     nan us  (  nan % of today)
+   mm11x9 k8 n8 2x2 w2    minimal_mm    1143  fused mm+rs     nan us  (  nan % of today)
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+  minimal_matmul_strided_reduce_scatter_async(ttnn.Tensor, ttnn.Tensor, int, list, ttnn.CoreCoord, ttnn.core.WormholeComputeKernelConfig, num_links=2, memory_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0), rs_output_me
+RS gate_up bw dX  K=16384 N=5120: today mm2d    2219 + rs     121 =    2340 us
+   mm11x8 k8 n8 2x2 w4    minimal_mm    2273  fused mm+rs     nan us  (  nan % of today)
+   mm11x8 k8 n4 2x2 w4    minimal_mm    2140  fused mm+rs     nan us  (  nan % of today)
+   mm11x9 k8 n8 2x2 w2    minimal_mm    2321  fused mm+rs     nan us  (  nan % of today)

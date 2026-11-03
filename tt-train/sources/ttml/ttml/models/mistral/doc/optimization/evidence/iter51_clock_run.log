@@ -1,0 +1,11 @@
+=== iter51_clock cool-down 600s 2026-11-03T09:16:00Z
+=== iter51_clock TP=4 MFU 12 steps with 20 Hz telemetry 2026-11-03T09:26:00Z
+rc=0
+40 of 40 layers, tp 4: 428.6 ms/step over 10 steps (best 422.4), 224.8 TFLOP/s, MFU 37.85%
+step phase: 5.2 s, 89 samples at 17 Hz
+chip 0: aiclk mean   1101 MHz (min 900, max 1350), tdp mean   134 W (max 259), tdc mean  182 A, temp max 70 C, throttler {'0': 89}
+chip 1: aiclk mean   1109 MHz (min 937, max 1350), tdp mean   131 W (max 220), tdc mean  177 A, temp max 72 C, throttler {'0': 89}
+chip 2: aiclk mean   1021 MHz (min 968, max 1118), tdp mean   142 W (max 213), tdc mean  197 A, temp max 70 C, throttler {'0': 89}
+chip 3: aiclk mean   1117 MHz (min 900, max 1262), tdp mean   122 W (max 226), tdc mean  165 A, temp max 73 C, throttler {'0': 89}
+MFU 37.85 % of the 1350 MHz peak = 50.1 % at the slowest chip's delivered clock (1021 MHz), 47.0 % at the mean delivered clock (1087 MHz)
+=== iter51_clock done 2026-11-03T09:29:19Z
