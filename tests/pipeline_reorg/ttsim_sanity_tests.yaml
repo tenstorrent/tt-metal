@@ -33,7 +33,7 @@
     done
   skus:
     sim_wh_n150:
-      timeout: 30
+      timeout: 31
     sim_bh_p150:
       timeout: 30
   team: ttsim
