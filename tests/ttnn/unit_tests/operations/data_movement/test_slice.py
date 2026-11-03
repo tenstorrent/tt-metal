@@ -2307,11 +2307,11 @@ def test_slice_nd_sharded_rescale_rank1(device):
     assert list(out_mem_config.nd_shard_spec.shard_shape) == [32]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Issue #58370: SliceRmProgramFactory reads a rank-1 ND-sharded input with more than two shards "
-    "incorrectly, independent of the output memory config.",
-)
+# @pytest.mark.xfail(
+#     strict=True,
+#     reason="Issue #58370: SliceRmProgramFactory reads a rank-1 ND-sharded input with more than two shards "
+#     "incorrectly, independent of the output memory config.",
+# )
 def test_slice_nd_sharded_rank1_input_data(device):
     torch_input = torch.rand((256,), dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
