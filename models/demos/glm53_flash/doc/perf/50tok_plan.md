@@ -160,3 +160,10 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   constants) read into a persistent L1 buffer on the slot's part-0 core by the preceding mHC pre-block program
   (its readers idle for ~40 us), the KDA reader copying L1 -> CB in ~2 us: item phase ~32 -> ~10 us, -0.7 ms per
   step. Needs host-side persistent L1 tensors allocated before the trace capture.
+* 22:24 **lever 1 constraint**: the (1, 8) bfp8 chain died at layer 33 with DRAM OOM (4.18 of 4.24 GB per bank):
+  a single-row TP8 instance holds 36 FULL experts per chip. Per chip over the 42 MoE layers (H 4096, I 2048, 288
+  experts): (8, 4) hybrid 7 GiB (72 experts x I/8), (1, 8) bfp8 28 GiB, (1, 8) bfp4 14 GiB, (2, 8) bfp8 14 GiB,
+  (4, 8) bfp8 7 GiB. So TP8 on one column needs bfp4 routed experts (lever 2 becomes the enabler; the column-1 run
+  decides), or a (2, 8) instance of 16 chips at bfp8 (DP2 on the Galaxy, descriptor `bh_galaxy_2x8_torus.textproto`
+  prepared). Running meanwhile on column 0: the first 32 layers on (1, 8) bfp8 (the converted prefix fits), base vs
+  the pre-block v3 knobs, for the per-layer TP8 step cost and a 32-layer decode-id gate of the knobs.
