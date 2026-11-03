@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Each unit produces 4 dvalids regardless of unit_dim
-            _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_unpack_stream_set_valid<true, false, PERF_RUN_TYPE>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -247,7 +247,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_math_stream_clear_valid<true, false, PERF_RUN_TYPE>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
