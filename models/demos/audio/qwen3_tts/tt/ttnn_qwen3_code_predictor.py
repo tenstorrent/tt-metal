@@ -35,6 +35,28 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import TtTalkerDecoderLay
 CODE_PREDICTOR_PREFIX = "talker.code_predictor."
 TALKER_CODEC_EMBEDDING = "talker.model.codec_embedding."
 
+# What the codebook heads return. See `codebook_logits` for why it is not bf16.
+HEAD_LOGITS_DTYPE = ttnn.float32
+
+
+def codebook_logits(hidden, weight, compute_config):
+    """One codebook head's logits, in fp32 rather than the input's bf16.
+
+    `ttnn.linear` packs its fp32 accumulator back to the input dtype unless asked for
+    another one. These logits span a few units, where bf16 resolves roughly 0.03 to 0.08 --
+    the same size as the near-ties `tests/pcc/test_code_predictor_pcc.py` reports, so the
+    pack can flip the argmax that picks the next codebook. The accumulation is already
+    fp32 (`fp32_dest_acc_en` in `_compute_config`); asking for fp32 output keeps what it
+    computed instead of rounding it away, for one [1, 1, 2048] row per step.
+
+    The talker's own codec head in `ttnn_qwen3_pipeline.py` already does this, with the
+    measured note that ttnn's defaults cost 0.035 to 0.081 of sampling distance to fp32.
+    The predictor's fifteen heads are picked from the same way and were left on the
+    default. Same reasoning as the Qwen36 MTP drafter's fp32 head, too: its argmax reads
+    the logits directly, and bf16 ties there discarded good drafts.
+    """
+    return ttnn.linear(hidden, weight, dtype=HEAD_LOGITS_DTYPE, compute_kernel_config=compute_config)
+
 
 def plain_rotary_tables(config, length):
     """Standard RoPE cos and sin as [1, 1, T, head_dim].
@@ -187,11 +209,15 @@ class TtCodePredictor:
             return x, intermediates
         return x
 
+    def head_logits(self, row, step):
+        """Codebook `step` logits from one row, in fp32. See `codebook_logits`."""
+        return codebook_logits(row, self.p["lm_head"][step], self.compute_config)
+
     def logits(self, hidden, position):
         """Codebook logits from one position: `lm_head[position - 1]` reads position."""
         length = hidden.shape[1]
         row = ttnn.slice(hidden, [0, position, 0], [1, position + 1, hidden.shape[2]])
-        return ttnn.linear(row, self.p["lm_head"][position - 1], compute_kernel_config=self.compute_config)
+        return self.head_logits(row, position - 1)
 
     def teacher_forced_logits(self, embeddings, cos, sin, mask):
         """All 15 codebook logits in one pass: [1, 15, 2048]."""
@@ -234,6 +260,6 @@ class TtCodePredictor:
             hidden = self(to_device(embeddings), to_device(cos), to_device(sin), to_device(mask))
             # The newest position is the last one, and step k reads it with lm_head[k].
             row = ttnn.slice(hidden, [0, length - 1, 0], [1, length, hidden.shape[2]])
-            logits = ttnn.linear(row, self.p["lm_head"][step], compute_kernel_config=self.compute_config)
+            logits = self.head_logits(row, step)
             codes.append(int(pick(ttnn.to_torch(logits).float().reshape(-1))))
         return codes[1:]

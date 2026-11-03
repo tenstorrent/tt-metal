@@ -29,6 +29,7 @@ from models.demos.audio.qwen3_tts import weights as checkpoint
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor import (
     CODE_PREDICTOR_PREFIX,
     TALKER_CODEC_EMBEDDING,
+    codebook_logits,
     preprocess_projection,
     project,
 )
@@ -417,8 +418,13 @@ class TtCodePredictorCachedDecoder:
             ttnn.copy(self._zero_cache, cache)
 
     def _head(self, hidden, step):
-        """Codebook logits for this step, from its own output head."""
-        return ttnn.linear(hidden, self.p["lm_head"][step], compute_kernel_config=self.compute_config)
+        """Codebook logits for this step, from its own output head, kept in fp32.
+
+        This is the only place the shipped loop reads logits, and it picks a codebook
+        straight off them, so the bf16 pack `ttnn.linear` defaults to is the wrong default
+        here. See `codebook_logits`.
+        """
+        return codebook_logits(hidden, self.p["lm_head"][step], self.compute_config)
 
     def _run(self, position):
         """One traced position, over whatever `_in` now holds."""

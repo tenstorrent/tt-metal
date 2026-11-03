@@ -253,7 +253,10 @@ def test_cached_predictor_tracks_the_uncached_graph(device):
         cos, sin, mask = plain.host_inputs(count)
         hidden = plain(*(to_device(device, tensor) for tensor in (embeddings, cos, sin, mask)))
         row = ttnn.slice(hidden, [0, count - 1, 0], [1, count, hidden.shape[2]])
-        logits = ttnn.to_torch(ttnn.linear(row, plain.p["lm_head"][step])).float().reshape(-1)
+        # The model's own head, not a bare `ttnn.linear`: the bare call takes ttnn's default
+        # compute config and bf16 output, so this "uncached path" would be a different head
+        # from the one the cached decoder is asked to match.
+        logits = ttnn.to_torch(plain.head_logits(row, step)).float().reshape(-1)
         reference_logits.append(logits)
         reference_codes.append(int(logits.argmax()))
         codes.append(reference_codes[-1])

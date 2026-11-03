@@ -219,7 +219,11 @@ def test_greedy_decode_tracks_the_reference_step_by_step(device, frame):
         cos, sin, mask = model.host_inputs(length)
         hidden_states = model(*(_to_device(device, t) for t in (embeddings, cos, sin, mask)))
         row = ttnn.slice(hidden_states, [0, length - 1, 0], [1, length, hidden_states.shape[2]])
-        device_logits = ttnn.to_torch(ttnn.linear(row, model.p["lm_head"][step])).float().reshape(-1)
+        # Through the model's own head, not a bare `ttnn.linear`: that would use the default
+        # compute config and bf16 output, measuring a head the pipeline never runs.
+        logits = model.head_logits(row, step)
+        assert logits.dtype == ttnn.float32, "the codebook head must keep its fp32 output"
+        device_logits = ttnn.to_torch(logits).float().reshape(-1)
 
         projected = reference.model.small_to_mtp_projection(embeddings)
         reference_hidden = reference.model.model(inputs_embeds=projected).last_hidden_state[:, -1]
