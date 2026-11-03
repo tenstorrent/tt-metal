@@ -15,6 +15,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <internal/kernel_build_options.hpp>
 #include "hostdevcommon/kernel_structs.h"
 
 #include "modulated_deform_conv2d_device_operation.hpp"
@@ -394,6 +395,11 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     compute_config.unpack_to_dest_mode[geom_kernel_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_config.unpack_to_dest_mode[geom_scratch_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_desc.config = compute_config;
+    // On Wormhole the compiler's replay recordings of the geometry's SFPU loops share the replay
+    // buffer with the LLK's own, which overwrite them, so a loop such as the y0 * W multiply never runs.
+    if (input.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+        compute_desc.defines.emplace_back(tt::tt_metal::internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE, "1");
+    }
 
     uint32_t block_cursor = 0;
     for (uint32_t i = 0; i < cores.size(); ++i) {
