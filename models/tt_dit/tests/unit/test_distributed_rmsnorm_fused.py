@@ -2127,9 +2127,12 @@ _H3_TABLE_TILES = 25  # tile rows of the adaLN tile-row tables (800 rows)
 _H3_PARAMS = [pytest.param((4, 8), _DP_GAL_RING, id="galaxy_tp4_ring")]
 
 
-def _h3_block_inputs(mesh_device, tile_rows: int, *, tile_row_map: bool, in_fp32: bool = False):
+def _h3_block_inputs(
+    mesh_device, tile_rows: int, *, tile_row_map: bool, in_fp32: bool = False, map_entries: int | None = None
+):
     """norm1/norm2 form: x [1,1,rows,5376] and per-token adaLN weight/bias, either full per-token tables
-    or a small tile-row table plus a per-chip map. Returns the device tensors and the fp32 reference."""
+    or a small tile-row table plus a per-chip map (`map_entries` > tile_rows gives a longer map whose
+    prefix is live). Returns the device tensors and the fp32 reference."""
     tp_axis = 0
     rows = tile_rows * 32
     torch.manual_seed(1000 + tile_rows)
@@ -2144,14 +2147,17 @@ def _h3_block_inputs(mesh_device, tile_rows: int, *, tile_row_map: bool, in_fp32
         "map": None,
     }
     if tile_row_map:
-        tmap = torch.randint(0, _H3_TABLE_TILES, (tile_rows,))
+        entries = tile_rows if map_entries is None else map_entries
+        assert entries >= tile_rows, "the map must cover every live tile row"
+        tmap = torch.randint(0, _H3_TABLE_TILES, (entries,))
         out["map"] = from_torch(
-            tmap.to(torch.int32).reshape(1, 1, 1, tile_rows),
+            tmap.to(torch.int32).reshape(1, 1, 1, entries),
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.Layout.ROW_MAJOR,
         )
-        expand = lambda t: t.reshape(-1, 32, _H3_DIM)[tmap].reshape(1, 1, rows, _H3_DIM)  # noqa: E731
+        live = tmap[:tile_rows]
+        expand = lambda t: t.reshape(-1, 32, _H3_DIM)[live].reshape(1, 1, rows, _H3_DIM)  # noqa: E731
         table_w, table_b = expand(table_w), expand(table_b)
     xf = x.float()
     normed = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + NORM_EPS)
@@ -2365,3 +2371,145 @@ def test_h3_dynamic_rows_per_head_rope(mesh_device):
         assert pcc >= 0.997, f"{variant}: pcc={pcc}"
 
     assert_program_cache_flat(mesh_device, run, variants, miss_indices=(len(variants) - 1,))
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_tile_row_map_longer_than_capacity(mesh_device):
+    """A tile-row map longer than the row capacity (the reader copies only the live entries): the first
+    length compiles, the second must hit the same program, both match the reference."""
+    tp_axis = 0
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    norm = DistributedRMSNorm(
+        embedding_dim=_H3_DIM,
+        norm_elementwise_affine=False,
+        mesh_axis=tp_axis,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        row_capacity=_H3_ROW_CAPACITY,
+    )
+    long_map = _H3_ROW_CAPACITY // 32 + 130
+    variants = [_H3_TILE_ROWS[0], _H3_TILE_ROWS[1]]
+    inputs = {t: _h3_block_inputs(mesh_device, t, tile_row_map=True, map_entries=long_map) for t in variants}
+
+    def run(tile_rows):
+        inp = inputs[tile_rows]
+        out = norm(
+            inp["x"],
+            dynamic_weight=inp["weight"],
+            dynamic_bias=inp["bias"],
+            dynamic_weight_includes_static=True,
+            dynamic_tile_row_map=inp["map"],
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"tile_rows={tile_rows}: non-finite output"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 long map ({long_map} entries) tile_rows={tile_rows} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"tile_rows={tile_rows}: pcc={pcc}"
+
+    assert_program_cache_flat(mesh_device, run, variants)
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_row_capacity_pool_key(mesh_device):
+    """Two DistributedRMSNorm modules on one CCLManager, one pinned at the capacity and one without
+    row_capacity, both at the capacity row count: they take different worker splits (so different stats
+    pools and programs); the pinned module runs first, so a shared pool would be too small for the other."""
+    tp_axis = 0
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    norms = {
+        row_capacity: DistributedRMSNorm(
+            embedding_dim=_H3_DIM,
+            norm_elementwise_affine=False,
+            mesh_axis=tp_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl,
+            row_capacity=row_capacity,
+        )
+        for row_capacity in (_H3_ROW_CAPACITY, None)
+    }
+    top = _H3_ROW_CAPACITY // 32
+    inp = _h3_block_inputs(mesh_device, top, tile_row_map=False)
+
+    def run(row_capacity):
+        out = norms[row_capacity](
+            inp["x"],
+            dynamic_weight=inp["weight"],
+            dynamic_bias=inp["bias"],
+            dynamic_weight_includes_static=True,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"row_capacity={row_capacity}: non-finite output"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 pool key row_capacity={row_capacity} tile_rows={top} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"row_capacity={row_capacity}: pcc={pcc}"
+
+    entries = assert_program_cache_flat(mesh_device, run, [_H3_ROW_CAPACITY, None], miss_indices=(1,))
+    assert entries == 2, f"expected one program per row_capacity mode, got {entries}"
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_batched_rope_hit_rejects_unaligned(mesh_device, expect_error):
+    """Batched RMSNorm + fused RoPE under row_capacity: a tile-aligned N compiles the program; an unaligned
+    N of the same batch shares its row-free key, so the cache hit must refuse it as the miss does."""
+    tp_axis, tp = 0, 4
+    dim, head_dim, batch, links = 1024, 128, 2, 2
+    nh_dev = (dim // tp) // head_dim  # head-split output, as in test_rmsnorm_batched_rope_corr
+    capacity = batch * 64
+    trans = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+    ccl = CCLManager(mesh_device=mesh_device, num_links=links, topology=ttnn.Topology.Ring)
+    sem = ccl.get_ag_ping_pong_semaphore(tp_axis)
+
+    def build(rows):
+        torch.manual_seed(rows)
+        x = bf16_tensor(
+            torch.randn(1, batch, rows, dim, dtype=torch.bfloat16), device=mesh_device, mesh_axis=tp_axis, shard_dim=-1
+        )
+        cos_f, sin_f = stack_cos_sin(torch.randn(1, rows, 1, head_dim // 2), torch.randn(1, rows, 1, head_dim // 2))
+        cos = from_torch(cos_f.permute(0, 2, 1, 3), device=mesh_device, dtype=ttnn.float32)
+        sin = from_torch(sin_f.permute(0, 2, 1, 3), device=mesh_device, dtype=ttnn.float32)
+        return x, cos, sin
+
+    aligned, unaligned = build(64), build(33)
+    pob = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+        aligned[0],
+        tp_axis,
+        mesh_device,
+        num_heads_per_device=nh_dev,
+        num_links=links,
+        transformation_mat=trans,
+        rope_cos=aligned[1],
+        rope_sin=aligned[2],
+        row_capacity=capacity,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    def run(x, cos, sin):
+        return ttnn.experimental.dit_fused_distributed_rmsnorm(
+            x,
+            tp_axis,
+            mesh_device,
+            sem,
+            topology=ttnn.Topology.Ring,
+            epsilon=NORM_EPS,
+            num_heads_per_device=nh_dev,
+            transformation_mat=trans,
+            rope_cos=cos,
+            rope_sin=sin,
+            persistent_output_buffer=pob,
+            num_preferred_links=links,
+            row_capacity=capacity,
+        )
+
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    out = run(*aligned)
+    ttnn.synchronize_device(mesh_device)
+    assert torch.isfinite(_gather(out, tp_axis)).all(), "aligned batched RoPE: non-finite output"
+    assert mesh_device.num_program_cache_entries() == 1
+    with expect_error(RuntimeError, "Batched fused RoPE requires input N"):
+        run(*unaligned)
+    assert mesh_device.num_program_cache_entries() == 1, "the refused call must not add a program"
