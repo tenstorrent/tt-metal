@@ -146,6 +146,8 @@ void AllocatorImpl::verify_safe_allocation() const {
 
 DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // Read under mutex_, so the allocation cannot straddle a generation change. See lifetime().
+    buffer->impl().allocation_generation_ = lifetime_->load(std::memory_order_relaxed);
     DeviceAddr address = 0;
     auto size = buffer->aligned_size();
     auto page_size = buffer->aligned_page_size();
@@ -320,6 +322,12 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
 
 void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // clear(), deallocate_buffers() or override_state() already released this allocation, and its address range may
+    // belong to a newer buffer by now.
+    const auto& generation = buffer->impl().allocation_generation_;
+    if (!generation || *generation != lifetime_->load(std::memory_order_relaxed)) {
+        return;
+    }
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
 
@@ -353,8 +361,19 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     }
 }
 
+void AllocatorImpl::end_all_allocations() {
+    // Advances the generation, but never past BufferImpl::kAllocatorDestroyed: once stored, it is final.
+    auto generation = lifetime_->load(std::memory_order_relaxed);
+    while (generation != BufferImpl::kAllocatorDestroyed &&
+           !lifetime_->compare_exchange_weak(generation, generation + 1, std::memory_order_relaxed)) {
+    }
+    // The Buffers are not told; they must not stay listed, since nothing would remove them.
+    allocated_buffers_.clear();
+}
+
 void AllocatorImpl::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
+    end_all_allocations();
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
@@ -406,16 +425,22 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_r
     return state.allocated_regions;
 }
 
-void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
+void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size, const Buffer& backing) {
+    // Live until the mesh allocator releases the allocation, which a bulk release does without unmirroring it.
+    BankManager::MirrorHolder holder{
+        .id = backing.unique_id(),
+        .live = [lifetime = backing.impl().allocator_lifetime_, generation = backing.impl().allocation_generation_] {
+            return BufferImpl::allocation_live(*lifetime, generation);
+        }};
     std::lock_guard<std::mutex> lock(mutex_);
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    l1_manager_->mark_allocated(AllocatorID{0}, address, size);
+    l1_manager_->mark_allocated(AllocatorID{0}, address, size, std::move(holder));
 }
 
-void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
+void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address, const Buffer& backing) {
     std::lock_guard<std::mutex> lock(mutex_);
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    l1_manager_->mark_deallocated(AllocatorID{0}, address);
+    l1_manager_->mark_deallocated(AllocatorID{0}, address, backing.unique_id());
 }
 
 std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
@@ -674,6 +699,7 @@ DeviceAddr AllocatorImpl::get_dram_deletion_high_water_mark() const {
 
 void AllocatorImpl::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    end_all_allocations();
     dram_manager_->clear();
     l1_manager_->clear();
     l1_small_manager_->clear();
@@ -692,6 +718,9 @@ void AllocatorConfig::reset() {
 }
 
 AllocatorImpl::~AllocatorImpl() {
+    // Ends the allocation of every surviving buffer. Relaxed suffices because teardown is single-threaded, or ordered
+    // before any later use of those buffers by a happens-before handoff (such as a thread join).
+    lifetime_->store(BufferImpl::kAllocatorDestroyed, std::memory_order_relaxed);
     if (tracking_enabled_) {
         unregister_traceback_allocator(this);
     }
@@ -761,7 +790,7 @@ void AllocatorImpl::override_state(const AllocatorState& state) {
     if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
         this->record_all_deallocations();
     }
-    allocated_buffers_.clear();
+    end_all_allocations();
 
     // Apply state for each buffer type
     for (const auto& [buffer_type, type_state] : state.get_states_per_buffer_type()) {

@@ -9,6 +9,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -56,7 +57,16 @@ public:
 
     std::shared_ptr<Buffer> view(Buffer& self, const BufferRegion& region);
 
-    bool is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED; }
+    bool is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED && allocation_live(); }
+    // False once the allocator is destroyed or has released the allocation this buffer holds
+    // (AllocatorImpl::lifetime()).
+    bool allocation_live() const { return allocation_live(*allocator_lifetime_, allocation_generation_); }
+    static bool allocation_live(const std::atomic<std::uint64_t>& lifetime, std::optional<std::uint64_t> generation) {
+        const std::uint64_t current = lifetime.load(std::memory_order_relaxed);
+        return current != kAllocatorDestroyed && (!generation || *generation == current);
+    }
+    // The value of AllocatorImpl::lifetime() once its allocator is destroyed; no generation reaches it.
+    static constexpr std::uint64_t kAllocatorDestroyed = std::numeric_limits<std::uint64_t>::max();
     HalMemType memory_type() const;
     bool is_valid_region(const BufferRegion& region) const;
     bool is_valid_partial_region(const BufferRegion& region) const;
@@ -86,6 +96,12 @@ public:
 
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
     AllocatorImpl* allocator_ = nullptr;
+    // See AllocatorImpl::lifetime(). Only allocate_buffer() sets the generation; buffers without an allocation have
+    // none.
+    std::shared_ptr<const std::atomic<std::uint64_t>> allocator_lifetime_;
+    std::optional<std::uint64_t> allocation_generation_;
+    // device_->id(), for cleanup that runs when device_ may be gone.
+    int device_id_ = 0;
 
     AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     bool hooked_allocation_ = false;

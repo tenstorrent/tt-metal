@@ -41,12 +41,18 @@ public:
     static std::vector<uint64_t> snapshot(int device_id);
 };
 
-// Padding regions [logical_end, physical_end) declared via emule::register_logical_size.
+// Padding regions [logical_end, physical_end) declared via emule::register_logical_size, one per start. `owner` is
+// the Buffer that set the region last; remove() erases a region only for its owner.
 class LiveL1PaddingRanges {
 public:
-    static void set(int device_id, uint32_t start, uint32_t logical_end, uint32_t physical_end);
+    static void set(int device_id, uint32_t start, uint32_t logical_end, uint32_t physical_end, uint64_t owner);
     static void clear(int device_id, uint32_t start);
+    static void remove(int device_id, uint64_t owner);
     static std::vector<uint64_t> snapshot(int device_id);
 };
+
+// Removes what `owner` registered on the device: its L1 or DRAM range and its padding region. Until anything has
+// registered, it returns without touching the registries, so buffers on hardware never reach them.
+void remove_owner(int device_id, uint64_t owner);
 
 }  // namespace tt::tt_metal::emule

@@ -99,7 +99,7 @@ void register_logical_size(const Buffer& buffer, DeviceAddr logical_size) {
         LiveL1PaddingRanges::clear(buffer.device()->id(), start);
     } else {
         uint32_t logical_end = static_cast<uint32_t>(buffer.address() + logical_size);
-        LiveL1PaddingRanges::set(buffer.device()->id(), start, logical_end, physical_end);
+        LiveL1PaddingRanges::set(buffer.device()->id(), start, logical_end, physical_end, buffer.unique_id());
     }
 }
 

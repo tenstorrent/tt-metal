@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -140,14 +141,15 @@ public:
     DeviceAddr get_dram_allocation_high_water_mark() const;
     DeviceAddr get_dram_deletion_high_water_mark() const;
 
-    // what does clear even mean on an allocator???
+    // Releases every allocation and resets the bank managers.
     void clear();
 
     // AllocatorState Methods
     // Extracts the current state of the allocator.
     AllocatorState extract_state() const;
 
-    // Overrides the current state with the given state, deallocating all of existing buffers.
+    // Overrides the current state with the given state, deallocating all of existing buffers (their allocations end
+    // as in deallocate_buffers()).
     void override_state(const AllocatorState& state);
 
     // Get allocated ranges from this allocator's L1 per-bank sub-allocator.
@@ -156,9 +158,9 @@ public:
         BankManager::AllocatorDependencies::AllocatorID allocator_id) const;
 
     // Mirror a lockstep allocation (from the mesh-level allocator) into this allocator's lockstep sub-allocator.
-    // This marks the region as occupied so per-bank allocators avoid it.
-    void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
-    void unmirror_lockstep_allocation(DeviceAddr address);
+    // This marks the region as occupied so per-bank allocators avoid it, while `backing` holds the mesh allocation.
+    void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size, const Buffer& backing);
+    void unmirror_lockstep_allocation(DeviceAddr address, const Buffer& backing);
 
     // Device-global L1 arena for allocations that outlive individual programs.
     PersistentL1Arena& persistent_l1() { return persistent_l1_; }
@@ -178,7 +180,12 @@ protected:
 
 private:
     friend class distributed::MeshDeviceImpl;
+    friend class BufferImpl;
     friend std::unordered_set<size_t> get_all_unsafe_tracked_ids();
+
+    // Shared with this allocator's buffers, which may outlive it (#57381). The allocation generation, advanced by
+    // clear(), deallocate_buffers() and override_state(); BufferImpl::kAllocatorDestroyed once this is destroyed.
+    std::shared_ptr<const std::atomic<std::uint64_t>> lifetime() const { return lifetime_; }
 
     void register_active_trace(SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void unregister_active_trace(SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
@@ -193,8 +200,13 @@ private:
     void retire_buffer_if_unreferenced(size_t buffer_unique_id);
     void clear_trace_allocation_state();
     bool in_corruptible_allocation_scope() const;
+    // Ends every allocation at once; mutex_ must be held. See lifetime().
+    void end_all_allocations();
 
     mutable std::mutex mutex_;
+
+    // See lifetime(). Created once; the generation changes only under mutex_, and the destructor ends it first.
+    std::shared_ptr<std::atomic<std::uint64_t>> lifetime_ = std::make_shared<std::atomic<std::uint64_t>>(0);
 
     std::unique_ptr<BankManager> dram_manager_;
     std::unique_ptr<BankManager> l1_manager_;

@@ -6,7 +6,9 @@
 
 #include <buffer_types.hpp>
 #include <stdint.h>
+#include <cstddef>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -145,10 +147,17 @@ public:
     DeviceAddr get_allocation_high_water_mark() const;
     DeviceAddr get_deletion_high_water_mark() const;
 
+    // A mirrored allocation: mark_deallocated() names it by `id`; `live` is false once its allocator released it.
+    struct MirrorHolder {
+        std::size_t id = 0;
+        std::function<bool()> live;
+    };
+
     // Cross-allocator mirroring: mark a region as allocated/deallocated in a specific sub-allocator.
     // Used to mirror lockstep allocations from the mesh-level allocator into per-device allocators.
-    void mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size);
-    void mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address);
+    void mark_allocated(
+        AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size, MirrorHolder holder);
+    void mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, std::size_t holder_id);
 
     // AllocatorState Methods
     // Extracts the state of the given allocator.
@@ -188,6 +197,15 @@ private:
 
     // Track allocations per allocator
     ttsl::SmallVector<std::unordered_set<DeviceAddr>> allocated_buffers_{};
+    // Ranges reserved by mark_allocated(), by start address. A borrowed one was already held by an allocation.
+    struct Mirror {
+        DeviceAddr size = 0;
+        bool borrowed = false;
+        std::vector<MirrorHolder> holders;
+    };
+    ttsl::SmallVector<std::map<DeviceAddr, Mirror>> mirrors_{};
+    // At least the size of every mirror, so a scan for overlaps can skip those that start too early.
+    ttsl::SmallVector<DeviceAddr> widest_mirror_{};
     ttsl::SmallVector<std::unique_ptr<allocator::Algorithm>> allocators_{};
 
     // Per-allocator cache of: merged allocated ranges of all other dependent allocators
@@ -221,6 +239,12 @@ private:
 
     // Invalidate caches stored on allocators that depend on the given allocator
     void invalidate_allocated_ranges_cache_for_dependent_allocators(AllocatorDependencies::AllocatorID allocator_id);
+
+    // Drops the holders of mirrors overlapping [begin, end) that are no longer live, and the mirrors left empty.
+    void release_stale_mirrors(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr begin, DeviceAddr end);
+    // Drops a mirror, freeing its range unless it is borrowed.
+    std::map<DeviceAddr, Mirror>::iterator erase_mirror(
+        AllocatorDependencies::AllocatorID allocator_id, std::map<DeviceAddr, Mirror>::iterator it);
 
     // Merge, sort and coalesce the allocated ranges of the given allocators
     std::vector<std::pair<DeviceAddr, DeviceAddr>> merge_allocated_ranges_from(

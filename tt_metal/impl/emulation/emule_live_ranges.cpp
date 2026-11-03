@@ -5,6 +5,7 @@
 #include "emule_live_ranges.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -16,6 +17,9 @@ namespace {
 uint64_t pack(uint32_t start, uint32_t end) {
     return (static_cast<uint64_t>(start) << 32) | static_cast<uint64_t>(end);
 }
+
+// Set by the first owned registration; remove_owner() skips the registries until then.
+std::atomic<bool> any_owned_registration{false};
 
 // Each entry keeps the registering buffer's unique_id so removal erases exactly
 // that registration — never an address match (see the header comment).
@@ -33,6 +37,7 @@ struct OwnedRangeRegistry {
 // Intentional: a device's live-range set stays small (a handful of buffers) and
 // this is a debug-only build, so the simplicity beats an index.
 void add_to(OwnedRangeRegistry& reg, int device_id, uint32_t start, uint32_t end, uint64_t owner) {
+    any_owned_registration.store(true, std::memory_order_relaxed);
     std::lock_guard<std::mutex> g(reg.mu);
     reg.per_device[device_id].push_back(OwnedRange{pack(start, end), owner});
 }
@@ -143,6 +148,7 @@ struct PaddingEntry {
     uint32_t start;
     uint32_t logical_end;
     uint32_t physical_end;
+    uint64_t owner;
 };
 
 struct PaddingRegistry {
@@ -157,7 +163,9 @@ PaddingRegistry& padding_registry() {
 
 }  // namespace
 
-void LiveL1PaddingRanges::set(int device_id, uint32_t start, uint32_t logical_end, uint32_t physical_end) {
+void LiveL1PaddingRanges::set(
+    int device_id, uint32_t start, uint32_t logical_end, uint32_t physical_end, uint64_t owner) {
+    any_owned_registration.store(true, std::memory_order_relaxed);
     auto& reg = padding_registry();
     std::lock_guard<std::mutex> g(reg.mu);
     auto& v = reg.per_device[device_id];
@@ -166,8 +174,9 @@ void LiveL1PaddingRanges::set(int device_id, uint32_t start, uint32_t logical_en
     if (match != v.end()) {
         match->logical_end = logical_end;
         match->physical_end = physical_end;
+        match->owner = owner;
     } else {
-        v.push_back(PaddingEntry{start, logical_end, physical_end});
+        v.push_back(PaddingEntry{start, logical_end, physical_end, owner});
     }
 }
 
@@ -186,6 +195,16 @@ void LiveL1PaddingRanges::clear(int device_id, uint32_t start) {
     }
 }
 
+void LiveL1PaddingRanges::remove(int device_id, uint64_t owner) {
+    auto& reg = padding_registry();
+    std::lock_guard<std::mutex> g(reg.mu);
+    auto it = reg.per_device.find(device_id);
+    if (it == reg.per_device.end()) {
+        return;
+    }
+    std::erase_if(it->second, [owner](const PaddingEntry& e) { return e.owner == owner; });
+}
+
 std::vector<uint64_t> LiveL1PaddingRanges::snapshot(int device_id) {
     auto& reg = padding_registry();
     std::lock_guard<std::mutex> g(reg.mu);
@@ -199,6 +218,15 @@ std::vector<uint64_t> LiveL1PaddingRanges::snapshot(int device_id) {
         out.push_back(pack(e.logical_end, e.physical_end));
     }
     return out;
+}
+
+void remove_owner(int device_id, uint64_t owner) {
+    if (!any_owned_registration.load(std::memory_order_relaxed)) {
+        return;
+    }
+    remove_from(l1_registry(), device_id, owner);
+    remove_from(dram_registry(), device_id, owner);
+    LiveL1PaddingRanges::remove(device_id, owner);
 }
 
 }  // namespace tt::tt_metal::emule

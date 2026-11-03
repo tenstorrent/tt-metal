@@ -363,7 +363,7 @@ void MeshBuffer::initialize_device_buffers() {
         for (const auto& [coord, device_buffer] : buffers_) {
             if (mesh_device->impl().is_local(coord)) {
                 auto* device = mesh_device->impl().get_device(coord);
-                device->allocator_impl()->mirror_lockstep_allocation(address_, alloc_size);
+                device->allocator_impl()->mirror_lockstep_allocation(address_, alloc_size, *backing);
             }
         }
     }
@@ -449,11 +449,12 @@ void MeshBuffer::deallocate() {
             // device_->is_initialized() guard in Buffer::deallocate_impl().
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
+                const Buffer& backing = *std::get<OwnedBufferState>(state_).backing_buffer;
                 for (const auto& [coord, device_buffer] : buffers_) {
                     if (mesh_device->impl().is_local(coord)) {
                         auto* device = mesh_device->impl().get_device(coord);
                         if (device->is_initialized()) {
-                            device->allocator_impl()->unmirror_lockstep_allocation(address_);
+                            device->allocator_impl()->unmirror_lockstep_allocation(address_, backing);
                         }
                     }
                 }

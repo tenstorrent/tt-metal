@@ -523,6 +523,8 @@ BufferImpl::BufferImpl(
         buffer_distribution_spec_,
         *this->allocator_,
         this->device_);
+    allocator_lifetime_ = allocator_->lifetime();
+    device_id_ = this->device_->id();
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
@@ -714,14 +716,19 @@ void BufferImpl::deallocate(Buffer& self) {
             // Mirror the Buffer::create registration; non-owning buffers skip deallocate_impl().
             // Guard on status: the explicit-call + destructor double-deallocate must remove once.
             if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0) {
-                if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), unique_id_);
-                } else if (buffer_type_ == BufferType::DRAM) {
-                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), unique_id_);
-                }
+                tt::tt_metal::emule::remove_owner(device_id_, unique_id_);
             }
             allocation_status_ = AllocationStatus::DEALLOCATED;
         }
+        return;
+    }
+    // The allocator is gone, so allocator_ and device_ may dangle. The graph tracker is not told: it reads both.
+    if (allocator_lifetime_->load(std::memory_order_relaxed) == kAllocatorDestroyed) {
+        if (allocation_status_ == AllocationStatus::ALLOCATED && !hooked_allocation_ && size_ != 0) {
+            // Keyed by this buffer's id, so what a replacement registered at the same address stays.
+            tt::tt_metal::emule::remove_owner(device_id_, unique_id_);
+        }
+        allocation_status_ = AllocationStatus::DEALLOCATED;
         return;
     }
     this->deallocate_impl(self);
@@ -735,7 +742,8 @@ void BufferImpl::deallocate_impl(Buffer& self) {
     if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(&self);
-        if (!GraphTracker::instance().hook_deallocate(&self) && !hooked_allocation_) {
+        const bool hooked = GraphTracker::instance().hook_deallocate(&self) || hooked_allocation_;
+        if (!hooked && allocation_live()) {
 #if defined(TRACY_ENABLE)
             if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
                     .rtoptions()
@@ -755,6 +763,10 @@ void BufferImpl::deallocate_impl(Buffer& self) {
                 }
             }
             allocator_->deallocate_buffer(&self);
+        } else if (!hooked) {
+            // Released by a bulk release: its address and sub-device manager may be another buffer's now, so only the
+            // emulator records keyed by its id go.
+            tt::tt_metal::emule::remove_owner(device_id_, unique_id_);
         }
 
         // Capture deallocates here instead of higher levels.

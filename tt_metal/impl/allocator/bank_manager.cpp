@@ -124,6 +124,8 @@ void BankManager::init_allocators(DeviceAddr size_bytes, uint32_t alignment_byte
     const uint32_t n = allocator_dependencies_.num_allocators();
     allocators_.resize(n);
     allocated_buffers_.resize(n);
+    mirrors_.resize(n);
+    widest_mirror_.resize(n);
     allocated_ranges_cache_.resize(n);
 
     for (uint32_t allocator_id = 0; allocator_id < n; ++allocator_id) {
@@ -631,6 +633,7 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDe
 
     alloc->deallocate(address);
     allocated_buffers_[allocator_id.get()].erase(address);
+    mirrors_[allocator_id.get()].erase(address);
     // Deallocation in this allocator invalidates caches in allocators that depend on this allocator
     this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
 }
@@ -643,6 +646,8 @@ void BankManager::deallocate_all() {
             alloc->deallocate(addr);
         }
         allocated_buffers_[allocator_id.get()].clear();
+        mirrors_[allocator_id.get()].clear();
+        widest_mirror_[allocator_id.get()] = 0;
         allocated_ranges_cache_[allocator_id.get()].reset();
     }
 }
@@ -653,6 +658,8 @@ void BankManager::clear() {
             allocators_[allocator_id.get()]->clear();
             allocated_buffers_[allocator_id.get()].clear();
         }
+        mirrors_[allocator_id.get()].clear();
+        widest_mirror_[allocator_id.get()] = 0;
         allocated_ranges_cache_[allocator_id.get()].reset();
     }
 }
@@ -660,6 +667,8 @@ void BankManager::clear() {
 BankManager& BankManager::operator=(BankManager&& that) noexcept {
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = std::move(that.allocated_buffers_);
+    mirrors_ = std::move(that.mirrors_);
+    widest_mirror_ = std::move(that.widest_mirror_);
     bank_id_to_bank_offset_ = std::move(that.bank_id_to_bank_offset_);
     allocators_ = std::move(that.allocators_);
     interleaved_address_limit_ = that.interleaved_address_limit_;
@@ -836,11 +845,23 @@ AllocatorState::BufferTypeState BankManager::extract_merged_state() const {
     return merged_state;
 }
 
-void BankManager::mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size) {
+void BankManager::mark_allocated(
+    AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size, MirrorHolder holder) {
     auto* alloc = get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
-    // Skip if this address is already marked (e.g., multiple devices mirroring the same address)
+    widest_mirror_[allocator_id.get()] = std::max(widest_mirror_[allocator_id.get()], size);
+    // A bulk release of mirrored allocations does not unmark them, so their ranges may have been reissued.
+    release_stale_mirrors(allocator_id, address, address + size);
+    auto& mirrors = mirrors_[allocator_id.get()];
+    // Already marked (e.g., multiple devices mirroring the same address): the last holder to unmark frees it.
+    if (auto it = mirrors.find(address); it != mirrors.end()) {
+        it->second.holders.push_back(std::move(holder));
+        return;
+    }
+    // Held by an allocation of this allocator, which frees it.
     if (allocated_buffers_[allocator_id.get()].contains(address)) {
+        auto& borrowed = mirrors.emplace(address, Mirror{.size = size, .borrowed = true}).first->second;
+        borrowed.holders.push_back(std::move(holder));
         return;
     }
     auto stats = alloc->get_statistics();
@@ -858,19 +879,52 @@ void BankManager::mark_allocated(AllocatorDependencies::AllocatorID allocator_id
         stats.total_free_bytes,
         stats.largest_free_block_bytes);
     allocated_buffers_[allocator_id.get()].insert(address);
+    auto& mirror = mirrors.emplace(address, Mirror{.size = size}).first->second;
+    mirror.holders.push_back(std::move(holder));
     invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
 }
 
-void BankManager::mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address) {
+void BankManager::mark_deallocated(
+    AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, std::size_t holder_id) {
     auto* alloc = get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
-    // Skip if this address is not marked (e.g., was deduplicated during mirroring)
-    if (!allocated_buffers_[allocator_id.get()].contains(address)) {
+    auto& mirrors = mirrors_[allocator_id.get()];
+    auto it = mirrors.find(address);
+    // Skip if this holder no longer holds the address (e.g., a bulk release here, or a later mark, freed it)
+    if (it == mirrors.end()) {
         return;
     }
-    alloc->deallocate(address);
-    allocated_buffers_[allocator_id.get()].erase(address);
-    invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+    auto& holders = it->second.holders;
+    if (auto holder = std::ranges::find(holders, holder_id, &MirrorHolder::id); holder != holders.end()) {
+        holders.erase(holder);
+        if (holders.empty()) {
+            erase_mirror(allocator_id, it);
+        }
+    }
+}
+
+void BankManager::release_stale_mirrors(
+    AllocatorDependencies::AllocatorID allocator_id, DeviceAddr begin, DeviceAddr end) {
+    auto& mirrors = mirrors_[allocator_id.get()];
+    // A mirror starting at or below begin - widest_mirror_ ends at or below begin.
+    for (auto it = mirrors.lower_bound(begin - std::min(begin, widest_mirror_[allocator_id.get()]));
+         it != mirrors.end() && it->first < end;) {
+        auto& holders = it->second.holders;
+        if (it->first + it->second.size > begin) {
+            std::erase_if(holders, [](const MirrorHolder& h) { return !h.live(); });
+        }
+        it = holders.empty() ? erase_mirror(allocator_id, it) : std::next(it);
+    }
+}
+
+std::map<DeviceAddr, BankManager::Mirror>::iterator BankManager::erase_mirror(
+    AllocatorDependencies::AllocatorID allocator_id, std::map<DeviceAddr, Mirror>::iterator it) {
+    if (!it->second.borrowed) {
+        get_allocator_from_id(allocator_id)->deallocate(it->first);
+        allocated_buffers_[allocator_id.get()].erase(it->first);
+        invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+    }
+    return mirrors_[allocator_id.get()].erase(it);
 }
 
 void BankManager::apply_state(
@@ -927,6 +981,8 @@ void BankManager::override_state(
         alloc->deallocate(addr);
     }
     allocated_buffers_[target_allocator_id.get()].clear();
+    mirrors_[target_allocator_id.get()].clear();
+    widest_mirror_[target_allocator_id.get()] = 0;
     allocated_ranges_cache_[target_allocator_id.get()].reset();
 
     // Apply state
