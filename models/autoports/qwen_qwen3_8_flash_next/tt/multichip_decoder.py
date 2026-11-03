@@ -666,7 +666,11 @@ class ParallelMoE:
             flat = ttnn.to_layout(
                 ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, 1, b, 2560)), ttnn.TILE_LAYOUT
             )
-            result = self.ops.scatter_reduce(self.group_packed(flat))
+            few = getattr(self, "single_token", None) is not None and b <= self.single_token.max_rows
+            if few:
+                from .moe_decode import group_single
+
+            result = self.ops.scatter_reduce(group_single(self, flat) if few else self.group_packed(flat))
             return ttnn.to_layout(
                 ttnn.reshape(ttnn.to_layout(result, ttnn.ROW_MAJOR_LAYOUT), (1, b, 1, 640)), ttnn.TILE_LAYOUT
             )
