@@ -51,7 +51,8 @@ ttnn::Tensor untilize_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_rows = false) {
     // If the input tensor is not sharded, and logical shape != padded shape, then unpad the input tensor.
     // conv op_slicing logic requires the padding information to be present in the input tensor.
     if (!input_tensor.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
@@ -107,7 +108,8 @@ ttnn::Tensor untilize_native(
             fp32_dest_acc_en,
             sub_core_grids,
             enough_space_height,
-            pf_type);
+            pf_type,
+            runtime_rows);
     };
 
     return operations::data_movement::build_ndiml_untilize(base_untilize)(input_tensor);
@@ -119,8 +121,9 @@ ttnn::Tensor untilize_force_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return untilize_native(input_tensor, memory_config, use_multicore, sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_rows) {
+    return untilize_native(input_tensor, memory_config, use_multicore, sub_core_grids, runtime_rows);
 }
 
 ttnn::Tensor untilize_force_codegen(
