@@ -183,3 +183,29 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   `gate84_B4_mhcv3`): the base ids must equal the frozen tip's line (10:58 `e2e_8x4_B4_postmcast`, S = 16: the KDA
   reader prologue change moves no rounding), the knobs are judged by the chain pcc against 0.86 at S = 16, the
   first-token match and the step (44.23 ms - ~3 ms expected).
+* 22:45 **(1, 8) per-op profiles** (`tracy_l4_b4_1x8`, `tracy_l3_b4_1x8`, column 0, 4 users, bfp8): KDA+MoE layer
+  1.228 ms (0.934 on the 8x4): the expert stream op takes **626 us** for ~4 full experts per chip (2.2x its byte
+  floor; 36 full experts per chip instead of 72 eighth-slices) and the per-chip expert count is unbalanced (chips 5-7
+  idle 0.58 ms in the MoE reduce-scatter); the row collectives are gone (-187 us) and the attention shards halve
+  (126 vs 188 us) but the two 8-ring all-reduces cost 67 + 143 us. DSA+MoE layer 1.57 ms (1.316): experts 362 +
+  the reduce-scatter wait 319. The (1, 8) bfp4 45-layer chain (`tp8_e2e_1x8_B4_bfp4`): fits, **45.05 ms** (22.2
+  tok/s/u), 128-token chain pcc **0.78** (0.947 at bfp8 on the 8x4): no step gain and an accuracy loss. Levers 1
+  and 2 are closed: the (8, 4) hybrid at 32 users stays the serving layout and the program-count levers carry the
+  target there.
+* 23:06 **pre-block v3 on the full mesh** (`gate84_B4_base` / `gate84_B4_mhcv3`, (8, 4) 45 layers, 4 users per
+  row): base (the perf branch's KDA reader prologue) is id-identical to the frozen tip (16 / 16 ids, chain pcc
+  0.946814, first token match, 44.36 ms); the v3 knobs give **41.18 ms (24.3 tok/s/u, -3.2 ms as predicted)** but
+  the 128-token chain pcc 0.9185 and a different first token: one knob moves the rounding too far (suspected
+  `x_parts=1`, which drops the 3-way bf16 split of the projection operands). A/B running: `gate84_B4_dst`
+  (x_parts 3 + dest Sinkhorn) and `gate84_B4_xp1` (x_parts 1 + fused Sinkhorn); the accurate knob flips its
+  default, the other stays off.
+* 23:15 **lever 3, first program: the row exchange** (`custom_ops/row_exchange`, draft, device test pending the
+  A/B): the hybrid MoE's gather (untilize + all_broadcast + concat + tilize for x and the routing: 8 ops, 113 us) and
+  combine (reduce-scatter + all-gather + selector matmul: 74 us) each as ONE generic op with in-program fabric
+  unicasts between the rows of a column (after the DeepSeek-V3 b1 fused ops' protocol in this tree:
+  `ttnn.setup_fabric_connection` per routing direction, `WorkerToFabricEdmSender`, fused write + atomic increment
+  into a persistent per-instance receive staging in DRAM and a global arrival semaphore). One exchange core per chip
+  sends 7 peers x 3 packets of 12 KB; 9 worker cores untilize / cut / assemble / tilize their 512-column chunk (the
+  reduce sums the 8 rows' pieces by one exact selector matmul in fp32 DST). Knobs `GLM53_HYBRID_GATHER=fabric`,
+  `GLM53_HYBRID_COMBINE=fabric` (`tt/moe.py`, defaults unchanged). Expected: 187 -> ~30 us per layer, about -7 ms
+  per step.

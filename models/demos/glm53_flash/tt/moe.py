@@ -174,8 +174,8 @@ def expert_layout_from_env(env=None) -> tuple[bool, bool, str]:
 # trace replays the mode it was captured in; no host ops, no per-call host state.
 HYBRID_GATHER_ENV = "GLM53_HYBRID_GATHER"
 HYBRID_COMBINE_ENV = "GLM53_HYBRID_COMBINE"
-HYBRID_GATHER_MODES = ("padded", "compact")
-HYBRID_COMBINE_MODES = ("rs", "allreduce", "allreduce_ccl")
+HYBRID_GATHER_MODES = ("padded", "compact", "fabric")
+HYBRID_COMBINE_MODES = ("rs", "allreduce", "allreduce_ccl", "fabric")
 
 
 def hybrid_gather_mode(env=None) -> str:
@@ -212,7 +212,7 @@ def decode_glue_modes(rows: int, T: int, *, has_idx: bool, in_prefill: bool, env
     decode_shape = rows > 1 and not has_idx and T < t_max and not in_prefill
     if not decode_shape:
         return False, "rs"
-    return hybrid_gather_mode(env) == "compact", hybrid_combine_mode(env)
+    return hybrid_gather_mode(env) != "padded", hybrid_combine_mode(env)  # compact-class: compact or fabric
 
 
 def row_selector_host(rows: int, T: int, T_gathered: int) -> torch.Tensor:
@@ -872,6 +872,7 @@ class TtRoutedExperts(LightweightModule):
         self.expert_down_dtype = expert_down_dtype
         self.dense = dense
         self.stream = stream
+        self._row_exchange_ops: dict = {}  # the fabric row-exchange ops by (mode, widths, T), built on first use
         assert not (dense and stream), "dense and stream are alternatives"
         ep, tpr = self.mesh.cols, self.mesh.rows
         assert self.E % ep == 0 and self.I % (tpr * TILE) == 0, (self.E, self.I, ep, tpr)
@@ -1898,7 +1899,9 @@ class TtRoutedExperts(LightweightModule):
             self.mesh.rows, T, has_idx=idx is not None, in_prefill=self.mesh.in_prefill
         )
         if self.mesh.rows > 1:
-            if compact_gather:
+            if compact_gather and hybrid_gather_mode() == "fabric":
+                x, dense_w = self._gather_rows_fabric(x, dense_w, l1=self._stream_x_into_l1(self.mesh.rows * T))
+            elif compact_gather:
                 x = self._gather_rows_compact(x, l1=self._stream_x_into_l1(self.mesh.rows * T))
                 dense_w = self._gather_rows_compact(dense_w)
             else:
@@ -1914,13 +1917,49 @@ class TtRoutedExperts(LightweightModule):
             if idx is not None:
                 ttnn.deallocate(idx)
                 ttnn.deallocate(w)
-            if combine != "rs" and y.shape[-2] == self.mesh.rows * T:
+            if combine == "fabric" and y.shape[-2] == self.mesh.rows * T:
+                y = self._combine_rows_fabric(y, T)
+            elif combine != "rs" and y.shape[-2] == self.mesh.rows * T:
                 y = self._combine_rows_allreduce(y, T, ccl=combine == "allreduce_ccl")
             else:
                 y = self.mesh.reduce_scatter_rows(y, dim=2)
         return y
 
     # ------------------------------------------------------- decode row glue at T < 32 (H1 / H2 knobs)
+    def _row_exchange(self, mode: str, widths: tuple[int, ...], T: int):
+        """The fabric row-exchange op (``custom_ops/row_exchange``) of this placement for ``(mode, widths, T)``,
+        built on its first (eager) use: its receive staging and arrival semaphore are persistent device allocations
+        (one per instance, the same address on every chip), so the first use precedes any trace capture (the
+        model's eager warm-up steps)."""
+        key = (mode, tuple(int(w) for w in widths), int(T))
+        op = self._row_exchange_ops.get(key)
+        if op is None:
+            from models.demos.glm53_flash.custom_ops.row_exchange.op import RowExchange
+
+            assert not self.mesh.allocations_frozen[0], f"row exchange {key} first used under live traces"
+            op = self._row_exchange_ops[key] = RowExchange(self.mesh, mode, list(key[1]), key[2])
+        return op
+
+    def _gather_rows_fabric(self, x: ttnn.Tensor, dense_w: ttnn.Tensor, l1: bool = False):
+        """``GLM53_HYBRID_GATHER=fabric``: x [1,1,T,H] and the routing [1,1,T,E] (bf16 TILE, this row's T users)
+        gathered over the mesh rows by ONE program (in-program fabric unicasts between the rows of the column) into
+        [1,1,32,W] tiles ordered like the compact gather (row r * T + t = mesh row r's user t, the rest zero);
+        ``l1``: both outputs L1 interleaved (the stream block op's input placement)."""
+        T = x.shape[-2]
+        op = self._row_exchange("gather", (int(x.padded_shape[-1]), int(dense_w.padded_shape[-1])), T)
+        outs = op.allocate_outputs(ttnn.L1_MEMORY_CONFIG if l1 else ttnn.DRAM_MEMORY_CONFIG)
+        xg, wg = op([x, dense_w], outs)
+        return xg, wg
+
+    def _combine_rows_fabric(self, y: ttnn.Tensor, T: int) -> ttnn.Tensor:
+        """``GLM53_HYBRID_COMBINE=fabric``: the row combine of y [1,1,rows*T,H] (row r * T + t = this chip's
+        contribution to row r's user t) by ONE program: every chip sends each row its T rows, the owner sums the
+        rows' contributions in fp32 DST (one rounding) into [1,1,T,H] (rows past T zero)."""
+        op = self._row_exchange("reduce", (int(y.padded_shape[-1]),), T)
+        (out,) = op([y])
+        ttnn.deallocate(y)
+        return out
+
     def _gather_rows_compact(self, t: ttnn.Tensor, l1: bool = False) -> ttnn.Tensor:
         """``all_gather_rows(t, dim=2)`` of a [1,1,T,W] bf16 TILE decode tensor (T < 32) on its T real rows only:
         untilize to ROW_MAJOR (T pages of 2 W bytes: 8 KB for x, 576 B for the [T, 288] routing, both 64 B

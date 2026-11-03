@@ -618,10 +618,11 @@ def test_moe_contract_intact():
     assert "self.stream_base = (" in src and "fold_base_host(ep, E_loc)" in src
     src = inspect.getsource(M.TtRoutedExperts._build_dispatch_path)
     assert "if self.stream and self._block_source is None:" in src and "raise RuntimeError(" in src
-    assert M.HYBRID_GATHER_MODES == ("padded", "compact") and M.HYBRID_COMBINE_MODES == (
+    assert M.HYBRID_GATHER_MODES == ("padded", "compact", "fabric") and M.HYBRID_COMBINE_MODES == (
         "rs",
         "allreduce",
         "allreduce_ccl",
+        "fabric",
     )
     assert M.STREAM_DISPATCH_MAX_T == 256
 

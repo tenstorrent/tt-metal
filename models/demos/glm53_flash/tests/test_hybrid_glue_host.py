@@ -242,8 +242,9 @@ def test_hybrid_knob_plumbing():
         M.hybrid_gather_mode({"GLM53_HYBRID_GATHER": "padded"}) == "padded"
         and M.hybrid_combine_mode({"GLM53_HYBRID_COMBINE": "rs"}) == "rs"
     )
-    assert M.hybrid_gather_mode({"GLM53_HYBRID_GATHER": "compact"}) == "compact"
-    for v in ("allreduce", "allreduce_ccl"):
+    for v in ("compact", "fabric"):
+        assert M.hybrid_gather_mode({"GLM53_HYBRID_GATHER": v}) == v
+    for v in ("allreduce", "allreduce_ccl", "fabric"):
         assert M.hybrid_combine_mode({"GLM53_HYBRID_COMBINE": v}) == v
     for fn, key in ((M.hybrid_gather_mode, "GLM53_HYBRID_GATHER"), (M.hybrid_combine_mode, "GLM53_HYBRID_COMBINE")):
         try:
@@ -259,6 +260,9 @@ def test_decode_glue_modes_gate():
     assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env=on) == (True, "allreduce")
     assert M.decode_glue_modes(2, 4, has_idx=False, in_prefill=False, env=on) == (True, "allreduce")
     assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (True, "allreduce")  # the defaults
+    fab = {"GLM53_HYBRID_GATHER": "fabric", "GLM53_HYBRID_COMBINE": "fabric"}  # the fabric programs: compact-class
+    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env=fab) == (True, "fabric")
+    assert M.decode_glue_modes(8, 64, has_idx=False, in_prefill=False, env=fab) == (False, "rs")
     off = {"GLM53_HYBRID_GATHER": "padded", "GLM53_HYBRID_COMBINE": "rs"}
     assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env=off) == (
         False,
