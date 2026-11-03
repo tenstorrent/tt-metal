@@ -360,7 +360,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, sp_axis, 
     # attention depends on all of it. The device cache is indexed by rank-local MLA slot and the
     # golden by model layer — the schedule owns that mapping.
     if kvpe is not None:
-        cache, stripes = gather_cache_natural(kvpe.storage, mesh_device, tp_shard_kv)
+        cache, stripes = gather_cache_natural(kvpe.storage, mesh_device, tp_shard_kv, sp_axis=sp_axis)
         positions = blockcyclic_positions(stripes, chunk_len, TOTAL_LEN)
         for slot, model_layer in enumerate(model.schedule.mla_layer_ids[: model.schedule.num_mla_layers]):
             if not trace.has_kv_cache(model_layer):
