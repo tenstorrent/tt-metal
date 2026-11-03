@@ -172,8 +172,665 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     v_endif;
 }
 
+struct SoftplusHandWords {
+    std::uint32_t beta_lo, beta_hi, beta_one, thr_lo, thr_hi, thr_one, brec_lo, brec_hi, brec_one;
+};
+inline SoftplusHandWords softplus_hand_words(std::uint32_t b, std::uint32_t t, std::uint32_t r) {
+    return {
+        TT_OP_SFPLOADI(3, 2, b & 0xFFFF),
+        TT_OP_SFPLOADI(3, 8, b >> 16),
+        TT_OP_SFPLOADI(3, 0, b >> 16),
+        TT_OP_SFPLOADI(3, 2, t & 0xFFFF),
+        TT_OP_SFPLOADI(3, 8, t >> 16),
+        TT_OP_SFPLOADI(3, 0, t >> 16),
+        TT_OP_SFPLOADI(3, 2, r & 0xFFFF),
+        TT_OP_SFPLOADI(3, 8, r >> 16),
+        TT_OP_SFPLOADI(3, 0, r >> 16)};
+}
+template <int D>
+inline void softplus_hand_row_bg(const SoftplusHandWords& w) {
+    TTI_SFPLOAD(1, 0, ADDR_MOD_3, 2 * D);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.beta_lo);
+    asm volatile("" ::: "memory");
+    asm volatile("" ::: "memory");
+    TT_INSN(w.beta_hi);
+    asm volatile("" ::: "memory");
+    TTI_SFPMUL(1, 3, 9, 1, 0);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.thr_lo);
+    asm volatile("" ::: "memory");
+    asm volatile("" ::: "memory");
+    TT_INSN(w.thr_hi);
+    asm volatile("" ::: "memory");
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPMAD(11, 1, 3, 0, 0);
+        TTI_SFPSETSGN(0, 1, 2, 1);
+        TTI_SFPSETCC(0, 0, 0, 4);
+        TTI_SFPMAD(2, 14, 13, 0, 0);
+        TTI_SFPSWAP(0, 1, 9, 1);
+        TTI_SFPMAD(2, 0, 12, 0, 0);
+        TTI_SFPPUSHC(0, 0, 0, 0);
+        TTI_SFPMAD(2, 0, 7, 0, 0);
+        TTI_SFPLOADI(3, 0, 0x40a0);
+        TTI_SFPMAD(2, 0, 6, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 5, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 4, 0, 0);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPADD(10, 1, 0, 0, 0);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPSETCC(0, 2, 0, 0);
+    TTI_SFPMOV(0, 1, 0, 0);
+    TTI_SFPPOPC(0, 0, 0, 0);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.brec_lo);
+    asm volatile("" ::: "memory");
+    asm volatile("" ::: "memory");
+    TT_INSN(w.brec_hi);
+    asm volatile("" ::: "memory");
+    TTI_SFPMUL(0, 3, 9, 0, 0);
+    TTI_SFPNOP;
+    TTI_SFP_STOCH_RND(0, 0, 9, 0, 0, 1);
+    TTI_SFPSTORE(0, 0, ADDR_MOD_3, 2 * D);
+    TTI_SFPENCC(3, 0, 0, 10);
+}
+template <int D>
+inline void softplus_hand_row_bs(const SoftplusHandWords& w) {
+    TTI_SFPLOAD(1, 0, ADDR_MOD_3, 2 * D);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.beta_one);
+    asm volatile("" ::: "memory");
+    TTI_SFPMUL(1, 3, 9, 1, 0);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.thr_one);
+    asm volatile("" ::: "memory");
+    TTI_SFPMAD(11, 1, 3, 0, 0);
+    TTI_SFPSETSGN(0, 1, 2, 1);
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPSETCC(0, 0, 0, 4);
+        TTI_SFPMAD(2, 14, 13, 0, 0);
+        TTI_SFPSWAP(0, 1, 9, 1);
+        TTI_SFPMAD(2, 0, 12, 0, 0);
+        TTI_SFPPUSHC(0, 0, 0, 0);
+        TTI_SFPMAD(2, 0, 7, 0, 0);
+        TTI_SFPLOADI(3, 0, 0x40a0);
+        TTI_SFPMAD(2, 0, 6, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 5, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 4, 0, 0);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPADD(10, 1, 0, 0, 0);
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPMOV(0, 1, 0, 0);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPPOPC(0, 0, 0, 0);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.brec_one);
+    asm volatile("" ::: "memory");
+    TTI_SFPMUL(0, 3, 9, 0, 0);
+    TTI_SFPNOP;
+    TTI_SFP_STOCH_RND(0, 0, 9, 0, 0, 1);
+    TTI_SFPSTORE(0, 0, ADDR_MOD_3, 2 * D);
+    TTI_SFPENCC(3, 0, 0, 10);
+}
+template <int D>
+inline void softplus_hand_row_bo(const SoftplusHandWords& w) {
+    TTI_SFPLOAD(1, 0, ADDR_MOD_3, 2 * D);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.thr_one);
+    asm volatile("" ::: "memory");
+    TTI_SFPMAD(11, 1, 3, 0, 0);
+    TTI_SFPSETSGN(0, 1, 2, 1);
+    TTI_SFPSETCC(0, 0, 0, 4);
+    TTI_SFPMAD(2, 14, 13, 0, 0);
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPSWAP(0, 1, 9, 1);
+        TTI_SFPMAD(2, 0, 12, 0, 0);
+        TTI_SFPPUSHC(0, 0, 0, 0);
+        TTI_SFPMAD(2, 0, 7, 0, 0);
+        TTI_SFPLOADI(3, 0, 0x40a0);
+        TTI_SFPMAD(2, 0, 6, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 5, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 4, 0, 0);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPADD(10, 1, 0, 0, 0);
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPMOV(0, 1, 0, 0);
+        TTI_SFPPOPC(0, 0, 0, 0);
+        TTI_SFP_STOCH_RND(0, 0, 9, 0, 0, 1);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPSTORE(0, 0, ADDR_MOD_3, 2 * D);
+    TTI_SFPENCC(3, 0, 0, 10);
+}
+template <int D>
+inline void softplus_hand_row_bn([[maybe_unused]] const SoftplusHandWords& w) {
+    TTI_SFPLOAD(1, 0, ADDR_MOD_3, 2 * D);
+    TTI_SFPSETSGN(0, 1, 2, 1);
+    TTI_SFPMAD(2, 14, 13, 0, 0);
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPSWAP(0, 1, 9, 1);
+        TTI_SFPMAD(2, 0, 12, 0, 0);
+        TTI_SFPLOADI(3, 0, 0x40a0);
+        TTI_SFPMAD(2, 0, 7, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 6, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 5, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 4, 0, 0);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPADD(10, 1, 0, 0, 0);
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPMOV(0, 1, 0, 0);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFP_STOCH_RND(0, 0, 9, 0, 0, 1);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPSTORE(0, 0, ADDR_MOD_3, 2 * D);
+}
+template <int D>
+inline void softplus_hand_row_fg(const SoftplusHandWords& w) {
+    TTI_SFPLOAD(1, 0, ADDR_MOD_3, 2 * D);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.beta_lo);
+    asm volatile("" ::: "memory");
+    asm volatile("" ::: "memory");
+    TT_INSN(w.beta_hi);
+    asm volatile("" ::: "memory");
+    TTI_SFPMUL(1, 3, 9, 1, 0);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.thr_lo);
+    asm volatile("" ::: "memory");
+    asm volatile("" ::: "memory");
+    TT_INSN(w.thr_hi);
+    asm volatile("" ::: "memory");
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPMAD(11, 1, 3, 0, 0);
+        TTI_SFPSETSGN(0, 1, 2, 1);
+        TTI_SFPSETCC(0, 0, 0, 4);
+        TTI_SFPMAD(2, 14, 13, 0, 0);
+        TTI_SFPSWAP(0, 1, 9, 1);
+        TTI_SFPMAD(2, 0, 12, 0, 0);
+        TTI_SFPPUSHC(0, 0, 0, 0);
+        TTI_SFPMAD(2, 0, 7, 0, 0);
+        TTI_SFPLOADI(3, 0, 0x40a0);
+        TTI_SFPMAD(2, 0, 6, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 5, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 4, 0, 0);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPADD(10, 1, 0, 0, 0);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPSETCC(0, 2, 0, 0);
+    TTI_SFPMOV(0, 1, 0, 0);
+    TTI_SFPPOPC(0, 0, 0, 0);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.brec_lo);
+    asm volatile("" ::: "memory");
+    asm volatile("" ::: "memory");
+    TT_INSN(w.brec_hi);
+    asm volatile("" ::: "memory");
+    TTI_SFPMUL(0, 3, 9, 0, 0);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(0, 0, ADDR_MOD_3, 2 * D);
+    TTI_SFPENCC(3, 0, 0, 10);
+}
+template <int D>
+inline void softplus_hand_row_fs(const SoftplusHandWords& w) {
+    TTI_SFPLOAD(1, 0, ADDR_MOD_3, 2 * D);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.beta_one);
+    asm volatile("" ::: "memory");
+    TTI_SFPMUL(1, 3, 9, 1, 0);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.thr_one);
+    asm volatile("" ::: "memory");
+    TTI_SFPMAD(11, 1, 3, 0, 0);
+    TTI_SFPSETSGN(0, 1, 2, 1);
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPSETCC(0, 0, 0, 4);
+        TTI_SFPMAD(2, 14, 13, 0, 0);
+        TTI_SFPSWAP(0, 1, 9, 1);
+        TTI_SFPMAD(2, 0, 12, 0, 0);
+        TTI_SFPPUSHC(0, 0, 0, 0);
+        TTI_SFPMAD(2, 0, 7, 0, 0);
+        TTI_SFPLOADI(3, 0, 0x40a0);
+        TTI_SFPMAD(2, 0, 6, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 5, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 4, 0, 0);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPADD(10, 1, 0, 0, 0);
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPMOV(0, 1, 0, 0);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPPOPC(0, 0, 0, 0);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.brec_one);
+    asm volatile("" ::: "memory");
+    TTI_SFPMUL(0, 3, 9, 0, 0);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(0, 0, ADDR_MOD_3, 2 * D);
+    TTI_SFPENCC(3, 0, 0, 10);
+}
+template <int D>
+inline void softplus_hand_row_fo(const SoftplusHandWords& w) {
+    TTI_SFPLOAD(1, 0, ADDR_MOD_3, 2 * D);
+    asm volatile("" ::: "memory");
+    TT_INSN(w.thr_one);
+    asm volatile("" ::: "memory");
+    TTI_SFPMAD(11, 1, 3, 0, 0);
+    TTI_SFPSETSGN(0, 1, 2, 1);
+    TTI_SFPSETCC(0, 0, 0, 4);
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPMAD(2, 14, 13, 0, 0);
+        TTI_SFPSWAP(0, 1, 9, 1);
+        TTI_SFPMAD(2, 0, 12, 0, 0);
+        TTI_SFPPUSHC(0, 0, 0, 0);
+        TTI_SFPMAD(2, 0, 7, 0, 0);
+        TTI_SFPLOADI(3, 0, 0x40a0);
+        TTI_SFPMAD(2, 0, 6, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 5, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 4, 0, 0);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPADD(10, 1, 0, 0, 0);
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPMOV(0, 1, 0, 0);
+        TTI_SFPPOPC(0, 0, 0, 0);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPSTORE(0, 0, ADDR_MOD_3, 2 * D);
+    TTI_SFPENCC(3, 0, 0, 10);
+}
+template <int D>
+inline void softplus_hand_row_fn([[maybe_unused]] const SoftplusHandWords& w) {
+    TTI_SFPLOAD(1, 0, ADDR_MOD_3, 2 * D);
+    TTI_SFPSETSGN(0, 1, 2, 1);
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPMAD(2, 14, 13, 0, 0);
+        TTI_SFPSWAP(0, 1, 9, 1);
+        TTI_SFPMAD(2, 0, 12, 0, 0);
+        TTI_SFPLOADI(3, 0, 0x40a0);
+        TTI_SFPMAD(2, 0, 7, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 6, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 5, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(2, 0, 4, 0, 0);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPADD(10, 1, 0, 0, 0);
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPMOV(0, 1, 0, 0);
+        TTI_SFPENCC(3, 0, 0, 10);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPSTORE(0, 0, ADDR_MOD_3, 2 * D);
+}
+template <int D, int N, bool RND, int M>
+inline void softplus_hand_rows(const SoftplusHandWords& w) {
+    if constexpr (D < N) {
+        if constexpr (RND == true && M == 0) {
+            softplus_hand_row_bg<D>(w);
+        } else if constexpr (RND == true && M == 1) {
+            softplus_hand_row_bs<D>(w);
+        } else if constexpr (RND == true && M == 2) {
+            softplus_hand_row_bo<D>(w);
+        } else if constexpr (RND == true && M == 3) {
+            softplus_hand_row_bn<D>(w);
+        } else if constexpr (RND == false && M == 0) {
+            softplus_hand_row_fg<D>(w);
+        } else if constexpr (RND == false && M == 1) {
+            softplus_hand_row_fs<D>(w);
+        } else if constexpr (RND == false && M == 2) {
+            softplus_hand_row_fo<D>(w);
+        } else if constexpr (RND == false && M == 3) {
+            softplus_hand_row_fn<D>(w);
+        }
+        softplus_hand_rows<D + 1, N, RND, M>(w);
+    }
+}
+template <int N>
+inline void softplus_hand_advance() {
+    if constexpr (N > 0) {
+        TTI_INCRWC(0, 8, 0, 0);
+        softplus_hand_advance<N - 1>();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
+#ifndef INP_FLOAT32
+    if constexpr (ITERATIONS % 4 == 0) {
+        const SoftplusHandWords w = softplus_hand_words(param0, param2, param1);
+        if (param0 == 0x3f800000u && param1 == 0x3f800000u && param2 >= 0x40a00000u && param2 <= 0x7f800000u) {
+            TTI_SFPLOADI(4, 2, 0xb9b4);
+            TTI_SFPLOADI(4, 8, 0x3f31);
+            TTI_SFPLOADI(5, 2, 0x6312);
+            TTI_SFPLOADI(5, 8, 0xbf02);
+            TTI_SFPLOADI(6, 2, 0x37cb);
+            TTI_SFPLOADI(6, 8, 0x3e12);
+            TTI_SFPLOADI(7, 2, 0x0067);
+            TTI_SFPLOADI(7, 8, 0xbc55);
+            softplus_hand_rows<0, ITERATIONS, !is_fp32_dest_acc_en, 3>(w);
+        } else if (param0 == 0x3f800000u && param1 == 0x3f800000u && (param2 & 0xFFFF) == 0) {
+            TTI_SFPLOADI(4, 2, 0xb9b4);
+            TTI_SFPLOADI(4, 8, 0x3f31);
+            TTI_SFPLOADI(5, 2, 0x6312);
+            TTI_SFPLOADI(5, 8, 0xbf02);
+            TTI_SFPLOADI(6, 2, 0x37cb);
+            TTI_SFPLOADI(6, 8, 0x3e12);
+            TTI_SFPLOADI(7, 2, 0x0067);
+            TTI_SFPLOADI(7, 8, 0xbc55);
+            softplus_hand_rows<0, ITERATIONS, !is_fp32_dest_acc_en, 2>(w);
+        } else if (((param0 | param1 | param2) & 0xFFFF) == 0) {
+            TTI_SFPLOADI(4, 2, 0xb9b4);
+            TTI_SFPLOADI(4, 8, 0x3f31);
+            TTI_SFPLOADI(5, 2, 0x6312);
+            TTI_SFPLOADI(5, 8, 0xbf02);
+            TTI_SFPLOADI(6, 2, 0x37cb);
+            TTI_SFPLOADI(6, 8, 0x3e12);
+            TTI_SFPLOADI(7, 2, 0x0067);
+            TTI_SFPLOADI(7, 8, 0xbc55);
+            softplus_hand_rows<0, ITERATIONS, !is_fp32_dest_acc_en, 1>(w);
+        } else {
+            TTI_SFPLOADI(4, 2, 0xb9b4);
+            TTI_SFPLOADI(4, 8, 0x3f31);
+            TTI_SFPLOADI(5, 2, 0x6312);
+            TTI_SFPLOADI(5, 8, 0xbf02);
+            TTI_SFPLOADI(6, 2, 0x37cb);
+            TTI_SFPLOADI(6, 8, 0x3e12);
+            TTI_SFPLOADI(7, 2, 0x0067);
+            TTI_SFPLOADI(7, 8, 0xbc55);
+            softplus_hand_rows<0, ITERATIONS, !is_fp32_dest_acc_en, 0>(w);
+        }
+        softplus_hand_advance<ITERATIONS / 4>();
+        return;
+    }
+#else
+    if (param0 == 0x3f800000u && param1 == 0x3f800000u) {
+        if constexpr (ITERATIONS % 2 == 0) {
+            TT_SFPLOADI(p_sfpu::LREG4, 2, param2 & 0xFFFF);
+            TT_SFPLOADI(p_sfpu::LREG4, 8, param2 >> 16);
+            TTI_SFPLOADI(0, 2, 0xaaab);
+            TTI_SFPLOADI(0, 8, 0x3eaa);
+            TTI_SFPCONFIG(0, 12, 0);
+            TTI_SFPLOADI(0, 2, 0xaa3b);
+            TTI_SFPLOADI(0, 8, 0x3fb8);
+            TTI_SFPCONFIG(0, 13, 0);
+            TTI_SFPLOAD(1, 0, 3, 0);
+            TTI_SFPLOAD(2, 0, 3, 2);
+            TTI_SFPSETSGN(0, 1, 1, 1);
+            TTI_SFPSETSGN(0, 2, 2, 1);
+            TTI_SFPLOADI(5, 2, 36525);
+            TTI_SFPLOADI(5, 8, 14258);
+            TTI_SFPMAD(1, 14, 5, 0, 0);
+            TTI_SFPMAD(2, 14, 5, 3, 0);
+            TTI_SFPLOADI(5, 2, 9009);
+            TTI_SFPLOADI(5, 8, 47540);
+            TTI_SFPMAD(1, 0, 5, 0, 0);
+            TTI_SFPMAD(2, 3, 5, 3, 0);
+            TTI_SFPLOADI(5, 2, 55633);
+            TTI_SFPLOADI(5, 8, 15154);
+            TTI_SFPMAD(1, 0, 5, 0, 0);
+            TTI_SFPMAD(2, 3, 5, 3, 0);
+            TTI_SFPLOADI(5, 2, 32564);
+            TTI_SFPLOADI(5, 8, 48172);
+            TTI_SFPMAD(1, 0, 5, 0, 0);
+            TTI_SFPMAD(2, 3, 5, 3, 0);
+            TTI_SFPLOADI(5, 2, 63622);
+            TTI_SFPLOADI(5, 8, 15289);
+            TTI_SFPMAD(1, 0, 5, 0, 0);
+            TTI_SFPMAD(2, 3, 5, 3, 0);
+            TTI_SFPLOADI(5, 2, 37777);
+            TTI_SFPLOADI(5, 8, 15865);
+            TTI_SFPMAD(1, 0, 5, 0, 0);
+            TTI_SFPMAD(2, 3, 5, 3, 0);
+            TTI_SFPLOADI(5, 2, 40788);
+            TTI_SFPLOADI(5, 8, 48895);
+            TTI_SFPMAD(1, 0, 5, 0, 0);
+            TTI_SFPMAD(2, 3, 5, 3, 0);
+            TTI_SFPLOADI(5, 2, 28510);
+            TTI_SFPLOADI(5, 8, 16177);
+            TTI_SFPMAD(1, 0, 5, 0, 0);
+            TTI_SFPMAD(2, 3, 5, 3, 0);
+            TTI_SFPSETSGN(1, 1, 7, 1);
+            TTI_SFPLOADI(5, 0, 19264);
+            TTI_SFPMAD(7, 13, 5, 1, 0);
+            TTI_SFPLOADI(6, 2, 28672);
+            TTI_SFPIADD(0, 1, 5, 6);
+            TTI_SFPADDI(52032, 1, 0);
+            TTI_SFPLOADI(6, 8, 48945);
+            TTI_SFPMAD(1, 6, 7, 7, 0);
+            TTI_SFPLOADI(6, 2, 65012);
+            TTI_SFPLOADI(6, 8, 47109);
+            TTI_SFPMAD(1, 6, 7, 6, 0);
+            TTI_REPLAY(0, 16, 1, 1);
+            TTI_SFPLOADI(1, 2, 3329);
+            TTI_SFPLOADI(1, 8, 14672);
+            TTI_SFPLOADI(7, 2, 2913);
+            TTI_SFPLOADI(7, 8, 15030);
+            TTI_SFPMAD(6, 1, 7, 1, 0);
+            TTI_SFPLOADI(7, 2, 34953);
+            TTI_SFPLOADI(7, 8, 15368);
+            TTI_SFPMAD(6, 1, 7, 1, 0);
+            TTI_SFPSETEXP(122, 12, 7, 1);
+            TTI_SFPMAD(6, 1, 7, 1, 0);
+            TTI_SFPSETEXP(124, 12, 7, 1);
+            TTI_SFPMAD(6, 1, 7, 1, 0);
+            TTI_SFPLOADI(7, 0, 16128);
+            TTI_SFPMAD(6, 1, 7, 1, 0);
+            TTI_SFPLOADI(7, 0, 48896);
+            TTI_SFPMAD(6, 1, 10, 1, 0);
+            TTI_SFPNOP;
+            TTI_SFPMAD(6, 1, 10, 1, 0);
+            TTI_SFPNOP;
+            TTI_SFPEXEXP(0, 1, 6, 1);
+            TTI_SFPIADD(0, 5, 6, 4);
+            TTI_SFPSWAP(0, 6, 9, 1);
+            TTI_SFPSETEXP(0, 1, 6, 0);
+            TTI_SFPMAD(6, 12, 7, 1, 0);
+            TTI_SFPLOAD(5, 0, 3, 0);
+            TTI_SFPMAD(6, 1, 10, 1, 0);
+            TTI_SFPSETSGN(0, 5, 7, 1);
+            TTI_SFPMUL(6, 1, 9, 6, 0);
+            TTI_SFPLOADI(1, 0, 16544);
+            TTI_SFPMAD(11, 7, 1, 7, 0);
+            TTI_SFPMAD(11, 5, 4, 1, 0);
+            TTI_SFPSWAP(0, 5, 9, 1);
+            TTI_SFPSETCC(0, 7, 0, 0);
+            TTI_SFPMOV(0, 6, 0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPADD(10, 5, 0, 5, 0);
+            TTI_SFPSETCC(0, 1, 0, 4);
+            TTI_SFPSTORE(5, 0, 3, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSETSGN(1, 2, 7, 1);
+            TTI_SFPLOADI(5, 0, 19264);
+            TTI_SFPMAD(7, 13, 5, 1, 0);
+            TTI_SFPLOADI(6, 2, 28672);
+            TTI_SFPIADD(0, 1, 5, 6);
+            TTI_SFPADDI(52032, 1, 0);
+            TTI_SFPLOADI(6, 8, 48945);
+            TTI_SFPMAD(1, 6, 7, 7, 0);
+            TTI_SFPLOADI(6, 2, 65012);
+            TTI_SFPLOADI(6, 8, 47109);
+            TTI_SFPMAD(1, 6, 7, 6, 0);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPNOP;
+            TTI_SFPMAD(6, 1, 10, 1, 0);
+            TTI_SFPNOP;
+            TTI_SFPEXEXP(0, 1, 6, 1);
+            TTI_SFPIADD(0, 5, 6, 4);
+            TTI_SFPSWAP(0, 6, 9, 1);
+            TTI_SFPSETEXP(0, 1, 6, 0);
+            TTI_SFPMAD(6, 12, 7, 1, 0);
+            TTI_SFPLOAD(5, 0, 3, 2);
+            TTI_SFPMAD(6, 1, 10, 1, 0);
+            TTI_SFPSETSGN(0, 5, 7, 1);
+            TTI_SFPMUL(6, 1, 9, 6, 0);
+            TTI_SFPLOADI(1, 0, 16544);
+            TTI_SFPMAD(11, 7, 1, 7, 0);
+            TTI_SFPMAD(11, 5, 4, 1, 0);
+            TTI_SFPSWAP(0, 5, 9, 1);
+            TTI_SFPSETCC(0, 7, 0, 0);
+            TTI_SFPMOV(0, 6, 3, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPADD(10, 5, 3, 5, 0);
+            TTI_SFPSETCC(0, 1, 0, 4);
+            TTI_SFPSTORE(5, 0, 3, 2);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_INCRWC(0, 4, 0, 0);
+#pragma GCC unroll 0
+            for (int d = 2; d < ITERATIONS; d += 2) {
+                TTI_SFPLOAD(1, 0, 3, 0);
+                TTI_SFPLOAD(2, 0, 3, 2);
+                TTI_SFPSETSGN(0, 1, 1, 1);
+                TTI_SFPSETSGN(0, 2, 2, 1);
+                TTI_SFPLOADI(5, 2, 36525);
+                TTI_SFPLOADI(5, 8, 14258);
+                TTI_SFPMAD(1, 14, 5, 0, 0);
+                TTI_SFPMAD(2, 14, 5, 3, 0);
+                TTI_SFPLOADI(5, 2, 9009);
+                TTI_SFPLOADI(5, 8, 47540);
+                TTI_SFPMAD(1, 0, 5, 0, 0);
+                TTI_SFPMAD(2, 3, 5, 3, 0);
+                TTI_SFPLOADI(5, 2, 55633);
+                TTI_SFPLOADI(5, 8, 15154);
+                TTI_SFPMAD(1, 0, 5, 0, 0);
+                TTI_SFPMAD(2, 3, 5, 3, 0);
+                TTI_SFPLOADI(5, 2, 32564);
+                TTI_SFPLOADI(5, 8, 48172);
+                TTI_SFPMAD(1, 0, 5, 0, 0);
+                TTI_SFPMAD(2, 3, 5, 3, 0);
+                TTI_SFPLOADI(5, 2, 63622);
+                TTI_SFPLOADI(5, 8, 15289);
+                TTI_SFPMAD(1, 0, 5, 0, 0);
+                TTI_SFPMAD(2, 3, 5, 3, 0);
+                TTI_SFPLOADI(5, 2, 37777);
+                TTI_SFPLOADI(5, 8, 15865);
+                TTI_SFPMAD(1, 0, 5, 0, 0);
+                TTI_SFPMAD(2, 3, 5, 3, 0);
+                TTI_SFPLOADI(5, 2, 40788);
+                TTI_SFPLOADI(5, 8, 48895);
+                TTI_SFPMAD(1, 0, 5, 0, 0);
+                TTI_SFPMAD(2, 3, 5, 3, 0);
+                TTI_SFPLOADI(5, 2, 28510);
+                TTI_SFPLOADI(5, 8, 16177);
+                TTI_SFPMAD(1, 0, 5, 0, 0);
+                TTI_SFPMAD(2, 3, 5, 3, 0);
+                TTI_SFPSETSGN(1, 1, 7, 1);
+                TTI_SFPLOADI(5, 0, 19264);
+                TTI_SFPMAD(7, 13, 5, 1, 0);
+                TTI_SFPLOADI(6, 2, 28672);
+                TTI_SFPIADD(0, 1, 5, 6);
+                TTI_SFPADDI(52032, 1, 0);
+                TTI_SFPLOADI(6, 8, 48945);
+                TTI_SFPMAD(1, 6, 7, 7, 0);
+                TTI_SFPLOADI(6, 2, 65012);
+                TTI_SFPLOADI(6, 8, 47109);
+                TTI_SFPMAD(1, 6, 7, 6, 0);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPNOP;
+                TTI_SFPMAD(6, 1, 10, 1, 0);
+                TTI_SFPNOP;
+                TTI_SFPEXEXP(0, 1, 6, 1);
+                TTI_SFPIADD(0, 5, 6, 4);
+                TTI_SFPSWAP(0, 6, 9, 1);
+                TTI_SFPSETEXP(0, 1, 6, 0);
+                TTI_SFPMAD(6, 12, 7, 1, 0);
+                TTI_SFPLOAD(5, 0, 3, 0);
+                TTI_SFPMAD(6, 1, 10, 1, 0);
+                TTI_SFPSETSGN(0, 5, 7, 1);
+                TTI_SFPMUL(6, 1, 9, 6, 0);
+                TTI_SFPLOADI(1, 0, 16544);
+                TTI_SFPMAD(11, 7, 1, 7, 0);
+                TTI_SFPMAD(11, 5, 4, 1, 0);
+                TTI_SFPSWAP(0, 5, 9, 1);
+                TTI_SFPSETCC(0, 7, 0, 0);
+                TTI_SFPMOV(0, 6, 0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPADD(10, 5, 0, 5, 0);
+                TTI_SFPSETCC(0, 1, 0, 4);
+                TTI_SFPSTORE(5, 0, 3, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSETSGN(1, 2, 7, 1);
+                TTI_SFPLOADI(5, 0, 19264);
+                TTI_SFPMAD(7, 13, 5, 1, 0);
+                TTI_SFPLOADI(6, 2, 28672);
+                TTI_SFPIADD(0, 1, 5, 6);
+                TTI_SFPADDI(52032, 1, 0);
+                TTI_SFPLOADI(6, 8, 48945);
+                TTI_SFPMAD(1, 6, 7, 7, 0);
+                TTI_SFPLOADI(6, 2, 65012);
+                TTI_SFPLOADI(6, 8, 47109);
+                TTI_SFPMAD(1, 6, 7, 6, 0);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPNOP;
+                TTI_SFPMAD(6, 1, 10, 1, 0);
+                TTI_SFPNOP;
+                TTI_SFPEXEXP(0, 1, 6, 1);
+                TTI_SFPIADD(0, 5, 6, 4);
+                TTI_SFPSWAP(0, 6, 9, 1);
+                TTI_SFPSETEXP(0, 1, 6, 0);
+                TTI_SFPMAD(6, 12, 7, 1, 0);
+                TTI_SFPLOAD(5, 0, 3, 2);
+                TTI_SFPMAD(6, 1, 10, 1, 0);
+                TTI_SFPSETSGN(0, 5, 7, 1);
+                TTI_SFPMUL(6, 1, 9, 6, 0);
+                TTI_SFPLOADI(1, 0, 16544);
+                TTI_SFPMAD(11, 7, 1, 7, 0);
+                TTI_SFPMAD(11, 5, 4, 1, 0);
+                TTI_SFPSWAP(0, 5, 9, 1);
+                TTI_SFPSETCC(0, 7, 0, 0);
+                TTI_SFPMOV(0, 6, 3, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPADD(10, 5, 3, 5, 0);
+                TTI_SFPSETCC(0, 1, 0, 4);
+                TTI_SFPSTORE(5, 0, 3, 2);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_INCRWC(0, 4, 0, 0);
+            }
+            TTI_SFPLOADI(0, 2, 0x2331);
+            TTI_SFPLOADI(0, 8, 0xb9b4);
+            TTI_SFPCONFIG(0, 12, 0);
+            TTI_SFPLOADI(0, 2, 0x8ead);
+            TTI_SFPLOADI(0, 8, 0x37b2);
+            TTI_SFPCONFIG(0, 13, 0);
+            return;
+        }
+    }
+#endif
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);
