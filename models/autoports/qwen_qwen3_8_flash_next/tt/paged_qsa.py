@@ -87,6 +87,11 @@ def transfer(attention, source, output, positions, page_table, *, seq, lane=None
         runtime.append(((core.x, core.y), [*[t.buffer_address() for t in tensors], begin, count, stride]))
     scratch = 2048 + 128 + 128 + attention.max_context // 32 * 4
     source = Path(__file__).with_name("kernels") / "qsa_pooled_paged.cpp"
+    marker = getattr(attention, "dense_marker", None) if gather and seq == 1 else None
+    if marker is not None:
+        # One-row view: per-layer dense keys, rebuild only rows the marker does not cover.
+        _dense_gather(attention, output, positions, page_table, args, tensors, marker, grid)
+        return
     if gather and seq == 1 and os.environ.get("QWEN_FLASH_QSA_RECT_GATHER", "1") == "1":
         # Decode lane gather: one grid rectangle sharing one argument list; each worker takes
         # whole 32-row tile rows (qsa_pooled_gather_rows.cpp). Bit-identical to the per-core path.
@@ -124,6 +129,58 @@ def transfer(attention, source, output, positions, page_table, *, seq, lane=None
         config=ttnn.ReaderConfigDescriptor(),
     )
     ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
+
+
+def _dense_gather(attention, output, positions, page_table, args, tensors, marker, grid):
+    """Incremental lane gather into attention's own dense keys (qsa_pooled_gather_incr.cpp)."""
+    slots = attention._step_slots
+    tensors = [*tensors, slots, marker]
+    args = args[:6] + _accessor_args(tensors)
+    rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    workers = grid.x * grid.y
+    scratch = 4 * 2048 + 32 * 256 + 128 + 128 + 64 + attention.max_context // 32 * 4
+    defines = f"#define GRID_X {grid.x}\n#define WORKERS {workers}\n"
+    cb = ttnn.CBDescriptor(
+        total_size=scratch,
+        core_ranges=rect,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)],
+    )
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=defines + Path(__file__).with_name("kernels").joinpath("qsa_pooled_gather_incr.cpp").read_text(),
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=rect,
+        compile_time_args=args,
+        common_runtime_args=[t.buffer_address() for t in tensors],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
+
+
+def _dense_marker_update(attention, positions, seq):
+    """After the step's consumers: record [slot, completed rows] for the next incremental gather."""
+    tensors = [positions, attention._step_slots, attention.dense_marker]
+    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    cb = ttnn.CBDescriptor(
+        total_size=512,
+        core_ranges=core,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=512)],
+    )
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=str(Path(__file__).with_name("kernels") / "qsa_dense_marker.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core,
+        compile_time_args=[seq, 0] + _accessor_args(tensors),
+        runtime_args=[((0, 0), [t.buffer_address() for t in tensors])],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
+
+
+def _accessor_args(tensors):
+    args = []
+    for tensor in tensors:
+        args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    return args
 
 
 def gather_all(attention, positions, page_table, *, seq):
@@ -316,4 +373,6 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
             workers=grid.x * grid.y,
         )
         return selected
+    if seq == 1 and getattr(attention, "dense_marker", None) is not None:
+        _dense_marker_update(attention, positions, seq)
     return selected_rows[0] if len(selected_rows) == 1 else ttnn.concat(selected_rows, dim=0)

@@ -19,6 +19,7 @@ import ttnn
 
 from .decode_view import CompactDecodeView, _decoder, _ops
 from .prefill_view import _clone
+from .state_ops import zero_inplace
 
 
 def enabled():
@@ -38,6 +39,7 @@ def _model(owner, pool):
     if not owner.serving_pool or owner.batch_size != 32:
         raise ValueError("The one-row decode view requires a fixed32 serving owner")
     bf4 = os.environ.get("QWEN_FLASH_DECODE_B1_BF4", "0") == "1"
+    dense_keys = os.environ.get("QWEN_FLASH_DECODE_B1_DENSE_KEYS", "1") != "0"
     result = _clone(owner, _ops(owner.ops))
     result.batch_size = 1
     result.terminal = _clone(owner.terminal, result.ops)
@@ -46,6 +48,20 @@ def _model(owner, pool):
         view = _decoder(layer, 1, pool)
         attention = view.attention
         attention.output_projection.column_weight = _column_weight(attention.output_projection, view.ops)
+        if layer.kind != "linear_attention" and dense_keys:
+            # Own dense pooled keys per layer (16 MB/chip at 262K) + [slot, rows valid] marker:
+            # each step gathers only rows the buffer lacks (paged_qsa._dense_gather).
+            attention.pooled_keys = ttnn.zeros(
+                tuple(layer.attention.pooled_keys.shape),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=owner.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            attention.dense_marker = ttnn.zeros(
+                (1, 8), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=owner.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         if layer.kind != "linear_attention":
             attention.decode_projection = (
                 ttnn.typecast(layer.attention.packed_projection, ttnn.bfloat4_b)
@@ -89,3 +105,10 @@ class SingleRowDecodeView(CompactDecodeView):
             )
         self.rows = pool["logit_rows"]
         self.row_mask = None  # the single row is always active
+
+    def invalidate_dense_keys(self):
+        """Prefill/reset may rewrite any slot's pooled rows: force a full rebuild next step."""
+        for layer in self.model.layers:
+            marker = getattr(layer.attention, "dense_marker", None)
+            if marker is not None:
+                zero_inplace(self.generator.mesh, marker)

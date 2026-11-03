@@ -505,6 +505,8 @@ class QwenFlashNextGenerator(Generator):
             raise ValueError("Expected tokens with shape [batch_size, sequence]")
         self._bind_cache(kv_cache)
         self.prepare()
+        # Prefill rewrites pooled rows of its slots: one-row-view dense keys rebuild next step.
+        self._invalidate_decode_keys()
         lengths = list(prompt_lens)
         if len(lengths) != self.batch_size or any(n < 0 or n > tokens.shape[1] for n in lengths):
             raise ValueError("Invalid logical prompt lengths")
@@ -755,7 +757,13 @@ class QwenFlashNextGenerator(Generator):
                 return tokens[: i + 1]
         return tokens
 
+    def _invalidate_decode_keys(self):
+        for view in self.decode_views.values():
+            if hasattr(view, "invalidate_dense_keys"):
+                view.invalidate_dense_keys()
+
     def reset(self):
+        self._invalidate_decode_keys()
         if self.trace_cache_reset and "reset_cache" in self.traces:
             self._replay("reset_cache")
         else:

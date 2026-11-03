@@ -2107,6 +2107,7 @@ class ParallelQSA(OptimizedQSA):
 
     def decode_forward(self, hidden_states, **kwargs):
         self._decode_phase = True
+        self._step_slots = kwargs.get("slots")  # request slots for the dense-key marker (paged_qsa)
         return super().decode_forward(hidden_states, **kwargs)
 
     def _linear(self, x, weight):
