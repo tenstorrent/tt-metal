@@ -17,7 +17,9 @@ from .moe_decode import MAX_ROWS, SingleTokenExperts
 from .prefill_view import _clone, _shared_zero
 from .state_ops import advance_positions
 
-DECODE_BUCKETS = (4, 8, 16)
+# Two users get their own 2-row graph (QWEN_FLASH_DECODE_B2=0: they share the 4-row graph);
+# rows are computed independently, so both graphs give the same logits for those rows.
+DECODE_BUCKETS = (2, 4, 8, 16) if os.environ.get("QWEN_FLASH_DECODE_B2", "1") != "0" else (4, 8, 16)
 
 
 def select_decode_batch(active, *, enabled=True, buckets=DECODE_BUCKETS):

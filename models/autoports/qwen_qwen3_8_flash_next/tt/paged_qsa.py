@@ -13,8 +13,8 @@ from .prefill_qsa_transfer import prefill_mask_enabled, prefill_mask_scores
 
 def mask_scores_per_row(attention, scores, positions, seq):
     """The canonical suffix mask with one original search bound per decode row."""
-    if seq != 1 or attention.batch_size not in (4, 8, 16, 32):
-        raise ValueError("Per-row selection is qualified only for B4/8/16/32 decode")
+    if seq != 1 or attention.batch_size not in (2, 4, 8, 16, 32):
+        raise ValueError("Per-row selection is qualified only for B2/4/8/16/32 decode")
     bound = ttnn.empty(
         (attention.batch_size, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=attention.device
     )
@@ -281,7 +281,7 @@ def select_groups_batched(attention, pooled, iq, positions, page_table, seq):
 
 
 def select_groups(attention, pooled, iq, positions, page_table, seq):
-    batched_selection = seq == 1 and attention.batch_size in (4, 8, 16, 32)
+    batched_selection = seq == 1 and attention.batch_size in (2, 4, 8, 16, 32)
     attention._qsa_batched_selection = batched_selection
     if (
         batched_selection
