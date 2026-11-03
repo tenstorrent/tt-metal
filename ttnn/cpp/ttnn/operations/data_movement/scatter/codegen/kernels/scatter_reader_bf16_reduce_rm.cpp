@@ -17,9 +17,13 @@
 #include "api/numeric/bfloat16.h"
 #include <cstdint>
 
+// The reduction_mode numbering; the host mirrors it as scatter_codegen_supported.hpp's kReduction*.
+constexpr uint32_t kReductionAdd = 1;
+constexpr uint32_t kReductionMultiply = 2;
+
 FORCE_INLINE float reduce_fp32(const float current, const uint16_t source_bf16, const uint32_t reduction_mode) {
     const float source = bf16_to_fp32(source_bf16);
-    return reduction_mode == 1 ? current + source : current * source;
+    return reduction_mode == kReductionAdd ? current + source : current * source;
 }
 
 void kernel_main() {
@@ -47,7 +51,9 @@ void kernel_main() {
     constexpr auto index_ta_args = TensorAccessorArgs<12>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");
-    static_assert(reduction_mode == 1 || reduction_mode == 2);
+    static_assert(
+        reduction_mode == kReductionAdd || reduction_mode == kReductionMultiply,
+        "this reader serves add and multiply only");
 
     const auto index_accessor = TensorAccessor(index_ta_args, index_addr, index_page_bytes);
     const auto src_accessor = TensorAccessor(src_ta_args, src_addr, src_page_bytes);

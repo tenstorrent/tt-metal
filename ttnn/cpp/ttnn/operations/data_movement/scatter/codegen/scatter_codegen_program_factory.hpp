@@ -49,8 +49,7 @@ struct ScatterTileGeometry {
     uint32_t idx_valid_w_last = 0;
     uint32_t Ht_per_batch_index = 0;
 };
-ScatterTileGeometry compute_scatter_tile_geometry(
-    const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& src_tensor);
+ScatterTileGeometry compute_scatter_tile_geometry(const Tensor& input_tensor, const Tensor& index_tensor);
 
 // Stick geometry for the ROW_MAJOR factories, computed from LOGICAL shapes (ROW_MAJOR tensors carry
 // no tile padding on any dimension).
