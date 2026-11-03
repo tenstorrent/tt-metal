@@ -85,21 +85,21 @@ autograd::TensorPtr layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, std::optional<autograd::TensorPtr> beta_opt) {
     const auto& beta_val = beta_opt.has_value() ? beta_opt.value()->get_value() : core::zeros_like(gamma->get_value());
 
-    auto tensor_shape = tensor->get_value().logical_shape();
-    auto mean = core::empty(
-        ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
-        &autograd::ctx().get_device(),
-        tensor->get_value().memory_config());
-    auto rstd = ttnn::empty_like(mean);
+    // mean and rstd are only read by the backward pass. Ask the kernel for them only when a backward
+    // node will actually be recorded: gradients are enabled and at least one input requires grad.
+    const bool needs_grad = autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED &&
+                            autograd::any_requires_grad(tensor, gamma, beta_opt.value_or(nullptr));
 
-    auto out_tensors =
-        ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta_val, 1e-6F, /* return_mean_std */ true);
+    auto out_tensors = ttml::metal::layernorm_fw(
+        tensor->get_value(), gamma->get_value(), beta_val, 1e-6F, /* return_mean_rstd */ needs_grad);
 
     auto out = autograd::create_tensor(out_tensors[0].value());
-    mean = out_tensors[1].value();
-    rstd = out_tensors[2].value();
+    // Both are std::nullopt when !needs_grad; the grad function below is only recorded when needs_grad.
+    const std::optional<ttnn::Tensor> mean = out_tensors[1];
+    const std::optional<ttnn::Tensor> rstd = out_tensors[2];
     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta_opt]() {
-        auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
+        auto res = ttml::metal::layernorm_bw(
+            tensor->get_value(), gamma->get_value(), mean.value(), rstd.value(), out->get_grad());
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         if (beta_opt.has_value()) {
