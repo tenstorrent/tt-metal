@@ -37,6 +37,11 @@
 #ifndef MHC_X_PARTS
 #define MHC_X_PARTS 3
 #endif
+// MHC_SINKHORN_DST=1: the Sinkhorn in dest registers on the live rows' bands only (mhc_sfpu_sinkhorn.h): no
+// matmul, no CB round trip per normalisation; the live row count is the compute kernel's last runtime arg.
+#ifndef MHC_SINKHORN_DST
+#define MHC_SINKHORN_DST 0
+#endif
 #ifndef MHC_MAX_EXTRA
 #define MHC_MAX_EXTRA 0
 #endif
@@ -60,6 +65,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 #include "mhc_sfpu_x8.h"
+#include "mhc_sfpu_sinkhorn.h"
 
 namespace {
 
@@ -109,6 +115,7 @@ constexpr uint32_t NORM_EPS_BITS = get_compile_time_arg_val(34);  // the sublaye
 constexpr uint32_t MAX_COLS = 2;  // column tiles per core (128 column tiles over 120 cores)
 constexpr bool SINKHORN_FUSED = MHC_SINKHORN_FUSED != 0;
 constexpr uint32_t X_PARTS = MHC_X_PARTS;
+constexpr bool SINKHORN_DST = MHC_SINKHORN_DST != 0;
 static_assert(X_PARTS == 1 || X_PARTS == 3, "MHC_X_PARTS: 1 or 3");
 constexpr uint32_t MAX_EXTRA = MHC_MAX_EXTRA;  // extra single stream tiles projected on this core (0: none)
 static_assert(N == 4, "the lane layout and the dest slot plan are written for n = 4");
@@ -342,6 +349,36 @@ FORCE_INLINE void sinkhorn_fused() {
     cb_mixes.pop_front(1);
 }
 
+// CB_MIXES (1 tile, kept) -> CB_SCOMB in ONE dest pass: the comb head (mixes @ SEL + bias, min, exp) in dest 0, the
+// Sinkhorn in place on the live rows' `nb` bands (mhc_sfpu::sinkhorn_bands), then the pack; pre / post as before.
+FORCE_INLINE void sinkhorn_dst(uint32_t nb) {
+    CircularBuffer cb_mixes(CB_MIXES);
+    cb_mixes.wait_front(1);
+    reconfig_data_format(CB_MIXES, CB_CONSTS);
+    matmul_init(CB_MIXES, CB_CONSTS);
+    tile_regs_acquire();
+    matmul_tiles(CB_MIXES, CB_CONSTS, 0, SEL_COMB, 0);
+    reconfig_data_format_srca(CB_CONSTS);
+    copy_init(CB_CONSTS);
+    copy_tile(CB_CONSTS, BASE_COMB, 1);
+    add_binary_tile_init();
+    add_binary_tile(0, 1, 0);
+    unary_min_tile_init();
+    unary_min_tile(0, 0x42a00000u);  // min(x, 80.0f): no inf out of exp
+    exp_tile_init();
+    exp_tile(0);
+    sfpu_bcast_col_init();
+    MATH((_llk_math_eltwise_binary_sfpu_params_(
+        mhc_sfpu::sinkhorn_bands, 0, 1, 0, VectorMode::None, nb, ITERS, EPS_BITS)));
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_one(0, CB_SCOMB);
+    tile_regs_release();
+    coef_fused(SEL_PRE, BASE_PRE, COEF_PRE, CB_SPRE);
+    coef_fused(SEL_POST, BASE_POST, COEF_POST, CB_SPOST);
+    cb_mixes.pop_front(1);
+}
+
 // ------------------------------------------------------------------ phases
 // x (fp32) -> bf16 parts hi, lo, lo2 with x == hi + lo + lo2 exactly (each pack rounds to bf16, the residuals
 // are exact fp32 subtractions). CB_X is never popped: x stays for the mix. `cnt` tiles from CB_X slot `x0`
@@ -529,7 +566,7 @@ FORCE_INLINE void sum_tiles(uint32_t cb, uint32_t count, uint32_t out_cb, uint32
 }
 
 // coordinator: CB_GATHER2 (GX leader sums) -> mixes (CB_MIXES) -> Sinkhorn -> lane tiles (CB_COEF_OUT)
-FORCE_INLINE void coordinator_coefficients() {
+FORCE_INLINE void coordinator_coefficients(uint32_t nb) {
     CircularBuffer g2(CB_GATHER2);
     g2.wait_front(GX);
     tile_regs_acquire();
@@ -565,7 +602,9 @@ FORCE_INLINE void coordinator_coefficients() {
     tile_regs_release();
     g2.pop_front(GX);
 
-    if constexpr (SINKHORN_FUSED) {
+    if constexpr (SINKHORN_DST) {
+        sinkhorn_dst(nb);
+    } else if constexpr (SINKHORN_FUSED) {
         sinkhorn_fused();
     } else {
         sinkhorn();
@@ -724,6 +763,15 @@ void kernel_main() {
             n_extra = MAX_EXTRA;
         }
     }
+    // the live rows (the compute kernel's last runtime arg): the dest-resident Sinkhorn touches their bands only
+    uint32_t nb = 8;
+    if constexpr (SINKHORN_DST) {
+        const uint32_t rows = get_arg_val<uint32_t>(MAX_EXTRA > 0 ? 5 : 3);
+        nb = (rows + 3) / 4;
+        if (nb == 0 || nb > 8) {
+            nb = 8;
+        }
+    }
 
     if (worker) {
         CircularBuffer cbx(CB_X), cbfn(CB_FN);
@@ -752,7 +800,7 @@ void kernel_main() {
         sum_tiles(CB_GATHER1, GY, CB_PART);
     }
     if (coordinator) {
-        coordinator_coefficients();
+        coordinator_coefficients(nb);
     }
     if (worker) {
         mix_h(count);

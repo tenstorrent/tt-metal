@@ -59,7 +59,7 @@ def _check(mesh_device, op, kcfg, params, x: torch.Tensor, rows: int, tag: str):
     n, C = kcfg.n, kcfg.dim
     xd = _up(mesh_device, x.reshape(1, 1, 32, n * C))
     hn, post, comb = op.allocate_outputs(xd)
-    op(xd, hn, post, comb)
+    op(xd, hn, post, comb, rows=rows)  # the live rows, as the model passes them
     r_mixes, r_pre, r_post, r_comb, r_h, r_hn = op.golden(x, fn, base, scale)
     hn_t = ttnn.to_torch(hn)[0, 0].double()[:rows]
     post_t, comb_t = ttnn.to_torch(post).double()[:rows], ttnn.to_torch(comb).double()[:rows]

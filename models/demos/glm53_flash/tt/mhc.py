@@ -133,7 +133,7 @@ assert MHC_KSUM in ("exact", "fast"), MHC_KSUM
 # m copied in, SFPU multiply: 2*iters + 3 passes, ~20 us expected). A bounded rounding change (fp32 SFPU products where
 # the LLK sequence multiplied through 19-bit FPU operands): logits gate required before it becomes the default.
 MHC_PRE_SINKHORN = os.environ.get("GLM53_MHC_PRE_SINKHORN", "fused")
-assert MHC_PRE_SINKHORN in ("llk", "fused"), MHC_PRE_SINKHORN
+assert MHC_PRE_SINKHORN in ("llk", "fused", "dst"), MHC_PRE_SINKHORN  # dst: in dest registers, live rows only
 # the fused pre-block's work split: "cols" = 128 column tiles over the grid (two on each of the first 8 cores of a 12x10
 # grid: they bound the projection phase); "extras" = a two-column core projects only its first column, the second's 4
 # stream tiles are projected by 4 single-column non-leader cores (12x10: critical path 10 -> 7 cost units; 13x10 / 8x8
@@ -987,7 +987,7 @@ class TtMHCFast(LightweightModule):
             # one program: projection + Sinkhorn + mix + norm; post / comb come out in the post kernel's lane layout
             pb = self._fused_pre_block(norm)
             hn, post, comb = pb.allocate_outputs(x32)
-            pb(x32, hn, post, comb)
+            pb(x32, hn, post, comb, rows=T)  # T live rows: the dest-resident Sinkhorn touches their bands only
             return _view_rows(hn, T), post, comb, x32, None, False
         if x32.shape[-2] != TILE and self.post_kernel and MHC_PREFILL_EXACT:
             x_sm, owned = None, False  # prefill through the composite projection/mix + kernel post-block: unused

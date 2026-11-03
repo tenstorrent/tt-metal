@@ -128,7 +128,7 @@ class MhcPreBlock:
     # two-column cores) and 8x8 (every core two columns, no recipient) keep the column plan.
     MAX_EXTRA = 2
     COL_COST, EXTRA_COST = 5, 2
-    SINKHORN_MODES = ("llk", "fused")
+    SINKHORN_MODES = ("llk", "fused", "dst")  # dst: in dest registers on the live rows' bands (MHC_SINKHORN_DST)
     SPLIT_MODES = ("cols", "extras")
     SEM_ARRIVE1, SEM_ARRIVE2, SEM_PRE, SEM_RS2 = 0, 1, 2, 3
     # kernel ABI (checked against the kernel sources by tests/custom_ops/test_mhc_pre_block_host.py):
@@ -390,6 +390,7 @@ class MhcPreBlock:
         hn_addr: int,
         count_proj: int | None = None,
         extras: tuple = (),
+        rows: int = TILE,
         max_extra: int = 0,
     ) -> tuple[list[int], list[int], list[int]]:
         """(reader, writer, compute) runtime args of logical core ``(xi, yi)``: buffer addresses, the work item, the
@@ -425,6 +426,7 @@ class MhcPreBlock:
             tail += [0, 0] * (max_extra - len(extras))
             reader = reader + tail
             compute = compute + [cp, len(extras)]
+        compute = compute + [int(rows)]  # the live rows (read by the dest-resident Sinkhorn only)
         return reader, writer, compute
 
     # ------------------------------------------------------------------ reference
@@ -459,7 +461,9 @@ class MhcPreBlock:
         )
         return hn, post, comb
 
-    def __call__(self, x: ttnn.Tensor, hn: ttnn.Tensor, post: ttnn.Tensor, comb: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, x: ttnn.Tensor, hn: ttnn.Tensor, post: ttnn.Tensor, comb: ttnn.Tensor, rows: int = TILE
+    ) -> ttnn.Tensor:
         n, gx, gy = self.n, self.gx, self.gy
         assert x.dtype == ttnn.float32 and x.layout == ttnn.TILE_LAYOUT and not x.memory_config().is_sharded()
         assert list(x.padded_shape)[-2:] == [TILE, self.nC], x.padded_shape
@@ -484,6 +488,8 @@ class MhcPreBlock:
         defines = []
         if self.sinkhorn == "fused":
             defines.append(("MHC_SINKHORN_FUSED", "1"))
+        if self.sinkhorn == "dst":
+            defines.append(("MHC_SINKHORN_DST", "1"))
         if self.max_extra:
             defines.append(("MHC_MAX_EXTRA", str(self.max_extra)))
         if self.x_parts != 3:
@@ -536,7 +542,7 @@ class MhcPreBlock:
                     _, _, count_proj, extras = self.work_ext[k]
                     ext = dict(count_proj=count_proj, extras=tuple(extras), max_extra=self.max_extra)
                 r, w, c = self.runtime_args_for_core(
-                    xi=xi, yi=yi, count=count, c0=c0, noc_x=self.noc_x, noc_y=self.noc_y, **addrs, **ext
+                    xi=xi, yi=yi, count=count, c0=c0, noc_x=self.noc_x, noc_y=self.noc_y, rows=rows, **addrs, **ext
                 )
                 reader_rt[xi][yi] = r
                 writer_rt[xi][yi] = w

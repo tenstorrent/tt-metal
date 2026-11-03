@@ -134,3 +134,9 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   at 4-8 users the 40 normalisations touch one or two bands: 28 -> ~3-6 us. Then round 2 (sum of h^2) as 32
   scalars per core summed on the RISCs and the rsqrt shipped in the pre multicast (-7 us), and the FFN pre-block
   merged with the attention post-mix (-8 us per layer). Target per wrap: 74 -> ~36 us.
+* 22:13 **pre-block v3, step 1 landed**: `MHC_X_PARTS=1` (81.4 -> 74.3 us) and the dest-resident Sinkhorn
+  `MHC_SINKHORN_DST=1` on the live rows' bands (`mhc_sfpu_sinkhorn.h`): 74.3 -> **46.4 us per wrap at 1-4 users**,
+  59.9 at 32 (chip 8, unit numerics within the bars). Per step at 4 users: 90 x 35 us = **-3.2 ms**. Knobs
+  `GLM53_MHC_PRE_XPARTS=1 GLM53_MHC_PRE_SINKHORN=dst`; defaults flip after the chain's decode-id gate on a (1, 8)
+  column with the converted cache. Next in the wrap: round 2 as RISC scalars (-7), the fan-in (-5), the merge with
+  the attention post-mix (-8 per layer).
