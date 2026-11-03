@@ -1,0 +1,364 @@
+diff -u kernels_base/moe_down_proj_compute.cpp kernels/moe_down_proj_compute.cpp
+--- kernels_base/moe_down_proj_compute.cpp	2026-11-03 09:52:06.061993150 +0000
++++ kernels/moe_down_proj_compute.cpp	2026-11-03 10:08:54.616565257 +0000
+@@ -12,6 +12,9 @@
+ //   untilize_wave: push the partials, untilize this core's tile rows into cb_output_rows, pop the remainder.
+ 
+ #include <cstdint>
++#ifdef ABL_NO_COMPUTE
++#define SKIP_COMPUTE
++#endif
+ 
+ #include "api/compute/compute_kernel_hw_startup.h"
+ #include "api/compute/matmul.h"
+diff -u kernels_base/moe_down_proj_reader.cpp kernels/moe_down_proj_reader.cpp
+--- kernels_base/moe_down_proj_reader.cpp	2026-11-03 09:52:06.061993150 +0000
++++ kernels/moe_down_proj_reader.cpp	2026-11-03 10:08:54.620565235 +0000
+@@ -26,6 +26,10 @@
+ #include "moe_down_proj_plan.h"
+ #include "moe_down_proj_store.h"
+ #include "moe_down_proj_w_prefetch.h"
++#include "moe_early_ack.h"
++#if defined(ABL_NO_X) && !defined(EA_TINY)
++#define EA_TINY
++#endif
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_x_round = get_compile_time_arg_val(0);
+@@ -143,8 +147,12 @@
+             const uint32_t kk = pf_next % x_step_k_tiles;
+             const uint32_t round = kk / k_block_tiles;
+             const uint32_t stage_tile = round * x_round_tiles + row * k_block_tiles + kk % k_block_tiles;
++#ifndef ABL_NO_X
+             noc_async_read_page(
+                 pf_first_page + row * tensor_k_tiles + kk, x_accessor, stage_l1 + stage_tile * tile_bytes);
++#else
++            (void)stage_tile;
++#endif
+         }
+     };
+ 
+@@ -207,6 +215,54 @@
+         w_prefetch.start(0, num_steps, w_owns);
+     }
+ 
++#ifdef EARLY_ACK_X
++    // Early ack: ack step s + 1 to its sender as soon as its x slot is free, before step s's data lands.
++    moe_early_ack::ChannelFor<
++        get_named_compile_time_arg_val("xa_ct_offset"),
++        get_named_compile_time_arg_val("xa_rt_offset"),
++        get_named_compile_time_arg_val("xa_dr1")>
++        xa(noc);
++    moe_early_ack::ChannelFor<
++        get_named_compile_time_arg_val("xb_ct_offset"),
++        get_named_compile_time_arg_val("xb_rt_offset"),
++        get_named_compile_time_arg_val("xb_dr1")>
++        xb(noc);
++    auto x_needs_ack = [&](uint32_t step) {
++        return step < num_steps && plan.group_rows(step / x_steps_per_wave, group) > 0 &&
++               !(on_xa && xa_mcast.should_send(step));
++    };
++    auto x_ack = [&](uint32_t step) {
++        if (on_xa) {
++            xa.ack(step);
++        } else {
++            xb.ack(step);
++        }
++    };
++    bool cur_acked = false;
++    bool next_acked = false;
++    // EARLY_SEND_X: the sender of step s + 1 sends it while it still waits for step s.
++    bool cur_sent = false;
++    bool next_sent = false;
++    constexpr uint32_t x_step_bytes = x_step_tiles * tile_bytes;
++    auto x_send_step = [&](uint32_t round, uint32_t dst, uint32_t size) {
++#ifdef PAIR_SEND
++        xa.issue(round, stage_l1, dst, size);
++        if (xb.can_send()) {
++            xb.issue(round, stage_l1, dst, size);
++        }
++        noc.async_write_barrier();
++        xa.retire(round);
++        if (xb.can_send()) {
++            xb.retire(round);
++        }
++#else
++        xa.send(round, stage_l1, dst, size);
++        if (xb.can_send()) {
++            xb.send(round, stage_l1, dst, size);
++        }
++#endif
++    };
++#endif
+     start_prefetch(0);
+     uint32_t stored = 0;
+     for (uint32_t step = 0; step < num_steps; ++step) {
+@@ -221,16 +277,114 @@
+             w_stage_step(step);
+         }
+         const uint32_t group_rows = plan.group_rows(step / x_steps_per_wave, group);
++#ifdef EARLY_ACK_X
++        const bool owned = on_xa && xa_mcast.should_send(step) && !cur_sent;
++#else
+         const bool owned = on_xa && xa_mcast.should_send(step);
++#endif
+         issue_prefetch(owned ? pf_total : issue_quota);
+         {
+             MaybeDeviceZoneScope("x_reserve");
+             cb_reserve_back(cb_x_round, x_step_tiles);
+         }
++#ifdef EARLY_ACK_X
++        auto try_ack_next = [&]() {
++#ifdef EA_NO_LOOKAHEAD
++            return;
++#endif
++            if (next_acked || next_sent) {
++                return;
++            }
++            const uint32_t next = step + 1;
++            if (x_needs_ack(next)) {
++                if (cb_pages_reservable_at_back(cb_x_round, 2 * x_step_tiles)) {
++#ifdef EA_ZONES
++                    MaybeDeviceZoneScope("x_ack_next");
++#endif
++                    x_ack(next);
++                    next_acked = true;
++                }
++                return;
++            }
++#ifdef EARLY_SEND_X
++            if (next >= num_steps || !on_xa || !xa_mcast.should_send(next)) {
++                return;
++            }
++            const uint32_t next_rows = plan.group_rows(next / x_steps_per_wave, group);
++#ifdef EA_ZONES
++            if (next_rows != 0 && cb_pages_reservable_at_back(cb_x_round, 2 * x_step_tiles) && !xa.acks_ready()) {
++                MaybeDeviceZoneScope("x_early_noacks");
++            }
++#endif
++            if (next_rows == 0 || !xa.acks_ready() || (xb.can_send() && !xb.acks_ready()) ||
++                !cb_pages_reservable_at_back(cb_x_round, 2 * x_step_tiles)) {
++                return;
++            }
++            MaybeDeviceZoneScope("x_send_early");
++            issue_prefetch(pf_total);
++            dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
++            const auto& cbi = get_local_cb_interface(cb_x_round);
++            uint32_t next_slot = get_write_ptr(cb_x_round) + x_step_bytes;
++            if (next_slot >= cbi.fifo_limit) {
++                next_slot -= cbi.fifo_size;
++            }
++#ifdef EA_TINY
++            const uint32_t next_bytes = tile_bytes;
++#else
++            const uint32_t next_bytes =
++                ((x_step_rounds - 1) * x_round_tiles + next_rows * k_block_tiles) * tile_bytes;
++#endif
++            x_send_step(next, next_slot, next_bytes);
++            start_prefetch(next + 1);
++            next_sent = true;
++#endif
++        };
++        if (!cur_acked && x_needs_ack(step)) {
++            x_ack(step);
++        }
++        try_ack_next();
++        if (group_rows > 0) {
++            const uint32_t slot = get_write_ptr(cb_x_round);
++#ifdef EA_TINY
++            const uint32_t bytes = tile_bytes;
++#else
++            const uint32_t bytes = ((x_step_rounds - 1) * x_round_tiles + group_rows * k_block_tiles) * tile_bytes;
++#endif
++            if (owned) {
++                MaybeDeviceZoneScope("x_send");
++                {
++                    MaybeDeviceZoneScope("x_send_barrier");
++                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
++                }
++                x_send_step(step, slot, bytes);
++            } else if (!cur_sent) {
++                MaybeDeviceZoneScope("x_receive");
++                if (on_xa) {
++                    while (!xa.ready(step)) {
++                        try_ack_next();
++                    }
++                    xa.consume(step);
++                } else {
++                    while (!xb.ready(step)) {
++                        try_ack_next();
++                    }
++                    xb.consume(step);
++                }
++            }
++        }
++        cur_acked = next_acked;
++        next_acked = false;
++        cur_sent = next_sent;
++        next_sent = false;
++#else
+         if (group_rows > 0) {
+             const uint32_t slot = get_write_ptr(cb_x_round);
+             // Every round but the last spans its nominal slot; the last ends at the group's rows.
++#ifdef ABL_NO_X
++            const uint32_t bytes = tile_bytes;
++#else
+             const uint32_t bytes = ((x_step_rounds - 1) * x_round_tiles + group_rows * k_block_tiles) * tile_bytes;
++#endif
+             if (owned) {
+                 MaybeDeviceZoneScope("x_send");
+                 {
+@@ -239,7 +393,11 @@
+                 }
+                 xa_sender->send(stage_l1, slot, bytes);
+                 if (xb_mcast.can_send()) {
++#ifdef ABL_NO_STRIP
++                    xb_sender->send(stage_l1, slot, tile_bytes);
++#else
+                     xb_sender->send(stage_l1, slot, bytes);
++#endif
+                 }
+             } else if (on_xa) {
+                 MaybeDeviceZoneScope("x_receive");
+@@ -249,6 +407,7 @@
+                 xb_receiver->receive(step);
+             }
+         }
++#endif
+         if (owned) {
+             start_prefetch(step + 1);
+         }
+diff -u kernels_base/moe_down_proj_store.h kernels/moe_down_proj_store.h
+--- kernels_base/moe_down_proj_store.h	2026-11-03 09:52:06.061993150 +0000
++++ kernels/moe_down_proj_store.h	2026-11-03 10:08:54.616565257 +0000
+@@ -38,7 +38,9 @@
+         const uint32_t block_l1 = get_read_ptr(cb_output_rows);
+         const uint32_t first_row = (row_lo + r) * tile_rows;
+         for (uint32_t i = 0; i < tile_rows; ++i) {
++#ifndef ABL_NO_STORE
+             noc_async_write(block_l1 + i * seg_bytes, out_accessor.get_noc_addr(first_row + i, seg_offset), seg_bytes);
++#endif
+         }
+         noc_async_writes_flushed();
+         cb_pop_front(cb_output_rows, core_n_tiles);
+diff -u kernels_base/moe_down_proj_writer.cpp kernels/moe_down_proj_writer.cpp
+--- kernels_base/moe_down_proj_writer.cpp	2026-11-03 09:52:06.061993150 +0000
++++ kernels/moe_down_proj_writer.cpp	2026-11-03 10:08:54.616565257 +0000
+@@ -22,6 +22,7 @@
+ #include "moe_down_proj_plan.h"
+ #include "moe_down_proj_store.h"
+ #include "moe_down_proj_w_prefetch.h"
++#include "moe_early_ack.h"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_output_rows = get_compile_time_arg_val(0);
+@@ -116,12 +117,38 @@
+         prefetch(plan, w_accessor, n_first, w_reader_share, w_share_den);
+ 
+     prefetch.start(0, num_steps, owns);
++#ifdef EARLY_ACK_W
++    moe_early_ack::ChannelFor<
++        get_named_compile_time_arg_val("wa_ct_offset"),
++        get_named_compile_time_arg_val("wa_rt_offset"),
++        get_named_compile_time_arg_val("wa_dr1")>
++        wa(noc);
++    moe_early_ack::ChannelFor<
++        get_named_compile_time_arg_val("wb_ct_offset"),
++        get_named_compile_time_arg_val("wb_rt_offset"),
++        get_named_compile_time_arg_val("wb_dr1")>
++        wb(noc);
++    auto w_needs_ack = [&](uint32_t step) { return step < num_steps && !owns(step); };
++    auto w_ack = [&](uint32_t step) {
++        if (on_wa) {
++            wa.ack(step);
++        } else {
++            wb.ack(step);
++        }
++    };
++    bool cur_acked = false;
++    bool next_acked = false;
++#endif
+     for (uint32_t wave = 0; wave < num_waves_active; ++wave) {
+         uint32_t first_expert;
+         uint32_t last_expert;
+         plan.wave_experts(wave, &first_expert, &last_expert);
+         const uint32_t range_offset = first_expert * w_chunk_bytes;
++#ifdef ABL_NO_W
++        const uint32_t range_bytes = w_tile_bytes;
++#else
+         const uint32_t range_bytes = (last_expert - first_expert + 1) * w_chunk_bytes;
++#endif
+ 
+         uint32_t stored = 0;
+         for (uint32_t round = 0; round < num_k_rounds; ++round) {
+@@ -131,12 +158,61 @@
+             // deliver_w_round
+             const uint32_t step = wave * num_k_rounds + round;
+             const bool owned = owns(step);
++#ifndef ABL_NO_W
+             prefetch.issue(stage_l1, owned ? prefetch.total : issue_quota);
++#endif
+             {
+                 MaybeDeviceZoneScope("w_reserve");
+                 cb_reserve_back(cb_w_round, w_round_tiles);
+             }
+             const uint32_t slot = get_write_ptr(cb_w_round) + range_offset;
++#ifdef EARLY_ACK_W
++            auto try_ack_next = [&]() {
++                if (!next_acked && w_needs_ack(step + 1) &&
++                    cb_pages_reservable_at_back(cb_w_round, 2 * w_round_tiles)) {
++                    w_ack(step + 1);
++                    next_acked = true;
++                }
++            };
++            if (!cur_acked && w_needs_ack(step)) {
++                w_ack(step);
++            }
++            try_ack_next();
++            if (owned) {
++                MaybeDeviceZoneScope("w_send");
++                {
++                    MaybeDeviceZoneScope("w_send_barrier");
++                    if constexpr (w_reads_on_reader) {
++                        cb_wait_front(cb_w_stage, w_round_tiles);
++                    }
++                    noc_async_read_barrier();
++                }
++                if (on_wa) {
++                    wa.send(step, stage_l1 + range_offset, slot, range_bytes);
++                } else {
++                    wb.send(step, stage_l1 + range_offset, slot, range_bytes);
++                }
++                if constexpr (w_reads_on_reader) {
++                    cb_pop_front(cb_w_stage, w_round_tiles);
++                }
++                prefetch.start(step + 1, num_steps, owns);
++            } else {
++                MaybeDeviceZoneScope("w_receive");
++                if (on_wa) {
++                    while (!wa.ready(step)) {
++                        try_ack_next();
++                    }
++                    wa.consume(step);
++                } else {
++                    while (!wb.ready(step)) {
++                        try_ack_next();
++                    }
++                    wb.consume(step);
++                }
++            }
++            cur_acked = next_acked;
++            next_acked = false;
++#else
+             if (owned) {
+                 MaybeDeviceZoneScope("w_send");
+                 {
+@@ -163,6 +239,7 @@
+                 MaybeDeviceZoneScope("w_receive");
+                 wb_receiver->receive(step);
+             }
++#endif
+             cb_push_back(cb_w_round, w_round_tiles);
+         }
+         if (wave > 0) {
+Only in kernels: moe_early_ack.h

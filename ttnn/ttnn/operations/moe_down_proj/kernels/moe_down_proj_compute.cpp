@@ -20,6 +20,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "moe_down_proj_plan.h"
 
 namespace {
@@ -112,34 +113,52 @@ void kernel_main() {
         bool first_call = true;
         Subblock init_sb{0, 0};
 
-        for (uint32_t round = 0; round < num_k_rounds; ++round) {
-            const bool seeded = round > 0;
-            for (uint32_t e = 0; e < MOE_NUM_EXPERTS; ++e) {
-                uint32_t first;
-                const uint32_t rows = plan.expert_rows_in(e, row_lo, row_hi, &first);
-                if (rows == 0) {
-                    continue;
-                }
-                // in1 is NoWaitNoPop: cumulative wait up to this expert's slot of the round.
-                w_buf.wait_front((e + 1) * w_chunk_tiles);
-                const ExpertSlotOffset slot_offset{e * w_chunk_tiles};
+        // Last expert slot this core reads; the writer pushes a whole round at once, so waiting for it up front
+        // only separates the input wait from the matmul work in the zones.
+        uint32_t last_slot = 0;
+        for (uint32_t e = 0; e < MOE_NUM_EXPERTS; ++e) {
+            uint32_t first;
+            if (plan.expert_rows_in(e, row_lo, row_hi, &first) != 0) {
+                last_slot = e + 1;
+            }
+        }
 
-                const uint32_t main_rows = rows - rows % preferred.h;
-                uint32_t call_r0 = first - row_lo;
-                for (uint32_t part = 0; part < 2; ++part) {
-                    const uint32_t call_rows = part == 0 ? main_rows : rows - main_rows;
-                    if (call_rows == 0) {
+        {
+            MaybeDeviceZoneScope("compute_accumulate");
+            for (uint32_t round = 0; round < num_k_rounds; ++round) {
+                const bool seeded = round > 0;
+                if (my_rows > 0) {
+                    MaybeDeviceZoneScope("compute_wait_inputs");
+                    x_buf.wait_front(my_rows * k_block_tiles);
+                    w_buf.wait_front(last_slot * w_chunk_tiles);
+                }
+                for (uint32_t e = 0; e < MOE_NUM_EXPERTS; ++e) {
+                    uint32_t first;
+                    const uint32_t rows = plan.expert_rows_in(e, row_lo, row_hi, &first);
+                    if (rows == 0) {
                         continue;
                     }
-                    const Subblock sb = part == 0 ? preferred : best_subblock(call_rows, core_n_tiles, dest_limit);
-                    const auto shape =
-                        MatmulBlockShape::of(call_rows / sb.h, core_n_tiles / sb.w, sb.h, sb.w, k_block_tiles, 1);
-                    const uint32_t out_base = call_r0 * core_n_tiles;
-                    const bool reinit = sb.h != init_sb.h || sb.w != init_sb.w;
-                    init_sb = sb;
+                    // in1 is NoWaitNoPop: cumulative wait up to this expert's slot of the round.
+                    w_buf.wait_front((e + 1) * w_chunk_tiles);
+                    const ExpertSlotOffset slot_offset{e * w_chunk_tiles};
 
-                    // Template order: transpose, packer_l1_acc, target, tile order, init, in0/in1 policy, hooks,
-                    // untilize dim, inner dim fn, in0 source, in1 offset, caller_owns, seeded, activation, reconfig.
+                    const uint32_t main_rows = rows - rows % preferred.h;
+                    uint32_t call_r0 = first - row_lo;
+                    for (uint32_t part = 0; part < 2; ++part) {
+                        const uint32_t call_rows = part == 0 ? main_rows : rows - main_rows;
+                        if (call_rows == 0) {
+                            continue;
+                        }
+                        const Subblock sb = part == 0 ? preferred : best_subblock(call_rows, core_n_tiles, dest_limit);
+                        const auto shape =
+                            MatmulBlockShape::of(call_rows / sb.h, core_n_tiles / sb.w, sb.h, sb.w, k_block_tiles, 1);
+                        const uint32_t out_base = call_r0 * core_n_tiles;
+                        const bool reinit = sb.h != init_sb.h || sb.w != init_sb.w;
+                        init_sb = sb;
+
+                        // Template order: transpose, packer_l1_acc, target, tile order, init, in0/in1 policy, hooks,
+                        // untilize dim, inner dim fn, in0 source, in1 offset, caller_owns, seeded, activation,
+                        // reconfig.
 #define MOE_MATMUL(INIT, SEEDED, RECONFIG)            \
     matmul_block<                                     \
         true,                                         \
@@ -175,32 +194,33 @@ void kernel_main() {
         slot_offset,                                  \
         out_base)
 
-                    if (first_call) {
-                        // Round 0 by construction (first sub-block of the wave).
-                        MOE_MATMUL(Short, false, INPUT_AND_OUTPUT);
-                    } else if (reinit) {
-                        if (seeded) {
-                            MOE_MATMUL(Short, true, NONE);
+                        if (first_call) {
+                            // Round 0 by construction (first sub-block of the wave).
+                            MOE_MATMUL(Short, false, INPUT_AND_OUTPUT);
+                        } else if (reinit) {
+                            if (seeded) {
+                                MOE_MATMUL(Short, true, NONE);
+                            } else {
+                                MOE_MATMUL(Short, false, NONE);
+                            }
                         } else {
-                            MOE_MATMUL(Short, false, NONE);
+                            if (seeded) {
+                                MOE_MATMUL(None, true, NONE);
+                            } else {
+                                MOE_MATMUL(None, false, NONE);
+                            }
                         }
-                    } else {
-                        if (seeded) {
-                            MOE_MATMUL(None, true, NONE);
-                        } else {
-                            MOE_MATMUL(None, false, NONE);
-                        }
-                    }
 #undef MOE_MATMUL
-                    first_call = false;
-                    call_r0 += call_rows;
+                        first_call = false;
+                        call_r0 += call_rows;
+                    }
                 }
+                // release_round: the sub-block calls popped my_rows * k_block_tiles; the rest of the nominal round.
+                x_buf.wait_front(x_round_tiles - my_rows * k_block_tiles);
+                x_buf.pop_front(x_round_tiles - my_rows * k_block_tiles);
+                w_buf.wait_front(MOE_NUM_EXPERTS * w_chunk_tiles);
+                w_buf.pop_front(MOE_NUM_EXPERTS * w_chunk_tiles);
             }
-            // release_round: the sub-block calls popped my_rows * k_block_tiles; the rest of the nominal round.
-            x_buf.wait_front(x_round_tiles - my_rows * k_block_tiles);
-            x_buf.pop_front(x_round_tiles - my_rows * k_block_tiles);
-            w_buf.wait_front(MOE_NUM_EXPERTS * w_chunk_tiles);
-            w_buf.pop_front(MOE_NUM_EXPERTS * w_chunk_tiles);
         }
         // The partials pack left packer L1 accumulation on; the untilize must overwrite its output.
         pack_reconfig_l1_acc(0);
@@ -208,6 +228,7 @@ void kernel_main() {
         // untilize_wave
         partials_buf.push_back(partials_tiles);
         if (my_rows > 0) {
+            MaybeDeviceZoneScope("compute_untilize");
             untilize<core_n_tiles, cb_partials, cb_output_rows>(my_rows);
         }
         const uint32_t remainder = partials_tiles - my_rows * core_n_tiles;

@@ -145,7 +145,10 @@ def _rect_layout(grid):
 
 def _l_layout(grid):
     """n-lines 0..gx-1 = columns of the rect (gx x h, h = gy - 1); n-line gx = the strip y = gy - 1, x < h.
-    m-group g = rect row g plus strip core (g, gy - 1). None where the shape does not exist."""
+    m-group g = rect row g plus strip core (g, gy - 1). None where the shape does not exist.
+    Core (g, g) of rect row g never sends x; it forwards each x step to the strip core one step behind, so a rotating
+    sender injects once (8x512 layer 0, occupied: 177.2 -> 161.9-163.1 us; sender sending both copies, or a
+    forwarder at x = gx - 1, measured slower)."""
     h = grid.y - 1
     lines = grid.x + 1
     if h < 2 or h > grid.x or TENSOR_N_TILES % lines:
@@ -160,12 +163,18 @@ def _l_layout(grid):
         layout.roles[(x, grid.y - 1)] = (grid.x, x)
     layout.channels[W_MAIN] = (rect, h, _rotating(h), ttnn.McastCoreOrder.ColumnMajor)
     layout.channels[W_STRIP] = (strip, h, _rotating(h), ttnn.McastCoreOrder.RowMajor)
-    layout.channels[X_MAIN] = (rect, grid.x, _rotating(grid.x), ttnn.McastCoreOrder.RowMajor)
-    # Group g's senders are rect row g, rotating in step with X_MAIN, so one core sends both copies of a round.
+    senders = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for y in range(h) for x in range(grid.x) if x != y]
+    )
+    if grid.x > 2:
+        x_sender = ttnn.McastRotatingSenderConfig(senders, sender_order=ttnn.McastCoreOrder.RowMajor)
+    else:
+        x_sender = ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(1 - g, g) for g in range(h)])
+    layout.channels[X_MAIN] = (rect, grid.x, x_sender, ttnn.McastCoreOrder.RowMajor)
     layout.channels[X_STRIP] = (
         strip,
         1,
-        ttnn.McastRotatingSenderConfig(rect, sender_order=ttnn.McastCoreOrder.RowMajor),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(g, g) for g in range(h)]),
         ttnn.McastCoreOrder.RowMajor,
     )
     return layout

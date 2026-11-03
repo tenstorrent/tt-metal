@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "moe_down_proj_plan.h"
 
 template <uint32_t cb_output_rows, uint32_t core_n_tiles, typename Accessor>
@@ -28,6 +29,10 @@ uint32_t moe_store_wave(
     const uint32_t row_lo = plan.group_first(wave, group);
     const uint32_t my_rows = plan.group_rows(wave, group);
     const uint32_t last = my_rows - first < max_blocks ? my_rows : first + max_blocks;
+    if (last <= first) {
+        return last;
+    }
+    MaybeDeviceZoneScope("y_store");
     for (uint32_t r = first; r < last; ++r) {
         cb_wait_front(cb_output_rows, core_n_tiles);
         const uint32_t block_l1 = get_read_ptr(cb_output_rows);

@@ -16,6 +16,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "moe_down_proj_plan.h"
@@ -131,14 +132,21 @@ void kernel_main() {
             const uint32_t step = wave * num_k_rounds + round;
             const bool owned = owns(step);
             prefetch.issue(stage_l1, owned ? prefetch.total : issue_quota);
-            cb_reserve_back(cb_w_round, w_round_tiles);
+            {
+                MaybeDeviceZoneScope("w_reserve");
+                cb_reserve_back(cb_w_round, w_round_tiles);
+            }
             const uint32_t slot = get_write_ptr(cb_w_round) + range_offset;
             if (owned) {
-                // The single-round stage CB keeps its read and write pointers at stage_l1.
-                if constexpr (w_reads_on_reader) {
-                    cb_wait_front(cb_w_stage, w_round_tiles);
+                MaybeDeviceZoneScope("w_send");
+                {
+                    MaybeDeviceZoneScope("w_send_barrier");
+                    // The single-round stage CB keeps its read and write pointers at stage_l1.
+                    if constexpr (w_reads_on_reader) {
+                        cb_wait_front(cb_w_stage, w_round_tiles);
+                    }
+                    noc_async_read_barrier();
                 }
-                noc_async_read_barrier();
                 if (on_wa) {
                     wa_sender->send(stage_l1 + range_offset, slot, range_bytes);
                 } else {
@@ -149,8 +157,10 @@ void kernel_main() {
                 }
                 prefetch.start(step + 1, num_steps, owns);
             } else if (on_wa) {
+                MaybeDeviceZoneScope("w_receive");
                 wa_receiver->receive(step);
             } else {
+                MaybeDeviceZoneScope("w_receive");
                 wb_receiver->receive(step);
             }
             cb_push_back(cb_w_round, w_round_tiles);

@@ -1,0 +1,115 @@
+diff -ru a/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp b/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp
+--- a/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp	2026-11-03 10:04:11.418064891 +0000
++++ b/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp	2026-11-03 10:04:17.862030685 +0000
+@@ -5,10 +5,11 @@
+ // D0: counts page -> cb_counts_compute and cb_counts_writer (parsed from the landing copy for the plan).
+ // deliver_x_round, x step s = (wave s / x_steps_per_wave, x K block s % x_steps_per_wave) over the non-empty waves:
+ //   the step's rotating sender of the m-group multicasts its rows' K block of x from its private staging buffer
+-//   into the round slot along the m-group (xa); in the L layout it also copies the block to the group's strip core
+-//   (xb). After a send the sender starts the reads of its next owned step into staging, a quota per step, so a
+-//   step's L1 reads overlap the steps in between. Nominal x_step_rounds * core_row_tiles_max * k_block_tiles pages
+-//   pushed per step; an empty m-group moves no data.
++//   into the round slot along the m-group (xa). In the L layout a fixed forwarder of the rect row (never an x
++//   sender) copies each step to the group's strip core (xb) one step behind, from its own round slot, before it
++//   acks the next step, so the sender injects each step once. After a send the sender starts the reads of its
++//   next owned step into staging, a quota per step, so a step's L1 reads overlap the steps in between. Nominal
++//   x_step_rounds * core_row_tiles_max * k_block_tiles pages pushed per step; an empty m-group moves no data.
+ // x_step_rounds: one x step carries that many consecutive compute K rounds (x K block = x_step_rounds *
+ //   k_block_tiles), laid out round-major ([round][row][k]) so compute pops them as separate rounds. Fewer, larger x
+ //   steps keep the x chain's per-step cost while the w rounds (and their CBs) stay at k_block_tiles.
+@@ -205,6 +206,21 @@
+         w_prefetch.start(0, num_steps, w_owns);
+     }
+ 
++    // L layout: the xb fixed sender forwards the last received step (pending) before acking the next one.
++    const bool forwarder = xb_mcast.can_send();
++    uint32_t pending_slot = 0;
++    uint32_t pending_bytes = 0;
++    auto forward_pending = [&]() {
++        if (pending_bytes == 0) {
++            return;
++        }
++        // The previous forward read the slot this step's ack frees.
++        noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
++        xb_sender->template send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
++            pending_slot, pending_slot, pending_bytes);
++        pending_bytes = 0;
++    };
++
+     start_prefetch(0);
+     uint32_t stored = 0;
+     for (uint32_t step = 0; step < num_steps; ++step) {
+@@ -222,6 +238,9 @@
+         const bool owned = on_xa && xa_mcast.should_send(step);
+         issue_prefetch(owned ? pf_total : issue_quota);
+         cb_reserve_back(cb_x_round, x_step_tiles);
++        if (forwarder) {
++            forward_pending();
++        }
+         if (group_rows > 0) {
+             const uint32_t slot = get_write_ptr(cb_x_round);
+             // Every round but the last spans its nominal slot; the last ends at the group's rows.
+@@ -229,11 +248,12 @@
+             if (owned) {
+                 dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
+                 xa_sender->send(stage_l1, slot, bytes);
+-                if (xb_mcast.can_send()) {
+-                    xb_sender->send(stage_l1, slot, bytes);
+-                }
+             } else if (on_xa) {
+                 xa_receiver->receive(step);
++                if (forwarder) {
++                    pending_slot = slot;
++                    pending_bytes = bytes;
++                }
+             } else {
+                 xb_receiver->receive(step);
+             }
+@@ -246,6 +266,10 @@
+             store_wave(step / x_steps_per_wave - 1, stored);
+         }
+     }
++    if (forwarder) {
++        forward_pending();
++        noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
++    }
+     if (num_steps > 0) {
+         store_wave(num_steps / x_steps_per_wave - 1);
+     }
+diff -ru a/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py b/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py
+--- a/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py	2026-11-03 10:04:11.422064871 +0000
++++ b/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py	2026-11-03 10:04:11.446064743 +0000
+@@ -145,7 +145,10 @@
+ 
+ def _l_layout(grid):
+     """n-lines 0..gx-1 = columns of the rect (gx x h, h = gy - 1); n-line gx = the strip y = gy - 1, x < h.
+-    m-group g = rect row g plus strip core (g, gy - 1). None where the shape does not exist."""
++    m-group g = rect row g plus strip core (g, gy - 1). None where the shape does not exist.
++    Core (g, g) of rect row g never sends x; it forwards each x step to the strip core one step behind, so a rotating
++    sender injects once (8x512 layer 0, occupied: 177.2 -> 161.9-163.1 us; sender sending both copies, or a
++    forwarder at x = gx - 1, measured slower)."""
+     h = grid.y - 1
+     lines = grid.x + 1
+     if h < 2 or h > grid.x or TENSOR_N_TILES % lines:
+@@ -160,12 +163,18 @@
+         layout.roles[(x, grid.y - 1)] = (grid.x, x)
+     layout.channels[W_MAIN] = (rect, h, _rotating(h), ttnn.McastCoreOrder.ColumnMajor)
+     layout.channels[W_STRIP] = (strip, h, _rotating(h), ttnn.McastCoreOrder.RowMajor)
+-    layout.channels[X_MAIN] = (rect, grid.x, _rotating(grid.x), ttnn.McastCoreOrder.RowMajor)
+-    # Group g's senders are rect row g, rotating in step with X_MAIN, so one core sends both copies of a round.
++    senders = ttnn.CoreRangeSet(
++        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for y in range(h) for x in range(grid.x) if x != y]
++    )
++    if grid.x > 2:
++        x_sender = ttnn.McastRotatingSenderConfig(senders, sender_order=ttnn.McastCoreOrder.RowMajor)
++    else:
++        x_sender = ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(1 - g, g) for g in range(h)])
++    layout.channels[X_MAIN] = (rect, grid.x, x_sender, ttnn.McastCoreOrder.RowMajor)
+     layout.channels[X_STRIP] = (
+         strip,
+         1,
+-        ttnn.McastRotatingSenderConfig(rect, sender_order=ttnn.McastCoreOrder.RowMajor),
++        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(g, g) for g in range(h)]),
+         ttnn.McastCoreOrder.RowMajor,
+     )
+     return layout
