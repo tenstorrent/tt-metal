@@ -10,11 +10,103 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+constexpr uint64_t kMinimalMatmulProgramHashSalt = 0x4d4d5f6d6d5f7631ULL;  // "MM_mm_v1"
+
+// Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash.
+ttsl::hash::hash_t spec_without_rows(const std::optional<Tensor>& tensor) {
+    return tensor.has_value()
+               ? operations::common::hash_spec_without_rows(tensor->tensor_spec(), kMinimalMatmulProgramHashSalt)
+               : ttsl::hash::hash_objects_with_default_seed(kMinimalMatmulProgramHashSalt);
+}
+
+using operations::common::folded_rows;
+
+// Shared by the miss and hit validators so a call that built the program is never refused on a later hit.
+// Logical rows as on the unfused op; folded rows because the kernels read the flat tile grid.
+void validate_fused_ternary_rows(const Tensor& act, const Tensor& ternary_a, const Tensor& ternary_b) {
+    const uint32_t M = folded_rows(act);
+    const uint32_t M_logical = act.logical_shape()[-2];
+    const uint32_t a_rows = folded_rows(ternary_a);
+    const uint32_t b_rows = folded_rows(ternary_b);
+    TT_FATAL(
+        ternary_a.logical_shape()[-2] == M_logical && a_rows == M,
+        "fused_ternary_input_a must hold the activation's rows (M={}, {} folded), got shape {} ({} folded)",
+        M_logical,
+        M,
+        ternary_a.logical_shape(),
+        a_rows);
+    if (ternary_b.logical_shape()[-2] == 1) {
+        // A [..., 1, N] gate is broadcast from tile row 0, so it cannot carry one gate per batch.
+        TT_FATAL(
+            b_rows == TILE_HEIGHT,
+            "fused_ternary_input_b broadcasts over the rows only when every upper dim is 1, got shape {}",
+            ternary_b.logical_shape());
+    } else {
+        // With M == 32 a full b is one tile row and the factory builds the broadcast program: the same one tile.
+        TT_FATAL(
+            ternary_b.logical_shape()[-2] == M_logical && b_rows == M,
+            "fused_ternary_input_b must be one row or the activation's rows (M={}, {} folded), got {} ({} folded)",
+            M_logical,
+            M,
+            ternary_b.logical_shape(),
+            b_rows);
+    }
+}
+
+}  // namespace
+
+ttsl::hash::hash_t MinimalMatmulDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const uint32_t M = input.physical_volume() / input.padded_shape()[-1];
+    const uint32_t N = tensor_args.weight_tensor.padded_shape()[-1];
+    const auto& b = tensor_args.fused_ternary_input_b;
+    // The grid orientation (M > N) and, without an explicit config, the default subblock choice
+    // (N >= M) are the only row-dependent program decisions; they enter the key as one bit.
+    const bool transpose_core_grid = M > N;
+    const bool b_broadcast = b.has_value() && folded_rows(*b) == TILE_HEIGHT;
+    return ttsl::hash::hash_objects_with_default_seed(
+        kMinimalMatmulProgramHashSalt,
+        operation_attributes,
+        operations::common::hash_spec_without_rows(input, kMinimalMatmulProgramHashSalt),
+        tensor_args.weight_tensor.tensor_spec(),
+        spec_without_rows(tensor_args.bias_tensor),
+        spec_without_rows(tensor_args.optional_input_tensor),
+        spec_without_rows(tensor_args.fused_ternary_input_a),
+        spec_without_rows(tensor_args.fused_ternary_input_b),
+        transpose_core_grid,
+        b_broadcast);
+}
+
+// Only the row-dependent invariants the hash does not cover; everything else was checked on the
+// miss that built the program.
+void MinimalMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const uint32_t M = folded_rows(tensor_args.input_tensor);
+    TT_FATAL(M > 0 && M % TILE_HEIGHT == 0, "minimal_matmul activation rows ({}) must be a multiple of 32", M);
+    if (tensor_args.optional_input_tensor.has_value()) {
+        TT_FATAL(
+            folded_rows(tensor_args.optional_input_tensor.value()) == M,
+            "minimal_matmul fused concat: second-input rows must match the activation rows ({})",
+            M);
+    }
+    if (operation_attributes.fused_ternary_scalar.has_value()) {
+        validate_fused_ternary_rows(
+            tensor_args.input_tensor,
+            tensor_args.fused_ternary_input_a.value(),
+            tensor_args.fused_ternary_input_b.value());
+    }
+}
+
 void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
@@ -228,25 +320,18 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             dtype_supported(ternary_a.dtype()) && dtype_supported(ternary_b.dtype()),
             "fused_ternary tensors must have supported dtypes");
 
-        const auto& ternary_a_logical = ternary_a.logical_shape();
-        const auto& ternary_b_logical = ternary_b.logical_shape();
-
-        // ternary_a matches output [M, N], ternary_b is broadcast [1, N]
+        // ternary_a matches the output [M, N]; ternary_b is broadcast [1, N] or full [M, N].
         TT_FATAL(
-            ternary_a_logical[-2] == M && ternary_a_logical[-1] == N,
-            "fused_ternary_input_a shape must match output [M={}, N={}], got [{}, {}]",
-            M,
-            N,
-            ternary_a_logical[-2],
-            ternary_a_logical[-1]);
+            ternary_a.logical_shape()[-1] == N,
+            "fused_ternary_input_a width ({}) must match the output width N ({})",
+            ternary_a.logical_shape()[-1],
+            N);
         TT_FATAL(
-            (ternary_b_logical[-2] == 1 || ternary_b_logical[-2] == M) && ternary_b_logical[-1] == N,
-            "fused_ternary_input_b shape must be [1, N={}] (broadcast) or [M={}, N={}] (full), got [{}, {}]",
-            N,
-            M,
-            N,
-            ternary_b_logical[-2],
-            ternary_b_logical[-1]);
+            ternary_b.logical_shape()[-1] == N,
+            "fused_ternary_input_b width ({}) must match the output width N ({})",
+            ternary_b.logical_shape()[-1],
+            N);
+        validate_fused_ternary_rows(act_tensor, ternary_a, ternary_b);
     }
 
     // Config constraints
