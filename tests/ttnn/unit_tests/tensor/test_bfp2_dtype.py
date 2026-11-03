@@ -29,6 +29,12 @@ def _round_trip(x):
     return ttnn.to_torch(tt_tensor)
 
 
+def _require_bfp_arch(device):
+    # Quasar has no BFP formats (see is_supported_quasar); device tests need Wormhole or Blackhole.
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("BFLOAT2_B device operations require Wormhole or Blackhole")
+
+
 def test_bfp2_alias():
     assert ttnn.bfloat2_b == ttnn.DataType.BFLOAT2_B
 
@@ -126,6 +132,7 @@ def test_bfp2_to_layout_row_major_rejected_on_host(expect_error):
 
 
 def test_bfp2_to_layout_row_major_rejected_on_device(device, expect_error):
+    _require_bfp_arch(device)
     # Untilize keeps the BFLOAT2_B dtype and a ROW_MAJOR BFLOAT2_B tensor is invalid, so the request is rejected before
     # any kernel runs.
     tt_tensor = ttnn.from_torch(_ternary((32, 32)), dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
@@ -167,6 +174,7 @@ def test_bfp2_full():
 
 @pytest.mark.parametrize("other", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_bfp2_device_typecast_float(device, other):
+    _require_bfp_arch(device)
     # Float targets are converted by the unpacker and packer, so these casts are exact for ternary data.
     x = _ternary((64, 64))
     bfp2_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
@@ -178,6 +186,7 @@ def test_bfp2_device_typecast_float(device, other):
 
 @pytest.mark.parametrize("integer", [ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8, ttnn.int8])
 def test_bfp2_device_typecast_integer(device, integer):
+    _require_bfp_arch(device)
     # BFLOAT2_B takes the BFLOAT4_B arms of the typecast kernel, so {0, 1} converts exactly in both directions.
     x = _ternary((64, 64)).abs()
     bfp2_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
@@ -189,6 +198,7 @@ def test_bfp2_device_typecast_integer(device, integer):
 
 @pytest.mark.parametrize("integer", [ttnn.int32, ttnn.int8])
 def test_bfp2_device_typecast_signed_integer(device, integer):
+    _require_bfp_arch(device)
     # -1 is exact in BFLOAT2_B, so signed casts are exact on {-1, 0, 1}.
     x = _ternary((64, 64))
     bfp2_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
@@ -199,6 +209,7 @@ def test_bfp2_device_typecast_signed_integer(device, integer):
 
 
 def test_bfp2_device_typecast_uint16_matches_golden(device):
+    _require_bfp_arch(device)
     # The uint16 golden truncates or rounds depending on the input dtype; 0.5 (exact in BFLOAT2_B) tells them apart.
     x = torch.full((32, 32), 0.5)
     bfp2_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
@@ -210,6 +221,7 @@ def test_bfp2_device_typecast_uint16_matches_golden(device):
 
 
 def test_bfp2_device_typecast_sharded_same_dtype(device):
+    _require_bfp_arch(device)
     # Only a BFLOAT2_B -> BFLOAT2_B cast reaches the sharded typecast factory: no other format has the 320-byte tile.
     x = _ternary((128, 128))
     shard_spec = ttnn.ShardSpec(
@@ -229,6 +241,7 @@ def test_bfp2_device_typecast_sharded_same_dtype(device):
 
 
 def test_bfp2_to_memory_config_dram_l1_round_trip(device):
+    _require_bfp_arch(device)
     # Interleaved DRAM <-> L1 moves fall back to ttnn.copy.
     x = _ternary((64, 128))
     dram_tensor = ttnn.from_torch(
@@ -245,6 +258,7 @@ def test_bfp2_to_memory_config_dram_l1_round_trip(device):
 
 
 def test_bfp2_add_integer_to_bfp2(device):
+    _require_bfp_arch(device)
     # Binary ops convert their result to the requested dtype through the same typecast kernel.
     x = _ternary((64, 64)).abs().to(torch.int32)
     a = ttnn.from_torch(x, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -256,6 +270,7 @@ def test_bfp2_add_integer_to_bfp2(device):
 
 
 def test_bfp2_binary_inputs_rejected(device, expect_error):
+    _require_bfp_arch(device)
     # Binary ops can write BFLOAT2_B results but don't read BFLOAT2_B inputs yet.
     a = ttnn.from_torch(_ternary((32, 32)), dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "Input tensor A dtype DataType::BFLOAT2_B is not supported"):
@@ -263,6 +278,7 @@ def test_bfp2_binary_inputs_rejected(device, expect_error):
 
 
 def test_bfp2_device_round_trip(device):
+    _require_bfp_arch(device)
     x = _ternary((64, 128))
 
     tt_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
@@ -272,6 +288,7 @@ def test_bfp2_device_round_trip(device):
 
 
 def test_bfp2_matmul_matches_bfp4(device):
+    _require_bfp_arch(device)
     # Ternary weights are exact in both formats, so a matmul with BFLOAT2_B weights must match the same matmul with
     # BFLOAT4_B weights bit for bit.
     torch.manual_seed(0)
