@@ -49,36 +49,7 @@ SHARED = {
     "quasar": frozenset(),
 }
 
-# Eltwise kernels that #56276 moves into llk_sfpu on Wormhole and Blackhole. They stay in tt-llk
-# until it lands; test_exceptions_are_current fails once a name here has moved.
-AWAITING_MOVE = frozenset(
-    {
-        "ckernel_sfpu_add_int.h",
-        "ckernel_sfpu_ema.h",
-        "ckernel_sfpu_isinf_isnan.h",
-        "ckernel_sfpu_mul_int.h",
-        "ckernel_sfpu_reduce_custom.h",
-        "ckernel_sfpu_rounding_ops.h",
-        "ckernel_sfpu_sub_int.h",
-        "ckernel_sfpu_threshold.h",
-        "ckernel_sfpu_where.h",
-    }
-)
-# Of those, the ones llk_sfpu already has a same-named header for: a forward to "sfpu/<name>", so
-# the Compute API includes one name on every arch. Both copies resolve to the tt-llk kernel, and
-# test_no_header_in_both_trees exempts one only while it is still that plain forward.
-FORWARDED = frozenset(
-    {
-        "ckernel_sfpu_isinf_isnan.h",
-        "ckernel_sfpu_sub_int.h",
-        "ckernel_sfpu_threshold.h",
-    }
-)
-_AWAITING_ARCHES = ("wormhole_b0", "blackhole")
-
 _BARE_INCLUDE = re.compile(r'\s*#\s*include\s*"(ckernel_sfpu_\w+\.h)"')
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-_LINE_COMMENT = re.compile(r"//[^\n]*")
 
 
 def _tt_llk_sfpu(arch: str) -> Path:
@@ -118,51 +89,24 @@ def _trees(arch: str) -> tuple[set[str], set[str]]:
     return _headers(_tt_llk_sfpu(arch)), llk_sfpu
 
 
-def _awaiting(arch: str) -> frozenset[str]:
-    return AWAITING_MOVE if arch in _AWAITING_ARCHES else frozenset()
-
-
-def _forwarded(arch: str) -> frozenset[str]:
-    return FORWARDED if arch in _AWAITING_ARCHES else frozenset()
-
-
-def _is_forward(path: Path) -> bool:
-    """`path` holds only ``#pragma once`` and ``#include "sfpu/<its own name>"``, besides comments.
-
-    Anything more is a second kernel under the tt-llk kernel's name, not a forward to it.
-    """
-    code = _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", path.read_text()))
-    lines = [" ".join(line.split()) for line in code.splitlines() if line.strip()]
-    return lines == ["#pragma once", f'#include "sfpu/{path.name}"']
-
-
 @pytest.mark.parametrize("arch", ARCHES)
 def test_no_header_in_both_trees(arch: str):
-    """A basename may be in tt-llk's sfpu or in llk_sfpu, not in both.
-
-    The one exception is a FORWARDED header that still only forwards to its tt-llk namesake.
-    """
+    """A basename may be in tt-llk's sfpu or in llk_sfpu, not in both."""
     tt_llk, llk_sfpu = _trees(arch)
-    both = sorted(
-        name
-        for name in tt_llk & llk_sfpu
-        if name not in _forwarded(arch) or not _is_forward(_llk_sfpu(arch) / name)
-    )
+    both = sorted(tt_llk & llk_sfpu)
     assert not both, (
         f"{arch}: {both} exist in both {_rel(_tt_llk_sfpu(arch))} and "
         f"{_rel(_llk_sfpu(arch))}, so which one a bare include compiles depends on the "
         "build. Keep only the llk_sfpu one, unless it is a SHARED helper: keep that in tt-llk, "
-        'delete the llk_sfpu copy and include it as "sfpu/<name>". (A FORWARDED header is '
-        'exempt only while it holds nothing but #pragma once and #include "sfpu/<its own name>".)'
+        'delete the llk_sfpu copy and include it as "sfpu/<name>".'
     )
 
 
 @pytest.mark.parametrize("arch", ARCHES)
 def test_tt_llk_sfpu_holds_only_shared_headers(arch: str):
-    """tt-llk's sfpu directory keeps the SHARED headers and no eltwise kernels, except the
-    AWAITING_MOVE ones until #56276 lands."""
+    """tt-llk's sfpu directory keeps the SHARED headers and no eltwise kernels."""
     tt_llk, _ = _trees(arch)
-    extra = sorted(tt_llk - SHARED[arch] - _awaiting(arch))
+    extra = sorted(tt_llk - SHARED[arch])
     assert not extra, (
         f"{arch}: {extra} in {_rel(_tt_llk_sfpu(arch))}. Eltwise SFPU kernels belong in "
         f"{_rel(_llk_sfpu(arch))}. If llk_lib itself needs the header, add it to SHARED "
@@ -172,25 +116,15 @@ def test_tt_llk_sfpu_holds_only_shared_headers(arch: str):
 
 @pytest.mark.parametrize("arch", ARCHES)
 def test_exceptions_are_current(arch: str):
-    """SHARED, AWAITING_MOVE and FORWARDED name only headers that are still where they say.
+    """SHARED names only headers that are still in tt-llk.
 
     A stale entry would let that name back into tt-llk unnoticed.
     """
-    tt_llk, llk_sfpu = _trees(arch)
+    tt_llk, _ = _trees(arch)
     gone = sorted(SHARED[arch] - tt_llk)
     assert not gone, (
         f"{arch}: {gone} are no longer in {_rel(_tt_llk_sfpu(arch))}. Remove them from "
         f'SHARED["{arch}"] in this test.'
-    )
-    moved = sorted(_awaiting(arch) - tt_llk)
-    assert not moved, (
-        f"{arch}: {moved} are no longer in {_rel(_tt_llk_sfpu(arch))}. Remove them "
-        "from AWAITING_MOVE, and from FORWARDED, in this test."
-    )
-    unforwarded = sorted(_forwarded(arch) - llk_sfpu)
-    assert not unforwarded, (
-        f"{arch}: {unforwarded} are no longer in {_rel(_llk_sfpu(arch))}. Remove them "
-        "from FORWARDED in this test."
     )
 
 

@@ -17,9 +17,11 @@ from models.tt_dit.models.vae.vae import (
     VaeContext,
     VaeConv2d,
     VaeDownBlock,
+    VaeDownsampler,
     VaeMidBlock,
     VaeNormDesc,
     VaeNormDescRms,
+    VaeResnetBlock,
     VaeRmsNorm,
     VaeUpBlock,
     fold_quant_conv_mean,
@@ -27,6 +29,7 @@ from models.tt_dit.models.vae.vae import (
 from models.tt_dit.parallel.config import VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache, tensor
+from models.tt_dit.utils.conv3d import conv3d_blocking_hash
 from models.tt_dit.utils.substate import pop_substate, rename_substate
 from models.tt_dit.utils.tracing import Tracer
 
@@ -110,6 +113,17 @@ class WanAvgDown2D(Module):
         return x
 
 
+class WanUpBlock2D(VaeUpBlock):
+    """Wan 2.1's up block (``WanUpBlock``), 2D-only."""
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if self.upsampler is not None:
+            rename_substate(state, "upsamplers.0.resample.1", "upsamplers.0.conv")
+            pop_substate(state, "upsamplers.0.time_conv")
+
+        super()._prepare_torch_state(state)
+
+
 class WanResidualUpBlock2D(VaeUpBlock):
     """Wan 2.2's residual up block (``WanResidualUpBlock``), 2D-only."""
 
@@ -136,10 +150,27 @@ class WanResidualUpBlock2D(VaeUpBlock):
             WanDupUp2D(in_channels=in_channels, out_channels=out_channels, factor=2) if upsample else None
         )
 
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if self.upsampler is not None:
+            rename_substate(state, "upsampler.resample.1", "upsampler.conv")
+            pop_substate(state, "upsampler.time_conv")
+
+        super()._prepare_torch_state(state)
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.avg_shortcut is None:
             return super().forward(x)
         return super().forward(x) + self.avg_shortcut.forward(x)
+
+
+class WanDownsampler2D(VaeDownsampler):
+    """Wan 2.1's downsampler (``WanResample``), 2D-only."""
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "resample.1", "conv")
+        pop_substate(state, "time_conv")
+
+        super()._prepare_torch_state(state)
 
 
 class WanResidualDownBlock2D(VaeDownBlock):
@@ -178,13 +209,24 @@ class WanResidualDownBlock2D(VaeDownBlock):
                 raise ValueError(msg)
             self.avg_shortcut = None
 
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if self.downsampler is not None:
+            rename_substate(state, "downsampler.resample.1", "downsampler.conv")
+            pop_substate(state, "downsampler.time_conv")
+
+        super()._prepare_torch_state(state)
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         shortcut = self.avg_shortcut.forward(x) if self.avg_shortcut is not None else x
         return super().forward(x) + shortcut
 
 
 class WanVaeDecoder2D(Module):
-    """Wan 2.2 VAE decoder on a single frame."""
+    """Wan VAE decoder on a single frame.
+
+    With ``is_residual`` it is the Wan 2.2 decoder, whose up blocks add a shortcut; without it, the
+    Wan 2.1 decoder, whose upsamplers halve the channel count.
+    """
 
     def __init__(
         self,
@@ -195,6 +237,7 @@ class WanVaeDecoder2D(Module):
         dim_mult: Sequence[int],
         num_res_blocks: int,
         out_channels: int,
+        is_residual: bool,
         parallel_config: VaeHWParallelConfig,
         device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
@@ -217,14 +260,26 @@ class WanVaeDecoder2D(Module):
 
         self.up_blocks = ModuleList([])
         for i, (in_dim, out_dim) in enumerate(itertools.pairwise(dims)):
-            up_block = WanResidualUpBlock2D(
-                in_channels=in_dim,
-                out_channels=out_dim,
-                num_layers=num_res_blocks + 1,
-                upsample=i != len(dim_mult) - 1,
-                norm=VaeNormDescRms(eps=eps),
-                ctx=ctx,
-            )
+            upsample = i != len(dim_mult) - 1
+            if is_residual:
+                up_block = WanResidualUpBlock2D(
+                    in_channels=in_dim,
+                    out_channels=out_dim,
+                    num_layers=num_res_blocks + 1,
+                    upsample=upsample,
+                    norm=VaeNormDescRms(eps=eps),
+                    ctx=ctx,
+                )
+            else:
+                up_block = WanUpBlock2D(
+                    in_channels=in_dim if i == 0 else in_dim // 2,
+                    out_channels=out_dim,
+                    upsampler_out_channels=out_dim // 2,
+                    num_layers=num_res_blocks + 1,
+                    upsample=upsample,
+                    norm=VaeNormDescRms(eps=eps),
+                    ctx=ctx,
+                )
             self.up_blocks.append(up_block)
 
         self.conv_norm_out = VaeRmsNorm(out_dim, eps=eps, ctx=ctx, activation_fn="silu")
@@ -238,15 +293,6 @@ class WanVaeDecoder2D(Module):
         rename_substate(state, "decoder", "")
 
         state["conv_norm_out.gamma"] = state.pop("norm_out.gamma")
-
-        # ``WanResidualUpBlock`` stores its upsampler as ``upsampler.resample[1]`` (a Sequential) plus
-        # an optional ``upsampler.time_conv`` for the temporal-upsample variant. The 2D decoder uses
-        # ``upsampler.conv`` and skips temporal, so rename the spatial conv and drop the time conv.
-        for key in list(state.keys()):
-            if ".upsampler.resample.1." in key:
-                state[key.replace(".upsampler.resample.1.", ".upsampler.conv.")] = state.pop(key)
-            elif ".upsampler.time_conv." in key:
-                del state[key]
 
         _slice_causal_convs(state)
         _convert_mid_block_attention(state, prefix="mid_block.attentions.0.")
@@ -294,7 +340,11 @@ class WanVaeDecoder2D(Module):
 
 
 class WanVaeEncoder2D(Module):
-    """Wan 2.2 (residual) VAE encoder on a single frame, producing the latent mean."""
+    """Wan VAE encoder on a single frame, producing the latent mean.
+
+    With ``is_residual`` it is the Wan 2.2 encoder, whose down blocks add a shortcut; without it, the
+    Wan 2.1 encoder, whose residual blocks and downsamplers form one flat list.
+    """
 
     def __init__(
         self,
@@ -305,6 +355,7 @@ class WanVaeEncoder2D(Module):
         num_res_blocks: int,
         temperal_downsample: Sequence[bool],
         in_channels: int,
+        is_residual: bool,
         parallel_config: VaeHWParallelConfig,
         device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
@@ -321,17 +372,31 @@ class WanVaeEncoder2D(Module):
         self.down_blocks = ModuleList([])
         for i, (in_dim, out_dim) in enumerate(itertools.pairwise(dims)):
             downsample = i != len(dim_mult) - 1
-            self.down_blocks.append(
-                WanResidualDownBlock2D(
-                    in_channels=in_dim,
-                    out_channels=out_dim,
-                    num_layers=num_res_blocks,
-                    downsample=downsample,
-                    temporal_downsample=downsample and temperal_downsample[i],
-                    norm=VaeNormDescRms(eps=eps),
-                    ctx=ctx,
+            if is_residual:
+                self.down_blocks.append(
+                    WanResidualDownBlock2D(
+                        in_channels=in_dim,
+                        out_channels=out_dim,
+                        num_layers=num_res_blocks,
+                        downsample=downsample,
+                        temporal_downsample=downsample and temperal_downsample[i],
+                        norm=VaeNormDescRms(eps=eps),
+                        ctx=ctx,
+                    )
                 )
-            )
+                continue
+
+            for j in range(num_res_blocks):
+                self.down_blocks.append(
+                    VaeResnetBlock(
+                        in_channels=in_dim if j == 0 else out_dim,
+                        out_channels=out_dim,
+                        norm=VaeNormDescRms(eps=eps),
+                        ctx=ctx,
+                    )
+                )
+            if downsample:
+                self.down_blocks.append(WanDownsampler2D(num_channels=out_dim, ctx=ctx))
 
         self.mid_block = VaeMidBlock(num_channels=dims[-1], norm=VaeNormDescRms(eps=eps), ctx=ctx)
 
@@ -344,14 +409,6 @@ class WanVaeEncoder2D(Module):
         pop_substate(state, "decoder")
         pop_substate(state, "post_quant_conv")
         rename_substate(state, "encoder", "")
-
-        # ``WanResample`` stores the downsampler's spatial conv as ``resample[1]``, after the zero
-        # padding, plus a ``time_conv`` that a single frame never reaches.
-        for key in list(state.keys()):
-            if ".downsampler.resample.1." in key:
-                state[key.replace(".downsampler.resample.1.", ".downsampler.conv.")] = state.pop(key)
-            elif ".downsampler.time_conv." in key:
-                del state[key]
 
         _slice_causal_convs(state)
         _convert_mid_block_attention(state, prefix="mid_block.attentions.0.")
@@ -381,7 +438,7 @@ class WanVaeEncoder2D(Module):
 
 
 class WanVaeDecoder2DAdapter:
-    """Torch-in (BHWC), torch-out (BCHW) decoder for the Wan 2.2 VAE of a checkpoint."""
+    """Torch-in (BHWC), torch-out (BCHW) decoder for the Wan VAE of a checkpoint."""
 
     def __init__(
         self,
@@ -404,14 +461,16 @@ class WanVaeDecoder2DAdapter:
         self._latents_shift = torch.tensor(hf_config["latents_mean"])
         self.z_dim: int = hf_config["z_dim"]
         self.patch_size: int = hf_config.get("patch_size") or 1
-        self.spatial_compression_ratio: int = hf_config["scale_factor_spatial"]
+        # Wan 2.1 style configs, such as Qwen-Image's, omit the keys that default to the Wan 2.1 VAE.
+        self.spatial_compression_ratio: int = hf_config.get("scale_factor_spatial", 8)
+        # One tracer per latent size, created on first use.
+        self._tracers: dict[tuple[int, int], Tracer] = {}
 
         if use_torch:
             self._torch_vae = AutoencoderKLWan.from_pretrained(
                 checkpoint_name, subfolder="vae", torch_dtype=torch.float32
             )
             self._decoder = None
-            self._tracer = None
             self._tt_latents_std = None
             self._tt_latents_mean = None
         else:
@@ -423,11 +482,11 @@ class WanVaeDecoder2DAdapter:
                 dim_mult=hf_config["dim_mult"],
                 num_res_blocks=hf_config["num_res_blocks"],
                 out_channels=hf_config.get("out_channels", 3),
+                is_residual=hf_config.get("is_residual", False),
                 device=self._device,
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-            self._tracer = Tracer(self._rescale_and_decode, device=self._device, clone_prep_inputs=False)
             self._tt_latents_std = tensor.from_torch(torch.tensor(hf_config["latents_std"]), device=self._device)
             self._tt_latents_mean = tensor.from_torch(torch.tensor(hf_config["latents_mean"]), device=self._device)
 
@@ -435,7 +494,7 @@ class WanVaeDecoder2DAdapter:
                 self._decoder,
                 get_torch_state_dict=self._load_torch_state_dict,
                 model_name=self._name.split("/")[-1],
-                subfolder="vae",
+                subfolder=f"vae_{conv3d_blocking_hash(self._decoder)}",
                 parallel_config=self._parallel_config,
                 mesh_shape=tuple(self._device.shape),
                 mesh_device=self._device,
@@ -465,7 +524,11 @@ class WanVaeDecoder2DAdapter:
             layout=ttnn.TILE_LAYOUT,
             mesh_axes=_bhwc_mesh_axes(self._parallel_config),
         )
-        tt_out = self._tracer(tt_latents, traced=traced)
+
+        if (h, w) not in self._tracers:
+            self._tracers[h, w] = Tracer(self._rescale_and_decode, device=self._device, clone_prep_inputs=False)
+        tt_out = self._tracers[h, w](tt_latents, traced=traced)
+
         torch_out = tensor.to_torch(tt_out)
         b, out_h, _ = torch_out.shape
         torch_out = torch_out.reshape(b, out_h, w * self.spatial_compression_ratio // self.patch_size, -1)
@@ -473,7 +536,7 @@ class WanVaeDecoder2DAdapter:
 
 
 class WanVaeEncoder2DAdapter:
-    """Torch-in (BCHW), torch-out (BHWC) encoder for the Wan 2.2 VAE of a checkpoint."""
+    """Torch-in (BCHW), torch-out (BHWC) encoder for the Wan VAE of a checkpoint."""
 
     def __init__(
         self,
@@ -493,14 +556,16 @@ class WanVaeEncoder2DAdapter:
         self._latents_std = torch.tensor(hf_config["latents_std"])
         self.z_dim: int = hf_config["z_dim"]
         self.patch_size: int = hf_config.get("patch_size") or 1
-        self.spatial_compression_ratio: int = hf_config["scale_factor_spatial"]
+        # Wan 2.1 style configs, such as Qwen-Image's, omit the keys that default to the Wan 2.1 VAE.
+        self.spatial_compression_ratio: int = hf_config.get("scale_factor_spatial", 8)
+        # One tracer per image size, created on first use.
+        self._tracers: dict[tuple[int, int], Tracer] = {}
 
         if use_torch:
             self._torch_vae = AutoencoderKLWan.from_pretrained(
                 checkpoint_name, subfolder="vae", torch_dtype=torch.float32
             )
             self._encoder = None
-            self._tracer = None
             self._tt_latents_mean = None
             self._tt_latents_scaling = None
         else:
@@ -512,11 +577,11 @@ class WanVaeEncoder2DAdapter:
                 num_res_blocks=hf_config["num_res_blocks"],
                 temperal_downsample=hf_config["temperal_downsample"],
                 in_channels=hf_config.get("in_channels", 3),
+                is_residual=hf_config.get("is_residual", False),
                 device=self._device,
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-            self._tracer = Tracer(self._encode_and_rescale, device=self._device, clone_prep_inputs=False)
             self._tt_latents_mean = tensor.from_torch(self._latents_mean, device=self._device)
             self._tt_latents_scaling = tensor.from_torch(1.0 / self._latents_std, device=self._device)
 
@@ -524,7 +589,7 @@ class WanVaeEncoder2DAdapter:
                 self._encoder,
                 get_torch_state_dict=self._load_torch_state_dict,
                 model_name=self._name.split("/")[-1],
-                subfolder="vae_encoder",
+                subfolder=f"vae_encoder_{conv3d_blocking_hash(self._encoder)}",
                 parallel_config=self._parallel_config,
                 mesh_shape=tuple(self._device.shape),
                 mesh_device=self._device,
@@ -565,7 +630,11 @@ class WanVaeEncoder2DAdapter:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_axes=mesh_axes,
         )
-        tt_out = self._tracer(tt_images, traced=traced)
+
+        if (h, w) not in self._tracers:
+            self._tracers[h, w] = Tracer(self._encode_and_rescale, device=self._device, clone_prep_inputs=False)
+        tt_out = self._tracers[h, w](tt_images, traced=traced)
+
         return tensor.to_torch(tt_out, mesh_axes=mesh_axes)
 
 
@@ -582,6 +651,7 @@ def _vae_context(
         w_factor=wp.factor,
         device=device,
         ccl_manager=ccl_manager,
+        use_conv3d=True,
     )
 
 
