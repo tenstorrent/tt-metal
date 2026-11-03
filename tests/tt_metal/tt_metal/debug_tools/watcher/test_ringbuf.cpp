@@ -440,4 +440,53 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscSemaphoreRewind) {
     }
 }
 
+// Repro for #63895: a 4-byte host read of a NEO cluster semaphore register must perform exactly one operation.
+// Reads at +4*k do GET k (k < 8) and at +4*(k+8) do POST k; each returns the value before its own operation.
+TEST_F(MeshWatcherFixture, QuasarHostSemaphoreReadIsNarrow) {
+    if (MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "NEO cluster semaphores are Quasar only";
+    }
+    // Semaphore 16 (TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_0__REG_ADDR + 16 * 0x40), unused with no kernel.
+    constexpr uint64_t sem_addr = 0x01840000 + 16 * 0x40;
+    constexpr uint32_t init_value = 100;
+    auto count_change = [](uint32_t offset) -> int32_t {
+        return offset < 0x20 ? -static_cast<int32_t>(offset / 4) : static_cast<int32_t>((offset - 0x20) / 4);
+    };
+    const auto& cluster = MetalContext::instance().get_cluster();
+    for (auto& mesh_device : this->devices_) {
+        auto* device = mesh_device->impl().get_devices()[0];
+        const tt_cxy_pair core{static_cast<size_t>(device->id()), device->worker_core_from_logical_core({0, 0})};
+        auto write32 = [&](uint64_t addr, uint32_t value) {
+            cluster.write_core_immediate(&value, sizeof(value), core, addr);
+        };
+        auto read32 = [&](uint64_t addr) {
+            uint32_t value = 0;
+            cluster.read_core(&value, sizeof(value), core, addr);
+            return value;
+        };
+        for (uint32_t offset : {0x0Cu, 0x20u, 0x24u, 0x28u, 0x2Cu, 0x30u, 0x34u}) {
+            write32(sem_addr, init_value);                  // write at +0x00: SEM_INIT
+            uint32_t returned = read32(sem_addr + offset);  // the read under test
+            uint32_t after = read32(sem_addr + 0x20);       // POST 0: reports the count the read under test left
+            int32_t measured = static_cast<int32_t>(after) - static_cast<int32_t>(init_value);
+            int32_t exact = count_change(offset);
+            int32_t next_4b = exact + (offset + 4 < 0x40 ? count_change(offset + 4) : 0);
+            int32_t aligned_8b = count_change(offset & ~7u) + count_change((offset & ~7u) + 4);
+            log_info(
+                LogTest,
+                "read +0x{:02x}: returned {} (expect {}), count change {:+} | exact 4 B {:+}, next 4 B {:+}, "
+                "aligned 8 B {:+}",
+                offset,
+                returned,
+                init_value,
+                measured,
+                exact,
+                next_4b,
+                aligned_8b);
+            EXPECT_EQ(returned, init_value) << "read +0x" << std::hex << offset;
+            EXPECT_EQ(measured, exact) << "read +0x" << std::hex << offset;
+        }
+    }
+}
+
 }  // namespace
