@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -58,6 +59,27 @@ struct SDPAForwardChunks {
     }
 };
 
+// The program's circular buffers; the kernels use the same indices.
+constexpr auto kQueryCbIndex = tt::CBIndex::c_0;
+constexpr auto kKeyCbIndex = tt::CBIndex::c_1;
+constexpr auto kValueCbIndex = tt::CBIndex::c_2;
+constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;      // causal: two on-chip tiles; arbitrary: one step's mask tiles
+constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;  // lse, one fp32 tile per row
+constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;   // the ones tile of the row reductions
+constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;      // the ones-column tile of the matmul row reduce, lse mask
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_7;  // one step's scores, rewritten in place by softmax
+// Online-softmax state, one tile per item row; prev/cur swap roles every K step.
+constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;
+constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;
+constexpr auto kExpMaxDiffCbIndex = tt::CBIndex::c_10;  // exp(scale * (prev max - cur max)), the rescale factor
+constexpr auto kPrevSumExpCbIndex = tt::CBIndex::c_11;
+constexpr auto kCurSumExpCbIndex = tt::CBIndex::c_12;
+constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;  // running P @ V accumulator
+constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
+constexpr auto kGateCbIndex = tt::CBIndex::c_16;
+constexpr uint32_t kNumSDPAForwardCbs = 17U;
+
 // Circular-buffer depths in tiles; 0 = the CB is not created.
 struct SDPAForwardCbTiles {
     uint32_t query;
@@ -70,11 +92,21 @@ struct SDPAForwardCbTiles {
     uint32_t stat;    // each of max prev/cur, exp max diff, sum prev/cur
     uint32_t mm_out;  // each of prev/cur
     uint32_t output;
-    uint32_t reduction_scaler;  // the ones tile of the row reductions
-    uint32_t matmul_reduce;     // the ones-column tile of the matmul row reduce and the lse mask
+    uint32_t reduction_scaler;
+    uint32_t matmul_reduce;
 };
 
 SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
+
+// One circular buffer as the program creates it. cb_plan is the one place that says which CBs are bf16
+// and which fp32: the factory creates the CBs from it and l1_bytes sums it, so the fit check cannot drift
+// from the program.
+struct SDPAForwardCb {
+    tt::CBIndex index;
+    tt::DataFormat format;
+    uint32_t tiles;
+};
+std::array<SDPAForwardCb, kNumSDPAForwardCbs> cb_plan(const SDPAForwardCbTiles& tiles);
 uint64_t l1_bytes(const SDPAForwardCbTiles& tiles);
 
 // Work item = one Q chunk of one head stack, see kernels/sdpa_fw_work_list.hpp. Each core gets a list
