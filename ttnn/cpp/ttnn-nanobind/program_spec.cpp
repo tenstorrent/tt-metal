@@ -34,7 +34,7 @@
 #include "ttnn/types.hpp"
 
 // This file is built outside the unity build (see ttnn/CMakeLists.txt), so it does not see the
-// NB_MAKE_OPAQUE(std::vector<uint32_t>) in program_descriptors.cpp: vararg values are Python lists here.
+// NB_MAKE_OPAQUE(std::vector<uint32_t>) in program_descriptors.cpp: array values are Python lists here.
 
 NAMESPACE_BEGIN(NB_NAMESPACE)
 NAMESPACE_BEGIN(detail)
@@ -77,6 +77,31 @@ struct type_caster<tt::tt_metal::experimental::ArgValue> {
     static handle from_cpp(
         const tt::tt_metal::experimental::ArgValue& arg, rv_policy policy, cleanup_list* cleanup) noexcept {
         return make_caster<uint32_t>::from_cpp(arg.to_uint32(), policy, cleanup);
+    }
+};
+
+// An array argument's value is a list of ints in Python.
+template <>
+struct type_caster<tt::tt_metal::experimental::ArrayArgValue> {
+    NB_TYPE_CASTER(tt::tt_metal::experimental::ArrayArgValue, const_name("list[int]"))
+
+    bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
+        make_caster<std::vector<uint32_t>> caster;
+        if (!caster.from_python(src, flags, cleanup)) {
+            return false;
+        }
+        value = tt::tt_metal::experimental::ArrayArgValue(caster.value);
+        return true;
+    }
+
+    static handle from_cpp(
+        const tt::tt_metal::experimental::ArrayArgValue& array, rv_policy policy, cleanup_list* cleanup) noexcept {
+        std::vector<uint32_t> values;
+        values.reserve(array.size());
+        for (std::size_t i = 0; i < array.size(); ++i) {
+            values.push_back(array[i].to_uint32());
+        }
+        return make_caster<std::vector<uint32_t>>::from_cpp(values, policy, cleanup);
     }
 };
 
@@ -126,8 +151,9 @@ constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
 auto setter_accepts_none() { return nb::for_setter(nb::arg("value").none()); }
 
 // Tripwires: adding a field to one of these Metal 2.0 types must be a deliberate choice. Bind it below,
-// or note why Python leaves it out, then update the count. KernelAdvancedOptions and DFBAdvancedOptions
-// have none: Python binds only the options Blaze uses, and the rest stay C++ only until a caller needs them.
+// or note why Python leaves it out, then update the count. DFBAdvancedOptions has none: Python binds only
+// alias_with, which Blaze uses, and the other advanced options stay C++ only until a caller needs them. Python
+// binds no varargs: Metal 2.0 keeps them only to ease migration, and array arguments replace them.
 static_assert(reflect::size<m2::TensorSpecRelaxations>() == 4);
 static_assert(reflect::size<m2::TensorParameter>() == 3);
 static_assert(reflect::size<m2::DataflowBufferSpec>() == 7);
@@ -142,16 +168,16 @@ static_assert(reflect::size<ComputeConfig::Compute2XXConfig>() == 1);
 static_assert(reflect::size<ComputeConfig>() == 8);
 static_assert(reflect::size<m2::KernelSpec::SourceCode>() == 1);
 static_assert(reflect::size<m2::KernelSpec::CompilerOptions>() == 3);
-static_assert(reflect::size<m2::KernelSpec::RuntimeArgSchema>() == 2);
+static_assert(reflect::size<m2::KernelSpec::RuntimeArgSchema>() == 4);
+static_assert(reflect::size<m2::ArrayArgDecl>() == 2);
 static_assert(reflect::size<m2::DFBBinding>() == 5);
 static_assert(reflect::size<m2::SemaphoreBinding>() == 2);
 static_assert(reflect::size<m2::ScratchpadBinding>() == 2);
 static_assert(reflect::size<m2::TensorBinding>() == 2);
-static_assert(reflect::size<m2::KernelSpec>() == 12);
+static_assert(reflect::size<m2::KernelSpec>() == 13, "advanced_options is C++ only");
 static_assert(reflect::size<m2::WorkUnitSpec>() == 3);
 static_assert(reflect::size<m2::ProgramSpec>() == 8, "advanced_options is C++ only");
-static_assert(reflect::size<m2::AdvancedKernelRunArgs>() == 2);
-static_assert(reflect::size<m2::KernelRunArgs>() == 4);
+static_assert(reflect::size<m2::KernelRunArgs>() == 6, "advanced_options is C++ only");
 static_assert(reflect::size<m2::DFBRunOverrides>() == 3);
 static_assert(reflect::size<m2::ProgramRunArgs>() == 4, "advanced_options is C++ only");
 
@@ -545,32 +571,14 @@ void bind_hardware_configs(nb::module_& mod) {
 }
 
 void bind_kernel_spec(nb::module_& mod) {
-    const m2::KernelAdvancedOptions kernel_advanced_defaults{};
-    nb::class_<m2::KernelAdvancedOptions>(
-        mod,
-        "KernelAdvancedOptions",
-        "Rarely used KernelSpec options. Python has the runtime vararg counts only; the others are C++ only. "
-        "See advanced_options.hpp.")
-        .def(
-            "__init__",
-            [](m2::KernelAdvancedOptions* self, uint32_t num_runtime_varargs, uint32_t num_common_runtime_varargs) {
-                new (self) m2::KernelAdvancedOptions{};
-                self->num_runtime_varargs = num_runtime_varargs;
-                self->num_common_runtime_varargs = num_common_runtime_varargs;
-            },
-            nb::kw_only(),
-            nb::arg("num_runtime_varargs") = kernel_advanced_defaults.num_runtime_varargs,
-            nb::arg("num_common_runtime_varargs") = kernel_advanced_defaults.num_common_runtime_varargs)
-        .def_rw("num_runtime_varargs", &m2::KernelAdvancedOptions::num_runtime_varargs)
-        .def_rw("num_common_runtime_varargs", &m2::KernelAdvancedOptions::num_common_runtime_varargs);
-
     auto kernel_spec = nb::class_<m2::KernelSpec>(
         mod,
         "KernelSpec",
         "One compiled kernel: its source, compiler options, the buffers, semaphores, scratchpads and tensors it "
-        "binds by name, its compile-time arguments and the names of its runtime arguments. compiler_options, "
-        "runtime_arg_schema and advanced_options refer into this object, so writes through them change the kernel; "
-        "source and hw_config are copies. See kernel_spec.hpp.");
+        "binds by name, its compile-time arguments and arrays, and the names of its runtime arguments and arrays. "
+        "compiler_options and runtime_arg_schema refer into this object, so writes through them change the kernel; "
+        "source and hw_config are copies. Varargs (advanced_options) are C++ only: use array arguments instead. See "
+        "kernel_spec.hpp.");
 
     nb::class_<m2::KernelSpec::SourceCode>(kernel_spec, "SourceCode", "Kernel source code, given inline.")
         .def(
@@ -601,22 +609,51 @@ void bind_kernel_spec(nb::module_& mod) {
         .def_rw("defines", &m2::KernelSpec::CompilerOptions::defines, COPY)
         .def_rw("opt_level", &m2::KernelSpec::CompilerOptions::opt_level);
 
+    auto schema = nb::class_<m2::KernelSpec::RuntimeArgSchema>(
+        kernel_spec,
+        "RuntimeArgSchema",
+        "The names of a kernel's runtime arguments, and the names and lengths of its runtime arrays. Their values "
+        "come in each call's KernelRunArgs; common ones have one value for every node.");
+
+    nb::class_<m2::ArrayArgDecl>(
+        schema,
+        "ArrayArgDecl",
+        "The name and length of a runtime array argument. Kernel code reads it as get_arg(args::<name>)[i].")
+        .def(
+            "__init__",
+            [](m2::ArrayArgDecl* self, std::string name, uint32_t size) {
+                new (self) m2::ArrayArgDecl{.name = std::move(name), .size = size};
+            },
+            nb::kw_only(),
+            nb::arg("name"),
+            nb::arg("size"))
+        .def_rw("name", &m2::ArrayArgDecl::name)
+        .def_rw("size", &m2::ArrayArgDecl::size);
+
     const m2::KernelSpec::RuntimeArgSchema schema_defaults{};
-    nb::class_<m2::KernelSpec::RuntimeArgSchema>(kernel_spec, "RuntimeArgSchema")
+    schema
         .def(
             "__init__",
             [](m2::KernelSpec::RuntimeArgSchema* self,
                std::vector<std::string> runtime_arg_names,
-               std::vector<std::string> common_runtime_arg_names) {
+               std::vector<std::string> common_runtime_arg_names,
+               std::vector<m2::ArrayArgDecl> runtime_array_args,
+               std::vector<m2::ArrayArgDecl> common_runtime_array_args) {
                 new (self) m2::KernelSpec::RuntimeArgSchema{
                     .runtime_arg_names = std::move(runtime_arg_names),
-                    .common_runtime_arg_names = std::move(common_runtime_arg_names)};
+                    .common_runtime_arg_names = std::move(common_runtime_arg_names),
+                    .runtime_array_args = std::move(runtime_array_args),
+                    .common_runtime_array_args = std::move(common_runtime_array_args)};
             },
             nb::kw_only(),
             nb::arg("runtime_arg_names") = schema_defaults.runtime_arg_names,
-            nb::arg("common_runtime_arg_names") = schema_defaults.common_runtime_arg_names)
+            nb::arg("common_runtime_arg_names") = schema_defaults.common_runtime_arg_names,
+            nb::arg("runtime_array_args") = schema_defaults.runtime_array_args,
+            nb::arg("common_runtime_array_args") = schema_defaults.common_runtime_array_args)
         .def_rw("runtime_arg_names", &m2::KernelSpec::RuntimeArgSchema::runtime_arg_names, COPY)
-        .def_rw("common_runtime_arg_names", &m2::KernelSpec::RuntimeArgSchema::common_runtime_arg_names, COPY);
+        .def_rw("common_runtime_arg_names", &m2::KernelSpec::RuntimeArgSchema::common_runtime_arg_names, COPY)
+        .def_rw("runtime_array_args", &m2::KernelSpec::RuntimeArgSchema::runtime_array_args, COPY)
+        .def_rw("common_runtime_array_args", &m2::KernelSpec::RuntimeArgSchema::common_runtime_array_args, COPY);
 
     auto dfb_binding = nb::class_<m2::DFBBinding>(
         kernel_spec,
@@ -718,8 +755,8 @@ void bind_kernel_spec(nb::module_& mod) {
                std::vector<m2::ScratchpadBinding> scratchpad_bindings,
                std::vector<m2::TensorBinding> tensor_bindings,
                m2::KernelSpec::CompileTimeArgs compile_time_args,
-               m2::KernelSpec::RuntimeArgSchema runtime_arg_schema,
-               m2::KernelAdvancedOptions advanced_options) {
+               m2::KernelSpec::CompileTimeArrayArgs compile_time_array_args,
+               m2::KernelSpec::RuntimeArgSchema runtime_arg_schema) {
                 new (self) m2::KernelSpec{
                     .unique_id = std::move(unique_id),
                     .source = std::move(source),
@@ -730,9 +767,9 @@ void bind_kernel_spec(nb::module_& mod) {
                     .scratchpad_bindings = std::move(scratchpad_bindings),
                     .tensor_bindings = std::move(tensor_bindings),
                     .compile_time_args = std::move(compile_time_args),
+                    .compile_time_array_args = std::move(compile_time_array_args),
                     .runtime_arg_schema = std::move(runtime_arg_schema),
-                    .hw_config = std::move(hw_config),
-                    .advanced_options = std::move(advanced_options)};
+                    .hw_config = std::move(hw_config)};
             },
             nb::kw_only(),
             nb::arg("unique_id"),
@@ -745,8 +782,8 @@ void bind_kernel_spec(nb::module_& mod) {
             nb::arg("scratchpad_bindings") = kernel_defaults.scratchpad_bindings,
             nb::arg("tensor_bindings") = kernel_defaults.tensor_bindings,
             nb::arg("compile_time_args") = kernel_defaults.compile_time_args,
-            nb::arg("runtime_arg_schema") = kernel_defaults.runtime_arg_schema,
-            nb::arg("advanced_options") = kernel_advanced_defaults)
+            nb::arg("compile_time_array_args") = kernel_defaults.compile_time_array_args,
+            nb::arg("runtime_arg_schema") = kernel_defaults.runtime_arg_schema)
         .def_rw("unique_id", &m2::KernelSpec::unique_id)
         .def_rw("source", &m2::KernelSpec::source, COPY)
         .def_rw("num_threads", &m2::KernelSpec::num_threads)
@@ -756,9 +793,9 @@ void bind_kernel_spec(nb::module_& mod) {
         .def_rw("scratchpad_bindings", &m2::KernelSpec::scratchpad_bindings, COPY)
         .def_rw("tensor_bindings", &m2::KernelSpec::tensor_bindings, COPY)
         .def_rw("compile_time_args", &m2::KernelSpec::compile_time_args, COPY)
+        .def_rw("compile_time_array_args", &m2::KernelSpec::compile_time_array_args, COPY)
         .def_rw("runtime_arg_schema", &m2::KernelSpec::runtime_arg_schema)
         .def_rw("hw_config", &m2::KernelSpec::hw_config, COPY)
-        .def_rw("advanced_options", &m2::KernelSpec::advanced_options)
         .def("is_data_movement_kernel", &m2::KernelSpec::is_data_movement_kernel)
         .def("is_compute_kernel", &m2::KernelSpec::is_compute_kernel);
 
@@ -871,27 +908,6 @@ void bind_program_spec(nb::module_& mod) {
 }
 
 void bind_program_run_args(nb::module_& mod) {
-    const m2::AdvancedKernelRunArgs advanced_run_args_defaults{};
-    nb::class_<m2::AdvancedKernelRunArgs>(
-        mod,
-        "AdvancedKernelRunArgs",
-        "Vararg values: runtime_varargs maps each node to its list, and common_runtime_varargs is one list for "
-        "every node. See advanced_options.hpp.")
-        .def(
-            "__init__",
-            [](m2::AdvancedKernelRunArgs* self,
-               m2::Table<m2::NodeCoord, m2::AdvancedKernelRunArgs::Varargs> runtime_varargs,
-               m2::AdvancedKernelRunArgs::Varargs common_runtime_varargs) {
-                new (self) m2::AdvancedKernelRunArgs{
-                    .runtime_varargs = std::move(runtime_varargs),
-                    .common_runtime_varargs = std::move(common_runtime_varargs)};
-            },
-            nb::kw_only(),
-            nb::arg("runtime_varargs") = advanced_run_args_defaults.runtime_varargs,
-            nb::arg("common_runtime_varargs") = advanced_run_args_defaults.common_runtime_varargs)
-        .def_rw("runtime_varargs", &m2::AdvancedKernelRunArgs::runtime_varargs, COPY)
-        .def_rw("common_runtime_varargs", &m2::AdvancedKernelRunArgs::common_runtime_varargs, COPY);
-
     // dynamic_attr: the Python object keeps its tensor arguments alive (see set_tensor_owners). __setattr__ below
     // still rejects names that are not attributes of the class, as for the other classes; Python subclasses may add
     // attributes of their own.
@@ -908,30 +924,35 @@ void bind_program_run_args(nb::module_& mod) {
         run_args,
         "KernelRunArgs",
         "One kernel's runtime argument values: runtime_arg_values maps each name to {node: value}, and "
-        "common_runtime_arg_values maps each name to one value for every node. advanced_options refers into this "
-        "object.")
+        "common_runtime_arg_values maps each name to one value for every node. runtime_array_arg_values maps each "
+        "array's name to {node: [values]}, and common_runtime_array_arg_values maps each array's name to one list "
+        "for every node.")
         .def(
             "__init__",
             [](m2::KernelRunArgs* self,
                m2::KernelSpecName kernel,
                m2::KernelRunArgs::RuntimeArgValues runtime_arg_values,
                m2::KernelRunArgs::CommonRuntimeArgValues common_runtime_arg_values,
-               m2::AdvancedKernelRunArgs advanced_options) {
+               m2::KernelRunArgs::RuntimeArrayArgValues runtime_array_arg_values,
+               m2::KernelRunArgs::CommonRuntimeArrayArgValues common_runtime_array_arg_values) {
                 new (self) m2::KernelRunArgs{
                     .kernel = std::move(kernel),
                     .runtime_arg_values = std::move(runtime_arg_values),
                     .common_runtime_arg_values = std::move(common_runtime_arg_values),
-                    .advanced_options = std::move(advanced_options)};
+                    .runtime_array_arg_values = std::move(runtime_array_arg_values),
+                    .common_runtime_array_arg_values = std::move(common_runtime_array_arg_values)};
             },
             nb::kw_only(),
             nb::arg("kernel"),
             nb::arg("runtime_arg_values") = kernel_run_args_defaults.runtime_arg_values,
             nb::arg("common_runtime_arg_values") = kernel_run_args_defaults.common_runtime_arg_values,
-            nb::arg("advanced_options") = kernel_run_args_defaults.advanced_options)
+            nb::arg("runtime_array_arg_values") = kernel_run_args_defaults.runtime_array_arg_values,
+            nb::arg("common_runtime_array_arg_values") = kernel_run_args_defaults.common_runtime_array_arg_values)
         .def_rw("kernel", &m2::KernelRunArgs::kernel)
         .def_rw("runtime_arg_values", &m2::KernelRunArgs::runtime_arg_values, COPY)
         .def_rw("common_runtime_arg_values", &m2::KernelRunArgs::common_runtime_arg_values, COPY)
-        .def_rw("advanced_options", &m2::KernelRunArgs::advanced_options);
+        .def_rw("runtime_array_arg_values", &m2::KernelRunArgs::runtime_array_arg_values, COPY)
+        .def_rw("common_runtime_array_arg_values", &m2::KernelRunArgs::common_runtime_array_arg_values, COPY);
 
     const m2::DFBRunOverrides override_defaults{};
     nb::class_<m2::DFBRunOverrides>(
@@ -1042,6 +1063,7 @@ void py_module_types(nb::module_& mod) {
     mod.attr("SemaphoreBinding") = kernel_spec.attr("SemaphoreBinding");
     mod.attr("ScratchpadBinding") = kernel_spec.attr("ScratchpadBinding");
     mod.attr("TensorBinding") = kernel_spec.attr("TensorBinding");
+    mod.attr("ArrayArgDecl") = kernel_spec.attr("RuntimeArgSchema").attr("ArrayArgDecl");
     mod.attr("DFBEndpointType") = kernel_spec.attr("DFBBinding").attr("EndpointType");
     mod.attr("DFBAccessPattern") = kernel_spec.attr("DFBBinding").attr("AccessPattern");
     nb::object program_run_args = mod.attr("ProgramRunArgs");
