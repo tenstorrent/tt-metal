@@ -13,7 +13,7 @@ from .multichip_decoder import _EXPERT_COMPACT_PACKED, _EXPERT_DISPATCH_PACKED, 
 from .prefill_moe_compact import (
     COMPACT1024_PIPE,
     DISPATCH1024_PIPE,
-    EXTRA_CB_BYTES,
+    compact_cb_bytes,
     compact_pipe_enabled,
     dispatch_cb_bytes,
     dispatch_pipe_enabled,
@@ -47,13 +47,23 @@ def group1024(self, x):
     self.hybrid_capacity_rows = int(capacity.shape[2]) // 128
     counts = ttnn.to_memory_config(counts, ttnn.DRAM_MEMORY_CONFIG)
     source = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    # The batched dispatch also writes inverse[e][packed] = row * 16 + route for the tile-once compaction.
+    inverse = None
+    if dispatch_pipe_enabled():
+        inverse = ttnn.empty(
+            (128, n),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.ops.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     _expert_kernel(
         self.ops.mesh,
-        [source, ids, scores, self.rank, counts, mapping, capacity],
-        DISPATCH1024_PIPE if dispatch_pipe_enabled() else DISPATCH1024,
+        [source, ids, scores, self.rank, counts, mapping, capacity] + ([inverse] if inverse is not None else []),
+        DISPATCH1024_PIPE if inverse is not None else DISPATCH1024,
         [n],
         workers=32,
-        cb_size=dispatch_cb_bytes(n) if dispatch_pipe_enabled() else 5120 + n * 192 + 64,
+        cb_size=dispatch_cb_bytes(n) if inverse is not None else 5120 + n * 192 + 64,
     )
     down = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
         capacity,
@@ -73,14 +83,24 @@ def group1024(self, x):
         device=self.ops.mesh,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    _expert_kernel(
-        self.ops.mesh,
-        [down, ids, scores, self.rank, mapping, compact],
-        COMPACT1024_PIPE if compact_pipe_enabled() else COMPACT1024,
-        [n],
-        workers=80,
-        cb_size=2176 + n * 320 + 64 + (EXTRA_CB_BYTES if compact_pipe_enabled() else 0),
-    )
+    if compact_pipe_enabled() and inverse is not None:
+        _expert_kernel(
+            self.ops.mesh,
+            [down, counts, inverse, self.rank, compact],
+            COMPACT1024_PIPE,
+            [n],
+            workers=80,
+            cb_size=compact_cb_bytes(n),
+        )
+    else:
+        _expert_kernel(
+            self.ops.mesh,
+            [down, ids, scores, self.rank, mapping, compact],
+            COMPACT1024,
+            [n],
+            workers=80,
+            cb_size=2176 + n * 320 + 64,
+        )
     scores = (
         ttnn.pad(selected[..., :10], [(0, 0), (0, 0), (0, padded - n), (0, 0)], 0) if n < padded else selected[..., :10]
     )
