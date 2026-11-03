@@ -582,22 +582,25 @@ class Attention(LightweightModule):
                 )
             )
 
-        self.layer_past = [
-            ttnn.as_tensor(
-                k_or_v,
-                dtype=self.kv_cache_dtype,
-                layout=self.args.get_attn_weights_layout(),
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                    if weight_cache_path and not configuration.dummy_weights
-                    else None
-                ),
-            )
-            for k_or_v in [cache_k, cache_v]
-        ]
+        # The KV cache holds real (zero) data and its cache file is keyed on max_seq_len / page
+        # params, which a warm-cache build does not pin, so it may be generated during one.
+        with ttnn.as_tensor_cache_required(False):
+            self.layer_past = [
+                ttnn.as_tensor(
+                    k_or_v,
+                    dtype=self.kv_cache_dtype,
+                    layout=self.args.get_attn_weights_layout(),
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    cache_file_name=(
+                        f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                        if weight_cache_path and not configuration.dummy_weights
+                        else None
+                    ),
+                )
+                for k_or_v in [cache_k, cache_v]
+            ]
 
     def _update_wqkv(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.wqkv`` via ``ttnn.copy``. Caller must match

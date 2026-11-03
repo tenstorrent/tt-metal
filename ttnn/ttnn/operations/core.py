@@ -856,6 +856,29 @@ def as_tensor_cache_repair(enabled: bool):
         _as_tensor_cache_repair = previous
 
 
+_as_tensor_cache_required = False
+
+
+@contextlib.contextmanager
+def as_tensor_cache_required(enabled: bool):
+    """Scopes whether ``ttnn.as_tensor`` raises when its cache file does not exist.
+
+    Off by default: a missing file is generated from the tensor passed to ``as_tensor``. Wrap a
+    warm-cache build, whose tensors are dataless placeholders, in
+    ``with ttnn.as_tensor_cache_required(True):`` so a cache miss raises instead of writing the
+    placeholder's contents to disk as a new cache file. Tensors that hold real data inside such a
+    build (e.g. a zero-filled KV cache) can opt back out with ``as_tensor_cache_required(False)``.
+    The previous setting is restored on exit.
+    """
+    global _as_tensor_cache_required
+    previous = _as_tensor_cache_required
+    _as_tensor_cache_required = enabled
+    try:
+        yield
+    finally:
+        _as_tensor_cache_required = previous
+
+
 def _golden_function_as_tensor(tensor, dtype=None, *, preprocess=None, **kwargs):
     # as_tensor applies the caller's preprocess callback to the Torch input before conversion.
     if preprocess is not None:
@@ -973,6 +996,12 @@ def as_tensor(
     cache_path = pathlib.Path(cache_file_name)
 
     if not cache_path.exists() or not cache_path.is_file():
+        if _as_tensor_cache_required:
+            raise RuntimeError(
+                f"Cache file {cache_file_name} does not exist. ttnn.as_tensor_cache_required is set (a warm-cache "
+                "build from placeholder weights), so it is not generated from the input tensor; rebuild the cache "
+                "from real weights."
+            )
         return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
 
     try:

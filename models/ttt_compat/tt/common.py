@@ -959,9 +959,12 @@ def create_tt_model(
         ]
         tt_model_args.num_experts = max(expert_indices) if expert_indices else tt_model_args.num_local_experts
 
-    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
-    # file rather than rebuild it from the placeholder.
-    with ttnn.as_tensor_cache_repair(not getattr(state_dict, "is_placeholder", False)):
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable or
+    # missing cache file rather than build it from the placeholder. A file can be missing even
+    # though the marker says complete when a build option outside the marker identity renames it
+    # (e.g. an LM-head-only dtype or width change); writing it would persist zeros as a weight.
+    is_placeholder = getattr(state_dict, "is_placeholder", False)
+    with ttnn.as_tensor_cache_repair(not is_placeholder), ttnn.as_tensor_cache_required(is_placeholder):
         model = Transformer(
             args=tt_model_args,
             mesh_device=mesh_device,

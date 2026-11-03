@@ -490,3 +490,26 @@ def test_warm_build_raises_on_unloadable_cache_file(tmp_path, build_placeholders
         with expect_error(RuntimeError, "truncated or corrupt"):
             ttnn.as_tensor(placeholders[key], dtype=ttnn.float32, cache_file_name=tmp_path / key)
     assert cache_path.read_bytes() == truncated
+
+
+@pytest.mark.parametrize("build_placeholders", [_build_modelargs_placeholders, _build_shared_placeholders])
+def test_warm_build_raises_on_missing_cache_file(tmp_path, build_placeholders, expect_error):
+    """A warm build must not let as_tensor write a cache file the seed never produced from a
+    placeholder: an LM-head-only dtype/width change renames that file without changing the marker
+    identity, and the miss used to persist a zero-filled weight (#63256)."""
+    key = "output.weight"
+    weight = torch.rand(8, 8)
+    ttnn.as_tensor(weight, dtype=ttnn.float32, cache_file_name=tmp_path / key)
+    placeholders = build_placeholders(tmp_path, {key: weight})
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    is_placeholder = placeholders.is_placeholder
+    assert is_placeholder
+    # The model factory scopes both switches like this around the model build.
+    with ttnn.as_tensor_cache_repair(not is_placeholder), ttnn.as_tensor_cache_required(is_placeholder):
+        # The seeded file still loads...
+        ttnn.as_tensor(placeholders[key], dtype=ttnn.float32, cache_file_name=tmp_path / key)
+        # ...but a file under a name the seed never wrote (here: another dtype) is not created.
+        with expect_error(RuntimeError, "does not exist"):
+            ttnn.as_tensor(placeholders[key], dtype=ttnn.bfloat16, cache_file_name=tmp_path / key)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before

@@ -3525,7 +3525,9 @@ class ModelArgs:
         placeholder on a cache hit (ttnn/operations/core.py) and loads the real weight from its
         .tensorbin; the placeholder exists only to satisfy the host-side reshape ops
         (permute/chunk/cat/transpose) the modules run before calling as_tensor. Guarded by
-        weight_cache_is_complete, so every as_tensor is guaranteed to hit and discard it.
+        weight_cache_is_complete, so every as_tensor is expected to hit and discard it;
+        create_tt_model builds under ttnn.as_tensor_cache_required(True), so a miss (a file the
+        marker identity does not cover) raises instead of persisting the placeholder.
 
         The mapping is falsy (__bool__ -> False) so reference-building callers that test
         `if not state_dict` (e.g. test_model_prefill) load real weights explicitly, while

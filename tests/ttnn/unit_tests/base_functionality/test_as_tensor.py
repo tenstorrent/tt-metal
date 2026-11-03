@@ -156,3 +156,28 @@ def test_as_tensor_cache_load_failure_regenerates_file_with_repair(cache_with_fa
     assert torch.equal(ttnn.to_torch(tensor), replacement)
     monkeypatch.setattr(ttnn._ttnn.tensor, "load_tensor_flatbuffer", real_load)  # read it back with the real loader
     assert torch.equal(ttnn.to_torch(ttnn.load_tensor(cache_path)), replacement)
+
+
+def test_as_tensor_cache_miss_raises_and_writes_nothing_when_required(tmp_path, expect_error):
+    kwargs = dict(dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, cache_file_name=tmp_path / "cache_file")
+    with ttnn.as_tensor_cache_required(True):
+        with expect_error(RuntimeError, "does not exist"):
+            ttnn.as_tensor(torch.zeros((7, 3), dtype=torch.float32), **kwargs)
+    assert list(tmp_path.iterdir()) == [], "a required cache miss must not write a cache file"
+
+
+def test_as_tensor_cache_required_scope_restores_previous_setting(tmp_path, expect_error):
+    with ttnn.as_tensor_cache_required(True):
+        with ttnn.as_tensor_cache_required(False):
+            assert not ttnn.operations.core._as_tensor_cache_required
+            # Opted back out: a miss generates the file as usual.
+            data = torch.rand((7, 3), dtype=torch.float32)
+            tensor = ttnn.as_tensor(data, dtype=ttnn.float32, cache_file_name=tmp_path / "cache_file")
+            assert torch.equal(ttnn.to_torch(tensor), data)
+        assert ttnn.operations.core._as_tensor_cache_required
+    assert not ttnn.operations.core._as_tensor_cache_required
+    assert len(list(tmp_path.glob("*.tensorbin"))) == 1
+    with expect_error(ValueError, "boom"):
+        with ttnn.as_tensor_cache_required(True):
+            raise ValueError("boom")
+    assert not ttnn.operations.core._as_tensor_cache_required
