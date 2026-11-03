@@ -85,6 +85,22 @@ is bound by its 27.5 MB of NoC1 DRAM reads: the x issue quota (4 / 8 / 11 / 16) 
 were measured flat. Moving x reads to NoC0 needs DM_DYNAMIC_NOC, which the mcast helper's TXN_ID flush does not
 support yet.
 
+
+
+### [x] Refinement 1b — DRAM placement for x and the output (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/moe_down_proj/test_moe_down_proj.py::test_moe_down_proj[t1] - AssertionError: pcc nan < 0.9998
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: not a kernel bug. The inline precompile collect pass (`run_safe_pytest.sh` on a whole file/dir) runs bodies with stand-in `torch.randn` / shape-only `from_torch`, and `host_weight()`'s `lru_cache` carried that stand-in weight into the real pass (constant output and reference, pcc nan). The conftest now clears module-level caches per pass via a module-scoped autouse fixture. Unit dir 72/72 with precompile on; golden 93/93 (graded mode, no hangs).
 ### [ ] Refinement 2 - Cut the multicast scaffold on the t = 4096 rows
 
 **Type**: perf
