@@ -378,9 +378,16 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">stack</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.stack" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Stacks tensors along a new dimension.</p>
+<p>Stacks tensors along a new dimension. All inputs must share shape, dtype and layout; the output
+has one more dimension than each input, with the number of inputs at position <cite>dim</cite>. The output
+currently lands in DRAM interleaved (concat’s default), whatever the inputs’ placement.</p>
 <p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensors</span></code>: List of tensors to stack.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: Dimension along which to stack.</p>
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: Position of the new dimension in the output, in [-(rank + 1), rank]; -1 and rank both mean a new last dimension.</p>
+<p>Equivalent pytorch code:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">input_tensors</span><span class="p">,</span> <span class="n">dim</span><span class="p">)</span>
+</pre></div>
+</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">

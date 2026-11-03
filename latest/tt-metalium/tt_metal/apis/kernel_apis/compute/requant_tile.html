@@ -308,16 +308,18 @@
 <h1>requant_tile<a class="headerlink" href="#requant-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel17requant_tile_initEK8uint32_t">
-<span class="target" id="namespaceckernel_1a8f1549a465c90ca0397025199fbe4291"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">requant_tile_init</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">zero_point</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel17requant_tile_initEK8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel17requant_tile_initEK8uint32_tK8uint32_t">
+<span class="target" id="namespaceckernel_1a0a4cc7e6cc8848a2360e42bf052cd505"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">requant_tile_init</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">zero_point</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">out_zero_point</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel17requant_tile_initEK8uint32_tK8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Initialize the sfpu with the zero point argument of the re-quantization Op. To be called once at beginning of a kernel.</p>
+<p>Both zero points are passed as fp32 bit patterns. zero_point is precomputed by the caller as -z_in * (s_in / s_out), where z_in is the input zero point.</p>
 <p>Return value: None</p>
 <p></p>
 <div class="tt-api-param-list colwidths-auto docutils container">
 <p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">zero_point  </span><span class="tt-api-param-desc">The zero point of the re-quantization Op  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">zero_point  </span><span class="tt-api-param-desc">-z_in * (s_in / s_out), as an fp32 bit pattern  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">out_zero_point  </span><span class="tt-api-param-desc">The output zero point, as an fp32 bit pattern  </span></p>
 </div>
 
 </dd>
