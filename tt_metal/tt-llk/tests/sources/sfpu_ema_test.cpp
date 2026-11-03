@@ -22,10 +22,6 @@
 #include "perf.h"
 #include "profiler.h"
 
-#ifndef EMA_BINARY_INIT_BEFORE_EMA_DEFINED
-constexpr bool EMA_BINARY_INIT_BEFORE_EMA = false;
-#endif
-
 // Globals
 std::uint32_t unp_cfg_context              = 0;
 std::uint32_t pack_sync_tile_dst_ptr       = 0;
@@ -73,9 +69,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Math isolate avoids software sync, but the hardware valid-bit handshake
-            // remains. Its one SrcA valid per face must match math retirements exactly
-            // or either side of the mismatch hangs.
+            // Math isolate keeps only the hardware handshake; one SrcA valid per face
+            // must match math retirements exactly or either side hangs.
             if constexpr (!unpack_to_dest)
             {
                 _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
@@ -184,23 +179,21 @@ void run_kernel(RUNTIME_PARAMETERS)
                     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                         EMA_INPUT_DST_INDEX, formats.math, formats.math);
 
-                    if constexpr (EMA_BINARY_INIT_BEFORE_EMA)
-                    {
-                        _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(
-                            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), 0 /* acc_to_dest */);
-                    }
+#ifdef EMA_BINARY_INIT_BEFORE_EMA
+                    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(
+                        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), 0 /* acc_to_dest */);
+#endif
 
                     llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
 
-                    if constexpr (EMA_BINARY_INIT_BEFORE_EMA)
-                    {
-                        _llk_math_eltwise_unary_datacopy_init_wrapper_<
-                            DataCopyType::A2D,
-                            is_fp32_dest_acc_en,
-                            BroadcastType::NONE,
-                            false /* is_int_fpu_en */,
-                            PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
-                    }
+#ifdef EMA_BINARY_INIT_BEFORE_EMA
+                    _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                        DataCopyType::A2D,
+                        is_fp32_dest_acc_en,
+                        BroadcastType::NONE,
+                        false /* is_int_fpu_en */,
+                        PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
+#endif
 
                     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
                 }
