@@ -14,6 +14,7 @@ import contextlib
 import gc
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -7396,12 +7397,19 @@ class TestGraphCaptureEndsWhenItsReportFails:
             pytest.skip("graph reporting is already on for this run; these tests end every capture they leave behind")
         stack_traces_were_on = ttnn.graph.is_python_stack_trace_enabled()
         yield
-        while ttnn.graph.is_graph_capture_active():
-            ttnn.graph.end_graph_capture()
-        if stack_traces_were_on:
-            ttnn.graph.enable_python_stack_traces()
-        else:
-            ttnn.graph.disable_python_stack_traces()
+        try:
+            while ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+        finally:
+            if stack_traces_were_on:
+                ttnn.graph.enable_python_stack_traces()
+            else:
+                ttnn.graph.disable_python_stack_traces()
+
+    @staticmethod
+    def _partial_reports(report_path):
+        """The temporary files a report is written to before it is moved into place."""
+        return list(Path(report_path).parent.glob(f"{Path(report_path).name}.partial*"))
 
     def test_failed_write_ends_the_capture_and_leaves_no_partial_report(self, tmp_path, expect_error):
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
@@ -7409,16 +7417,38 @@ class TestGraphCaptureEndsWhenItsReportFails:
             ttnn.graph.end_graph_capture_to_file(tmp_path)
         assert not ttnn.graph.is_graph_capture_active()
         assert not ttnn.graph.is_python_io_recording_enabled()
-        assert not Path(f"{tmp_path}.partial").exists()
+        assert not self._partial_reports(tmp_path)
 
-    @pytest.mark.parametrize("end", ["end_graph_capture", "end_graph_capture_to_file"])
+    def test_failed_open_ends_the_capture(self, tmp_path, expect_error):
+        """The temporary file can't be opened (a directory is in the way)."""
+        report_path = tmp_path / "report.json"
+        Path(f"{report_path}.partial.{os.getpid()}").mkdir()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, "Failed to open graph report file for writing"):
+            ttnn.graph.end_graph_capture_to_file(report_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert not report_path.exists()
+
+    def test_report_under_a_regular_file_ends_the_capture(self, tmp_path, expect_error):
+        """The report's directory can't be created, because a file has its name."""
+        (tmp_path / "f").write_text("")
+        report_path = tmp_path / "f" / "report.json"
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, "create_directories|Not a directory|File exists"):
+            ttnn.graph.end_graph_capture_to_file(report_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+
+    @pytest.mark.parametrize(
+        "end",
+        [lambda report_path: ttnn.graph.end_graph_capture(), ttnn.graph.end_graph_capture_to_file],
+        ids=["end_graph_capture", "end_graph_capture_to_file"],
+    )
     def test_ending_with_no_active_capture_raises(self, tmp_path, expect_error, end):
         report_path = tmp_path / "report.json"
         with expect_error(RuntimeError, "no graph capture is active"):
-            if end == "end_graph_capture":
-                ttnn.graph.end_graph_capture()
-            else:
-                ttnn.graph.end_graph_capture_to_file(report_path)
+            end(report_path)
         assert not ttnn.graph.is_graph_capture_active()
         assert not ttnn.graph.is_python_io_recording_enabled()
         assert not report_path.exists()
@@ -7451,10 +7481,11 @@ class TestGraphCaptureEndsWhenItsReportFails:
         assert ttnn.graph._python_io_data == []
 
     def test_failed_nested_write_leaves_the_records_to_the_outer_capture(self, tmp_path, expect_error, monkeypatch):
-        """The nested capture ends; the outer one keeps recording and writes the records in its own report."""
+        """The nested capture ends; the outer one keeps recording and writes both kinds of records in its own report."""
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        monkeypatch.setattr(ttnn.graph, "_python_io_data", [{"name": "ttnn.relu"}])
         with expect_error(RuntimeError, self.WRITE_FAILS):
             ttnn.graph.end_graph_capture_to_file(tmp_path)
         assert ttnn.graph.is_graph_capture_active()
@@ -7463,11 +7494,14 @@ class TestGraphCaptureEndsWhenItsReportFails:
         outer_report = tmp_path / "outer.json"
         ttnn.graph.end_graph_capture_to_file(outer_report)
         assert not ttnn.graph.is_graph_capture_active()
-        sidecar = json.loads(outer_report.with_suffix(".comparison_records.json").read_text())
-        assert [r["tensor_id"] for r in sidecar["local_tensor_comparison_records"]] == [1]
+        comparison = json.loads(outer_report.with_suffix(".comparison_records.json").read_text())
+        assert [r["tensor_id"] for r in comparison["local_tensor_comparison_records"]] == [1]
+        python_io = json.loads(outer_report.with_suffix(".python_io.json").read_text())
+        assert [r["name"] for r in python_io] == ["ttnn.relu"]
 
-    def test_failed_sidecar_write_still_ends_the_capture(self, tmp_path, expect_error, monkeypatch):
-        """The C++ report is written, then the Python I/O sidecar fails: the capture is over and its records reset."""
+    @pytest.mark.parametrize("failing_sidecar", ["_write_python_io_sidecar", "_write_comparison_records_sidecar"])
+    def test_failed_sidecar_write_still_ends_the_capture(self, tmp_path, expect_error, monkeypatch, failing_sidecar):
+        """The C++ report is written, then a sidecar fails: the capture is over and its records are reset."""
 
         def failing_sidecar_write(report_path):
             raise OSError("sidecar write failed")
@@ -7475,12 +7509,15 @@ class TestGraphCaptureEndsWhenItsReportFails:
         report_path = tmp_path / "report.json"
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         monkeypatch.setattr(ttnn.graph, "_python_io_data", [{"name": "ttnn.relu"}])
-        monkeypatch.setattr(ttnn.graph, "_write_python_io_sidecar", failing_sidecar_write)
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        monkeypatch.setattr(ttnn.graph, failing_sidecar, failing_sidecar_write)
         with expect_error(OSError, "sidecar write failed"):
             ttnn.graph.end_graph_capture_to_file(report_path)
         assert report_path.exists()
         assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
         assert ttnn.graph._python_io_data == []
+        assert not ttnn.graph.has_comparison_records()
 
     @pytest.mark.parametrize("write_fails", [False, True], ids=["write_succeeds", "write_fails"])
     def test_nested_full_graph_capture_leaves_the_enclosing_capture_active(self, tmp_path, expect_error, write_fails):

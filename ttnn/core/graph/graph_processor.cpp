@@ -16,10 +16,13 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <fstream>
-#include <system_error>
 #include <optional>
 #include <sstream>
+#include <system_error>
+#include <unistd.h>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <string>
@@ -1340,18 +1343,20 @@ void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
 
 namespace {
 
-// The capture end_graph_capture and end_graph_capture_to_file end: the processor on top of this thread's tracker stack.
-// Checked before anything is popped. Any process that has opened a device has the device's memory tracker
-// (ShmTrackingProcessor) on the stack for good, so popping without these checks would remove the tracker when no
-// capture is active, or when a device opened after begin_graph_capture sits above the capture.
+// Returns the capture that end_graph_capture and end_graph_capture_to_file end: the processor on top of this thread's
+// tracker stack. Throws, popping nothing, unless a capture is active and is on top. The checks matter because a process
+// that has opened a device keeps the device's memory tracker (ShmTrackingProcessor) on the stack for good: popping
+// unchecked would remove that tracker when no capture is active, or when a device opened after begin_graph_capture
+// sits above the capture.
 GraphProcessor& capture_to_end(tt::tt_metal::GraphTracker& tracker) {
     TT_FATAL(
         tracker.is_enabled(), "Cannot end graph capture: no graph capture is active; call begin_graph_capture first");
     auto* processor = dynamic_cast<GraphProcessor*>(tracker.get_processors().back().get());
     TT_FATAL(
         processor != nullptr,
-        "Cannot end graph capture: the innermost graph tracking processor is not a GraphProcessor (a device opened "
-        "after begin_graph_capture puts its memory tracker above the capture)");
+        "Cannot end graph capture: the innermost graph tracking processor is not a GraphProcessor. A device opened "
+        "after begin_graph_capture puts its memory tracker above the capture; open devices before beginning the "
+        "capture");
     return *processor;
 }
 
@@ -1378,33 +1383,44 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     auto graph_json = processor.end_capture();
     nlohmann::json report = processor.get_report();
 
-    // Written beside the report and moved into place once complete, so a failed write never leaves a truncated report
-    // where an import's graph_capture*.json glob would pick it up.
+    // Written beside the report under a name of this process's own and moved into place once complete, so a failed
+    // write never leaves a truncated report where an import's graph_capture*.json glob would pick it up. Overwriting a
+    // report therefore needs room for both until the rename.
     if (report_path.has_parent_path()) {
         std::filesystem::create_directories(report_path.parent_path());
     }
     auto partial_path = report_path;
-    partial_path += ".partial";
+    partial_path += ".partial." + std::to_string(::getpid());
+    // Declared before the file, so the file is closed first; released once the report is in place.
+    auto remove_partial = ttnn::make_guard([&partial_path]() {
+        std::error_code ignored;
+        std::filesystem::remove(partial_path, ignored);
+    });
     {
         std::ofstream file(partial_path);
         if (!file.is_open()) {
-            TT_THROW("Failed to open graph report file for writing: {}", partial_path.string());
+            TT_THROW(
+                "Failed to open graph report file for writing: {} (via {}): {}",
+                report_path.string(),
+                partial_path.string(),
+                std::strerror(errno));
         }
         file << report.dump(2);
         file.close();
         if (!file) {
-            std::error_code ignored;
-            std::filesystem::remove(partial_path, ignored);
-            TT_THROW("Failed to write graph report to file: {}", partial_path.string());
+            TT_THROW(
+                "Failed to write graph report to file: {} (via {}): {}",
+                report_path.string(),
+                partial_path.string(),
+                std::strerror(errno));
         }
     }
     std::error_code rename_error;
     std::filesystem::rename(partial_path, report_path, rename_error);
     if (rename_error) {
-        std::error_code ignored;
-        std::filesystem::remove(partial_path, ignored);
         TT_THROW("Failed to move graph report into place at {}: {}", report_path.string(), rename_error.message());
     }
+    remove_partial.release();
     log_info(tt::LogAlways, "Graph report written to: {}", report_path.string());
     return graph_json;
 }
