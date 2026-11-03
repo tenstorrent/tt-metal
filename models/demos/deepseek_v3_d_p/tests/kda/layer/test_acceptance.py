@@ -99,6 +99,16 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
+        # Two chunks: 1280 rows per chip, still one group per head (relay and entry correction).
+        pytest.param(
+            (8, 4),
+            1,
+            kda_device_params((8, 4)),
+            2 * PREFILL_CHUNK_TOKENS,
+            None,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="galaxy-T10240",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
