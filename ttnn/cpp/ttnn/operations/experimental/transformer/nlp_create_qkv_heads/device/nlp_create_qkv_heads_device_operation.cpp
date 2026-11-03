@@ -277,8 +277,11 @@ ttsl::hash::hash_t NlpCreateHeadsDeviceOperation::compute_program_hash(
         hash_spec_without_rows(tensor_args.input_tensor_q, kSalt),
         hash_spec_without_rows(tensor_args.input_tensor_kv, kSalt),
         tensor_args.optional_output_tensors.size());
-    for (const auto& output : tensor_args.optional_output_tensors) {
-        hash = ttsl::hash::hash_objects(hash, hash_spec_without_rows(output, kSalt));
+    for (std::size_t i = 0; i < tensor_args.optional_output_tensors.size(); ++i) {
+        // A transposed K output is [B, Hkv, D, S]: its rows (the sequence) sit in the last dim.
+        const int rows_dim = (i == 1 && operation_attributes.transpose_k_heads) ? -1 : -2;
+        hash = ttsl::hash::hash_objects(
+            hash, hash_spec_without_rows(tensor_args.optional_output_tensors[i], kSalt, rows_dim));
     }
     return hash;
 }

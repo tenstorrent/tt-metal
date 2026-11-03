@@ -387,29 +387,33 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] =
         (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
 
-    constexpr uint32_t TILE_SIZE = 32;
+    // A page is one tile, so every tile count comes from the tensor's own tile shape (tiny tiles included):
+    // the workers split input_Ht * input_Wt pages and the per-chip offsets use the same counts.
+    const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const uint32_t tile_height = tile_shape[0];
+    const uint32_t tile_width = tile_shape[1];
     // Only check tile alignment for the dimension being all-gathered
     uint32_t rank = input_tensor_shape.rank();
     if (dim == rank - 1) {
         TT_FATAL(
-            !(input_tensor_shape[-1] % TILE_SIZE),
+            !(input_tensor_shape[-1] % tile_width),
             "Input tensor width must be tile-aligned when all-gathering along width");
         TT_FATAL(
-            !(output_tensor_shape[-1] % TILE_SIZE),
+            !(output_tensor_shape[-1] % tile_width),
             "Output tensor width must be tile-aligned when all-gathering along width");
     } else if (dim == rank - 2) {
         TT_FATAL(
-            !(input_tensor_shape[-2] % TILE_SIZE),
+            !(input_tensor_shape[-2] % tile_height),
             "Input tensor height must be tile-aligned when all-gathering along height");
         TT_FATAL(
-            !(output_tensor_shape[-2] % TILE_SIZE),
+            !(output_tensor_shape[-2] % tile_height),
             "Output tensor height must be tile-aligned when all-gathering along height");
     }
 
-    uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_SIZE;
-    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_SIZE;
+    uint32_t input_tensor_Wt = input_tensor_shape[-1] / tile_width;
+    uint32_t input_tensor_Ht = experimental::prim::all_gather_input_Ht(input_tensor);
 
-    uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_SIZE;
+    uint32_t output_tensor_Wt = output_tensor_shape[-1] / tile_width;
 
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;
@@ -730,7 +734,8 @@ void apply_all_gather_async_minimal_default_semaphore_args(
 namespace experimental::prim {
 
 uint32_t all_gather_input_Ht(const Tensor& input) {
-    return input.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    // The tensor's own tile height: a 16x32-tiled plane holds twice the pages of a 32x32-tiled one.
+    return input.padded_shape()[-2] / input.tensor_spec().tile().get_height();
 }
 
 uint32_t all_gather_async_num_workers_per_direction(
