@@ -102,8 +102,8 @@ void kernel_main() {
     noc.async_read_barrier();
     const uint32_t valid_end = CoreLocalMem<volatile uint32_t>(cbg.get_write_ptr())[0];
 
-    // The zero tile and the table of the 32 standard pooling tiles (1/64 in row r), built after the first batch's
-    // reads are issued.
+    // The zero tile and the table of the 32 standard pooling tiles (1/64 in row r). The table is built while the
+    // first batch's reads are in flight.
     cbz.reserve_back(1);
     const uint32_t zero_addr = cbz.get_write_ptr();
     cbt.reserve_back(32);
@@ -248,6 +248,12 @@ void kernel_main() {
     }
     if (pending) {
         finish_pending();
+    }
+    if (!table_built) {
+        // An all-empty core skips the row loop, but compute still waits for cb_zero.
+        noc.async_write_zeros(CoreLocalMem<uint32_t>(zero_addr), TILE_BYTES);
+        noc.write_zeros_l1_barrier();
+        cbz.push_back(1);
     }
     // Leave the NoC transaction id at 0 for the next kernel on this core.
     noc_async_read_set_trid(0, noc.get_noc_id());
