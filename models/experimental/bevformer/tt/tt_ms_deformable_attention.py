@@ -58,52 +58,18 @@ def _is_allocation_oom(error):
     return "Out of Memory" in str(error)
 
 
-def group_sum_matrix(num_groups, group_size, device):
-    """Block-diagonal ones: ``x @ G`` puts each group's sum on every column of the group."""
-    groups = torch.block_diag(*([torch.ones(group_size, group_size)] * num_groups))
-    return ttnn.from_torch(groups, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+def grouped_softmax(logits, group_size):
+    """Softmax over each group of columns of TILE ``logits`` (..., num_groups * group_size).
 
-
-def group_sum_compute_config(device):
-    """The group sum is a softmax denominator: full-precision products, fp32 accumulation."""
-    return ttnn.init_device_compute_kernel_config(
-        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
-    )
-
-
-# Floor on (logit - row max) before exp. exp(-80) is still a normal bf16, so a
-# group whose logits all sit far below another group's max cannot sum to 0.
-# The trained base, small and tiny checkpoints, on a nuScenes frame, keep every
-# group's max within 14 of the row max, in TSA, SCA and the decoder.
-_SOFTMAX_EXP_FLOOR = -80.0
-
-
-GROUPED_SOFTMAX_LIVE = 4
-
-
-def grouped_softmax(logits, group_sum, compute_kernel_config):
-    """Softmax over each group of columns of TILE ``logits`` (..., num_groups * group_size), with
-    ``group_sum`` from :func:`group_sum_matrix`.
-
-    Splitting off the group dim in TILE layout would pad every group to a whole tile row. Here the
-    tensor keeps its shape and the group sums come from one matmul. At its peak
-    ``GROUPED_SOFTMAX_LIVE`` tensors of the logits' size live at once: the logits, the
-    exponentials, the group sums and the result. Subtracting the row max over
-    all groups leaves each group's softmax unchanged as long as its logits stay within 80 of it;
-    past that the floor makes them equal instead of 0 / 0.
+    Each group gets its own row and maximum so other groups' logits cannot change its
+    distribution. Keep the tile-padded rows in DRAM; only the packed input and output
+    use the caller's memory placement.
     """
-    exp = ttnn.subtract(
-        logits,
-        ttnn.max(logits, dim=-1, keepdim=True),
-        activations=[
-            ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MIN, _SOFTMAX_EXP_FLOOR),
-            ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP),
-        ],
-    )
-    group_sums = ttnn.matmul(
-        exp, group_sum, compute_kernel_config=compute_kernel_config, memory_config=logits.memory_config()
-    )
-    return ttnn.divide(exp, group_sums)
+    grouped = ttnn.reshape(logits, (-1, group_size), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # TODO(#62506): softmax's additive -inf mask cannot clear NaN or +inf in tile padding.
+    grouped = ttnn.fill_implicit_tile_padding(grouped, 0.0)
+    weights = ttnn.softmax(grouped, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.reshape(weights, logits.shape, memory_config=logits.memory_config())
 
 
 def heads_packed_offsets(rows, num_heads):
@@ -318,8 +284,6 @@ class TTMSDeformableAttention:
             self.attention_softmax = "tile_row"
         elif (self.num_heads * samples) % ttnn.TILE_SIZE == 0:
             self.attention_softmax = "grouped"
-            self.attention_group_sum = group_sum_matrix(self.num_heads, samples, device)
-            self.attention_group_sum_config = group_sum_compute_config(device)
         else:
             self.attention_softmax = "padded"
 
@@ -450,19 +414,17 @@ class TTMSDeformableAttention:
         bs, num_queries, _ = query.shape
 
         # Placement:
-        # - the Linears, and the weights' softmax but for "padded", run in L1 when they fit, the
-        #   weights' first, then the offsets'. Besides the query, the weights' Linear and softmax
-        #   hold at most two weight-sized tensors at once ("tile_row"; "padded" keeps only the
-        #   Linear's output in L1) or GROUPED_SOFTMAX_LIVE ("grouped"), and the offsets one
-        #   offset-sized tensor, as many values as two weight-sized: the budget below;
+        # - the Linears and packed weights run in L1 when they fit, the weights' first, then the
+        #   offsets'. Besides the query, the weights' Linear and softmax hold at most two packed
+        #   weight-sized tensors in L1; padded softmax intermediates stay in DRAM. The offsets hold
+        #   one offset-sized tensor, as many values as two weight-sized: the budget below;
         # - both results land in DRAM, since the fused op stages its value and output in L1;
         # - they are row-major but for "padded", which the fused wrapper untilizes. Its reshape
         #   is 32x32 / (heads * samples) times the weights, so it goes to DRAM.
         samples = self.num_levels * self.num_points
-        weights_live = GROUPED_SOFTMAX_LIVE if self.attention_softmax == "grouped" else 2
         memory = l1_if_fits(
             self.device,
-            bs * num_queries * (self.embed_dims + weights_live * self.num_heads * samples) * query.element_size(),
+            bs * num_queries * (self.embed_dims + 2 * self.num_heads * samples) * query.element_size(),
         )
         DRAM = ttnn.DRAM_MEMORY_CONFIG
 
@@ -490,7 +452,7 @@ class TTMSDeformableAttention:
             )
         elif self.attention_softmax == "grouped":
             logits = attention_weights
-            attention_weights = grouped_softmax(logits, self.attention_group_sum, self.attention_group_sum_config)
+            attention_weights = grouped_softmax(logits, samples)
             ttnn.deallocate(logits)
             attention_weights = ttnn.reshape(
                 ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM), heads_shape

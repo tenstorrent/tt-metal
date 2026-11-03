@@ -21,8 +21,6 @@ ENABLE_LOGGING = False
 
 from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
 from .tt_ms_deformable_attention import (
-    group_sum_compute_config,
-    group_sum_matrix,
     grouped_softmax,
     heads_packed_offsets,
     multi_scale_deformable_attn_fused,
@@ -127,9 +125,6 @@ class TTTemporalSelfAttention:
         # The fused op's levels: every BEV map's, map-major.
         self.map_spatial_shapes = spatial_shapes.repeat(num_bev_queue, 1)
 
-        # Softmax over each head's (level, point) samples, per BEV map.
-        self.attention_group_sum = group_sum_matrix(num_heads * num_bev_queue, num_levels * num_points, device)
-        self.attention_group_sum_config = group_sum_compute_config(device)
         self.linear_kwargs = grid_linear_kwargs(device)
 
     def forward(
@@ -234,9 +229,8 @@ class TTTemporalSelfAttention:
         sampling_offsets = linear(offsets_query_cat, params.sampling_offsets)
         attention_weights = linear(offsets_query_cat, params.attention_weights)
         ttnn.deallocate(offsets_query_cat)
-        attention_weights = grouped_softmax(
-            attention_weights, self.attention_group_sum, self.attention_group_sum_config
-        )
+        # Softmax over each head's (level, point) samples, per BEV map.
+        attention_weights = grouped_softmax(attention_weights, self.num_levels * self.num_points)
 
         # The fused op reads a query's heads of offsets from one row-major page when each head's
         # offsets fill whole units of the buffer's alignment, else from a page per head; a head's

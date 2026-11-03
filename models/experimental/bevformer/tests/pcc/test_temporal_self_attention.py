@@ -7,11 +7,7 @@ import ttnn
 import pytest
 
 from models.experimental.bevformer.tt import tt_common
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
-    group_sum_compute_config,
-    group_sum_matrix,
-    grouped_softmax,
-)
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import grouped_softmax
 from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
 
@@ -312,30 +308,36 @@ def test_temporal_self_attention_previous_bev(
     [(16, 4), (8, 4), (8, 8), (8, 32)],
     ids=["groups_of_4", "decoder_groups_of_4", "groups_of_8", "groups_of_32"],
 )
-def test_grouped_softmax_matches_per_group_softmax(device, num_groups, group_size):
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG], ids=["l1", "dram"])
+def test_grouped_softmax_matches_per_group_softmax(device, num_groups, group_size, memory_config):
     """The (Q, groups*size) softmax must match softmax over each group of columns.
 
-    Row 0 puts one group 40 below the others, which the shared row max must not disturb, and row 1
-    puts one 200 below, past the exp floor: that group must stay finite and sum to 1.
+    Rows 0 and 1 put one group 40 and 200 below the others. Row 2 reproduces the
+    [-100, -100, -100, -90] case beside zero logits. Every group must retain its distribution.
     """
     torch.manual_seed(0)
     num_queries = 96
     logits = torch.randn(1, num_queries, num_groups * group_size) * 3.0
     logits[0, 0, group_size : 2 * group_size] -= 40.0
     logits[0, 1, group_size : 2 * group_size] -= 200.0
+    logits[0, 2] = 0.0
+    logits[0, 2, group_size : 2 * group_size] = -100.0
+    logits[0, 2, 2 * group_size - 1] = -90.0
+    # Compare against the logits the device receives, including bf16 rounding at large offsets.
+    logits = logits.bfloat16().float()
     expected = torch.softmax(logits.reshape(1, num_queries, num_groups, group_size), dim=-1)
 
     got = grouped_softmax(
-        ttnn.from_torch(logits, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-        group_sum_matrix(num_groups, group_size, device),
-        group_sum_compute_config(device),
+        ttnn.from_torch(
+            logits, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        ),
+        group_size,
     )
+    assert got.memory_config() == memory_config
     got = ttnn.to_torch(got).float().reshape(1, num_queries, num_groups, group_size)
 
     assert torch.isfinite(got).all()
     torch.testing.assert_close(got.sum(-1), torch.ones(1, num_queries, num_groups), atol=0.02, rtol=0)
-    # Past the floor the group comes out uniform rather than as its own softmax; check the rest.
-    keep = torch.ones(num_queries, num_groups, dtype=torch.bool)
-    keep[1, 1] = False
-    passed, message = check_with_pcc(expected[0][keep], got[0][keep], pcc=0.9999)
+    torch.testing.assert_close(got, expected, atol=0.01, rtol=0.02)
+    passed, message = check_with_pcc(expected, got, pcc=0.9999)
     assert passed, message
