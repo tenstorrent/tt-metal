@@ -50,8 +50,7 @@ void kernel_main() {
         // Int32 input is never scaled (the host rejects it), so its build leaves the multiply out.
         if constexpr (format != DataFormat::Int32) {
             if (apply_post_mul) {
-                binop_with_scalar_tile_init();
-                mul_unary_tile(dst_acc, post_mul_scaler_bits);
+                compute_kernel_lib::detail::reduce_post_mul_tile<format>(dst_acc, post_mul_scaler_bits);
                 // The multiply reprograms the SFPU; restore the fold for the next output tile.
                 compute_kernel_lib::detail::sfpu_reduce_fold_init<PoolType::SUM, format>();
             }

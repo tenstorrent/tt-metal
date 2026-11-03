@@ -7,6 +7,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -20,6 +21,7 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
+    constexpr DataFormat format = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
 
     DataflowBuffer cb_in0_obj(dfb::in0);
     DataflowBuffer cb_in1_obj(dfb::in1);
@@ -46,8 +48,7 @@ void kernel_main() {
             cb_in0_obj.pop_front(input_granularity);
         }
         if (apply_post_mul) {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(dst0, post_mul_scaler_bits);
+            compute_kernel_lib::detail::reduce_post_mul_tile<format>(dst0, post_mul_scaler_bits);
         }
         tile_regs_commit();
         cb_out0_obj.reserve_back(onetile);
