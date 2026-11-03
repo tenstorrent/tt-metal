@@ -324,12 +324,16 @@ _BOOL_FIELDS = frozenset(
 )
 
 
-def build_program_config(spec):
-    """Rebuild a captured program config (e.g. SDPAProgramConfig(...))."""
+def build_program_config(spec, quasar_cls=None):
+    """Rebuild a captured program config (e.g. SDPAProgramConfig(...)).
+
+    ``quasar_cls`` is the quasar fork's copy of the class (see ``U.quasar_program_config_class``),
+    used instead of ``ttnn.<kind>`` when the op is routed to ``ttnn.experimental.quasar``.
+    """
     if spec is None:
         return None
     kind = spec["kind"]
-    cls = getattr(ttnn, kind, None)
+    cls = quasar_cls or getattr(ttnn, kind, None)
     if cls is None:
         pytest.skip(f"{kind} is not exposed on this ttnn build")
 
@@ -365,6 +369,11 @@ def build_program_config(spec):
     for name in _MUST_BE_EMPTY:
         if fields.get(name):
             pytest.skip(f"{kind}.{name}={fields[name]!r} is not reconstructible from the capture")
+
+    if quasar_cls is not None:
+        for name, default in U.QUASAR_CONFIG_DROPPED_FIELDS.get(kind, {}).items():
+            if kwargs.pop(name, default) != default:
+                pytest.skip(f"{kind}.{name}={fields[name]!r} has no equivalent in the quasar fork's config")
 
     try:
         return cls(**kwargs)
@@ -669,8 +678,10 @@ def _build_value(spec, mesh_device, case, op_name, key, torch_sink):
     if kind == "mem":
         return build_memory_config(spec, mesh_device)
     if kind == "cfg":
-        builder = _OP_CONFIG_BUILDERS.get(spec["kind"], build_program_config)
-        return builder(spec)
+        builder = _OP_CONFIG_BUILDERS.get(spec["kind"])
+        if builder is not None:
+            return builder(spec)
+        return build_program_config(spec, quasar_cls=U.quasar_program_config_class(op_name, spec["kind"]))
     if kind == "dtype":
         return DTYPE[spec["v"]]
     if kind == "layout":
@@ -1575,6 +1586,9 @@ def _output_tensors(out):
     return []
 
 
+_POOL_OPS = frozenset({"ttnn.max_pool2d", "ttnn.avg_pool2d"})
+
+
 def _check_output(out, case, mesh_device, op_name):
     """Check every returned tensor against its captured spec, then its values.
 
@@ -1603,15 +1617,24 @@ def _check_output(out, case, mesh_device, op_name):
         if not spec:
             continue
 
+        pool_single_slice = False
         if "shape" in spec:
             want_shape = tuple(spec["shape"])
-            assert (
-                tuple(got.shape) == want_shape
-            ), f"{op_name}: output[{i}] shape {tuple(got.shape)} != {source} {want_shape}"
+            got_shape = tuple(got.shape)
+            if op_name in _POOL_OPS and len(want_shape) == 4 and want_shape[:2] != (1, 1):
+                # pool2d returns [N, H, W, C] in DRAM from its DRAM-sliced path but a flattened
+                # [1, 1, N*H*W, C] sharded L1 tensor when one slice fits (pool2d_DRAM -> pool2d_L1),
+                # and the slice count depends on the grid: the 20-core capture sliced, a 32-core
+                # Quasar grid may not. Accept that output; the golden check still runs.
+                flat = (1, 1, want_shape[0] * want_shape[1] * want_shape[2], want_shape[3])
+                if got_shape == flat:
+                    want_shape, pool_single_slice = flat, True
+            assert got_shape == want_shape, f"{op_name}: output[{i}] shape {got_shape} != {source} {want_shape}"
         if "dtype" in spec:
             want_dtype = DTYPE[spec["dtype"]]
             assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != {source} {want_dtype}"
-        _check_placement(got, spec, mesh_device, op_name, i, source)
+        if not pool_single_slice:
+            _check_placement(got, spec, mesh_device, op_name, i, source)
 
     for i, t in enumerate(tensors):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)
