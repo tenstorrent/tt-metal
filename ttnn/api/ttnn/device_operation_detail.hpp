@@ -87,6 +87,12 @@ inline std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
 }
 
 /**
+ * Logs, once per process per `op_name`, that the operation declares a compute_output_topologies the framework does not
+ * call (HasIgnoredComputeOutputTopologies in ttnn/operation_concepts.hpp), so the default labels its outputs.
+ */
+void warn_ignored_compute_output_topologies(std::string_view op_name);
+
+/**
  * The labels an operation without its own compute_output_topologies gets. An output that shares its device buffer
  * with a tensor in tensor_args is the caller's tensor (in place or preallocated) and keeps that tensor's label while
  * the rule of caller_owned_output_topology accepts it against the other tensors; every other output, and a caller's

@@ -584,20 +584,16 @@ void place_output_tensors(
     }
 
     if (!input_tensors.empty()) [[likely]] {
+        const auto op_name = get_operation_name<device_operation_t>(operation_attributes);
         std::vector<tt::tt_metal::TensorTopology> custom_topologies;
-        if constexpr (requires {
-                          {
-                              device_operation_t::compute_output_topologies(operation_attributes, tensor_args)
-                          } -> std::same_as<std::vector<tt::tt_metal::TensorTopology>>;
-                      }) {
+        if constexpr (HasComputeOutputTopologies<device_operation_t>) {
             custom_topologies = device_operation_t::compute_output_topologies(operation_attributes, tensor_args);
+        } else if constexpr (HasIgnoredComputeOutputTopologies<device_operation_t>) {
+            warn_ignored_compute_output_topologies(op_name);
         }
 
         mesh_device_operation_utils::update_output_tensor_topologies(
-            tensor_return_value,
-            input_tensors,
-            std::move(custom_topologies),
-            get_operation_name<device_operation_t>(operation_attributes));
+            tensor_return_value, input_tensors, std::move(custom_topologies), op_name);
     }
 }
 

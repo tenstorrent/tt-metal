@@ -10,11 +10,13 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include <cstdint>
 
@@ -274,5 +276,22 @@ template <typename device_operation_t>
 concept SupportsPerCoreAllocation = requires {
     { device_operation_t::supports_per_core_allocation } -> std::convertible_to<bool>;
 } && device_operation_t::supports_per_core_allocation;
+
+// The compute_output_topologies that place_output_tensors calls: static, taking the operation's attributes and tensor
+// args, and returning one label per output tensor. Without one, the framework default labels the outputs.
+template <typename device_operation_t>
+concept HasComputeOutputTopologies = requires(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::compute_output_topologies(operation_attributes, tensor_args)
+    } -> std::same_as<std::vector<tt::tt_metal::TensorTopology>>;
+};
+
+// A compute_output_topologies with any other signature. place_output_tensors does not call it; it logs a warning,
+// once per process per operation, and applies the default. An overloaded one is not detected.
+template <typename device_operation_t>
+concept HasIgnoredComputeOutputTopologies =
+    requires { &device_operation_t::compute_output_topologies; } && !HasComputeOutputTopologies<device_operation_t>;
 
 }  // namespace ttnn::device_operation

@@ -294,22 +294,33 @@ std::string rejection_reason(
     return {};
 }
 
-void warn_once(std::string_view op_name, std::string_view reason) {
-    static std::mutex warned_mutex;
-    static std::set<std::string, std::less<>> warned;
-    {
-        std::lock_guard<std::mutex> guard(warned_mutex);
-        if (warned.contains(op_name)) {
-            return;
+// The operations a warning was logged for, so that it is logged once per process per operation.
+class OncePerOperation {
+public:
+    bool first_time(std::string_view op_name) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (names_.contains(op_name)) {
+            return false;
         }
-        warned.emplace(op_name);
+        names_.emplace(op_name);
+        return true;
     }
-    log_warning(
-        tt::LogOp,
-        "{}: the caller's tensor takes the union of the operand labels instead of its own: {} (logged once per "
-        "process for this op)",
-        op_name,
-        reason);
+
+private:
+    std::mutex mutex_;
+    std::set<std::string, std::less<>> names_;
+};
+
+void warn_once(std::string_view op_name, std::string_view reason) {
+    static OncePerOperation logged;
+    if (logged.first_time(op_name)) {
+        log_warning(
+            tt::LogOp,
+            "{}: the caller's tensor takes the union of the operand labels instead of its own: {} (logged once per "
+            "process for this op)",
+            op_name,
+            reason);
+    }
 }
 
 // The device buffer `tensor` lives in, or nullptr for a host or deallocated tensor.
@@ -347,6 +358,18 @@ std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
     }
     warn_once(op_name, reason);
     return std::nullopt;
+}
+
+void warn_ignored_compute_output_topologies(std::string_view op_name) {
+    static OncePerOperation logged;
+    if (logged.first_time(op_name)) {
+        log_warning(
+            tt::LogOp,
+            "{}: compute_output_topologies is ignored and the default labels the outputs: the framework calls it only "
+            "when it is static, takes (operation_attributes_t, tensor_args_t) and returns "
+            "std::vector<tt::tt_metal::TensorTopology> (logged once per process for this op)",
+            op_name);
+    }
 }
 
 void apply_default_output_topologies(
