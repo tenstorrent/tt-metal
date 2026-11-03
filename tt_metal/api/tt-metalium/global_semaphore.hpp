@@ -49,17 +49,16 @@ public:
         uint8_t cq_id = 0);
 
     /**
-     * @brief Allocates a global semaphore in L1 on the mesh device, writing the initial value through `mesh_cq`.
+     * @brief Allocates a global semaphore in L1 on `mesh_cq`'s mesh device, writing the initial value through
+     * `mesh_cq`.
      *
-     * @param device Mesh device to create the semaphore on.
-     * @param mesh_cq Command queue used for the initial-value write with fast dispatch. Must belong to `device`.
-     * It is not used on slow dispatch / simulator, where no command queue is involved.
+     * @param mesh_cq Command queue of the mesh device to create the semaphore on. It is used for the initial-value
+     * write with fast dispatch, and not used for the write on slow dispatch / simulator.
      * @param cores Range of Tensix coordinates using the semaphore.
      * @param initial_value Initial value of the semaphore.
      * @param buffer_type Buffer type to store the semaphore. Can only be an L1 buffer type.
      */
     GlobalSemaphore(
-        distributed::MeshDevice& device,
         distributed::MeshCommandQueue& mesh_cq,
         CoreRangeSet cores,
         uint32_t initial_value,

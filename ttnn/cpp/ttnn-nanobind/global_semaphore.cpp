@@ -31,7 +31,6 @@ void py_module(nb::module_& mod) {
             using namespace tt::tt_metal;
             TT_FATAL(buffer_type == BufferType::L1, "Address-based semaphores require ordinary SRAM");
             return tt::tt_metal::experimental::CreateGlobalSemaphore(
-                mesh,
                 mesh.mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()),
                 cores,
                 initial_value,

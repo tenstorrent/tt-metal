@@ -29,12 +29,12 @@ namespace experimental {
 // go through GlobalCircularBuffer::impl().
 class GlobalCircularBufferImpl {
 public:
+    // The buffer is created on `mesh_cq`'s device.
     GlobalCircularBufferImpl(
-        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type,
-        distributed::MeshCommandQueue& mesh_cq);
+        BufferType buffer_type);
 
     GlobalCircularBufferImpl(const GlobalCircularBufferImpl&) = default;
     GlobalCircularBufferImpl& operator=(const GlobalCircularBufferImpl&) = default;

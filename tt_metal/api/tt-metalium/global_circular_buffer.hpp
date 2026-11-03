@@ -46,9 +46,8 @@ public:
         BufferType buffer_type = BufferType::L1,
         uint8_t cq_id = 0);
 
-    // The config write goes through `mesh_cq`, which must belong to `device`.
+    // The buffer is created on `mesh_cq`'s mesh device, and the config write goes through `mesh_cq`.
     GlobalCircularBuffer(
-        distributed::MeshDevice& device,
         distributed::MeshCommandQueue& mesh_cq,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
@@ -99,10 +98,10 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     uint8_t cq_id = 0);
 
 /**
- * @brief Same as above, but the config write goes through `mesh_cq`, which must belong to `device`.
+ * @brief Same as above, but the buffer is created on `mesh_cq`'s mesh device, and the config write goes through
+ * `mesh_cq`.
  */
 GlobalCircularBuffer CreateGlobalCircularBuffer(
-    distributed::MeshDevice& device,
     distributed::MeshCommandQueue& mesh_cq,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,

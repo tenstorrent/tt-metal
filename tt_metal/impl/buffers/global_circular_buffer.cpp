@@ -38,13 +38,11 @@
 namespace tt::tt_metal::experimental {
 
 GlobalCircularBufferImpl::GlobalCircularBufferImpl(
-    distributed::MeshDevice& device,
+    distributed::MeshCommandQueue& mesh_cq,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type,
-    distributed::MeshCommandQueue& mesh_cq) :
-    device_(&device), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
-    TT_FATAL(mesh_cq.device() == &device, "MeshCommandQueue belongs to a different MeshDevice");
+    BufferType buffer_type) :
+    device_(mesh_cq.device()), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
     const uint32_t num_sender_cores = sender_receiver_core_mapping.size();
     TT_FATAL(num_sender_cores > 0, "At least one sender required");
     uint32_t num_receiver_cores = 0;
@@ -189,15 +187,14 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     uint32_t size,
     BufferType buffer_type,
     uint8_t cq_id) :
-    GlobalCircularBuffer(device, device.mesh_command_queue(cq_id), sender_receiver_core_mapping, size, buffer_type) {}
+    GlobalCircularBuffer(device.mesh_command_queue(cq_id), sender_receiver_core_mapping, size, buffer_type) {}
 
 GlobalCircularBuffer::GlobalCircularBuffer(
-    distributed::MeshDevice& device,
     distributed::MeshCommandQueue& mesh_cq,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) :
-    GlobalCircularBuffer(GlobalCircularBufferImpl(device, sender_receiver_core_mapping, size, buffer_type, mesh_cq)) {}
+    GlobalCircularBuffer(GlobalCircularBufferImpl(mesh_cq, sender_receiver_core_mapping, size, buffer_type)) {}
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
@@ -205,17 +202,15 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     uint32_t size,
     BufferType buffer_type,
     uint8_t cq_id) {
-    return GlobalCircularBuffer(
-        device, device.mesh_command_queue(cq_id), sender_receiver_core_mapping, size, buffer_type);
+    return GlobalCircularBuffer(device.mesh_command_queue(cq_id), sender_receiver_core_mapping, size, buffer_type);
 }
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
-    distributed::MeshDevice& device,
     distributed::MeshCommandQueue& mesh_cq,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
-    return GlobalCircularBuffer(device, mesh_cq, sender_receiver_core_mapping, size, buffer_type);
+    return GlobalCircularBuffer(mesh_cq, sender_receiver_core_mapping, size, buffer_type);
 }
 
 GlobalCircularBuffer::GlobalCircularBuffer(GlobalCircularBufferImpl impl) :

@@ -4,7 +4,8 @@
 
 // Metal has no implicit command queue selection for these APIs: the queue that performs the write is passed as a
 // MeshCommandQueue& (command queue 0 when the overload without a queue is used). These tests check that the given
-// queue is honored and that a queue belonging to a different MeshDevice is rejected.
+// queue is honored, that objects are created on the queue's MeshDevice, and that resetting a semaphore through a queue
+// of a different MeshDevice is rejected.
 
 #include <gtest/gtest.h>
 
@@ -45,7 +46,7 @@ TEST_F(ExplicitCqTest, GlobalSemaphoreCreateAndResetOnSecondQueue) {
     const CoreCoord core(0, 0);
     const CoreRangeSet cores(CoreRange(core, core));
 
-    GlobalSemaphore semaphore(*mesh_device, cq1, cores, /*initial_value=*/3);
+    GlobalSemaphore semaphore(cq1, cores, /*initial_value=*/3);
     Synchronize(mesh_device.get(), std::nullopt);
     EXPECT_EQ(read_semaphore(*mesh_device, core, semaphore.address()), 3u);
 
@@ -69,7 +70,7 @@ TEST_F(ExplicitCqTest, AddressBackedGlobalSemaphoreInitOnGivenQueue) {
     const DeviceAddr address = backing.address();
 
     auto at_address = experimental::CreateGlobalSemaphore(
-        *mesh_device, mesh_device->mesh_command_queue(1), cores, /*initial_value=*/5, BufferType::L1, address);
+        mesh_device->mesh_command_queue(1), cores, /*initial_value=*/5, BufferType::L1, address);
     Synchronize(mesh_device.get(), std::nullopt);
     EXPECT_EQ(read_semaphore(*mesh_device, core, address), 5u);
 
@@ -85,7 +86,7 @@ TEST_F(ExplicitCqTest, GlobalCircularBufferConfigWriteOnSecondQueue) {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange(CoreCoord(1, 1), CoreCoord(1, 1)))}};
 
     {
-        experimental::GlobalCircularBuffer gcb(*mesh_device, mesh_device->mesh_command_queue(1), mapping, 3200);
+        experimental::GlobalCircularBuffer gcb(mesh_device->mesh_command_queue(1), mapping, 3200);
         Synchronize(mesh_device.get(), std::nullopt);
     }
     {
@@ -102,7 +103,7 @@ TEST_F(ExplicitCqTest, InspectorTraceIdOfGivenQueue) {
     EXPECT_FALSE(experimental::inspector::GetCurrentMeshTraceId(mesh_device->mesh_command_queue(1)).has_value());
 }
 
-TEST_F(ExplicitCqTest, QueueOfAnotherMeshDeviceIsRejected) {
+TEST_F(ExplicitCqTest, SemaphoreLivesOnQueueDeviceAndRejectsResetOnAnotherMeshDevice) {
     auto mesh_device = get_mesh_device();
     if (mesh_device->num_devices() < 2) {
         GTEST_SKIP() << "Needs a mesh with at least two devices to build a submesh that differs from the parent";
@@ -112,16 +113,11 @@ TEST_F(ExplicitCqTest, QueueOfAnotherMeshDeviceIsRejected) {
     auto& submesh = *submeshes[0];
     const CoreRangeSet cores(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
+    GlobalSemaphore semaphore(submesh.mesh_command_queue(0), cores, /*initial_value=*/1);
+    EXPECT_EQ(semaphore.device(), &submesh);
+
     // The parent's queue does not belong to the submesh.
-    auto& parent_cq = mesh_device->mesh_command_queue(0);
-    EXPECT_ANY_THROW(GlobalSemaphore(submesh, parent_cq, cores, /*initial_value=*/1));
-
-    GlobalSemaphore semaphore(submesh, cores, /*initial_value=*/1);
-    EXPECT_ANY_THROW(semaphore.reset_semaphore_value(2, parent_cq));
-
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
-        {CoreCoord(0, 0), CoreRangeSet(CoreRange(CoreCoord(1, 1), CoreCoord(1, 1)))}};
-    EXPECT_ANY_THROW(experimental::GlobalCircularBuffer(submesh, parent_cq, mapping, 3200));
+    EXPECT_ANY_THROW(semaphore.reset_semaphore_value(2, mesh_device->mesh_command_queue(0)));
 }
 
 // The overloads taking a raw command queue id (cq 0 by default) look the queue up with mesh_command_queue(cq_id).

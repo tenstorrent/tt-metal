@@ -141,7 +141,7 @@ TEST_F(MeshDispatchFixture, GlobalSemaphoresWithExplicitQueue) {
     for (const auto& mesh_device : devices_) {
         auto device_id = mesh_device->get_device_ids()[0];
         auto& cq = mesh_device->mesh_command_queue(0);
-        auto global_semaphore = tt::tt_metal::GlobalSemaphore(*mesh_device, cq, cores, /*initial_value=*/4);
+        auto global_semaphore = tt::tt_metal::GlobalSemaphore(cq, cores, /*initial_value=*/4);
         auto address = global_semaphore.address();
         distributed::Synchronize(*mesh_device, std::nullopt);
         auto read_value = [&](const CoreCoord& core) {

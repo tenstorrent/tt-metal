@@ -31,23 +31,21 @@ namespace tt::tt_metal {
 // GlobalSemaphoreImpl implementation
 
 GlobalSemaphoreImpl::GlobalSemaphoreImpl(
-    distributed::MeshDevice& device,
+    distributed::MeshCommandQueue& mesh_cq,
     CoreRangeSet cores,
     std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    distributed::MeshCommandQueue& mesh_cq) :
-    device_{&device}, cores_{std::move(cores)} {
+    BufferType buffer_type) :
+    device_{mesh_cq.device()}, cores_{std::move(cores)} {
     this->setup_buffer(initial_value, buffer_type, std::nullopt, mesh_cq);
 }
 
 GlobalSemaphoreImpl::GlobalSemaphoreImpl(
-    distributed::MeshDevice& device,
+    distributed::MeshCommandQueue& mesh_cq,
     CoreRangeSet cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
-    uint64_t address,
-    distributed::MeshCommandQueue& mesh_cq) :
-    device_{&device}, cores_{std::move(cores)} {
+    uint64_t address) :
+    device_{mesh_cq.device()}, cores_{std::move(cores)} {
     this->setup_buffer(initial_value, buffer_type, address, mesh_cq);
 }
 
@@ -88,7 +86,6 @@ void GlobalSemaphoreImpl::setup_buffer(
     BufferType buffer_type,
     std::optional<uint64_t> address,
     distributed::MeshCommandQueue& mesh_cq) {
-    TT_FATAL(mesh_cq.device() == device_, "MeshCommandQueue belongs to a different MeshDevice");
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global semaphore can only be created for L1 buffer types");
@@ -114,19 +111,18 @@ void GlobalSemaphoreImpl::setup_buffer(
 namespace experimental {
 // Forge backdoor API.
 GlobalSemaphore CreateGlobalSemaphore(
-    distributed::MeshDevice& device,
     distributed::MeshCommandQueue& mesh_cq,
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
     uint64_t address) {
     // Validate every destination in its selected SRAM region before any constructor can write.
-    for (auto* local_device : device.get_devices()) {
+    for (auto* local_device : mesh_cq.device()->get_devices()) {
         const auto& allocator = local_device->allocator_impl();
         const auto footprint = tt::align(sizeof(uint32_t), allocator->get_alignment(BufferType::L1));
         allocator->validate_l1_range(address, footprint, buffer_type);
     }
-    return GlobalSemaphore{GlobalSemaphoreImpl{device, cores, initial_value, buffer_type, address, mesh_cq}};
+    return GlobalSemaphore{GlobalSemaphoreImpl{mesh_cq, cores, initial_value, buffer_type, address}};
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
@@ -136,7 +132,7 @@ GlobalSemaphore CreateGlobalSemaphore(
     BufferType buffer_type,
     uint64_t address,
     uint8_t cq_id) {
-    return CreateGlobalSemaphore(device, device.mesh_command_queue(cq_id), cores, initial_value, buffer_type, address);
+    return CreateGlobalSemaphore(device.mesh_command_queue(cq_id), cores, initial_value, buffer_type, address);
 }
 }  // namespace experimental
 
@@ -148,15 +144,11 @@ GlobalSemaphore::GlobalSemaphore(
     uint32_t initial_value,
     BufferType buffer_type,
     uint8_t cq_id) :
-    GlobalSemaphore(device, device.mesh_command_queue(cq_id), std::move(cores), initial_value, buffer_type) {}
+    GlobalSemaphore(device.mesh_command_queue(cq_id), std::move(cores), initial_value, buffer_type) {}
 
 GlobalSemaphore::GlobalSemaphore(
-    distributed::MeshDevice& device,
-    distributed::MeshCommandQueue& mesh_cq,
-    CoreRangeSet cores,
-    uint32_t initial_value,
-    BufferType buffer_type) :
-    GlobalSemaphore{GlobalSemaphoreImpl{device, std::move(cores), initial_value, buffer_type, mesh_cq}} {}
+    distributed::MeshCommandQueue& mesh_cq, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) :
+    GlobalSemaphore{GlobalSemaphoreImpl{mesh_cq, std::move(cores), initial_value, buffer_type}} {}
 
 GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl impl) :
     impl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}

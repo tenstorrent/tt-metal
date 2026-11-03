@@ -24,22 +24,21 @@ class MeshDevice;
 // This can be updated in the future to be its own container with optimized dispatch functions
 class GlobalSemaphoreImpl {
 public:
+    // The semaphore is created on `mesh_cq`'s device.
     GlobalSemaphoreImpl(
-        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
-        BufferType buffer_type,
-        distributed::MeshCommandQueue& mesh_cq);
+        BufferType buffer_type);
 
     // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
     GlobalSemaphoreImpl(
-        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
         BufferType buffer_type,
-        uint64_t address,
-        distributed::MeshCommandQueue& mesh_cq);
+        uint64_t address);
 
     // Copy/move semantics
     GlobalSemaphoreImpl(const GlobalSemaphoreImpl&) = default;
