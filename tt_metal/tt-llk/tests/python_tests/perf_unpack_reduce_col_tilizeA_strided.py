@@ -5,7 +5,6 @@ import pytest
 from helpers.llk_params import DestSync
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
-from helpers.tile_constants import MAX_FACE_R_DIM
 from test_unpack_reduce_col_tilizeA_strided import (
     UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
     UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES,
@@ -16,6 +15,7 @@ from test_unpack_reduce_col_tilizeA_strided import (
 )
 from test_unpack_reduce_col_tilizeA_strided import (
     unpack_reduce_col_tilizeA_strided_dest_acc,
+    unpack_reduce_col_tilizeA_strided_face_r_dim,
     unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
 )
 
@@ -26,6 +26,7 @@ from test_unpack_reduce_col_tilizeA_strided import (
     dest_acc=unpack_reduce_col_tilizeA_strided_dest_acc,
     max_tiles_per_iter=unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
     num_faces=UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES,
+    face_r_dim=unpack_reduce_col_tilizeA_strided_face_r_dim,
     pool_type=UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
     dest_sync=[DestSync.Half],
     run_types=[ALL_PERF_RUN_TYPES],
@@ -37,6 +38,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided(
     dest_acc,
     max_tiles_per_iter,
     num_faces,
+    face_r_dim,
     pool_type,
     dest_sync,
     run_types,
@@ -48,7 +50,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided(
         max_tiles_per_iter,
         num_faces,
         pool_type,
-        MAX_FACE_R_DIM,
+        face_r_dim,
         dest_sync,
         is_perf=True,
         perf_report=perf_report,

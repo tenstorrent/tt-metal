@@ -34,6 +34,8 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test, result_tensor
 
+UNPACK_TILIZE_NUM_FACES = [2, 4]
+
 
 def unpack_tilize_input_dimensions(rt_dim, ct_dim):
     return [rt_dim * TILE_DIMENSIONS[0], ct_dim * TILE_DIMENSIONS[1]]
@@ -48,7 +50,7 @@ def unpack_tilize_input_dimensions(rt_dim, ct_dim):
             DataFormat.Fp8_e4m3,
         ]
     ),
-    num_faces=[2, 4],
+    num_faces=UNPACK_TILIZE_NUM_FACES,
     rt_dim=list(range(1, 9)),
     ct_dim=list(range(1, 9)),
 )
@@ -82,7 +84,7 @@ def test_unpack_tilize_float(
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.Yes],
-    num_faces=[2, 4],
+    num_faces=UNPACK_TILIZE_NUM_FACES,
 )
 def test_unpack_tilize_float32_lossless(
     formats,
@@ -100,7 +102,7 @@ def test_unpack_tilize_float32_lossless(
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
-    num_faces=[2, 4],
+    num_faces=UNPACK_TILIZE_NUM_FACES,
     rt_dim=[1, 2],
     ct_dim=[1, 2],
 )
@@ -120,7 +122,7 @@ def test_unpack_tilize_int(
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int8]),
-    num_faces=[2, 4],
+    num_faces=UNPACK_TILIZE_NUM_FACES,
 )
 def test_unpack_tilize_int8(
     formats,

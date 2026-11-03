@@ -51,6 +51,8 @@ from ttexalens.tt_exalens_lib import read_from_device
 
 pytestmark = blackhole_only
 
+FAST_UNTILIZE_STIMULUS_KINDS = ["row_id", "random"]
+
 
 def generate_tile_face_row_ids(tile_count, dtype=torch.bfloat16):
     values = []
@@ -205,7 +207,7 @@ def _run_fast_untilize_correctness(
     rt_dim=FAST_UNTILIZE_RT_DIMS,
     ct_dim=FAST_UNTILIZE_CT_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
-    stimulus_kind=["row_id", "random"],
+    stimulus_kind=FAST_UNTILIZE_STIMULUS_KINDS,
 )
 def test_fast_untilize(formats, dest_acc, rt_dim, ct_dim, dest_sync, stimulus_kind):
     _run_fast_untilize_correctness(

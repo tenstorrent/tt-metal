@@ -22,6 +22,8 @@ PACK_UNTILIZE_RUN_TYPES = [
 @pytest.mark.perf
 @parametrize(
     case=pack_untilize_cases,
+    dest_sync=[DestSync.Half],
+    tile_dst_ct_offset=[0],
     run_types=[PACK_UNTILIZE_RUN_TYPES],
     loop_factor=[64],
     is_perf=[True],
@@ -29,6 +31,8 @@ PACK_UNTILIZE_RUN_TYPES = [
 def test_perf_pack_untilize(
     perf_report,
     case,
+    dest_sync,
+    tile_dst_ct_offset,
     run_types,
     loop_factor,
     is_perf,
@@ -37,8 +41,8 @@ def test_perf_pack_untilize(
 
     run_pack_untilize(
         case,
-        DestSync.Half,
-        tile_dst_ct_offset=0,
+        dest_sync,
+        tile_dst_ct_offset,
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
