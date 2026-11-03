@@ -348,12 +348,15 @@ std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
         return caller_topology;  // not a mesh tensor: nothing to compare against
     }
     const auto& mesh_shape = caller_tensor.device()->shape();
+    const void* caller_buffer = device_buffer(caller_tensor);
     ttsl::SmallVector<RuleOperand> read;
     for (const ttnn::Tensor* operand : operands) {
-        if (operand != nullptr && operand != &caller_tensor) {
-            const auto& topology = operand->tensor_topology();
-            read.push_back({&topology, sharded_per_mesh_axis(topology, mesh_shape)});
+        if (operand == nullptr || operand == &caller_tensor ||
+            (caller_buffer != nullptr && device_buffer(*operand) == caller_buffer)) {
+            continue;  // absent, or the caller's tensor under any handle
         }
+        const auto& topology = operand->tensor_topology();
+        read.push_back({&topology, sharded_per_mesh_axis(topology, mesh_shape)});
     }
     ttsl::SmallVector<const RuleOperand*> read_operands;
     for (const auto& operand : read) {
