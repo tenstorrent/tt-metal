@@ -17,13 +17,16 @@ namespace tt::tt_metal::experimental {
 // ProgramSpec::dataflow_buffers.size(). Gen1 lowers each slot to a circular buffer; Gen2
 // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
 // Gen2 is still checked later at enqueue.
-void ValidateDFBSlotsPerNode(const ValidationContext& ctx, uint32_t max_slots_per_core, tt::ARCH arch) {
+void ValidateDFBSlotsPerNode(
+    const WorkUnitSpec& work_unit, const ValidationContext& ctx, uint32_t max_slots_per_core, tt::ARCH arch) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
 
+    const NodeRangeSet nodes = to_node_range_set(work_unit.target_nodes);
     std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
     for (const auto& dfb : spec.dataflow_buffers) {
-        for (const NodeCoord& node : corerange_to_cores(collected.dfb_placements.at(dfb.unique_id).configuration)) {
+        for (const NodeCoord& node :
+             corerange_to_cores(collected.dfb_placements.at(dfb.unique_id).configuration.intersection(nodes))) {
             dfbs_per_node[node]++;
         }
     }
