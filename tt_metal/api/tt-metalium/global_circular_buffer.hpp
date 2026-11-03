@@ -36,12 +36,25 @@ class GlobalCircularBuffer {
 public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
 
+    // Allocate and own data and configuration buffers at allocator-selected addresses.
     // `cq_id` is the command queue used for the config write.
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type = BufferType::L1,
+        uint8_t cq_id = 0);
+
+    // Allocate and own both buffers at the exact addresses. Both ranges must be free.
+    // This reserves new storage; it does not view or adopt existing allocations.
+    // `cq_id` is the command queue used for the config write.
+    GlobalCircularBuffer(
+        distributed::MeshDevice& device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        uint32_t size,
+        BufferType buffer_type,
+        DeviceAddr buffer_address,
+        DeviceAddr config_address,
         uint8_t cq_id = 0);
 
     GlobalCircularBuffer(const GlobalCircularBuffer& other);
@@ -56,6 +69,12 @@ public:
     const CoreRangeSet& receiver_cores() const;
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
+    // Worker senders only. Releases both backing allocations, including those shared by copies of this object.
+    // The caller must finish all uses before allocating other buffers or replaying traces.
+    void deallocate();
+    // Worker senders only. Acknowledges that all existing traces may overwrite this GCB's data and configuration.
+    // The caller must ensure the addresses and layout match those used during capture.
+    void acknowledge_corruptible();
     uint32_t size() const;
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
 
@@ -72,7 +91,7 @@ private:
 };
 
 /**
- * @brief Allocates a global circular buffer in L1 on the device.
+ * @brief Allocates and owns a global circular buffer at allocator-selected L1 addresses.
  *
  * @param device Mesh device to create the global circular buffer on.
  * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
@@ -86,6 +105,31 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
+    uint8_t cq_id = 0);
+
+/**
+ * @brief Allocates and owns a global circular buffer at two exact L1 addresses.
+ *
+ * Both ranges must be free. This function reserves new storage in the allocator and initializes
+ * the configuration buffer. It does not view or adopt existing allocations. It fails if either
+ * range is unavailable or invalid. Deallocation releases both owned ranges.
+ *
+ * @param device Mesh device to allocate the global circular buffer on.
+ * @param sender_receiver_core_mapping Mapping of sender cores to receiver cores.
+ * @param size Size of the data buffer per core in bytes.
+ * @param buffer_type L1 buffer type for both allocations.
+ * @param buffer_address Exact data address.
+ * @param config_address Exact configuration address.
+ * @param cq_id Command queue used for the config write.
+ * @return The global circular buffer that owns both allocations.
+ */
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    distributed::MeshDevice& device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type,
+    DeviceAddr buffer_address,
+    DeviceAddr config_address,
     uint8_t cq_id = 0);
 
 /**

@@ -43,7 +43,8 @@ public:
         BufferType buffer_type,
         const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt,
+        std::optional<DeviceAddr> requested_address = std::nullopt);
     static std::shared_ptr<Buffer> create(
         IDevice* device,
         DeviceAddr address,
@@ -67,7 +68,7 @@ public:
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
     void mark_as_deallocated() { allocation_status_ = AllocationStatus::DEALLOCATED; }
 
-    void allocate_impl(Buffer& self);
+    void allocate_impl(Buffer& self, std::optional<DeviceAddr> requested_address = std::nullopt);
     void deallocate(Buffer& self);
     void deallocate_impl(Buffer& self);
     DeviceAddr translate_page_address(const Buffer& self, DeviceAddr offset, uint32_t bank_id) const;
