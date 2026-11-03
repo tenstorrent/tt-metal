@@ -31,13 +31,23 @@ def length_class(rows: int) -> LengthClass:
 
 
 def uncovered_class_lengths(padded_lengths: Iterable[int], sp_factor: int) -> list[int]:
-    """Padded packed lengths that warm the classes between the shortest and the longest of `padded_lengths`
-    that none of them falls in: the first tile-aligned length of each such class."""
+    """Extra warm-up points so that every length class a request can land in has compiled its programs.
+
+    `padded_lengths` are the packed (all-device) lengths already warmed, normally the two ends of the served
+    envelope. A class is covered when one of them falls in it. For each class that lies strictly between the
+    shortest and the longest warmed length and that none of them covers, return the first tile-aligned packed
+    length of that class, so one short generation at it warms the class. With the two shipped classes the two
+    ends always cover both (the shortest request is `short`, the capacity is `long`), so this returns `[]`;
+    it only adds points once a class sits between them.
+    """
     lengths = sorted(padded_lengths)
+    if not lengths:
+        return []
     covered = {length_class(n // sp_factor).name for n in lengths}
     tile = ttnn.TILE_SIZE
     out = []
     for previous, cls in zip(LENGTH_CLASSES, LENGTH_CLASSES[1:]):
+        # The class starts one row past the previous class's bound; round that to whole tiles on every device.
         first = -(-(previous.max_rows + 1) // tile) * tile * sp_factor
         if cls.name not in covered and lengths[0] < first < lengths[-1]:
             out.append(first)
