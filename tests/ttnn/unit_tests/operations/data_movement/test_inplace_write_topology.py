@@ -348,6 +348,7 @@ def test_sharded_src_into_replicated_dst_adopts_shard(mesh_device, write_into, d
 # dst holds afterwards, given device 0's slice of the mesh tensor).
 _ONE_DEVICE_SOURCES = [
     pytest.param(ttnn.neg, lambda x0: -x0, id="op_on_one_device_tensor"),
+    pytest.param(lambda device_tensor: device_tensor, lambda x0: x0, id="one_device_tensor"),
 ]
 
 
@@ -361,7 +362,8 @@ def test_src_on_one_device_overwrites_dst_there_only(
 
     dst is stored on every device and written in part, so the framework default labels it. The result of an op on one
     device tensor of a mesh tensor is stored on that device, though its label can span the whole mesh: dst keeps its
-    Shard(0) next to the replicated source.
+    Shard(0) next to the replicated source. That device tensor itself is labelled over its own mesh coordinate: dst
+    takes the union of the two labels, which is its own Shard(0).
     """
     num_devices = mesh_device.get_num_devices()
     shape = [num_devices, 1, 64, 64]
