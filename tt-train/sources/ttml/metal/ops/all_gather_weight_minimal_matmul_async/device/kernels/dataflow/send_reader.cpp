@@ -20,7 +20,8 @@ void kernel_main() {
     constexpr uint32_t stripe_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t ring_size = get_compile_time_arg_val(7);
     constexpr bool transpose_b = get_compile_time_arg_val(8) == 1;
-    constexpr auto shard_args = TensorAccessorArgs<9>();
+    constexpr uint32_t cb_packets = get_compile_time_arg_val(9);
+    constexpr auto shard_args = TensorAccessorArgs<10>();
     constexpr auto pwb_args = TensorAccessorArgs<shard_args.next_compile_time_args_offset()>();
     constexpr uint32_t packet_bytes = tiles_per_packet * tile_size;
 
@@ -38,8 +39,10 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb(cb_id);
 
+    const uint32_t cb_base = cb.get_write_ptr();
+    constexpr uint32_t cb_bytes = cb_packets * packet_bytes;
     uint32_t batched = 0;
-    uint32_t batch_base = 0;
+    uint32_t batch_offset = 0;
     auto flush_batch = [&]() {
         if (batched > 0) {
             noc.async_read_barrier();
@@ -59,8 +62,12 @@ void kernel_main() {
                 return;
             }
             const uint32_t target = (chunk_idx * seg.num_pieces) + piece_idx + 1;
-            noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stripe_sem_addrs[seg.stripe]), target);
+            auto* counter = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stripe_sem_addrs[seg.stripe]);
+            invalidate_l1_cache();
+            if (*counter < target) {
+                flush_batch();
+                noc_semaphore_wait_min(counter, target);
+            }
             relay_credits[seg.stripe]++;
         },
         [&](const SendSegment& seg,
@@ -71,9 +78,9 @@ void kernel_main() {
             uint32_t chunk) {
             if (batched == 0) {
                 cb.reserve_back(packets_per_batch * tiles_per_packet);
-                batch_base = cb.get_write_ptr();
+                batch_offset = cb.get_write_ptr() - cb_base;
             }
-            uint32_t l1 = batch_base + (batched * packet_bytes);
+            uint32_t l1 = cb_base + ((batch_offset + (batched * packet_bytes)) % cb_bytes);
             for (uint32_t i = 0; i < count; ++i, l1 += tile_size) {
                 const uint32_t t = t0 + i;
                 const uint32_t row = piece.row_offset + (t / chunk);

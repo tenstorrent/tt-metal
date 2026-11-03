@@ -353,6 +353,56 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, LargeBatch4D) {
     }
 }
 
+TEST_F(AllGatherWeightMinimalMatmulAsyncTest, NarrowStripes4D) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
+    for (const auto& s : std::array<Shape, 2>{{{256, 512, 256}, {256, 256, 512}}}) {
+        const Problem p = make_problem(s);
+        const auto x = ttml::core::from_vector(
+            p.x, ttnn::Shape({2, 1, s.M / 2, s.K}), device, ttnn::Layout::TILE, replicate.get());
+        const auto w =
+            ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+        for (const auto& [num_links, num_workers] : std::array<std::pair<uint32_t, uint32_t>, 2>{{{2, 3}, {1, 1}}}) {
+            SCOPED_TRACE(
+                testing::Message() << "K=" << s.K << " N=" << s.N << " links=" << num_links
+                                   << " workers=" << num_workers);
+            std::printf("NarrowStripes4D K=%u N=%u links=%u workers=%u\n", s.K, s.N, num_links, num_workers);
+            std::fflush(stdout);
+            run_fabric_gather(p, x, w, num_links, num_workers, true, ttnn::ccl::Topology::Ring, std::nullopt);
+        }
+    }
+}
+
+TEST_F(AllGatherWeightMinimalMatmulAsyncTest, TinyShapes) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
+    for (const uint32_t K : {32U, 96U, 256U}) {
+        for (const uint32_t N : {128U, 256U, 384U}) {
+            const Shape s{128, K, N};
+            const Problem p = make_problem(s);
+            const auto x =
+                ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
+            const auto w =
+                ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+            for (const auto& [num_links, num_workers] :
+                 std::array<std::pair<uint32_t, uint32_t>, 2>{{{2, 3}, {1, 1}}}) {
+                for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
+                    const bool ring = topology == ttnn::ccl::Topology::Ring;
+                    SCOPED_TRACE(
+                        testing::Message() << "K=" << K << " N=" << N << " links=" << num_links
+                                           << " workers=" << num_workers << " ring=" << ring);
+                    std::printf(
+                        "TinyShapes K=%u N=%u links=%u workers=%u ring=%d\n", K, N, num_links, num_workers, ring);
+                    std::fflush(stdout);
+                    run_fabric_gather(p, x, w, num_links, num_workers, true, topology, std::nullopt);
+                }
+            }
+        }
+    }
+}
+
 TEST_F(AllGatherWeightMinimalMatmulAsyncTest, Small) {
     sweep({256, 512, 1024});
 }

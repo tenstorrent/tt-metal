@@ -552,7 +552,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                     kSendPacketsPerBatch,
                     layout.stripe_tiles,
                     layout.ring_size,
-                    static_cast<uint32_t>(transpose_b)};
+                    static_cast<uint32_t>(transpose_b),
+                    kSendCbPackets};
                 tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(reader_ct);
                 tt::tt_metal::TensorAccessorArgs(*pwb.buffer()).append_to(reader_ct);
                 const auto reader_id = tt::tt_metal::CreateKernel(
