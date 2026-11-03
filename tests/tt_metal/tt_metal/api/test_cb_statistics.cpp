@@ -34,7 +34,7 @@ TEST(CircularBufferStatistics, CPU_OverlappingCoreRangesPreservePhysicalAddressU
             }
         }
     }
-    const auto actual = detail::ProgramImpl::expand_cb_l1_regions_per_core(ranges);
+    const auto actual = detail::Metal1CircularBufferAllocator::expand_l1_regions_per_core(ranges);
     ASSERT_EQ(actual.size(), expected.size());
     for (const auto& [core, regions] : actual) {
         std::set<uint64_t> addresses;
@@ -49,7 +49,7 @@ TEST(CircularBufferStatistics, CPU_OverlappingCoreRangesPreservePhysicalAddressU
         }
         EXPECT_EQ(addresses, expected.at(core));
     }
-    EXPECT_TRUE(detail::ProgramImpl::expand_cb_l1_regions_per_core({}).empty());
+    EXPECT_TRUE(detail::Metal1CircularBufferAllocator::expand_l1_regions_per_core({}).empty());
 }
 
 }  // namespace tt::tt_metal

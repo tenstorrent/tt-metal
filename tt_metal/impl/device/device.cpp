@@ -1146,9 +1146,9 @@ uint64_t Device::get_total_cb_allocated() const {
     // Nonidentical overlapping ranges are still merged per core, preserving physical address reuse.
     std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_range;
     for (const auto* program : active_programs_) {
-        program->merge_cb_l1_regions_by_core_range(regions_per_range);
+        program->cb_allocator().merge_l1_regions_by_core_range(regions_per_range);
     }
-    const auto device_regions_per_core = detail::ProgramImpl::expand_cb_l1_regions_per_core(regions_per_range);
+    const auto device_regions_per_core = detail::Metal1CircularBufferAllocator::expand_l1_regions_per_core(regions_per_range);
 
     uint64_t total_physical = 0;
     for (const auto& [core, regions] : device_regions_per_core) {

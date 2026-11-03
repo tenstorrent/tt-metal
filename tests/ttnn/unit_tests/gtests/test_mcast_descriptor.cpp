@@ -335,7 +335,7 @@ TEST_F(McastHostFixture, NoHandshakeLeavesExchangeCreditAcrossConstructionPaths)
         ProgramDescriptor descriptor;
         auto spec = spec_pair();
         for (uint32_t id = 0; id < 14; ++id) {
-            program.impl().add_semaphore(participants, id, 0, tt::CoreType::WORKER);
+            program.impl().builder().add_semaphore(participants, id, 0, tt::CoreType::WORKER);
             descriptor.semaphores.push_back({.id = id, .core_ranges = participants, .initial_value = 0});
             spec.semaphores.push_back(
                 {.unique_id = m2::SemaphoreSpecName{"exchange_" + std::to_string(id)}, .target_nodes = participants});
