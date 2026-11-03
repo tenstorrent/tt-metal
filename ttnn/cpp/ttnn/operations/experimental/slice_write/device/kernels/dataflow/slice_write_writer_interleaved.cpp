@@ -17,9 +17,13 @@ void kernel_main() {
     const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
     const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
     const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
+    // Byte offset applied to every output page; dst_addr stays the output buffer's own base address.
+    const uint32_t dst_page_offset = get_arg_val<uint32_t>(9);
+    // Per-dim arrays (3 * num_dims words) start at RTA 10.
+    constexpr uint32_t per_dim_args_idx = 10;
 
 #ifdef UNPAD_INPUT_WIDTH
-    const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(21);
+    const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(per_dim_args_idx + 3 * num_dims);
 #endif
 
 #ifdef DEBUG
@@ -32,12 +36,13 @@ void kernel_main() {
     DPRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
     DPRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
     DPRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
+    DPRINT("dst_page_offset: {}\n", dst_page_offset);
 #ifdef UNPAD_INPUT_WIDTH
     DPRINT("padding_width_ntiles: {}\n", padding_width_ntiles);
 #endif
 
 #endif
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(per_dim_args_idx));
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim_args = num_padded_sticks + num_dims;
     // Copied out of the RTA block: Metal 2.0 runtime args are read-only (get_vararg is by value).
@@ -69,11 +74,20 @@ void kernel_main() {
             sticks_read++;
 #ifdef UNPAD_INPUT_WIDTH
             if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
-                noc.async_write(cb_out0, s0, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
+                noc.async_write(
+                    cb_out0,
+                    s0,
+                    noc_write_size,
+                    {.offset_bytes = src_offset},
+                    {.page_id = dst_stick_id, .offset_bytes = dst_page_offset});
             }
 #else
             noc.async_write(
-                cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
+                cb_out0,
+                s0,
+                noc_write_size,
+                {.offset_bytes = src_offset + page_offset},
+                {.page_id = dst_stick_id, .offset_bytes = dst_page_offset});
 #endif
 #ifdef DEBUG
             DPRINT(

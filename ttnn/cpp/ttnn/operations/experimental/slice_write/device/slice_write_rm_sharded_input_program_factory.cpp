@@ -23,35 +23,23 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-constexpr uint32_t kSliceWriteRmShardedWriterKernelIdx = 1;
 constexpr uint32_t kSliceWriteRmShardedWriterAddressArgIdx = 0;
+constexpr uint32_t kSliceWriteRmShardedWriterPageOffsetArgIdx = 9;
 constexpr uint8_t kSliceWriteRmShardedInputCbIndex = static_cast<uint8_t>(tt::CBIndex::c_0);
 
-uint32_t slice_write_rm_sharded_writer_address(
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    const ttnn::Shape& output_tensor_start,
-    const CoreCoord& core) {
-    auto* output_buffer = output_tensor.buffer();
-    TT_FATAL(output_buffer != nullptr, "Output buffer should be allocated on device!");
-    const auto shard_spec = input_tensor.shard_spec().value();
-    const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    const uint32_t input_row_size_bytes = shard_spec.shape[1] * input_tensor.element_size();
-    uint32_t core_w_index = 0;
-    if (is_block_sharded) {
-        core_w_index = rm_orientation ? core.x : core.y;
-    }
-    const uint32_t width_offset = core_w_index * input_row_size_bytes;
-    return output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()) + width_offset;
-}
-
-void update_slice_write_rm_sharded_input_cb(Program& program, Buffer& input_buffer) {
-    for (const auto& cb : program.circular_buffers()) {
-        if (cb->buffer_indices().contains(kSliceWriteRmShardedInputCbIndex)) {
-            UpdateDynamicCircularBufferAddress(program, cb->id(), input_buffer);
+// The writer's RTA 0 is the output Buffer* (patched on a program-cache hit); everything else is a plain value.
+void emplace_slice_write_rm_sharded_writer_args(
+    KernelDescriptor& kernel, const CoreCoord& core, const std::vector<uint32_t>& args, Buffer* output_buffer) {
+    KernelDescriptor::RTArgList runtime_args;
+    runtime_args.reserve(args.size());
+    for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
+        if (arg_idx == kSliceWriteRmShardedWriterAddressArgIdx) {
+            runtime_args.push_back(output_buffer);
+        } else {
+            runtime_args.push_back(args[arg_idx]);
         }
     }
+    kernel.emplace_runtime_args(core, runtime_args);
 }
 
 SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
@@ -141,8 +129,9 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         output_tensor_start[-1]);
 
     log_debug(tt::LogOp, "Output Buffer address: {}", output_buffer->address());
+    // RTA 0 is a placeholder for the output Buffer*; RTA 9 is this core's byte offset into each output page.
     std::vector<uint32_t> common_writer_kernel_args = {
-        0u, output_row_size_bytes, input_row_size_bytes, input_row_size_bytes_offset, num_dims, 0, 0, 0, 0};
+        0u, output_row_size_bytes, input_row_size_bytes, input_row_size_bytes_offset, num_dims, 0, 0, 0, 0, 0u};
 
     common_writer_kernel_args.insert(
         common_writer_kernel_args.end(), num_input_sticks_per_dim.begin(), num_input_sticks_per_dim.end());
@@ -195,8 +184,11 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
         uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, output_row_size_bytes - width_offset);
         WriterKernelArgs writer_kernel_args = common_writer_kernel_args;
-        writer_kernel_args[0] =
-            slice_write_rm_sharded_writer_address(input_tensor, output_tensor, output_tensor_start, core);
+        // A block-sharded core writes its own column range of each output row. The offset goes in its own RTA so
+        // the address RTA stays the output buffer's base (the sharded factories hash the full slice and specs, so
+        // it is fixed for a given program).
+        writer_kernel_args[kSliceWriteRmShardedWriterPageOffsetArgIdx] =
+            (output_tensor_start[-1] * output_tensor.element_size()) + width_offset;
         writer_kernel_args[2] = this_input_row_size_bytes;
 
         uint32_t num_sticks_this_core =
@@ -333,45 +325,13 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
     uint32_t i = 0;
     for (const auto& core : iter_cores) {
         reader_kernel.runtime_args.emplace_back(core, all_runtime_args[i].first);
-        writer_kernel.runtime_args.emplace_back(core, all_runtime_args[i].second);
+        emplace_slice_write_rm_sharded_writer_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
         i++;
     }
 
     desc.kernels.push_back(std::move(reader_kernel));
-    // kSliceWriteRmShardedWriterKernelIdx is the GetRuntimeArgs index in override_runtime_arguments.
-    // Capture it from the push so a reorder fails here instead of patching the reader.
-    const uint32_t writer_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kernel));
-    TT_FATAL(
-        writer_kernel_idx == kSliceWriteRmShardedWriterKernelIdx,
-        "Slice-write RM sharded writer must be kernel index {}, got {}",
-        kSliceWriteRmShardedWriterKernelIdx,
-        writer_kernel_idx);
     return desc;
-}
-
-void SliceWriteRMShardedInputProgramFactory::override_runtime_arguments(
-    Program& program,
-    const SliceWriteParams& operation_attributes,
-    const SliceWriteInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
-    const auto& src_tensor = tensor_args.input;
-    const auto& dst_tensor = tensor_return_value;
-    auto* src_buffer = src_tensor.buffer();
-    TT_FATAL(src_buffer != nullptr, "Input buffer should be allocated on device");
-    TT_FATAL(src_tensor.is_sharded(), "Input tensor should be sharded");
-    update_slice_write_rm_sharded_input_cb(program, *src_buffer);
-
-    const auto shard_spec = src_tensor.shard_spec().value();
-    const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    const auto iter_cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
-
-    for (const auto& core : iter_cores) {
-        auto& writer_args = GetRuntimeArgs(program, kSliceWriteRmShardedWriterKernelIdx, core);
-        writer_args[kSliceWriteRmShardedWriterAddressArgIdx] =
-            slice_write_rm_sharded_writer_address(src_tensor, dst_tensor, operation_attributes.slice_start, core);
-    }
 }
 
 }  // namespace ttnn::experimental::prim
