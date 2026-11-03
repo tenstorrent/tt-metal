@@ -80,8 +80,10 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
-# untraced call also pays its host dispatch, which a block of 10 calls does not fully hide.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.180, "untraced": 1.208}
+# untraced call also pays its host dispatch, which a block of 10 calls does not fully hide. Only a trace runs the
+# output gate beside the relay and the final carry beside the output projection (side_windows.py); untraced, they run
+# one after another.
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.100, "untraced": 1.280}
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320

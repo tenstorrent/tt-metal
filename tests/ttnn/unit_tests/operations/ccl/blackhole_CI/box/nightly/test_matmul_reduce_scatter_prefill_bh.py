@@ -113,6 +113,7 @@ def run_case(
     a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     w_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     l1_headroom=None,
+    core_grid=None,
 ):
     mesh_shape = tuple(mesh_device.shape)
     a = random_stacked(mesh_shape, a_shape, seed=0)
@@ -127,6 +128,7 @@ def run_case(
         num_links=num_links,
         compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2),
         l1_headroom=l1_headroom,
+        **({} if core_grid is None else {"core_grid": core_grid}),
     )
     preallocated = None
     if output_tensor:
@@ -267,6 +269,37 @@ def test_output_tensor(mesh_device):
         topology=ttnn.Topology.Ring,
         output_tensor=True,
     )
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("free_columns", [1, 3], ids=["1col", "3col"])
+def test_core_grid(mesh_device, free_columns):
+    """core_grid keeps the op on a block of worker columns: it runs on the first sub-device of a manager that gives
+    the last free_columns columns to another, as KDA's final carry takes the last one."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    split = grid.x - free_columns
+    columns = lambda first, last: ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(first, 0), ttnn.CoreCoord(last, grid.y - 1))]
+    )
+    manager = mesh_device.create_sub_device_manager(
+        [ttnn.SubDevice([columns(0, split - 1)]), ttnn.SubDevice([columns(split, grid.x - 1)])], 0
+    )
+    mesh_device.load_sub_device_manager(manager)
+    try:
+        run_case(
+            mesh_device,
+            (1, 1, 640, 2048),
+            (2048, 7168),
+            cluster_axis=1,
+            scatter_dim=-1,
+            topology=ttnn.Topology.Ring,
+            core_grid=ttnn.CoreCoord(split, grid.y),
+        )
+    finally:
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager)
 
 
 @skip_for_wormhole_b0()

@@ -194,6 +194,7 @@ def _run(
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     output_dtype: ttnn.DataType = ttnn.float32,
     gate_column_offset: int = 0,
+    gate_tail: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     return ttnn.experimental.kda.sigmoid_gated_rms_norm(
         input_tt,
@@ -205,6 +206,7 @@ def _run(
         compute_kernel_config=compute_kernel_config,
         output_dtype=output_dtype,
         gate_column_offset=gate_column_offset,
+        gate_tail=gate_tail,
     )
 
 
@@ -569,6 +571,33 @@ def test_sigmoid_gated_rms_norm_gate_column_offset_matches_sliced_gate(
     expected = _run(input_tt, gate_tt, weight_tt)
     actual = _run(input_tt, wide_tt, weight_tt, gate_column_offset=gate_column_offset)
     assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name="gate_column_offset")
+
+
+@pytest.mark.parametrize("tail_heads", [1, _NUM_HEADS - 1, _NUM_HEADS], ids=["tail1", "tail-all-but-one", "tail-all"])
+def test_sigmoid_gated_rms_norm_gate_tail_matches_one_gate(device: ttnn.Device, tail_heads: int) -> None:
+    """The first heads' gate read in place from a wider tensor and the other heads' from gate_tail matches one gate."""
+    host, (input_tt, gate_tt, weight_tt) = _device_inputs(device, batch=2, seed=4213)
+    gate = host[1]
+    batch, sequence, width = gate.shape
+    split = width - tail_heads * (width // _NUM_HEADS)
+    generator = torch.Generator().manual_seed(4214)
+    wide = torch.cat(
+        (
+            torch.randn(batch, sequence, 64, generator=generator, dtype=torch.bfloat16),
+            gate[..., :split],
+            torch.randn(batch, sequence, 32, generator=generator, dtype=torch.bfloat16),
+        ),
+        dim=-1,
+    )
+    expected = _run(input_tt, gate_tt, weight_tt)
+    actual = _run(
+        input_tt,
+        _to_device(wide, device, dtype=ttnn.bfloat16),
+        weight_tt,
+        gate_column_offset=64,
+        gate_tail=_to_device(gate[..., split:].contiguous(), device, dtype=ttnn.bfloat16),
+    )
+    assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name="gate_tail")
 
 
 @pytest.mark.parametrize(

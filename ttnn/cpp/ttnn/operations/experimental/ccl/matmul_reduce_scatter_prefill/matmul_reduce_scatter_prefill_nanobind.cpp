@@ -100,6 +100,9 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
                 it and may differ from the plan with the op's own staging. Other stagings held at the same time are
                 L1 the op does not see (raise ``l1_headroom``). Keep it alive while calls that use it run, traced
                 replays included.
+            core_grid (ttnn.CoreCoord, optional): run on the ``[0, x) x [0, y)`` block of worker cores instead of the
+                full grid, e.g. beside a program on the other columns' sub-device. The staging still spans the full
+                grid. Defaults to the full grid.
 
         Returns:
             ttnn.Tensor: bfloat16 TILE output, the scattered dim divided by the group size.
@@ -120,7 +123,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
         nb::arg("l1_headroom") = nb::none(),
-        nb::arg("staging_tensor") = nb::none());
+        nb::arg("staging_tensor") = nb::none(),
+        nb::arg("core_grid") = nb::none());
 
     ttnn::bind_function<"matmul_reduce_scatter_prefill_staging", "ttnn.experimental.">(
         mod,
@@ -139,6 +143,7 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
             topology (ttnn.Topology, optional): Linear or Ring. Defaults to Linear.
             num_links (int, optional): fabric links per hop (1 or 2); None uses every usable link, up to 2.
             l1_headroom (int, optional): as the op takes it. Defaults to 64 KiB.
+            core_grid (ttnn.CoreCoord, optional): as the op takes it.
 
         Returns:
             ttnn.Tensor: the staging, sized exactly for these arguments.
@@ -151,7 +156,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("scatter_dim") = -2,
         nb::arg("topology") = ttnn::ccl::Topology::Linear,
         nb::arg("num_links") = nb::none(),
-        nb::arg("l1_headroom") = nb::none());
+        nb::arg("l1_headroom") = nb::none(),
+        nb::arg("core_grid") = nb::none());
 
     mod.def(
         "_matmul_reduce_scatter_prefill_last_plan",

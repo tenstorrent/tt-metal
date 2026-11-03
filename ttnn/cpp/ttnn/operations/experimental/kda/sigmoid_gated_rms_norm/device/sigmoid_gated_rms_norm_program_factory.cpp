@@ -62,6 +62,11 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     const m2::TensorParamName GATE{"gate"};
     const m2::TensorParamName WEIGHT{"weight"};
     const m2::TensorParamName OUTPUT{"output"};
+    const m2::TensorParamName GATE_TAIL{"gate_tail"};
+    // Heads h >= gate_heads read their gate from gate_tail's columns (h - gate_heads) * V on.
+    const uint32_t tail_row_tiles =
+        in.gate_tail ? static_cast<uint32_t>(in.gate_tail->padded_shape()[-1]) / TILE_WIDTH : 0;
+    const uint32_t gate_heads = attrs.num_heads - tail_row_tiles / Vt;
 
     const auto input_format = datatype_to_dataformat_converter(input.dtype());
     const auto output_format = datatype_to_dataformat_converter(attrs.output_dtype);
@@ -116,10 +121,16 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
              {"Mt", Mt},
              {"epsilon_bits", eps_bits},
              {"gate_row_tiles", static_cast<uint32_t>(in.gate.padded_shape()[-1]) / TILE_WIDTH},
-             {"gate_offset_tiles", attrs.gate_column_offset / TILE_WIDTH}},
+             {"gate_offset_tiles", attrs.gate_column_offset / TILE_WIDTH},
+             {"gate_heads", gate_heads},
+             {"tail_row_tiles", tail_row_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+
+    if (in.gate_tail) {
+        reader.tensor_bindings.push_back(m2::TensorBinding{GATE_TAIL, "gate_tail"});
+    }
 
     m2::KernelSpec writer{
         .unique_id = WRITER,
@@ -205,6 +216,11 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
             },
     };
 
+    if (in.gate_tail) {
+        spec.tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = GATE_TAIL, .spec = in.gate_tail->mesh_tensor().tensor_spec()});
+    }
+
     m2::ProgramRunArgs run_args;
     run_args.kernel_run_args.reserve(3);
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
@@ -216,6 +232,9 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         {WEIGHT, weight},
         {OUTPUT, output},
     };
+    if (in.gate_tail) {
+        run_args.tensor_args.emplace(GATE_TAIL, in.gate_tail->mesh_tensor());
+    }
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

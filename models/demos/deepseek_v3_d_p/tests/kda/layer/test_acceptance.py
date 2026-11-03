@@ -113,6 +113,13 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("interval", list(_INTERVALS))
+# Galaxy's layer runs the output gate beside the relay and the final carry beside the output projection only in a
+# trace (side_windows.py), so its traced replay is checked too.
+@pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
+@pytest.mark.uncollect_if(
+    pred=lambda mesh_device, sequence, traced, **_: traced
+    and (mesh_device != (8, 4) or sequence != PREFILL_CHUNK_TOKENS)
+)
 def test_synthetic_kimi_k3_accuracy_and_determinism(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
@@ -120,12 +127,14 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     sequence: int,
     num_heads: int | None,
     interval: str,
+    traced: bool,
 ) -> None:
     """Gate K3 dimensions on one valid interval against Torch; repeat runs must match exactly.
 
     Padded rows hold NaN, so any read of them reaches the checked results. The
     reference runs on the valid prefix only. Repeated runs compare by value on device
-    (``ttnn.ne``), on valid output rows and on both carries.
+    (``ttnn.ne``), on valid output rows and on both carries. Traced, each run replays a trace of the call captured
+    after an eager warm-up.
     """
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
@@ -162,8 +171,19 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         initial_state = layer.allocate_state(batch_size=1)
+        forward = lambda: layer.forward(hidden_tt, initial_state, actual_start_tt, actual_end_tt)
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output, state = layer.forward(hidden_tt, initial_state, actual_start_tt, actual_end_tt)
+            if not traced:
+                output, state = forward()
+                return output, state.recurrent, state.convolution
+            warm_output, warm_state = forward()
+            for tensor in (warm_output, warm_state.recurrent, warm_state.convolution):
+                ttnn.deallocate(tensor)
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            output, state = forward()
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        ttnn.release_trace(mesh_device, trace_id)
         return output, state.recurrent, state.convolution
 
     (output, recurrent, convolution), mismatch_markers = collect_mesh_accuracy_and_determinism_results(
@@ -204,6 +224,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
                     "reference": "independent pure-Torch FP32 CPU reference",
                     "cpu_reference_seconds": reference_seconds,
                     "interval": interval,
+                    "traced": traced,
                     "actual_start": actual_start,
                     "valid_length": length,
                     "padding": "NaN",

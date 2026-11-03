@@ -8,7 +8,10 @@ perform the bespoke kernels exposed by ``ttnn.experimental.kda``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
 
@@ -26,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.entry_correction import EntryCorrection
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, persistent_semaphores
+from models.demos.deepseek_v3_d_p.tt.kda.side_windows import SideWindows
 
 
 def _group_summary_memory_config(
@@ -89,7 +93,11 @@ class _PreparedChunks:
 @dataclass(frozen=True)
 class RecurrenceResult:
     output: ttnn.Tensor
-    final_state: ttnn.Tensor
+    # None when the final carry is left pending (final_carry runs it).
+    final_state: ttnn.Tensor | None
+    # What beside_relay returned.
+    beside_relay: Any = None
+    final_carry: Callable[[], ttnn.Tensor] | None = None
 
 
 @dataclass(frozen=True)
@@ -337,6 +345,8 @@ def _scan_sp_chunks(
     affine_relay: RelayAffinePrefix,
     final_carry: _RelayFinalCarry,
     correction: EntryCorrection,
+    side_windows: SideWindows | None = None,
+    beside_relay: Callable[[], Any] | None = None,
 ) -> RecurrenceResult:
     """One group per head: the summary writes the packed transform the relay carries (the identity for a rank without a
     head) and each chunk's output terms, from which the entry correction forms the outputs once the relay has delivered
@@ -358,17 +368,28 @@ def _scan_sp_chunks(
     # The summary is the chunk terms' last reader: free their L1 before the relay and its companion.
     for tensor in grouped.as_kernel_args():
         ttnn.deallocate(tensor)
-    # Every correction core reads its head's entry state: L1 spares those DRAM reads.
-    entry_states, prefix_final_state = affine_relay(
-        packed, initial_state, actual_start, entry_memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    # Every correction core reads its head's entry state: L1 spares those DRAM reads. With side windows the relay runs
+    # on their relay cores and beside_relay on the other worker columns.
+    beside = None
+    with side_windows.relay() if side_windows is not None else nullcontext():
+        entry_states, prefix_final_state = affine_relay(
+            packed, initial_state, actual_start, entry_memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        if beside_relay is not None:
+            beside = beside_relay()
     output, rank_final = correction(*emitted, entry_states, prefix_final_state, actual_start, actual_end)
     for tensor in (*emitted, entry_states):
         ttnn.deallocate(tensor)
+
     # The relay leaves the prefix's final state on the first and last chronological ranks only: without a split tail
-    # the last rank multicasts it, with one the tail's owner multicasts its own. The carry runs as its own program.
-    final_state = final_carry(rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows)
-    return RecurrenceResult(output, final_state)
+    # the last rank multicasts it, with one the tail's owner multicasts its own. The carry runs as its own program;
+    # with side windows the caller runs it beside the output projection (RecurrenceResult.final_carry).
+    def carry() -> ttnn.Tensor:
+        return final_carry(rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows)
+
+    if side_windows is not None:
+        return RecurrenceResult(output, None, beside, carry)
+    return RecurrenceResult(output, carry(), beside)
 
 
 class _RelayFinalCarry:
@@ -425,6 +446,7 @@ class KDARecurrence:
         value_dim: int,
         batch: int = 1,
         gate_scale: float = 1.0,
+        side_windows: SideWindows | None = None,
     ) -> None:
         # Preparation multiplies the gate by gate_scale before its cumulative sum.
         self._gate_scale = gate_scale
@@ -507,6 +529,7 @@ class KDARecurrence:
                 num_links=links,
                 local_rows=local_rows,
                 math_fidelity=program_config.affine_prefix_math_fidelity,
+                cores=None if side_windows is None else side_windows.relay_cores,
             )
             self._relay_final_carry = _RelayFinalCarry.shared(device, sequence_parallel_axis, links)
             grid = device.compute_with_storage_grid_size()
@@ -521,6 +544,9 @@ class KDARecurrence:
                 cores=[ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:max_cores],
                 math_fidelity=program_config.scan_math_fidelity,
             )
+        if side_windows is not None and not self._sequence_parallel:
+            raise ValueError("side windows need the SP relay")
+        self._side_windows = side_windows
         # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
         # and chunk preparation's DRAM writes.
         preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
@@ -598,10 +624,11 @@ class KDARecurrence:
     @staticmethod
     def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry) -> RecurrenceResult:
         output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
-        final_state = ttnn.reshape(
-            scan.final_state, (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
-        )
-        return RecurrenceResult(output, final_state)
+        state_shape = (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
+        if scan.final_carry is not None:
+            pending = scan.final_carry
+            return RecurrenceResult(output, None, scan.beside_relay, lambda: ttnn.reshape(pending(), state_shape))
+        return RecurrenceResult(output, ttnn.reshape(scan.final_state, state_shape), scan.beside_relay)
 
     def __call__(
         self,
@@ -616,6 +643,7 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
         beta_logits_column_offset: int,
         release_gate: bool = False,
+        beside_relay: Callable[[], Any] | None = None,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
@@ -623,7 +651,12 @@ class KDARecurrence:
         pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
         With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
         read it.
+
+        With side windows, ``beside_relay`` runs in the relay's window (its result is ``RecurrenceResult.beside_relay``)
+        and the final carry is left to the caller (``RecurrenceResult.final_carry``), to run in the final carry's.
         """
+        if beside_relay is not None and self._side_windows is None:
+            raise ValueError("beside_relay needs the recurrence's side windows")
         # A no-op when the layer already reserved the landing buffer (reserve_affine_relay).
         self.reserve_affine_relay()
         prepared, state, geometry = self._prepare(
@@ -638,7 +671,7 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             release_gate=release_gate,
         )
-        result = self._execute(prepared, state, actual_start, actual_end)
+        result = self._execute(prepared, state, actual_start, actual_end, beside_relay)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory (the
         # summary already released them when the entry correction runs).
         for tensor in prepared.as_kernel_args():
@@ -652,6 +685,7 @@ class KDARecurrence:
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        beside_relay: Callable[[], Any] | None = None,
     ) -> RecurrenceResult:
         return _scan_chunks(
             prepared,
@@ -669,6 +703,7 @@ class KDARecurrence:
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        beside_relay: Callable[[], Any] | None = None,
     ) -> RecurrenceResult:
         return _scan_local_grouped_chunks(
             prepared,
@@ -702,6 +737,7 @@ class KDARecurrence:
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        beside_relay: Callable[[], Any] | None = None,
     ) -> RecurrenceResult:
         return _scan_sp_chunks(
             prepared,
@@ -714,4 +750,6 @@ class KDARecurrence:
             affine_relay=self._affine_relay,
             final_carry=self._relay_final_carry,
             correction=self._entry_correction,
+            side_windows=self._side_windows,
+            beside_relay=beside_relay,
         )

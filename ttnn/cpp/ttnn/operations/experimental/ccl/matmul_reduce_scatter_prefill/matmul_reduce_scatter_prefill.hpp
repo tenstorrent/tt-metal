@@ -34,6 +34,8 @@ namespace ttnn::experimental {
 //                          may pick smaller K blocks or more chunks). Other stagings the caller holds are L1 the op
 //                          does not see (l1_headroom). The caller keeps it alive while calls that use it run (a trace
 //                          replays into it).
+//   core_grid              run on the [0, x) x [0, y) block of worker cores instead of the full grid, e.g. to leave
+//                          the other columns to a program on another sub-device; the staging still spans the full grid
 Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -45,7 +47,8 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,
     const std::optional<uint32_t>& l1_headroom = std::nullopt,
-    const std::optional<Tensor>& staging_tensor = std::nullopt);
+    const std::optional<Tensor>& staging_tensor = std::nullopt,
+    const std::optional<CoreCoord>& core_grid = std::nullopt);
 
 // A staging tensor for calls with these arguments (L1, height-sharded bf16 tiles over the full grid, replicated on the
 // mesh), to pass as staging_tensor; the same arguments resolve the same plan as the op.
@@ -56,6 +59,7 @@ Tensor matmul_reduce_scatter_prefill_staging(
     int32_t scatter_dim = -2,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<int32_t>& num_links = std::nullopt,
-    const std::optional<uint32_t>& l1_headroom = std::nullopt);
+    const std::optional<uint32_t>& l1_headroom = std::nullopt,
+    const std::optional<CoreCoord>& core_grid = std::nullopt);
 
 }  // namespace ttnn::experimental
