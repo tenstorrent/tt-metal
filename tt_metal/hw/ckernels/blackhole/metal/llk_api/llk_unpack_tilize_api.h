@@ -53,6 +53,14 @@ inline void llk_unpack_tilize_impl(
 
 // Kept for the experimental/2_0 callers; remove when they move to TensorShape.
 // A narrow tile is one face wide (32x16 or 16x16), so its faces form a num_faces x 1 grid.
+inline ckernel::TensorShape tensor_shape_from_legacy_tile(
+    const std::uint32_t face_r_dim, const std::uint32_t num_faces, const bool narrow_tile) {
+    return narrow_tile ? ckernel::make_tensor_shape(face_r_dim, ckernel::MAX_FACE_C_DIM, num_faces, 1 /* num_faces_c_dim */)
+                       : ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces);
+}
+
+// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
+// Same face grid as the helper above.
 inline void llk_unpack_tilize_init_impl(
     const std::uint32_t src_format,
     const std::uint32_t dst_format,
@@ -60,14 +68,11 @@ inline void llk_unpack_tilize_init_impl(
     const std::uint32_t face_r_dim,
     const bool narrow_tile,
     const std::uint32_t num_faces) {
-    const ckernel::TensorShape tensor_shape =
-        narrow_tile ? ckernel::make_tensor_shape(face_r_dim, ckernel::MAX_FACE_C_DIM, num_faces, 1)
-                    : ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces);
-    llk_unpack_tilize_init_impl(src_format, dst_format, ct_dim, tensor_shape);
+    llk_unpack_tilize_init_impl(src_format, dst_format, ct_dim, tensor_shape_from_legacy_tile(face_r_dim, num_faces, narrow_tile));
 }
 
 // Kept for the experimental/2_0 callers; remove when they move to TensorShape.
-// Same face grid as the init overload above.
+// Same face grid as the helper above.
 inline void llk_unpack_tilize_impl(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
@@ -76,10 +81,7 @@ inline void llk_unpack_tilize_impl(
     const std::uint32_t face_r_dim,
     const std::uint32_t num_faces,
     const bool narrow_tile) {
-    const ckernel::TensorShape tensor_shape =
-        narrow_tile ? ckernel::make_tensor_shape(face_r_dim, ckernel::MAX_FACE_C_DIM, num_faces, 1)
-                    : ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces);
-    llk_unpack_tilize_impl(base_address, tile_index, src_format, dst_format, tensor_shape);
+    llk_unpack_tilize_impl(base_address, tile_index, src_format, dst_format, tensor_shape_from_legacy_tile(face_r_dim, num_faces, narrow_tile));
 }
 
 /**
@@ -200,23 +202,23 @@ inline void llk_unpack_tilizeA_B_init(
     SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const ckernel::TensorShape tensor_shape_a = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape tensor_shape_b = get_operand_tensor_shape(operandB_id);
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        get_operand_tensor_shape(operandA_id),
-        get_operand_tensor_shape(operandB_id)));
+        tensor_shape_a,
+        tensor_shape_b));
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
         ct_dim,
-        get_operand_tensor_shape(operandA_id),
-        get_operand_tensor_shape(operandB_id));
+        tensor_shape_a,
+        tensor_shape_b);
 }
 
 /**
@@ -245,9 +247,7 @@ inline void llk_unpack_tilizeA_B(
     SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
-
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
+    const ckernel::TensorShape tensor_shape_a = get_operand_tensor_shape(operandA_id);
 
     const std::uint32_t base_address_a =
         get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
@@ -262,7 +262,7 @@ inline void llk_unpack_tilizeA_B(
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        get_operand_tensor_shape(operandA_id),
+        tensor_shape_a,
         get_operand_tensor_shape(operandB_id)));
 
     WAYPOINT("UPTW");
@@ -273,7 +273,7 @@ inline void llk_unpack_tilizeA_B(
         address_b,
         tile_index_a,
         block_ct_dim,
-        get_operand_tensor_shape(operandA_id));
+        tensor_shape_a);
 
     WAYPOINT("UPTD");
 }

@@ -104,6 +104,8 @@ inline void _llk_unpack_tilize_init_(
     // and that is the write the teardown reverts.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
 
+    // narrow_tile is always false past the 32-wide assert above; the ternary is main's and stays
+    // until #59786 lifts the narrow-tile restriction.
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
 
     // In case of 32-bit numbers, we have to unpack into dest register
@@ -217,6 +219,7 @@ inline void _llk_unpack_tilize_(
     const bool unpack_to_dest =
         (unpack_source_format == DataFormat::UInt32) || (unpack_source_format == DataFormat::Int32) || (unpack_dest_format == DataFormat::Float32);
 
+    // narrow_tile is always false past _llk_unpack_tilize_init_'s 32-wide assert; kept until #59786.
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, tile_index) << (narrow_tile ? 0 : 1);
 
     // 8-bit path: 2-context inline UNPACR sequence. AddrMode=0b00010001 advances BOTH
@@ -419,7 +422,10 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_mop_config_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_mop_config_", tensor_shape);
+    // No LLK_VALIDATE_TENSOR_SHAPE_UNPACK on the tilizeA_B path (mop_config, init, execute, uninit):
+    // ttnn pool runs tilizeA_B on N x 32 operand A tiles (face_r_dim = min(kh*kw, 16), e.g. 9 for a 3x3
+    // window) and a 2 x 32 scalar B that no tt-llk test exercises, and the coverage table only lists
+    // test-observed shapes. The geometry asserts are the contract here.
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t replay_buf_run_len  = 6;
@@ -488,8 +494,11 @@ inline void _llk_unpack_tilizeA_B_init_(
     const ckernel::TensorShape tensor_shape_a = ckernel::DEFAULT_TENSOR_SHAPE,
     const ckernel::TensorShape tensor_shape_b = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_init_", tensor_shape_a);
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_init_", tensor_shape_b);
+    // No coverage validate here; see the note in _llk_unpack_tilizeA_B_mop_config_. Operand B only
+    // supplies face_r_dim (the SrcB x-end config below), so it keeps no further checks.
+    // num_faces == 1 (a 16x16 operand A) is unreachable past the 32-wide assert below. The arm and
+    // the (num_faces == 1) strides here and in _llk_unpack_tilizeA_B_ are main's and stay, matching
+    // Wormhole (no 32-wide assert there) until #59786 lifts the narrow-tile restriction.
     const std::uint32_t num_faces       = tensor_shape_a.total_num_faces();
     const std::uint32_t unpB_face_r_dim = tensor_shape_b.face_r_dim;
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -551,7 +560,7 @@ inline void _llk_unpack_tilizeA_B_(
     std::uint32_t block_ct_dim,
     const ckernel::TensorShape tensor_shape_a = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_", tensor_shape_a);
+    // No coverage validate here; see the note in _llk_unpack_tilizeA_B_mop_config_.
     const std::uint32_t face_r_dim = tensor_shape_a.face_r_dim;
     const std::uint32_t num_faces  = tensor_shape_a.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -639,7 +648,7 @@ inline void _llk_unpack_tilizeA_B_(
 inline void _llk_unpack_tilizeA_B_uninit_(
     const std::uint32_t unpack_dst_format, [[maybe_unused]] const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_uninit_", tensor_shape);
+    // No coverage validate here; see the note in _llk_unpack_tilizeA_B_mop_config_.
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
     // _llk_unpack_tilizeA_B uses y-stride and updates y counter

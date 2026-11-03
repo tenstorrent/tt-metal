@@ -161,24 +161,19 @@ inline void llk_unpack_tilizeA_B_init(
     SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
-    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const ckernel::TensorShape tensor_shape_a = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape tensor_shape_b = get_operand_tensor_shape(operandB_id);
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        get_operand_tensor_shape(operandA_id),
-        get_operand_tensor_shape(operandB_id)));
+        tensor_shape_a,
+        tensor_shape_b));
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        unpack_src_format[operandA_id],
-        unpack_dst_format[operandA_id],
-        ct_dim,
-        get_operand_tensor_shape(operandA_id),
-        get_operand_tensor_shape(operandB_id));
+        unpack_src_format[operandA_id], unpack_dst_format[operandA_id], ct_dim, tensor_shape_a, tensor_shape_b);
 }
 
 /**
@@ -203,8 +198,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t block_ct_dim) {
     SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
+    const ckernel::TensorShape tensor_shape_a = get_operand_tensor_shape(operandA_id);
 
     std::uint32_t base_address_a =
         get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
@@ -220,17 +214,12 @@ inline void llk_unpack_tilizeA_B(
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        get_operand_tensor_shape(operandA_id),
+        tensor_shape_a,
         get_operand_tensor_shape(operandB_id)));
 
     WAYPOINT("UPTW");
     _llk_unpack_tilizeA_B_<zero_srcA>(
-        unpack_src_format[operandA_id],
-        base_address_a,
-        address_b,
-        tile_index_a,
-        block_ct_dim,
-        get_operand_tensor_shape(operandA_id));
+        unpack_src_format[operandA_id], base_address_a, address_b, tile_index_a, block_ct_dim, tensor_shape_a);
     WAYPOINT("UPTD");
 }
 
