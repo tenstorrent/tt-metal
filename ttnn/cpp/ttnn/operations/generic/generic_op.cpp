@@ -52,12 +52,6 @@ namespace {
 
 using ProgramSpecAttributes = ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t;
 
-// No range: the program runs on the devices of the tensor that is on the fewest devices.
-ProgramSpecAttributes make_program_spec_attributes(
-    const ProgramSpec& spec, const ProgramRunArgs& run_args, std::optional<uint64_t> custom_program_hash) {
-    return {.programs = {{.spec = &spec, .run_args = &run_args}}, .custom_program_hash = custom_program_hash};
-}
-
 // Pairs each range's spec with its run args.
 ProgramSpecAttributes make_program_spec_attributes(
     const MeshProgramSpec& mesh_program_spec, const MeshProgramRunArgs& mesh_run_args) {
@@ -89,7 +83,7 @@ Tensor generic_op(
     const ProgramSpec& spec,
     const ProgramRunArgs& run_args,
     std::optional<uint64_t> custom_program_hash) {
-    return ttnn::prim::generic_op(io_tensors, make_program_spec_attributes(spec, run_args, custom_program_hash));
+    return ttnn::prim::generic_op(io_tensors, spec, run_args, custom_program_hash);
 }
 
 Tensor generic_op(
@@ -104,7 +98,7 @@ void prepare_generic_op(
     const ProgramSpec& spec,
     const ProgramRunArgs& run_args,
     std::optional<uint64_t> custom_program_hash) {
-    ttnn::prim::prepare_generic_op(io_tensors, make_program_spec_attributes(spec, run_args, custom_program_hash));
+    ttnn::prim::prepare_generic_op(io_tensors, spec, run_args, custom_program_hash);
 }
 
 void prepare_generic_op(

@@ -25,10 +25,10 @@ namespace ttnn::operations::generic {
 // programs to Metal unchanged and adds program caching, mesh dispatch and per-call argument checks.
 struct GenericProgramSpecDeviceOperation {
     struct operation_attributes_t {
-        // A program and its run args. They point into the caller's objects, which outlive the call.
+        // A program, the devices it runs on, and its run args. The program and run args point into the caller's
+        // objects, which outlive the call.
         struct Program {
-            // Unset for the ProgramSpec form: the program runs on the devices of the tensor on the fewest devices.
-            std::optional<ttnn::MeshCoordinateRange> range;
+            ttnn::MeshCoordinateRange range;
             const tt::tt_metal::experimental::ProgramSpec* spec = nullptr;
             const tt::tt_metal::experimental::ProgramRunArgs* run_args = nullptr;
         };
@@ -74,6 +74,21 @@ ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::experimental::P
 
 namespace ttnn::prim {
 
+// The ProgramSpec form. The program runs on the ranges that ttnn's framework gives the tensors, as it would in a
+// MeshProgramSpec with those ranges, so the two forms share cache entries.
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    std::optional<uint64_t> custom_program_hash);
+
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    std::optional<uint64_t> custom_program_hash);
+
+// The MeshProgramSpec form: a program for each range.
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t& operation_attributes);
