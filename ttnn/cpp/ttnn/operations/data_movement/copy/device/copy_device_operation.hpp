@@ -65,9 +65,6 @@ struct CopyDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 Tensor copy(

@@ -10,8 +10,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <algorithm>
-
 namespace ttnn::prim {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -198,23 +196,6 @@ CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_te
     const Tensor& input_tensor = tensor_args.input;
     const spec_return_value_t spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(spec, input_tensor.device());
-}
-
-std::vector<tt::tt_metal::TensorTopology> CopyDeviceOperation::compute_output_topologies(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    // A copy is distributed like its source: a fresh output, and a preallocated one the copy overwrites on every
-    // device, take the source's label. A preallocated output spanning other mesh coordinates is overwritten only in
-    // part; the framework default labels it. The coordinates are compared as sets: two full-mesh tensors may list them
-    // in a different order.
-    const Tensor& src = tensor_args.input;
-    if (tensor_args.preallocated_output.has_value()) {
-        const auto& src_coords = src.tensor_topology().mesh_coords();
-        const auto& dst_coords = tensor_args.preallocated_output->tensor_topology().mesh_coords();
-        if (!std::is_permutation(src_coords.begin(), src_coords.end(), dst_coords.begin(), dst_coords.end())) {
-            return {};
-        }
-    }
-    return {src.tensor_topology()};
 }
 
 CopyDeviceOperation::tensor_return_value_t copy(

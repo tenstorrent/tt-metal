@@ -5,11 +5,6 @@
 #include "moreh_dot_backward_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include <functional>
-#include <optional>
-#include <vector>
-
-#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -88,42 +83,6 @@ MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::crea
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     TT_FATAL(!tensor_args.output_tensors.empty(), "Invalid number of output tensors.");
     return tensor_args.output_tensors;
-}
-
-std::vector<tt::tt_metal::TensorTopology> MorehDotBackwardOperation::compute_output_topologies(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    // input_grad = output_grad * other and other_grad = output_grad * input, both caller-owned. Each is checked only
-    // against the two tensors it is computed from, where the framework default would check it against every tensor
-    // here; a grad the rule rejects takes the union of all of them.
-    std::vector<std::reference_wrapper<const Tensor>> all_tensors = {
-        tensor_args.output_grad, tensor_args.input, tensor_args.other};
-    for (const auto& output_tensor : tensor_args.output_tensors) {
-        if (output_tensor.has_value()) {
-            all_tensors.emplace_back(*output_tensor);
-        }
-    }
-    std::optional<tt::tt_metal::TensorTopology> union_topology;
-    std::vector<tt::tt_metal::TensorTopology> topologies;
-    topologies.reserve(tensor_args.output_tensors.size());
-    for (size_t slot = 0; slot < tensor_args.output_tensors.size(); ++slot) {
-        const auto& output_tensor = tensor_args.output_tensors[slot];
-        if (!output_tensor.has_value()) {
-            continue;
-        }
-        const Tensor* factor = slot == 0 ? &tensor_args.other : &tensor_args.input;
-        if (auto label = ttnn::device_operation::detail::caller_owned_output_topology(
-                *output_tensor, {&tensor_args.output_grad, factor}, "ttnn::moreh_dot_backward")) {
-            topologies.push_back(std::move(*label));
-            continue;
-        }
-        if (!union_topology.has_value()) {
-            auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(all_tensors);
-            union_topology.emplace(
-                std::move(shape), std::move(placements), tensor_args.input.tensor_topology().mesh_coords());
-        }
-        topologies.push_back(*union_topology);
-    }
-    return topologies;
 }
 
 }  // namespace ttnn::operations::moreh::moreh_dot_backward
