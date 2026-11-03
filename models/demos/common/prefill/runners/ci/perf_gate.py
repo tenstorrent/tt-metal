@@ -22,6 +22,16 @@ def fail(msg):
         print(f"::error title=Prefill perf gate::{escaped}")
 
 
+def fail_deterministic(msg):
+    """fail() for a verdict a re-run of the same commit would repeat; also tells CI auto-retry to skip it."""
+    fail(msg)
+    try:
+        from models.common.ci_failure import record_deterministic_failure
+    except ImportError:  # run outside the repo's PYTHONPATH; only the auto-retry skip is lost
+        return
+    record_deterministic_failure(msg)
+
+
 def power_class():
     """This host's power class: 14kw, 8kw, or unknown when tt-smi cannot report the TDP (no tt-smi here,
     or it timed out). An unreadable TDP is not evidence of a low-power host."""
@@ -86,7 +96,7 @@ def check(rec, path, label, metric, expected, margin):
     if value < lo or value > hi:
         faster = (value > hi) == higher_is_better
         hint = "; faster than the baseline, update the configured baseline in this change" if faster else ""
-        fail(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]{hint}")
+        fail_deterministic(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]{hint}")
         return False, [label, f"{name} ({unit})", f"{value:{fmt}}", band, "FAIL (faster)" if faster else "FAIL"]
     print(f"{name} GATE PASS")
     return True, [label, f"{name} ({unit})", f"{value:{fmt}}", band, "PASS"]
@@ -161,7 +171,7 @@ def main():
 
     gated = [probe for probe, _ in baselines if probe is not None]
     if gated and label not in gated:
-        fail(
+        fail_deterministic(
             f"TPS GATE FAIL: baseline covers {', '.join(gated)} but the deepest probe is {label}; "
             f"the context length changed, so re-measure and update perf_baselines.json"
         )
