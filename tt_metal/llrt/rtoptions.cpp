@@ -1638,8 +1638,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_RISCV_DEBUG_INFO
         // Enable RISC-V debug info. Defaults to inspector setting, override with 0/1.
-        // Default: Inherits from inspector setting
-        // Usage: export TT_METAL_RISCV_DEBUG_INFO=1  # or =0 to disable
+        // Default: Inherits from inspector setting. Firmware, the dispatch kernels and ethernet kernels get full debug
+        // info (-g); other kernels get minimal debug info (-g1: function names, line tables, unwind info).
+        // Usage: export TT_METAL_RISCV_DEBUG_INFO=1  # full debug info (-g) for every kernel; =0 to disable
         case EnvVarID::TT_METAL_RISCV_DEBUG_INFO: {
             bool enable_riscv_debug_info = this->get_inspector_enabled();  // Default from inspector
             if (value) {
@@ -1649,6 +1650,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 }
             }
             this->set_riscv_debug_info_enabled(enable_riscv_debug_info);
+            this->riscv_full_debug_info = value != nullptr && enable_riscv_debug_info;
             break;
         }
 

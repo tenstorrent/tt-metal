@@ -155,6 +155,9 @@ public:
     // Returns true when this compute kernel opted out of the SFPI compiler's replay optimization for its TRISC
     // compiles (internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE). Default off: the build recipe is unchanged.
     virtual bool get_sfpu_replay_optimization_disabled() const { return false; }
+    // Returns true when tt-triage reads this kernel's constants and typed globals, so its debug info
+    // must be full (-g) rather than minimal (-g1).
+    virtual bool needs_full_debug_info() const { return false; }
 
     // Called to process the user defines
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;

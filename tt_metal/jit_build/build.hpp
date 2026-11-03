@@ -105,6 +105,8 @@ private:
     std::string defines_;
     std::string includes_;
     std::string lflags_;
+    // Debug flag of kernels tt-triage reads no constants or types from: -g1, -g or none (kernel_debug_flag).
+    std::string kernel_debug_flag_;
 
     std::uint64_t build_key_{};
 };

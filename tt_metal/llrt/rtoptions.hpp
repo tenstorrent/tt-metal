@@ -291,6 +291,8 @@ class RunTimeOptions {
 
     bool jit_analytics_enabled = false;
     bool riscv_debug_info_enabled = false;
+    // TT_METAL_RISCV_DEBUG_INFO set explicitly: every kernel gets full debug info, not only the ones triage reads.
+    bool riscv_full_debug_info = false;
     uint32_t watcher_debug_delay = 0;
 
     bool validate_kernel_binaries = false;
@@ -811,9 +813,10 @@ public:
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
     void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
-    // Whether to compile with -g to include DWARF debug info in the binary.
+    // Whether to include DWARF debug info in the binary: -g, or -g1 for kernels tt-triage doesn't read.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
     void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
+    bool get_riscv_full_debug_info() const { return riscv_full_debug_info; }
 
     unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }

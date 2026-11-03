@@ -253,6 +253,13 @@ CoreType Kernel::get_kernel_core_type() const {
 
 const std::string& Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
 
+// tt-triage reads constants and typed globals from the dispatch kernels (dump_fast_dispatch.py) and from every
+// ethernet kernel (check_noc_status.py, dump_fabric_stream_regs.py).
+bool Kernel::needs_full_debug_info() const {
+    return this->get_kernel_core_type() == CoreType::ETH ||
+           this->kernel_src_.path_.generic_string().find("tt_metal/impl/dispatch/kernels/") != std::string::npos;
+}
+
 void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
     this->defines_.insert(defines.begin(), defines.end());
 }
@@ -835,6 +842,8 @@ uint64_t Kernel::compute_hash() const {
     // Independent of compile_time_args_ values: same words with a different split must not collide.
     hasher.update(static_cast<uint64_t>(this->compile_time_vararg_count_));
     hasher.update(this->config_hash());
+    // Selects -g over -g1 (kernel_debug_flag in jit_build/build.cpp).
+    hasher.update(this->needs_full_debug_info());
 
     // Include paths affect compilation: the gcc -I order is significant (left-to-right
     // header resolution), so different lists or orderings must produce different binaries.
