@@ -19,7 +19,11 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
-from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merged, require_realtime_profiler
+from tests.ttnn.profiling.realtime_profiler_utils import (
+    assert_op_duration_merged,
+    profile_realtime_program,
+    require_realtime_profiler,
+)
 
 # RT records carry kernel sources, not an OP CODE, so identify the op by its reader kernel.
 _OP_KERNEL = "/scatter/device/kernels/dataflow/reader_scatter.cpp"
@@ -76,9 +80,15 @@ def test_scatter_perf(device, dtype_name, input_len, index_len):
     tt_source = to_device(torch_source, ttnn_dtype)
 
     # correctness first, so a case that gets fast by computing the wrong thing fails here
-    # (exact: the op copies and overwrites values, no arithmetic)
+    # (exact: the op copies and overwrites values, no arithmetic). It runs in its own profiler window: the profiler
+    # delivers records asynchronously, so without one this dispatch's record could land in the timed window below.
     expected = torch.scatter(torch_input, -1, torch_index, torch_source)
-    assert torch.equal(ttnn.to_torch(ttnn.scatter(tt_input, -1, tt_index, tt_source)), expected)
+    actual, _ = profile_realtime_program(
+        device, lambda: ttnn.to_torch(ttnn.scatter(tt_input, -1, tt_index, tt_source)), collect_all=True
+    )
+    assert torch.equal(
+        actual, expected
+    ), f"scatter output differs from the reference for {dtype_name}, {input_len}, {index_len}"
 
     label = f'("{dtype_name}", {input_len}, {index_len})'
     expected_ns = _EXPECTED_NS.get((dtype_name, input_len, index_len))
