@@ -1,23 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Accept intentional regressions: the REGRESSION ACCEPTANCE table and /accept-regression (#57871).
-
-Run it by path: ``tt_metal/tt-llk`` is not an importable package.
-"""
-
 import argparse
 import hashlib
+import html
 import json
 import math
 import re
 import sys
+from collections import Counter
 
+LABEL = "llk-perf-intentional-regression"
 HEADING = "## REGRESSION ACCEPTANCE"
 HEADER = ["point", "test", "run type", "max delta", "reason"]
 MODULE_COL = "test_module"
 COMMAND = "/accept-regression"
 PLACEHOLDER = "<reason>"
+_PASTE_ROWS = 100
 
 _ID = re.compile(r"^[0-9a-f]{12}$")
 _MAX = re.compile(r"^\+?(\d+(?:\.\d+)?)\s*%$")
@@ -25,17 +24,18 @@ _APPROVAL = re.compile(r"^/accept-regression\s+([0-9a-f]{12})\s*$", re.MULTILINE
 
 
 def _norm(value):
-    """One spelling per value, so 4, 4.0 and "4" give the same point ID."""
+    # 4, 4.0 and "4" must give the same point ID.
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     text = str(value)
     return text[:-2] if re.fullmatch(r"-?\d+\.0", text) else text
 
 
-def point_id(module, marker, run_type, config):
-    """12 hex characters of a hash of module | marker | run type | sorted config."""
+def point_id(arch, module, marker, run_type, config):
     pairs = sorted((k, _norm(v)) for k, v in config if k != MODULE_COL)
-    key = f"{module}|{marker}|{run_type}|" + ",".join(f"{k}={v}" for k, v in pairs)
+    key = f"{arch}|{module}|{marker}|{run_type}|" + ",".join(
+        f"{k}={v}" for k, v in pairs
+    )
     return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
@@ -44,7 +44,6 @@ def _cells(line):
 
 
 def _rule(n, cells):
-    """One parsed row, or raise ValueError with the row number."""
     if len(cells) != len(HEADER):
         raise ValueError(f"row {n}: expected {len(HEADER)} cells, got {len(cells)}")
     point, test, run_types, max_delta, reason = cells
@@ -81,15 +80,23 @@ def _rule(n, cells):
     return rule
 
 
-def parse_section(body):
-    """``(rules, errors)`` from a PR description; ``(None, [])`` when there is no section."""
+def _sections(body):
     lines = (body or "").replace("\r\n", "\n").split("\n")
-    try:
-        start = next(i for i, line in enumerate(lines) if line.strip() == HEADING)
-    except StopIteration:
+    starts = [i for i, line in enumerate(lines) if line.strip() == HEADING]
+    return lines, starts
+
+
+def parse_section(body):
+    lines, starts = _sections(body)
+    if not starts:
         return None, []
+    if len(starts) > 1:
+        return [], [
+            f"the description has {len(starts)} `{HEADING}` sections; "
+            "put all rows in one table under one heading"
+        ]
     table = []
-    for line in lines[start + 1 :]:
+    for line in lines[starts[0] + 1 :]:
         if line.strip().startswith("|"):
             table.append(line)
         elif table or line.startswith("#"):
@@ -112,40 +119,35 @@ def parse_section(body):
 
 
 def section_hash(body):
-    """A hash of the section's text, valid or not; ``none`` without a section."""
-    lines = (body or "").replace("\r\n", "\n").split("\n")
-    try:
-        start = next(i for i, line in enumerate(lines) if line.strip() == HEADING)
-    except StopIteration:
+    lines, starts = _sections(body)
+    if not starts:
         return "none"
-    end = next(
-        (i for i in range(start + 1, len(lines)) if lines[i].startswith("#")),
-        len(lines),
-    )
-    text = "\n".join(line.strip() for line in lines[start:end]).strip()
-    return hashlib.sha256(text.encode()).hexdigest()[:12]
+    text = []
+    for start in starts:
+        end = next(
+            (i for i in range(start + 1, len(lines)) if lines[i].startswith("#")),
+            len(lines),
+        )
+        text += [line.strip() for line in lines[start:end]]
+    return hashlib.sha256("\n".join(text).strip().encode()).hexdigest()[:12]
 
 
 def table_hash(rules):
-    """What an approval is bound to: any change to a row gives another hash."""
     canon = [{k: v for k, v in r.items() if k != "row"} for r in rules]
     return hashlib.sha256(json.dumps(canon, sort_keys=True).encode()).hexdigest()[:12]
 
 
 def approved_hash(body):
-    """The table hash in a ``/accept-regression <hash>`` line, else None."""
     m = _APPROVAL.search(body or "")
     return m.group(1) if m else None
 
 
 def approval(comments, table, approvers, pr_author):
-    """The approver whose own comment names this table's hash, else None.
-
-    Only the approver's comment counts, and it names the table they read, so an
-    edit to the table after it, or a comment by a bot, approves nothing.
-    """
     for c in reversed(comments or []):
         login = (c.get("user") or {}).get("login")
+        # Anyone with write access can edit a comment, so an edited one does not count.
+        if c.get("updated_at") != c.get("created_at"):
+            continue
         if (
             login in approvers
             and login != pr_author
@@ -156,7 +158,6 @@ def approval(comments, table, approvers, pr_author):
 
 
 def read(body, comments, approvers, pr_author):
-    """The gate's view of a PR: the rules, the errors and the approval."""
     rules, errors = parse_section(body)
     if rules is None:
         return {"state": "none", "rules": [], "errors": [], "approved": False}
@@ -176,8 +177,7 @@ def read(body, comments, approvers, pr_author):
     }
 
 
-def matches(rule, point, ids):
-    """``rule`` covers ``point``; an ID shared by two points covers neither."""
+def matches(rule, point, ids, arch):
     if (
         rule["test"] != point.get(MODULE_COL)
         or point["run_type"] not in rule["run_types"]
@@ -187,11 +187,23 @@ def matches(rule, point, ids):
         pid = point["point_id"]
         return pid == rule["id"] and ids.get(pid, 0) == 1
     config = {k: _norm(v) for k, v in point["config"]}
+    config.setdefault("arch", arch)
     return all(config.get(k) == v for k, v in rule["filter"].items())
 
 
-def apply(result, acceptance, ids):
-    """Move approved, covered regressions to ``result["accepted"]``; return the status."""
+def _pct(delta):
+    # Rounded so that +7% covers 1000 -> 1070 cycles (7.000000000000001%).
+    return round(delta * 100, 6)
+
+
+def apply(result, acceptance, arch):
+    if acceptance.get("state") == "off":
+        return {"state": "off"}
+    for p in result["records"] + result["new_points"]:
+        p["point_id"] = point_id(
+            arch, p.get(MODULE_COL, ""), p["marker"], p["run_type"], p["config"]
+        )
+    ids = Counter(p["point_id"] for p in result["records"] + result["new_points"])
     rules = acceptance.get("rules") or []
     approved = acceptance.get("approved")
     kept, accepted, missing = [], [], []
@@ -200,7 +212,7 @@ def apply(result, acceptance, ids):
             (
                 x
                 for x in rules
-                if matches(x, r, ids) and _pct(r["delta"]) <= x["max_pct"]
+                if matches(x, r, ids, arch) and _pct(r["delta"]) <= x["max_pct"]
             ),
             None,
         )
@@ -236,41 +248,105 @@ def apply(result, acceptance, ids):
     }
 
 
-def _pct(delta):
-    """A slowdown in percent, rounded so ``+7%`` covers 1000 -> 1070 cycles."""
-    return round(delta * 100, 6)
-
-
-def paste_table(regressions):
-    """The section an author pastes into the PR description, one row per point."""
-    lines = [HEADING, "", "| " + " | ".join(HEADER) + " |", "|---|---|---|--:|---|"]
+def paste_table(regressions, arch):
+    rows = {}
     for r in sorted(regressions, key=lambda x: -x["delta"]):
-        pct = math.ceil(_pct(r["delta"]))
         module = r.get(MODULE_COL) or "?"
+        # A GitHub comment holds 65536 characters: many points get one row per test.
+        point = r["point_id"] if len(regressions) <= _PASTE_ROWS else f"arch={arch}"
+        rows.setdefault((point, module, r["run_type"]), math.ceil(_pct(r["delta"])))
+    lines = [HEADING, "", "| " + " | ".join(HEADER) + " |", "|---|---|---|--:|---|"]
+    lines += [
+        f"| {point} | {module} | {run_type} | +{pct}% | {PLACEHOLDER} |"
+        for (point, module, run_type), pct in rows.items()
+    ]
+    return lines
+
+
+_STATE = {
+    "none": f"no `{HEADING}` section in the PR description.",
+    "invalid": f"the `{HEADING}` section does not parse, so nothing is accepted.",
+    "waiting": "the table covers every regressed point. It waits for a perf approver.",
+    "incomplete": "the table does not cover every regressed point, so the perf approvers are not asked yet.",
+    "approved": "approved by @{approver}.",
+    "not needed": "the table is present, but no point regressed.",
+}
+
+
+def report_lines(result, acc, arch):
+    if acc["state"] == "off":
+        if not result["regressions"]:
+            return []
+        return [
+            "",
+            f"If this slowdown is intentional, add the label `{LABEL}` "
+            "to start an acceptance review (#57871).",
+        ]
+    lines = [
+        "",
+        "## Regression acceptance",
+        "",
+        "- " + _STATE[acc["state"]].format(approver=acc.get("approver")),
+    ]
+    if acc.get("table") and acc["state"] in ("waiting", "incomplete"):
         lines.append(
-            f"| {r['point_id']} | {module} | {r['run_type']} | +{pct}% | {PLACEHOLDER} |"
+            f"- Table hash `{acc['table']}`. A perf approver who accepts this table "
+            f"comments `{COMMAND} {acc['table']}`. A change to the table changes the hash."
         )
+    lines += [f"- ❌ {e}" for e in acc.get("errors") or []]
+    if acc.get("missing"):
+        ids = ", ".join(f"`{i}`" for i in acc["missing"][:20])
+        more = (
+            f" and {len(acc['missing']) - 20} more" if len(acc["missing"]) > 20 else ""
+        )
+        lines.append(
+            f"- Not covered: {ids}{more}. A row also stops covering a point that is slower than its max delta."
+        )
+    accepted = result.get("accepted") or []
+    if accepted:
+        lines += [
+            "",
+            f"### Accepted regressions ({len(accepted)}), not counted",
+            "",
+            "| point | test | marker | run type | Δ | max delta | reason |",
+            "|---|---|---|---|--:|--:|---|",
+        ]
+        for r in sorted(accepted, key=lambda x: -x["delta"])[:_PASTE_ROWS]:
+            # The reason is PR text: keep it from adding markup to the bot's comment.
+            reason = html.escape(r["reason"], quote=False)
+            lines.append(
+                f"| `{r['point_id']}` | {r.get(MODULE_COL) or '?'} | {r['marker']} | "
+                f"{r['run_type']} | {r['delta'] * 100:+.1f}% | +{r['max_pct']:g}% | {reason} |"
+            )
+        if len(accepted) > _PASTE_ROWS:
+            lines.append(f"\n_… and {len(accepted) - _PASTE_ROWS} more._")
+    if result["regressions"]:
+        lines += [
+            "",
+            "<details><summary>To accept these regressions, paste this into the PR description "
+            "and write a reason in each row</summary>",
+            "",
+            "```markdown",
+            *paste_table(result["regressions"], arch),
+            "```",
+            "",
+            "Point IDs differ per arch. If the other arch also has rows, add them to the same "
+            "table: the description can have only one heading. A row can also name a filter "
+            "instead of an ID, for example `mathop=MathOperation.Square` or "
+            "`arch=blackhole, mathop=MathOperation.Square`.",
+            "</details>",
+        ]
     return lines
 
 
 def _load_comments(path):
-    """A JSON list, or one JSON object per line as ``gh api --paginate --jq`` writes it."""
-    try:
-        with open(path) as fh:
-            text = fh.read()
-    except OSError:
-        return []
+    with open(path) as fh:
+        text = fh.read()
     try:
         data = json.loads(text)
         return data if isinstance(data, list) else [data]
     except ValueError:
-        out = []
-        for line in filter(str.strip, text.splitlines()):
-            try:
-                out.append(json.loads(line))
-            except ValueError:
-                print(f"::warning::Skipped a comment that is not JSON: {line[:80]}")
-        return out
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 def _load(path, default):
@@ -282,23 +358,21 @@ def _load(path, default):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    rd = sub.add_parser(
-        "read", help="the gate: parse the table and find a valid approval"
+    ap = argparse.ArgumentParser(
+        description="Accept intentional perf regressions (#57871)."
     )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    rd = sub.add_parser("read", help="the gate: parse the table, find the approval")
     rd.add_argument("--pr", required=True, help="the PR as JSON from GET /pulls/{n}")
     rd.add_argument("--comments", required=True, help="the PR's comments as JSON")
     rd.add_argument("--approvers", required=True)
     rd.add_argument("--out", required=True)
-    ok = sub.add_parser(
-        "approve", help="/accept-regression: check the commenter and the table"
-    )
+    ok = sub.add_parser("approve", help="/accept-regression: check the approval")
     ok.add_argument("--pr", required=True)
     ok.add_argument("--approvers", required=True)
     ok.add_argument("--commenter", required=True)
     ok.add_argument("--comment", required=True, help="file with the comment's body")
-    sub.add_parser("hash", help="print a hash of the section of a description on stdin")
+    sub.add_parser("hash", help="hash the section of a description on stdin")
     a = ap.parse_args(argv)
 
     if a.cmd == "hash":
@@ -317,6 +391,12 @@ def main(argv=None):
             )
         return 0
 
+    if LABEL not in [x.get("name") for x in pr.get("labels") or []]:
+        print(
+            f"`{COMMAND}` has no effect: the PR does not have the label `{LABEL}`. "
+            "The PR author adds it to start an acceptance review."
+        )
+        return 2
     if a.commenter not in approvers:
         names = ", ".join("@" + x for x in approvers)
         print(

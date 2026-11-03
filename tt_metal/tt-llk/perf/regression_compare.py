@@ -13,8 +13,13 @@ import glob
 import json
 import os
 import re
+import sys
 
 import pandas as pd
+
+# perf.py in .github/llk_sfpu_report loads this file by path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import regression_accept  # noqa: E402
 
 # 5 runs of one commit on Blackhole moved at most 1.9% and 25 cycles (#53752).
 DEFAULT_THRESHOLD = 0.02
@@ -474,6 +479,7 @@ def main(argv=None):
         help="what the baseline side is, e.g. 'branch point on main' or the ref as typed",
     )
     ap.add_argument("--current-label", help="what the current side is")
+    ap.add_argument("--accept", help="the PR's acceptance (regression_accept.py read)")
     a = ap.parse_args(argv)
 
     current = sorted(glob.glob(a.current, recursive=True))
@@ -505,6 +511,11 @@ def main(argv=None):
         )
         raise SystemExit(1)
 
+    acceptance = None
+    if a.accept:
+        with open(a.accept) as fh:
+            acceptance = regression_accept.apply(result, json.load(fh), a.arch)
+
     report = render_report(
         result,
         threshold=a.threshold,
@@ -519,6 +530,10 @@ def main(argv=None):
         module_thresholds=_module_thresholds(a.module_threshold),
         arch=a.arch,
     )
+    if acceptance is not None:
+        report += "\n" + "\n".join(
+            regression_accept.report_lines(result, acceptance, a.arch)
+        )
     with open(a.report, "w") as f:
         f.write(report + "\n")
 
@@ -528,6 +543,10 @@ def main(argv=None):
         written.append(f"{stem}.points.csv")
     if _write_points_csv(result["regressions"], f"{stem}.regressions.csv"):
         written.append(f"{stem}.regressions.csv")
+    if acceptance is not None:
+        with open(f"{stem}.acceptance.json", "w") as fh:
+            json.dump(acceptance, fh, indent=1)
+        written.append(f"{stem}.acceptance.json")
 
     print(report)
     print("\n(wrote " + " + ".join(written) + ")")

@@ -216,6 +216,12 @@ jobs:
             BASE_REF=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
             BRANCH_POINT=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${PR_HEAD}" --jq .merge_base_commit.sha)
           fi
+          # The acceptance re-runs the compare jobs (#57871); stage 2 does not measure the same run again.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$GITHUB_RUN_ATTEMPT" != 1 ] \
+            && [ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=placement-nodes-blackhole" --jq .total_count)" != 0 ]; then
+            echo "Stage 2 already measured run ${GITHUB_RUN_ID}."
+            echo "measured=true" >> "$GITHUB_OUTPUT"
+          fi
           echo "Stage 1 from run ${SOURCE_RUN}: PR #${PR_NUMBER}, head ${PR_HEAD}, branch point ${BRANCH_POINT}, cap ${CAP}"
           {
             echo "run=${SOURCE_RUN}"
@@ -234,6 +240,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check for stage-1 regressions
         id: any
+        if: steps.source.outputs.measured != 'true'
         run: |
           # Header plus at least one row; with none, there is nothing to re-measure and no data to download.
           if [ "$(wc -l < reports/blackhole/perf_gate_report.regressions.csv 2>/dev/null || echo 0)" -gt 1 ]; then
@@ -250,6 +257,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Pick the tests
         id: plan
+        if: steps.source.outputs.measured != 'true'
         env:
           CAP: ${{ steps.source.outputs.cap }}
         run: |

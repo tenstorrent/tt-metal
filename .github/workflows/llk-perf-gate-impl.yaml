@@ -426,6 +426,32 @@ jobs:
               break
           PYTHON
 
+      - name: Read the regression acceptance
+        if: github.event_name == 'pull_request' && steps.measured.outputs.complete == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Read now, not from the event: a re-run keeps the event of the first attempt.
+          LABELLED=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq 'any(.labels[]; .name == "llk-perf-intentional-regression")')
+          if [ "$LABELLED" != true ]; then
+            echo '{"state": "off"}' > acceptance_in.json
+            exit 0
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > pr.json
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '.[] | @json' > pr_comments.jsonl
+          # From main, so a PR cannot add its own approver.
+          if ! gh api -H "Accept: application/vnd.github.raw" \
+              "repos/${GITHUB_REPOSITORY}/contents/${LLK_PATH}/perf/regression_approvers.json?ref=main" > approvers.json; then
+            echo "::warning::regression_approvers.json is not on main, so no approval can count."
+            echo '{}' > approvers.json
+          fi
+          python3 "${LLK_PATH}/perf/regression_accept.py" read \
+            --pr pr.json --comments pr_comments.jsonl --approvers approvers.json --out acceptance_in.json
+          cat acceptance_in.json
+
       - name: Compare regressions
         id: compare
         if: >-
@@ -446,6 +472,8 @@ jobs:
           if python3 -c "import json, sys; sys.exit(not json.load(open('baseline_metadata.json')).get('stale'))"; then
             BASELINE_LABEL="${BASELINE_LABEL}, stale"
           fi
+          ACCEPT_ARG=()
+          [ -f acceptance_in.json ] && ACCEPT_ARG=(--accept acceptance_in.json)
 
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
             --current 'current_perf/**/*.csv' \
@@ -460,7 +488,8 @@ jobs:
             --baseline-sha "$BASELINE_SHA" \
             --current-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
             --baseline-label "$BASELINE_LABEL" \
-            --current-label "${{ github.event_name == 'pull_request' && 'PR head' || github.event_name == 'merge_group' && 'merge queue' || github.ref_name }}"
+            --current-label "${{ github.event_name == 'pull_request' && 'PR head' || github.event_name == 'merge_group' && 'merge queue' || github.ref_name }}" \
+            "${ACCEPT_ARG[@]}"
           EXIT_CODE=$?
           echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
           if [ -f perf_gate_report.verdict.json ]; then
@@ -514,7 +543,7 @@ jobs:
               return;
             }
             const marker = `<!-- llk-perf-gate:${process.env.ARCH} -->`;
-            const body = `${marker}\n${fs.readFileSync('perf_gate_report.md', 'utf8')}`;
+            let body = `${marker}\n${fs.readFileSync('perf_gate_report.md', 'utf8')}`;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -522,11 +551,35 @@ jobs:
             });
             const mine = comments.find(
               (c) => c.user.type === 'Bot' && c.body.startsWith(marker));
+            // A re-run does not measure stage 2 again, so keep the stage 2 of this run.
+            const split = '<!-- llk-perf-gate-stage2 -->';
+            if (mine && process.env.GITHUB_RUN_ATTEMPT !== '1' && mine.body.includes(split)
+                && mine.body.includes(context.payload.pull_request.head.sha)) {
+              body = `${body.trimEnd()}\n\n${split}${mine.body.split(split)[1]}`;
+            }
             if (mine) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+            if (!fs.existsSync('perf_gate_report.acceptance.json')) return;
+            const accept = JSON.parse(fs.readFileSync('perf_gate_report.acceptance.json', 'utf8'));
+            if (accept.state !== 'waiting') return;
+            // A new comment, not the edited report, so that the mention notifies.
+            const ping = `<!-- llk-perf-gate-accept:${accept.table} -->`;
+            if (comments.some((c) => c.user.type === 'Bot' && c.body.startsWith(ping))) return;
+            const author = context.payload.pull_request.user.login;
+            const approvers = Object.keys(JSON.parse(fs.readFileSync('approvers.json', 'utf8')))
+              .filter((login) => login !== author)
+              .map((login) => `@${login}`)
+              .join(', ');
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: `${ping}\n${approvers}: the REGRESSION ACCEPTANCE table \`${accept.table}\` ` +
+                `covers every regressed point on ${process.env.ARCH}. To accept it, ` +
+                `comment \`/accept-regression ${accept.table}\`.`,
+            });
       - name: Upload the gate report
         id: report
         if: always()
@@ -537,6 +590,7 @@ jobs:
             perf_gate_report.md
             perf_gate_report.points.csv
             perf_gate_report.regressions.csv
+            perf_gate_report.acceptance.json
           if-no-files-found: ignore
 
       - name: Build the Slack payload
