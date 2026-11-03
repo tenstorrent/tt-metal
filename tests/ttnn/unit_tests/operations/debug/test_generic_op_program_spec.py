@@ -23,6 +23,7 @@ E = ttnn.experimental
 
 MUL_KERNELS = pathlib.Path(__file__).parent / "kernels" / "program_spec_mul"
 UNARY_KERNELS = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels"
+MATMUL_KERNELS = "ttnn/cpp/ttnn/operations/matmul/device/kernels"
 SEMAPHORE_KERNELS = "tests/tt_metal/tt_metal/test_kernels/dataflow"
 TILE_BYTES = 2 * 32 * 32  # one bfloat16 tile
 
@@ -177,6 +178,126 @@ def test_mul(device, shape):
     spec, run_args = mul_program(a, b, out)
     result = E.generic_op([a, b, out], spec, run_args)
     assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+
+
+def test_add(device):
+    """The binary add case of test_generic_op.cpp, with the compute kernel of test_mul adding."""
+    _, a, b, out = inputs(device, (11, 9, 32, 32), seed=17)
+    spec, run_args = mul_program(a, b, out)
+    kernels = spec.kernels
+    kernels[1].compiler_options = E.KernelSpec.CompilerOptions(defines={"BINARY_ADD": "1"})
+    spec.kernels = kernels
+    result = E.generic_op([a, b, out], spec, run_args)
+    assert_with_pcc(ttnn.to_torch(a) + ttnn.to_torch(b), ttnn.to_torch(result), 0.9999)
+
+
+def test_matmul(device):
+    """The matmul case of test_generic_op.cpp, with the Metal 2.0 kernels of TT-NN's multi-core matmul.
+
+    [3, 1, 320, 64] times [3, 1, 64, 128], one output tile after another, split over the grid in core groups that differ
+    in tile count. The compute kernel loops over batch, Mt and Nt as one loop, so each group's compute kernel sets only
+    Nt, to the group's tile count.
+    """
+    batch, m_tiles, k_tiles, n_tiles = 3, 10, 2, 4
+    torch.manual_seed(18)
+    torch_a = torch.randn((batch, 1, m_tiles * 32, k_tiles * 32), dtype=torch.bfloat16)
+    torch_b = torch.randn((batch, 1, k_tiles * 32, n_tiles * 32), dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.TensorSpec((batch, 1, m_tiles * 32, n_tiles * 32), ttnn.bfloat16, ttnn.TILE_LAYOUT), device
+    )
+    grid = device.compute_with_storage_grid_size()
+    _, all_cores, *groups_and_tiles = ttnn.split_work_to_cores(grid, batch * m_tiles * n_tiles)
+    groups = [
+        (f"group_{i + 1}", group, tiles)
+        for i, (group, tiles) in enumerate(zip(groups_and_tiles[:2], groups_and_tiles[2:]))
+        if group.num_cores() > 0
+    ]
+
+    spec = E.ProgramSpec(
+        name="matmul",
+        kernels=[
+            E.KernelSpec(
+                unique_id="reader",
+                source=f"{MATMUL_KERNELS}/dataflow/reader_bmm_8bank_output_tiles_partitioned_metal2.cpp",
+                dfb_bindings=[E.producer_of("in0", "in0"), E.producer_of("in1", "in1")],
+                tensor_bindings=[
+                    E.TensorBinding(tensor_parameter_name="in0", accessor_name="in0"),
+                    E.TensorBinding(tensor_parameter_name="in1", accessor_name="in1"),
+                ],
+                compile_time_args={"in0_last_ktile_w": 0, "in0_last_ktile_h": 0},
+                runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(
+                    runtime_arg_names=["output_tile_start_id", "num_output_tiles"],
+                    common_runtime_arg_names=["Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "bcast_B", "MtNt"],
+                ),
+                hw_config=E.create_reader_datamovement_config(disable_dfb_implicit_sync_for_all=True),
+            ),
+            E.KernelSpec(
+                unique_id="writer",
+                source=f"{MATMUL_KERNELS}/dataflow/writer_unary_interleaved_start_id.cpp",
+                dfb_bindings=[E.consumer_of("out", "out")],
+                tensor_bindings=[E.TensorBinding(tensor_parameter_name="output", accessor_name="output")],
+                runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_pages", "start_id"]),
+                hw_config=E.create_writer_datamovement_config(disable_dfb_implicit_sync_for_all=True),
+            ),
+        ]
+        + [
+            E.KernelSpec(
+                unique_id=f"compute_{name}",
+                source=f"{MATMUL_KERNELS}/compute/bmm_metal2.cpp",
+                dfb_bindings=[E.consumer_of("in0", "in0"), E.consumer_of("in1", "in1"), E.producer_of("out", "out")],
+                compile_time_args={"batch": 1, "Mt": 1, "Kt": k_tiles, "Nt": tiles},
+                hw_config=E.ComputeHardwareConfig(
+                    unpack_modes={"in0": E.UnpackMode.UnpackToSrc, "in1": E.UnpackMode.UnpackToSrc}
+                ),
+            )
+            for name, _, tiles in groups
+        ],
+        dataflow_buffers=[
+            E.DataflowBufferSpec(
+                unique_id=name, entry_size=TILE_BYTES, num_entries=2, data_format_metadata=ttnn.bfloat16
+            )
+            for name in ("in0", "in1", "out")
+        ],
+        tensor_parameters=[
+            E.TensorParameter(unique_id="in0", spec=a.spec),
+            E.TensorParameter(unique_id="in1", spec=b.spec),
+            E.TensorParameter(unique_id="output", spec=out.spec),
+        ],
+        work_units=[
+            E.WorkUnitSpec(name=name, kernels=["reader", "writer", f"compute_{name}"], target_nodes=group)
+            for name, group, _ in groups
+        ],
+    )
+
+    start_id, num_tiles, start = {}, {}, 0
+    for core in ttnn.corerange_to_cores(all_cores, None, False):
+        tiles = next(tiles for _, group, tiles in groups if group.contains(core))
+        start_id[core], num_tiles[core] = start, tiles
+        start += tiles
+    run_args = E.ProgramRunArgs(
+        kernel_run_args=[
+            E.KernelRunArgs(
+                kernel="reader",
+                runtime_arg_values={"output_tile_start_id": start_id, "num_output_tiles": num_tiles},
+                common_runtime_arg_values={
+                    "Mt": m_tiles,
+                    "Kt": k_tiles,
+                    "Nt": n_tiles,
+                    "MtKt": m_tiles * k_tiles,
+                    "KtNt": k_tiles * n_tiles,
+                    "batch": batch,
+                    "bcast_B": 0,
+                    "MtNt": m_tiles * n_tiles,
+                },
+            ),
+            E.KernelRunArgs(kernel="writer", runtime_arg_values={"num_pages": num_tiles, "start_id": start_id}),
+        ],
+        tensor_args={"in0": a, "in1": b, "output": out},
+    )
+    result = E.generic_op([a, b, out], spec, run_args)
+    assert_with_pcc(torch.matmul(torch_a.float(), torch_b.float()), ttnn.to_torch(result).float(), 0.999)
 
 
 def exp_program(input_tensor, output_tensor, compute_threads=1):
@@ -592,6 +713,24 @@ def test_prepare_fills_the_program_cache(device):
     assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
 
 
+def test_a_compilation_failure_leaves_the_program_cache_unchanged(device, expect_error):
+    expected, a, b, out = inputs(device, seed=16)
+    spec, run_args = mul_program(a, b, out)
+    kernels = spec.kernels
+    kernels[1].source = E.KernelSpec.SourceCode(code="this does not compile")
+    spec.kernels = kernels
+    entries = device.num_program_cache_entries()
+    with expect_error(RuntimeError, "build failed"):
+        E.generic_op([a, b, out], spec, run_args)
+    assert device.num_program_cache_entries() == entries
+
+    # The same spec with a kernel that compiles still runs.
+    kernels[1].source = str(MUL_KERNELS / "compute.cpp")
+    spec.kernels = kernels
+    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert device.num_program_cache_entries() == entries + 1
+
+
 def test_dynamic_shape_relaxation_reuses_the_program(device):
     relaxations = E.TensorSpecRelaxations(dynamic_tensor_shape=True)
     expected, a, b, out = inputs(device, (1, 1, 32, 64), seed=5)
@@ -637,9 +776,14 @@ def test_a_spec_reused_with_other_tensors_is_rejected(device, validate, expect_e
         E.generic_op([a2, b2, out2], spec, run_args)
 
 
-def test_tensor_args_must_match_the_parameters(device, expect_error):
+@pytest.mark.parametrize("cache_hit", [False, True], ids=["first_call", "later_call"])
+def test_tensor_args_must_match_the_parameters(device, cache_hit, expect_error):
     _, a, b, out = inputs(device)
     spec, run_args = mul_program(a, b, out)
+    if cache_hit:
+        E.generic_op([a, b, out], spec, run_args)
+        # These checks run on every call, so the later calls run without validate_program_args.
+        ttnn.CONFIG.validate_program_args = False
     run_args.tensor_args = {"a": a, "b": b}
     with expect_error(RuntimeError, "tensor parameter 'out' has no tensor"):
         E.generic_op([a, b, out], spec, run_args)
@@ -811,6 +955,33 @@ def test_a_core_left_out_of_a_later_call(device, validate, varargs, expect_error
 
 def mesh_range(device):
     return ttnn.MeshCoordinateRange(device.shape)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_a_range_over_a_device_without_a_tensor_is_rejected(mesh_device, expect_error):
+    """A program runs on every device of its mesh range, so each of them must hold every tensor."""
+    torch.manual_seed(19)
+    first_device_only = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)], mesh_shape_override=ttnn.MeshShape(1, 1)
+        ),
+    )
+    input_tensor = ttnn.from_torch(
+        torch.rand([1, 1, 32, 32]).to(torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=first_device_only,
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
+    spec, run_args = exp_program(input_tensor, output_tensor)
+    whole_mesh = mesh_range(mesh_device)
+    with expect_error(RuntimeError, r"a program runs on device .*, which does not hold io_tensors\[0\]"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(whole_mesh, spec)]),
+            E.MeshProgramRunArgs(programs=[(whole_mesh, run_args)]),
+        )
 
 
 def test_mesh_form(device):
