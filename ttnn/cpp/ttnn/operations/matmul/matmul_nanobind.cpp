@@ -779,7 +779,8 @@ void py_module(nb::module_& mod) {
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
 
         Keyword Args:
-            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
+            transpose_a (bool, optional): Whether to transpose input_tensor_a. An L1-sharded input_tensor_a supports
+                only one tile per batch. Defaults to `False`.
             transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
             memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType): the data type of the output tensor. Defaults to `None`.
@@ -909,7 +910,8 @@ void py_module(nb::module_& mod) {
                 Most program configs take a row-vector bias of shape ``[1, N]`` (or ``[1, 1, 1, N]``), broadcast across the output rows.
                 The batched ``MatmulMultiCoreReuseProgramConfig`` path additionally supports a full-tile bias of shape ``[M, N]``,
                 added to the output and broadcast over the batch dimension.
-            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
+            transpose_a (bool, optional): Whether to transpose input_tensor_a. An L1-sharded input_tensor_a supports
+                only one tile per batch. Defaults to `False`.
             transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
@@ -979,7 +981,8 @@ void py_module(nb::module_& mod) {
 
         Keyword Args:
             bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
-            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
+            transpose_a (bool, optional): Whether to transpose input_tensor_a. An L1-sharded input_tensor_a supports
+                only one tile per batch. Defaults to `False`.
             transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.

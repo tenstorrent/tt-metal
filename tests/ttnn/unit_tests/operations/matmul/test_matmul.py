@@ -3635,6 +3635,159 @@ def test_matmul_block_float_ktile_padding_transpose_a(device, dtype, pcc):
     assert_with_pcc(torch_output, output, pcc=pcc)
 
 
+def _l1_sharded_memory_config(layout, grid_x, grid_y, shard_shape):
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    shard_spec = ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(layout, ttnn.BufferType.L1, shard_spec)
+
+
+@pytest.mark.parametrize(
+    "m, k, transpose_a",
+    [
+        (32, 16, False),
+        (32, 46, False),
+        (64, 48, False),  # shard of 2 x 2 tiles
+        (96, 80, False),  # shard of 3 x 3 tiles
+        (64, 32, False),  # control: no K padding
+        (32, 16, True),  # one tile per batch, K runs along the tile rows
+        (32, 32, True),  # control: no K padding
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_matmul_reuse_height_sharded_in0_ktile_padding(device, m, k, transpose_a, dtype):
+    """The Reuse path uses a height-sharded in0 in place, and its K padding must be zeroed as on the other paths.
+
+    The padding adds the same constant to every output value, so PCC cannot see it: the check is on absolute error.
+    """
+    torch.manual_seed(0)
+    batch, n = 2, 64
+    torch_input_a = torch.randn((batch, 1, m, k), dtype=torch.float32) * 0.5
+    torch_input_b = torch.randn((batch, 1, k, n), dtype=torch.float32) * 0.5
+    torch_output = torch_input_a @ torch_input_b
+    stored_a = torch_input_a.transpose(-1, -2) if transpose_a else torch_input_a
+
+    input_a = ttnn.from_torch(
+        stored_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_a = ttnn.fill_implicit_tile_padding(input_a, 1.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_b = ttnn.fill_implicit_tile_padding(input_b, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    shard_shape = [math.ceil(dim / 32) * 32 for dim in stored_a.shape[-2:]]
+    input_a = ttnn.to_memory_config(
+        input_a, _l1_sharded_memory_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, batch, 1, shard_shape)
+    )
+    logical_a_before = ttnn.to_torch(input_a).to(torch.float32)
+
+    output = ttnn.to_torch(
+        ttnn.matmul(input_a, input_b, transpose_a=transpose_a, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ).to(torch.float32)
+
+    assert (output - torch_output).abs().max().item() < 1.0
+    # Zeroing the padding in the shard must leave the logical values of the input as they were.
+    assert torch.equal(ttnn.to_torch(input_a).to(torch.float32), logical_a_before)
+
+
+@pytest.mark.parametrize(
+    "batch, m, per_core_m",
+    [
+        (1, 64, 1),  # per_core_M < M: the shard holds one M block
+        (4, 32, 2),  # per_core_M > M: the shard holds two batches, so the reader walks batch * in0_block_h rows
+    ],
+)
+def test_matmul_reuse_height_sharded_in0_ktile_padding_per_core_m(device, batch, m, per_core_m):
+    """The reader zeroes the last K tile of every stored row, however the shard splits M and the batches."""
+    torch.manual_seed(0)
+    k, n = 46, 64
+    torch_input_a = torch.randn((batch, 1, m, k), dtype=torch.float32) * 0.5
+    torch_input_b = torch.randn((batch, 1, k, n), dtype=torch.float32) * 0.5
+    input_a = ttnn.from_torch(
+        torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_a = ttnn.fill_implicit_tile_padding(input_a, 1.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_b = ttnn.fill_implicit_tile_padding(input_b, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_a = ttnn.to_memory_config(
+        input_a, _l1_sharded_memory_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2, 1, [per_core_m * 32, 64])
+    )
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(2, 1),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=per_core_m,
+        per_core_N=2,
+    )
+    output = ttnn.to_torch(
+        ttnn.matmul(input_a, input_b, program_config=program_config, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ).to(torch.float32)
+    assert (output - torch_input_a @ torch_input_b).abs().max().item() < 1.0
+
+
+@pytest.mark.parametrize("k", [16, 46])
+def test_matmul_reuse_height_sharded_in0_ktile_padding_tile_height_16(device, k):
+    """Two tile rows per shard row: zeroing a 16-high tile as if it were 32-high would overwrite the next tile."""
+    torch.manual_seed(0)
+    batch, m, n = 4, 64, 128
+    padded_k = math.ceil(k / 32) * 32
+    torch_input_a = torch.rand((batch, 1, m, k), dtype=torch.float32)
+    torch_input_b = torch.rand((batch, 1, k, n), dtype=torch.float32)
+    # to_memory_config does not take low tiles, so the padding of in0 comes up from the host.
+    stored_a = torch.ones((batch, 1, m, padded_k), dtype=torch.float32)
+    stored_a[..., :k] = torch_input_a
+    input_a = ttnn.from_torch(
+        stored_a,
+        tile=ttnn.Tile((16, 32)),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=_l1_sharded_memory_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, batch, 1, [m, padded_k]),
+    )
+    input_a = ttnn.reshape(input_a, (batch, 1, m, k), padded_shape=(batch, 1, m, padded_k))
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_b = ttnn.fill_implicit_tile_padding(input_b, 1.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output = ttnn.to_torch(
+        ttnn.matmul(input_a, input_b, memory_config=ttnn.L1_MEMORY_CONFIG, output_tile=ttnn.Tile((16, 32)))
+    ).to(torch.float32)
+    assert (output - torch_input_a @ torch_input_b).abs().max().item() < 1.0
+
+
+@pytest.mark.parametrize(
+    "layout, grid_x, grid_y, shard_shape",
+    [
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2, 1, [64, 128]),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 2, 1, [128, 64]),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, 2, 2, [64, 64]),
+    ],
+)
+def test_matmul_transpose_a_sharded_in0_above_one_tile_is_rejected(
+    device, expect_error, layout, grid_x, grid_y, shard_shape
+):
+    """The sharded readers keep the stored tile order, so more than one tile per batch used to give wrong values."""
+    torch.manual_seed(0)
+    input_a = ttnn.from_torch(
+        torch.randn((1, 1, 128, 128), dtype=torch.float32),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=_l1_sharded_memory_config(layout, grid_x, grid_y, shard_shape),
+    )
+    input_b = ttnn.from_torch(
+        torch.randn((1, 1, 128, 128), dtype=torch.float32),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "transpose_a with an L1-sharded input A supports one tile per batch"):
+        ttnn.matmul(input_a, input_b, transpose_a=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
 @pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
 @pytest.mark.parametrize("out_subblock_h", [1, 2], ids=["subblock_h1", "subblock_h2"])
 def test_matmul_2d_mcast_block_float_ktile_padding_subblock_h(device, out_subblock_h, dtype, pcc):

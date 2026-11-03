@@ -119,6 +119,27 @@ void validate_matmul_in0_column_window(
         a_shape[-1]);
 }
 
+// Sharded A with transpose_a: the sharded readers hand the shard to compute in stored tile order and compute only
+// transposes inside each tile, so the tile grid stays untransposed. Only the interleaved readers reorder tiles, with
+// their strides, and a sharded A can also hold the tiles of a K row on other cores. One tile per batch keeps the
+// stored order right on every route, so it is the only layout accepted.
+void validate_matmul_sharded_in0_transpose_a(
+    const MatmulParams& attributes,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& a_shape_padded,
+    const tt::tt_metal::Tile& in0_tile) {
+    if (!attributes.transpose_a || !input_tensor_a.is_sharded() ||
+        input_tensor_a.memory_config().buffer_type() == BufferType::DRAM) {
+        return;
+    }
+    TT_FATAL(
+        a_shape_padded[-2] == in0_tile.get_height() && a_shape_padded[-1] == in0_tile.get_width(),
+        "transpose_a with an L1-sharded input A supports one tile per batch, got padded [M, K] = [{}, {}]. "
+        "Use an interleaved input A.",
+        a_shape_padded[-2],
+        a_shape_padded[-1]);
+}
+
 // Bfloat4 Tile Size: checks that a bfloat4 input has each tile dim >= 4. Only A's height
 // and B's width are checked; the other two dims (A's width, B's height) are the K axis,
 // already forced to 32 by the Operand Basics check above, so they can't be < 4.
@@ -2735,6 +2756,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     validate_matmul_operand_basics(input_tensor_a, input_tensor_b, in0_tile, in1_tile);
     validate_matmul_matrix_dimensions(a_shape, b_shape, a_shape_padded, b_shape_padded, in0_tile, in1_tile);
     validate_matmul_bfloat4_tile_dims(input_tensor_a, input_tensor_b, in0_tile, in1_tile);
+    validate_matmul_sharded_in0_transpose_a(attributes, input_tensor_a, a_shape_padded, in0_tile);
     validate_matmul_optional_tensors(attributes, args);
 
     // ---- choose + normalize the program config ----
