@@ -209,6 +209,8 @@ jobs:
             tests/pipeline_reorg
       - name: Install dependencies
         run: pip3 install PyYAML
+      - name: Test time-budget validation
+        run: python3 -m unittest discover -s .github/scripts/utils -p 'test_verify_time_budget.py'
       # A cmd block that records a failed test command and runs the next one starts that
       # command on devices nothing has reset (#57706). Runs from this job's own checkout.
       - name: Lint pipeline cmd blocks
