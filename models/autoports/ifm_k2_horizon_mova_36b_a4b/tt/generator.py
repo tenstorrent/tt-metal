@@ -9,12 +9,12 @@ from dataclasses import dataclass, fields, is_dataclass
 from types import SimpleNamespace
 
 import torch
-from readiness_check.contract import Generator
 from transformers import AutoTokenizer
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
-from models.autoports.ifm_k2_horizon_mova_36b_a4b.tt.model import HF_MODEL, HF_REVISION, K2HorizonModel
+from models.autoports.ifm_k2_horizon_mova_36b_a4b.tt.model import K2HorizonModel, pretrained_source
+from models.autoports.ifm_k2_horizon_mova_36b_a4b.tt.readiness_contract import Generator
 from models.common.sampling.generator import (
     SamplingGenerator,
     SamplingParams,
@@ -72,8 +72,9 @@ class K2HorizonGenerator(Generator):
         if not 1 <= max_batch_size <= 32 or sampling_mode not in ("device", "host"):
             raise ValueError("Invalid batch or sampling mode")
         self.sampling_mode = sampling_mode
+        source, revision = pretrained_source()
         self.tokenizer = AutoTokenizer.from_pretrained(
-            HF_MODEL, revision=HF_REVISION, trust_remote_code=True, local_files_only=True
+            source, revision=revision, trust_remote_code=True, local_files_only=True
         )
         # Cover the rounded SDPA read window, not just the logical page count.
         self.capacity = (max_seq_len + 1023) // 1024 * 1024
