@@ -205,9 +205,16 @@ class Qwen36MLP:
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
-        hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+        # decode (T<=1): gate/up outputs one step down to bfloat8_b; prefill keeps the default bfloat16
+        gu_dtype = ttnn.bfloat8_b if T <= 1 else None
+        w1_out = ttnn.linear(
+            x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype
+        )
+        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype)
+        if T <= 1:
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc, dtype=ttnn.bfloat16)
+        else:
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
         down_pc = None
