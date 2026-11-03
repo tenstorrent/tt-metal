@@ -229,6 +229,8 @@ private:
     std::vector<uint32_t> eth_debug_regs_;
     // The physical RISCs the core has.
     std::optional<uint32_t> num_physical_riscs_;
+    // Leading DM processors (DM0..) the runtime keeps for itself; user kernels never land on them.
+    uint32_t num_reserved_dm_processors_ = 0;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
@@ -700,6 +702,14 @@ public:
 
     // The processors metal runs on a core of this type.
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    // Number of data-movement processors metal runs on this programmable core type (DM class only).
+    // Source of truth for Tensix vs DISPATCH DM capacity; do not hard-code Quasar node DM counts.
+    uint32_t get_num_dm_processors(HalProgrammableCoreType programmable_core_type) const;
+    // Leading DMs (DM0..) reserved for the runtime, e.g. Quasar Tensix DM0 ISR / DM1 remapper.
+    // Set per core type by the arch HAL; zero unless the arch says otherwise.
+    uint32_t get_num_reserved_dm_processors(HalProgrammableCoreType programmable_core_type) const;
+    // get_num_dm_processors minus reserved; max user SPMD DM threads for this core type.
+    uint32_t get_num_user_dm_processors(HalProgrammableCoreType programmable_core_type) const;
     // The physical RISCs a core of this type has.
     // NOTE: This includes the RISCs that metal runs processors on and the ones it doesn't.
     uint32_t get_num_physical_risc_processors(HalProgrammableCoreType programmable_core_type) const;
@@ -947,6 +957,29 @@ inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmabl
     }
     TT_ASSERT(num_riscs <= max_processors_per_core_);
     return num_riscs;
+}
+
+inline uint32_t Hal::get_num_dm_processors(HalProgrammableCoreType programmable_core_type) const {
+    if (!has_programmable_core_type(programmable_core_type)) {
+        return 0;
+    }
+    return get_processor_types_count(
+        programmable_core_type, ttsl::as_underlying_type<HalProcessorClassType>(HalProcessorClassType::DM));
+}
+
+inline uint32_t Hal::get_num_reserved_dm_processors(HalProgrammableCoreType programmable_core_type) const {
+    if (!has_programmable_core_type(programmable_core_type)) {
+        return 0;
+    }
+    return this->core_info_[ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+        .num_reserved_dm_processors_;
+}
+
+inline uint32_t Hal::get_num_user_dm_processors(HalProgrammableCoreType programmable_core_type) const {
+    const uint32_t total = get_num_dm_processors(programmable_core_type);
+    const uint32_t reserved = get_num_reserved_dm_processors(programmable_core_type);
+    TT_ASSERT(total >= reserved);
+    return total - reserved;
 }
 inline uint32_t Hal::get_processor_index(
     HalProgrammableCoreType programmable_core_type,

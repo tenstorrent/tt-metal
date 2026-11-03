@@ -20,14 +20,14 @@ namespace tt::tt_metal::experimental {
 void ValidateWorkUnitFields(const ValidationContext& ctx, const CoreCoord& compute_grid_size);
 
 // Per-node limits: work-unit capacity, DFB slots, Gen1 DM processors, scratchpad binders.
-void ValidateNodeCapacity(const ValidationContext& ctx, tt::ARCH arch, uint32_t max_slots_per_core);
+void ValidateNodeCapacity(const ValidationContext& ctx, const Hal& hal, tt::ARCH arch, uint32_t max_slots_per_core);
 
 // ----------------------------------------------------------------------------
 // These are the individual validator
 // ----------------------------------------------------------------------------
 
 // work_unit.cpp
-void ValidateWorkUnitSpec(const WorkUnitSpec& work_unit, const ValidationContext& ctx, tt::ARCH arch);
+void ValidateWorkUnitSpec(const WorkUnitSpec& work_unit, const ValidationContext& ctx, const Hal& hal, tt::ARCH arch);
 
 // dfb.cpp
 void ValidateDFBSlotsPerNode(

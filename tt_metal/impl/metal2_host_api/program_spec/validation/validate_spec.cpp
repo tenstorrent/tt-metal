@@ -70,11 +70,11 @@ void ValidateProgramSpec(
     ValidateWorkUnitFields(ctx, get_compute_grid_size(metal_ctx));
 
     for (const auto& kernel : spec.kernels) {
-        ValidateKernelSpec(kernel, ctx, arch);
+        ValidateKernelSpec(kernel, ctx, hal, arch);
     }
     ValidateResourceSpecs(ctx, arch, get_l1_alignment(hal), make_num_banks_from_buffer_type_fun(allocator));
     ValidateResourceUsage(ctx, arch);
-    ValidateNodeCapacity(ctx, arch, max_slots_per_core);
+    ValidateNodeCapacity(ctx, hal, arch, max_slots_per_core);
 
     // NOTE:
     // Placement consistency between kernels, DFBs, and WorkUnitSpecs is now structural,

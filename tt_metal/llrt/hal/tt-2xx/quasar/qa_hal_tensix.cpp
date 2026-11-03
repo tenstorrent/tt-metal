@@ -281,6 +281,12 @@ HalCoreInfoType create_tensix_mem_map() {
     };
     std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1, /*COMPUTE*/ 4};
 
+    static_assert(NUM_TENSIX_DM_CORES == NumTensixDMProcessors);
+    TT_FATAL(
+        processor_classes[0].size() == NUM_TENSIX_DM_CORES && processor_classes_names[0].size() == NUM_TENSIX_DM_CORES,
+        "Tensix DM processor class size must match NUM_TENSIX_DM_CORES ({})",
+        NUM_TENSIX_DM_CORES);
+
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,

@@ -13,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "host_api/temp_quasar_api.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include "impl/program/program_impl.hpp"
@@ -58,6 +59,13 @@ KernelHandle CreateDispatchEngineKernel(
     const CoreCoord& core,
     DataMovementProcessor dm_processor,
     const experimental::quasar::QuasarDataMovementConfig& config) {
+    const auto& hal = MetalContext::instance(program.impl().get_context_id()).hal();
+    const uint32_t num_dms = hal.get_num_dm_processors(HalProgrammableCoreType::DISPATCH);
+    TT_FATAL(
+        static_cast<uint32_t>(dm_processor) < num_dms,
+        "CreateDispatchEngineKernel: DataMovementProcessor {} exceeds DISPATCH DM count {}",
+        static_cast<uint32_t>(dm_processor),
+        num_dms);
     return create_dispatch_engine_kernel(program, file_name, core, dm_processor, config);
 }
 

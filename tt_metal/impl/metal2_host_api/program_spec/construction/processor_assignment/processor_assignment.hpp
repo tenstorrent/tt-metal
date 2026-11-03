@@ -16,7 +16,7 @@
 namespace tt::tt_metal::experimental {
 
 // Processor allocation on a node: bit i set = core i in use.
-using DMProcessorMask = std::bitset<QUASAR_DM_CORES_PER_NODE>;
+using DMProcessorMask = std::bitset<QUASAR_MAX_DM_CORES_PER_NODE>;
 using ComputeEngineMask = std::bitset<QUASAR_TENSIX_ENGINES_PER_NODE>;
 
 // Kernel -> DFB risc mask (passed to MakeDataflowBufferConfig)

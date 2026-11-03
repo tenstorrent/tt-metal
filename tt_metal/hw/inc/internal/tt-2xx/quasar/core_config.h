@@ -46,17 +46,11 @@ enum class TensixProcessorTypes : uint8_t {
 
 enum class EthProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, COUNT = 2 };
 
-enum class DispatchEngineProcessorTypes : uint8_t {
-    DM0 = 0,
-    DM1 = 1,
-    DM2 = 2,
-    DM3 = 3,
-    DM4 = 4,
-    DM5 = 5,
-    DM6 = 6,
-    DM7 = 7,
-    COUNT = 8
-};
+// Independent of the Tensix DM count — keep in sync with NUM_DISPATCH_DM_CORES in dev_mem_map.h.
+constexpr uint8_t NumDispatchDMProcessors = 8;
+
+// Dispatch engines are DM-only; individual DMs are addressed by index, so only COUNT is named.
+enum class DispatchEngineProcessorTypes : uint8_t { DM0 = 0, COUNT = NumDispatchDMProcessors };
 
 enum class DramProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };
 
@@ -99,10 +93,22 @@ union subordinate_map_t {
     };
 };
 
+// Keep in sync with NUM_TENSIX_DM_CORES in dev_mem_map.h (TensixProcessorTypes DM0..DM7).
+constexpr uint8_t NumTensixDMProcessors = 8;
+// Tensix DM0 (ISR) and DM1 (remapper) never host user kernels. Dispatch engines reserve none.
+constexpr uint8_t NumTensixReservedDMProcessors = 2;
+static_assert(static_cast<uint8_t>(TensixProcessorTypes::DM7) + 1 == NumTensixDMProcessors);
+static_assert(NumTensixReservedDMProcessors < NumTensixDMProcessors);
+
 constexpr uint8_t MaxProcessorsPerCoreType = 24;
 constexpr uint8_t MaxProcessorsForThreadingVariables =
     16;  // 8 DMs + 4 compute engine slots; round up to multiple of 8 for alignment
-constexpr uint8_t MaxDMProcessorsPerCoreType = 8;
+// Shared array sizes (NOC barriers, fabric UDM, etc.) must cover the larger of the two.
+constexpr uint8_t MaxDMProcessorsPerCoreType =
+    NumTensixDMProcessors > NumDispatchDMProcessors ? NumTensixDMProcessors : NumDispatchDMProcessors;
+// subordinate_map_t has one run-sync byte per subordinate DM (dm1..dm7), and the host-side
+// DataMovementProcessor enum names only RISCV_0..RISCV_7. Widen both before raising either count past 8.
+static_assert(MaxDMProcessorsPerCoreType <= 8, "Quasar DM run-sync and DataMovementProcessor support at most 8 DMs");
 constexpr uint8_t MaxNumKernels = MaxDMProcessorsPerCoreType + 4;  // +4 for the 4 TRISCs per engine.
 constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t NumEthDispatchClasses = 2;

@@ -71,18 +71,26 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
         enchantum::values<ProcessorClassType>.begin(), enchantum::values<ProcessorClassType>.end());
     std::vector<std::set<DataMovementProcessor>> dm_processors_in_use_per_kernel_group;
 
-    // Tensix WORKER: DM0/DM1 are reserved for runtime use (ISR / remapper) and must not host
-    // user kernels. Dispatch-engine cores keep the full DM0..DM7 set.
+    const Hal& hal = MetalContext::instance(program.impl().get_context_id()).hal();
+
+    // Drop DataMovementProcessor enum values that exceed this core type's HAL DM count, then
+    // apply Tensix reserved-DM policy (DM0/DM1). DISPATCH keeps its full user-available set.
     if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
-        if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-            processors.erase(DataMovementProcessor::RISCV_0);
-            processors.erase(DataMovementProcessor::RISCV_1);
+        const uint32_t num_dms = hal.get_num_dm_processors(programmable_core_type);
+        for (auto it = processors.begin(); it != processors.end();) {
+            if (static_cast<uint32_t>(*it) >= num_dms) {
+                it = processors.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        const uint32_t num_reserved = hal.get_num_reserved_dm_processors(programmable_core_type);
+        for (uint32_t i = 0; i < num_reserved; ++i) {
+            processors.erase(static_cast<DataMovementProcessor>(i));
         }
     }
 
-    const uint32_t programmable_core_type_index = MetalContext::instance(program.impl().get_context_id())
-                                                      .hal()
-                                                      .get_programmable_core_type_index(programmable_core_type);
+    const uint32_t programmable_core_type_index = hal.get_programmable_core_type_index(programmable_core_type);
     std::unordered_set<const KernelGroup*> kernel_groups;
     for (const CoreRange& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -163,11 +171,13 @@ KernelHandle CreateQuasarDataMovementKernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_ranges,
     const QuasarDataMovementConfig& config) {
+    const Hal& hal = MetalContext::instance(program.impl().get_context_id()).hal();
+    const uint32_t max_user_dms = hal.get_num_user_dm_processors(HalProgrammableCoreType::TENSIX);
     TT_FATAL(
-        1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= QUASAR_NUM_USER_DM_CORES_PER_CLUSTER,
+        1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= max_user_dms,
         "Requested number of data movement cores per cluster must be between 1 and {} (inclusive); "
         "DM0/DM1 are reserved on Tensix",
-        QUASAR_NUM_USER_DM_CORES_PER_CLUSTER);
+        max_user_dms);
     const std::set<DataMovementProcessor> dm_processors = GetProcessorsPerClusterQuasar<DataMovementProcessor>(
         program, core_ranges, config.num_threads_per_cluster, HalProgrammableCoreType::TENSIX);
     std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(

@@ -235,7 +235,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
 
 std::set<DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask) {
     std::set<DataMovementProcessor> processors;
-    for (uint8_t i = 0; i < QUASAR_DM_CORES_PER_NODE; ++i) {
+    for (uint8_t i = 0; i < QUASAR_MAX_DM_CORES_PER_NODE; ++i) {
         if (mask.test(i)) {
             processors.insert(static_cast<DataMovementProcessor>(i));
         }

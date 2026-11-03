@@ -61,7 +61,8 @@ void ValidateNodeBounds(const ProgramSpec& spec, const CoreCoord& compute_grid_s
 }
 
 // Does the WorkUnit have enough cores to run all of its kernels?
-void ValidateWorkUnitCapacity(const WorkUnitSpec& work_unit, const CollectedSpecData& collected, tt::ARCH arch) {
+void ValidateWorkUnitCapacity(
+    const WorkUnitSpec& work_unit, const CollectedSpecData& collected, const Hal& hal, tt::ARCH arch) {
     uint32_t dm_cores_needed = 0;
     uint32_t compute_engines_needed = 0;
     for (const auto& kernel_name : work_unit.kernels) {
@@ -74,6 +75,9 @@ void ValidateWorkUnitCapacity(const WorkUnitSpec& work_unit, const CollectedSpec
         }
     }
     if (is_gen2_arch(arch)) {
+        // WorkUnits on the compute grid are Tensix-typed today; capacity still goes through HAL so
+        // DISPATCH can use a different budget when DE WorkUnits are introduced.
+        const uint32_t max_user_dms = get_user_dm_cores_per_node(hal, HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             compute_engines_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
             "WorkUnitSpec '{}' needs {} Tensix engines, but only {} are available",
@@ -81,11 +85,11 @@ void ValidateWorkUnitCapacity(const WorkUnitSpec& work_unit, const CollectedSpec
             compute_engines_needed,
             QUASAR_TENSIX_ENGINES_PER_NODE);
         TT_FATAL(
-            dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
+            dm_cores_needed <= max_user_dms,
             "WorkUnitSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
             work_unit.name,
             dm_cores_needed,
-            QUASAR_USER_DM_CORES_PER_NODE);
+            max_user_dms);
     }
     if (is_gen1_arch(arch)) {
         TT_FATAL(
@@ -126,13 +130,13 @@ void ValidateWorkUnitFields(const ValidationContext& ctx, const CoreCoord& compu
     }
 }
 
-void ValidateWorkUnitSpec(const WorkUnitSpec& work_unit, const ValidationContext& ctx, tt::ARCH arch) {
+void ValidateWorkUnitSpec(const WorkUnitSpec& work_unit, const ValidationContext& ctx, const Hal& hal, tt::ARCH arch) {
     const CollectedSpecData& collected = ctx.collected;
 
     // A WorkUnitSpec must have at least one kernel
     TT_FATAL(!work_unit.kernels.empty(), "WorkUnitSpec '{}' has no kernels", work_unit.name);
 
-    ValidateWorkUnitCapacity(work_unit, collected, arch);
+    ValidateWorkUnitCapacity(work_unit, collected, hal, arch);
 
     // A work_unit can have at most one compute kernel
     uint32_t num_compute_kernels = 0;

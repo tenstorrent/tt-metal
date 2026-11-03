@@ -30,6 +30,8 @@ namespace tt::tt_metal {
 class Program;
 
 namespace experimental::quasar {
+// Compile-time Tensix defaults for QuasarDataMovementConfig. Runtime limits come from
+// Hal::get_num_*_dm_processors(core_type) — Tensix and DISPATCH capacity can diverge.
 static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
 // Tensix WORKER clusters reserve DM0 (ISR) and DM1 (remapper) for runtime use; CreateKernel
 // assigns user kernels to DM2..DM7 only. Dispatch-engine cores do not apply this reservation.

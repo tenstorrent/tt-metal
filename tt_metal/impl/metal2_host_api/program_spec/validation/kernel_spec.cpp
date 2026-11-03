@@ -54,7 +54,7 @@ void ValidateKernelArguments(const KernelSpec& kernel) {
     }
 }
 
-void ValidateNumThreads(const KernelSpec& kernel, tt::ARCH arch) {
+void ValidateNumThreads(const KernelSpec& kernel, const Hal& hal, tt::ARCH arch) {
     TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
     if (kernel.is_compute_kernel()) {
         if (is_gen2_arch(arch)) {
@@ -80,11 +80,14 @@ void ValidateNumThreads(const KernelSpec& kernel, tt::ARCH arch) {
     }
     if (kernel.is_data_movement_kernel()) {
         if (is_gen2_arch(arch)) {
+            // Metal2 WorkUnits currently target the compute (Tensix) grid. Capacity is keyed by
+            // HalProgrammableCoreType so DISPATCH can diverge without another API knob.
+            const uint32_t max_user_dms = get_user_dm_cores_per_node(hal, HalProgrammableCoreType::TENSIX);
             TT_FATAL(
-                kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
+                kernel.num_threads <= max_user_dms,
                 "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
                 kernel.unique_id,
-                QUASAR_USER_DM_CORES_PER_NODE);
+                max_user_dms);
         } else {
             TT_FATAL(
                 kernel.num_threads == 1,
@@ -99,10 +102,10 @@ void ValidateNumThreads(const KernelSpec& kernel, tt::ARCH arch) {
 
 }  // namespace
 
-void ValidateKernelSpec(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch) {
+void ValidateKernelSpec(const KernelSpec& kernel, const ValidationContext& ctx, const Hal& hal, tt::ARCH arch) {
     ValidateResourceBindings(kernel, ctx, arch);
     ValidateKernelArguments(kernel);
-    ValidateNumThreads(kernel, arch);
+    ValidateNumThreads(kernel, hal, arch);
     ValidateKernelHardwareConfig(kernel, ctx, arch);
 }
 

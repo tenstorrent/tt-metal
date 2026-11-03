@@ -134,12 +134,33 @@ struct KernelCouplingGroup {
     uint8_t num_threads = 0;                 // shared across members
 };
 
+// DMs a node can never hand to a user kernel: the runtime-reserved leading DMs, plus any mask bits
+// beyond the core type's DM count.
+DMProcessorMask UnavailableDMProcessors(const Hal& hal, HalProgrammableCoreType core_type) {
+    const uint32_t num_dms = hal.get_num_dm_processors(core_type);
+    const uint32_t num_reserved = hal.get_num_reserved_dm_processors(core_type);
+    TT_FATAL(
+        num_dms <= QUASAR_MAX_DM_CORES_PER_NODE,
+        "Core type has {} DM processors, more than the {} that DMProcessorMask can hold",
+        num_dms,
+        QUASAR_MAX_DM_CORES_PER_NODE);
+    DMProcessorMask unavailable;
+    for (uint32_t i = 0; i < QUASAR_MAX_DM_CORES_PER_NODE; ++i) {
+        if (i < num_reserved || i >= num_dms) {
+            unavailable.set(i);
+        }
+    }
+    return unavailable;
+}
+
 // State for tracking per-node processor usage
 class NodeUsageTracker {
 public:
+    explicit NodeUsageTracker(DMProcessorMask unavailable) : unavailable_(unavailable) {}
+
     DMProcessorMask& get_used_mask(const NodeCoord& node) {
         if (!node_used_masks_.contains(node)) {
-            node_used_masks_[node] = DMProcessorMask{0b11};  // Reserve DM0, DM1
+            node_used_masks_[node] = unavailable_;
         }
         return node_used_masks_[node];
     }
@@ -176,6 +197,7 @@ public:
     void reset() { node_used_masks_.clear(); }
 
 private:
+    DMProcessorMask unavailable_;
     std::map<NodeCoord, DMProcessorMask> node_used_masks_;
 };
 
@@ -350,7 +372,8 @@ namespace {
 // DFB endpoint roles), not individual kernels. Each group is assigned one DMProcessorMask
 // which then applies to every member kernel. This ensures multi-bound same-role kernels end
 // up with identical masks, matching the per-side single-mask shape of DataflowBufferConfig.
-KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const CollectedSpecData& collected) {
+KernelRiscMaskMap SolveGen2KernelRiscMasks(
+    const ProgramSpec& spec, const CollectedSpecData& collected, const Hal& hal) {
     ComputeEngineMaskMap compute_assignments;
 
     // Collect DM kernels and compute kernels separately.
@@ -385,8 +408,8 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
         dm_solver::SortByConstraint(group_ptrs);
     }
 
-    // Solve DM assignments at the group level
-    dm_solver::NodeUsageTracker tracker;
+    // Solve DM assignments at the group level. WorkUnits target the compute grid, so every node is TENSIX.
+    dm_solver::NodeUsageTracker tracker(dm_solver::UnavailableDMProcessors(hal, HalProgrammableCoreType::TENSIX));
     dm_solver::KernelCouplingGroupMaskMap group_assignments;
     bool success = dm_solver::SolveWithOrderingBacktrack(group_ptrs, tracker, group_assignments);
 
@@ -472,7 +495,7 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 }  // namespace
 
 KernelRiscMaskMap SolveKernelRiscMasks(const ProgramSpec& spec, const CollectedSpecData& collected, const Hal& hal) {
-    return is_gen2_arch(hal) ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
+    return is_gen2_arch(hal) ? SolveGen2KernelRiscMasks(spec, collected, hal) : BuildGen1KernelRiscMasks(spec);
 }
 
 }  // namespace tt::tt_metal::experimental

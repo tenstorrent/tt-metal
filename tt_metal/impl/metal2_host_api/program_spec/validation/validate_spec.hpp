@@ -71,7 +71,7 @@ struct ValidationContext {
 };
 
 // kernel_spec.cpp
-void ValidateKernelSpec(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch);
+void ValidateKernelSpec(const KernelSpec& kernel, const ValidationContext& ctx, const Hal& hal, tt::ARCH arch);
 
 // hardware_config.cpp
 void ValidateKernelHardwareConfig(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch);

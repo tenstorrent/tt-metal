@@ -10,6 +10,7 @@
 using namespace tt::tt_metal::quasar::dispatch;
 
 #include <cstdint>
+#include <string>
 
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_dispatch_asserts.hpp"
@@ -40,23 +41,15 @@ namespace dispatch_realtime_profiler_msgs {
 HalCoreInfoType create_dispatch_mem_map() {
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
-    static constexpr DeviceAddr dispatch_dm_kernel_bases[] = {
-        MEM_DISPATCH_DM0_KERNEL_BASE,
-        MEM_DISPATCH_DM1_KERNEL_BASE,
-        MEM_DISPATCH_DM2_KERNEL_BASE,
-        MEM_DISPATCH_DM3_KERNEL_BASE,
-        MEM_DISPATCH_DM4_KERNEL_BASE,
-        MEM_DISPATCH_DM5_KERNEL_BASE,
-        MEM_DISPATCH_DM6_KERNEL_BASE,
-        MEM_DISPATCH_DM7_KERNEL_BASE,
-    };
-    static_assert(std::size(dispatch_dm_kernel_bases) == NUM_DM_CORES);
+    static_assert(
+        NUM_DISPATCH_DM_CORES == static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT),
+        "NUM_DISPATCH_DM_CORES (dev_mem_map.h) and NumDispatchDMProcessors (core_config.h) must match");
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(1);
-    processor_classes[0].reserve(NUM_DM_CORES);
-    for (unsigned long dispatch_dm_kernel_base : dispatch_dm_kernel_bases) {
+    processor_classes[0].reserve(NUM_DISPATCH_DM_CORES);
+    for (uint32_t dm = 0; dm < NUM_DISPATCH_DM_CORES; dm++) {
         processor_classes[0].push_back({
-            .fw_base_addr = dispatch_dm_kernel_base,
+            .fw_base_addr = MEM_DISPATCH_DM_KERNEL_BASE(dm),
             .local_init_addr = UINT32_MAX,
             .fw_launch_addr = 0x0,
             // DM firmware is linked and loaded at MEM_DISPATCH_DM_FIRMWARE_BASE (qa_hal.cpp passes it as
@@ -69,16 +62,12 @@ HalCoreInfoType create_dispatch_mem_map() {
 
     // Prefix with DE- so dispatch-engine DMs are distinguishable from Tensix DMs in DPRINT/watcher
     // output (e.g. "DE-DM4" vs "DM4"). Abbreviated and full names match so both GetRiscName paths agree.
-    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
-        {{"DE-DM0", "DE-DM0"},
-         {"DE-DM1", "DE-DM1"},
-         {"DE-DM2", "DE-DM2"},
-         {"DE-DM3", "DE-DM3"},
-         {"DE-DM4", "DE-DM4"},
-         {"DE-DM5", "DE-DM5"},
-         {"DE-DM6", "DE-DM6"},
-         {"DE-DM7", "DE-DM7"}},
-    };
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names(1);
+    processor_classes_names[0].reserve(NUM_DISPATCH_DM_CORES);
+    for (uint32_t dm = 0; dm < NUM_DISPATCH_DM_CORES; dm++) {
+        const std::string name = "DE-DM" + std::to_string(dm);
+        processor_classes_names[0].emplace_back(name, name);
+    }
 
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);

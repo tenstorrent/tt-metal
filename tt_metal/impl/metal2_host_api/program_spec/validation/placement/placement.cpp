@@ -6,9 +6,9 @@
 
 namespace tt::tt_metal::experimental {
 
-void ValidateNodeCapacity(const ValidationContext& ctx, tt::ARCH arch, uint32_t max_slots_per_core) {
+void ValidateNodeCapacity(const ValidationContext& ctx, const Hal& hal, tt::ARCH arch, uint32_t max_slots_per_core) {
     for (const auto& work_unit : ctx.spec.work_units) {
-        ValidateWorkUnitSpec(work_unit, ctx, arch);
+        ValidateWorkUnitSpec(work_unit, ctx, hal, arch);
         ValidateDFBSlotsPerNode(work_unit, ctx, max_slots_per_core, arch);
     }
     // Checked over every node at once rather than per WorkUnitSpec: WorkUnitSpecs with the same name
