@@ -15,6 +15,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronologic
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
+    distributed_prefix,
     kda_device_params,
     reconstruct_state_at_sp_rank,
 )
@@ -535,7 +536,7 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         )
         return ttnn.reshape(tensor, (1, 32, 32))
 
-    entry, final = recurrence.distributed_prefix(
+    entry, final = distributed_prefix(
         recurrence.pack_transform(recurrence.AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1)))),
         to_mesh(initial, (None, 1)),
         sequence_parallel_axis=0,
