@@ -231,14 +231,7 @@ def _hw_statistic_golden(input_tensor, take_sqrt):
 
     import torch
 
-    height, width = input_tensor.shape[-2:]
-    padded_height = -(-height // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-    padded_width = -(-width // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-    # The device sums squared deviations over the logical elements but divides by the tile-padded H * W,
-    # so non-tile-aligned inputs get a variance scaled by logical / padded area.
-    variance = torch.var(input_tensor.float(), dim=(-2, -1), keepdim=True, correction=0) * (
-        (height * width) / (padded_height * padded_width)
-    )
+    variance = torch.var(input_tensor.float(), dim=(-2, -1), keepdim=True, correction=0)
     output_tensor = (torch.sqrt(variance) if take_sqrt else variance).to(input_tensor.dtype)
     # A single-plane statistic is one value, so PCC is undefined and the default allclose tolerance is
     # finer than one bfloat16 ULP; padding leaks would still shift the value by far more than a few ULP.

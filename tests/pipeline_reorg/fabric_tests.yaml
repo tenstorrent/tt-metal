@@ -117,8 +117,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout
@@ -132,8 +132,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout
@@ -145,8 +145,8 @@
   skus:
     bh_loudbox:
       timeout: 5
-    bh_p300:
-      timeout: 5
+    # bh_p300:
+    #   timeout: 5
     bh_quietbox_2:
       timeout: 5
   team: scaleout
@@ -160,8 +160,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout
@@ -177,8 +177,8 @@
   skus:
     bh_loudbox:
       timeout: 10
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_quietbox_2:
       timeout: 10
   team: scaleout
@@ -190,8 +190,8 @@
   skus:
     bh_loudbox:
       timeout: 10
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_quietbox_2:
       timeout: 10
   team: scaleout
@@ -203,8 +203,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout
@@ -217,8 +217,8 @@
   skus:
     bh_loudbox:
       timeout: 30
-    bh_p300:
-      timeout: 30
+    # bh_p300:
+    #   timeout: 30
     bh_quietbox_2:
       timeout: 30
   team: scaleout
@@ -230,8 +230,8 @@
   skus:
     bh_loudbox:
       timeout: 30
-    bh_p300:
-      timeout: 30
+    # bh_p300:
+    #   timeout: 30
     bh_quietbox_2:
       timeout: 30
   team: scaleout
@@ -247,8 +247,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout

@@ -15,12 +15,12 @@
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include "trace/trace_buffer.hpp"
+#include "impl/trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/device.hpp>

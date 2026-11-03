@@ -9,6 +9,8 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tests/tt_metal/tt_fabric/common/test_host_kernel_common.hpp"
+using tt::tt_fabric::fabric_router_tests::FUSED_ATOMIC_INC_PATTERN_WORD_IDX_BITS;
+using tt::tt_fabric::fabric_router_tests::FUSED_ATOMIC_INC_PATTERN_WORD_IDX_MASK;
 using tt::tt_fabric::fabric_router_tests::NocPacketType;
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
@@ -55,28 +57,41 @@ void kernel_main() {
         }
     }
 
-    for (uint32_t i = 0; i < num_packets; i++) {
-        uint32_t expected_atomic_value = i + 1;
-
+    // The sender is not throttled, so the semaphore can advance by more than one between polls; wait for any
+    // change instead of an exact value so the payload check below cannot cause a missed value and a hang.
+    uint32_t last_atomic_value = 0;
+    while (last_atomic_value < num_packets) {
+        uint32_t atomic_value;
         WAYPOINT("FPW");
-        while (expected_atomic_value != *atomic_poll_addr) {
+        do {
             invalidate_l1_cache();
-        }
+            atomic_value = *atomic_poll_addr;
+        } while (atomic_value == last_atomic_value);
         WAYPOINT("FPD");
 
         if constexpr (
             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC) {
-            bool data_written = false;
+            // The payload of packet atomic_value must have landed before its increment, so every word must come
+            // from that packet or a later one (later packets may already have overwritten the buffer).
             for (uint32_t j = 0; j < payload_size_words; j++) {
-                if (start_addr[j] != 0) {
-                    data_written = true;
-                    break;
+                const uint32_t word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr)[j];
+                const uint32_t packet_idx = word >> FUSED_ATOMIC_INC_PATTERN_WORD_IDX_BITS;
+                const uint32_t word_idx = word & FUSED_ATOMIC_INC_PATTERN_WORD_IDX_MASK;
+                if (packet_idx < atomic_value || packet_idx > num_packets ||
+                    word_idx != (j & FUSED_ATOMIC_INC_PATTERN_WORD_IDX_MASK)) {
+                    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;
+                    test_results[TT_FABRIC_MISC_INDEX + 12] = atomic_value;
+                    test_results[TT_FABRIC_MISC_INDEX + 13] = j;
+                    test_results[TT_FABRIC_MISC_INDEX + 14] = word;
+                    test_results[TT_FABRIC_WORD_CNT_INDEX] = atomic_value;
+                    return;
                 }
             }
         }
-        operations_received++;
+        last_atomic_value = atomic_value;
     }
+    operations_received = last_atomic_value;
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)operations_received;

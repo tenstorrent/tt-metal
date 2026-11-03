@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
     // sfpu_operations.h uses this init for rpow. It programs vConstFloatPrgm0/1, which only the
     // bf16 body of _sfpu_binary_power_ reads; the fp32 body does not use them.
