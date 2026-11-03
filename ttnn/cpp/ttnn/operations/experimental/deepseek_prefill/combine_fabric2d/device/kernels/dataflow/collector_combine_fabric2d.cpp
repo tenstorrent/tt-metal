@@ -15,9 +15,11 @@
 //
 // With CMBF2D_DYNAMIC_ORDER the steps are released in the order the routed expert actually finishes them: each
 // release position takes the lowest unreleased step that is complete, or failing that one with a chunk out (a
-// whole-grid expert, which runs alone, so nothing else can finish before it). Which step went out at each position
-// is published on every waiting core BEFORE `progress` or `ready` names that position, and the untilizers and
-// readers walk positions. Without it, position k is step k.
+// whole-grid expert, which runs alone, so nothing else can finish before it). Every other step already complete
+// goes out at the following positions in the same release, so a wave finishing at once costs one publish of the
+// order and one of `ready`. Which step went out at each position is published on every waiting core BEFORE
+// `progress` or `ready` names that position, and the untilizers and readers walk positions; only the untilizers
+// take `progress` and `ready`. Without it, position k is step k.
 //
 // Unicast rather than one multicast: the waiting cores are scattered over rows 0-1, and a rectangle over them
 // would also write into cores that are not part of this program. The routed expert's cores ARE a rectangle,
@@ -34,9 +36,9 @@ constexpr ::cmbf2d::CollectorCtArgs ct{};
 #error "the release order is picked from the per-chunk reports, which only the progress build zeroes"
 #endif
 
-// Copy this core's semaphore `addr` to the same semaphore on every waiting core.
-void publish_to_targets(uint32_t addr) {
-    for (uint32_t t = 0; t < ct.num_targets; t++) {
+// Copy this core's semaphore `addr` to the same semaphore on the first `n` waiting cores.
+void publish_to_targets(uint32_t addr, uint32_t n = ct.num_gated) {
+    for (uint32_t t = 0; t < n; t++) {
         const uint32_t noc_x = kernel_compile_time_args[ct.target_base + 2 * t];
         const uint32_t noc_y = kernel_compile_time_args[ct.target_base + 2 * t + 1];
         noc_semaphore_set_remote(addr, get_noc_addr(noc_x, noc_y, addr));
@@ -71,15 +73,36 @@ uint32_t pick_next_step(
     }
 }
 
-// Publish that release position `position` is step `step`. Landed before `progress` or `ready` can name the
-// position, so a waiting core that sees either finds the step already there.
-void publish_release(uint32_t position, uint32_t step) {
+uint32_t order_word_addr(uint32_t position) {
+    return static_cast<uint32_t>(get_semaphore(CMBF2D_DYNAMIC_ORDER + position / 4));
+}
+
+// Record locally that release position `position` is step `step`.
+void record_release(uint32_t position, uint32_t step) {
     released_steps |= 1ull << step;
-    const uint32_t word_addr = static_cast<uint32_t>(get_semaphore(CMBF2D_DYNAMIC_ORDER + position / 4));
-    volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word_addr);
+    volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(order_word_addr(position));
     *word = *word | ((step + 1) << (8 * (position % 4)));
-    publish_to_targets(word_addr);
+}
+
+// Release `s` at position `k`, and if it is complete, every other complete step at the positions after it.
+// Returns how many positions went out. Landed before `progress` or `ready` can name them, so a waiting core
+// that sees either finds the steps already there.
+uint32_t publish_releases(uint32_t k, uint32_t s, volatile tt_l1_ptr uint32_t* counts) {
+    record_release(k, s);
+    uint32_t n = 1;
+    if (counts[s] >= ct.num_writers) {
+        for (uint32_t t = 0; t < ct.num_steps && k + n < ct.num_steps; t++) {
+            if (!(released_steps & (1ull << t)) && counts[t] >= ct.num_writers) {
+                record_release(k + n, t);
+                n++;
+            }
+        }
+    }
+    for (uint32_t w = k / 4; w <= (k + n - 1) / 4; w++) {
+        publish_to_targets(order_word_addr(4 * w), ct.num_targets);
+    }
     noc_async_write_barrier();
+    return n;
 }
 #endif
 
@@ -115,13 +138,15 @@ void kernel_main() {
     const uint32_t ready_addr = static_cast<uint32_t>(get_semaphore(ct.ready_sem));
     volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
 
-    for (uint32_t k = 0; k < ct.num_steps; k++) {
+    for (uint32_t k = 0; k < ct.num_steps;) {
 #ifdef CMBF2D_DYNAMIC_ORDER
         static_assert(ct.num_steps <= 64 && ct.num_steps <= MAX_STEPS, "one bit and one chunk row per step");
         const uint32_t s = pick_next_step(counts, chunk_counts, MAX_CHUNKS);
-        publish_release(k, s);
+        // More than one only when `s` is complete, so the wait below does not run for a batch.
+        const uint32_t n = publish_releases(k, s, counts);
 #else
         const uint32_t s = k;
+        constexpr uint32_t n = 1;
 #endif
         invalidate_l1_cache();
 #ifdef CMBF2D_PROGRESS_SEM
@@ -149,9 +174,10 @@ void kernel_main() {
             invalidate_l1_cache();
         }
 #endif
-        *ready = k + 1;
+        *ready = k + n;
         publish_to_targets(ready_addr);
         // Landed before the source word changes, and so a later, larger value can never be overtaken.
         noc_async_write_barrier();
+        k += n;
     }
 }

@@ -34,8 +34,9 @@ void add_collector(
         // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
         TT_FATAL(!plan.waiting.empty(), "combine_fabric2d: overlapped with the routed expert but no core gates on it");
         if (order_sem != kNoOrderSem) {
+            // The readers walk release positions but never gate on `ready` or `progress`.
             for (const auto& [stream, self] : placement.streams) {
-                plan.waiting.push_back(self.worker_virtual);
+                plan.order_only.push_back(self.worker_virtual);
             }
         }
     }
