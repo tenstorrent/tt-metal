@@ -3061,7 +3061,7 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
             // Use the address latched by set_borrowed_memory_base_addr()
             alloc_addr = dfb->borrowed_addr_;
         } else {
-            const uint64_t computed_addr = allocate_program_resource(
+            const uint64_t computed_addr = allocate_dfb(
                 this->dfb_allocation_metadata_,
                 dfb->allocation_core_ranges(),
                 dfb->total_size(),
