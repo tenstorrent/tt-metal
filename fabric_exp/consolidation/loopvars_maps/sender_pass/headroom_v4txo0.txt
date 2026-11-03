@@ -1,0 +1,44 @@
+== v4txo0 + tx1
+  bh_1d                    10/10 pass; carried [-1], peak [-1], sp accesses [0]
+  bh_2d                    28/28 pass; carried [1], peak [1], sp accesses [3]
+  bh_2d_vc2                28/28 pass; carried [-3], peak [-2], sp accesses [-2]
+  bh_2d_vc2_trim_w0        0/28 pass; carried [0], peak [0], sp accesses [3]; HOT MOVED {'run:remote.vc2.next_slot_addr': 28}
+  bh_ring                  10/10 pass; carried [0], peak [0], sp accesses [2]; shed {'run:workers.vc0.first_level_acked (around a call)': 10, 'visit_worker<0>:reported_acks (around a call)': 10}
+  bh_torus                 12/12 pass; carried [1], peak [1], sp accesses [2]; shed {'run:workers.vc0.first_level_acked (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_torus_vc2             16/28 pass; carried [-3, 0], peak [-2, -1], sp accesses [-2, 5]; HOT MOVED {'run:workers.vc2.sent': 12}
+  bh_vc1                   22/22 pass; carried [0], peak [0], sp accesses [6]
+  bh_vc1_trim_w0           22/22 pass; carried [-2], peak [-2], sp accesses [-2]
+  glx_express              28/28 pass; carried [0], peak [0], sp accesses [4]
+== v4txo0 + tx2
+  bh_1d                    10/10 pass; carried [-1], peak [0], sp accesses [2]
+  bh_2d                    28/28 pass; carried [2], peak [1], sp accesses [5]
+  bh_2d_vc2                0/28 pass; carried [-2], peak [-1], sp accesses [5]; HOT MOVED {'run:workers.vc0.sent': 28}
+  bh_2d_vc2_trim_w0        0/28 pass; carried [0], peak [0], sp accesses [12]; HOT MOVED {'run:remote.vc0.next_slot_addr': 28, 'run:remote.vc2.next_slot_addr': 28}
+  bh_ring                  0/10 pass; carried [0], peak [0], sp accesses [8]; HOT MOVED {'run:remote.vc0.next_slot_addr': 10}; shed {'run:workers.vc0.first_level_acked (around a call)': 10, 'visit_worker<0>:reported_acks (around a call)': 10}
+  bh_torus                 0/12 pass; carried [1], peak [1], sp accesses [8]; HOT MOVED {'run:workers.vc0.next_slot_addr': 12, 'send<0>:header': 12, 'send<0>:slot_addr': 12}; shed {'run:workers.vc0.first_level_acked (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_torus_vc2             0/28 pass; carried [-2, -1], peak [-2, -1], sp accesses [5, 12]; HOT MOVED {'run:workers.vc0.sent': 16, 'run:workers.vc0.first_level_acked': 12, 'run:workers.vc2.sent': 12}
+  bh_vc1                   22/22 pass; carried [-1], peak [-1], sp accesses [17]
+  bh_vc1_trim_w0           22/22 pass; carried [-2], peak [-2], sp accesses [1]
+  glx_express              0/28 pass; carried [0], peak [0], sp accesses [9, 10]; HOT MOVED {'run:workers.vc0.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28}
+== v4txo0 + twk
+  bh_1d                    0/10 pass; carried [2], peak [0], sp accesses [24]; HOT MOVED {'run:remote.vc0.next_slot_addr': 10, 'run:workers.vc0.next_slot_addr': 10, 'send<0>:header': 10, 'send<0>:slot_addr': 10}; shed {'run:workers.vc0.connection_state (around a call)': 10, 'visit_worker<0>:connected (around a call)': 10}
+  bh_2d                    0/28 pass; carried [-3], peak [-4], sp accesses [14]; HOT MOVED {'run:workers.vc0.next_slot_addr': 28}; shed {'run:remote.vc0.next_slot_addr (around a call)': 28, 'run:workers.vc0.connection_state (around a call)': 28, 'visit_worker<0>:connected (around a call)': 28}
+  bh_2d_vc2                0/28 pass; carried [-2], peak [-2], sp accesses [22]; HOT MOVED {'run:remote.vc2.free_slots': 28, 'run:workers.vc2.sent': 28}; shed {'run:workers.vc0.sent (around a call)': 28}
+  bh_2d_vc2_trim_w0        0/28 pass; carried [-3], peak [-1], sp accesses [25]; HOT MOVED {'run:remote.vc0.next_slot_addr': 28, 'run:remote.vc2.next_slot_addr': 28, 'run:workers.vc0': 28, 'send<4>:header': 28, 'send<4>:slot_addr': 28}; shed {'run:synthetic4 (invariant)': 28, 'run:workers.vc2.sent (around a call)': 28}
+  bh_ring                  0/10 pass; carried [-3], peak [-3], sp accesses [15]; HOT MOVED {'run:remote.vc0.next_slot_addr': 10, 'run:workers.vc0.next_slot_addr': 10, 'run:workers.vc0.sent': 10, 'send<0>:header': 10, 'send<0>:slot_addr': 10}; shed {'check_connection<0>:returned (around a call)': 10, 'run:workers.vc0.first_level_acked (around a call)': 10, 'visit_worker<0>:reported_acks (around a call)': 10}
+  bh_torus                 0/12 pass; carried [-3], peak [-3], sp accesses [15]; HOT MOVED {'run:remote.vc0.next_slot_addr': 12, 'run:workers.vc0.first_level_acked': 12, 'run:workers.vc0.next_slot_addr': 12, 'send<0>:header': 12, 'send<0>:slot_addr': 12}; shed {'check_connection<0>:returned (around a call)': 12, 'run:workers.vc0.completed (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_torus_vc2             0/28 pass; carried [-2, -1], peak [-2], sp accesses [22, 30]; HOT MOVED {'run:remote.vc2.free_slots': 28, 'run:workers.vc2.sent': 28, 'run:workers.vc0.first_level_acked': 12}; shed {'run:workers.vc0.sent (around a call)': 28, 'pass:holding (around a call)': 12}
+  bh_vc1                   0/22 pass; carried [-2], peak [-1], sp accesses [28]; HOT MOVED {'run:remote.vc0.next_slot_addr': 22, 'run:workers.vc0.next_slot_addr': 22, 'send<0>:header': 22, 'send<0>:slot_addr': 22}; shed {'run:synthetic1 (invariant)': 22, 'run:workers.vc0.connection_state (around a call)': 22, 'visit_worker<0>:connected (around a call)': 22}
+  bh_vc1_trim_w0           22/22 pass; carried [-8], peak [-8], sp accesses [-5]
+  glx_express              0/28 pass; carried [-4], peak [-4, -3, -2], sp accesses [17, 18, 27]; HOT MOVED {'run:workers.vc0.completed': 28, 'run:workers.vc0.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28, 'run:workers.vc0.first_level_acked': 20, 'run:remote.vc0.next_slot_addr': 8}; shed {'check_connection<0>:returned (around a call)': 28, 'run:workers.vc0.sent (around a call)': 20}
+== v4txo0 + trr
+  bh_1d                    10/10 pass; carried [-2], peak [-1], sp accesses [1]
+  bh_2d                    28/28 pass; carried [2], peak [1], sp accesses [5]
+  bh_2d_vc2                0/28 pass; carried [-2], peak [-1], sp accesses [5]; HOT MOVED {'run:workers.vc0.sent': 28}
+  bh_2d_vc2_trim_w0        0/28 pass; carried [1], peak [1], sp accesses [12]; HOT MOVED {'run:remote.vc0.next_slot_addr': 28, 'run:remote.vc2.next_slot_addr': 28}
+  bh_ring                  0/10 pass; carried [-1], peak [-1], sp accesses [6]; HOT MOVED {'run:remote.vc0.next_slot_addr': 10}; shed {'run:workers.vc0.first_level_acked (around a call)': 10, 'visit_worker<0>:reported_acks (around a call)': 10}
+  bh_torus                 0/12 pass; carried [1], peak [1], sp accesses [8]; HOT MOVED {'run:workers.vc0.next_slot_addr': 12, 'send<0>:header': 12, 'send<0>:slot_addr': 12}; shed {'run:workers.vc0.first_level_acked (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_torus_vc2             0/28 pass; carried [-2, -1], peak [-1], sp accesses [5, 12]; HOT MOVED {'run:workers.vc0.sent': 28, 'run:workers.vc2.sent': 12}
+  bh_vc1                   22/22 pass; carried [1], peak [-1], sp accesses [17]
+  bh_vc1_trim_w0           22/22 pass; carried [-2], peak [-2], sp accesses [1]
+  glx_express              0/28 pass; carried [0], peak [0], sp accesses [9, 10]; HOT MOVED {'run:workers.vc0.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28}

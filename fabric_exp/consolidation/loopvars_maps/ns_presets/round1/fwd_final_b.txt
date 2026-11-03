@@ -1,0 +1,45 @@
+bh_1d__11771157836117153027: loop 489, forward copies 1
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+bh_ring__10444497403978295403: loop 443, forward copies 1
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+bh_2d__9385634899218476589: loop 492, forward copies 1
+  path  28 cmd  34 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 13; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+bh_2d__9724914797274631410: loop 488, forward copies 1
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+bh_2d__4837949914138770387: loop 556, forward copies 2
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+bh_2d_vc2__10491303747420227617: loop 799, forward copies 1
+  path  28 cmd  34 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 13; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+bh_2d_vc2__12633423150643726066: loop 891, forward copies 2
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+bh_torus__11644205323160773140: loop 450, forward copies 1
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+bh_torus__11880517098734099235: loop 538, forward copies 2
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+bh_vc1__11573880575809721320: loop 1197, forward copies 6
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:322 < router_downstream.hpp:276 
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:322 < router_downstream.hpp:276 
+bh_vc1__14449052750677022402: loop 544, forward copies 2
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+glx_2d__10580619657294665664: loop 492, forward copies 1
+  path  28 cmd  34 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 13; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+glx_2d__13568215798666737538: loop 556, forward copies 2
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  16  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+glx_express__12210747554248498275: loop 639, forward copies 4
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:322 < router_downstream.hpp:276 
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:322 < router_downstream.hpp:322 
+glx_torus__14163533803936141850: loop 589, forward copies 3
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:276 < router_receiver.hpp:409 < router_receiver.hpp:461 < ro
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:276 < router_receiver.hpp:409 < 
+  path  27 cmd  33 (reg_w  9 st  1 ready_r  4 ld  3 br  4 alu 12; wait  6)  book  14  @ router_downstream.hpp:320 < router_downstream.hpp:322 < router_downstream.hpp:322 < router_downstream.hpp:276 

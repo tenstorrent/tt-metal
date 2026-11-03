@@ -1,0 +1,21 @@
+--- a/tt_metal/fabric/erisc_datamover_builder.cpp	2026-11-02 21:26:19.039854832 +0000
++++ b/tt_metal/fabric/erisc_datamover_builder.cpp	2026-11-02 21:26:19.055855049 +0000
+@@ -1518,9 +1518,16 @@
+         named_args[fmt::format("SENDER_CH_{}_ACK_NOC_ID", i)] =
+             (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_noc_ids[i]) : 0;
+     }
++    // Study (fabric_exp, v4): a worker channel's credits go out on a command buffer of its own, by channel identity and
++    // whether or not trimming services it: VC0's worker channel on WR, VC2's on WR_REG; every other channel keeps the
++    // config's (the atomics buffer). Main's router hands the arg to the worker interface, which does not use it.
+     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+-        named_args[fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", i)] =
+-            (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_cmd_buf_ids[i]) : 0;
++        uint32_t ack_cmd_buf = static_cast<uint32_t>(config.sender_channel_ack_cmd_buf_ids[i]);
++        if (i < num_sender_channels && is_worker_channel(i)) {
++            ack_cmd_buf = i == get_worker_connected_sender_channel() ? FabricEriscDatamoverConfig::WR_CMD_BUF
++                                                                     : FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
++        }
++        named_args[fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", i)] = (i < num_sender_channels) ? ack_cmd_buf : 0;
+     }
+ 
+     // --- Receiver channel per-channel arrays (always emit MAX entries; 0 for unused) ---

@@ -1,0 +1,1252 @@
+<title>Blackhole Fabric Router Study</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a lab report printout. One reading column with wide figure bands; the wire (line rate) is the
+   reference mark every bandwidth figure is drawn against. v4 is the accent, main is the gray context. */
+:root {
+  --bd-checks: #a3a8ae;
+  --jam-3072: #9cc0ec;
+  --jam-3584: #4f8fdd;
+  --jam-4352: #1f5fb4;
+  --bd-decode: #1baf7a;
+  --bd-noc: #eb6834;
+  --bd-eth_send: #6250d6;
+  --bd-credits: #008300;
+  --bd-loop: #e87ba4;
+  --bd-other: #eda100;
+  --bg: #f3f4f5;
+  --surface: #fcfcfb;
+  --ink: #15181b;
+  --ink-2: #4b5158;
+  --muted: #7d838a;
+  --rule: #dfe2e5;
+  --axis: #c4c8cc;
+  --hover: rgba(42, 120, 214, 0.06);
+  --v4: #2a78d6;
+  --v4-soft: rgba(42, 120, 214, 0.12);
+  --vc0: #1baf7a;
+  --vc1: #6250d6;
+  --vc2: #eb6834;
+  --main: #7f858c;
+  --wire: #15181b;
+  --good: #0f7a0f;
+  --warn-bg: #fdf3dc;
+  --warn-ink: #6b4a00;
+  --crit: #b3302f;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.125rem;
+  --step-2: 1.5rem;
+  --step-3: 2.25rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bd-checks: #686e74;
+    --jam-3072: #3a5d88;
+    --jam-3584: #4a86d4;
+    --jam-4352: #8ec1ff;
+    --bd-decode: #199e70;
+    --bd-noc: #d95926;
+    --bd-eth_send: #9085e9;
+    --bd-credits: #008300;
+    --bd-loop: #d55181;
+    --bd-other: #c98500;
+    --bg: #0f1113;
+    --surface: #1a1a19;
+    --ink: #eceef0;
+    --ink-2: #b6bbc1;
+    --muted: #8a9097;
+    --rule: #2c2f33;
+    --axis: #3d4146;
+    --hover: rgba(57, 135, 229, 0.10);
+    --v4: #3987e5;
+    --v4-soft: rgba(57, 135, 229, 0.16);
+    --vc0: #199e70;
+    --vc1: #9085e9;
+    --vc2: #d95926;
+    --main: #8a9097;
+    --wire: #eceef0;
+    --good: #3cbf3c;
+    --warn-bg: #3a2e12;
+    --warn-ink: #f2d38a;
+    --crit: #e66767;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bd-checks: #686e74;
+  --jam-3072: #3a5d88;
+  --jam-3584: #4a86d4;
+  --jam-4352: #8ec1ff;
+  --bd-decode: #199e70;
+  --bd-noc: #d95926;
+  --bd-eth_send: #9085e9;
+  --bd-credits: #008300;
+  --bd-loop: #d55181;
+  --bd-other: #c98500;
+  --bg: #0f1113;
+  --surface: #1a1a19;
+  --ink: #eceef0;
+  --ink-2: #b6bbc1;
+  --muted: #8a9097;
+  --rule: #2c2f33;
+  --axis: #3d4146;
+  --hover: rgba(57, 135, 229, 0.10);
+  --v4: #3987e5;
+  --v4-soft: rgba(57, 135, 229, 0.16);
+  --vc0: #199e70;
+  --vc1: #9085e9;
+  --vc2: #d95926;
+  --main: #8a9097;
+  --wire: #eceef0;
+  --good: #3cbf3c;
+  --warn-bg: #3a2e12;
+  --warn-ink: #f2d38a;
+  --crit: #e66767;
+  color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: var(--step-0); line-height: 1.55; }
+.page {
+  max-width: 1120px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+  display: flex; flex-direction: column; gap: 56px;
+}
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: var(--step-3); font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: var(--step-2); font-weight: 600; display: flex; gap: 12px; align-items: baseline; }
+h2 .num { font-family: var(--font-data); font-size: var(--step-0); color: var(--muted); font-weight: 400; }
+h3 { font-size: var(--step-1); font-weight: 600; }
+p { margin: 0; max-width: 70ch; }
+.prose { display: flex; flex-direction: column; gap: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: var(--step--1); }
+code, .mono { font-family: var(--font-data); font-size: 0.92em; }
+a { color: var(--v4); }
+
+.masthead { display: flex; flex-direction: column; gap: 14px; }
+.eyebrow { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.08em; font-size: var(--step--1); color: var(--muted); }
+.lede { font-size: var(--step-1); color: var(--ink-2); max-width: 62ch; }
+.status { display: flex; gap: 10px; align-items: flex-start; font-size: var(--step--1); color: var(--ink-2); max-width: 90ch; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-data); font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink-2); white-space: nowrap; }
+.chip-draft { background: var(--warn-bg); color: var(--warn-ink); border-color: transparent; }
+.chip-cross { color: var(--warn-ink); background: var(--warn-bg); border-color: transparent; }
+.chip-same { color: var(--ink-2); }
+
+section { display: flex; flex-direction: column; gap: 22px; }
+.sub { display: flex; flex-direction: column; gap: 14px; }
+
+/* KPI row */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.kpi { background: var(--surface); padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.kpi .label { font-size: var(--step--1); color: var(--ink-2); }
+.kpi .value { font-size: 1.9rem; font-weight: 600; line-height: 1.1; }
+.kpi .value .unit { font-size: var(--step-0); font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+.kpi .foot { font-size: 0.78rem; color: var(--muted); }
+
+/* Method note */
+.method { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding-block: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px 32px; }
+.method dt { font-family: var(--font-display); font-weight: 600; font-size: var(--step-0); margin-bottom: 4px; }
+.method dd { margin: 0; font-size: var(--step--1); color: var(--ink-2); }
+.method div { min-width: 0; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: var(--step--1); }
+th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { font-weight: 500; color: var(--ink-2); font-size: 0.78rem; background: var(--surface); position: sticky; top: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-data); font-size: 0.8rem; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--hover); }
+tr.clickable { cursor: pointer; }
+tr.group-link th { font-family: var(--font-display); font-size: var(--step-0); font-weight: 600; color: var(--ink); background: var(--bg); padding-top: 12px; position: static; }
+tr.group-link th .group-meta { font-family: var(--font-data); font-size: 0.75rem; font-weight: 400; color: var(--muted); }
+tr.group-size th { font-family: var(--font-data); font-size: 0.75rem; font-weight: 500; color: var(--ink-2); background: var(--surface); text-transform: none; position: static; }
+tbody tr.group-link:hover th, tbody tr.group-size:hover th { background: inherit; }
+tr.clickable:focus-visible { outline: 2px solid var(--v4); outline-offset: -2px; }
+.cell-sub { font-family: var(--font-body); font-size: 0.72rem; color: var(--muted); white-space: normal; max-width: 210px; margin-left: auto; line-height: 1.25; }
+.better { color: var(--good); }
+.worse { color: var(--crit); }
+
+/* Filters */
+.filters { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-start; }
+.fgroup { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fgroup .flabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-family: var(--font-display); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fchip { font: inherit; font-size: var(--step--1); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.fchip:hover { border-color: var(--axis); color: var(--ink); }
+.fchip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.fchip:focus-visible, .db-row:focus-visible, button:focus-visible { outline: 2px solid var(--v4); outline-offset: 2px; }
+
+/* Legend */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: var(--step--1); color: var(--ink-2); align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.key-v4 { width: 10px; height: 10px; border-radius: 50%; background: var(--v4); display: inline-block; }
+.key-main { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--main); background: var(--surface); display: inline-block; box-sizing: border-box; }
+.key-wire { width: 2px; height: 14px; background: var(--wire); display: inline-block; }
+.key-vc0 { width: 12px; height: 10px; border-radius: 2px; background: var(--vc0); display: inline-block; }
+.key-vc1 { width: 12px; height: 10px; border-radius: 2px; background: var(--vc1); display: inline-block; }
+.key-vc2 { width: 12px; height: 10px; border-radius: 2px; background: var(--vc2); display: inline-block; }
+.seg { position: absolute; top: 9px; height: 12px; }
+.seg.vc0 { background: var(--vc0); left: 0; border-radius: 0; }
+.seg.vc2 { background: var(--vc2); border-radius: 0 4px 4px 0; border-left: 2px solid var(--surface); }
+.seg.s { border-radius: 0; }
+.seg.s.vc0 { background: var(--vc0); }
+.seg.s.vc1 { background: var(--vc1); }
+.seg.s.vc2 { background: var(--vc2); }
+.seg.s.gap { border-left: 2px solid var(--surface); }
+.seg.s.end { border-radius: 0 4px 4px 0; }
+.alloc { display: flex; flex-direction: column; gap: 2px; font-family: var(--font-data); font-size: 0.74rem; color: var(--ink-2); margin: -2px 0 4px; }
+.alloc b { font-weight: 600; color: var(--ink); }
+.seg-val { position: absolute; top: 8px; font-family: var(--font-data); font-size: 0.7rem; color: var(--ink-2); white-space: nowrap; }
+
+/* Dumbbell panels */
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 18px; }
+@media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.panel-head h4 { margin: 0; font-family: var(--font-display); font-size: var(--step-0); font-weight: 600; }
+.panel-head .meta { font-size: 0.78rem; color: var(--muted); font-family: var(--font-data); }
+.db-row { display: grid; grid-template-columns: minmax(130px, 210px) minmax(0, 1fr); gap: 12px; align-items: center; min-height: 30px; border-radius: 3px; }
+.db-row:hover { background: var(--hover); }
+.db-label { font-size: var(--step--1); line-height: 1.25; min-width: 0; overflow-wrap: anywhere; padding-left: 4px; }
+.db-label .tags { color: var(--muted); font-size: 0.75rem; }
+.db-label .grp { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--font-display); }
+.track { position: relative; height: 30px; }
+.gl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--rule); }
+.wl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--wire); opacity: 0.8; }
+.conn { position: absolute; top: 14px; height: 2px; background: var(--axis); }
+.dot { position: absolute; top: 15px; width: 10px; height: 10px; border-radius: 50%; transform: translate(-50%, -50%); box-sizing: border-box; }
+.dot.v4 { background: var(--v4); box-shadow: 0 0 0 2px var(--surface); z-index: 2; }
+.dot.main { background: var(--surface); border: 2px solid var(--main); box-shadow: 0 0 0 2px var(--surface); z-index: 1; }
+.axis-row .track { height: 22px; }
+.tick { position: absolute; bottom: 2px; transform: translateX(-50%); font-family: var(--font-data); font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
+.tick.wire-label { color: var(--ink); bottom: auto; top: -2px; }
+.empty { padding: 18px 4px; font-size: var(--step--1); color: var(--muted); }
+@media (max-width: 560px) {
+  .db-row { grid-template-columns: 1fr; gap: 0; padding-top: 4px; }
+  .axis-row .db-label { display: none; }
+}
+.row-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.btn { font: inherit; font-size: var(--step--1); padding: 5px 12px; border-radius: 4px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); cursor: pointer; }
+.btn:hover { border-color: var(--axis); }
+
+/* Tooltip */
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 6px 22px rgba(0,0,0,0.14); padding: 10px 12px; font-size: var(--step--1); max-width: 320px; }
+.tip[hidden] { display: none; }
+.tip .t-title { font-weight: 600; margin-bottom: 6px; }
+.tip .t-row { display: grid; grid-template-columns: 14px 1fr; gap: 8px; align-items: baseline; margin-top: 4px; }
+.tip .t-key { width: 12px; height: 2px; margin-top: 8px; }
+.tip .t-val { font-weight: 600; }
+.tip .t-sub { color: var(--ink-2); }
+.tip .t-foot { margin-top: 8px; color: var(--muted); font-size: 0.74rem; }
+
+/* Bars (size) */
+.bars { display: flex; flex-direction: column; gap: 10px; padding-top: 22px; }
+.bar-row { display: grid; grid-template-columns: minmax(130px, 200px) minmax(0, 1fr); gap: 12px; align-items: center; }
+.bar-track { position: relative; height: 30px; }
+.bar { position: absolute; left: 0; height: 10px; border-radius: 0 4px 4px 0; }
+.bar.main { top: 3px; background: var(--main); }
+.bar.v4 { top: 17px; background: var(--v4); }
+.bar-val { position: absolute; font-family: var(--font-data); font-size: 0.7rem; color: var(--ink-2); transform: translateY(-2px); white-space: nowrap; }
+.limit { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--crit); }
+.limit-label { position: absolute; top: -18px; transform: translateX(-100%); font-family: var(--font-data); font-size: 0.7rem; color: var(--crit); white-space: nowrap; padding-right: 4px; }
+@media (max-width: 560px) { .bar-row { grid-template-columns: 1fr; gap: 2px; } }
+
+/* Cards (section 4) */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.card h4 { margin: 0; font-family: var(--font-display); font-size: var(--step-1); font-weight: 600; }
+.card p { font-size: var(--step--1); color: var(--ink-2); }
+.card ul { margin: 0; padding-left: 18px; font-size: var(--step--1); color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+.card .src { font-size: 0.74rem; color: var(--muted); font-family: var(--font-data); overflow-wrap: anywhere; }
+.st { align-self: flex-start; }
+.st-measured { color: var(--good); }
+.st-designed { color: var(--v4); }
+.st-proposed { color: var(--ink-2); }
+
+.callout { background: var(--warn-bg); color: var(--warn-ink); border-radius: 6px; padding: 10px 14px; font-size: var(--step--1); max-width: 90ch; }
+details summary { cursor: pointer; font-size: var(--step--1); color: var(--ink-2); }
+details[open] summary { margin-bottom: 10px; }
+footer { border-top: 1px solid var(--rule); padding-top: 18px; font-size: var(--step--1); color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+/* Tabs */
+.tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 2px; overflow-x: auto; background: var(--bg); border-bottom: 1px solid var(--rule); margin-bottom: 22px; scrollbar-width: thin; }
+.tabs button { font: inherit; font-size: var(--step--1); padding: 10px 12px 9px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.tabs button:hover { color: var(--ink); }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--v4); font-weight: 600; }
+.tabs button:focus-visible { outline: 2px solid var(--v4); outline-offset: -2px; }
+.tabpanel > section + section { margin-top: 34px; }
+/* Breakdown */
+.seg.bd { border-radius: 0; }
+.seg.bd.gap { border-left: 2px solid var(--surface); }
+.seg.bd.end { border-radius: 0 4px 4px 0; }
+.key-bd { width: 12px; height: 10px; border-radius: 2px; display: inline-block; }
+.bd-erisc { font-family: var(--font-data); font-size: 0.74rem; color: var(--muted); margin: 6px 0 0; }
+.bd-note { font-size: 0.78rem; color: var(--ink-2); margin: 4px 0 0; }
+/* Ring jam */
+.hop { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--step--1); }
+.hop .box { font-family: var(--font-data); font-size: 0.78rem; padding: 4px 9px; border-radius: 4px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink-2); white-space: nowrap; }
+.hop .box.seen { border: 2px solid var(--v4); color: var(--ink); }
+.hop .box.blind { background: var(--warn-bg); color: var(--warn-ink); border-color: transparent; }
+.hop .arrow { color: var(--muted); font-family: var(--font-data); font-size: 0.78rem; white-space: nowrap; }
+#rj-chart { overflow-x: auto; }
+.rj-svg { width: 100%; min-width: 560px; height: auto; display: block; }
+.rj-svg text { font-family: var(--font-data); font-size: 11px; fill: var(--muted); }
+.rj-svg .lab { fill: var(--ink-2); }
+.rj-svg .grid { stroke: var(--rule); stroke-width: 1; }
+.rj-svg .wire { stroke: var(--wire); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.55; }
+.rj-svg .cross { stroke: var(--axis); stroke-width: 1; }
+.key-line { width: 16px; height: 2px; display: inline-block; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <p class="eyebrow">Tenstorrent Blackhole · Ethernet fabric router · study report</p>
+    <h1>Blackhole Fabric Router Study</h1>
+    <p class="lede">A new fabric router against main's router on 400G and 200G Ethernet links: bandwidth, latency, code and stack, and what the new structure makes possible.</p>
+    <p class="status"><span class="chip chip-draft">Draft</span><span>Every number is the final build of the new router against main as shipped, in the same jobs, two passes in reversed order, 2026-11-03. At 400G (one P150x8): the two-ERISC suites (2D mesh, 1D line, ring, Y torus, XY torus) at five packet sizes, and the one-ERISC, mux and two-mesh tests. At 200G (Galaxy): the mesh, 1D line, ring and XY torus suites at five packet sizes, with main also run at a 1,000-cycle keepalive. The keepalive table on the Bandwidth tab still uses an earlier build of the new router.</span></p>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Report sections">
+    <button type="button" role="tab" id="tab-overview" data-tab="overview" aria-controls="panel-overview" aria-selected="false" tabindex="-1">Overview</button>
+    <button type="button" role="tab" id="tab-bandwidth" data-tab="bandwidth" aria-controls="panel-bandwidth" aria-selected="false" tabindex="-1">Bandwidth</button>
+    <button type="button" role="tab" id="tab-multivc" data-tab="multivc" aria-controls="panel-multivc" aria-selected="false" tabindex="-1">Multi-VC</button>
+    <button type="button" role="tab" id="tab-latency" data-tab="latency" aria-controls="panel-latency" aria-selected="false" tabindex="-1">Latency</button>
+    <button type="button" role="tab" id="tab-breakdown" data-tab="breakdown" aria-controls="panel-breakdown" aria-selected="false" tabindex="-1">Cycle breakdown</button>
+    <button type="button" role="tab" id="tab-code" data-tab="code" aria-controls="panel-code" aria-selected="false" tabindex="-1">Code and stack</button>
+    <button type="button" role="tab" id="tab-structure" data-tab="structure" aria-controls="panel-structure" aria-selected="false" tabindex="-1">What it enables</button>
+    <button type="button" role="tab" id="tab-gaps" data-tab="gaps" aria-controls="panel-gaps" aria-selected="false" tabindex="-1">Gaps and next</button>
+    <button type="button" role="tab" id="tab-ringjam" data-tab="ringjam" aria-controls="panel-ringjam" aria-selected="false" tabindex="-1">Ring jam</button>
+  </nav>
+
+  <div class="tabpanel" role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" hidden>
+
+  <section aria-label="Headline numbers">
+    <div class="kpis" id="kpis"></div>
+  </section>
+
+  <dl class="method" aria-label="How the numbers were measured">
+    <div><dt>Bandwidth</dt><dd>Payload GB/s from the measured cycles per packet on the 1.35 GHz router clock (payload bytes × 1.35 ÷ cycles). Cycles per packet follow in parentheses; fewer is faster.</dd></div>
+    <div><dt>Line rate</dt><dd>A packet's time on the wire: payload + header + 56 B per 4,114 B frame + 84 B, over 37.04 B/cycle at 400G or 18.52 at 200G. A 4,352 B 2D packet takes 125.4 cycles at 400G and 250.8 at 200G.</dd></div>
+    <div><dt>Systems</dt><dd>400G links: a P150x8 (8 chips). 200G links: a Galaxy (32 chips). One link per connection, bandwidth telemetry off. On the Galaxy the driver reports some chips' clock settling at 1,337–1,343 MHz at start (it does not name them); the profiler reads 1,350 MHz on the sending chips. Cycles are the device's own counts; GB/s and the line rate assume 1.35 GHz, so on a chip at 1,337 MHz the GB/s would read 1% high.</dd></div>
+    <div><dt>Y torus at 400G</dt><dd>The torus tests ask for a torus along Y only (the fabric's 2D Y-torus, written for the Galaxy, where Y is 8 chips long). The P150x8 runs as a 2x4 mesh: Y is 2 rows long and has no wrap-around (the 4-chip rows along X do). So the fabric maps these tests onto the mesh (it logs that the Y-torus cannot be realized), while the N/S routers still run in torus mode with deadlock avoidance, as requested. No traffic crosses a wrap-around link. The tests are 1-hop E/W and N/S (one way and both ways), 3-hop E/W and multicast. The 8-chip ring tests are realized as rings.</dd></div>
+    <div><dt>XY torus</dt><dd>On the Galaxy (200G) the fabric realizes both axes as rings (it logs Y=RING X=RING), and the wrap rows send across a wrap-around link. On the P150x8 (400G) only the 4-long axis can wrap: X on the shipped 2x4 mesh (each 4-chip row is a ring), Y on a 4x2 mesh from a study descriptor; the 2-long axis stays a line. Deadlock avoidance is on in all four directions in both cases, and the runs were validated (data-checked all-to-all) first.</dd></div>
+    <div><dt>Controls</dt><dd>Two passes in reversed router order. Main is main's router as shipped. The new router ran with a 1,000-cycle Ethernet keepalive; section 2 shows what that changes.</dd></div>
+  </dl>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-bandwidth" aria-labelledby="tab-bandwidth" hidden>
+  <section id="bandwidth">
+    <h2>Bandwidth</h2>
+    <div class="prose">
+      <p id="bw-intro"></p>
+    </div>
+
+    <div class="sub">
+      <h3>Peak bandwidth by topology and traffic</h3>
+      <p class="small muted">Pick a link speed and packet size. For each router, its fastest test in each topology and traffic type, with the test named beneath; the range runs from its slowest to its fastest test, as a share of line rate. Two ERISCs per router. Select a row to see its tests in the chart below.</p>
+      <div class="filters" id="pk-filters"></div>
+      <div class="table-wrap"><table id="peaks"></table></div>
+    </div>
+
+    <div class="sub">
+      <h3>How close each router gets to line rate</h3>
+      <p class="small muted">Each row is one test. A dot shows the share of the link's line rate the router delivers: wire time ÷ measured cycles per packet. Rows on the line run as fast as the wire allows.</p>
+      <div class="filters" id="bw-filters"></div>
+      <div class="legend">
+        <span><i class="key-v4"></i>new router</span>
+        <span><i class="key-main"></i>main</span>
+        <span><i class="key-wire"></i>line rate</span>
+      </div>
+      <div class="panels" id="bw-panels"></div>
+      <div class="row-actions">
+        <button class="btn" id="bw-table-toggle" type="button" aria-expanded="false">Show as table</button>
+        <span class="small muted" id="bw-count"></span>
+      </div>
+      <div class="table-wrap" id="bw-table" hidden></div>
+    </div>
+
+    <div class="sub">
+      <h3>Faster than the wire</h3>
+      <p class="small muted">Where a test runs at the 400G line rate, a fixed delay added on one ERISC shows how much spare time that ERISC has: an ERISC with none pays about 44 cycles for a 32-cycle delay. The dot is the pace of the busier ERISC (measured cycles minus its spare time), set against the wire time of the same packet. New router (final build), 2026-11-03, 4,352 B, two ERISCs.</p>
+      <div class="panel" id="headroom"></div>
+    </div>
+  </section>
+
+  <section id="keepalive">
+    <h2>One-way traffic and the keepalive</h2>
+    <div class="prose">
+      <p>When traffic flows one way only, the Ethernet keepalive interval matters. With main's shipped setting, one-way tests with packets above 4,114 B settle near 187.5 cycles per packet whatever the router does. A 1,000-cycle interval removes most of that floor. The new router's runs used 1,000 cycles; everywhere else on this page main runs as shipped. These are the tests where the setting changes main's result. It does not change latency (section 3).</p>
+    </div>
+    <div class="table-wrap"><table id="ka"></table></div>
+  </section>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-multivc" aria-labelledby="tab-multivc" hidden>
+  <section id="multivc">
+    <h2>Several VCs on one link</h2>
+    <div class="sub" id="mvc-sub">
+      <h3>VC0 and VC2 on one link</h3>
+      <p class="small muted">VC0 and VC2 sending on one east-west link at 400G. Each bar is the link's combined bandwidth measured in one run: all bytes delivered over the run's time, with the packet counts set so both VCs send for the whole run (they finish within 1% of each other in every run). The split shows each VC's share of the packets. A separate check, each VC's rate measured while the other sends in two other runs and summed, agrees within 0.5% (mean of two passes). Each router runs its own slot allocation, as shipped; VC2 has fewer slots than VC0 in both. Slots are listed per channel. VC0 and VC2 each have a worker channel, which the local sender here uses; VC0 and VC1 also have forwarding channels for traffic passing through from the router's other links. Those are idle in these tests except VC1's, which carries the forwarded VC1 flow. The receiver is the far router's buffer for that VC. All channels share the ERISC's buffer space, so the two routers divide it differently. A VC with few slots can be limited by how many packets it has in flight rather than by the router or the link.</p>
+      <div class="legend"><span><i class="key-vc0"></i>VC0</span><span><i class="key-vc2"></i>VC2</span><span><i class="key-wire"></i>line rate</span></div>
+      <div class="panels" id="mvc-panels"></div>
+      <div class="table-wrap"><table id="mvc-table"></table></div>
+    </div>
+
+    <div class="sub" id="mvc01-sub">
+      <h3>VC0 and VC1 on one link</h3>
+      <p class="small muted">The P150 as two 2x2 meshes. One east-west link in the second mesh, next to the chip where inter-mesh traffic lands, carries VC0 from a local sender and VC1 forwarded in from the other mesh. Each bar is the link's combined bandwidth measured in one run with both VCs sending throughout (packet counts set so they finish together), split by each VC's share of the packets; it matches the sum of each VC's rate measured while the other sends within 0.4%. Both routers at their default slot allocation. Main runs VC1 at -Os, as it ships (it does not fit at -O3 with VC1); the new router runs -O3. Same job, two passes.</p>
+      <div class="legend"><span><i class="key-vc0"></i>VC0</span><span><i class="key-vc1"></i>VC1</span><span><i class="key-wire"></i>line rate</span></div>
+      <div class="panels" id="mvc01-panels"></div>
+      <div class="table-wrap"><table id="mvc01-table"></table></div>
+    </div>
+
+    <div class="sub" id="mvc3-sub">
+      <h3>All three VCs on one link</h3>
+      <p class="small muted">The same link with VC2 added: neighbour exchange from a local sender, next to VC0 and the forwarded VC1. New router only: main cannot build VC1 and VC2 together. Measured on a study build that admits the combination (one compile-time gate removed; every other configuration compiles to the same binary). Default slot allocation (VC2: 2 sending, 4 receiving slots), -O3, which leaves 1,376 B of the 26,624 B kernel config buffer; other allocations were not measured. Bars as above; the first row in each size is VC0 alone on the same build.</p>
+      <div class="legend"><span><i class="key-vc0"></i>VC0</span><span><i class="key-vc1"></i>VC1</span><span><i class="key-vc2"></i>VC2</span><span><i class="key-wire"></i>line rate</span></div>
+      <div class="panels" id="mvc3-panels"></div>
+      <div class="table-wrap"><table id="mvc3-table"></table></div>
+    </div>
+
+  </section>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-latency" aria-labelledby="tab-latency" hidden>
+  <section id="latency">
+    <h2>Latency</h2>
+    <div class="prose"><p id="lat-intro"></p></div>
+    <div class="sub">
+      <div class="table-wrap"><table id="lat"></table></div>
+      <p class="small muted">Median net round trip of 1,000 one-packet samples per pass (round trip minus the responder's own time), mean of two passes in reversed router order, both routers in the same jobs on one P150x8 host, 2026-11-03. Each pass's value is in brackets.</p>
+    </div>
+  </section>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-breakdown" aria-labelledby="tab-breakdown" hidden>
+  <section id="breakdown">
+    <h2>Where the cycles go</h2>
+    <p class="small muted" style="max-width:90ch">Where each ERISC spends a packet's time, main's router against the new router, at five test points. Both ERISCs of every router were sampled over the debug bus while the test ran (sampling leaves the measured rate unchanged); each sample is mapped to its source line and grouped into seven categories, so each bar adds up to the measured cycles per packet. Each bar is one router: for each ERISC, the busiest one (the largest share of samples in its main work: Ethernet send on the sending ERISC, NoC commands on the receiving one). Polls are time spent checking for work or room, waiting included. A split within one ERISC does not say which ERISC limits the rate. Mean of two passes in reversed router order. The new router is the same build as on the other tabs.</p>
+    <div class="legend" id="bd-legend"></div>
+    <div class="panels" id="bd-panels"></div>
+    <div class="table-wrap"><table id="bd-table"></table></div>
+  </section>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-code" aria-labelledby="tab-code" hidden>
+  <section id="size">
+    <h2>Code and stack</h2>
+    <div class="prose">
+      <p>Both ERISC programs of a router load from one 26,624 B kernel config buffer, which also holds the runtime args. On every two-ERISC configuration both routers build, the new router is the smaller one, and every configuration it builds runs at -O3. Main's router with VC1 does not fit at -O3 and ships at -Os.</p>
+    </div>
+    <div class="panel">
+      <div class="legend"><span><i class="key-v4" style="border-radius:2px"></i>new router, -O3</span><span><i class="key-main" style="border-radius:2px;background:var(--main);border:0"></i>main, -O3</span></div>
+      <div class="bars" id="sizebars"></div>
+    </div>
+    <div class="table-wrap"><table id="stack"></table></div>
+    <ul class="small" style="margin:0;padding-left:18px;color:var(--ink-2);display:flex;flex-direction:column;gap:4px;max-width:90ch">
+      <li>Main cannot build VC1 + VC2 (its stack use reaches 2,176 B) or VC2 on one ERISC. The new router does not admit VC1 + VC2 yet either; two earlier builds of it have built and run that combination.</li>
+      <li>The new router is larger than main only on one-ERISC binaries, where one image holds both programs: up to +1,244 B (Galaxy express).</li>
+      <li>Not yet built for either router: a configuration with every feature at once (inter-mesh, express, bubble flow control, VC1 and VC2).</li>
+    </ul>
+  </section>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-structure" aria-labelledby="tab-structure" hidden>
+  <section id="enables">
+    <h2>What the new structure enables</h2>
+    <div class="cards" id="cards"></div>
+  </section>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-gaps" aria-labelledby="tab-gaps" hidden>
+  <section id="trails">
+    <h2>Where the new router is not ahead yet</h2>
+    <div class="prose"><p>Every test in the latest data where the new router is slower than main by more than noise. Full-ring multicast at 200G and 4,352 B is the one large gap; the Ring jam tab shows what causes it.</p></div>
+    <div class="table-wrap"><table id="trailtable"></table></div>
+  </section>
+
+  <section id="next">
+    <h2>Measurements still to run</h2>
+    <div class="table-wrap"><table id="todo"></table></div>
+  </section>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-ringjam" aria-labelledby="tab-ringjam" hidden>
+  <section id="ringjam">
+    <h2>A ring jam at 200G</h2>
+    <div class="prose">
+      <p>On Galaxy's 200G rings the new router runs full-ring multicast about 29% faster than main up to 3,072 B, then about 41% slower at 4,352 B. The slowdown appears only when the new router's receiving ERISC handles a packet faster than the link delivers one. Main's receiving ERISC is slower than a 200G link, so main never gets there.</p>
+    </div>
+    <div class="table-wrap"><table id="rj-gap"></table></div>
+    <p class="small muted">Galaxy full-ring multicast (the 8-chip rings set its rate), write, cycles per packet; mean of two passes in reversed router order, main and the new router in the same jobs (Slurm 169482/169483, 2026-11-03). Line time: the packet's time on a 200G link.</p>
+  </section>
+
+  <section>
+    <h3>How we know the receiver's speed causes it</h3>
+    <div class="prose"><p>We slowed only the receiving ERISC, by a fixed number of cycles per packet. If it were the bottleneck, every row would get slower. Instead the large-packet rows got faster, until the receiver's own time per packet passed the line time; from there on all three sizes run on one line, set by the receiver.</p></div>
+    <div class="panel">
+      <div class="legend" id="rj-legend"></div>
+      <div id="rj-chart"></div>
+    </div>
+    <div class="table-wrap"><table id="rj-sweep"></table></div>
+    <p class="small muted">Galaxy Slurm 169903 (bh-glx-110-a01u14), 2026-11-03: the new router with a delay on the receiving ERISC only (the build is byte-identical to the new router at delay 0), two passes in reversed order. Cycles per packet.</p>
+    <div class="prose"><p>The reverse holds too: skipping the receiver's local write makes it faster, and pushes rows into the slow mode. Giving the receiver more slots (32 to 48) did not help.</p></div>
+    <div class="table-wrap"><table id="rj-skip"></table></div>
+    <p class="small muted">Galaxy Slurm 169871 (bh-glx-110-a08u20), 2026-11-03: the local write of data-only packets dropped on the receiving ERISC (the build is byte-identical to the new router with the switch off). Cycles per packet.</p>
+  </section>
+
+  <section>
+    <h3>Why it happens (hypothesis)</h3>
+    <div class="hop" aria-label="One ring hop">
+      <span class="box">worker</span><span class="box blind">forwarding channel</span><span class="arrow">→ link →</span><span class="box seen">receiver ring</span><span class="arrow">→ forward →</span><span class="box blind">next forwarding channel</span><span class="arrow">→ …</span>
+    </div>
+    <ul class="small" style="margin:0;padding-left:18px;color:var(--ink-2);display:flex;flex-direction:column;gap:6px;max-width:90ch">
+      <li>Rings avoid deadlock with bubble flow control: a worker may send only if the next chip's receiver ring has 2 free slots; a forwarded packet needs 1.</li>
+      <li>In the new router one ring hop has two buffers in series: the receiver ring and the next sending ERISC's forwarding channel. The check reads only the receiver ring (outlined).</li>
+      <li>When the receiver outruns the link, the queue moves into the forwarding channels (shaded), which the check cannot see. Workers keep sending until the whole ring is full; it then advances one free slot at a time, each move waiting a full credit round trip.</li>
+      <li>Past saturation this is known behavior of bubble flow control: <a href="https://web.engr.oregonstate.edu/~chenliz/publications/2011_IPDPS_Critical%20Bubble%20Scheme_Lizhong%20Chen.pdf">Chen, Wang and Pinkston, IPDPS 2011</a>, sections II.C and V.C.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h3>Fix tried on the Galaxy: hold back injection</h3>
+    <div class="prose"><p>A worker (or, on a torus, a turn from the other axis) may send only if the straight forwarding channel holds fewer than T packets, or K forwarded packets have gone out since the last injection. K = 6 matches an 8-chip ring, where each link carries 7 flows. Holding back injection removes the jam: the 8-chip ring at 4,352 B drops from 371 to 254 cycles, below main's <span id="rj-main"></span> on the full-ring row.</p></div>
+    <div class="table-wrap"><table id="rj-glx"></table></div>
+    <p class="small muted">Galaxy Slurm 170016 (bh-glx-110-a06u02), 2026-11-03, two passes in reversed order, every arm validated with data checks and flow control on. Cycles per packet; green or red where an arm moves by more than 1 cycle from the throttle off.</p>
+  </section>
+
+  <section>
+    <h3>The same throttle at 400G</h3>
+    <div class="prose"><p>A P150 has no jam to remove (every router there is slower than its 400G link), so the throttle only costs. A fixed K holds the worker below its share where each link carries fewer flows (both-way ring and 2x4 torus multicast, up to +21.5 cycles), and the torus version costs 4 to 7 cycles on 1-hop writes even where it never engages. It is not a general fix yet. Next is a trigger that tells a jam (the link idle for lack of credits) from an ordinary queue; that too is a hypothesis to test.</p></div>
+    <div class="table-wrap"><table id="rj-p150"></table></div>
+    <p class="small muted">P150x8, lb2 Slurm 170034 (bh-lb-120-a07u28), 2026-11-03, two passes in reversed order, every arm validated. Cycles per packet; colors as above.</p>
+  </section>
+  </div>
+
+  <footer>
+    <span>Every number comes from <code>fabric_exp/report/data/*.json</code>, each record with its source file, job and date. Claims and caveats: <code>fabric_exp/report/CLAIMS.md</code>. Page built by <code>fabric_exp/report/build_page.py</code>.</span>
+    <span>Draft of 2026-11-03.</span>
+  </footer>
+</div>
+
+<div class="tip" id="tip" role="status" hidden></div>
+
+<script>
+const D = /*__DATA__*/null;
+
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const f1 = (x) => (x == null ? "–" : Number(x).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
+const f2 = (x) => (x == null ? "–" : Number(x).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const fint = (x) => (x == null ? "–" : Math.round(x).toLocaleString("en-US"));
+const gbps = (size, cycles) => size * 1.35 / cycles;
+const bwc = (size, cycles) => `${f1(gbps(size, cycles))} GB/s (${f1(cycles)} cycles)`;
+const cyc = (size, gb) => size * 1.35 / gb;  // cycles per packet from GB/s
+const B = (n) => n.toLocaleString("en-US") + " B";
+const MODE = { two: "two ERISCs", one: "one ERISC", mux: "mux mode" };
+
+/* ---------- tooltip ---------- */
+const tip = $("#tip");
+function showTip(node, ev) { tip.replaceChildren(node); tip.hidden = false; placeTip(ev); }
+function placeTip(ev) {
+  const r = tip.getBoundingClientRect();
+  let x, y;
+  if (ev && ev.clientX != null) { x = ev.clientX + 14; y = ev.clientY + 14; }
+  else if (ev && ev.target) { const b = ev.target.getBoundingClientRect(); x = b.left + 24; y = b.bottom + 6; }
+  else { x = 20; y = 20; }
+  if (x + r.width > window.innerWidth - 8) x = Math.max(8, window.innerWidth - r.width - 8);
+  if (y + r.height > window.innerHeight - 8) y = Math.max(8, y - r.height - 28);
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.hidden = true; }
+function tipRow(color, value, sub, hollow) {
+  const row = el("div", "t-row");
+  const key = el("i", "t-key"); key.style.background = color;
+  if (hollow) { key.style.background = "transparent"; key.style.borderTop = "2px solid " + color; key.style.height = "0"; }
+  const box = el("div"); box.append(el("span", "t-val", value), document.createTextNode(" "), el("span", "t-sub", sub));
+  row.append(key, box); return row;
+}
+function hover(row, make) {
+  row.addEventListener("pointermove", (ev) => showTip(make(), ev));
+  row.addEventListener("pointerleave", hideTip);
+  row.addEventListener("focus", (ev) => showTip(make(), ev));
+  row.addEventListener("blur", hideTip);
+}
+
+/* ---------- KPIs ---------- */
+function renderKpis() {
+  const h = D.head, m = h.mesh1, mc = h.mesh_mc;
+  const tiles = [
+    { label: "2D mesh, 1 hop, 4,352 B, 400G", value: (100 * m.wire / m.new).toFixed(1), unit: "% of line rate", foot: `new ${bwc(4352, m.new)} · main ${(100 * m.wire / m.main).toFixed(0)}%, ${f1(gbps(4352, m.main))} GB/s` },
+    { label: "2D mesh multicast, 4,352 B, 400G", value: (100 * mc.wire / mc.new).toFixed(1), unit: "% of line rate", foot: `new ${bwc(4352, mc.new)} · main ${(100 * mc.wire / mc.main).toFixed(0)}%, ${f1(gbps(4352, mc.main))} GB/s` },
+    { label: "Mesh 0 to mesh 1 (VC1), 4,352 B, 400G", value: f2(h.inter_ratio), unit: "× main", foot: `mean of ${h.inter_n} paths · main uses a different slot table and -Os` },
+    { label: `1-hop mesh write, ${h.glx_sizes[0].toLocaleString("en-US")}–${h.glx_sizes[1].toLocaleString("en-US")} B, 200G`, value: `${f2(h.glx[0])}–${f2(h.glx[1])}`, unit: "× main", foot: "same job · both reach the line rate at 4,352 B" },
+    { label: "Router code with VC1, both ERISCs", value: fint(h.vc1size.new), unit: "B", foot: `main ${fint(h.vc1size.main)} B at -O3, over the ${fint(D.buffer)} B buffer` },
+  ];
+  const box = $("#kpis");
+  for (const t of tiles) {
+    const k = el("div", "kpi");
+    k.append(el("div", "label", t.label));
+    const v = el("div", "value", t.value); v.append(el("span", "unit", " " + t.unit));
+    k.append(v, el("div", "foot", t.foot));
+    box.append(k);
+  }
+}
+
+/* ---------- summary ---------- */
+function simpleTable(id, cols, rows) {
+  const t = $(id); const th = el("thead"); const hr = el("tr");
+  for (const [txt, num] of cols) hr.append(el("th", num ? "num" : "", txt));
+  th.append(hr); t.append(th);
+  const tb = el("tbody");
+  for (const r of rows) { const tr = el("tr"); for (const [v, num, cls] of r) { const td = el("td", num ? "num" : "", v); if (cls) td.classList.add(cls); tr.append(td); } tb.append(tr); }
+  t.append(tb);
+}
+function ratioCls(q) { return q >= 1.005 ? "better" : q <= 0.995 ? "worse" : ""; }
+const PK = { link: "400G", size: 4352 };
+function pkChips(label, options, key) {
+  const g = el("div", "fgroup"); g.append(el("div", "flabel", label));
+  const chips = el("div", "chips");
+  for (const [val, text] of options) {
+    const b = el("button", "fchip", text); b.type = "button";
+    b.setAttribute("aria-pressed", String(PK[key] === val));
+    b.addEventListener("click", () => {
+      PK[key] = val;
+      if (key === "link") {
+        const sizes = D.peaks.filter(x => x.link === PK.link).map(x => x.size);
+        if (!sizes.includes(PK.size)) PK.size = Math.max(...sizes);
+      }
+      renderPeakTable();
+    });
+    chips.append(b);
+  }
+  g.append(chips); return g;
+}
+function renderPeakTable() {
+  const systems = { "400G": "P150x8", "200G": "Galaxy" };
+  const links = [...new Set(D.peaks.map(x => x.link))];
+  const sizes = [...new Set(D.peaks.filter(x => x.link === PK.link).map(x => x.size))].sort((a, b) => a - b);
+  const f = $("#pk-filters"); f.replaceChildren(
+    pkChips("Link", links.map(l => [l, `${l} links · ${systems[l]}`]), "link"),
+    pkChips("Packet size", sizes.map(s => [s, B(s)]), "size"));
+  const t = $("#peaks"); t.replaceChildren();
+  const cols = [["Topology", 0], ["Traffic", 0], ["Tests", 1], ["Line rate", 1], ["Main peak", 1], ["New router peak", 1], ["Main range", 1], ["New router range", 1]];
+  const th = el("thead"); const hr = el("tr");
+  for (const [txt, num] of cols) hr.append(el("th", num ? "num" : "", txt));
+  th.append(hr); t.append(th);
+  const tb = el("tbody"); t.append(tb);
+  const pct = (x, c) => 100 * x.wire / c;
+  for (const x of D.peaks.filter(x => x.link === PK.link && x.size === PK.size)) {
+    const tr = el("tr"); tr.className = "clickable"; tr.tabIndex = 0;
+    tr.setAttribute("aria-label", `Show the ${x.topo} ${x.traffic} tests at ${x.size} bytes, ${x.link}, in the chart`);
+    const peakCell = (c, label, better) => {
+      const td = el("td", "num");
+      const v = el("div", null, `${f1(gbps(x.size, c))} GB/s · ${pct(x, c).toFixed(0)}%`);
+      if (better === true) v.classList.add("better");
+      if (better === false) v.classList.add("worse");
+      td.append(v, el("div", "cell-sub", label));
+      return td;
+    };
+    const nb = x.new_peak < x.main_peak * 0.995 ? true : x.new_peak > x.main_peak * 1.005 ? false : null;
+    tr.append(el("td", null, x.topo), el("td", null, x.traffic),
+      el("td", "num", String(x.tests)), el("td", "num", `${f1(x.line_gbps)} GB/s`),
+      peakCell(x.main_peak, x.main_peak_label, null), peakCell(x.new_peak, x.new_peak_label, nb),
+      el("td", "num", `${pct(x, x.main_low).toFixed(0)}–${pct(x, x.main_peak).toFixed(0)}%`),
+      el("td", "num", `${pct(x, x.new_low).toFixed(0)}–${pct(x, x.new_peak).toFixed(0)}%`));
+    const go = () => {
+      BW.size = x.size; BW.topo = x.topo; BW.traffic = x.traffic; BW.mode = "two";
+      $("#bw-filters").replaceChildren(); renderFilters(); renderBW();
+      $("#bw-filters").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    };
+    tr.addEventListener("click", go);
+    tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    tb.append(tr);
+  }
+}
+function renderPeaks() {
+  $("#bw-intro").textContent = D.intro;
+  renderPeakTable();
+}
+
+/* ---------- line-rate dumbbells ---------- */
+const BW = { size: 4352, topo: "2D mesh", traffic: "All", mode: "two" };
+const LINKS = [["400G", "400G links", "P150x8"], ["200G", "200G links", "Galaxy"]];
+
+function chipGroup(label, options, key) {
+  const g = el("div", "fgroup"); g.append(el("div", "flabel", label));
+  const chips = el("div", "chips");
+  for (const [val, text] of options) {
+    const b = el("button", "fchip", text); b.type = "button";
+    b.setAttribute("aria-pressed", String(BW[key] === val));
+    b.addEventListener("click", () => {
+      BW[key] = val;
+      for (const c of chips.children) c.setAttribute("aria-pressed", "false");
+      b.setAttribute("aria-pressed", "true");
+      renderBW();
+    });
+    chips.append(b);
+  }
+  g.append(chips); return g;
+}
+function renderFilters() {
+  const sizes = [...new Set(D.bw.map(r => r.size))].sort((a, b) => a - b);
+  $("#bw-filters").append(
+    chipGroup("Packet size", sizes.map(s => [s, B(s)]), "size"),
+    chipGroup("Topology", [["All", "All"], ...D.topos.map(t => [t, t])], "topo"),
+    chipGroup("Traffic", [["All", "All"], ...D.traffic.map(t => [t, t])], "traffic"),
+    chipGroup("Router", [["two", "Two ERISCs"], ["one", "One ERISC"], ["mux", "Mux mode"]], "mode"),
+  );
+}
+function visibleRows(link) {
+  return D.bw.filter(r => r.link === link && r.size === BW.size && (BW.topo === "All" || r.topo === BW.topo)
+    && (BW.traffic === "All" || r.traffic === BW.traffic) && r.mode === BW.mode);
+}
+function niceDomain(maxPct) {
+  if (maxPct > 60) return Math.max(100, Math.ceil(maxPct / 5) * 5);
+  const raw = maxPct * 1.2;
+  return [2, 4, 5, 8, 10, 15, 20, 25, 30, 40, 50, 60].find(s => s >= raw) || 60;
+}
+function bwTip(r) {
+  const n = el("div");
+  n.append(el("div", "t-title", r.label));
+  n.append(el("div", "t-sub", `${r.link} · ${B(r.size)} · ${r.topo} · ${r.traffic.toLowerCase()} · ${MODE[r.mode]}`));
+  n.append(tipRow("var(--v4)", `${(100 * r.wire / r.new).toFixed(1)}%`, `new router · ${bwc(r.size, r.new)}`));
+  n.append(tipRow("var(--main)", `${(100 * r.wire / r.main).toFixed(1)}%`, `main · ${bwc(r.size, r.main)}`, true));
+  n.append(el("div", "t-foot", `New ÷ main ${f2(r.main / r.new)}× · wire ${f1(r.wire)} cycles · ${r.same_job ? "same job, " + r.date_new : "new " + r.date_new + ", main " + r.date_main}`));
+  return n;
+}
+function renderBW() {
+  const panels = $("#bw-panels"); panels.replaceChildren();
+  const all = LINKS.flatMap(([l]) => visibleRows(l));
+  let maxPct = 0;
+  for (const r of all) maxPct = Math.max(maxPct, 100 * r.wire / r.main, 100 * r.wire / r.new);
+  const dom = niceDomain(maxPct || 100);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => t * dom);
+  const x = (pct) => Math.min(100, Math.max(0, 100 * pct / dom));
+  let count = 0;
+  for (const [link, title, system] of LINKS) {
+    const rows = visibleRows(link);
+    const p = el("div", "panel");
+    const ph = el("div", "panel-head");
+    ph.append(el("h4", null, title), el("span", "meta", `${system} · ${rows.length} tests`));
+    p.append(ph);
+    if (!rows.length) {
+      let msg = "No tests for this selection.";
+      if (link === "200G" && BW.mode !== "two") msg = "The 200G runs are two-ERISC only.";
+      else if (link === "200G" && BW.topo !== "All" && !["1D line", "Ring", "2D mesh"].includes(BW.topo)) msg = `No ${BW.topo.toLowerCase()} tests at 200G yet.`;
+      else if (BW.topo === "Neighbor exchange" && BW.traffic === "Multicast") msg = "Neighbor exchange has no multicast tests.";
+      p.append(el("div", "empty", msg)); panels.append(p); continue;
+    }
+    const ax = el("div", "db-row axis-row"); ax.append(el("div", "db-label"));
+    const at = el("div", "track");
+    for (const t of ticks) { const g = el("div", "tick", t === 100 ? "" : (Number.isInteger(t) ? t : t.toFixed(1)) + "%"); g.style.left = x(t) + "%"; at.append(g); }
+    if (dom >= 100) { const wl = el("div", "tick wire-label", "line rate"); wl.style.left = x(100) + "%"; wl.style.transform = "translateX(-100%)"; at.append(wl); }
+    ax.append(at); p.append(ax);
+    let lastGroup = null;
+    for (const r of rows) {
+      const pv = 100 * r.wire / r.new, pm = 100 * r.wire / r.main;
+      const row = el("div", "db-row"); row.tabIndex = 0;
+      row.setAttribute("aria-label", `${r.label}: new router ${pv.toFixed(1)} percent, main ${pm.toFixed(1)} percent of line rate`);
+      const lab = el("div", "db-label");
+      const grp = (BW.topo === "All" ? r.topo : "") + (BW.topo === "All" && BW.traffic === "All" ? " · " : "") + (BW.traffic === "All" ? r.traffic : "");
+      if (grp && grp !== lastGroup) { lab.append(el("div", "grp", grp)); lastGroup = grp; }
+      lab.append(document.createTextNode(r.label));
+      const tr = el("div", "track");
+      for (const t of ticks) { const g = el("div", "gl"); g.style.left = x(t) + "%"; tr.append(g); }
+      if (dom >= 100) { const w = el("div", "wl"); w.style.left = x(100) + "%"; tr.append(w); }
+      const a = Math.min(x(pv), x(pm)), b = Math.max(x(pv), x(pm));
+      const c = el("div", "conn"); c.style.left = a + "%"; c.style.width = (b - a) + "%"; tr.append(c);
+      const dm = el("div", "dot main"); dm.style.left = x(pm) + "%"; tr.append(dm);
+      const dv = el("div", "dot v4"); dv.style.left = x(pv) + "%"; tr.append(dv);
+      row.append(lab, tr);
+      hover(row, () => bwTip(r));
+      p.append(row); count++;
+    }
+    panels.append(p);
+  }
+  $("#bw-count").textContent = `${count} tests at ${B(BW.size)}`;
+  if (!$("#bw-table").hidden) renderBWTable();
+}
+function renderBWTable() {
+  const wrap = $("#bw-table"); wrap.replaceChildren();
+  const t = el("table"); t.id = "bw-tab"; wrap.append(t);
+  const rows = LINKS.flatMap(([l]) => visibleRows(l));
+  simpleTable("#bw-tab", [["Link", 0], ["Topology", 0], ["Traffic", 0], ["Test", 0], ["Packet", 1], ["Wire (cycles)", 1], ["Main", 1], ["% of line rate", 1], ["New router", 1], ["% of line rate", 1], ["New ÷ main", 1]],
+    rows.map(r => { const q = r.main / r.new; return [[r.link, 0], [r.topo, 0], [r.traffic, 0], [r.label, 0], [B(r.size), 1], [f1(r.wire), 1], [bwc(r.size, r.main), 1], [(100 * r.wire / r.main).toFixed(1), 1], [bwc(r.size, r.new), 1], [(100 * r.wire / r.new).toFixed(1), 1], [f2(q) + "×", 1, ratioCls(q)]]; }));
+}
+
+/* ---------- slot allocations ---------- */
+// Each VC's sender channels as logged: VC0 and VC2 list the worker channel (the local sender's) first, then the
+// forwarding channels (traffic passing through from the router's other links); VC1 has forwarding channels only. The
+// receiver is the far router's buffer for that VC.
+function allocText(alloc, vcs) {
+  if (!alloc) return "";
+  return vcs.filter(v => alloc[`VC${v}`]).map(v => {
+    const a = alloc[`VC${v}`];
+    const ch = String(a.sender).split(",").map(t => Number(t.trim())).filter(n => n > 0);
+    const worker = v === 1 ? null : ch.shift();
+    const parts = [];
+    if (worker != null) parts.push(`worker ${worker}`);
+    if (ch.length) parts.push(ch.every(n => n === ch[0]) ? `forwarding ${ch[0]} ×${ch.length}` : `forwarding ${ch.join("/")}`);
+    parts.push(`receiver ${a.receiver}`);
+    return `VC${v}: ${parts.join(", ")}`;
+  }).join(" · ");
+}
+function allocBlock(entries, vcs) {
+  const box = el("div", "alloc");
+  for (const [who, alloc] of entries) {
+    const t = allocText(alloc, vcs);
+    if (!t) continue;
+    const line = el("div");
+    line.append(el("b", null, who + " "), document.createTextNode(t));
+    box.append(line);
+  }
+  return box;
+}
+
+/* ---------- two VCs on one link ---------- */
+function renderMultiVC() {
+  const rows = D.multivc || [];
+  if (!rows.length) { $("#mvc-sub").hidden = true; return; }
+  const panels = $("#mvc-panels");
+  const groups = [["default", "Each router's own slots (as shipped)"], ["v8", "Same allocation for both routers"]];
+  const top = Math.max(...rows.map(r => Math.max(r.combined_gbps ?? (r.vc0_gbps + r.vc2_gbps), r.line_gbps))) * 1.18;
+  const x = (v) => 100 * v / top;
+  for (const [slots, title] of groups) {
+    const rs = rows.filter(r => r.slots === slots);
+    if (!rs.length) continue;  // no runs at this allocation
+    const p = el("div", "panel");
+    const ph = el("div", "panel-head"); ph.append(el("h4", null, title));
+    const a = rs.find(r => r.router === "main"), b = rs.find(r => r.router === "new");
+    ph.append(el("span", "meta", "slots per channel"));
+    p.append(ph);
+    p.append(slots === "default" ? allocBlock([["main", a && a.alloc], ["new router", b && b.alloc]], [0, 2])
+                                 : allocBlock([["both routers", b && b.alloc]], [0, 2]));
+    let lastSize = null;
+    for (const r of rs) {
+      const row = el("div", "db-row"); row.tabIndex = 0;
+      const lab = el("div", "db-label");
+      if (r.size !== lastSize) { lab.append(el("div", "grp", B(r.size))); lastSize = r.size; }
+      lab.append(document.createTextNode(r.router === "main" ? "main" : "new router"));
+      const tr = el("div", "track");
+      const w = el("div", "wl"); w.style.left = x(r.line_gbps) + "%"; tr.append(w);
+      const s0 = el("div", "seg vc0"); s0.style.width = x(r.vc0_gbps) + "%"; tr.append(s0);
+      const s2 = el("div", "seg vc2"); s2.style.left = x(r.vc0_gbps) + "%"; s2.style.width = x(r.vc2_gbps) + "%"; tr.append(s2);
+      const tot = r.combined_gbps ?? (r.vc0_gbps + r.vc2_gbps);
+      const v = el("div", "seg-val", `${f1(tot)} GB/s · ${(100 * tot / r.line_gbps).toFixed(0)}%`);
+      v.style.left = `calc(${x(tot)}% + 6px)`; tr.append(v);
+      row.append(lab, tr);
+      hover(row, () => {
+        const n = el("div");
+        n.append(el("div", "t-title", `${r.router === "main" ? "Main" : "New router"} · ${B(r.size)} · ${title.toLowerCase()}`));
+        n.append(tipRow("var(--vc0)", `${f1(r.vc0_gbps)} GB/s`, `VC0 (${f1(cyc(r.size, r.vc0_gbps))} cycles/packet)`));
+        n.append(tipRow("var(--vc2)", `${f1(r.vc2_gbps)} GB/s`, `VC2 (${f1(cyc(r.size, r.vc2_gbps))} cycles/packet)`));
+        const extra = [];
+        if (r.combined_gbps != null) extra.push(`combined ${f1(r.combined_gbps)} GB/s in one run; two-run check ${f1(r.two_run_gbps)} GB/s`);
+        if (r.vc2_alone) extra.push(`VC2 alone ${f1(gbps(r.size, r.vc2_alone))} GB/s (${f1(r.vc2_alone)} cycles)`);
+        if (r.vc0_alone) extra.push(`VC0 alone with VC2 built in ${f1(gbps(r.size, r.vc0_alone))} GB/s (${f1(r.vc0_alone)} cycles)`);
+        extra.push(`line rate ${f1(r.line_gbps)} GB/s`);
+        n.append(el("div", "t-foot", extra.join(" · ")));
+        return n;
+      });
+      p.append(row);
+    }
+    panels.append(p);
+  }
+  simpleTable("#mvc-table", [["Slots", 0], ["Slots per channel", 0], ["Packet", 1], ["Router", 0], ["VC0", 1], ["VC2", 1], ["Combined (one run)", 1], ["Two-run check", 1], ["VC2 alone", 1]],
+    rows.map(r => [[r.slots === "default" ? "own (as shipped)" : "same for both", 0], [allocText(r.alloc, [0, 2]), 0], [B(r.size), 1], [r.router === "main" ? "main" : "new router", 0],
+      [bwc(r.size, cyc(r.size, r.vc0_gbps)), 1], [bwc(r.size, cyc(r.size, r.vc2_gbps)), 1],
+      [r.combined_gbps != null ? `${f1(r.combined_gbps)} GB/s` : "–", 1], [`${f1(r.two_run_gbps)} GB/s`, 1],
+      [r.vc2_alone ? bwc(r.size, r.vc2_alone) : "–", 1]]));
+}
+
+/* ---------- multi-VC on the two-mesh split ---------- */
+function stackPanel(title, meta, rows, vcs, top, labelOf, extraTip, allocEntries) {
+  const x = (v) => 100 * v / top;
+  const p = el("div", "panel");
+  const ph = el("div", "panel-head"); ph.append(el("h4", null, title));
+  if (meta) ph.append(el("span", "meta", meta));
+  p.append(ph);
+  if (allocEntries) p.append(allocBlock(allocEntries, vcs));
+  let lastSize = null;
+  for (const r of rows) {
+    const row = el("div", "db-row"); row.tabIndex = 0;
+    const lab = el("div", "db-label");
+    if (r.size !== lastSize) { lab.append(el("div", "grp", B(r.size))); lastSize = r.size; }
+    lab.append(document.createTextNode(labelOf(r)));
+    const tr = el("div", "track");
+    const w = el("div", "wl"); w.style.left = x(r.line_gbps) + "%"; tr.append(w);
+    let left = 0;
+    const segs = r.segs.filter(sg => sg.gbps > 0);
+    segs.forEach((sg, i) => {
+      const s = el("div", `seg s vc${sg.vc}${i > 0 ? " gap" : ""}${i === segs.length - 1 ? " end" : ""}`);
+      s.style.left = x(left) + "%"; s.style.width = x(sg.gbps) + "%"; tr.append(s);
+      left += sg.gbps;
+    });
+    const v = el("div", "seg-val", `${f1(r.total)} GB/s · ${(100 * r.total / r.line_gbps).toFixed(0)}%`);
+    v.style.left = `calc(${x(r.total)}% + 6px)`; tr.append(v);
+    row.append(lab, tr);
+    hover(row, () => {
+      const n = el("div");
+      n.append(el("div", "t-title", `${labelOf(r)} · ${B(r.size)}`));
+      for (const sg of segs) n.append(tipRow(`var(--vc${sg.vc})`, `${f1(sg.gbps)} GB/s`, `VC${sg.vc} (${f1(cyc(r.size, sg.gbps))} cycles/packet)`));
+      const foot = extraTip(r);
+      foot.push(`line rate ${f1(r.line_gbps)} GB/s`);
+      n.append(el("div", "t-foot", foot.join(" · ")));
+      return n;
+    });
+    p.append(row);
+  }
+  return p;
+}
+
+function renderTwoMesh() {
+  const r01 = D.multivc01 || [], r3 = D.multivc3 || [];
+  if (!r01.length) $("#mvc01-sub").hidden = true;
+  if (!r3.length) $("#mvc3-sub").hidden = true;
+  const all = [...r01, ...r3];
+  if (!all.length) return;
+  const top = Math.max(...all.map(r => Math.max(r.combined_gbps, r.line_gbps, r.vc0_alone_gbps || 0))) * 1.18;
+  const aloneTips = (r, vcs) => vcs.filter(v => r[`vc${v}_alone_gbps`]).map(v => `VC${v} alone ${f1(r[`vc${v}_alone_gbps`])} GB/s`);
+  if (r01.length) {
+    const rows = r01.map(r => ({ ...r, total: r.combined_gbps, segs: [{ vc: 0, gbps: r.vc0_gbps }, { vc: 1, gbps: r.vc1_gbps }] }));
+    const am = r01.find(r => r.router === "main"), an = r01.find(r => r.router === "new");
+    $("#mvc01-panels").append(stackPanel("Main and the new router", "default allocation; slots per channel", rows, [0, 1], top,
+      r => (r.router === "main" ? "main" : "new router"),
+      r => [...aloneTips(r, [0, 1]), `sum of the per-VC rates ${f1(r.summed_gbps)} GB/s`,
+            ...(r.finish_gap_pct > 1 ? [`the VCs finished ${f1(r.finish_gap_pct)}% apart (mean of runs), so the tail is one VC alone`] : [])],
+      [["main", am && am.alloc], ["new router", an && an.alloc]]));
+    simpleTable("#mvc01-table", [["Packet", 1], ["Router", 0], ["Slots per channel", 0], ["VC0", 1], ["VC1", 1], ["Combined (one run)", 1], ["Sum of per-VC rates", 1], ["VC0 alone", 1], ["VC1 alone", 1], ["Share of line rate", 1]],
+      r01.map(r => [[B(r.size), 1], [r.router === "main" ? "main" : "new router", 0], [allocText(r.alloc, [0, 1]), 0], [`${f1(r.vc0_gbps)} GB/s`, 1], [`${f1(r.vc1_gbps)} GB/s`, 1],
+        [`${f1(r.combined_gbps)} GB/s`, 1], [`${f1(r.summed_gbps)} GB/s`, 1], [`${f1(r.vc0_alone_gbps)} GB/s`, 1], [`${f1(r.vc1_alone_gbps)} GB/s`, 1],
+        [`${(100 * r.combined_gbps / r.line_gbps).toFixed(0)}%`, 1]]));
+  }
+  if (r3.length) {
+    const rows = [];
+    for (const r of r3) {
+      rows.push({ ...r, alone: true, total: r.vc0_alone_gbps, segs: [{ vc: 0, gbps: r.vc0_alone_gbps }] });
+      rows.push({ ...r, total: r.combined_gbps, segs: [0, 1, 2].map(v => ({ vc: v, gbps: r[`vc${v}_gbps`] })) });
+    }
+    $("#mvc3-panels").append(stackPanel("New router", "default allocation; slots per channel", rows, [0, 1, 2], top,
+      r => (r.alone ? "VC0 alone" : "all three"),
+      r => (r.alone ? ["same build, VC1 and VC2 idle"] : [...aloneTips(r, [1, 2]), `sum of the per-VC rates ${f1(r.summed_gbps)} GB/s`]),
+      [["new router", r3[0].alloc]]));
+    simpleTable("#mvc3-table", [["Packet", 1], ["VC0", 1], ["VC1", 1], ["VC2", 1], ["All three (one run)", 1], ["Sum of per-VC rates", 1], ["VC0 alone", 1], ["VC1 alone", 1], ["VC2 alone", 1], ["Share of line rate", 1]],
+      r3.map(r => [[B(r.size), 1], [`${f1(r.vc0_gbps)} GB/s`, 1], [`${f1(r.vc1_gbps)} GB/s`, 1], [`${f1(r.vc2_gbps)} GB/s`, 1],
+        [`${f1(r.combined_gbps)} GB/s`, 1], [`${f1(r.summed_gbps)} GB/s`, 1], [`${f1(r.vc0_alone_gbps)} GB/s`, 1], [`${f1(r.vc1_alone_gbps)} GB/s`, 1],
+        [`${f1(r.vc2_alone_gbps)} GB/s`, 1], [`${(100 * r.combined_gbps / r.line_gbps).toFixed(0)}%`, 1]]));
+  }
+}
+
+/* ---------- cycle breakdown ---------- */
+function renderBreakdown() {
+  const B0 = D.breakdown;
+  if (!B0 || !B0.rows || !B0.rows.length) { $("#panel-breakdown").querySelector("section").append(el("p", "small muted", "No breakdown data yet.")); return; }
+  const cats = B0.cats, labels = B0.labels, rows = B0.rows;
+  const leg = $("#bd-legend");
+  for (const c of cats) {
+    const sp = el("span"); const k = el("i", "key-bd"); k.style.background = `var(--bd-${c})`;
+    sp.append(k, document.createTextNode(labels[c])); leg.append(sp);
+  }
+  const top = Math.max(...rows.map(r => r.rate)) * 1.12;
+  const x = (v) => 100 * v / top;
+  const points = [...new Set(rows.map(r => r.point))];
+  const box = $("#bd-panels");
+  for (const pt of points) {
+    const rs = rows.filter(r => r.point === pt);
+    const p = el("div", "panel");
+    const ph = el("div", "panel-head"); ph.append(el("h4", null, `${rs[0].label}`));
+    const main = rs.find(r => r.router === "main"), neu = rs.find(r => r.router === "new");
+    ph.append(el("span", "meta", `${rs[0].link} · main ${f1(main && main.rate)}, new ${f1(neu && neu.rate)} cycles/packet`));
+    p.append(ph);
+    for (const erisc of ["E0", "E1"]) {
+      const er = rs.filter(r => r.erisc === erisc);
+      if (!er.length) continue;
+      p.append(el("div", "bd-erisc", erisc === "E0" ? "sending ERISC" : "receiving ERISC"));
+      for (const r of er) {
+        const row = el("div", "db-row"); row.tabIndex = 0;
+        const lab = el("div", "db-label"); lab.append(document.createTextNode(r.router === "main" ? "main" : "new router"));
+        const tr = el("div", "track");
+        let left = 0;
+        const segs = cats.filter(c => (r.cats[c] || 0) > 0.05);
+        segs.forEach((c, i) => {
+          const sg = el("div", `seg bd${i > 0 ? " gap" : ""}${i === segs.length - 1 ? " end" : ""}`);
+          sg.style.background = `var(--bd-${c})`; sg.style.left = x(left) + "%"; sg.style.width = x(r.cats[c]) + "%";
+          tr.append(sg); left += r.cats[c];
+        });
+        const v = el("div", "seg-val", `${f1(r.rate)} cycles/packet`); v.style.left = `calc(${x(left)}% + 6px)`; tr.append(v);
+        row.append(lab, tr);
+        hover(row, () => {
+          const n = el("div");
+          n.append(el("div", "t-title", `${r.router === "main" ? "Main" : "New router"} · ${erisc === "E0" ? "sending" : "receiving"} ERISC · ${r.label}`));
+          for (const c of segs) n.append(tipRow(`var(--bd-${c})`, `${f1(r.cats[c])}`, `${labels[c]} (${(100 * r.cats[c] / r.rate).toFixed(0)}%)`));
+          n.append(el("div", "t-foot", `${f1(r.rate)} cycles/packet measured · ${r.router_name || ""} · ${(r.samples || 0).toLocaleString("en-US")} samples`));
+          return n;
+        });
+        p.append(row);
+      }
+    }
+    if (rs[0].note) p.append(el("p", "bd-note", rs[0].note));
+    box.append(p);
+  }
+  simpleTable("#bd-table", [["Point", 0], ["Link", 0], ["Router", 0], ["ERISC", 0], ["Cycles/packet", 1], ...cats.map(c => [labels[c], 1])],
+    rows.map(r => [[r.label, 0], [r.link, 0], [r.router === "main" ? "main" : "new router", 0], [r.erisc === "E0" ? "sending" : "receiving", 0],
+      [f1(r.rate), 1], ...cats.map(c => [f1(r.cats[c] || 0), 1])]));
+}
+
+/* ---------- tabs ---------- */
+function setupTabs() {
+  const tabs = [...document.querySelectorAll('.tabs [role="tab"]')];
+  const ids = tabs.map(t => t.dataset.tab);
+  const show = (id, focus) => {
+    for (const t of tabs) {
+      const on = t.dataset.tab === id;
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById("panel-" + t.dataset.tab).hidden = !on;
+      if (on && focus) t.focus();
+    }
+    try { history.replaceState(null, "", "#" + id); } catch (e) {}
+    try { localStorage.setItem("router-report-tab", id); } catch (e) {}
+  };
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => show(t.dataset.tab));
+    t.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      const j = (i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      show(ids[j], true); e.preventDefault();
+    });
+  });
+  let start = (location.hash || "").slice(1);
+  if (!ids.includes(start)) { try { start = localStorage.getItem("router-report-tab") || ""; } catch (e) { start = ""; } }
+  if (!ids.includes(start)) start = ids[0];
+  show(start);
+}
+
+/* ---------- faster than the wire ---------- */
+function renderHeadroom() {
+  const box = $("#headroom");
+  const rows = D.headroom;
+  const lo = Math.floor(Math.min(...rows.map(r => r.pace)) / 10) * 10 - 10;
+  const hi = Math.ceil(Math.max(...rows.map(r => Math.max(r.wire, r.rate))) / 10) * 10 + 5;
+  const x = (v) => 100 * (v - lo) / (hi - lo);
+  const ticks = []; for (let v = Math.ceil(lo / 10) * 10; v <= hi; v += 10) ticks.push(v);
+  const legend = el("div", "legend");
+  const s1 = el("span"); s1.append(el("i", "key-v4"), document.createTextNode("pace of the busier ERISC"));
+  const s2 = el("span"); s2.append(el("i", "key-wire"), document.createTextNode("wire time of the packet at 400G"));
+  legend.append(s1, s2, el("span", "muted", "axis: cycles per packet, fewer is faster"));
+  box.append(legend);
+  const ax = el("div", "db-row axis-row"); ax.append(el("div", "db-label"));
+  const at = el("div", "track");
+  for (const t of ticks) { const g = el("div", "tick", String(t)); g.style.left = x(t) + "%"; at.append(g); }
+  ax.append(at); box.append(ax);
+  for (const r of rows) {
+    const row = el("div", "db-row"); row.tabIndex = 0;
+    const faster = 100 * (r.wire / r.pace - 1);
+    const lab = el("div", "db-label");
+    lab.append(el("div", "grp", r.topo));
+    lab.append(document.createTextNode(r.label + " "));
+    lab.append(el("span", "tags", faster > 0.5 ? `${faster.toFixed(0)}% faster than the wire` : "at its own limit"));
+    const tr = el("div", "track");
+    for (const t of ticks) { const g = el("div", "gl"); g.style.left = x(t) + "%"; tr.append(g); }
+    const w = el("div", "wl"); w.style.left = x(r.wire) + "%"; tr.append(w);
+    const a = Math.min(x(r.pace), x(r.wire)), b = Math.max(x(r.pace), x(r.wire));
+    const c = el("div", "conn"); c.style.left = a + "%"; c.style.width = (b - a) + "%"; tr.append(c);
+    const d = el("div", "dot v4"); d.style.left = x(r.pace) + "%"; tr.append(d);
+    row.append(lab, tr);
+    hover(row, () => {
+      const n = el("div");
+      n.append(el("div", "t-title", `${r.topo}: ${r.label}`));
+      n.append(tipRow("var(--v4)", `${f1(r.pace)} cycles`, `pace of ${r.binds}`));
+      n.append(tipRow("var(--wire)", `${f1(r.wire)} cycles`, "wire time at 400G"));
+      n.append(el("div", "t-foot", `Measured ${f1(r.rate)} cycles (${f1(gbps(r.size, r.rate))} GB/s). Spare time: sending ERISC ${f1(r.e0)}, receiving ERISC ${f1(r.e1)} cycles.`));
+      return n;
+    });
+    box.append(row);
+  }
+}
+
+/* ---------- keepalive ---------- */
+function renderKeepalive() {
+  simpleTable("#ka", [["Topology", 0], ["Test", 0], ["Traffic", 0], ["Main as shipped", 1], ["Main, keepalive 1,000", 1], ["New router", 1]],
+    D.keepalive.map(k => [[k.topo, 0], [k.label, 0], [k.traffic, 0], [bwc(k.size, k.main), 1], [bwc(k.size, k.main_ka), 1], [bwc(k.size, k.new), 1]]));
+}
+
+/* ---------- latency ---------- */
+function renderLatency() {
+  const rows = D.latency;
+  const one = rows.filter(r => r.hops === 1).map(r => r.main - r.new);
+  const three = rows.filter(r => r.hops === 3).map(r => r.main - r.new);
+  const ka = rows.filter(r => r.main_ka != null).map(r => Math.abs(r.main_ka - r.main));
+  $("#lat-intro").textContent = `The new router cuts one packet's round trip by ${f1(Math.min(...one)).replace(".0", "")} to ${f1(Math.max(...one)).replace(".0", "")} ns at 1 hop and ${f1(Math.min(...three)).replace(".0", "")} to ${f1(Math.max(...three)).replace(".0", "")} ns at 3 hops, about ${Math.round(Math.min(...three) / 3)} to ${Math.round(Math.max(...three) / 3)} ns per hop.` +
+    (ka.length ? ` The keepalive setting does not change latency: main at either setting is within ${Math.ceil(Math.max(...ka))} ns on every case.` : "");
+  simpleTable("#lat", [["Hops", 0], ["Direction", 0], ["Packet", 0], ["Size", 1], ["Main (ns)", 1], ["New router (ns)", 1], ["Difference (ns)", 1], ["Difference", 1]],
+    rows.map(r => { const d = r.new - r.main; const cls = d < 0 ? "better" : d > 0 ? "worse" : "";
+      return [[String(r.hops), 0], [r.dir, 0], [r.type, 0], [B(r.size), 1],
+        [`${f1(r.main)} (${r.main_passes.map(v => v.toFixed(0)).join(" / ")})`, 1], [`${f1(r.new)} (${r.new_passes.map(v => v.toFixed(0)).join(" / ")})`, 1],
+        [(d > 0 ? "+" : "") + f1(d), 1, cls], [(d > 0 ? "+" : "") + (100 * d / r.main).toFixed(1) + "%", 1, cls]]; }));
+}
+
+/* ---------- size ---------- */
+function renderSize() {
+  const box = $("#sizebars");
+  const top = 32000;
+  const x = (v) => 100 * v / top;
+  let first = true;
+  for (const s of D.sizes) {
+    if (s.main == null || s.new == null) continue;
+    const row = el("div", "bar-row");
+    const lab = el("div", "db-label"); lab.append(document.createTextNode(s.label));
+    lab.append(el("div", "tags", `main ${fint(s.main)} · new ${fint(s.new)} B` + (s.main_os ? ` · main ships at -Os: ${fint(s.main_os)}` : "")));
+    const tr = el("div", "bar-track");
+    const lim = el("div", "limit"); lim.style.left = x(D.buffer) + "%"; tr.append(lim);
+    if (first) { const ll = el("div", "limit-label", `buffer ${fint(D.buffer)} B`); ll.style.left = x(D.buffer) + "%"; tr.append(ll); first = false; }
+    const bm = el("div", "bar main"); bm.style.width = x(s.main) + "%"; tr.append(bm);
+    const bv = el("div", "bar v4"); bv.style.width = x(s.new) + "%"; tr.append(bv);
+    row.append(lab, tr); box.append(row);
+  }
+  simpleTable("#stack", [["Configuration", 0], ["Least free stack, sending ERISC: main", 1], ["New router", 1]],
+    D.sizes.filter(s => s.main_stack != null && s.new_stack != null).map(s => [[s.label, 0], [fint(s.main_stack) + " B" + (s.main_stack_os ? ` (-Os ${fint(s.main_stack_os)} B)` : ""), 1], [fint(s.new_stack) + " B", 1]]));
+}
+
+/* ---------- cards ---------- */
+function renderCards() {
+  const cards = [
+    { title: "Native fan-in: workers reach the fabric without mux cores", st: ["measured", "Measured, partly"], body: "Today a chip that needs more than one worker per link puts a mux core in front of the router: with 4 directions and 2 links that is up to 8 Tensix cores per chip doing no compute, and every packet takes an extra hop (worker, mux, router). The new router treats a VC as a unit, with its own worker channel and state, so several workers can connect to a router directly. VC0, VC1 and VC2 already run together. Stack is not the limit: the least free stack across configurations is 1.6 KB on the sending ERISC and 3.7 KB on the receiving one. Code space is, and freeing it opens two paths: VC2 as a forwarding line VC with 2D packet headers, for prefill device-to-device streams and KV-cache migration on their own VC without a barrier against CCL traffic; or up to three 1D line VCs, three workers per router natively, which frees up to 8 cores per chip for matmul and compute and removes a hop.",
+      items: ["Measured: VC0, VC1 and VC2 on one 400G link carry 36.0 GB/s at 4,352 B with no VC starved; data-checked on Galaxy two-mesh splits up to 4x4 per mesh, on one and two ERISCs.", "Code space today: VC1 and VC2 together fit at -O3 with 240 B to spare at the default allocation; line-mode routers need the 29 KiB kernel config buffer. Making the cold init and control paths runtime-parameterized (11 to 18% of each image) is the planned fix.", "Not measured yet: N workers on N line VCs against N workers through a mux, for bandwidth and the hop saved."], src: "VC2_LINE_BRINGUP.md, multivc_3vc.json, V4_SIZE.md, LINE_VCS_HOST_DESIGN.md" },
+    { title: "Slot allocation without the power-of-two constraint", st: ["measured", "Measured"], body: "Main's slot tables favor powers of two because its ring wrap has a power-of-two fast path: any other depth on a sender channel costs main 2 to 6 cycles per packet. The new router's sender channels have no such path and no such cost (19, 27 and 35 worker slots, 15 to 28 forwarding slots all measured flat). So the allocation can be computed per router shape, mesh size and link speed, balanced between VCs, and left open for users to tune. A model of each window (its credit round trip over its slots) predicts measured rates within 0.6% on average, and allocates by water-filling with one policy input, the weight between VCs.",
+      items: ["Off powers of two, the same VC0 with a faster VC1: 18,8,16,6,5 slots against 25,8,16,4,4 kept every VC0 row within 2 cycles and made the VC1 paths 24 to 29% faster; a power-of-two split leaves 7 slots on a worker that needs 18.", "1D: sharing the sender slots evenly (26 / 25, receiver 32, instead of the 16 / 16 tier) took the new router's 1-hop write from 131.8 to 124.5 cycles per packet, both ways -16, 3-hop -11.7.", "One measured exception: a receiver ring that is not a power of two costs about 8 cycles per packet on the receiving ERISC (a compare per ring step), and compiles to more code. The model includes it.", "At 200G, 3,072 B slots put every VC0 path on the wire, with the VC0 and VC1 windows at their bounds."], src: "RESULTS.md (slot allocation sweep, allocation model), SLOT_DECISIONS.md, SLOT_STUDY.md, alloc_model.py" },
+    { title: "Codegen that is stable and explainable", st: ["measured", "Checked on every build"], body: "In the router this study started from, small source edits moved performance in ways nobody could predict: the loop sat at the register limit and the compiler decided where state lived, so even a build with fewer stack accesses could run slower. The new router states where each piece of loop state lives (the first VC's state in registers, later VCs in memory) and checks that on every build. It uses no compiler-specific tricks: no register pinning, pragmas or branch hints, and NoC programming only through named API helpers. A change's effect on the code is known before it reaches a device.",
+      items: ["Every stage of the redesign was compared byte for byte across about 2,900 configurations at -O3 and -Os; each difference was classified as identical, layout-only or explained instruction by instruction before any measurement.", "A register-map guard checks every build, and a headroom check adds synthetic state to show the hot values do not move.", "One-side delay A/Bs name the ERISC that bounds a test and how much slack the other one has, so a gain or a loss is attributed by experiment, not by guess."], src: "V4_SENDER_OWNERSHIP.md §8-§12, V4_RECEIVER_OWNERSHIP.md, V4_BOUNDS.md, loopvars.py" },
+    { title: "Strict flush without stalling the router", st: ["designed", "Designed"], body: "A flushed atomic waits for its channel's earlier writes to be acknowledged, and today the whole ERISC spins meanwhile. The design defers the atomic per channel, so other VCs, acks and completions keep moving.",
+      items: ["On instrumented study builds a flushed fused write took 522.8 cycles per packet against 152.0 without the flush (east-west, 4,352 B). Neither router has been measured with flushing as shipped."], src: "FLUSH_DEFER_DESIGN.md, V4_ROUTE_PRELOAD.md §1.4" },
+    { title: "Measurement tooling that stays behind", st: ["measured", "Built"], body: "Tools that make the next router change measurable and safe.",
+      items: ["About 2,900 router configurations built offline and compared byte for byte between builds.", "PC sampling of live routers over the debug bus, without perturbing them.", "One-side delay A/Bs that name the ERISC bounding a test.", "Register-map guard and headroom check on every build."], src: "fabric_exp/consolidation/" },
+    { title: "Correctness on the same footing as main", st: ["measured", "Measured"], body: "The new router passes the study's 13 validation suites, UDM 8/8 and 68/68, the channel-trimming tests on one and two ERISCs, and the inline-write then flushed-atomic tests in 1D and 2D, which main also passes.",
+      items: ["An earlier build hung on an inline write followed by a flushed atomic; the fix is in the current router."], src: "V4_RECEIVER_OWNERSHIP.md §17-§18" },
+  ];
+  const box = $("#cards");
+  for (const c of cards) {
+    const k = el("article", "card");
+    k.append(el("span", `chip st st-${c.st[0]}`, c.st[1]), el("h4", null, c.title), el("p", null, c.body));
+    const ul = el("ul"); for (const i of c.items) ul.append(el("li", null, i)); k.append(ul);
+    k.append(el("div", "src", c.src));
+    box.append(k);
+  }
+}
+
+/* ---------- ring jam ---------- */
+function renderRingJam() {
+  const J = D.ringjam;
+  if (!J) return;
+  $("#rj-main").textContent = `${f1(J.main_fullring_4352)}`;
+  const pct = (a, b) => `${a < b ? "−" : "+"}${Math.abs(100 * (a / b - 1)).toFixed(0)}%`;
+  simpleTable("#rj-gap", [["Packet", 1], ["Line time", 1], ["Main", 1], ["New router", 1], ["New against main", 1]],
+    J.gap.map(r => [[B(r.size), 1], [f1(r.wire), 1], [f1(r.main), 1], [f1(r.new), 1],
+      [pct(r.new, r.main) + " time", 1, r.new < r.main * 0.995 ? "better" : r.new > r.main * 1.005 ? "worse" : ""]]));
+
+  // Receiver-delay sweep: one line per packet size on the 8-chip ring; dashed lines mark each size's line time.
+  const S = J.sweep, dl = S.delays, series = S.series;
+  const color = (s) => `var(--jam-${s.size})`;
+  const leg = $("#rj-legend");
+  for (const s of series) { const sp = el("span"); const k = el("i", "key-line"); k.style.background = color(s); sp.append(k, document.createTextNode(s.label)); leg.append(sp); }
+  const sw = el("span"); const wk = el("i", "key-line"); wk.style.background = "var(--wire)"; wk.style.opacity = "0.55"; sw.append(wk, document.createTextNode("line time of each size (dashed)")); leg.append(sw);
+  leg.append(el("span", "muted", "y: cycles per packet, fewer is faster · x: cycles added on the receiving ERISC"));
+  const W = 740, H = 300, ml = 44, mr = 175, mt = 14, mb = 34;
+  const x0 = 0, x1 = 96, y0 = 150, y1 = 400;
+  const X = (v) => ml + (W - ml - mr) * (v - x0) / (x1 - x0);
+  const Y = (v) => mt + (H - mt - mb) * (1 - (v - y0) / (y1 - y0));
+  const NS = "http://www.w3.org/2000/svg";
+  const sv = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, class: "rj-svg", role: "img", "aria-label": "Cycles per packet against the delay added on the receiving ERISC, 8-chip ring, three packet sizes" });
+  for (let v = y0; v <= y1; v += 50) { svg.append(sv("line", { x1: ml, x2: W - mr, y1: Y(v), y2: Y(v), class: "grid" })); svg.append(sv("text", { x: ml - 8, y: Y(v) + 4, "text-anchor": "end" }, String(v))); }
+  for (const d of dl) svg.append(sv("text", { x: X(d), y: H - mb + 18, "text-anchor": "middle" }, String(d)));
+  for (const s of series) {
+    svg.append(sv("line", { x1: ml, x2: W - mr, y1: Y(s.wire), y2: Y(s.wire), class: "wire" }));
+    svg.append(sv("text", { x: W - mr + 8, y: Y(s.wire) + 4, class: "lab" }, `line time ${B(s.size)}: ${f1(s.wire)}`));
+  }
+  const cross = sv("line", { y1: mt, y2: H - mb, class: "cross", visibility: "hidden" }); svg.append(cross);
+  for (const s of series) {
+    svg.append(sv("polyline", { points: dl.map((d, i) => `${X(d)},${Y(s.vals[i])}`).join(" "), style: `fill:none;stroke:${color(s)};stroke-width:2;stroke-linejoin:round` }));
+    s.vals.forEach((v, i) => svg.append(sv("circle", { cx: X(dl[i]), cy: Y(v), r: 4, style: `fill:${color(s)};stroke:var(--surface);stroke-width:2` })));
+    svg.append(sv("text", { x: X(0) + 10, y: Y(s.vals[0]) - 8, class: "lab" }, B(s.size)));
+  }
+  // Hover: one band per delay, a crosshair and every series' value there.
+  dl.forEach((d, i) => {
+    const half = (X(dl[Math.min(i + 1, dl.length - 1)]) - X(dl[Math.max(i - 1, 0)])) / (i === 0 || i === dl.length - 1 ? 2 : 4);
+    const band = sv("rect", { x: X(d) - Math.max(half, 12), y: mt, width: 2 * Math.max(half, 12), height: H - mt - mb, fill: "transparent", tabindex: 0 });
+    const make = () => {
+      const n = el("div");
+      n.append(el("div", "t-title", `${d} cycles added on the receiving ERISC`));
+      for (const s of series) n.append(tipRow(color(s), f1(s.vals[i]), `${s.label} (line time ${f1(s.wire)})`));
+      for (const t of S.torus) n.append(tipRow("var(--muted)", f1(t.vals[i]), `${t.label} (line time ${f1(t.wire)})`, true));
+      return n;
+    };
+    band.addEventListener("pointermove", (ev) => { cross.setAttribute("x1", X(d)); cross.setAttribute("x2", X(d)); cross.setAttribute("visibility", "visible"); showTip(make(), ev); });
+    band.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+    band.addEventListener("focus", (ev) => showTip(make(), ev));
+    band.addEventListener("blur", hideTip);
+    svg.append(band);
+  });
+  $("#rj-chart").append(svg);
+  simpleTable("#rj-sweep", [["Row", 0], ["Line time", 1], ...dl.map(d => [`+${d}`, 1])],
+    [...series, ...S.torus].map(s => [[s.label, 0], [f1(s.wire), 1], ...s.vals.map((v, i) => [f1(v), 1, i > 0 && v < s.vals[0] - 1 ? "better" : i > 0 && v > s.vals[0] + 1 ? "worse" : ""])]));
+  simpleTable("#rj-skip", [["Row", 0], ["Packet", 1], ["Line time", 1], ["New router", 1], ["Local write skipped", 1]],
+    J.writeskip.map(r => [[r.row, 0], [B(r.size), 1], [f1(r.wire), 1], [f1(r.base), 1], [f1(r.skip), 1, r.skip < r.base - 1 ? "better" : r.skip > r.base + 1 ? "worse" : ""]]));
+
+  const arms = ["A", "B", "C"];
+  const armHead = arms.map(a => [`${a}: T ${J.arms[a].T}, K ${J.arms[a].K}`, 1]);
+  const armCells = (r) => arms.map(a => {
+    const dlt = r[a] - r.base;
+    return [`${f1(r[a])} (${dlt >= 0 ? "+" : "−"}${f1(Math.abs(dlt))})`, 1, dlt < -1 ? "better" : dlt > 1 ? "worse" : ""];
+  });
+  simpleTable("#rj-glx", [["Row", 0], ["Packet", 1], ["Throttle off", 1], ...armHead], J.glx.map(r => [[r.row, 0], [B(r.size), 1], [f1(r.base), 1], ...armCells(r)]));
+  simpleTable("#rj-p150", [["Row", 0], ["Packet", 1], ["Throttle off", 1], ...armHead], J.p150.map(r => [[r.row, 0], [B(r.size), 1], [f1(r.base), 1], ...armCells(r)]));
+}
+
+/* ---------- trails + todo ---------- */
+function renderTrails() {
+  const rows = D.trails.filter(t => t.pct >= 0.3);
+  simpleTable("#trailtable", [["Link", 0], ["Topology", 0], ["Router", 0], ["Test", 0], ["Packet", 1], ["Main", 1], ["New router", 1], ["Slower by", 1], ["Comparison", 0]],
+    rows.map(t => [[t.link, 0], [t.topo, 0], [MODE[t.mode] || t.mode, 0], [t.label, 0], [t.size ? B(t.size) : "–", 1], [t.size ? bwc(t.size, t.main) : f1(t.main), 1], [t.size ? bwc(t.size, t.new) : f1(t.new), 1], [t.pct.toFixed(1) + "%", 1, "worse"], [t.same_job ? "same job" : "separate jobs", 0]]));
+}
+function renderTodo() {
+  simpleTable("#todo", [["Measurement", 0], ["Link", 0], ["Why", 0]], D.todo.map(t => [[t.what, 0], [t.where, 0], [t.why, 0]]));
+  for (const td of document.querySelectorAll("#todo td:nth-child(3), #todo td:nth-child(1)")) { td.style.whiteSpace = "normal"; td.style.minWidth = "240px"; }
+}
+
+/* ---------- boot ---------- */
+renderKpis();
+renderPeaks();
+renderFilters();
+renderBW();
+renderMultiVC();
+renderTwoMesh();
+renderBreakdown();
+renderHeadroom();
+renderKeepalive();
+renderLatency();
+renderSize();
+renderCards();
+renderTrails();
+renderTodo();
+renderRingJam();
+setupTabs();
+$("#bw-table-toggle").addEventListener("click", (e) => {
+  const w = $("#bw-table"); w.hidden = !w.hidden;
+  e.currentTarget.setAttribute("aria-expanded", String(!w.hidden));
+  e.currentTarget.textContent = w.hidden ? "Show as table" : "Hide table";
+  if (!w.hidden) renderBWTable();
+});
+window.addEventListener("scroll", hideTip, { passive: true });
+</script>

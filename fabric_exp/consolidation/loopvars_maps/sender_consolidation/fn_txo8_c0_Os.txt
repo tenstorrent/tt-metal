@@ -1,0 +1,3 @@
+394 images
+  378  _start; +fabric_router::PartialPresetForwards<0u>::preset; +fabric_router::PartialPresetForwards<0u>::preset_cmd_bufs; fabric_router::receiver::run; kernel_main
+   16  _start; +fabric_router::PartialPresetForwards<0u>::preset; +fabric_router::PartialPresetForwards<0u>::preset_cmd_bufs; kernel_main

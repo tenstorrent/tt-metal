@@ -1,0 +1,46 @@
+/home/aagarwal/tt-metal/fabric_exp/consolidation/loopvars_golden/s3_torusy_vc2_e1.elf: 949 instructions in the function; pass loop 859
+   98.4%  caller/slot  run:downstreams
+   96.5%  slot         run:me.y
+   96.2%  slot         run:me.x
+   93.7%  callee       invariant: addi s2,a5,352 (Channel router_receiver.hpp:145)
+   93.5%  callee       invariant: mv s3,s6 (Channel router_receiver.hpp:145)
+   91.3%  callee       invariant: addi s1,a5,-1056 (accumulate_ack_credit fabric_router_flow_
+   90.9%  callee       run:cursor0.position.ready
+   89.6%  callee       run:cursor0.counts.uncredited
+   89.6%  caller       set in the pass: addi t5,t5,-1 (run router_receiver.hpp:758); lw t5,28
+   89.4%  caller       set in the pass: lw t4,36(sp) (deliver router_local_delivery.hpp:189);
+   88.8%  callee       run:cursor1.counts.uncredited
+   88.6%  caller       set in the pass: lui t2,0xffb44 (deliver router_local_delivery.hpp:189
+   86.9%  caller/slot  pass:txq_status
+   86.0%  callee       run:cursor1.position.ready
+   81.1%  caller       set in the pass: li t0,0 (send_credit_frame router_receiver.hpp:667); 
+   70.6%  caller       set in the pass: add a6,a4,a7 (deliver router_local_delivery.hpp:156);
+   65.9%  caller/slot  handle:downstreams
+   59.9%  caller       set in the pass: add a7,a6,s2 (next_ring_slot router_downstream.hpp:18
+   58.0%  caller       set in the pass: addi a2,a2,1 (accumulate_first_level_acks router_rece
+   58.0%  caller       set in the pass: add a5,a4,a7 (deliver router_local_delivery.hpp:150);
+   56.3%  callee       run:cursor1.position.slot_addr
+   54.6%  callee       run:cursor1.position.index
+   49.7%  callee       pass:arrived1
+   49.1%  caller       set in the pass: add a3,a1,a2 (count_local_writes router_local_deliver
+   47.9%  caller       set in the pass: add a1,a1,a6 (count_local_writes router_local_deliver
+   47.5%  callee       of_slot:group
+   47.3%  callee       run:cursor0.position.slot_addr
+   46.2%  callee       run:cursor0.position.index
+   41.6%  callee       action:volatile_header
+   33.6%  callee       set in the pass: lw s10,1188(a4) (read_stream_raw router_common.hpp:10
+   32.3%  caller       set in the pass: add a4,a3,a4 (NOC_STATUS_READ_REG noc_nonblocking_api
+   30.7%  callee/caller deliver:trid
+   25.3%  callee       deliver:header
+   24.3%  caller       set in the pass: add a0,a0,a6 (noc_common_write_with_state noc_nonbloc
+   23.5%  caller       deliver:payload
+   19.8%  caller       local_atomic_inc:value
+   18.2%  caller/slot  deliver:chunks
+   15.2%  caller       local_atomic_inc:addr.@4
+   13.1%  caller       deliver:offset
+   12.9%  caller       local_write:dst_noc_addr.@4
+   12.4%  slot         set in the pass: sw a3,28(sp) (deliver router_local_delivery.hpp:162);
+   12.4%  caller       deliver:payload_size
+   12.2%  caller       set in the pass: lw t6,32(sp) (deliver router_local_delivery.hpp:189);
+   11.9%  caller/slot  deliver:encoding
+   10.7%  caller       local_write:dst_noc_addr.@0

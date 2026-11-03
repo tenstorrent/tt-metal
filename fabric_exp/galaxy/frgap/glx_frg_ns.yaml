@@ -1,0 +1,19 @@
+# FULLRING_MCAST_GAP.md A/Bs 7 and 4 (2026-11-03): glx_frg_axis.yaml's GlxRingMcastNS alone (the 8-chip rings, which
+# set the full-ring row: A/B 1), at 3072 and 4352 B.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: GlxRingMcastNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 4352]
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+    destination:
+      hops: {N: max, S: max}
+  patterns:
+  - {type: all_devices_uniform_pattern, iterations: 1}

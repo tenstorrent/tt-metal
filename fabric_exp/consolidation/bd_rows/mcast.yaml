@@ -1,0 +1,24 @@
+# Cycle breakdown, phase 2 (fabric_exp/report/BREAKDOWN_PLAN.md): Point 3: MeshMulticast write 4352 B (all-to-all, as pcs3/mcast.yaml), shorter: ~10 s on the new router.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BdMcast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+    num_links:
+    - 1
+  defaults:
+    ftype: mcast
+    num_packets: 16000000
+  patterns:
+  - type: all_to_all
+    iterations: 1

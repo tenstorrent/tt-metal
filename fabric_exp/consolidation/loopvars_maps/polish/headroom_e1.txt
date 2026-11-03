@@ -1,0 +1,24 @@
+== v4rxe1 + x1
+  bh_1d                    10/10 pass
+  bh_2d                    24/28 pass; HOT MOVED {'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 4, 'local_write@deliver<0>:dst_noc_addr.@4': 4}
+  bh_2d_vc2                28/28 pass
+  bh_ring                  0/10 pass; HOT MOVED {'run:first_channel_cursor.counts.uncredited': 10}
+  bh_torus                 0/12 pass; HOT MOVED {'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 8, 'local_write@deliver<0>:dst_noc_addr.@4': 8, 'deliver<0>:encoding': 4}
+  bh_torus_vc2             16/28 pass; HOT MOVED {'pass:txq_status': 8, 'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 4, 'NOC_CMD_BUF_WRITE_REG@deliver<1>:val': 4}
+  bh_vc1                   22/22 pass
+== v4rxe1 + x2
+  bh_1d                    0/10 pass; HOT MOVED {'run:first_channel_cursor.counts.uncredited': 10}
+  bh_2d                    8/28 pass; HOT MOVED {'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 20, 'local_write@deliver<0>:dst_noc_addr.@4': 20}
+  bh_2d_vc2                8/28 pass; HOT MOVED {'run:first_channel_cursor.counts.idle_passes_with_partial_group': 16, 'deliver<1>:encoding': 4}
+  bh_ring                  0/10 pass; HOT MOVED {'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 10, 'local_write@deliver<0>:dst_noc_addr.@4': 10, 'run:first_channel_cursor.counts.uncredited': 10}
+  bh_torus                 0/12 pass; HOT MOVED {'deliver<0>:encoding': 12, 'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 8, 'deliver<0>:chunks': 8}
+  bh_torus_vc2             0/28 pass; HOT MOVED {'run:first_channel_cursor.counts.idle_passes_with_partial_group': 16, 'deliver<0>:payload': 8, 'NOC_CMD_BUF_WRITE_REG@deliver<1>:val': 4, 'local_write@deliver<1>:dst_noc_addr.@4': 4}
+  bh_vc1                   14/22 pass; HOT MOVED {'run:credit_frame_due': 6, 'run:first_channel_cursor.counts.idle_passes_with_partial_group': 2}
+== v4rxe1 + fd
+  bh_1d                    10/10 pass
+  bh_2d                    28/28 pass
+  bh_2d_vc2                28/28 pass
+  bh_ring                  10/10 pass
+  bh_torus                 12/12 pass
+  bh_torus_vc2             4/28 pass; HOT MOVED {'run:first_channel_cursor.counts.idle_passes_with_partial_group': 16, 'pass:txq_status': 8}
+  bh_vc1                   22/22 pass

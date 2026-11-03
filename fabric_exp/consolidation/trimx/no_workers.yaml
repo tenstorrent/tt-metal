@@ -1,0 +1,6 @@
+# Every router loses both worker channels (VC0's channel 0, VC2's channel); VC0's forwarding channels stay.
+channel_trimming_overrides:
+  vc0:
+    force_enable_sender_channels: [1, 2, 3]
+  vc2:
+    force_enable_sender_channels: []

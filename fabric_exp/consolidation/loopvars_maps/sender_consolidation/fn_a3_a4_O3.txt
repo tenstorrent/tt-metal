@@ -1,0 +1,8 @@
+2285 images
+  954  _start; fabric_router::receiver::run
+  523  _start; fabric_router::single::run
+  472  fabric_router::sender::run
+  100  fabric_router::single::run
+   94  fabric_router::sender::run; -void fabric_router::telemetry::round_end_impl<true, false, fabric_router::sender::after_round<false, fabric_router::sender::SenderVcState<0u>, fabric_router::sender::run; +void fabric_router::telemetry::round_end_impl<true, false, fabric_router::sender::after_round<false, fabric_router::sender::SenderVcState<0u>, fabric_router::sender::run
+   92  _start; fabric_router::run_idle
+   50  _start; fabric_router::receiver::run

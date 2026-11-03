@@ -49,9 +49,12 @@ using namespace erisc_load_overlap;
 
 constexpr const char* kKernel = "tests/tt_metal/tt_fabric/erisc_load_ubench/kernels/erisc_load_overlap.cpp";
 
+constexpr uint32_t kNoBase = UINT32_MAX;
+
 struct PatternInfo {
     const char* name;
-    uint32_t adds;  // non-load instructions besides the filler (BASE2/BASE3 shape)
+    uint32_t adds;               // non-load instructions besides the filler (BASE2/BASE3 shape)
+    uint32_t base = kNoBase;     // send-batch patterns: the same-shape pattern without the loads measured (cost = difference)
 };
 
 constexpr PatternInfo kPatterns[kNumPatterns] = {
@@ -98,6 +101,37 @@ constexpr PatternInfo kPatterns[kNumPatterns] = {
     {"4 stream, K, use; header L (slot in reg) at once", 5},
     {"4 stream + slot DS, K, use; header via DS at once", 5},
     {"slot DS, header via DS used at once, K", 2},
+    {"count read; K; 4 uses (baseline)", 4, HB_BASE},
+    {"count read; H0, K, use", 4, HB_BASE},
+    {"count read; H0 H1 together, K, use", 4, HB_BASE},
+    {"count read; H0 H1 H2 together, K, use", 4, HB_BASE},
+    {"count read; H0..H3 together, K, use", 4, HB_BASE},
+    {"count read; H0 at once, H1 at once, K", 4, HB_BASE},
+    {"count read; H0..H3 each at once, K", 4, HB_BASE},
+    {"count read; DS -> H0, K, use", 4, HB_BASE},
+    {"count read; DS DS2 -> H0 H1 together, K, use", 4, HB_BASE},
+    {"count read; DS -> H0 at once, DS2 -> H1 at once, K", 4, HB_BASE},
+    {"count read; 7 TXQ writes, K (baseline)", 2, HW_BASE},
+    {"count read; H1, 7 writes, K, use", 2, HW_BASE},
+    {"count read; 4 writes, H1, 3 writes, K, use", 2, HW_BASE},
+    {"count read; 7 writes, H1, K, use", 2, HW_BASE},
+    {"count read; DS2 -> H1, 7 writes, K, use", 2, HW_BASE},
+    {"count read; H1 at once, 7 writes, K", 2, HW_BASE},
+    {"count read; K; 3 uses (baseline)", 3, HP_BASE},
+    {"count read; TXQ T Q + counter, K, use", 3, HP_BASE},
+    {"count read; TXQ T Q + counter + H1, K, use", 3, HP_BASE},
+    {"count read; lw H0+40, K, use", 4, HB_BASE},
+    {"count read; lhu L, K, use", 4, HB_BASE},
+    {"count read; lw L, K, use", 4, HB_BASE},
+    {"count read; lhu H0+40 at once, K", 4, HB_BASE},
+    {"count read; lw H0+40 at once, K", 4, HB_BASE},
+    {"count read; lw L at once, K", 4, HB_BASE},
+    {"no count read; lw L, K, use", 4, HX_BASE_NC},
+    {"no count read; lhu H0+40, K, use", 4, HX_BASE_NC},
+    {"no count read; K, 4 uses (baseline)", 4, HX_BASE_NC},
+    {"count read; TXQ T Q at once, K", 4, HB_BASE},
+    {"count read; H0 + TXQ T Q at once, K", 4, HB_BASE},
+    {"count read; (H0 T Q at once) x2, K", 4, HB_BASE},
 };
 
 }  // namespace
@@ -178,6 +212,9 @@ TEST(EriscLoadOverlap, ReadLatencyHiding) {
     auto overhead5 = [&](uint32_t k) { return per_block(BASE5, k) - kFill[k] - 5.0; };
     auto overhead7 = [&](uint32_t k) { return per_block(BASE7, k) - kFill[k] - 7.0; };
     auto load_cost = [&](uint32_t p, uint32_t k) {
+        if (kPatterns[p].base != kNoBase) {
+            return per_block(p, k) - per_block(kPatterns[p].base, k);
+        }
         const uint32_t adds = kPatterns[p].adds;
         const double oh = adds == 7   ? overhead7(k)
                           : adds == 5 ? overhead5(k)

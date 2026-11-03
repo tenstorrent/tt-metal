@@ -1,0 +1,10 @@
+# sls_model.py p150 refit (jobs 376-379, 190 points) predictions for the rule's unrun picks, written 2026-11-01 21:09:41 before the check runs
+# (lead fit: 1:2 = 1:1 -> 18,7,16,7,5; 2:1 -> 17,10,16,5,3; 3:1 -> 17,12,16,3,3; plus 19,7,16,7,4: 18,7,16,7,5 with a burst-sized worker and ring 4)
+18,7,16,7,5      16 B  1-hop  141.9  2-hop  288.5  inter + 2 VC1  290.1  inter + VC1  289.7  inter direct  208.3
+18,7,16,7,5    4352 B  1-hop  142.0  2-hop  315.3  inter + 2 VC1  323.4  inter + VC1  294.3  inter direct  209.1
+17,10,16,5,3     16 B  1-hop  141.9  2-hop  225.0  inter + 2 VC1  478.8  inter + VC1  407.9  inter direct  208.3
+17,10,16,5,3   4352 B  1-hop  142.0  2-hop  238.2  inter + 2 VC1  505.9  inter + VC1  489.3  inter direct  209.1
+17,12,16,3,3     16 B  1-hop  141.9  2-hop  200.2  inter + 2 VC1  600.7  inter + VC1  566.1  inter direct  208.3
+17,12,16,3,3   4352 B  1-hop  142.0  2-hop  208.1  inter + 2 VC1  663.8  inter + VC1  646.4  inter direct  209.1
+19,7,16,7,4      16 B  1-hop  141.9  2-hop  288.5  inter + 2 VC1  359.1  inter + VC1  305.9  inter direct  208.3
+19,7,16,7,4    4352 B  1-hop  142.0  2-hop  315.3  inter + 2 VC1  391.9  inter + VC1  367.0  inter direct  209.1

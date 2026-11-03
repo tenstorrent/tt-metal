@@ -1,0 +1,107 @@
+active_erisc.elf: _ZN13fabric_router6sender3runIN2tt9tt_fabric30EdmChannelWorkerInterfac
+  pass loop 605 instructions (round loop 669); live values per instruction: mean 50.7, peak 57
+  carried (live at the pass loop's head) 8d7c read_connection_semaphores router_sender.hpp:262: 46 (12 registers, 34 slots)
+    a4      caller invariant: add a4,a4,a2 (total_sent router_sender.hpp:711); add a4,a4,a3 (total_sent router_sender.hpp:711)
+    a5      caller set in the pass: lw a5,12(sp) (eth_txq_reg_write tt_eth_api.h:27); lw a5,16(sp) (send router_sender.hpp:332)
+    a6      caller invariant: li a6,10 (later_vcs_start router_sender.hpp:759); lw a6,8(a0) (worker_connections router_sender.hpp:726)
+    s1      callee set in the pass: mv s1,s6 (visit_worker router_sender.hpp:515)
+    s10     callee set in the pass: addi s10,s10,-1 (run router_sender.hpp:896)
+    s11     callee run:in_flight
+    s2      callee run:workers.vc0.sent
+    s3      callee invariant: lui s3,0x16 (got_immediate_termination_signal tt_fabric_utils.h:29); lui s3,0xffb40 (read_stream_raw router_common.hpp:102)
+    s4      callee run:far.vc0.next_slot
+    s5      callee run:workers.vc0.slot
+    s8      callee run:workers.vc0.expected_connection
+    s9      callee run:far.vc0.free_slots
+    sp+104  slot   run:forwarding.records._M_elems[0].upstream_credit_addr
+    sp+108  slot   run:forwarding.records._M_elems[0].upstream_credit_addr
+    sp+112  slot   run:forwarding.records._M_elems[1].slot
+    sp+116  slot   run:forwarding.records._M_elems[1].sent
+    sp+12   slot   invariant: sw a5,12(sp) (eth_txq_reg_write tt_eth_api.h:27)
+    sp+120  slot   run:forwarding.records._M_elems[1].completed
+    sp+128  slot   run:forwarding.records._M_elems[1].upstream_credit_addr
+    sp+132  slot   run:forwarding.records._M_elems[1].upstream_credit_addr
+    sp+136  slot   run:forwarding.records._M_elems[2].slot
+    sp+140  slot   run:forwarding.records._M_elems[2].sent
+    sp+144  slot   run:forwarding.records._M_elems[2].completed
+    sp+152  slot   run:forwarding.records._M_elems[2].upstream_credit_addr
+    sp+156  slot   run:forwarding.records._M_elems[2].upstream_credit_addr
+    sp+16   slot   invariant: sw a5,16(sp) (send router_sender.hpp:332)
+    sp+168  slot   run:connections
+    sp+172  slot   run:connections
+    sp+20   slot   invariant: sw a5,20(sp) (send router_sender.hpp:333)
+    sp+216  slot   run:connections
+    sp+220  slot   run:connections
+    sp+24   slot   invariant: ?
+    sp+272  slot   invariant: ?
+    sp+28   slot   invariant: sw a5,28(sp) (send router_sender.hpp:332)
+    sp+284  slot   invariant: ?
+    sp+48   slot   run:round.attempted
+    sp+52   slot   run:round.sent_at_round_start
+    sp+60   slot   run:later.vc2.far.free_slots
+    sp+64   slot   run:later.vc2.far.next_slot
+    sp+68   slot   run:later.vc2.worker.slot
+    sp+72   slot   run:later.vc2.worker.sent
+    sp+76   slot   run:later.vc2.worker.completed
+    sp+84   slot   run:later.vc2.worker.expected_connection
+    sp+88   slot   run:forwarding.records._M_elems[0].slot
+    sp+92   slot   run:forwarding.records._M_elems[0].sent
+    sp+96   slot   run:forwarding.records._M_elems[0].completed
+  peak 96e4 visit_kept_worker router_sender.hpp:622: 57 (20 registers, 37 slots)
+    a0      caller set in the pass: addi a0,a0,-10 (holds_packet router_sender.hpp:232); addi a0,a0,1 (send router_sender.hpp:352)
+    a1      caller set in the pass: addi a1,a1,-672 (send router_sender.hpp:333); addi a1,a1,96 (send router_sender.hpp:325)
+    a2      caller set in the pass: addi a2,a2,-10 (holds_packet router_sender.hpp:232); addi a2,a2,1184 (send router_sender.hpp:333)
+    a3      caller set in the pass: addi a3,a3,-8 (holds_packet router_sender.hpp:232); addi a3,a3,1 (noc_fast_default_write_dw_inline noc_nonblocking_api.h:1186)
+    a4      caller invariant: add a4,a4,a2 (total_sent router_sender.hpp:711); add a4,a4,a3 (total_sent router_sender.hpp:711)
+    a5      caller set in the pass: lw a5,12(sp) (eth_txq_reg_write tt_eth_api.h:27); lw a5,16(sp) (send router_sender.hpp:332)
+    a6      caller invariant: li a6,10 (later_vcs_start router_sender.hpp:759); lw a6,8(a0) (worker_connections router_sender.hpp:726)
+    a7      caller set in the pass: addi a7,a3,138 (NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174); addi a7,a7,1 (send router_sender.hpp:352)
+    s0      callee set in the pass: addi s0,s0,-10 (holds_packet router_sender.hpp:232); andi s0,s0,16 (pass router_sender.hpp:852)
+    s1      callee set in the pass: mv s1,s6 (visit_worker router_sender.hpp:515)
+    s10     callee set in the pass: addi s10,s10,-1 (run router_sender.hpp:896)
+    s11     callee run:in_flight
+    s2      callee set in the pass: addi s2,s2,1 (send router_sender.hpp:352)
+    s3      callee invariant: lui s3,0x16 (got_immediate_termination_signal tt_fabric_utils.h:29); lui s3,0xffb40 (read_stream_raw router_common.hpp:102)
+    s4      callee run:far.vc0.next_slot
+    s5      callee run:workers.vc0.slot
+    s6      callee set in the pass: lw s6,-1104(a2) (send router_sender.hpp:337); lw s6,-1104(a3) (visit_worker router_sender.hpp:503)
+    s7      callee set in the pass: add s7,s6,t3 (send router_sender.hpp:332); mv s7,s6 (pass router_sender.hpp:856)
+    s8      callee run:workers.vc0.expected_connection
+    s9      callee run:far.vc0.free_slots
+    sp+0    slot   set in the pass: sw t4,0(sp) (visit_kept_worker router_sender.hpp:618)
+    sp+104  slot   run:forwarding.records._M_elems[0].upstream_credit_addr
+    sp+108  slot   run:forwarding.records._M_elems[0].upstream_credit_addr
+    sp+112  slot   run:forwarding.records._M_elems[1].slot
+    sp+116  slot   run:forwarding.records._M_elems[1].sent
+    sp+12   slot   invariant: sw a5,12(sp) (eth_txq_reg_write tt_eth_api.h:27)
+    sp+120  slot   run:forwarding.records._M_elems[1].completed
+    sp+128  slot   run:forwarding.records._M_elems[1].upstream_credit_addr
+    sp+132  slot   run:forwarding.records._M_elems[1].upstream_credit_addr
+    sp+136  slot   run:forwarding.records._M_elems[2].slot
+    sp+140  slot   run:forwarding.records._M_elems[2].sent
+    sp+144  slot   run:forwarding.records._M_elems[2].completed
+    sp+152  slot   run:forwarding.records._M_elems[2].upstream_credit_addr
+    sp+156  slot   run:forwarding.records._M_elems[2].upstream_credit_addr
+    sp+16   slot   invariant: sw a5,16(sp) (send router_sender.hpp:332)
+    sp+168  slot   run:connections
+    sp+172  slot   run:connections
+    sp+20   slot   invariant: sw a5,20(sp) (send router_sender.hpp:333)
+    sp+216  slot   run:connections
+    sp+220  slot   run:connections
+    sp+24   slot   invariant: ?
+    sp+272  slot   invariant: ?
+    sp+28   slot   invariant: sw a5,28(sp) (send router_sender.hpp:332)
+    sp+284  slot   invariant: ?
+    sp+4    slot   set in the pass: sw a7,4(sp) (visit_kept_worker router_sender.hpp:622)
+    sp+48   slot   run:round.attempted
+    sp+52   slot   run:round.sent_at_round_start
+    sp+60   slot   run:later.vc2.far.free_slots
+    sp+64   slot   run:later.vc2.far.next_slot
+    sp+68   slot   run:later.vc2.worker.slot
+    sp+72   slot   run:later.vc2.worker.sent
+    sp+76   slot   run:later.vc2.worker.completed
+    sp+8    slot   set in the pass: sw t5,8(sp) (visit_kept_worker router_sender.hpp:622)
+    sp+84   slot   run:later.vc2.worker.expected_connection
+    sp+88   slot   run:forwarding.records._M_elems[0].slot
+    sp+92   slot   run:forwarding.records._M_elems[0].sent
+    sp+96   slot   run:forwarding.records._M_elems[0].completed

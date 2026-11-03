@@ -1194,6 +1194,15 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         return this->is_sender_channel_serviced_[risc_id][channel_id] ||
                (exp_upstream_on_e1 && risc_id == 1 && this->is_sender_channel_serviced_[0][channel_id]);
     };
+    // A worker channel: the first sender channel of each VC whose routing mode has a worker, which a worker (or the
+    // fabric's mux) connects to at run time; every other sender channel is forwarded into by an upstream router.
+    // VC0: the worker-connected channel; VC1 (inter-mesh): none; VC2 (neighbour exchange): its first channel.
+    // A channel position's role, whether or not trimming services it.
+    auto is_worker_channel = [&](size_t channel_id) -> bool {
+        const size_t vc2_first = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        return channel_id == get_worker_connected_sender_channel() ||
+               (actual_sender_channels_vc2 > 0 && channel_id == vc2_first);
+    };
     auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
         if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
             return false;
@@ -1203,14 +1212,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             return false;
         }
 
-        const size_t worker_channel = get_worker_connected_sender_channel();
-        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
-        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
-        const bool is_worker_channel = channel_id == worker_channel;
-        const bool is_vc2_channel = channel_id >= vc2_start && channel_id < vc2_end;
         const bool has_static_peer = this->sender_channel_connection_liveness_check_disable_array[channel_id];
 
-        return !is_worker_channel && !is_vc2_channel && !has_static_peer;
+        return !is_worker_channel(channel_id) && !has_static_peer;
     };
 
     const auto& builder_context = fabric_context.get_builder_context();
@@ -1351,6 +1355,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // agree across every VC1 link, since the acking receiver and upstream sender are on different
     // routers, so it cannot be enabled per-router.
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;
+    // VC2 (neighbour exchange): one hop and no bubble flow control, so no first-level acks. One arg per VC, so the
+    // router reads every VC's setting from the host (VC2 line mode sets it by mode).
+    named_args["ENABLE_FIRST_LEVEL_ACK_VC2"] = 0;
+    // Whether VC2's receiver forwards onto VC1's downstream routers here (crossover, as FABRIC_2D_VC0_CROSSOVER_TO_VC1
+    // is for VC0). Neighbour exchange never forwards; VC2 line mode sets it where its line fans into VC1.
+    named_args["VC2_CROSSOVER_TO_VC1"] = 0;
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
@@ -1491,6 +1501,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                             this->is_sender_channel_serviced_[risc_id][i])
                                       : 0;
     }
+    // Study (fabric_exp, v4): which sender channels are worker channels (is_worker_channel above), for every channel
+    // position whether or not trimming services it; the router's worker channels are the serviced ones among them.
+    // (LIVE_CHECK_SKIP is the connection protocol, which differs from the role on a channel trimming forces on.)
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_IS_WORKER_CHANNEL", i)] =
+            (i < num_sender_channels) ? static_cast<uint32_t>(is_worker_channel(i)) : 0;
+    }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("SENDER_CH_{}_IS_INJECTION", i)] =
             (i < num_sender_channels)
@@ -1501,9 +1518,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("SENDER_CH_{}_ACK_NOC_ID", i)] =
             (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_noc_ids[i]) : 0;
     }
+    // Study (fabric_exp, v4): a worker channel's credits go out on a command buffer of its own, by channel identity and
+    // whether or not trimming services it: VC0's worker channel on WR, VC2's on WR_REG; every other channel keeps the
+    // config's (the atomics buffer). Main's router hands the arg to the worker interface, which does not use it.
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        named_args[fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", i)] =
-            (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_cmd_buf_ids[i]) : 0;
+        uint32_t ack_cmd_buf = static_cast<uint32_t>(config.sender_channel_ack_cmd_buf_ids[i]);
+        if (i < num_sender_channels && is_worker_channel(i)) {
+            ack_cmd_buf = i == get_worker_connected_sender_channel() ? FabricEriscDatamoverConfig::WR_CMD_BUF
+                                                                     : FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
+        }
+        named_args[fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", i)] = (i < num_sender_channels) ? ack_cmd_buf : 0;
     }
 
     // --- Receiver channel per-channel arrays (always emit MAX entries; 0 for unused) ---
@@ -2011,10 +2035,17 @@ tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_le
     if (opt_level_override.has_value()) {
         return opt_level_override.value();
     }
-    // Use Os (optimize for size) when VC1 is active to fit in code space
-    // Use O3 (optimize for performance) otherwise
-    bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
-    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+    // Os (optimize for size) where a router would not fit in code space at O3, O3 (optimize for performance) otherwise:
+    // main's router with VC1 (29,940 B at O3 against the 26,624 B kernel config buffer), and the study's router
+    // (TT_FABRIC_KERNEL_VERSION=2) with VC1 and VC2 both active (26,156 B at O3 before runtime args). The study's router
+    // with VC1 alone fits at O3 (23,340 B) and is 10.7% / 12.7% faster there on the VC1 split / inter-mesh rows
+    // (fabric_exp, job 367).
+    const bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
+    const bool vc2_active = this->config.num_used_receiver_channels_per_vc[2] > 0;
+    const char* kernel_version = std::getenv("TT_FABRIC_KERNEL_VERSION");
+    const bool study_router = kernel_version != nullptr && std::string(kernel_version) == "2";
+    const bool needs_size = vc1_active && (!study_router || vc2_active);
+    return needs_size ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
 }
 
 void FabricEriscDatamoverBuilder::teardown_from_host(

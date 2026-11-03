@@ -1,0 +1,238 @@
+v4rxg3_Os -> v4rxrp1_Os: 1697 images with different .text, 2398 role analyses
+  bh_1d receiver                             10  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_1d_1erisc receiver                      10  loop +14 sp S+0 L+0
+  bh_1d_1erisc sender                        10  loop +0 sp S+0 L+0
+  bh_1d_allinstr receiver                    10  loop +20 sp S+2 L+1 +['receive<0>:route_loaded~', 'step<0>:route_loaded~']
+  bh_1d_delay receiver                       10  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_1d_mux receiver                         10  loop +14 sp S+0 L+0
+  bh_1d_mux sender                           10  loop +0 sp S+0 L+0
+  bh_1d_telemetry receiver                   10  loop +20 sp S+0 L+2
+  bh_1d_trim receiver                        10  loop +25 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_1d_trim_w0 receiver                     10  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_1d_trim_w0_1erisc receiver              10  loop +14 sp S+0 L+0
+  bh_1d_trim_w0_1erisc sender                10  loop +0 sp S+0 L+0
+  bh_2d receiver                             16  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_2d receiver                              8  loop +41 sp S+2 L+6 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_2d receiver                              4  loop +37 sp S+1 L+4 +['run:loop_copy.packets_ready']
+  bh_2d_1erisc receiver                      16  loop +20 sp S+1 L+1
+  bh_2d_1erisc receiver                      12  loop +27 sp S+1 L+1
+  bh_2d_1erisc sender                        28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_delay receiver                16  loop +20 sp S+1 L+1
+  bh_2d_1erisc_delay receiver                12  loop +27 sp S+1 L+1
+  bh_2d_1erisc_delay sender                  28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_passdelay receiver            16  loop +20 sp S+1 L+1
+  bh_2d_1erisc_passdelay receiver            12  loop +27 sp S+1 L+1
+  bh_2d_1erisc_passdelay sender              28  loop +0 sp S+0 L+0
+  bh_2d_allinstr receiver                    16  loop +16 sp S+0 L+2 +['handle<0>:header_word', 'receive<0>:route_loaded~', 'step<0>:route_loaded~']
+  bh_2d_allinstr receiver                     8  loop +26 sp S+4 L+9 +['forward<1>:dst', 'forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_each<2>:size_bytes', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:dst', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@4', 'noc_addr@forward_stateless<1,2>:addr', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@4', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<0>:route_loaded~'] -['run:credit_frame_due']
+  bh_2d_allinstr receiver                     4  loop +43 sp S+1 L+5 +['receive<0>:route_loaded~', 'step<0>:route_loaded~']
+  bh_2d_bwtelemetry receiver                 16  loop +19 sp S+0 L+2
+  bh_2d_bwtelemetry receiver                  8  loop +39 sp S+2 L+6 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_2d_bwtelemetry receiver                  4  loop +32 sp S+0 L+5
+  bh_2d_codeprof receiver                    16  loop +13 sp S+1 L+3
+  bh_2d_codeprof receiver                     8  loop +33 sp S+6 L+9 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<0>:trid', 'forward<1>:trid', 'forward_all@handle<0>:trid', 'forward_each<2>:trid', 'forward_each<3>:trid', 'forward_stateless<1,2>:trid', 'handle<0>:trid', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x'] -['run:credit_frame_due']
+  bh_2d_codeprof receiver                     4  loop +51 sp S+2 L+6
+  bh_2d_delay receiver                       16  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_2d_delay receiver                        8  loop +41 sp S+2 L+6 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_2d_delay receiver                        4  loop +37 sp S+1 L+4 +['run:loop_copy.packets_ready']
+  bh_2d_mux receiver                         16  loop +20 sp S+1 L+1
+  bh_2d_mux receiver                         12  loop +27 sp S+1 L+1
+  bh_2d_mux sender                           28  loop +0 sp S+0 L+0
+  bh_2d_mux_delay receiver                   16  loop +20 sp S+1 L+1
+  bh_2d_mux_delay receiver                   12  loop +27 sp S+1 L+1
+  bh_2d_mux_delay sender                     28  loop +0 sp S+0 L+0
+  bh_2d_mux_trim_all receiver                16  loop +20 sp S+1 L+1
+  bh_2d_mux_trim_all receiver                12  loop +27 sp S+1 L+1
+  bh_2d_mux_trim_all sender                  28  loop +0 sp S+0 L+0
+  bh_2d_passdelay receiver                   16  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_2d_passdelay receiver                    8  loop +41 sp S+2 L+6 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_2d_passdelay receiver                    4  loop +37 sp S+1 L+4 +['run:loop_copy.packets_ready']
+  bh_2d_telemetry receiver                   16  loop +20 sp S+0 L+2
+  bh_2d_telemetry receiver                    8  loop +31 sp S+2 L+6 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_2d_telemetry receiver                    4  loop +32 sp S+0 L+5
+  bh_2d_trim receiver                        12  loop +27 sp S+1 L+2 +['handle<0>:header_word', 'run:loop_copy.packets_ready']
+  bh_2d_trim receiver                         8  loop +22 sp S+4 L+6 +['route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x'] -['run:credit_frame_due']
+  bh_2d_trim receiver                         4  loop +28 sp S+1 L+2 +['handle<0>:header_word', 'run:loop_copy.packets_ready']
+  bh_2d_trim receiver                         4  loop +36 sp S+1 L+5 +['run:loop_copy.packets_ready']
+  bh_2d_udm receiver                         16  loop +20 sp S+1 L+1
+  bh_2d_udm receiver                         12  loop +27 sp S+1 L+1
+  bh_2d_udm sender                           28  loop +0 sp S+0 L+0
+  bh_2d_udm_gtest receiver                   16  loop +20 sp S+1 L+1
+  bh_2d_udm_gtest receiver                   12  loop +27 sp S+1 L+1
+  bh_2d_udm_gtest sender                     28  loop +0 sp S+0 L+0
+  bh_2d_vc2 receiver                         16  loop +24 sp S+2 L+4 +['run:loop_copy.packets_ready']
+  bh_2d_vc2 receiver                          8  loop +40 sp S+4 L+3 +['run:credit_frame_due'] -['forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_each<2>:size_bytes', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size']
+  bh_2d_vc2 receiver                          4  loop +41 sp S+4 L+7 +['run:loop_copy.packets_ready']
+  bh_2d_vc2_1erisc receiver                   8  loop +22 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_1erisc receiver                   8  loop +31 sp S+3 L+3 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  bh_2d_vc2_1erisc receiver                   8  loop +22 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_1erisc receiver                   4  loop +29 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_1erisc sender                    28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_rx0 receiver                28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_rx0_1erisc receiver         28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_rx0_1erisc sender           28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0 receiver                 16  loop +24 sp S+2 L+4 +['run:loop_copy.packets_ready']
+  bh_2d_vc2_trim_w0 receiver                  8  loop +42 sp S+4 L+3 +['run:credit_frame_due'] -['forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_each<2>:size_bytes', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size']
+  bh_2d_vc2_trim_w0 receiver                  4  loop +39 sp S+4 L+7 +['run:loop_copy.packets_ready']
+  bh_2d_vc2_trim_w02 receiver                16  loop +24 sp S+2 L+4 +['run:loop_copy.packets_ready']
+  bh_2d_vc2_trim_w02 receiver                 8  loop +42 sp S+4 L+3 +['run:credit_frame_due'] -['forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_each<2>:size_bytes', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size']
+  bh_2d_vc2_trim_w02 receiver                 4  loop +39 sp S+4 L+7 +['run:loop_copy.packets_ready']
+  bh_2d_vc2_trim_w02_1erisc receiver          8  loop +22 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w02_1erisc receiver          8  loop +22 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w02_1erisc receiver          8  loop +31 sp S+3 L+3 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  bh_2d_vc2_trim_w02_1erisc receiver          4  loop +29 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w02_1erisc sender           28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc receiver           8  loop +31 sp S+3 L+3 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  bh_2d_vc2_trim_w0_1erisc receiver           8  loop +22 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w0_1erisc receiver           8  loop +22 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w0_1erisc receiver           4  loop +29 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w0_1erisc sender            28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w2 receiver                 16  loop +24 sp S+2 L+4 +['run:loop_copy.packets_ready']
+  bh_2d_vc2_trim_w2 receiver                  8  loop +42 sp S+4 L+3 +['run:credit_frame_due'] -['forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_each<2>:size_bytes', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size']
+  bh_2d_vc2_trim_w2 receiver                  4  loop +39 sp S+4 L+7 +['run:loop_copy.packets_ready']
+  bh_2d_vc2_trim_w2_1erisc receiver           8  loop +31 sp S+3 L+3 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  bh_2d_vc2_trim_w2_1erisc receiver           8  loop +22 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w2_1erisc receiver           8  loop +22 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w2_1erisc receiver           4  loop +29 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_2d_vc2_trim_w2_1erisc sender            28  loop +0 sp S+0 L+0
+  bh_neighbor receiver                        4  loop +0 sp S+0 L+0
+  bh_neighbor_1erisc receiver                 4  loop +0 sp S+0 L+0
+  bh_neighbor_1erisc sender                   4  loop +0 sp S+0 L+0
+  bh_neighbor_delay receiver                  4  loop +0 sp S+0 L+0
+  bh_ring receiver                           10  loop +11 sp S+3 L+3 +['run:loop_copy.packets_ready']
+  bh_ring_1erisc receiver                    10  loop +15 sp S+0 L+0
+  bh_ring_1erisc sender                      10  loop +0 sp S+0 L+0
+  bh_ring_allinstr receiver                  10  loop +32 sp S+3 L+4 +['eth_read_wall_clock@step<0>:wall_clock_low', 'run:loop_copy.packets_ready']
+  bh_ring_delay receiver                     10  loop +11 sp S+3 L+3 +['run:loop_copy.packets_ready']
+  bh_ring_mux receiver                       10  loop +15 sp S+0 L+0
+  bh_ring_mux sender                         10  loop +0 sp S+0 L+0
+  bh_ring_passdelay receiver                 10  loop +11 sp S+3 L+3 +['run:loop_copy.packets_ready']
+  bh_torus receiver                           4  loop +40 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  bh_torus receiver                           4  loop +39 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  bh_torus receiver                           4  loop +38 sp S+1 L+6 +['handle<0>:size~']
+  bh_torus_1erisc receiver                    4  loop +23 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_torus_1erisc receiver                    4  loop +32 sp S+3 L+3 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  bh_torus_1erisc receiver                    4  loop +23 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_torus_1erisc sender                     12  loop +0 sp S+0 L+0
+  bh_torus_vc2 receiver                      16  loop +24 sp S+2 L+4 +['run:loop_copy.packets_ready']
+  bh_torus_vc2 receiver                       8  loop +29 sp S+4 L+3 +['load_route_bytes@receive<0>:action_y', 'receive<2>:route_loaded~', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<0>:next_route.x', 'step<0>:next_route.y', 'step<2>:route_loaded~']
+  bh_torus_vc2 receiver                       4  loop +10 sp S+5 L+6 +['credit_completions<2>:waiting~', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.packets_ready', 'step<0>:next_route.x']
+  bh_torus_vc2_1erisc receiver                8  loop +27 sp S+1 L+1
+  bh_torus_vc2_1erisc receiver                8  loop +22 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_torus_vc2_1erisc receiver                8  loop +22 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_torus_vc2_1erisc receiver                4  loop +27 sp S+1 L+1 +['pass:txq_status']
+  bh_torus_vc2_1erisc sender                 28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0 receiver              16  loop +24 sp S+2 L+4 +['run:loop_copy.packets_ready']
+  bh_torus_vc2_trim_w0 receiver               8  loop +29 sp S+4 L+3 +['load_route_bytes@receive<0>:action_y', 'receive<2>:route_loaded~', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<0>:next_route.x', 'step<0>:next_route.y', 'step<2>:route_loaded~']
+  bh_torus_vc2_trim_w0 receiver               4  loop +10 sp S+5 L+6 +['credit_completions<2>:waiting~', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.packets_ready', 'step<0>:next_route.x']
+  bh_torus_vc2_trim_w0_1erisc receiver        8  loop +27 sp S+1 L+1
+  bh_torus_vc2_trim_w0_1erisc receiver        8  loop +22 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_torus_vc2_trim_w0_1erisc receiver        8  loop +22 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_torus_vc2_trim_w0_1erisc receiver        4  loop +27 sp S+1 L+1 +['pass:txq_status']
+  bh_torus_vc2_trim_w0_1erisc sender         28  loop +0 sp S+0 L+0
+  bh_trim_gtest receiver                     39  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                     12  loop +27 sp S+1 L+2 +['handle<0>:header_word', 'run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                     12  loop +22 sp S+4 L+6 +['route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x'] -['run:credit_frame_due']
+  bh_trim_gtest receiver                     10  loop +25 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                      8  loop +41 sp S+2 L+6 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_trim_gtest receiver                      6  loop +0 sp S+0 L+0
+  bh_trim_gtest receiver                      4  loop +24 sp S+1 L+2 +['handle<0>:header_word', 'run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                      4  loop +36 sp S+1 L+5 +['run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                      4  loop +23 sp S+1 L+2 +['handle<0>:header_word', 'run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                      4  loop +28 sp S+1 L+2 +['handle<0>:header_word', 'run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                      4  loop +37 sp S+1 L+4 +['run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                      2  loop +40 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  bh_trim_gtest receiver                      1  loop +39 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  bh_trim_gtest_1erisc receiver              20  loop +14 sp S+0 L+0
+  bh_trim_gtest_1erisc receiver              19  loop +20 sp S+1 L+1
+  bh_trim_gtest_1erisc receiver              16  loop +20 sp S+1 L+1 +['handle<0>:header_word']
+  bh_trim_gtest_1erisc receiver              16  loop +26 sp S+1 L+1
+  bh_trim_gtest_1erisc receiver              12  loop +27 sp S+1 L+1
+  bh_trim_gtest_1erisc receiver              10  loop +13 sp S+0 L+0
+  bh_trim_gtest_1erisc receiver               8  loop +21 sp S+1 L+1 +['handle<0>:header_word']
+  bh_trim_gtest_1erisc receiver               6  loop +0 sp S+0 L+0
+  bh_trim_gtest_1erisc receiver               2  loop +23 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_trim_gtest_1erisc receiver               1  loop +23 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  bh_trim_gtest_1erisc sender               110  loop +0 sp S+0 L+0
+  bh_vc1 receiver                             6  loop +63 sp S+8 L+16 +['load_route_bytes@receive<0>:action_y', 'receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1 receiver                             6  loop +44 sp S+2 L+5 -['run:credit_frame_due']
+  bh_vc1 receiver                             2  loop +72 sp S+13 L+23 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<2>:size_bytes', 'forward_each<3>:forward_to~', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1 receiver                             2  loop +43 sp S+6 L+13 +['receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'route_word@receive<0>:route_action~', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1 receiver                             2  loop +60 sp S+12 L+21 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<3>:src_addr', 'forward_all@handle<1>:src_addr', 'forward_each<12>:src_addr', 'forward_each<13>:src_addr', 'forward_each<8>:src_addr', 'forward_stateless<1,2>:src_addr', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1 receiver                             2  loop +43 sp S+2 L+7 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_vc1 receiver                             2  loop +55 sp S+11 L+19 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<2>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<4>:size_bytes', 'forward_each<5>:forward_to~', 'forward_each<5>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_allinstr receiver                    2  loop +59 sp S+10 L+14 +['load_route_bytes@receive<0>:action_y', 'receive<0>:arrived', 'receive<1>:route_loaded~', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<0>:arrived', 'step<0>:route_loaded~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step<1>:route_loaded~']
+  bh_vc1_allinstr receiver                    2  loop +33 sp S+3 L+9 +['route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<0>:route_loaded~'] -['run:credit_frame_due']
+  bh_vc1_allinstr receiver                    2  loop +41 sp S+8 L+10 +['handle<0>:trid~', 'index_after@advance<0>:index', 'receive<1>:route_loaded~', 'route_word@receive<0>:bytes.x', 'route_word@receive<0>:route_action~', 'run:loop_copy.next_index', 'run:loop_copy.next_route.x', 'step<1>:next_route.x', 'step<1>:route_loaded~'] -['run:loop_copy.packets_ready']
+  bh_vc1_delay receiver                       6  loop +63 sp S+8 L+16 +['load_route_bytes@receive<0>:action_y', 'receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_delay receiver                       6  loop +44 sp S+2 L+5 -['run:credit_frame_due']
+  bh_vc1_delay receiver                       2  loop +43 sp S+6 L+13 +['receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'route_word@receive<0>:route_action~', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_delay receiver                       2  loop +72 sp S+13 L+23 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<2>:size_bytes', 'forward_each<3>:forward_to~', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_delay receiver                       2  loop +55 sp S+11 L+19 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<2>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<4>:size_bytes', 'forward_each<5>:forward_to~', 'forward_each<5>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_delay receiver                       2  loop +60 sp S+12 L+21 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<3>:src_addr', 'forward_all@handle<1>:src_addr', 'forward_each<12>:src_addr', 'forward_each<13>:src_addr', 'forward_each<8>:src_addr', 'forward_stateless<1,2>:src_addr', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_delay receiver                       2  loop +43 sp S+2 L+7 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_vc1_passdelay receiver                   6  loop +63 sp S+8 L+16 +['load_route_bytes@receive<0>:action_y', 'receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_passdelay receiver                   6  loop +44 sp S+2 L+5 -['run:credit_frame_due']
+  bh_vc1_passdelay receiver                   2  loop +55 sp S+11 L+19 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<2>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<4>:size_bytes', 'forward_each<5>:forward_to~', 'forward_each<5>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_passdelay receiver                   2  loop +72 sp S+13 L+23 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<2>:size_bytes', 'forward_each<3>:forward_to~', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_passdelay receiver                   2  loop +43 sp S+6 L+13 +['receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'route_word@receive<0>:route_action~', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_passdelay receiver                   2  loop +43 sp S+2 L+7 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_vc1_passdelay receiver                   2  loop +60 sp S+12 L+21 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<3>:src_addr', 'forward_all@handle<1>:src_addr', 'forward_each<12>:src_addr', 'forward_each<13>:src_addr', 'forward_each<8>:src_addr', 'forward_stateless<1,2>:src_addr', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_rx0 receiver                    6  loop +34 sp S+3 L+2 +['route_word@receive<1>:bytes.x', 'run:loop_copy.next_route.x', 'step<1>:next_route.x']
+  bh_vc1_trim_rx0 receiver                    4  loop +23 sp S+0 L+1
+  bh_vc1_trim_rx0 receiver                    2  loop +36 sp S+1 L+6 +['handle<1>:size~']
+  bh_vc1_trim_rx0 receiver                    2  loop +27 sp S+1 L+6 +['handle<1>:size~']
+  bh_vc1_trim_rx0_1erisc receiver             8  loop +26 sp S+1 L+1
+  bh_vc1_trim_rx0_1erisc receiver             6  loop +19 sp S+1 L+1
+  bh_vc1_trim_rx0_1erisc sender              14  loop +0 sp S+0 L+0
+  bh_vc1_trim_vc1 receiver                    6  loop +63 sp S+8 L+16 +['load_route_bytes@receive<0>:action_y', 'receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1 receiver                    6  loop +44 sp S+2 L+5 -['run:credit_frame_due']
+  bh_vc1_trim_vc1 receiver                    2  loop +43 sp S+6 L+13 +['receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'route_word@receive<0>:route_action~', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1 receiver                    2  loop +55 sp S+11 L+19 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<2>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<4>:size_bytes', 'forward_each<5>:forward_to~', 'forward_each<5>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1 receiver                    2  loop +72 sp S+13 L+23 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<2>:size_bytes', 'forward_each<3>:forward_to~', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1 receiver                    2  loop +43 sp S+2 L+7 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1 receiver                    2  loop +60 sp S+12 L+21 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<3>:src_addr', 'forward_all@handle<1>:src_addr', 'forward_each<12>:src_addr', 'forward_each<13>:src_addr', 'forward_each<8>:src_addr', 'forward_stateless<1,2>:src_addr', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1p receiver                   6  loop +44 sp S+2 L+5 -['run:credit_frame_due']
+  bh_vc1_trim_vc1p receiver                   6  loop +63 sp S+8 L+16 +['load_route_bytes@receive<0>:action_y', 'receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1p receiver                   2  loop +43 sp S+2 L+7 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1p receiver                   2  loop +60 sp S+12 L+21 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<3>:src_addr', 'forward_all@handle<1>:src_addr', 'forward_each<12>:src_addr', 'forward_each<13>:src_addr', 'forward_each<8>:src_addr', 'forward_stateless<1,2>:src_addr', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1p receiver                   2  loop +43 sp S+6 L+13 +['receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'route_word@receive<0>:route_action~', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1p receiver                   2  loop +72 sp S+13 L+23 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<2>:size_bytes', 'forward_each<3>:forward_to~', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_vc1p receiver                   2  loop +55 sp S+11 L+19 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<2>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<4>:size_bytes', 'forward_each<5>:forward_to~', 'forward_each<5>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_w0 receiver                     6  loop +44 sp S+2 L+5 -['run:credit_frame_due']
+  bh_vc1_trim_w0 receiver                     6  loop +63 sp S+8 L+16 +['load_route_bytes@receive<0>:action_y', 'receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'run:loop_copy.next_route.y', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_w0 receiver                     2  loop +43 sp S+2 L+7 +['receive<0>:header_word'] -['run:credit_frame_due']
+  bh_vc1_trim_w0 receiver                     2  loop +43 sp S+6 L+13 +['receive<1>:arrived~', 'receive<1>:header_word', 'route_word@receive<0>:bytes.x', 'route_word@receive<0>:route_action~', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_w0 receiver                     2  loop +55 sp S+11 L+19 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<2>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<4>:size_bytes', 'forward_each<5>:forward_to~', 'forward_each<5>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_w0 receiver                     2  loop +72 sp S+13 L+23 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'forward<1>:size_bytes', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<1>:forward_to~', 'forward_each<2>:size_bytes', 'forward_each<3>:forward_to~', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'handle<0>:size', 'handle<1>:route_word', 'handle<1>:size', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:arrived~', 'receive<1>:header_word', 'receive<1>:route_word', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<1>:arrived_raw', 'step<1>:arrived~', 'step<1>:next_route.x', 'step<1>:next_route.y', 'step_channel<1>:arrived_raw'] -['run:credit_frame_due']
+  bh_vc1_trim_w0_1erisc receiver              8  loop +27 sp S+0 L+0 -['pass:my_chip', 'receive<0>:my_chip', 'receiver_pass:my_chip', 'step<0>:my_chip', 'step_channel<0>:my_chip']
+  bh_vc1_trim_w0_1erisc receiver              7  loop +50 sp S+1 L+1
+  bh_vc1_trim_w0_1erisc receiver              4  loop +34 sp S+1 L+1
+  bh_vc1_trim_w0_1erisc sender               19  loop +0 sp S+0 L+0
+  glx_1d receiver                            12  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  glx_2d receiver                            24  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  glx_2d receiver                            20  loop +41 sp S+2 L+6 +['receive<0>:header_word'] -['run:credit_frame_due']
+  glx_2d receiver                             4  loop +37 sp S+1 L+4 +['run:loop_copy.packets_ready']
+  glx_express receiver                       20  loop +36 sp S+4 L+7 +['handle<0>:size~', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<0>:next_route.x']
+  glx_express receiver                        4  loop +39 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  glx_express receiver                        4  loop +40 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  glx_express_1erisc receiver                12  loop +40 sp S+7 L+7 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  glx_express_1erisc receiver                 8  loop +36 sp S+5 L+5 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  glx_express_1erisc receiver                 4  loop +23 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  glx_express_1erisc receiver                 4  loop +23 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  glx_express_1erisc sender                  28  loop +0 sp S+0 L+0
+  glx_express_line receiver                  28  loop +36 sp S+4 L+7 +['handle<0>:size~', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<0>:next_route.x']
+  glx_express_line receiver                   8  loop +39 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  glx_express_line receiver                   8  loop +40 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  glx_express_line_1erisc receiver           18  loop +40 sp S+7 L+7 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  glx_express_line_1erisc receiver           10  loop +36 sp S+5 L+5 +['noc_async_write_one_packet_with_trid@forward_stateless<1,0>:dst_noc_addr.@4', 'noc_inline_dw_write@forward_stateless<1,0>:addr.@4']
+  glx_express_line_1erisc receiver            8  loop +23 sp S+2 L+2 +['forward<1>:src_addr', 'forward_all@handle<0>:src_addr', 'forward_each<2>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  glx_express_line_1erisc receiver            8  loop +23 sp S+2 L+2 +['forward<0>:src_addr', 'forward_all@handle<0>:size_bytes', 'forward_all@handle<0>:src_addr', 'forward_each<1>:size_bytes', 'forward_each<1>:src_addr', 'forward_stateless<1,0>:src_addr', 'handle<0>:size']
+  glx_express_line_1erisc sender             44  loop +0 sp S+0 L+0
+  glx_express_mesh receiver                  24  loop +24 sp S+1 L+3 +['run:loop_copy.packets_ready']
+  glx_express_mesh receiver                  20  loop +41 sp S+2 L+6 +['receive<0>:header_word'] -['run:credit_frame_due']
+  glx_express_mesh receiver                   4  loop +37 sp S+1 L+4 +['run:loop_copy.packets_ready']
+  glx_ring receiver                           8  loop +11 sp S+3 L+3 +['run:loop_copy.packets_ready']
+  glx_torus receiver                          4  loop +37 sp S+1 L+6 +['handle<0>:size~']
+  glx_torus receiver                          2  loop +39 sp S+2 L+3 +['run:loop_copy.packets_ready']
+  glx_torus receiver                          2  loop +40 sp S+2 L+3 +['run:loop_copy.packets_ready']

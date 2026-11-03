@@ -1,0 +1,29 @@
+v4rxg3_O3 -> v4rxnsbs_O3: 238 images with different .text, 238 role analyses
+  bh_1d receiver                             10  loop -2 sp S+0 L+0
+  bh_2d receiver                             12  loop -2 sp S+0 L+0
+  bh_2d receiver                              8  loop -4 sp S-3 L-3 -['run:credit_frame_due']
+  bh_2d receiver                              8  loop -44 sp S+0 L+0
+  bh_2d_codeprof receiver                    20  loop -2 sp S+0 L+0
+  bh_2d_codeprof receiver                     8  loop -34 sp S+4 L+6 +['NOC_CMD_BUF_WRITE_REG@deliver<0>:val', 'local_write@deliver<0>:src_addr']
+  bh_ring receiver                           10  loop -6 sp S+0 L-1
+  bh_torus receiver                           8  loop -5 sp S+0 L+0
+  bh_torus receiver                           4  loop -33 sp S+4 L+5 +['NOC_CMD_BUF_WRITE_REG@deliver<0>:val', 'local_write@deliver<0>:dst_noc_addr.@4']
+  bh_vc1 receiver                             6  loop -66 sp S+0 L+0
+  bh_vc1 receiver                             4  loop -131 sp S+5 L+3 +['credit_completions<1>:waiting~', 'read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<0>:header_word', 'receive<1>:header', 'receive<1>:header_word']
+  bh_vc1 receiver                             4  loop -133 sp S+0 L-1
+  bh_vc1 receiver                             2  loop -89 sp S+0 L-1
+  bh_vc1 receiver                             2  loop -128 sp S+5 L+3 +['credit_completions<1>:waiting~', 'read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<0>:header_word', 'receive<1>:header', 'receive<1>:header_word']
+  bh_vc1 receiver                             2  loop -44 sp S+0 L+0
+  bh_vc1 receiver                             2  loop -88 sp S+0 L+0
+  glx_2d receiver                            16  loop -2 sp S+0 L+0
+  glx_2d receiver                            12  loop -4 sp S-3 L-3 -['run:credit_frame_due']
+  glx_2d receiver                            12  loop -76 sp S+1 L+1 -['run:loop_copy.idle_passes_with_partial_group']
+  glx_2d receiver                             8  loop -44 sp S+0 L+0
+  glx_express receiver                       12  loop -80 sp S+0 L+0
+  glx_express receiver                        8  loop -56 sp S+3 L+3
+  glx_express receiver                        8  loop -5 sp S+0 L+0
+  glx_express_line receiver                  18  loop -80 sp S+0 L+0
+  glx_express_line receiver                  16  loop -5 sp S+0 L+0
+  glx_express_line receiver                  10  loop -56 sp S+3 L+3
+  glx_torus receiver                          4  loop -5 sp S+0 L+0
+  glx_torus receiver                          4  loop -56 sp S+3 L+3

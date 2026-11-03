@@ -1,0 +1,10 @@
+v4rxg2a O3: built 2863/3124 into /home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4rxg2a_O3
+  configs 3124, ok 2863, not in base 150
+  ok-set mismatches: 0 []
+  bytecmp exit 1
+  shared 2713  identical 2713  differ 0  only in v4rxg1_O3 0  only in v4rxg2a_O3 150
+v4rxg2a Os: built 2863/3124 into /home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4rxg2a_Os
+  configs 3124, ok 2863, not in base 150
+  ok-set mismatches: 0 []
+  bytecmp exit 1
+  shared 2713  identical 2713  differ 0  only in v4rxg1_Os 0  only in v4rxg2a_Os 150

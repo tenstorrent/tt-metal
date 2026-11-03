@@ -10,3 +10,6 @@ __pycache__/
 # Router ELFs saved by the run scripts (tens of GB): variants/<v>/elf/ and consolidation/builds/ stay local.
 variants/*/elf/
 consolidation/builds/
+# Hang captures (device-state dumps) and source snapshots (.tgz) stay local: raw artifacts, like the logs.
+results/*_hangcap/
+results/*.tgz

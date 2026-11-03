@@ -1,0 +1,4 @@
+# Every router loses VC2's sender channel (its worker channel). Other VCs untouched.
+channel_trimming_overrides:
+  vc2:
+    force_enable_sender_channels: []

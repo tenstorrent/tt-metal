@@ -1,0 +1,26 @@
+2863 images
+ 1032  _start; kernel_main
+  402  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; +wait_for_upstream_routers; -wait_for_upstream_routers
+  182  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main; +wait_for_upstream_routers; -wait_for_upstream_routers
+  168  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; +wait_for_upstream_routers; -wait_for_upstream_routers
+  164  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main; +wait_for_upstream_routers; -wait_for_upstream_routers
+  160  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; +wait_for_upstream_routers; -wait_for_upstream_routers
+  136  _start
+  112  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; +wait_for_upstream_routers; -wait_for_upstream_routers
+   84  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main
+   72  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main; +wait_for_upstream_routers; -wait_for_upstream_routers
+   72  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; +wait_for_upstream_routers; -wait_for_upstream_routers
+   41  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main; +wait_for_upstream_routers; -wait_for_upstream_routers
+   40  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main; +wait_for_upstream_routers; -wait_for_upstream_routers
+   38  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start
+   28  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main; +wait_for_upstream_routers; -wait_for_upstream_routers
+   28  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; +wait_for_upstream_routers; -wait_for_upstream_routers
+   22  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start
+   20  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main
+   20  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main
+   18  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main
+    8  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start
+    4  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; +wait_for_upstream_routers; -wait_for_upstream_routers
+    4  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; kernel_main
+    4  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start; +wait_for_upstream_routers; -wait_for_upstream_routers
+    4  +SenderChannelInterfaces::start; -SenderChannelInterfaces::start; _start

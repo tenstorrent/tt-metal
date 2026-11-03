@@ -1,0 +1,533 @@
+diff -ruN v4txc4/fabric_erisc_router_ct_args.hpp v4txa1/fabric_erisc_router_ct_args.hpp
+--- v4txc4/fabric_erisc_router_ct_args.hpp	2026-11-03 03:04:49.791401001 +0000
++++ v4txa1/fabric_erisc_router_ct_args.hpp	2026-11-03 03:52:42.007239224 +0000
+@@ -127,6 +127,34 @@
+     return ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS + (position - VC2_FABRIC_POSITION_START);
+ }
+ 
++// The free-slots stream register of each sender channel, by fabric position (the host's
++// SENDER_CHANNEL_<p>_FREE_SLOTS_STREAM_ID: the table is the same on every router, so a router can name a downstream
++// router's register).
++constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_free_slots_streams = {
++    sender_channel_0_free_slots_stream_id,
++    sender_channel_1_free_slots_stream_id,
++    sender_channel_2_free_slots_stream_id,
++    sender_channel_3_free_slots_stream_id,
++    sender_channel_4_free_slots_stream_id,
++    sender_channel_5_free_slots_stream_id,
++    sender_channel_6_free_slots_stream_id,
++    sender_channel_7_free_slots_stream_id,
++    sender_channel_8_free_slots_stream_id,
++    sender_channel_9_free_slots_stream_id};
++
++// This router's local copy of each downstream router's free slots, by VC that forwards to routers (VC0, VC1) and by
++// downstream entry (the host's compact order: VC<n>_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_<entry + 1>_STREAM_ID).
++constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 2> local_downstream_credit_streams = {{
++    {vc_0_free_slots_from_downstream_edge_1_stream_id,
++     vc_0_free_slots_from_downstream_edge_2_stream_id,
++     vc_0_free_slots_from_downstream_edge_3_stream_id,
++     vc_0_free_slots_from_downstream_edge_4_stream_id},
++    {vc_1_free_slots_from_downstream_edge_1_stream_id,
++     vc_1_free_slots_from_downstream_edge_2_stream_id,
++     vc_1_free_slots_from_downstream_edge_3_stream_id,
++     vc_1_free_slots_from_downstream_edge_4_stream_id},
++}};
++
+ // Does this router service a channel at this fabric position?
+ constexpr bool services_fabric_position(size_t position) {
+     if (position < VC1_FABRIC_POSITION_START) {
+@@ -327,6 +355,21 @@
+     NAMED_CT_ARG("SENDER_CH_8_CONNECTION_SEMAPHORE_ADDR");
+ constexpr size_t local_sender_channel_9_connection_semaphore_addr =
+     NAMED_CT_ARG("SENDER_CH_9_CONNECTION_SEMAPHORE_ADDR");
++// The same, by channel: each sender channel's connection info (its worker's location, the read counter a disconnected
++// worker's credits go to) and its connection semaphore (a worker channel's connection state, read every pass), in L1
++// at compile-time addresses.
++constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_addrs = {
++    local_sender_channel_0_connection_info_addr, local_sender_channel_1_connection_info_addr,
++    local_sender_channel_2_connection_info_addr, local_sender_channel_3_connection_info_addr,
++    local_sender_channel_4_connection_info_addr, local_sender_channel_5_connection_info_addr,
++    local_sender_channel_6_connection_info_addr, local_sender_channel_7_connection_info_addr,
++    local_sender_channel_8_connection_info_addr, local_sender_channel_9_connection_info_addr};
++constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_semaphore_addrs = {
++    local_sender_channel_0_connection_semaphore_addr, local_sender_channel_1_connection_semaphore_addr,
++    local_sender_channel_2_connection_semaphore_addr, local_sender_channel_3_connection_semaphore_addr,
++    local_sender_channel_4_connection_semaphore_addr, local_sender_channel_5_connection_semaphore_addr,
++    local_sender_channel_6_connection_semaphore_addr, local_sender_channel_7_connection_semaphore_addr,
++    local_sender_channel_8_connection_semaphore_addr, local_sender_channel_9_connection_semaphore_addr};
+ 
+ // ============================================================================
+ // Status pointers
+diff -ruN v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp
+--- v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 03:33:26.642241535 +0000
++++ v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 04:24:42.556308722 +0000
+@@ -4,16 +4,16 @@
+ 
+ #pragma once
+ 
+-// Compile-time facts both router programs use: stream register ids, the downstream direction maps, channel slot
+-// layouts and small register helpers. Everything here is derived from the compile-time args
+-// (fabric_erisc_router_ct_args.hpp); nothing here holds state.
++// Compile-time facts both router programs use: the architecture, the VCs and modes, stream registers, the downstream
++// direction maps, the Ethernet TX queues, and the roles and NoC command buffers. Everything here is derived from the
++// compile-time args (fabric_erisc_router_ct_args.hpp); nothing here holds state. The router-independent helpers are
++// router_utils.hpp's.
+ 
+ #include <array>
+-#include <atomic>
+ #include <cstddef>
+ #include <cstdint>
+-#include <type_traits>
+-#include <utility>
++
++#include "router_utils.hpp"
+ 
+ namespace fabric_router {
+ 
+@@ -41,6 +41,9 @@
+     false;
+ #endif
+ 
++// VC2 (neighbour exchange): a worker channel and a receiver channel that only delivers.
++constexpr bool has_vc2 = ACTUAL_VC2_SENDER_CHANNELS > 0;
++
+ // Tensix mux mode (FabricTensixConfig::MUX; V4_TENSIX_MUX.md): the fabric's mux of each direction feeds that router's
+ // worker channel with everything for its link and takes the forwards of the other directions' routers. The host's flag
+ // is also set under UDM, which is its own mode.
+@@ -52,35 +55,20 @@
+ static_assert(stream_count_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
+ 
+ // The Ethernet firmware's heartbeat word. While the router runs instead of the base firmware, each loop keeps it moving
+-// every 64 rounds, with UMD's fabric signature (0xDCBA) in the upper half.
++// every HEARTBEAT_INTERVAL rounds, the count in the lower half and UMD's fabric signature in the upper half.
+ #if defined(ARCH_BLACKHOLE)
+ constexpr uint32_t heartbeat_addr = MEM_SYSENG_ETH_HEARTBEAT;
+ #else
+ constexpr uint32_t heartbeat_addr = 0x1F80;  // Wormhole's (main's router; the firmware headers do not name it)
+ #endif
++constexpr uint32_t HEARTBEAT_INTERVAL = 64;  // rounds
++constexpr uint32_t HEARTBEAT_SIGNATURE = 0xDCBA0000;
++static_assert((HEARTBEAT_INTERVAL & (HEARTBEAT_INTERVAL - 1)) == 0, "the round count is tested with a mask");
+ 
+ // ---------------------------------------------------------------------------------------------------------------------
+ // Stream registers
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+-// The free-slots stream register of each sender channel, by fabric position (the table is fabric-flat: a router's
+-// compact channel i sits at fabric_position_for_compact_sender(i)).
+-constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_free_slots_streams = {
+-    sender_channel_0_free_slots_stream_id,
+-    sender_channel_1_free_slots_stream_id,
+-    sender_channel_2_free_slots_stream_id,
+-    sender_channel_3_free_slots_stream_id,
+-    sender_channel_4_free_slots_stream_id,
+-    sender_channel_5_free_slots_stream_id,
+-    sender_channel_6_free_slots_stream_id,
+-    sender_channel_7_free_slots_stream_id,
+-    sender_channel_8_free_slots_stream_id,
+-    sender_channel_9_free_slots_stream_id};
+-
+-// The free-slots stream register of this router's compact sender channel CH.
+-template <size_t CH>
+-constexpr uint32_t sender_free_slots_stream = sender_free_slots_streams[fabric_position_for_compact_sender(CH)];
+-
+ // Initialize a stream register that this router uses; k_unused_stream_id marks one it does not (a VC whose credits
+ // travel through L1 counters), and is out of register range.
+ template <uint32_t STREAM_ID>
+@@ -103,28 +91,6 @@
+ }
+ 
+ // ---------------------------------------------------------------------------------------------------------------------
+-// Sender channels' connection blocks
+-// ---------------------------------------------------------------------------------------------------------------------
+-
+-// Each sender channel's connection info (its worker's location, the read counter a disconnected worker's credits go
+-// to), in L1 at a compile-time address.
+-constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_addrs = {
+-    local_sender_channel_0_connection_info_addr, local_sender_channel_1_connection_info_addr,
+-    local_sender_channel_2_connection_info_addr, local_sender_channel_3_connection_info_addr,
+-    local_sender_channel_4_connection_info_addr, local_sender_channel_5_connection_info_addr,
+-    local_sender_channel_6_connection_info_addr, local_sender_channel_7_connection_info_addr,
+-    local_sender_channel_8_connection_info_addr, local_sender_channel_9_connection_info_addr};
+-
+-// Each sender channel's connection semaphore (a worker channel's connection state, read every pass), in L1 at a
+-// compile-time address: reading it needs no pointer.
+-constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_semaphore_addrs = {
+-    local_sender_channel_0_connection_semaphore_addr, local_sender_channel_1_connection_semaphore_addr,
+-    local_sender_channel_2_connection_semaphore_addr, local_sender_channel_3_connection_semaphore_addr,
+-    local_sender_channel_4_connection_semaphore_addr, local_sender_channel_5_connection_semaphore_addr,
+-    local_sender_channel_6_connection_semaphore_addr, local_sender_channel_7_connection_semaphore_addr,
+-    local_sender_channel_8_connection_semaphore_addr, local_sender_channel_9_connection_semaphore_addr};
+-
+-// ---------------------------------------------------------------------------------------------------------------------
+ // Downstream routers (2D): the other directions of this chip, in compact order
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+@@ -136,7 +102,8 @@
+ 
+ constexpr eth_chan_directions downstream_direction(size_t compact) { return downstream_directions[compact]; }
+ 
+-// The compact index of downstream direction `dir` (dir != my_direction).
++// The compact index of downstream direction `dir` (dir != my_direction): a router lists the other directions in enum
++// order, skipping its own facing.
+ constexpr size_t downstream_compact_index(eth_chan_directions dir) {
+     return static_cast<size_t>(dir) < static_cast<size_t>(my_direction) ? static_cast<size_t>(dir)
+                                                                          : static_cast<size_t>(dir) - 1;
+@@ -148,38 +115,6 @@
+     return is_2d ? downstream_compact_index(static_cast<eth_chan_directions>(name)) : 0;
+ }
+ 
+-// The free-slots stream register, on the downstream router, of the sender channel this router feeds (the downstream's
+-// channel for traffic arriving from this router's direction).
+-constexpr uint32_t downstream_sender_free_slots_stream(size_t vc, size_t compact) {
+-    const size_t base = vc == 0 ? 0 : VC1_FABRIC_POSITION_START - 1;
+-    if constexpr (is_2d) {
+-        const bool below = my_direction > static_cast<uint32_t>(downstream_direction(compact));
+-        return sender_free_slots_streams[base + (below ? my_direction : my_direction + 1)];
+-    } else {
+-        return sender_channel_1_free_slots_stream_id;
+-    }
+-}
+-
+-// This router's local copy of a downstream's free slots (the downstream credits it as it sends), per VC.
+-constexpr std::array<uint32_t, max_downstreams> vc0_downstream_credit_streams = {
+-    vc_0_free_slots_from_downstream_edge_1_stream_id,
+-    vc_0_free_slots_from_downstream_edge_2_stream_id,
+-    vc_0_free_slots_from_downstream_edge_3_stream_id,
+-    vc_0_free_slots_from_downstream_edge_4_stream_id};
+-constexpr std::array<uint32_t, max_downstreams> vc1_downstream_credit_streams = {
+-    vc_1_free_slots_from_downstream_edge_1_stream_id,
+-    vc_1_free_slots_from_downstream_edge_2_stream_id,
+-    vc_1_free_slots_from_downstream_edge_3_stream_id,
+-    vc_1_free_slots_from_downstream_edge_4_stream_id};
+-
+-constexpr uint32_t local_downstream_credit_stream(size_t vc, size_t compact) {
+-    if constexpr (is_2d) {
+-        return vc == 0 ? vc0_downstream_credit_streams[compact] : vc1_downstream_credit_streams[compact];
+-    } else {
+-        return vc0_downstream_credit_streams[0];
+-    }
+-}
+-
+ // ---------------------------------------------------------------------------------------------------------------------
+ // Ethernet TX queues
+ // ---------------------------------------------------------------------------------------------------------------------
+@@ -192,114 +127,6 @@
+ }
+ FORCE_INLINE bool txq_busy(uint32_t status) { return ((status >> ETH_TXQ_STATUS_CMD_ONGOING_BIT) & 1u) != 0; }
+ 
+-// ---------------------------------------------------------------------------------------------------------------------
+-// Compile-time loops
+-// ---------------------------------------------------------------------------------------------------------------------
+-
+-// Calls f(std::integral_constant<size_t, I>) for each I in [0, N).
+-template <size_t N, typename F>
+-FORCE_INLINE void for_each_index(F&& f) {
+-    [&]<size_t... Is>(std::index_sequence<Is...>) { (f(std::integral_constant<size_t, Is>{}), ...); }(
+-        std::make_index_sequence<N>{});
+-}
+-
+-constexpr uint32_t popcount(uint32_t mask) { return static_cast<uint32_t>(__builtin_popcount(mask)); }
+-
+-// For plain recursion over a channel mask: the lowest channel in MASK, and MASK without it. The per-pass code recurses
+-// over its masks instead of iterating with a closure (router_sender.hpp, "The loop function takes no closures").
+-constexpr size_t lowest_bit(uint32_t mask) { return static_cast<size_t>(__builtin_ctz(mask)); }
+-constexpr uint32_t without_lowest_bit(uint32_t mask) { return mask & (mask - 1); }
+-
+-// ---------------------------------------------------------------------------------------------------------------------
+-// Presence
+-// ---------------------------------------------------------------------------------------------------------------------
+-
+-// A member that exists only where its channel or VC is present on this router (by configuration or channel trimming),
+-// and is an empty Absent<TAG> elsewhere (TAG keeps two absent members of one struct at distinct addresses). Code names
+-// such a member only under `if constexpr` on the same flag, from template-dependent code, so an absent one never has to
+-// compile.
+-template <size_t TAG>
+-struct Absent {};
+-template <bool PRESENT, typename T, size_t TAG>
+-using Present = std::conditional_t<PRESENT, T, Absent<TAG>>;
+-
+-// `value` where PRESENT, Absent<TAG> elsewhere: to initialize a Present member.
+-template <bool PRESENT, size_t TAG, typename T>
+-FORCE_INLINE constexpr Present<PRESENT, T, TAG> present(const T& value) {
+-    if constexpr (PRESENT) {
+-        return value;
+-    } else {
+-        return {};
+-    }
+-}
+-
+-// One T<I> for each bit I of MASK, lowest first, found by its index at compile time (get<I>()); empty where MASK is 0.
+-// A channel or VC this router does not run has no member. Code names a member only under `if constexpr` on the same
+-// mask, from template-dependent code.
+-template <uint32_t MASK, template <size_t> class T>
+-struct Each {
+-    [[no_unique_address]] T<lowest_bit(MASK)> first;
+-    [[no_unique_address]] Each<without_lowest_bit(MASK), T> rest;
+-
+-    template <size_t I>
+-    FORCE_INLINE T<I>& get() {
+-        if constexpr (I == lowest_bit(MASK)) {
+-            return first;
+-        } else {
+-            return rest.template get<I>();
+-        }
+-    }
+-    template <size_t I>
+-    FORCE_INLINE const T<I>& get() const {
+-        if constexpr (I == lowest_bit(MASK)) {
+-            return first;
+-        } else {
+-            return rest.template get<I>();
+-        }
+-    }
+-};
+-template <size_t I>
+-struct NotHeld : std::false_type {};
+-template <template <size_t> class T>
+-struct Each<0, T> {
+-    // Naming a member this container does not hold is an error where it is instantiated, not where it is written.
+-    template <size_t I>
+-    T<I>& get() {
+-        static_assert(NotHeld<I>::value, "no member for this index");
+-    }
+-    template <size_t I>
+-    const T<I>& get() const {
+-        static_assert(NotHeld<I>::value, "no member for this index");
+-    }
+-};
+-
+-// ---------------------------------------------------------------------------------------------------------------------
+-// Placement primitives
+-// ---------------------------------------------------------------------------------------------------------------------
+-// Each is compiler-only: it emits no instruction, it only constrains where the compiler may keep or move things.
+-
+-// Keeps `obj` in memory at this point: its current value is stored before it and read back after it (GCC's documented
+-// semantics of an asm memory operand). The whole object is affected, so state meant to stay in registers must not
+-// share an object with it. It says nothing about where `obj` lives between such points. Use: state touched only on some
+-// passes (a forwarding channel's record, a later VC's receiver state), so the registers go to the state every pass
+-// touches (V4_PLACEMENT.md).
+-template <typename T>
+-FORCE_INLINE void keep_in_memory(T& obj) {
+-    asm volatile("" : "+m"(obj));
+-}
+-
+-// Read group boundaries (std::atomic_signal_fence): a compiler barrier for memory. No access to memory other code could
+-// see (device registers, L1, any object whose address escapes) moves across either one, so the reads written between
+-// a begin and an end stay together, with no other such access among them, and their latencies overlap when their
+-// values are first used after the end. They do not stop arithmetic, or locals kept in registers, moving between the
+-// reads, and such memory used on both sides of a boundary is stored before it and reloaded after it.
+-FORCE_INLINE void begin_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
+-FORCE_INLINE void end_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
+-
+-// An ordering point outside a read group (std::atomic_signal_fence): the same compiler barrier for memory, where code
+-// relies on the order of the memory accesses around it but they form no group.
+-FORCE_INLINE void order_point() { std::atomic_signal_fence(std::memory_order_seq_cst); }
+-
+ // Byte enables of a whole-word inline write (credit registers and words).
+ constexpr uint32_t INLINE_WRITE_ALL_BYTES = 0xF;
+ 
+diff -ruN v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp
+--- v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-03 03:27:25.517094086 +0000
++++ v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-03 04:25:55.120297456 +0000
+@@ -54,11 +54,26 @@
+     static constexpr uint8_t sync_cmd_buf = CommandBuffers::forward_credits[VC];
+     static constexpr uint8_t noc = tt::tt_fabric::edm_to_downstream_noc;
+ 
+-    // This router's local copy of entry ENTRY's free-slots register, and the register on the downstream.
++    // This router's local copy of entry ENTRY's free-slots register (the downstream credits it as it sends).
+     template <size_t ENTRY>
+-    static constexpr uint32_t local_credit_stream = local_downstream_credit_stream(VC, ENTRY);
++    static constexpr uint32_t local_credit_stream = local_downstream_credit_streams[VC][ENTRY];
++    // Entry ENTRY's sender channel for traffic arriving from this router's direction, by its fabric position: VC's first
++    // forwarding position (VC0's channel 0 is its worker channel), plus this router's direction's index among the
++    // downstream's other directions (each router lists the other directions in enum order, skipping its own facing).
++    // A 1D downstream has one forwarding channel.
+     template <size_t ENTRY>
+-    static constexpr uint32_t remote_credit_stream = downstream_sender_free_slots_stream(VC, ENTRY);
++    static constexpr size_t forwarding_position() {
++        constexpr size_t first = VC == 0 ? 1 : VC1_FABRIC_POSITION_START;
++        if constexpr (is_2d) {
++            constexpr size_t facing = static_cast<size_t>(downstream_direction(ENTRY));
++            return first + (my_direction < facing ? my_direction : my_direction - 1);
++        } else {
++            return first;
++        }
++    }
++    // That channel's free-slots register, on the downstream.
++    template <size_t ENTRY>
++    static constexpr uint32_t remote_credit_stream = sender_free_slots_streams[forwarding_position<ENTRY>()];
+ 
+     static_assert(count > 0 && count <= max_downstreams);
+     static_assert(num_slots <= stream_count_mask);
+diff -ruN v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp
+--- v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 03:07:56.898956415 +0000
++++ v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 03:52:42.005239197 +0000
+@@ -17,9 +17,6 @@
+ 
+ constexpr bool is_teardown_master = MY_ERISC_ID == 0 || NUM_ACTIVE_ERISCS == 1;  // a single ERISC may be ERISC 1
+ 
+-// VC2 (neighbour exchange; V4_VC2.md): a worker channel and a receiver channel that only delivers.
+-constexpr bool has_vc2 = ACTUAL_VC2_SENDER_CHANNELS > 0;
+-
+ // ---------------------------------------------------------------------------------------------------------------------
+ // ERISC sync
+ // ---------------------------------------------------------------------------------------------------------------------
+diff -ruN v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
+--- v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 03:33:26.642241535 +0000
++++ v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 03:52:42.005239197 +0000
+@@ -104,8 +104,8 @@
+ // round), otherwise every SWITCH_INTERVAL rounds; the other ERISC follows. Returns whether the base firmware ran on this
+ // ERISC (the master's context switch), which may have used its command buffers.
+ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_attempted) {
+-    if ((++counters.heartbeat & 0x3F) == 0) {
+-        *reinterpret_cast<volatile uint32_t*>(heartbeat_addr) = 0xDCBA0000 | counters.heartbeat;
++    if ((++counters.heartbeat & (HEARTBEAT_INTERVAL - 1)) == 0) {
++        *reinterpret_cast<volatile uint32_t*>(heartbeat_addr) = HEARTBEAT_SIGNATURE | counters.heartbeat;
+     }
+     if constexpr (is_context_switch_master) {
+         if (IDLE_CONTEXT_SWITCHING && send_attempted) {
+diff -ruN v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:33:26.642241535 +0000
++++ v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:52:42.006239211 +0000
+@@ -58,7 +58,8 @@
+     static constexpr uint32_t num_slots = SENDER_NUM_BUFFERS_ARRAY[CH];
+     static constexpr uint32_t first_slot_addr = channel_allocs::Entry<SENDER_TO_ENTRY_IDX[CH]>::base_address;
+     static constexpr uint32_t last_slot_addr = first_slot_addr + (num_slots - 1) * channel_buffer_size;
+-    static constexpr uint32_t free_slots_stream = sender_free_slots_stream<CH>;
++    // Its free-slots register: the host's table is by fabric position, the same on every router.
++    static constexpr uint32_t free_slots_stream = sender_free_slots_streams[fabric_position_for_compact_sender(CH)];
+     // Counters the far router's receiver writes over the link.
+     static constexpr uint32_t completion_counter_addr =
+         sender_channel_counter_addr(to_sender_remote_completion_counters_base_address, CH);
+diff -ruN v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp
+--- v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp	1970-01-01 00:00:00.000000000 +0000
++++ v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp	2026-11-03 03:52:42.004239183 +0000
+@@ -0,0 +1,127 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++//
++// SPDX-License-Identifier: Apache-2.0
++
++#pragma once
++
++// Router-independent helpers both router programs use: compile-time loops and channel-mask helpers, members present
++// only where their channel or VC is, and the placement primitives (compiler-only). Nothing here reads a compile-time
++// arg; router_common.hpp holds the router's facts.
++
++#include <atomic>
++#include <cstddef>
++#include <cstdint>
++#include <type_traits>
++#include <utility>
++
++namespace fabric_router {
++
++// ---------------------------------------------------------------------------------------------------------------------
++// Compile-time loops
++// ---------------------------------------------------------------------------------------------------------------------
++
++// Calls f(std::integral_constant<size_t, I>) for each I in [0, N).
++template <size_t N, typename F>
++FORCE_INLINE void for_each_index(F&& f) {
++    [&]<size_t... Is>(std::index_sequence<Is...>) { (f(std::integral_constant<size_t, Is>{}), ...); }(
++        std::make_index_sequence<N>{});
++}
++
++constexpr uint32_t popcount(uint32_t mask) { return static_cast<uint32_t>(__builtin_popcount(mask)); }
++
++// For plain recursion over a channel mask: the lowest channel in MASK, and MASK without it. The per-pass code recurses
++// over its masks instead of iterating with a closure (router_sender.hpp, "The loop function takes no closures").
++constexpr size_t lowest_bit(uint32_t mask) { return static_cast<size_t>(__builtin_ctz(mask)); }
++constexpr uint32_t without_lowest_bit(uint32_t mask) { return mask & (mask - 1); }
++
++// ---------------------------------------------------------------------------------------------------------------------
++// Presence
++// ---------------------------------------------------------------------------------------------------------------------
++
++// A member that exists only where its channel or VC is present on this router (by configuration or channel trimming),
++// and is an empty Absent<TAG> elsewhere (TAG keeps two absent members of one struct at distinct addresses). Code names
++// such a member only under `if constexpr` on the same flag, from template-dependent code, so an absent one never has to
++// compile.
++template <size_t TAG>
++struct Absent {};
++template <bool PRESENT, typename T, size_t TAG>
++using Present = std::conditional_t<PRESENT, T, Absent<TAG>>;
++
++// `value` where PRESENT, Absent<TAG> elsewhere: to initialize a Present member.
++template <bool PRESENT, size_t TAG, typename T>
++FORCE_INLINE constexpr Present<PRESENT, T, TAG> present(const T& value) {
++    if constexpr (PRESENT) {
++        return value;
++    } else {
++        return {};
++    }
++}
++
++// One T<I> for each bit I of MASK, lowest first, found by its index at compile time (get<I>()); empty where MASK is 0.
++// A channel or VC this router does not run has no member. Code names a member only under `if constexpr` on the same
++// mask, from template-dependent code.
++template <uint32_t MASK, template <size_t> class T>
++struct Each {
++    [[no_unique_address]] T<lowest_bit(MASK)> first;
++    [[no_unique_address]] Each<without_lowest_bit(MASK), T> rest;
++
++    template <size_t I>
++    FORCE_INLINE T<I>& get() {
++        if constexpr (I == lowest_bit(MASK)) {
++            return first;
++        } else {
++            return rest.template get<I>();
++        }
++    }
++    template <size_t I>
++    FORCE_INLINE const T<I>& get() const {
++        if constexpr (I == lowest_bit(MASK)) {
++            return first;
++        } else {
++            return rest.template get<I>();
++        }
++    }
++};
++template <size_t I>
++struct NotHeld : std::false_type {};
++template <template <size_t> class T>
++struct Each<0, T> {
++    // Naming a member this container does not hold is an error where it is instantiated, not where it is written.
++    template <size_t I>
++    T<I>& get() {
++        static_assert(NotHeld<I>::value, "no member for this index");
++    }
++    template <size_t I>
++    const T<I>& get() const {
++        static_assert(NotHeld<I>::value, "no member for this index");
++    }
++};
++
++// ---------------------------------------------------------------------------------------------------------------------
++// Placement primitives
++// ---------------------------------------------------------------------------------------------------------------------
++// Each is compiler-only: it emits no instruction, it only constrains where the compiler may keep or move things.
++
++// Keeps `obj` in memory at this point: its current value is stored before it and read back after it (GCC's documented
++// semantics of an asm memory operand). The whole object is affected, so state meant to stay in registers must not
++// share an object with it. It says nothing about where `obj` lives between such points. Use: state touched only on some
++// passes (a forwarding channel's record, a later VC's receiver state), so the registers go to the state every pass
++// touches (V4_PLACEMENT.md).
++template <typename T>
++FORCE_INLINE void keep_in_memory(T& obj) {
++    asm volatile("" : "+m"(obj));
++}
++
++// Read group boundaries (std::atomic_signal_fence): a compiler barrier for memory. No access to memory other code could
++// see (device registers, L1, any object whose address escapes) moves across either one, so the reads written between
++// a begin and an end stay together, with no other such access among them, and their latencies overlap when their
++// values are first used after the end. They do not stop arithmetic, or locals kept in registers, moving between the
++// reads, and such memory used on both sides of a boundary is stored before it and reloaded after it.
++FORCE_INLINE void begin_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
++FORCE_INLINE void end_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
++
++// An ordering point outside a read group (std::atomic_signal_fence): the same compiler barrier for memory, where code
++// relies on the order of the memory accesses around it but they form no group.
++FORCE_INLINE void order_point() { std::atomic_signal_fence(std::memory_order_seq_cst); }
++
++}  // namespace fabric_router

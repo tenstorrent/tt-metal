@@ -1,0 +1,14 @@
+(?:void )?fabric_router::sender::credit_worker<(\d+)u>	WorkerChannel<\1>::credit
+fabric_router::sender::WorkerChannel<(\d+)u>::credit\b	WorkerChannel<\1>::credit
+(?:void )?fabric_router::sender::preset_worker_credit<(\d+)u>	WorkerChannel<\1>::preset_credit
+fabric_router::sender::WorkerChannel<(\d+)u>::preset_credit	WorkerChannel<\1>::preset_credit
+(?:unsigned long )?fabric_router::sender::connection_event<(\d+)u>	WorkerChannel<\1>::connection_event
+fabric_router::sender::WorkerChannel<(\d+)u>::connection_event	WorkerChannel<\1>::connection_event
+fabric_router::sender::worker_connection_event\(tt::tt_fabric::EdmChannelWorkerConnection<\(unsigned char\)0>&	open_or_close_worker_connection(EdmChannelWorkerConnection&
+fabric_router::sender::open_or_close_worker_connection\(tt::tt_fabric::EdmChannelWorkerConnection<\(unsigned char\)0>&	open_or_close_worker_connection(EdmChannelWorkerConnection&
+fabric_router::sender::worker_connection_event	open_or_close_worker_connection
+fabric_router::sender::open_or_close_worker_connection	open_or_close_worker_connection
+fabric_router::init_worker_interfaces\([^)]*\)	SenderChannelInterfaces::start()
+fabric_router::sender::SenderChannelInterfaces::start\([^)]*\)	SenderChannelInterfaces::start()
+fabric_router::(sender::)?wait_for_connect_request	wait_for_connect_request
+fabric_router::(sender::)?wait_for_upstream_routers\([^)]*\)	wait_for_upstream_routers()

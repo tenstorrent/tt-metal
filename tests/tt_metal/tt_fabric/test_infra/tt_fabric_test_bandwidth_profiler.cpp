@@ -347,18 +347,45 @@ void BandwidthProfiler::convert_core_cycles_to_direction_cycles(
                 core_direction_links.insert({direction, link_id});
             }
 
-            // Add cycles to each (direction, link_id) pair this core sends to
-            // Only one core per device should send in each (direction, link) combination
+            // Add cycles to each (direction, link_id) pair this core sends to. Several cores may share a link (e.g. a
+            // VC0 and a VC2 sender on the same chip and direction): the link is busy until its last sender finishes, so
+            // it gets the longest sender's cycles (bytes and packets are summed over every flow on the link below), and
+            // each sharing core's own cycles and packets are logged so per-sender rates can be computed.
+            uint64_t core_packets = 0;
+            uint32_t core_vc = 0;
+            for (const auto& [config, _] : sender.get_configs()) {
+                core_packets += config.parameters.num_packets;
+                core_vc = config.vc_id;
+            }
             for (const auto& [direction, link_id] : core_direction_links) {
-                if (device_direction_cycles_[device_node_id][direction].contains(link_id)) {
-                    TT_THROW(
-                        "Multiple cores on device {} are sending traffic in direction {} on link {}. "
-                        "Only one core per device should send in each (direction, link) combination.",
+                auto& link_cycles = device_direction_cycles_[device_node_id][direction];
+                if (link_cycles.contains(link_id)) {
+                    log_info(
+                        tt::LogTest,
+                        "Shared link: device {} direction {} link {}: another sender core {} (VC{}) with {} packets "
+                        "in {} cycles (link cycles so far {})",
                         device_node_id.chip_id,
                         direction,
-                        link_id);
+                        link_id,
+                        core.str(),
+                        core_vc,
+                        core_packets,
+                        core_cycles,
+                        link_cycles[link_id]);
+                    link_cycles[link_id] = std::max(link_cycles[link_id], core_cycles);
+                } else {
+                    log_info(
+                        tt::LogTest,
+                        "Sender core {} (VC{}) on device {} direction {} link {}: {} packets in {} cycles",
+                        core.str(),
+                        core_vc,
+                        device_node_id.chip_id,
+                        direction,
+                        link_id,
+                        core_packets,
+                        core_cycles);
+                    link_cycles[link_id] = core_cycles;
                 }
-                device_direction_cycles_[device_node_id][direction][link_id] = core_cycles;
             }
         }
     }

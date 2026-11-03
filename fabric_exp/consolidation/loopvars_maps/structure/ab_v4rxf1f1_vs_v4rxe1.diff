@@ -1,0 +1,436 @@
+diff -ru v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp
+--- v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-01 21:27:26.059252899 +0000
++++ v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-02 05:52:57.373293974 +0000
+@@ -229,19 +229,57 @@
+     }
+ }
+ 
++// One T<I> for each bit I of MASK, lowest first, found by its index at compile time (get<I>()); empty where MASK is 0.
++// A channel or VC this router does not run has no member. Code names a member only under `if constexpr` on the same
++// mask, from template-dependent code.
++template <uint32_t MASK, template <size_t> class T>
++struct Each {
++    [[no_unique_address]] T<lowest_bit(MASK)> first;
++    [[no_unique_address]] Each<without_lowest_bit(MASK), T> rest;
++
++    template <size_t I>
++    FORCE_INLINE T<I>& get() {
++        if constexpr (I == lowest_bit(MASK)) {
++            return first;
++        } else {
++            return rest.template get<I>();
++        }
++    }
++};
++template <size_t I>
++struct NotHeld : std::false_type {};
++template <template <size_t> class T>
++struct Each<0, T> {
++    // Naming a member this container does not hold is an error where it is instantiated, not where it is written.
++    template <size_t I>
++    T<I>& get() {
++        static_assert(NotHeld<I>::value, "no member for this index");
++    }
++};
++
+ // ---------------------------------------------------------------------------------------------------------------------
+-// Placement
++// Placement primitives
+ // ---------------------------------------------------------------------------------------------------------------------
++// Each is compiler-only: it emits no instruction, it only constrains where the compiler may keep or move things.
+ 
+ // Keeps `obj` in memory at this point: its current value is stored before it and read back after it (GCC's documented
+-// semantics of an asm memory operand; it emits no instruction). The whole object is affected, so state meant to stay in
+-// registers must not share an object with it. Use: state touched only on some passes (a forwarding channel's record,
+-// in memory between its visits), so the registers go to the state every pass touches (V4_PLACEMENT.md).
++// semantics of an asm memory operand). The whole object is affected, so state meant to stay in registers must not
++// share an object with it. It says nothing about where `obj` lives between such points. Use: state touched only on some
++// passes (a forwarding channel's record, a later VC's receiver state), so the registers go to the state every pass
++// touches (V4_PLACEMENT.md).
+ template <typename T>
+ FORCE_INLINE void keep_in_memory(T& obj) {
+     asm volatile("" : "+m"(obj));
+ }
+ 
++// Read group boundaries (std::atomic_signal_fence): a compiler barrier for memory. No access to memory other code could
++// see (device registers, L1, any object whose address escapes) moves across either one, so the reads written between
++// a begin and an end stay together, with no other such access among them, and their latencies overlap when their
++// values are first used after the end. They do not stop arithmetic, or locals kept in registers, moving between the
++// reads, and such memory used on both sides of a boundary is stored before it and reloaded after it.
++FORCE_INLINE void begin_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
++FORCE_INLINE void end_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
++
+ // Whether NoC command buffers stay programmed between commands (the stateful NoC API: local writes, forwards, the
+ // worker credit). A single-ERISC router (Wormhole; Blackhole with two-ERISC mode off) issues both roles' commands from
+ // one RISC on command buffers the roles would share, so it keeps none programmed and issues every command whole
+diff -ru v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp
+--- v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-01 21:27:10.583042714 +0000
++++ v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-02 05:52:57.376294014 +0000
+@@ -39,17 +39,17 @@
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+ // Byte enables of a whole-word inline write (the credit register).
+-constexpr uint32_t inline_write_all_bytes = 0xF;
++constexpr uint32_t INLINE_WRITE_ALL_BYTES = 0xF;
+ 
+ // The host's downstream args exist per VC for the VCs that forward to other routers: VC0 and VC1
+ // (VC<n>_DOWNSTREAM_EDM_SIZE, DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY, the runtime args' per-VC blocks).
+-constexpr std::array<size_t, 2> downstream_edm_count_by_vc = {VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE};
++constexpr std::array<size_t, 2> DOWNSTREAM_EDM_COUNT_BY_VC = {VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE};
+ 
+ // The downstream routers of VC, as the host sets them.
+ template <size_t VC>
+ struct DownstreamTraits {
+-    static_assert(VC < downstream_edm_count_by_vc.size(), "the host lists downstream routers for VC0 and VC1");
+-    static constexpr size_t count = downstream_edm_count_by_vc[VC];
++    static_assert(VC < DOWNSTREAM_EDM_COUNT_BY_VC.size(), "the host lists downstream routers for VC0 and VC1");
++    static constexpr size_t count = DOWNSTREAM_EDM_COUNT_BY_VC[VC];
+     static constexpr uint32_t num_slots = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[VC];
+     // The last slot's offset from the ring's base (the ring wraps after it).
+     static constexpr uint32_t last_slot_offset = (num_slots - 1) * channel_buffer_size;
+@@ -198,7 +198,7 @@
+     noc_async_write_one_packet_with_trid</*update_counter=*/is_blackhole_arch, /*posted=*/true>(
+         src_addr, link.noc_addr(dst), size_bytes, trid, DATA_CMD_BUF, NOC);
+     noc_inline_dw_write<InlineWriteDst::REG>(
+-        link.credit_noc_addr, pack_value_for_inc_on_write_stream_reg_write(-1), inline_write_all_bytes, NOC);
++        link.credit_noc_addr, pack_value_for_inc_on_write_stream_reg_write(-1), INLINE_WRITE_ALL_BYTES, NOC);
+ }
+ 
+ // UDM's relay: a ring of LOCAL_RELAY_NUM_BUFFERS slots in the relay's L1 that takes the whole packet, and a free-slots
+@@ -250,9 +250,9 @@
+             return true;
+         }
+         uint32_t raw[Traits::count];  // by entry
+-        std::atomic_signal_fence(std::memory_order_seq_cst);
++        begin_read_group();
+         read_local_credits<live>(raw);
+-        std::atomic_signal_fence(std::memory_order_seq_cst);
++        end_read_group();
+         set_free_slots<live>(raw);
+         return !any_without_free_slot<live>(forward_to);
+     }
+@@ -519,7 +519,7 @@
+             noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
+                 get_noc_addr(x, y, get_stream_reg_write_addr(Traits::template remote_credit_stream<entry>), Traits::noc),
+                 pack_value_for_inc_on_write_stream_reg_write(-1),
+-                inline_write_all_bytes,
++                INLINE_WRITE_ALL_BYTES,
+                 Traits::sync_cmd_buf,
+                 Traits::noc,
+                 noc_vc);
+diff -ru v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp
+--- v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-01 20:56:07.651694325 +0000
++++ v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-02 05:52:57.377294028 +0000
+@@ -20,9 +20,9 @@
+ 
+ namespace fabric_router {
+ 
+-constexpr uint8_t local_noc = tt::tt_fabric::edm_to_local_chip_noc;
+-constexpr uint8_t local_write_cmd_buf = tt::tt_fabric::local_chip_data_cmd_buf;
+-constexpr uint8_t local_noc_vc = tt::tt_fabric::forward_and_local_write_noc_vc;
++constexpr uint8_t LOCAL_NOC = tt::tt_fabric::edm_to_local_chip_noc;
++constexpr uint8_t LOCAL_WRITE_CMD_BUF = tt::tt_fabric::local_chip_data_cmd_buf;
++constexpr uint8_t LOCAL_NOC_VC = tt::tt_fabric::forward_and_local_write_noc_vc;
+ 
+ constexpr bool local_write_state_preset =
+ #if !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+@@ -33,19 +33,19 @@
+ 
+ constexpr bool local_write_cmd_buf_is_exclusive = [] {
+     for (size_t ch = 0; ch < NUM_RECEIVER_CHANNELS; ch++) {
+-        if (receiver_channel_forwarding_data_cmd_buf_ids[ch] == local_write_cmd_buf ||
+-            receiver_channel_forwarding_sync_cmd_buf_ids[ch] == local_write_cmd_buf) {
++        if (receiver_channel_forwarding_data_cmd_buf_ids[ch] == LOCAL_WRITE_CMD_BUF ||
++            receiver_channel_forwarding_sync_cmd_buf_ids[ch] == LOCAL_WRITE_CMD_BUF) {
+             return false;
+         }
+     }
+-    return local_write_cmd_buf != write_at_cmd_buf;
++    return LOCAL_WRITE_CMD_BUF != write_at_cmd_buf;
+ }();
+ 
+ FORCE_INLINE void local_write_init() {
+     if constexpr (local_write_state_preset) {
+         static_assert(!local_write_state_preset || local_write_cmd_buf_is_exclusive);  // checked even when discarded
+-        while (!noc_cmd_buf_ready(local_noc, local_write_cmd_buf));
+-        noc_write_init_state<local_write_cmd_buf, CQ_NOC_mkp>(local_noc, local_noc_vc);
++        while (!noc_cmd_buf_ready(LOCAL_NOC, LOCAL_WRITE_CMD_BUF));
++        noc_write_init_state<LOCAL_WRITE_CMD_BUF, CQ_NOC_mkp>(LOCAL_NOC, LOCAL_NOC_VC);
+     }
+ }
+ 
+@@ -55,27 +55,27 @@
+ template <bool COUNTED>
+ FORCE_INLINE void local_write(uint32_t src_addr, uint64_t dst_noc_addr, uint32_t size, uint32_t trid) {
+     WAYPOINT("NAWW");
+-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size, -1, false, local_noc);
+-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(local_noc, dst_noc_addr, src_addr, size);
++    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size, -1, false, LOCAL_NOC);
++    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(LOCAL_NOC, dst_noc_addr, src_addr, size);
+     if constexpr (local_write_state_preset) {
+-        ncrisc_noc_set_transaction_id(local_noc, local_write_cmd_buf, trid);  // waits for the command buffer
++        ncrisc_noc_set_transaction_id(LOCAL_NOC, LOCAL_WRITE_CMD_BUF, trid);  // waits for the command buffer
+         noc_write_with_state<
+             noc_mode,
+-            local_write_cmd_buf,
++            LOCAL_WRITE_CMD_BUF,
+             CQ_NOC_SNDL,
+             CQ_NOC_SEND,
+             CQ_NOC_wait,
+             /*update_counter=*/COUNTED,
+-            /*posted=*/false>(local_noc, src_addr, dst_noc_addr, size);
++            /*posted=*/false>(LOCAL_NOC, src_addr, dst_noc_addr, size);
+     } else {
+-        while (!noc_cmd_buf_ready(local_noc, local_write_cmd_buf));
++        while (!noc_cmd_buf_ready(LOCAL_NOC, LOCAL_WRITE_CMD_BUF));
+         ncrisc_noc_fast_write<noc_mode, /*use_trid=*/true, /*update_counter=*/COUNTED>(
+-            local_noc,
+-            local_write_cmd_buf,
++            LOCAL_NOC,
++            LOCAL_WRITE_CMD_BUF,
+             src_addr,
+             dst_noc_addr,
+             size,
+-            local_noc_vc,
++            LOCAL_NOC_VC,
+             /*mcast=*/false,
+             /*linked=*/false,
+             /*num_dests=*/1,
+@@ -89,8 +89,8 @@
+ // Adds `writes` local writes to the software write counters (noc_nonposted_writes_num_issued/acked), as the write API
+ // does for each write.
+ FORCE_INLINE void count_local_writes(uint32_t writes) {
+-    noc_nonposted_writes_num_issued[local_noc] += writes;
+-    noc_nonposted_writes_acked[local_noc] += writes;
++    noc_nonposted_writes_num_issued[LOCAL_NOC] += writes;
++    noc_nonposted_writes_acked[LOCAL_NOC] += writes;
+ }
+ 
+ // An atomic increment; a flushed one first waits for every earlier write to be acknowledged.
+@@ -98,14 +98,14 @@
+     if (flush) {
+         flush_write_to_noc_pipeline(channel);
+     }
+-    noc_semaphore_inc<true>(addr, value, local_noc, local_noc_vc);
++    noc_semaphore_inc<true>(addr, value, LOCAL_NOC, LOCAL_NOC_VC);
+ }
+ 
+ // An inline write (one word) to this chip, on the local-write command buffer, then that buffer's preset restored: on
+ // Blackhole a write to L1 is emulated there by a posted write, which leaves the buffer posted.
+ FORCE_INLINE void local_inline_write(uint64_t dst_noc_addr, uint32_t value) {
+     noc_inline_dw_write<InlineWriteDst::DEFAULT, /*posted=*/true, /*flush=*/true, /*emulated_write_on_cmd_buf=*/true>(
+-        dst_noc_addr, value, 0xF, local_noc, local_noc_vc, /*customized_src_addr=*/0, local_write_cmd_buf);
++        dst_noc_addr, value, 0xF, LOCAL_NOC, LOCAL_NOC_VC, /*customized_src_addr=*/0, LOCAL_WRITE_CMD_BUF);
+     local_write_init();
+ }
+ 
+@@ -121,7 +121,8 @@
+     execute_chip_unicast_to_local_chip_impl(header, payload_size, type, trid, channel);
+ }
+ 
+-// Writes the packet to this chip; every write that reads the slot is tagged with `trid`. CH: the receiver channel.
++// Writes the packet to this chip; every write that reads the slot is tagged with `trid`. CH: the host's index of the
++// receiver channel (receiver_channel_of), for the channel-trimming capture and the channel's flush.
+ template <size_t CH>
+ FORCE_INLINE void deliver(
+     tt_l1_ptr PACKET_HEADER_TYPE* header, uint16_t payload_size, tt::tt_fabric::NocSendType type, uint8_t trid) {
+diff -ru v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 04:33:44.345749182 +0000
++++ v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:52:57.382294095 +0000
+@@ -461,7 +461,7 @@
+     SlotSourcesOf<CH>& sources,
+     Connections& downstreams,
+     uint32_t arrived,
+-    const Coordinates& me) {
++    const ChipCoordinates& my_chip) {
+     Position& position = cursor.position;
+     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+     if (position.ready == 0) {
+@@ -480,7 +480,7 @@
+     const uint32_t header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);
+     uint32_t route_word = 0;
+     if constexpr (Channel<CH>::forwards) {
+-        route_word = Channel<CH>::Routing::read(header, me);
++        route_word = Channel<CH>::Routing::read(header, my_chip);
+     }
+     return handle<CH>(cursor, sources, downstreams, header_word, route_word);
+ }
+@@ -635,7 +635,7 @@
+     Credits& credits,
+     bool& credit_frame_due,
+     uint32_t arrived_raw,
+-    const Coordinates& me) {
++    const ChipCoordinates& my_chip) {
+     const uint32_t arrived = arrived_raw & stream_count_mask;
+     if constexpr (Channel<CH>::first_level_ack) {
+         credit_frame_due |= accumulate_first_level_acks<CH>(cursor.position, credits, arrived);
+@@ -647,7 +647,7 @@
+         timer;
+     timer.set_should_dump(cursor.position.ready != 0);
+     timer.open();
+-    const bool progress = receive<CH>(cursor, sources, downstreams, arrived, me);
++    const bool progress = receive<CH>(cursor, sources, downstreams, arrived, my_chip);
+     timer.close();
+     credit_frame_due |= credit_completions<CH>(cursor.counts, sources, cursor.position.index, progress, credits);
+ }
+@@ -692,11 +692,11 @@
+     Credits& credits,
+     bool& credit_frame_due,
+     uint32_t arrived_raw,
+-    const Coordinates& me) {
++    const ChipCoordinates& my_chip) {
+     if constexpr (CH == first_channel) {
+-        step<CH>(first_channel_cursor, state.sources, downstreams, credits, credit_frame_due, arrived_raw, me);
++        step<CH>(first_channel_cursor, state.sources, downstreams, credits, credit_frame_due, arrived_raw, my_chip);
+     } else {
+-        step<CH>(state.cursor, state.sources, downstreams, credits, credit_frame_due, arrived_raw, me);
++        step<CH>(state.cursor, state.sources, downstreams, credits, credit_frame_due, arrived_raw, my_chip);
+         keep_in_memory(state);
+     }
+ }
+@@ -718,7 +718,7 @@
+     States& states,
+     Credits& credits,
+     Connections& downstreams,
+-    const Coordinates& me) {
++    const ChipCoordinates& my_chip) {
+     std::atomic_signal_fence(std::memory_order_seq_cst);
+     const uint32_t arrived0 = read_packets_received<0>();
+     const uint32_t arrived1 = read_packets_received<1>();
+@@ -729,13 +729,13 @@
+     }
+     std::atomic_signal_fence(std::memory_order_seq_cst);
+     if constexpr (runs_channel(0)) {
+-        step_channel<0>(first_channel_cursor, states.ch0, downstreams, credits, credit_frame_due, arrived0, me);
++        step_channel<0>(first_channel_cursor, states.ch0, downstreams, credits, credit_frame_due, arrived0, my_chip);
+     }
+     if constexpr (runs_channel(1)) {
+-        step_channel<1>(first_channel_cursor, states.ch1, downstreams, credits, credit_frame_due, arrived1, me);
++        step_channel<1>(first_channel_cursor, states.ch1, downstreams, credits, credit_frame_due, arrived1, my_chip);
+     }
+     if constexpr (runs_channel(2)) {
+-        step_channel<2>(first_channel_cursor, states.ch2, downstreams, credits, credit_frame_due, arrived2, me);
++        step_channel<2>(first_channel_cursor, states.ch2, downstreams, credits, credit_frame_due, arrived2, my_chip);
+     }
+     if (credit_frame_due) {
+         credit_frame_due = !send_credit_frame(credits, txq_status);
+@@ -749,7 +749,7 @@
+ // routers (Channel<CH>::forwards_on_vc).
+ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+     const auto& routing_table = *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+-    const Coordinates me{routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
++    const ChipCoordinates my_chip{routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     ChannelStates states;
+     CursorOf<first_channel> first_channel_cursor = first_channel_cursor_in(states);  // carried through the loop
+@@ -763,7 +763,7 @@
+             telemetry::round_start();
+         }
+         for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
+-            pass(first_channel_cursor, credit_frame_due, states, credits, downstreams, me);
++            pass(first_channel_cursor, credit_frame_due, states, credits, downstreams, my_chip);
+         }
+         end_round(round, true);
+         if constexpr (telemetry::any_option) {
+diff -ru v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp
+--- v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-01 20:56:07.651694325 +0000
++++ v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-02 05:52:57.380294068 +0000
+@@ -37,8 +37,8 @@
+     return *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+ }
+ 
+-// This router's place in the fabric, as routing uses it (2D).
+-struct Coordinates {
++// This chip's place in the fabric, as routing uses it (2D): the routing table's my_mesh_coord_y / _x and my_mesh_id.
++struct ChipCoordinates {
+     uint8_t y;
+     uint8_t x;
+     uint16_t mesh_id;
+@@ -81,16 +81,16 @@
+     // MESH_Y_SIZE + x). Routers that read the row's byte read both bytes as volatile loads, unconditionally, so they
+     // issue together; a destination reached on the Y leg decides on the X byte, which would otherwise wait behind the
+     // Y byte's test (LEDGER E1-19).
+-    static FORCE_INLINE uint8_t action(tt_l1_ptr PACKET_HEADER_TYPE* header, const Coordinates& me) {
++    static FORCE_INLINE uint8_t action(tt_l1_ptr PACKET_HEADER_TYPE* header, const ChipCoordinates& my_chip) {
+         if constexpr (column_only && !intermesh_exits) {
+-            return header->route_buffer[MESH_Y_SIZE + me.x];
++            return header->route_buffer[MESH_Y_SIZE + my_chip.x];
+         } else if constexpr (column_only) {
+             const volatile PACKET_HEADER_TYPE* const volatile_header = header;
+-            return volatile_header->route_buffer[MESH_Y_SIZE + me.x];
++            return volatile_header->route_buffer[MESH_Y_SIZE + my_chip.x];
+         } else {
+             const volatile PACKET_HEADER_TYPE* const volatile_header = header;
+-            const uint8_t y_action = volatile_header->route_buffer[me.y];
+-            const uint8_t x_action = volatile_header->route_buffer[MESH_Y_SIZE + me.x];
++            const uint8_t y_action = volatile_header->route_buffer[my_chip.y];
++            const uint8_t x_action = volatile_header->route_buffer[MESH_Y_SIZE + my_chip.x];
+             return y_action != 0 ? y_action : x_action;
+         }
+     }
+@@ -98,18 +98,19 @@
+     // The packet's route word: its action byte, landed first on an ingress channel; on an edge router, the exit's
+     // direction bit for a packet that leaves the mesh here (its destination mesh read in the same group as the action
+     // bytes, both volatile, so the loads overlap).
+-    static FORCE_INLINE uint32_t read(tt_l1_ptr PACKET_HEADER_TYPE* header, const Coordinates& me) {
++    static FORCE_INLINE uint32_t read(tt_l1_ptr PACKET_HEADER_TYPE* header, const ChipCoordinates& my_chip) {
+         if constexpr (INTERMESH_INGRESS) {
+             set_landing_route(header);
+         }
+         if constexpr (intermesh_exits) {
+             const volatile PACKET_HEADER_TYPE* const volatile_header = header;
+             const uint32_t dst_mesh = volatile_header->dst_start_mesh_id;
+-            const uint32_t route_action = action(header, me);
+-            return Routing2DCodec::action_is_intermesh_exit(route_action, dst_mesh, me.mesh_id) ? exit_action<VC>(dst_mesh)
+-                                                                                                : route_action;
++            const uint32_t route_action = action(header, my_chip);
++            return Routing2DCodec::action_is_intermesh_exit(route_action, dst_mesh, my_chip.mesh_id)
++                       ? exit_action<VC>(dst_mesh)
++                       : route_action;
+         } else {
+-            return action(header, me);
++            return action(header, my_chip);
+         }
+     }
+ 
+@@ -137,7 +138,7 @@
+     // The packet's route word: the routing word, whose low FIELD_WIDTH bits are this hop's field. One word, as 2D's
+     // action: the extension words of packets past 16 hops are read only when the next-hop update needs them
+     // (update_for_next_hop).
+-    static FORCE_INLINE uint32_t read(tt_l1_ptr PACKET_HEADER_TYPE* header, const Coordinates&) {
++    static FORCE_INLINE uint32_t read(tt_l1_ptr PACKET_HEADER_TYPE* header, const ChipCoordinates&) {
+         return header->routing_fields.value;
+     }
+ 
+diff -ru v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp
+--- v4rxe1/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-02 04:33:55.764904042 +0000
++++ v4rxf1f1/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-02 05:52:57.382294095 +0000
+@@ -40,16 +40,16 @@
+     sender::pass(s.workers, s.connections, s.forwarding, s.in_flight, s.far, attempted);
+ }
+ 
+-__attribute__((noinline)) void receiver_pass(ReceiverState& r, DownstreamConnections& downstreams, const Coordinates& me) {
++__attribute__((noinline)) void receiver_pass(ReceiverState& r, DownstreamConnections& downstreams, const ChipCoordinates& my_chip) {
+     receiver::pass(
+-        receiver::first_channel_cursor_in(r.states), r.credit_frame_due, r.states, r.credits, downstreams, me);
++        receiver::first_channel_cursor_in(r.states), r.credit_frame_due, r.states, r.credits, downstreams, my_chip);
+ }
+ 
+ template <typename WorkerInterfaces>
+ __attribute__((noinline)) void run(
+     WorkerInterfaces& interfaces, const sender::UpstreamCredits& upstream, DownstreamConnections& downstreams) {
+     const auto& routing_table = *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+-    const Coordinates me{routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
++    const ChipCoordinates my_chip{routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     SenderState<decltype(sender::worker_connections(interfaces))> s{
+         sender::worker_connections(interfaces), {}, {}, 0, sender::far_rings_start()};
+@@ -71,7 +71,7 @@
+                 telemetry::round_start();
+             }
+             for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
+-                receiver_pass(r, downstreams, me);
++                receiver_pass(r, downstreams, my_chip);
+                 sender_pass(s, round.attempted);
+             }
+             const bool firmware_ran = end_round(

@@ -1,0 +1,5 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+Vc2OnVC0_size_2048_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,32,0,1,E,1,1000000,2048,130092427,21.252582,10377237.408
+Vc2Alone_size_2048_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,32,0,1,E,1,1000000,2048,143739897,19.234743,9391964.431
+Vc02A_size_2048_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,32,0,1,E,2,1500000,2048,399131899,20.781100,10147021.599
+Vc02B_size_2048_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,32,0,1,E,2,1500000,2048,374279499,22.160979,10820790.374

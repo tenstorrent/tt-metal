@@ -1,0 +1,278 @@
+[
+ {
+  "point": 2,
+  "router": "main",
+  "pass": "a",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_ew1024_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_ew1024.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_main",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_main.tgz"
+  ],
+  "build": "main (kernel v1, flags 0, firmware keepalive)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxEW1024",
+  "packet_size_B": 1024
+ },
+ {
+  "point": 5,
+  "router": "main",
+  "pass": "a",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_fullring_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_fullring.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_main",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_main.tgz"
+  ],
+  "build": "main (kernel v1, flags 0, firmware keepalive)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxFullRing4352",
+  "packet_size_B": 4352
+ },
+ {
+  "point": 4,
+  "router": "main",
+  "pass": "a",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_ns7_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_ns7.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_main",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_s_ns7_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_main.tgz"
+  ],
+  "build": "main (kernel v1, flags 0, firmware keepalive)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxNS7",
+  "packet_size_B": 1024
+ },
+ {
+  "point": 2,
+  "router": "new",
+  "pass": "a",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_ew1024_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_ew1024.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_v4rxg3",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_v4rxg3.tgz"
+  ],
+  "build": "v4rxg3 (kernel v2 slot, flags 13129088, keepalive 1000)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxEW1024",
+  "packet_size_B": 1024
+ },
+ {
+  "point": 5,
+  "router": "new",
+  "pass": "a",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_fullring_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_fullring.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_v4rxg3",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_v4rxg3.tgz"
+  ],
+  "build": "v4rxg3 (kernel v2 slot, flags 13129088, keepalive 1000)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxFullRing4352",
+  "packet_size_B": 4352
+ },
+ {
+  "point": 4,
+  "router": "new",
+  "pass": "a",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_ns7_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_ns7.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_v4rxg3",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_s_ns7_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_v4rxg3.tgz"
+  ],
+  "build": "v4rxg3 (kernel v2 slot, flags 13129088, keepalive 1000)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxNS7",
+  "packet_size_B": 1024
+ },
+ {
+  "point": 2,
+  "router": "main",
+  "pass": "b",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_ew1024_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_ew1024.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_main",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_main.tgz"
+  ],
+  "build": "main (kernel v1, flags 0, firmware keepalive)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxEW1024",
+  "packet_size_B": 1024
+ },
+ {
+  "point": 5,
+  "router": "main",
+  "pass": "b",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_fullring_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_fullring.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_main",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_main.tgz"
+  ],
+  "build": "main (kernel v1, flags 0, firmware keepalive)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxFullRing4352",
+  "packet_size_B": 4352
+ },
+ {
+  "point": 4,
+  "router": "main",
+  "pass": "b",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_ns7_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_ns7.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_main",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_main_s_ns7_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_main_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_main.tgz"
+  ],
+  "build": "main (kernel v1, flags 0, firmware keepalive)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxNS7",
+  "packet_size_B": 1024
+ },
+ {
+  "point": 2,
+  "router": "new",
+  "pass": "b",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_ew1024_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_ew1024.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_v4rxg3",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_v4rxg3.tgz"
+  ],
+  "build": "v4rxg3 (kernel v2 slot, flags 13129088, keepalive 1000)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxEW1024",
+  "packet_size_B": 1024
+ },
+ {
+  "point": 5,
+  "router": "new",
+  "pass": "b",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_fullring_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_fullring.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_v4rxg3",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_v4rxg3.tgz"
+  ],
+  "build": "v4rxg3 (kernel v2 slot, flags 13129088, keepalive 1000)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxFullRing4352",
+  "packet_size_B": 4352
+ },
+ {
+  "point": 4,
+  "router": "new",
+  "pass": "b",
+  "samples_prefix": "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_ns7_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_ns7.csv",
+  "cache": "/data/aagarwal/frs-glx/jobs/169481/cache_v4rxg3",
+  "logs": [
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/b_v4rxg3_s_ns7_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/169481/results/a_v4rxg3_c_ring.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/169481/results/src_v4rxg3.tgz"
+  ],
+  "build": "v4rxg3 (kernel v2 slot, flags 13129088, keepalive 1000)",
+  "job": "Slurm 169481",
+  "node": "bh-glx-110-a10u08",
+  "date": "2026-11-03",
+  "test": "BdGlxNS7",
+  "packet_size_B": 1024
+ }
+]

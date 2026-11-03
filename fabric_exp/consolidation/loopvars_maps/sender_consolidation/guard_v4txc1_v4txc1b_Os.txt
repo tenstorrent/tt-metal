@@ -1,0 +1,8 @@
+v4txc1_Os -> v4txc1b_Os: 112 images with different .text, 168 role analyses
+  bh_2d_vc2_trim_w0 sender                   28  loop +16 sp S+6 L+6 +['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val']
+  bh_2d_vc2_trim_w0_1erisc receiver          28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc sender            28  loop +6 sp S+2 L+2
+  bh_torus_vc2_trim_w0 sender                16  loop +16 sp S+6 L+6 +['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val']
+  bh_torus_vc2_trim_w0 sender                12  loop +7 sp S+1 L+2 +['visit_channel_with_work<3>:acks~'] -['credit_upstream@return_slots<3>:credit_addr.@4', 'noc_inline_dw_write@return_slots<3>:val']
+  bh_torus_vc2_trim_w0_1erisc receiver       28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0_1erisc sender         28  loop +6 sp S+2 L+2

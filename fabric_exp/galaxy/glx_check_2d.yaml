@@ -1,0 +1,23 @@
+# Tree check at the start of each Galaxy job (frs_glx_rsz.sbatch, step PASS:CONFIG:check): one short data-checked 2D row,
+# one parametrization of the mesh sanity suite (test_fabric_mesh_sanity_common.yaml "FlowControlMeshLowLatency": Mesh,
+# all_to_all, flow control on, unicast write, 1 link, 4096 B), which passed on 110-a Galaxies (e.g. job 168925
+# nbr_sanity, 96/96). The first check row (explicit 1-hop E/W + 7-hop N/S senders, 1000 x 4352 B, no flow control)
+# failed with DATA_MISMATCH at the 7-hop receiver on BOTH routers (jobs 169264 v4rxg3, 169265 main): the row, not a
+# router (hypothesis: without flow control the sender laps the receiver's payload ring).
+Tests:
+  - name: "GlxCheck2D"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ftype: [unicast]
+      ntype: [unicast_write]
+      num_links: [1]
+      size: [4096]
+
+    defaults:
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all

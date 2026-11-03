@@ -1,0 +1,10 @@
+v4txa3_Os -> v4txa4_Os: 2863 images; loop functions at the same address: 3999, moved: 286
+  bh_1d_allinstr               receiver::run              -8 B  64B offset changed  x10
+  bh_1d_trim                   receiver::run              -8 B  64B offset changed  x10
+  bh_2d_allinstr               receiver::run              -8 B  64B offset changed  x28
+  bh_2d_trim                   receiver::run              -8 B  64B offset changed  x28
+  bh_ring_allinstr             receiver::run              -8 B  64B offset changed  x10
+  bh_trim_gtest                receiver::run              -8 B  64B offset changed  x50
+  bh_trim_gtest_1erisc         single::receiver_pass      -8 B  64B offset changed  x50
+  bh_trim_gtest_1erisc         single::run               -48 B  64B offset changed  x50
+  bh_trim_gtest_1erisc         single::sender_pass        -8 B  64B offset changed  x50

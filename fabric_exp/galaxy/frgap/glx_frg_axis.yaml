@@ -1,0 +1,34 @@
+# FULLRING_MCAST_GAP.md A/B 1 (2026-11-03): the full-ring multicast one ring axis at a time. Every chip multicasts
+# around its N/S ring both ways (hops N/S = max = axis length - 1), then, as its own test, around its E/W ring. Otherwise
+# glx_sizes_ring.yaml's GlxFullRingMulticast (Ring topology, 20000 packets, unicast_write), at 3072 and 4352 B.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: GlxRingMcastNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 4352]
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+    destination:
+      hops: {N: max, S: max}
+  patterns:
+  - {type: all_devices_uniform_pattern, iterations: 1}
+- name: GlxRingMcastEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 4352]
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+    destination:
+      hops: {E: max, W: max}
+  patterns:
+  - {type: all_devices_uniform_pattern, iterations: 1}

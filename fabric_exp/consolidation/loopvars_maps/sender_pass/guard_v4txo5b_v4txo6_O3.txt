@@ -1,0 +1,15 @@
+v4txo5b_O3 -> v4txo6_O3: 240 images with different .text, 240 role analyses
+  bh_1d_allinstr receiver                    10  loop +0 sp S+0 L+0
+  bh_1d_allinstr sender                      10  loop -26 sp S+0 L+2
+  bh_1d_telemetry receiver                   10  loop +0 sp S+0 L+0
+  bh_1d_telemetry sender                     10  loop -18 sp S+0 L+2
+  bh_2d_allinstr receiver                    28  loop +0 sp S+0 L+0
+  bh_2d_allinstr sender                      28  loop -54 sp S-1 L+3
+  bh_2d_bwtelemetry receiver                 28  loop +0 sp S+0 L+0
+  bh_2d_bwtelemetry sender                   28  loop -40 sp S-1 L+3
+  bh_2d_telemetry receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_telemetry sender                     28  loop -40 sp S-1 L+3
+  bh_ring_allinstr receiver                  10  loop +0 sp S+0 L+0
+  bh_ring_allinstr sender                    10  loop -22 sp S+0 L+3
+  bh_vc1_allinstr receiver                    6  loop +0 sp S+0 L+0
+  bh_vc1_allinstr sender                      6  loop -92 sp S+0 L+7

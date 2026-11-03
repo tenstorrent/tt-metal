@@ -1,0 +1,90 @@
+diff -ru v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4rxf1i2/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:58:52.331086875 +0000
++++ v4rxf1i2/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:57:31.832998825 +0000
+@@ -272,15 +272,22 @@
+ // The first VC's ring progress where this router runs its channel (Present, router_common.hpp).
+ using FirstVcProgress = Present<runs_vc(FIRST_VC), RingProgress, FIRST_VC>;
+ 
+-// The first VC's ring progress in `states` (Absent where its channel does not run: no step uses it). A template, so
+-// that an absent channel's state is named only in template-dependent code.
++// The first VC's ring progress in `states`, in place (a single-ERISC router's pass), and as the receiver loop's local
++// copy. Templates, so that an absent channel's state is named only in template-dependent code.
+ template <typename States>
+-FORCE_INLINE FirstVcProgress& first_vc_progress_in(States& states) {
++FORCE_INLINE auto& first_vc_progress_in(States& states) {
+     if constexpr (runs_vc(FIRST_VC)) {
+         return states.template get<FIRST_VC>().progress;
+     } else {
+-        static FirstVcProgress absent;
+-        return absent;
++        return states;  // not used: no step for an absent channel
++    }
++}
++template <typename States>
++FORCE_INLINE FirstVcProgress first_vc_progress_copy(States& states) {
++    if constexpr (runs_vc(FIRST_VC)) {
++        return states.template get<FIRST_VC>().progress;
++    } else {
++        return {};
+     }
+ }
+ 
+@@ -687,23 +694,20 @@
+ // VC's step on its state where the placement puts it (ReceiverChannelStates): the first VC on the loop's local copy
+ // of its ring progress, a later VC on its state in memory, kept there after the step. None where VC's channel does
+ // not run.
+-template <size_t VC, typename FirstProgress, typename States, typename Connections>
++template <size_t VC, typename FirstProgress, typename Connections>
+ FORCE_INLINE void step_channel(
+     FirstProgress& first_vc_progress,
+-    States& states,
++    ReceiverChannelState<VC>& state,
+     Connections& downstreams,
+     Credits& credits,
+     bool& credit_frame_due,
+     uint32_t arrived_raw,
+     const ChipCoordinates& my_chip) {
+-    if constexpr (runs_vc(VC)) {
+-        auto& state = states.template get<VC>();
+-        if constexpr (VC == FIRST_VC) {
+-            step<VC>(first_vc_progress, state.sources, downstreams, credits, credit_frame_due, arrived_raw, my_chip);
+-        } else {
+-            step<VC>(state.progress, state.sources, downstreams, credits, credit_frame_due, arrived_raw, my_chip);
+-            keep_in_memory(state);
+-        }
++    if constexpr (VC == FIRST_VC) {
++        step<VC>(first_vc_progress, state.sources, downstreams, credits, credit_frame_due, arrived_raw, my_chip);
++    } else {
++        step<VC>(state.progress, state.sources, downstreams, credits, credit_frame_due, arrived_raw, my_chip);
++        keep_in_memory(state);
+     }
+ }
+ 
+@@ -730,9 +734,15 @@
+         txq_status = read_txq_status(receiver_txq_id);
+     }
+     end_read_group();
+-    step_channel<0>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived[0], my_chip);
+-    step_channel<1>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived[1], my_chip);
+-    step_channel<2>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived[2], my_chip);
++    if constexpr (runs_vc(0)) {
++        step_channel<0>(first_vc_progress, states.template get<0>(), downstreams, credits, credit_frame_due, arrived[0], my_chip);
++    }
++    if constexpr (runs_vc(1)) {
++        step_channel<1>(first_vc_progress, states.template get<1>(), downstreams, credits, credit_frame_due, arrived[1], my_chip);
++    }
++    if constexpr (runs_vc(2)) {
++        step_channel<2>(first_vc_progress, states.template get<2>(), downstreams, credits, credit_frame_due, arrived[2], my_chip);
++    }
+     if (credit_frame_due) {
+         credit_frame_due = !send_credit_frame(credits, txq_status);
+     }
+@@ -749,7 +759,7 @@
+         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     ReceiverChannelStates states;
+-    FirstVcProgress first_vc_progress = first_vc_progress_in(states);  // a copy, carried through the loop
++    FirstVcProgress first_vc_progress = first_vc_progress_copy(states);  // carried through the loop
+     local_write_init();
+     Credits credits(0);
+     bool credit_frame_due = false;  // the credit counts changed since the last frame

@@ -1,0 +1,644 @@
+diff -ruN v4txc2/fabric_erisc_router_v4.cpp v4txc3/fabric_erisc_router_v4.cpp
+--- v4txc2/fabric_erisc_router_v4.cpp	2026-11-03 03:04:49.791401001 +0000
++++ v4txc3/fabric_erisc_router_v4.cpp	2026-11-03 03:27:51.948476151 +0000
+@@ -112,58 +112,6 @@
+     (num_ds_or_local_tensix_connections == 0 || tensix_mux_mode || udm_mode);
+ static_assert(brought_up, "fabric router v4: this configuration is not brought up yet (see the file header)");
+ 
+-// ---------------------------------------------------------------------------------------------------------------------
+-// Sender side: worker interfaces and static connections
+-// ---------------------------------------------------------------------------------------------------------------------
+-
+-using sender::WorkerInterfaces;
+-
+-// The worker interface of every sender channel: its location info, connection semaphore, starting credits (0 for a
+-// worker channel, whose credits are counters; the ring size for a forwarding channel) and the source word of its worker
+-// credits (a worker channel's read counter: router_sender.hpp, credit_worker).
+-__attribute__((noinline)) void init_worker_interfaces(WorkerInterfaces& interfaces, const RuntimeArgs& args) {
+-    for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
+-        constexpr size_t CH = decltype(i)::value;
+-        constexpr bool worker = is_sender_channel_worker[CH];  // the host's role, serviced or not
+-        auto* info =
+-            reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(sender_connection_info_addrs[CH]);
+-        info->edm_read_counter = 0;
+-        ASSERT(!worker || args.connection_semaphores[CH] == sender_connection_semaphore_addrs[CH]);
+-        new (&interfaces.template get<CH>())
+-            tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[CH]>(
+-                info,
+-                0,
+-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(args.connection_semaphores[CH]),
+-                sender_channel_ack_cmd_buf_ids[CH],
+-                worker ? 0 : SENDER_NUM_BUFFERS_ARRAY[CH],
+-                worker ? sender::worker_read_counter_addr(CH) : notify_worker_of_read_counter_update_src_address);
+-    });
+-}
+-
+-// Wait until an upstream router asks to connect on `connection_semaphore`, or termination. One body for every channel.
+-__attribute__((noinline)) void wait_for_connect_request(volatile tt_l1_ptr uint32_t* connection_semaphore) {
+-    uint32_t polls = 0;
+-    while (!connect_is_requested(*connection_semaphore) && !terminating()) {
+-        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+-        if (polls++ == 100000) {
+-            polls = 0;
+-            run_routing();
+-        }
+-    }
+-}
+-
+-// Wait for each forwarding channel's upstream router to connect, and cache its credit address.
+-__attribute__((noinline)) void wait_for_upstream_routers(WorkerInterfaces& interfaces) {
+-    for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
+-        constexpr size_t CH = decltype(i)::value;
+-        if constexpr (is_sender_channel_serviced[CH] && sender_ch_wait_static_connection[CH]) {
+-            auto& interface = interfaces.template get<CH>();
+-            wait_for_connect_request(interface.connection_live_semaphore);
+-            interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
+-        }
+-    });
+-}
+-
+ }  // namespace fabric_router
+ 
+ void kernel_main() {
+@@ -191,7 +139,6 @@
+     // Phase: local setup.
+     RuntimeArgs args;
+     read_runtime_args(args);
+-    WorkerInterfaces& interfaces = sender::start_worker_interfaces();
+     // The receiver's downstream connections (router_downstream.hpp): set up here, then used by its loop.
+     DownstreamConnections downstreams{};
+     if constexpr (is_sender_role) {
+@@ -221,7 +168,7 @@
+         auto sender_channels =
+             SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
+         sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
+-        init_worker_interfaces(interfaces, args);
++        sender::SenderChannelInterfaces::start(args.connection_semaphores);
+     }
+     sync_erisc(Phase::SETUP_DONE);
+ 
+@@ -259,7 +206,7 @@
+     // Phase: upstream connections.
+     WAYPOINT("FSCW");
+     if constexpr (is_sender_role) {
+-        wait_for_upstream_routers(interfaces);
++        sender::wait_for_upstream_routers();
+     }
+     WAYPOINT("FSCD");
+     sync_erisc(Phase::CONNECTED);
+diff -ruN v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:08:25.750349781 +0000
++++ v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:33:26.501239550 +0000
+@@ -27,12 +27,12 @@
+ //
+ // State, by placement class: the loop-local VC's send state (its remote receiver progress and its worker channel's
+ // progress and connection state) and which channels kept in memory have packets in flight, loop locals; every other
+-// VC's send state and each forwarding channel's state, in memory between its visits; the worker interfaces, in memory
+-// (they escape to out-of-line calls); slot bounds, registers and counters, compile-time. The block before pass()
+-// (SenderChannelStates) states the rule.
++// VC's send state and each forwarding channel's state, in memory between its visits; the channels' interfaces
++// (SenderChannelInterfaces), in memory (out-of-line calls reach them); slot bounds, registers and counters,
++// compile-time. The block before pass() (SenderChannelStates) states the rule.
+ //
+-// Sections, in order: channels and their features; state; free-slots registers; sending; credits back to producers;
+-// visits; where the channel states live, and the loop.
++// Sections, in order: channels and their features; state; producers (the channel kinds' links to their producers);
++// free-slots registers; sending; visits; where the channel states live, and the loop; init.
+ 
+ #include "router_common.hpp"
+ #include "router_round.hpp"
+@@ -44,14 +44,6 @@
+ // Channels and their features
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+-// The NoC of the credits this router writes to its producers (workers and upstream routers).
+-constexpr uint8_t WORKER_CREDIT_NOC = tt::tt_fabric::worker_handshake_noc;
+-
+-// Channel `ch`'s read counter in its connection info: a worker reads the credits returned so far there when it connects.
+-constexpr uint32_t worker_read_counter_addr(size_t ch) {
+-    return sender_connection_info_addrs[ch] + offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter);
+-}
+-
+ // Sender channel CH: its slots, registers and counters, and its features (the host's, per channel or per VC).
+ template <size_t CH>
+ struct SenderChannel {
+@@ -68,8 +60,6 @@
+         sender_channel_counter_addr(to_sender_remote_completion_counters_base_address, CH);
+     static constexpr uint32_t first_level_ack_counter_addr =
+         sender_channel_counter_addr(to_sender_remote_ack_counters_base_address, CH);
+-    // A worker channel's connection semaphore (compile time; the worker interface holds the same address).
+-    static constexpr uint32_t connection_semaphore_addr = sender_connection_semaphore_addrs[CH];
+     static constexpr bool first_level_ack = is_vc_first_level_ack_enabled[vc];
+     // Bubble flow control: on a deadlock-avoiding ring or torus an injection channel (the worker channel; on a torus a
+     // channel fed from the other axis, a turn) sends only with two free remote slots. (The untrimmed array: GCC rejects
+@@ -78,10 +68,8 @@
+         enable_deadlock_avoidance && sender_channel_is_traffic_injection_channel_all_[CH]
+             ? BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS
+             : 1;
+-    // A worker channel's credits: the command buffer they go out on (CommandBuffers), and its read counter, which holds
+-    // the credits returned so far and is the source word of each credit write.
+-    static constexpr uint8_t producer_credit_cmd_buf = CommandBuffers::worker_credits[CH];
+-    static constexpr uint32_t read_counter_addr = worker_read_counter_addr(CH);
++    // The NoC of its producer's credits and connection handshake (the library's, from SENDER_CH_<i>_ACK_NOC_ID).
++    static constexpr uint8_t producer_noc = tt::tt_fabric::worker_handshake_noc;
+ 
+     // Whether its free-slots register (raw) says it holds a packet. The register counts the free slots of the channel:
+     // the producer takes one for each packet it writes, this router gives one back for each packet it sends. Anything
+@@ -94,7 +82,6 @@
+ 
+     static_assert(num_slots > 0 && num_slots <= stream_count_mask);
+     static_assert(sender_channel_uses_counter_credits(CH), "the sender reads its credits from L1 counters");
+-    static_assert(!worker || !sender_ch_live_check_skip[CH], "the host checks every worker channel's connection");
+ };
+ 
+ // VC's sender features, from its channels' (each channel's VC and role are the host's): its serviced sender channels,
+@@ -258,23 +245,206 @@
+         worker{};
+ };
+ 
+-// The sender channels' interfaces (the library's connection state, the producer's credit address), at a fixed
+-// location: built by the kernel at init, then reached by channel (worker_interface<CH>()). Storage and an explicit
+-// construction: the kernel runs no global constructors.
+-using WorkerInterfaces = decltype(tt::tt_fabric::EdmChannelWorkerInterfaces<WORKER_CREDIT_NOC, SENDER_NUM_BUFFERS_ARRAY>::make(
+-    std::make_index_sequence<NUM_SENDER_CHANNELS>{}));
+-struct WorkerInterfaceStorage {
+-    alignas(WorkerInterfaces) unsigned char bytes[sizeof(WorkerInterfaces)];
+-};
+-inline WorkerInterfaceStorage worker_interface_storage;
+-// Builds the interfaces at their location (once, at init); the kernel then sets each one up.
+-FORCE_INLINE WorkerInterfaces& start_worker_interfaces() {
+-    return *new (worker_interface_storage.bytes) WorkerInterfaces{};
++// ---------------------------------------------------------------------------------------------------------------------
++// Producers
++// ---------------------------------------------------------------------------------------------------------------------
++
++// Every sender channel position's library interface: its producer's connection (connection info, connection semaphore,
++// the producer's credit address, cached when it connects). At a fixed location, not in run()'s frame: the out-of-line
++// connection path reaches them by channel. Storage and an explicit start: the kernel runs no global constructors.
++struct SenderChannelInterfaces {
++    using All = decltype(tt::tt_fabric::EdmChannelWorkerInterfaces<
++                         tt::tt_fabric::worker_handshake_noc,
++                         SENDER_NUM_BUFFERS_ARRAY>::make(std::make_index_sequence<NUM_SENDER_CHANNELS>{}));
++
++    // Channel `ch`'s read counter in its connection info: the credits returned so far, which a worker reads when it
++    // connects, and the source word of each credit write to it.
++    static constexpr uint32_t read_counter_addr(size_t ch) {
++        return sender_connection_info_addrs[ch] +
++               offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter);
++    }
++
++    // Builds every position's interface, serviced or not (once, at init, on an ERISC that serves sender channels): its
++    // connection info, its connection semaphore (the runtime args'), its starting credits (0 for a worker channel,
++    // whose credits are counts; the slot count for a forwarding channel) and a worker channel's credit source word (its
++    // read counter).
++    __attribute__((noinline)) static void start(
++        const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
++        new (storage) All{};
++        for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
++            constexpr size_t CH = decltype(i)::value;
++            constexpr bool worker = is_sender_channel_worker[CH];  // the host's role, serviced or not
++            auto* info = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
++                sender_connection_info_addrs[CH]);
++            info->edm_read_counter = 0;
++            ASSERT(!worker || connection_semaphores[CH] == sender_connection_semaphore_addrs[CH]);
++            new (&of<CH>()) tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
++                tt::tt_fabric::worker_handshake_noc,
++                SENDER_NUM_BUFFERS_ARRAY[CH]>(
++                info,
++                0,
++                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_semaphores[CH]),
++                CommandBuffers::worker_credits[CH],
++                worker ? 0 : SENDER_NUM_BUFFERS_ARRAY[CH],
++                worker ? read_counter_addr(CH) : notify_worker_of_read_counter_update_src_address);
++        });
++    }
++
++    // Channel CH's interface (after start).
++    template <size_t CH>
++    static FORCE_INLINE auto& of() {
++        return std::launder(reinterpret_cast<All*>(storage))->template get<CH>();
++    }
++
++private:
++    alignas(All) static inline unsigned char storage[sizeof(All)];
++};
++
++// What a worker channel's connection-semaphore change does, the same for every worker channel (one copy: the connection
++// type does not depend on the channel's slot count). Opening caches the worker's credit address; closing writes the
++// credits returned so far (`returned`) into the worker's connection info and signals its teardown semaphore. Returns
++// the value the semaphore holds while nothing changes.
++__attribute__((noinline)) uint32_t open_or_close_worker_connection(
++    tt::tt_fabric::EdmChannelWorkerConnection<tt::tt_fabric::worker_handshake_noc>& connection,
++    uint32_t semaphore,
++    uint32_t expected,
++    uint32_t returned) {
++    using namespace tt::tt_fabric::connection_interface;
++    if (expected == unused_connection_value) {
++        if (connect_is_requested(semaphore)) {
++            connection.cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, MY_ETH_CHANNEL>();
++            return open_connection_value;
++        }
++        return unused_connection_value;
++    }
++    if (semaphore == close_connection_request_value) {
++        connection.close_connection<true, ENABLE_RISC_CPU_DATA_CACHE>(returned);
++        return unused_connection_value;
++    }
++    return open_connection_value;
+ }
++
++// A worker channel: a worker on this chip connects at run time (its connection semaphore, checked every pass) and is
++// credited with the absolute count of slots returned. The count goes into the channel's read counter, which therefore
++// always holds it; while a worker is connected, a 4-byte posted NoC write copies that word into the worker's L1 on the
++// channel's own credit command buffer (CommandBuffers). Where command buffers keep presets, that buffer stays
++// programmed for the connection (at the connection, and again after the base firmware ran), so a credit only issues
++// the write; elsewhere every credit is a whole command. The credit and the connection event are out of line: a credit
++// goes back once per completion group from the far router (every few packets), or under first-level acks once per ack
++// frame, and its constants are built then instead of being held in the sender loop's registers for its whole run
++// (RESULTS §98).
+ template <size_t CH>
+-FORCE_INLINE auto& worker_interface() {
+-    return std::launder(reinterpret_cast<WorkerInterfaces*>(worker_interface_storage.bytes))->template get<CH>();
+-}
++struct WorkerChannel {
++    static_assert(SenderChannel<CH>::worker);
++    static_assert(!sender_ch_live_check_skip[CH], "the host checks every worker channel's connection");
++    // Unflushed: the read counter may be rewritten before an earlier write read it; the worker then sees the newer,
++    // larger count.
++    static_assert(!enable_read_counter_update_noc_flush);
++
++    // Its connection semaphore (compile time; the interface holds the same address), its read counter and its credit
++    // command buffer.
++    static constexpr uint32_t connection_semaphore_addr = sender_connection_semaphore_addrs[CH];
++    static constexpr uint32_t read_counter_addr = SenderChannelInterfaces::read_counter_addr(CH);
++    static constexpr uint8_t credit_cmd_buf = CommandBuffers::worker_credits[CH];
++
++    static FORCE_INLINE bool connected(const SenderChannelState<CH>& state) {
++        return state.connection_state != tt::tt_fabric::connection_interface::unused_connection_value;
++    }
++
++    // The connection, every pass (by rule), from the semaphore the pass's read group read: a change (open or close
++    // request) is handled out of line. Returns whether it changed.
++    static FORCE_INLINE bool check_connection(SenderChannelState<CH>& state, uint32_t semaphore) {
++        if (semaphore != state.connection_state) {
++            const uint32_t returned =
++                SenderChannel<CH>::first_level_ack ? state.progress.first_level_acked : state.progress.completed;
++            state.connection_state = connection_event(semaphore, state.connection_state, returned);
++            return true;
++        }
++        return false;
++    }
++
++    // `returned` slots in all: into the read counter and, while a worker is connected, from there into the worker's L1.
++    __attribute__((noinline)) static void credit(uint32_t returned, bool worker_connected) {
++        constexpr uint32_t source = read_counter_addr;
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source) = returned;
++        if (worker_connected) {
++            if constexpr (CommandBuffers::presets) {
++                ncrisc_noc_write_with_state<noc_mode, /*posted=*/true, /*update_counter=*/true, /*one_packet=*/true>(
++                    SenderChannel<CH>::producer_noc,
++                    credit_cmd_buf,
++                    source,
++                    static_cast<uint32_t>(interface().cached_worker_semaphore_address));
++            } else {
++                while (!noc_cmd_buf_ready(SenderChannel<CH>::producer_noc, credit_cmd_buf)) {
++                }
++                ncrisc_noc_fast_write<noc_mode>(
++                    SenderChannel<CH>::producer_noc,
++                    credit_cmd_buf,
++                    source,
++                    interface().cached_worker_semaphore_address,
++                    sizeof(uint32_t),
++                    NOC_UNICAST_WRITE_VC,
++                    /*mcast=*/false,
++                    /*linked=*/false,
++                    /*num_dests=*/1,
++                    /*multicast_path_reserve=*/true,
++                    /*posted=*/true);
++            }
++        }
++    }
++
++    // The credit command buffer programmed for the connected worker, where command buffers keep presets.
++    __attribute__((noinline)) static void preset_credit() {
++        if constexpr (CommandBuffers::presets) {
++            ncrisc_noc_write_set_state</*posted=*/true, /*one_packet=*/true>(
++                SenderChannel<CH>::producer_noc,
++                credit_cmd_buf,
++                interface().cached_worker_semaphore_address,
++                sizeof(uint32_t),
++                NOC_UNICAST_WRITE_VC);
++        }
++    }
++
++private:
++    static FORCE_INLINE auto& interface() { return SenderChannelInterfaces::of<CH>(); }
++
++    // The shared event, then, where it opened the connection, the credit command buffer preset and the credits
++    // returned so far sent. Its own function, so the pass calls one function per channel.
++    __attribute__((noinline)) static uint32_t connection_event(
++        uint32_t semaphore, uint32_t expected, uint32_t returned) {
++        const uint32_t state = open_or_close_worker_connection(interface(), semaphore, expected, returned);
++        if (expected == tt::tt_fabric::connection_interface::unused_connection_value &&
++            state != tt::tt_fabric::connection_interface::unused_connection_value) {
++            preset_credit();
++            credit(returned, true);
++        }
++        return state;
++    }
++};
++
++// A forwarding channel: a router on this chip facing another direction writes into it. That upstream router connects
++// once at init and is credited +n on its free-slots register.
++template <size_t CH>
++struct ForwardingChannel {
++    static_assert(!SenderChannel<CH>::worker);
++    // Whether init waits for its upstream router to connect (SENDER_CH_<i>_WAIT_STATIC_CONNECTION; a channel a trimming
++    // override forced on has none).
++    static constexpr bool waits_for_upstream_router = sender_ch_wait_static_connection[CH];
++
++    // The upstream router's free-slots register, as the interface cached it when that router connected.
++    static FORCE_INLINE uint64_t upstream_free_slots_addr() {
++        return SenderChannelInterfaces::of<CH>().cached_worker_semaphore_address;
++    }
++
++    // +n on the upstream router's free-slots register (at `register_addr`, its address as the channel's state holds it).
++    static FORCE_INLINE void credit(uint64_t register_addr, uint32_t n) {
++        noc_inline_dw_write<InlineWriteDst::REG, true>(
++            register_addr,
++            pack_value_for_inc_on_write_stream_reg_write(n),
++            INLINE_WRITE_ALL_BYTES,
++            SenderChannel<CH>::producer_noc);
++    }
++};
+ 
+ // ---------------------------------------------------------------------------------------------------------------------
+ // Free-slots registers
+@@ -308,7 +478,7 @@
+     if constexpr (WORKERS != 0) {
+         constexpr size_t CH = lowest_bit(WORKERS);
+         connection_semaphores[CH] =
+-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::connection_semaphore_addr);
++            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WorkerChannel<CH>::connection_semaphore_addr);
+         read_connection_semaphores<without_lowest_bit(WORKERS)>(connection_semaphores);
+     }
+ }
+@@ -410,140 +580,17 @@
+ }
+ 
+ // ---------------------------------------------------------------------------------------------------------------------
+-// Credits back to producers
+-// ---------------------------------------------------------------------------------------------------------------------
+-
+-// The worker credit goes back once per completion batch from the far router (every few packets), or under first-level
+-// acks once per ack frame. Out of line, its constants are built when a credit goes out instead of being held in the
+-// sender loop's registers for its whole run (RESULTS §98).
+-
+-// The worker credit: the count goes into the channel's read counter (SenderChannel<CH>::read_counter_addr), which
+-// therefore always holds it, and while a worker is connected a 4-byte posted NoC write copies that word into the
+-// worker's L1 on the channel's own command buffer (SenderChannel<CH>::producer_credit_cmd_buf). Where command buffers
+-// keep presets (CommandBuffers::presets) that buffer stays programmed for the whole connection (preset_worker_credit: at
+-// the connection, and again after the base firmware ran), so a credit only issues the write; elsewhere every credit is
+-// a whole command. The sender's upstream credits and teardowns use the atomics buffer.
+-static_assert(!enable_read_counter_update_noc_flush);  // the read counter may be rewritten before an earlier write read
+-                                                       // it: the worker then sees the newer, larger count
+-
+-// Programs worker channel CH's credit command buffer for its connected worker (where command buffers keep presets).
+-template <size_t CH>
+-__attribute__((noinline)) void preset_worker_credit() {
+-    if constexpr (CommandBuffers::presets) {
+-        ncrisc_noc_write_set_state</*posted=*/true, /*one_packet=*/true>(
+-            WORKER_CREDIT_NOC,
+-            SenderChannel<CH>::producer_credit_cmd_buf,
+-            worker_interface<CH>().cached_worker_semaphore_address,
+-            sizeof(uint32_t),
+-            NOC_UNICAST_WRITE_VC);
+-    }
+-}
+-
+-// To worker channel CH's worker: the absolute count of slots returned, into the channel's read counter and, while a
+-// worker is connected, from there into the worker's L1 (unflushed: a later, larger count may overwrite the word before
+-// this write reads it, which the worker accepts).
+-template <size_t CH>
+-__attribute__((noinline)) void credit_worker(uint32_t returned, bool connected) {
+-    constexpr uint32_t source = SenderChannel<CH>::read_counter_addr;
+-    constexpr uint8_t cmd_buf = SenderChannel<CH>::producer_credit_cmd_buf;
+-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source) = returned;
+-    if (connected) {
+-        if constexpr (CommandBuffers::presets) {
+-            ncrisc_noc_write_with_state<noc_mode, /*posted=*/true, /*update_counter=*/true, /*one_packet=*/true>(
+-                WORKER_CREDIT_NOC,
+-                cmd_buf,
+-                source,
+-                static_cast<uint32_t>(worker_interface<CH>().cached_worker_semaphore_address));
+-        } else {
+-            while (!noc_cmd_buf_ready(WORKER_CREDIT_NOC, cmd_buf)) {
+-            }
+-            ncrisc_noc_fast_write<noc_mode>(
+-                WORKER_CREDIT_NOC,
+-                cmd_buf,
+-                source,
+-                worker_interface<CH>().cached_worker_semaphore_address,
+-                sizeof(uint32_t),
+-                NOC_UNICAST_WRITE_VC,
+-                /*mcast=*/false,
+-                /*linked=*/false,
+-                /*num_dests=*/1,
+-                /*multicast_path_reserve=*/true,
+-                /*posted=*/true);
+-        }
+-    }
+-}
+-
+-// To an upstream router: +n on its free-slots register.
+-FORCE_INLINE void credit_upstream(uint64_t credit_addr, uint32_t n) {
+-    noc_inline_dw_write<InlineWriteDst::REG, true>(
+-        credit_addr, pack_value_for_inc_on_write_stream_reg_write(n), INLINE_WRITE_ALL_BYTES, WORKER_CREDIT_NOC);
+-}
+-
+-// A worker channel's connection, whatever its slot count (the library's connection state).
+-using WorkerConnection = tt::tt_fabric::EdmChannelWorkerConnection<WORKER_CREDIT_NOC>;
+-
+-// A worker channel's connection semaphore changed (open or close request): handled out of line, one copy for every
+-// worker channel; returns the value the semaphore holds while nothing changes. Opening caches the worker's credit
+-// address (the caller then sends the opening credit); closing writes the credits returned so far (`returned`) into the
+-// worker's location info and signals its teardown semaphore.
+-__attribute__((noinline)) uint32_t worker_connection_event(
+-    WorkerConnection& connection, uint32_t semaphore, uint32_t expected, uint32_t returned) {
+-    using namespace tt::tt_fabric::connection_interface;
+-    if (expected == unused_connection_value) {
+-        if (connect_is_requested(semaphore)) {
+-            connection.cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, MY_ETH_CHANNEL>();
+-            return open_connection_value;
+-        }
+-        return unused_connection_value;
+-    }
+-    if (semaphore == close_connection_request_value) {
+-        connection.close_connection<true, ENABLE_RISC_CPU_DATA_CACHE>(returned);
+-        return unused_connection_value;
+-    }
+-    return open_connection_value;
+-}
+-
+-// Worker channel CH's connection event (open or close request), out of line: the shared event, then, where it opened
+-// the connection, the channel's credit command buffer programmed for the worker and the credits returned so far sent on
+-// it. A thin wrapper, so the pass calls one function per channel, as before.
+-template <size_t CH>
+-__attribute__((noinline)) uint32_t connection_event(uint32_t semaphore, uint32_t expected, uint32_t returned) {
+-    const uint32_t state = worker_connection_event(worker_interface<CH>(), semaphore, expected, returned);
+-    if (expected == tt::tt_fabric::connection_interface::unused_connection_value &&
+-        state != tt::tt_fabric::connection_interface::unused_connection_value) {
+-        preset_worker_credit<CH>();
+-        credit_worker<CH>(returned, true);
+-    }
+-    return state;
+-}
+-
+-// ---------------------------------------------------------------------------------------------------------------------
+ // Visits
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+-// A worker channel's connection, checked every pass (by rule) from the semaphore the pass's read group read: a change
+-// (open or close request) is handled out of line. Returns whether it changed.
+-template <size_t CH>
+-FORCE_INLINE bool check_connection(SenderChannelState<CH>& state, uint32_t semaphore) {
+-    if (semaphore != state.connection_state) {
+-        const uint32_t returned =
+-            SenderChannel<CH>::first_level_ack ? state.progress.first_level_acked : state.progress.completed;
+-        state.connection_state = connection_event<CH>(semaphore, state.connection_state, returned);
+-        return true;
+-    }
+-    return false;
+-}
+-
+-// Slots back to channel CH's producer, `n` more for `returned` in all: to a worker, the absolute count (out of line);
+-// to an upstream router, +n on its free-slots register.
++// Slots back to channel CH's producer, `n` more for `returned` in all, by the channel's kind: to a worker, the absolute
++// count (out of line); to an upstream router, +n on its free-slots register.
+ template <size_t CH>
+-FORCE_INLINE void return_slots(
+-    const SenderChannelState<CH>& state, uint32_t n, uint32_t returned) {
++FORCE_INLINE void return_slots(const SenderChannelState<CH>& state, uint32_t n, uint32_t returned) {
+     if constexpr (SenderChannel<CH>::worker) {
+-        const bool connected = state.connection_state != tt::tt_fabric::connection_interface::unused_connection_value;
+-        credit_worker<CH>(returned, connected);
++        WorkerChannel<CH>::credit(returned, WorkerChannel<CH>::connected(state));
+     } else {
+-        credit_upstream(state.upstream_free_slots_addr, n);
++        ForwardingChannel<CH>::credit(state.upstream_free_slots_addr, n);
+     }
+ }
+ 
+@@ -800,17 +847,6 @@
+     }
+ }
+ 
+-// The forwarding channels in MASK: each one's upstream router's free-slots register address, as its interface cached it
+-// when the upstream router connected.
+-template <uint32_t MASK>
+-FORCE_INLINE void init_forwarding(SenderChannelStates& states) {
+-    if constexpr (MASK != 0) {
+-        constexpr size_t CH = lowest_bit(MASK);
+-        states.forwarding.template get<CH>().upstream_free_slots_addr = worker_interface<CH>().cached_worker_semaphore_address;
+-        init_forwarding<without_lowest_bit(MASK)>(states);
+-    }
+-}
+-
+ // Packets sent so far on the forwarding channels in MASK.
+ template <uint32_t MASK>
+ FORCE_INLINE uint32_t forwarded(SenderChannelStates& states) {
+@@ -852,9 +888,8 @@
+ FORCE_INLINE void restore_worker_credit_preset(LoopCopy& loop_copy, SenderChannelStates& states) {
+     if constexpr (CommandBuffers::presets && SenderVc<VC>::has_worker_channel) {
+         constexpr size_t CH = SenderVc<VC>::worker_channel;
+-        if (states.template progress_for<VC>(loop_copy).worker.connection_state !=
+-            tt::tt_fabric::connection_interface::unused_connection_value) {
+-            preset_worker_credit<CH>();
++        if (WorkerChannel<CH>::connected(states.template progress_for<VC>(loop_copy).worker)) {
++            WorkerChannel<CH>::preset_credit();
+         }
+     }
+ }
+@@ -872,7 +907,8 @@
+     LoopCopy& loop_copy, SenderChannelStates& states, const uint32_t* connection_semaphores) {
+     if constexpr (SenderVc<VC>::has_worker_channel) {
+         constexpr size_t CH = SenderVc<VC>::worker_channel;
+-        check_connection<CH>(states.template progress_for<VC>(loop_copy).worker, connection_semaphores[CH]);
++        WorkerChannel<CH>::check_connection(
++            states.template progress_for<VC>(loop_copy).worker, connection_semaphores[CH]);
+     }
+ }
+ 
+@@ -928,11 +964,23 @@
+     }
+ }
+ 
++// At the loop's start: each forwarding channel's upstream router's free-slots register address, as its interface cached
++// it when that router connected (wait_for_upstream_routers). (MASK: the forwarding channels left to start.)
++template <uint32_t MASK = SenderChannels::forwarding_channels>
++FORCE_INLINE void start_forwarding_channels(SenderChannelStates& states) {
++    if constexpr (MASK != 0) {
++        constexpr size_t CH = lowest_bit(MASK);
++        states.forwarding.template get<CH>().upstream_free_slots_addr =
++            ForwardingChannel<CH>::upstream_free_slots_addr();
++        start_forwarding_channels<without_lowest_bit(MASK)>(states);
++    }
++}
++
+ // The sender loop: rounds of passes over the sender channels, with router commands between runs of rounds. A function
+ // of its own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).
+ __attribute__((noinline)) void run() {
+     SenderChannelStates states;
+-    init_forwarding<SenderChannels::forwarding_channels>(states);
++    start_forwarding_channels(states);
+     auto loop_copy = states.loop_local_progress();  // carried through the loop (SenderChannelStates)
+     uint32_t channels_in_flight = 0;  // the channels kept in memory with packets not yet completed (or acked)
+ 
+@@ -952,4 +1000,35 @@
+     }
+ }
+ 
++// ---------------------------------------------------------------------------------------------------------------------
++// Init (out of line, once)
++// ---------------------------------------------------------------------------------------------------------------------
++
++// Waits until an upstream router asks to connect on `connection_semaphore`, or termination. One body for every channel.
++__attribute__((noinline)) void wait_for_connect_request(volatile tt_l1_ptr uint32_t* connection_semaphore) {
++    uint32_t polls = 0;
++    while (!connect_is_requested(*connection_semaphore) && !terminating()) {
++        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
++        if (polls++ == 100000) {
++            polls = 0;
++            run_routing();
++        }
++    }
++}
++
++// Waits for each forwarding channel's upstream router to connect where the host has it wait, and caches that router's
++// free-slots register address in the channel's interface (after SenderChannelInterfaces::start).
++__attribute__((noinline)) void wait_for_upstream_routers() {
++    for_each_index<NUM_SENDER_CHANNELS>([](auto i) {
++        constexpr size_t CH = decltype(i)::value;
++        if constexpr (((SenderChannels::forwarding_channels >> CH) & 1u) != 0) {
++            if constexpr (ForwardingChannel<CH>::waits_for_upstream_router) {
++                auto& interface = SenderChannelInterfaces::of<CH>();
++                wait_for_connect_request(interface.connection_live_semaphore);
++                interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
++            }
++        }
++    });
++}
++
+ }  // namespace fabric_router::sender
+diff -ruN v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp
+--- v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-03 03:04:33.963184425 +0000
++++ v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-03 03:27:51.949476166 +0000
+@@ -48,7 +48,7 @@
+         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     SenderState s;
+-    sender::init_forwarding<sender::SenderChannels::forwarding_channels>(s.states);
++    sender::start_forwarding_channels(s.states);
+     ReceiverState r;
+     local_write_init();
+ 

@@ -1,0 +1,29 @@
+# Cycle breakdown, phase 2 (fabric_exp/report/BREAKDOWN_PLAN.md): Point 2: GlxMesh1HopEW write 1024 B, long (new ~123 cycles/packet: ~7 s; main ~224: ~13 s).
+# Copy of fabric_exp/consolidation/bd_rows/glx_ew1024.yaml (mock-vetted on the Galaxy descriptor) with num_packets 800,000,000 for ~75 s of traffic on the faster router (Galaxy report runs, frs_glx_rsz.sbatch).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BdGlxEW1024
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+  defaults:
+    ftype: unicast
+    num_packets: 800000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

@@ -1,0 +1,386 @@
+diff -ruN v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp
+--- v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-02 21:14:59.887653174 +0000
++++ v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 03:27:46.851402554 +0000
+@@ -299,10 +299,99 @@
+ // Byte enables of a whole-word inline write (credit registers and words).
+ constexpr uint32_t INLINE_WRITE_ALL_BYTES = 0xF;
+ 
+-// Whether NoC command buffers stay programmed between commands (the stateful NoC API: local writes, forwards, the
+-// worker credit). A single-ERISC router (Wormhole; Blackhole with two-ERISC mode off) issues both roles' commands from
+-// one RISC on command buffers the roles would share, so it keeps none programmed and issues every command whole
+-// (V4_SINGLE_ERISC.md: single-ERISC is functional on Blackhole, tuned on Wormhole).
+-constexpr bool command_buffer_presets = NUM_ACTIVE_ERISCS > 1;
++// ---------------------------------------------------------------------------------------------------------------------
++// Roles and NoC command buffers
++// ---------------------------------------------------------------------------------------------------------------------
++
++// This ERISC's roles: one each on a two-ERISC router, both on a single-ERISC router (channel trimming may leave an
++// ERISC neither).
++constexpr bool is_sender_role = any_sender_channel_serviced;
++constexpr bool is_receiver_role = any_receiver_channel_serviced;
++
++// The VCs whose forwards go to downstream routers here: the host lists downstream routers for VC0 and VC1.
++constexpr bool vc_forwards_to_routers(size_t vc) { return vc == 0 || (vc == 1 && has_vc1); }
++
++// Which NoC command buffer each kind of command uses on this ERISC (the host's ids), which kinds keep their buffer
++// programmed between commands (a preset, through the stateful NoC API), and the rule they follow. A buffer that a kind
++// keeps preset carries that kind only: any other command on it rewrites the preset (VC2's credit on VC0's credit
++// preset, job 142; an inline write on the local-write preset, job 351). The atomics buffer carries no preset and no
++// write from L1: atomics need the return address the firmware keeps there (job 366); upstream-router credits,
++// stateless forward credits and teardowns, whole inline-register writes and increments, go on it too. Each ERISC's
++// buffers are its own: two ERISCs issue on different NoCs (V4_BOUNDS.md §4). The table holds the router's own commands;
++// an API that ignores its buffer argument is outside it (Blackhole's emulated L1 inline write always issues on
++// write_cmd_buf, job 142).
++struct CommandBuffers {
++    // The host's buffer of each kind.
++    static constexpr uint8_t atomics = write_at_cmd_buf;
++    static constexpr uint8_t local_writes = tt::tt_fabric::local_chip_data_cmd_buf;               // receiver
++    static constexpr const auto& worker_credits = sender_channel_ack_cmd_buf_ids;                // sender, by channel
++    static constexpr const auto& forward_data = receiver_channel_forwarding_data_cmd_buf_ids;    // receiver, by VC
++    static constexpr const auto& forward_credits = receiver_channel_forwarding_sync_cmd_buf_ids;  // receiver, by VC
++
++    // Which kinds keep presets: none on one ERISC (both roles' commands share its buffers; V4_SINGLE_ERISC.md) or with
++    // DPRINT or the watcher (their traffic shares them); forwards also not where every path uses one NoC, or in UDM
++    // mode (the relay's stateless forwards share the data buffer).
++    static constexpr bool presets =
++#if !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
++        NUM_ACTIVE_ERISCS > 1;
++#else
++        false;
++#endif
++    static constexpr bool forward_presets = presets && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !udm_mode;
++
++    // The kinds of command, one bit each; each worker channel's credits are a kind of their own (WORKER_CREDITS << CH).
++    enum Kind : uint32_t {
++        ATOMICS = 1u << 0,
++        LOCAL_WRITES = 1u << 1,
++        FORWARD_DATA = 1u << 2,
++        FORWARD_CREDITS = 1u << 3,
++        WORKER_CREDITS = 1u << 4,
++    };
++
++    // The kinds each of the four buffers (WR, RD, WR_REG, AT) carries on this ERISC. Worker credits by the host's
++    // worker positions, serviced or not (the host assigns buffers by channel, whatever the trimming). The forwards of
++    // every VC that forwards to routers are one kind: VCs on the same buffers share their presets.
++    static constexpr std::array<uint32_t, 4> kinds_on = [] {
++        std::array<uint32_t, 4> kinds{};
++        kinds[atomics] |= ATOMICS;
++        if (is_sender_role) {
++            for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
++                kinds[worker_credits[ch]] |= is_sender_channel_worker[ch] ? WORKER_CREDITS << ch : 0u;
++            }
++        }
++        if (is_receiver_role) {
++            kinds[local_writes] |= LOCAL_WRITES;
++            for (size_t vc = 0; vc < MAX_NUM_VCS; vc++) {
++                if (vc_forwards_to_routers(vc)) {
++                    kinds[forward_data[vc]] |= FORWARD_DATA;
++                    kinds[forward_credits[vc]] |= forward_presets ? FORWARD_CREDITS : 0u;  // stateless: on atomics
++                }
++            }
++        }
++        return kinds;
++    }();
++    // The kinds kept preset here.
++    static constexpr uint32_t preset_kinds =
++        presets ? ~(ATOMICS | (forward_presets ? 0u : FORWARD_DATA | FORWARD_CREDITS)) : 0u;
++
++    // Whether VC's forwards use VC0's two buffers (true where VC forwards to no router here).
++    static constexpr bool forwards_on_vc0_bufs(size_t vc) {
++        return !vc_forwards_to_routers(vc) ||
++               (forward_data[vc] == forward_data[0] && forward_credits[vc] == forward_credits[0]);
++    }
++};
++static_assert(
++    [] {
++        for (uint32_t kinds : CommandBuffers::kinds_on) {
++            if ((kinds & CommandBuffers::preset_kinds) != 0 && popcount(kinds) != 1) {
++                return false;
++            }
++        }
++        return true;
++    }(),
++    "a command buffer kept preset carries one kind of command (the host's *_CMD_BUF_ID)");
++static_assert(
++    CommandBuffers::kinds_on[CommandBuffers::atomics] == CommandBuffers::ATOMICS,
++    "only atomics, inline register writes and teardowns go on the atomics buffer");
+ 
+ }  // namespace fabric_router
+diff -ruN v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp
+--- v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-03 03:01:29.294651663 +0000
++++ v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-03 03:27:25.517094086 +0000
+@@ -50,8 +50,8 @@
+     static constexpr uint32_t num_slots = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[VC];
+     // The last slot's offset from the ring's base (the ring wraps after it).
+     static constexpr uint32_t last_slot_offset = (num_slots - 1) * channel_buffer_size;
+-    static constexpr uint8_t data_cmd_buf = receiver_channel_forwarding_data_cmd_buf_ids[VC];
+-    static constexpr uint8_t sync_cmd_buf = receiver_channel_forwarding_sync_cmd_buf_ids[VC];
++    static constexpr uint8_t data_cmd_buf = CommandBuffers::forward_data[VC];
++    static constexpr uint8_t sync_cmd_buf = CommandBuffers::forward_credits[VC];
+     static constexpr uint8_t noc = tt::tt_fabric::edm_to_downstream_noc;
+ 
+     // This router's local copy of entry ENTRY's free-slots register, and the register on the downstream.
+@@ -87,53 +87,13 @@
+     }
+ }
+ 
+-// Forward command buffers. Every forward to a router is two commands on its VC's forwarding command buffers (the host's
+-// RX_CH_<n>_FWD_DATA_ / FWD_SYNC_CMD_BUF_ID): the packet on the data buffer, then -1 on the destination's free-slots
+-// register (its doorbell) on the credit buffer. Which fields stay programmed between forwards is decided at compile
+-// time, per VC (ForwardCommands, below):
++// Forward command buffers. Every forward to a router is two commands on its VC's forwarding command buffers
++// (CommandBuffers: the host's RX_CH_<n>_FWD_DATA_ / FWD_SYNC_CMD_BUF_ID): the packet on the data buffer, then -1 on the
++// destination's free-slots register (its doorbell) on the credit buffer. Which fields stay programmed between forwards
++// is decided at compile time, per VC (ForwardCommands, below):
+ //   - one destination for the whole run (forwards_have_one_destination): the buffers keep it (FullPresetForwards);
+ //   - several destinations: the buffers keep only what no forward changes (PartialPresetForwards);
+-//   - no presets (forwards_can_preset false): every forward writes its whole commands (StatelessForwards).
+-
+-// The VCs whose forwards go to downstream routers here (DownstreamConnections).
+-constexpr bool vc_forwards_to_routers(size_t vc) { return vc == 0 || (vc == 1 && has_vc1); }
+-
+-// A buffer is preset for one kind of command: VC's data and credit buffers differ, neither is VC0's other one, and
+-// neither is the local-write buffer or the atomics buffer (write_at_cmd_buf), whose commands program those fields.
+-template <size_t VC>
+-constexpr bool forward_cmd_bufs_consistent() {
+-    if constexpr (!vc_forwards_to_routers(VC)) {
+-        return true;
+-    } else {
+-        using T = DownstreamTraits<VC>;
+-        constexpr uint8_t local = tt::tt_fabric::local_chip_data_cmd_buf;
+-        return T::data_cmd_buf != T::sync_cmd_buf && T::data_cmd_buf != DownstreamTraits<0>::sync_cmd_buf &&
+-               T::sync_cmd_buf != DownstreamTraits<0>::data_cmd_buf && T::data_cmd_buf != local &&
+-               T::sync_cmd_buf != local && T::data_cmd_buf != write_at_cmd_buf && T::sync_cmd_buf != write_at_cmd_buf;
+-    }
+-}
+-
+-// Whether forwards may keep anything in their command buffers between forwards: not with DPRINT or the watcher, whose
+-// traffic shares the command buffers; only on two-ERISC routers (on one ERISC the forward data shares buffer 0 with the
+-// local writes); not on UDM routers, whose relay forwards are stateless on the same data buffer.
+-constexpr bool forwards_can_preset =
+-#if !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+-    command_buffer_presets && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !udm_mode && forward_cmd_bufs_consistent<0>() &&
+-    forward_cmd_bufs_consistent<1>();
+-#else
+-    false;
+-#endif
+-
+-// Whether VC's forwards use VC0's two forwarding buffers (true where VC forwards to no router here).
+-template <size_t VC>
+-constexpr bool uses_vc0_forward_cmd_bufs() {
+-    if constexpr (!vc_forwards_to_routers(VC)) {
+-        return true;
+-    } else {
+-        return DownstreamTraits<VC>::data_cmd_buf == DownstreamTraits<0>::data_cmd_buf &&
+-               DownstreamTraits<VC>::sync_cmd_buf == DownstreamTraits<0>::sync_cmd_buf;
+-    }
+-}
++//   - no presets (CommandBuffers::forward_presets false): every forward writes its whole commands (StatelessForwards).
+ 
+ // Whether VC's forwards can use VC0's destination preset: VC forwards to no router here, or it uses VC0's two buffers
+ // and goes to VC0's downstreams.
+@@ -142,7 +102,7 @@
+     if constexpr (!vc_forwards_to_routers(VC)) {
+         return true;
+     } else {
+-        return uses_vc0_forward_cmd_bufs<VC>() && live_downstreams<VC>() == live_downstreams<0>();
++        return CommandBuffers::forwards_on_vc0_bufs(VC) && live_downstreams<VC>() == live_downstreams<0>();
+     }
+ }
+ 
+@@ -314,7 +274,7 @@
+         static_assert(VC == 0, "presets every forwarding VC's buffers from VC0's call");
+         // The host's buffer ids (RX_CH_<n>_FWD_DATA_ / FWD_SYNC_CMD_BUF_ID) put every VC's forwards on VC0's two
+         // buffers, so one preset serves them all; a VC given buffers of its own would be preset here.
+-        static_assert(uses_vc0_forward_cmd_bufs<1>(), "VC1's forwards share VC0's forwarding command buffers");
++        static_assert(CommandBuffers::forwards_on_vc0_bufs(1), "VC1's forwards share VC0's forwarding command buffers");
+         preset_cmd_bufs();
+     }
+ 
+@@ -366,7 +326,7 @@
+ // How VC's forwards use their command buffers, chosen at compile time.
+ template <size_t VC>
+ using ForwardCommands = std::conditional_t<
+-    !forwards_can_preset,
++    !CommandBuffers::forward_presets,
+     StatelessForwards<VC>,
+     std::conditional_t<forwards_have_one_destination, FullPresetForwards<VC>, PartialPresetForwards<VC>>>;
+ 
+diff -ruN v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp
+--- v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-02 16:47:11.131479330 +0000
++++ v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 03:07:56.898956415 +0000
+@@ -15,8 +15,6 @@
+ 
+ namespace fabric_router {
+ 
+-constexpr bool is_sender_role = any_sender_channel_serviced;
+-constexpr bool is_receiver_role = any_receiver_channel_serviced;
+ constexpr bool is_teardown_master = MY_ERISC_ID == 0 || NUM_ACTIVE_ERISCS == 1;  // a single ERISC may be ERISC 1
+ 
+ // VC2 (neighbour exchange; V4_VC2.md): a worker channel and a receiver channel that only delivers.
+diff -ruN v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp
+--- v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-02 06:49:43.963114959 +0000
++++ v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-03 03:08:10.506141958 +0000
+@@ -12,8 +12,8 @@
+ //
+ // Local writes use one command buffer, programmed once with the write state that never changes (local_write_init),
+ // so each write sets only its transaction ID, source, destination and length (LEDGER E1-17). Nothing else on this
+-// ERISC uses that command buffer while the loop runs (static_assert below) but an inline write, which restores it
+-// after. With DPRINT or the watcher, whose traffic shares command buffers, each write programs its whole state
++// ERISC uses that command buffer while the loop runs (CommandBuffers) but an inline write, which restores it after.
++// Where command buffers keep no presets (one ERISC; DPRINT or the watcher), each write programs its whole state
+ // instead.
+ //
+ // Atomics are strict: a flushed atomic waits for every earlier write of this ERISC to be acknowledged first.
+@@ -23,31 +23,12 @@
+ namespace fabric_router {
+ 
+ constexpr uint8_t LOCAL_NOC = tt::tt_fabric::edm_to_local_chip_noc;
+-constexpr uint8_t LOCAL_WRITE_CMD_BUF = tt::tt_fabric::local_chip_data_cmd_buf;
+ constexpr uint8_t LOCAL_NOC_VC = tt::tt_fabric::forward_and_local_write_noc_vc;
+ 
+-constexpr bool local_write_state_preset =
+-#if !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+-    command_buffer_presets;
+-#else
+-    false;
+-#endif
+-
+-constexpr bool local_write_cmd_buf_is_exclusive = [] {
+-    for (size_t ch = 0; ch < NUM_RECEIVER_CHANNELS; ch++) {
+-        if (receiver_channel_forwarding_data_cmd_buf_ids[ch] == LOCAL_WRITE_CMD_BUF ||
+-            receiver_channel_forwarding_sync_cmd_buf_ids[ch] == LOCAL_WRITE_CMD_BUF) {
+-            return false;
+-        }
+-    }
+-    return LOCAL_WRITE_CMD_BUF != write_at_cmd_buf;
+-}();
+-
+ FORCE_INLINE void local_write_init() {
+-    if constexpr (local_write_state_preset) {
+-        static_assert(!local_write_state_preset || local_write_cmd_buf_is_exclusive);  // checked even when discarded
+-        while (!noc_cmd_buf_ready(LOCAL_NOC, LOCAL_WRITE_CMD_BUF));
+-        noc_write_init_state<LOCAL_WRITE_CMD_BUF, CQ_NOC_mkp>(LOCAL_NOC, LOCAL_NOC_VC);
++    if constexpr (CommandBuffers::presets) {
++        while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
++        noc_write_init_state<CommandBuffers::local_writes, CQ_NOC_mkp>(LOCAL_NOC, LOCAL_NOC_VC);
+     }
+ }
+ 
+@@ -59,21 +40,21 @@
+     WAYPOINT("NAWW");
+     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size, -1, false, LOCAL_NOC);
+     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(LOCAL_NOC, dst_noc_addr, src_addr, size);
+-    if constexpr (local_write_state_preset) {
+-        ncrisc_noc_set_transaction_id(LOCAL_NOC, LOCAL_WRITE_CMD_BUF, trid);  // waits for the command buffer
++    if constexpr (CommandBuffers::presets) {
++        ncrisc_noc_set_transaction_id(LOCAL_NOC, CommandBuffers::local_writes, trid);  // waits for the command buffer
+         noc_write_with_state<
+             noc_mode,
+-            LOCAL_WRITE_CMD_BUF,
++            CommandBuffers::local_writes,
+             CQ_NOC_SNDL,
+             CQ_NOC_SEND,
+             CQ_NOC_wait,
+             /*update_counter=*/COUNTED,
+             /*posted=*/false>(LOCAL_NOC, src_addr, dst_noc_addr, size);
+     } else {
+-        while (!noc_cmd_buf_ready(LOCAL_NOC, LOCAL_WRITE_CMD_BUF));
++        while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
+         ncrisc_noc_fast_write<noc_mode, /*use_trid=*/true, /*update_counter=*/COUNTED>(
+             LOCAL_NOC,
+-            LOCAL_WRITE_CMD_BUF,
++            CommandBuffers::local_writes,
+             src_addr,
+             dst_noc_addr,
+             size,
+@@ -107,7 +88,7 @@
+ // Blackhole a write to L1 is emulated there by a posted write, which leaves the buffer posted.
+ FORCE_INLINE void local_inline_write(uint64_t dst_noc_addr, uint32_t value) {
+     noc_inline_dw_write<InlineWriteDst::DEFAULT, /*posted=*/true, /*flush=*/true, /*emulated_write_on_cmd_buf=*/true>(
+-        dst_noc_addr, value, 0xF, LOCAL_NOC, LOCAL_NOC_VC, /*customized_src_addr=*/0, LOCAL_WRITE_CMD_BUF);
++        dst_noc_addr, value, 0xF, LOCAL_NOC, LOCAL_NOC_VC, /*customized_src_addr=*/0, CommandBuffers::local_writes);
+     local_write_init();
+ }
+ 
+diff -ruN v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:06:57.644148008 +0000
++++ v4txc2/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:08:25.750349781 +0000
+@@ -78,9 +78,9 @@
+         enable_deadlock_avoidance && sender_channel_is_traffic_injection_channel_all_[CH]
+             ? BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS
+             : 1;
+-    // A worker channel's credits: the command buffer they go out on (the host's), and its read counter, which holds the
+-    // credits returned so far and is the source word of each credit write.
+-    static constexpr uint8_t producer_credit_cmd_buf = sender_channel_ack_cmd_buf_ids[CH];
++    // A worker channel's credits: the command buffer they go out on (CommandBuffers), and its read counter, which holds
++    // the credits returned so far and is the source word of each credit write.
++    static constexpr uint8_t producer_credit_cmd_buf = CommandBuffers::worker_credits[CH];
+     static constexpr uint32_t read_counter_addr = worker_read_counter_addr(CH);
+ 
+     // Whether its free-slots register (raw) says it holds a packet. The register counts the free slots of the channel:
+@@ -166,21 +166,6 @@
+         }(),
+         "a static upstream connection is a forwarding channel's");
+ };
+-// Each serviced worker channel's credits on a command buffer of its own, none the atomics buffer (the upstream credits'
+-// and the teardowns').
+-constexpr bool worker_credit_cmd_bufs_distinct() {
+-    uint32_t used = 1u << write_at_cmd_buf;
+-    for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
+-        if (((SenderChannels::worker_channels >> ch) & 1u) != 0) {
+-            if (((used >> sender_channel_ack_cmd_buf_ids[ch]) & 1u) != 0) {
+-                return false;
+-            }
+-            used |= 1u << sender_channel_ack_cmd_buf_ids[ch];
+-        }
+-    }
+-    return true;
+-}
+-static_assert(worker_credit_cmd_bufs_distinct(), "each worker channel's credits need a command buffer of their own");
+ 
+ // The far router's receiver channel of VC: its slots and its packets-received register (on the far router).
+ template <size_t VC>
+@@ -434,18 +419,17 @@
+ 
+ // The worker credit: the count goes into the channel's read counter (SenderChannel<CH>::read_counter_addr), which
+ // therefore always holds it, and while a worker is connected a 4-byte posted NoC write copies that word into the
+-// worker's L1 on the channel's own command buffer (SenderChannel<CH>::producer_credit_cmd_buf). With two ERISCs that
+-// buffer stays programmed for the whole connection (preset_worker_credit: at the connection, and again after the base
+-// firmware ran), so a credit only issues the write; with one ERISC both roles share the buffers and every credit is a
+-// whole command. The sender's upstream credits and teardowns use the atomics buffer.
+-constexpr bool worker_credit_preset = command_buffer_presets;
++// worker's L1 on the channel's own command buffer (SenderChannel<CH>::producer_credit_cmd_buf). Where command buffers
++// keep presets (CommandBuffers::presets) that buffer stays programmed for the whole connection (preset_worker_credit: at
++// the connection, and again after the base firmware ran), so a credit only issues the write; elsewhere every credit is
++// a whole command. The sender's upstream credits and teardowns use the atomics buffer.
+ static_assert(!enable_read_counter_update_noc_flush);  // the read counter may be rewritten before an earlier write read
+                                                        // it: the worker then sees the newer, larger count
+ 
+-// Programs worker channel CH's credit command buffer for its connected worker (two ERISCs).
++// Programs worker channel CH's credit command buffer for its connected worker (where command buffers keep presets).
+ template <size_t CH>
+ __attribute__((noinline)) void preset_worker_credit() {
+-    if constexpr (worker_credit_preset) {
++    if constexpr (CommandBuffers::presets) {
+         ncrisc_noc_write_set_state</*posted=*/true, /*one_packet=*/true>(
+             WORKER_CREDIT_NOC,
+             SenderChannel<CH>::producer_credit_cmd_buf,
+@@ -464,7 +448,7 @@
+     constexpr uint8_t cmd_buf = SenderChannel<CH>::producer_credit_cmd_buf;
+     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source) = returned;
+     if (connected) {
+-        if constexpr (worker_credit_preset) {
++        if constexpr (CommandBuffers::presets) {
+             ncrisc_noc_write_with_state<noc_mode, /*posted=*/true, /*update_counter=*/true, /*one_packet=*/true>(
+                 WORKER_CREDIT_NOC,
+                 cmd_buf,
+@@ -866,7 +850,7 @@
+ // worker channel's credit command buffer again (a no-op where command buffers are not preset).
+ template <size_t VC, typename LoopCopy>
+ FORCE_INLINE void restore_worker_credit_preset(LoopCopy& loop_copy, SenderChannelStates& states) {
+-    if constexpr (worker_credit_preset && SenderVc<VC>::has_worker_channel) {
++    if constexpr (CommandBuffers::presets && SenderVc<VC>::has_worker_channel) {
+         constexpr size_t CH = SenderVc<VC>::worker_channel;
+         if (states.template progress_for<VC>(loop_copy).worker.connection_state !=
+             tt::tt_fabric::connection_interface::unused_connection_value) {

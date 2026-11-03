@@ -1,0 +1,48 @@
+--- a/tt_metal/fabric/erisc_datamover_builder.cpp
++++ b/tt_metal/fabric/erisc_datamover_builder.cpp
+@@ -1194,6 +1194,15 @@
+         return this->is_sender_channel_serviced_[risc_id][channel_id] ||
+                (exp_upstream_on_e1 && risc_id == 1 && this->is_sender_channel_serviced_[0][channel_id]);
+     };
++    // A worker channel: a sender channel a worker (or the fabric's mux) connects to at run time, the others being
++    // forwarded into by the upstream routers. VC0's is the worker-connected sender channel; VC2's channels are
++    // worker-type (neighbour exchange; builder_config). A channel position's role, whether or not trimming services it.
++    auto is_worker_channel = [&](size_t channel_id) -> bool {
++        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
++        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
++        return channel_id == get_worker_connected_sender_channel() ||
++               (channel_id >= vc2_start && channel_id < vc2_end);
++    };
+     auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
+         if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
+             return false;
+@@ -1203,14 +1212,9 @@
+             return false;
+         }
+ 
+-        const size_t worker_channel = get_worker_connected_sender_channel();
+-        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+-        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
+-        const bool is_worker_channel = channel_id == worker_channel;
+-        const bool is_vc2_channel = channel_id >= vc2_start && channel_id < vc2_end;
+         const bool has_static_peer = this->sender_channel_connection_liveness_check_disable_array[channel_id];
+ 
+-        return !is_worker_channel && !is_vc2_channel && !has_static_peer;
++        return !is_worker_channel(channel_id) && !has_static_peer;
+     };
+ 
+     const auto& builder_context = fabric_context.get_builder_context();
+@@ -1491,6 +1495,13 @@
+                                             this->is_sender_channel_serviced_[risc_id][i])
+                                       : 0;
+     }
++    // Study (fabric_exp, v4): which sender channels are worker channels (is_worker_channel above), for every channel
++    // position whether or not trimming services it; the router's worker channels are the serviced ones among them.
++    // (LIVE_CHECK_SKIP is the connection protocol, which differs from the role on a channel trimming forces on.)
++    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
++        named_args[fmt::format("SENDER_CH_{}_IS_WORKER_CHANNEL", i)] =
++            (i < num_sender_channels) ? static_cast<uint32_t>(is_worker_channel(i)) : 0;
++    }
+     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+         named_args[fmt::format("SENDER_CH_{}_IS_INJECTION", i)] =
+             (i < num_sender_channels)

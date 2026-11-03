@@ -1,0 +1,9 @@
+2863 images
+ 1351  _start; -fabric_router::init_2d_streams; -fabric_router::init_link_streams; fabric_router::init_txqs; +fabric_router::receiver::init_channel_streams; +fabric_router::sender::init_channel_streams; kernel_main
+  908  _start; -fabric_router::init_2d_streams; -fabric_router::init_link_streams; fabric_router::init_txqs; +fabric_router::receiver::init_channel_streams; +fabric_router::sender::init_channel_streams
+  230  _start; -fabric_router::init_link_streams; fabric_router::init_txqs; +fabric_router::receiver::init_channel_streams; +fabric_router::sender::init_channel_streams; kernel_main
+  150  _start; -fabric_router::init_link_streams; fabric_router::init_txqs; +fabric_router::receiver::init_channel_streams; +fabric_router::sender::init_channel_streams
+  112  -fabric_router::init_2d_streams; -fabric_router::init_link_streams; fabric_router::init_txqs; +fabric_router::receiver::init_channel_streams; +fabric_router::sender::init_channel_streams; kernel_main
+   92  _start; -fabric_router::init_2d_streams; -fabric_router::init_link_streams; +fabric_router::receiver::init_channel_streams; +fabric_router::sender::init_channel_streams
+   12  -fabric_router::init_link_streams; +fabric_router::receiver::init_channel_streams; +fabric_router::sender::init_channel_streams; kernel_main
+    8  _start; -fabric_router::init_link_streams; +fabric_router::receiver::init_channel_streams; +fabric_router::sender::init_channel_streams

@@ -1,0 +1,6 @@
+  912  fabric_router::receiver::run                  identical  (e.g. bh_1d__10711705047208358998)
+   92  fabric_router::receiver::run                  same opcodes  (e.g. bh_1d_allinstr__10544047754461278761)
+ 1010  fabric_router::sender::run                    identical  (e.g. bh_1d__10640509689287669773)
+  757  fabric_router::single::receiver_pass          identical  (e.g. bh_1d_1erisc__10063481670200031670)
+  757  fabric_router::single::run                    identical  (e.g. bh_1d_1erisc__10063481670200031670)
+  757  fabric_router::single::sender_pass            identical  (e.g. bh_1d_1erisc__10063481670200031670)

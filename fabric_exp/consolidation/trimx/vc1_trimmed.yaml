@@ -1,0 +1,4 @@
+# Every router loses all of VC1's sender channels.
+channel_trimming_overrides:
+  vc1:
+    force_enable_sender_channels: []

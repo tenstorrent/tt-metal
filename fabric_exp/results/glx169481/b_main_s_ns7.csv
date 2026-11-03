@@ -1,0 +1,2 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+BdGlxNS7,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[32]",1,1024,1,120455256259.000000,6052039.758502,6.197289,6.197289,6.197289,0.000000,1.000000

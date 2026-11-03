@@ -1,0 +1,3 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+BdGlxCompileEW_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,32,0,1,E,1,2000,1024,451066,6.129480,5985820.257
+BdGlxCompileNS7_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,32,0,1,S,1,2000,1024,448107,6.169955,6025346.625

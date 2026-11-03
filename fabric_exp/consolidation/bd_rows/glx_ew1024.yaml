@@ -1,0 +1,28 @@
+# Cycle breakdown, phase 2 (fabric_exp/report/BREAKDOWN_PLAN.md): Point 2: GlxMesh1HopEW write 1024 B, long (new ~123 cycles/packet: ~7 s; main ~224: ~13 s).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BdGlxEW1024
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+  defaults:
+    ftype: unicast
+    num_packets: 80000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

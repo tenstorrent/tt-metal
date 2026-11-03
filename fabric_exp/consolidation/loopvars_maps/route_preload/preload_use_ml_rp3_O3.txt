@@ -1,0 +1,4 @@
+bh_2d                        preload  loads   40  first use after 9..200 insns  spill stores 0  first-use ops {'(dead:': 15428, 'srl': 7148}
+bh_2d                        load-now loads   40  first use after 1..200 insns  spill stores 0  first-use ops {'(dead:': 5516, 'srl': 1964}
+glx_2d                       preload  loads   72  first use after 10..200 insns  spill stores 0  first-use ops {'(dead:': 27936, 'srl': 12652}
+glx_2d                       load-now loads   72  first use after 1..200 insns  spill stores 0  first-use ops {'(dead:': 10948, 'srl': 3848}

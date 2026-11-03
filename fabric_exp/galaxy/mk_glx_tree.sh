@@ -1,12 +1,15 @@
 #!/bin/bash
-# Build /data/aagarwal/frs-glx/trees/$2 = trees/base (hard links) with variant $1's files swapped in (each file replaced,
-# not overwritten, so the base tree's linked files stay as they are).
+# Build /data/aagarwal/frs-glx/trees/$2 = trees/$BASE (default base; hard links) with variant $1's files swapped in (each
+# file replaced, not overwritten, so the base tree's linked files stay as they are).
+#   [BASE=base_1102] mk_glx_tree.sh VARIANT_DIR NAME
 set -euo pipefail
 V=$(realpath "$1"); NAME=$2; G=/data/aagarwal/frs-glx/trees  # the variant path is used after a cd
 [ -e $G/$NAME ] && { echo "$G/$NAME exists"; exit 1; }
 t0=$(date +%s)
-cp -al $G/base $G/$NAME
-echo "linked copy in $(( $(date +%s) - t0 )) s"
+B=${BASE:-base}
+[ -d $G/$B ] || { echo "no base tree $G/$B"; exit 1; }
+cp -al $G/$B $G/$NAME
+echo "linked copy of $B in $(( $(date +%s) - t0 )) s"
 cd /home/aagarwal/tt-metal/fabric_exp/consolidation
 python3 - "$V" "$G/$NAME" <<'PY'
 import os, shutil, sys

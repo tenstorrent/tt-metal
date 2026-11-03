@@ -1,0 +1,5 @@
+2863 images
+ 1245  _start; kernel_main
+ 1155  _start
+  325  (no function differs)
+  138  kernel_main

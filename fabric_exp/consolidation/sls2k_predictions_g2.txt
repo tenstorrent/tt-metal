@@ -1,0 +1,13 @@
+# sls_model.py glx fit at 2 KiB slots (job 167648, vc12k runs, 98 points) predictions for G2, written 2026-11-02 03:25:09 before the job.
+# Rule picks: sized at 2048 B 81,14,16,8,6 (every weight: both VCs reach their bounds, the rest goes to the worker); sized at 16 B 88,13,16,7,5;
+# 32,18,32,12,10: the same windows with the leftovers to the receivers and VC1 instead of the worker (hand-made).
+81,14,16,8,6     16 B  1-hop  137.6  2-hop  167.9  VC0 hop + inter  231.6  inter + 2 VC1  273.6  inter + VC1  275.8  inter + VC1 N/S  276.4  inter direct  206.4
+88,13,16,7,5     16 B  1-hop  137.6  2-hop  167.9  VC0 hop + inter  231.6  inter + 2 VC1  304.3  inter + VC1  275.8  inter + VC1 N/S  276.4  inter direct  206.4
+32,18,32,12,10   16 B  1-hop  137.6  2-hop  167.9  VC0 hop + inter  231.6  inter + 2 VC1  273.6  inter + VC1  275.8  inter + VC1 N/S  276.4  inter direct  206.4
+# 2D at 2 KiB slots (2d2k fit, 1 KiB): the rule by hand (receiver 32, worker 1,834 / (109.3 - 13.5) = 19.1 -> 20, forwarding the rest) = 20,39,32:
+#   (forwarding 39 >> the N/S 7-hop loop's need ~2,970 / 172 = 17: every row at its bound: 1-hop 109.3, 3-hop E/W 139.5, N/S 172-173, turn 170.6)
+# N/S floor on the Galaxy with the diagnostic variants (P150 job 413: E/W 3-hop lead 144.7 -> stateless 155.5 -> multi-downstream 174.5, E1-bound): Galaxy E/W 3-hop at 2 KiB slots, 1 KiB: v4bddsl ~155-160 (E1), v4bddml ~172-176 (E1, = the N/S rows); N/S rows unchanged in both (their routers already take both paths).
+81,14,16,8,6   2048 B  1-hop  137.7  2-hop  167.9  VC0 hop + inter  231.6  inter + 2 VC1  274.0  inter + VC1  276.2  inter + VC1 N/S  276.8  inter direct  206.6
+88,13,16,7,5   2048 B  1-hop  137.7  2-hop  176.5  VC0 hop + inter  231.6  inter + 2 VC1  326.3  inter + VC1  282.3  inter + VC1 N/S  290.0  inter direct  206.6
+32,18,32,12,10 2048 B  1-hop  137.7  2-hop  167.9  VC0 hop + inter  231.6  inter + 2 VC1  274.0  inter + VC1  276.2  inter + VC1 N/S  276.8  inter direct  206.6
+20,39,32       1024 B  1-hop  109.3  3-hop E/W  139.5  3-hop N/S  172.5  7-hop N/S  173.1  corner 10  173.2  turn 4  170.5

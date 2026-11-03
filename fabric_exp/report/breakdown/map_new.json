@@ -1,0 +1,459 @@
+{
+ "router": "new",
+ "description": "The study router (kernel v2 slot, fabric_erisc_router_v4.cpp and router/*.hpp). Written against the receiver lead v4rxg3 and its sender (router_sender.hpp as of v4rxg3); rules are by function, with content-matched lines (match / from-to text anchors) where one function mixes categories, so they re-apply to the sender-pass builds (v4txo*) as long as the function names stay. Rules tagged legacy cover the older receiver of v4rxv2i3 (router_completions.hpp, acknowledge_arrivals, HeaderWord), which most existing samples ran; they are unresolved on v4rxg3 and that is expected. Sources: the variant directory over git HEAD, never the live tree.",
+ "router_files": [
+  "edm_fabric/router/",
+  "fabric_erisc_router_v2\\.cpp$",
+  "fabric_edm_packet_transmission\\.hpp$",
+  "fabric_router_flow_control\\.hpp$",
+  "fabric_erisc_datamover_channels\\.hpp$"
+ ],
+ "work_categories": {
+  "E0": [
+   "eth_send"
+  ],
+  "E1": [
+   "noc"
+  ]
+ },
+ "rules": [
+  {
+   "id": "tx.poll.registers",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(holds_packet|read_free_slots_registers|channels_holding_packets|channels_with_packets)$",
+   "cat": "checks",
+   "note": "the pass's group read of the channels' free-slots registers and its tests (is there a packet); its latency shows at the first test"
+  },
+  {
+   "id": "tx.poll.semaphores",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)read_connection_semaphores$",
+   "cat": "loop",
+   "note": "the worker channels' connection semaphores, read in the same group"
+  },
+  {
+   "id": "tx.send.credit_reads",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)send$",
+   "match": "const uint32_t reported = \\*reinterpret_cast|uint32_t reported_acks = 0;|reported_acks = \\*reinterpret_cast|completions = reported - completed;|acks = reported_acks;",
+   "cat": "credits",
+   "note": "completion / ack counters read inside the send's post-send load group (placed there to overlap the send); a stall on them can show at the next send line"
+  },
+  {
+   "id": "tx.send",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)send$",
+   "cat": "eth_send",
+   "note": "header size read and TX status group, src_ch_id stamp, busy yield, TXQ send, slot advances, free-slots register, busy spin, packets-received update"
+  },
+  {
+   "id": "tx.visit_worker.room",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)visit_worker$",
+   "match": "if \\(has_packet && (far\\.free_slots >= C::far_slots_needed|remote\\.has_room\\()",
+   "cat": "checks"
+  },
+  {
+   "id": "tx.visit_worker.send_call",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)visit_worker$",
+   "match": "sent = send<CH>\\(",
+   "cat": "eth_send"
+  },
+  {
+   "id": "tx.visit_worker",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)visit_worker$",
+   "cat": "credits",
+   "note": "after the send: completion and ack reads (when nothing was sent), free slots, worker credit"
+  },
+  {
+   "id": "tx.visit_fwd.record",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(visit_forwarding|visit_channel_with_work)$",
+   "match": "ForwardingRecord& r = table\\.records|uint32_t sent = (r|state\\.progress)\\.sent;|uint32_t completed = (r|state\\.progress)\\.completed;|(in_flight|channels_in_flight) = busy \\?|keep_in_memory\\((r|state)\\);",
+   "cat": "loop",
+   "note": "the forwarding channel's record loaded and stored around the visit"
+  },
+  {
+   "id": "tx.visit_fwd.room",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(visit_forwarding|visit_channel_with_work)$",
+   "match": "if \\(has_packet && (far\\.free_slots >= C::far_slots_needed|remote\\.has_room\\()",
+   "cat": "checks"
+  },
+  {
+   "id": "tx.visit_fwd.send",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(visit_forwarding|visit_channel_with_work)$",
+   "from": [
+    507,
+    "/uint32_t (slot = r\\.slot|next_slot_addr = state\\.progress\\.next_slot_addr);/"
+   ],
+   "to": [
+    512,
+    "/^\\s*\\}\\s*$/"
+   ],
+   "cat": "eth_send"
+  },
+  {
+   "id": "tx.visit_fwd",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(visit_forwarding|visit_channel_with_work)$",
+   "cat": "credits",
+   "note": "completions and acks of the forwarding channel, upstream router credits"
+  },
+  {
+   "id": "tx.visit_fwd.tests",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(visit_forwarding_channels|visit_forwarding_group|visit_channels)$",
+   "cat": "checks",
+   "note": "which forwarding channels have a packet or one in flight (one test skips them all when idle)"
+  },
+  {
+   "id": "tx.credits",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(credit_worker|credit_upstream|preset_worker_credit|return_slots)$",
+   "cat": "credits"
+  },
+  {
+   "id": "tx.connection",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(worker_connection_event|check_connection|check_worker_connections?|restore_worker_credit_preset)$",
+   "cat": "loop"
+  },
+  {
+   "id": "tx.round",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(total_sent|forwarded|sent_by_worker|any_channel_holds_packet)$",
+   "cat": "loop"
+  },
+  {
+   "id": "tx.remote.room",
+   "file": "router_sender.hpp",
+   "fn": "RemoteReceiverChannelProgress::has_room$",
+   "cat": "checks",
+   "note": "sender pass (v4txo*): far ring room test on the packed progress word"
+  },
+  {
+   "id": "tx.remote.take",
+   "file": "router_sender.hpp",
+   "fn": "RemoteReceiverChannelProgress::(take_slot|next_slot_addr)$",
+   "cat": "eth_send",
+   "note": "sender pass (v4txo*): the far ring's slot taken by a send"
+  },
+  {
+   "id": "tx.remote.add",
+   "file": "router_sender.hpp",
+   "fn": "RemoteReceiverChannelProgress::add_free_slots$",
+   "cat": "credits",
+   "note": "sender pass (v4txo*): far slots returned by completions"
+  },
+  {
+   "id": "tx.remote.defer",
+   "file": "router_sender.hpp",
+   "fn": "RemoteReceiverChannelProgress::",
+   "cat": "defer",
+   "note": "accessors take their caller's category"
+  },
+  {
+   "id": "tx.vc.idle_test",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)visit_vc$",
+   "match": "if \\(\\(\\(holding \\| channels_in_flight\\) & SenderVc<VC>::sender_channels\\) == 0\\) \\{|return;",
+   "cat": "checks",
+   "optional": true,
+   "note": "sender pass (v4txo*) only"
+  },
+  {
+   "id": "tx.state",
+   "file": "router_sender.hpp",
+   "fn": "(^|::)(visit_vc|after_visit|loop_local_progress|progress_for|start_worker_interfaces|worker_interface|init_forwarding)$|SenderChannelStates",
+   "cat": "loop",
+   "note": "sender pass (v4txo*): per-VC visit structure and state placement"
+  },
+  {
+   "id": "tx.file",
+   "file": "router_sender.hpp",
+   "cat": "loop",
+   "fallback": true,
+   "note": "pass(), run() and anything else in the sender file"
+  },
+  {
+   "id": "rx.pass.poll",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)(read_packets_received|arrival_register)$",
+   "cat": "checks",
+   "note": "each VC's packets-received register, in the pass's read group"
+  },
+  {
+   "id": "rx.pass.txq",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)pass$",
+   "match": "(txq_status|group_txq|txq) = read_txq_status|if \\((credit_frame_due|frame_due)\\) \\{|(credit_frame_due|frame_due) = !send_credit_frame",
+   "cat": "credits",
+   "note": "the TX status for the credit frame (read every pass on first-level-ack VCs) and the frame"
+  },
+  {
+   "id": "rx.step.arrived",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)step$",
+   "match": "const uint32_t arrived = arrived_raw & stream_count_mask;",
+   "cat": "checks"
+  },
+  {
+   "id": "rx.step.timer",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)step$",
+   "match": "NamedProfiler<|CodeProfilingTimerType|code_profiling_enabled_timers_bitfield|code_profiling_buffer_base_addr>|timer;|timer\\.(set_should_dump|open|close)",
+   "cat": "loop"
+  },
+  {
+   "id": "rx.step.receive_call",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)step$",
+   "match": "= receive<",
+   "cat": "loop"
+  },
+  {
+   "id": "rx.step",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)step$",
+   "cat": "credits",
+   "note": "first-level acks and completion credits of the step"
+  },
+  {
+   "id": "rx.idle.partial_group",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)slots_due_for_credit$",
+   "match": "is_due = waiting >= GROUP_SIZE \\|\\||\\+\\+progress\\.idle_passes_with_partial_group",
+   "cat": "credits",
+   "note": "runs only when the pass handled no packet on this channel (the partial-group timeout count); counted with the credit decision it belongs to (v4rxg3 and later). Was 'waiting' until 2026-11-02.",
+   "optional": true
+  },
+  {
+   "id": "rx.idle.receive_return",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)receive$",
+   "match": "return false;",
+   "cat": "checks",
+   "note": "the early return of a pass with no packet ready: part of the readiness test. Was 'waiting' until 2026-11-02."
+  },
+  {
+   "id": "rx.receive.ready",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)receive$",
+   "from": [
+    443,
+    "/if \\((progress\\.packets_ready|p\\.available) == 0\\) \\{/"
+   ],
+   "to": [
+    452,
+    "/^    \\}$/"
+   ],
+   "cat": "checks",
+   "note": "is a packet ready (the pass's packets-received count)"
+  },
+  {
+   "id": "rx.receive.invalidate",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)receive$",
+   "match": "router_invalidate_l1_cache",
+   "cat": "checks"
+  },
+  {
+   "id": "rx.receive",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)receive$",
+   "cat": "decode",
+   "note": "header word and route word loads"
+  },
+  {
+   "id": "rx.handle.admit",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)handle$",
+   "match": "return false;",
+   "cat": "checks",
+   "note": "the early returns when a downstream (or the relay) has no room"
+  },
+  {
+   "id": "rx.handle.route_test",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)handle$",
+   "match": "if \\(route\\.(forwards|delivers)\\(\\) && !",
+   "cat": "decode",
+   "note": "the route test guarding admission: on rows without forwarding this line carries the route word's first-use stall; the admission work itself (downstream credit tests) maps to router_downstream.hpp (checks), and its result branch shares this line (debatable)"
+  },
+  {
+   "id": "rx.handle.trid",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)handle$",
+   "match": "const uint8_t trid = ",
+   "cat": "noc"
+  },
+  {
+   "id": "rx.handle.dispatch_calls",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)handle$",
+   "match": "forward_all\\(|deliver<|\\.forward\\(progress|\\.forward\\(c\\.|sparse_multicast_hop<",
+   "cat": "noc"
+  },
+  {
+   "id": "rx.handle.retire",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)handle$",
+   "match": "retire<",
+   "cat": "credits"
+  },
+  {
+   "id": "rx.handle.bookkeeping",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)handle$",
+   "match": "note_received<|record_forwarded<",
+   "cat": "loop"
+  },
+  {
+   "id": "rx.handle",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)handle$",
+   "cat": "decode",
+   "note": "header word unpack, route tests, the sparse-multicast test, the size"
+  },
+  {
+   "id": "rx.sparse.header",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)sparse_multicast_hop$",
+   "match": "sparse\\.|auto& sparse|update_for_next_hop|before_forward",
+   "cat": "decode"
+  },
+  {
+   "id": "rx.sparse",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)sparse_multicast_hop$",
+   "cat": "noc"
+  },
+  {
+   "id": "rx.credits",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)(accumulate_first_level_acks|acknowledge_arrivals|retire|advance|credit_completions|slots_due_for_credit|accumulate_completion_credits|trid_writes_sent|trid_writes_sent_within|send_credit_frame|oldest_uncredited|index_add|source_channel)$",
+   "cat": "credits",
+   "note": "acks, slot release (retire, ring advance, source record), completion groups and proofs, the credit frame"
+  },
+  {
+   "id": "rx.slot_sources",
+   "file": "router_receiver.hpp",
+   "fn": "SlotSources",
+   "cat": "credits"
+  },
+  {
+   "id": "rx.bookkeeping",
+   "file": "router_receiver.hpp",
+   "fn": "(^|::)(note_received|record_forwarded|step_channel|after_step|progress_for|loop_local_progress)$",
+   "cat": "loop"
+  },
+  {
+   "id": "rx.file",
+   "file": "router_receiver.hpp",
+   "cat": "loop",
+   "fallback": true,
+   "note": "pass(), run() and anything else in the receiver file"
+  },
+  {
+   "id": "rx.completions.legacy",
+   "file": "router_completions.hpp",
+   "cat": "credits",
+   "legacy": true,
+   "note": "v4rxv2i3's completion and ack bookkeeping",
+   "optional": true
+  },
+  {
+   "id": "rx.headerword.legacy",
+   "file": "router_common.hpp",
+   "fn": "HeaderWord",
+   "cat": "decode",
+   "legacy": true,
+   "optional": true
+  },
+  {
+   "id": "rx.routing",
+   "file": "router_routing.hpp",
+   "cat": "decode",
+   "note": "route word reads and decodes, Route tests, next-hop header rewrite"
+  },
+  {
+   "id": "rx.down.admit",
+   "file": "router_downstream.hpp",
+   "fn": "(^|::)(admit|any_without_free_slot|any_used_up|read_local_credits|set_free_slots)$",
+   "cat": "checks",
+   "note": "downstream free slots: tested per packet, the credit registers re-read only when a needed downstream reads full"
+  },
+  {
+   "id": "rx.down.forward",
+   "file": "router_downstream.hpp",
+   "fn": "(^|::)(forward|forward_all|forward_each|forward_stateless|slot_after|noc_addr)$",
+   "cat": "noc"
+  },
+  {
+   "id": "rx.down.file",
+   "file": "router_downstream.hpp",
+   "cat": "noc",
+   "fallback": true
+  },
+  {
+   "id": "rx.local.dispatch",
+   "file": "router_local_delivery.hpp",
+   "fn": "(^|::)(deliver|deliver_other)$",
+   "match": "if \\(type == ",
+   "cat": "decode",
+   "note": "the command switch: first use of the send type from the header word"
+  },
+  {
+   "id": "rx.local",
+   "file": "router_local_delivery.hpp",
+   "cat": "noc"
+  },
+  {
+   "id": "pt.dispatch",
+   "file": "fabric_edm_packet_transmission.hpp",
+   "fn": "execute_chip_unicast_to_local_chip_impl$",
+   "match": "switch \\(noc_send_type\\)|if \\(noc_send_type == ",
+   "cat": "decode"
+  },
+  {
+   "id": "pt.file",
+   "file": "fabric_edm_packet_transmission.hpp",
+   "cat": "noc"
+  },
+  {
+   "id": "init",
+   "file": "router_init.hpp",
+   "cat": "other",
+   "note": "init and teardown (outside the steady-state loop)"
+  },
+  {
+   "id": "round",
+   "file": "router_round.hpp",
+   "cat": "loop"
+  },
+  {
+   "id": "telemetry",
+   "file": "router_telemetry.hpp",
+   "cat": "loop"
+  },
+  {
+   "id": "single",
+   "file": "router_single.hpp",
+   "cat": "loop",
+   "fallback": true,
+   "note": "one-ERISC pass structure (out-of-line sender and receiver passes)"
+  },
+  {
+   "id": "kernel.file",
+   "file": "fabric_erisc_router_v2.cpp",
+   "cat": "loop",
+   "fallback": true,
+   "note": "kernel_main; init functions would show here (none in the steady state)"
+  }
+ ],
+ "loop_fn": "(sender|receiver|single)::(run|pass|sender_pass|receiver_pass)$|::(run|pass)$"
+}

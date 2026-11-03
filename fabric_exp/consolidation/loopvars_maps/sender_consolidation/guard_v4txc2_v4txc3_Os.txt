@@ -1,0 +1,146 @@
+v4txc2_Os -> v4txc3_Os: 2771 images with different .text, 3528 role analyses
+  bh_1d receiver                             10  loop +0 sp S+0 L+0
+  bh_1d sender                               10  loop +0 sp S+0 L+0
+  bh_1d_1erisc receiver                      10  loop +0 sp S+0 L+0
+  bh_1d_1erisc sender                        10  loop +0 sp S+0 L+0
+  bh_1d_allinstr receiver                    10  loop +0 sp S+0 L+0
+  bh_1d_allinstr sender                      10  loop +0 sp S+0 L+0
+  bh_1d_delay receiver                       10  loop +0 sp S+0 L+0
+  bh_1d_delay sender                         10  loop +0 sp S+0 L+0
+  bh_1d_mux receiver                         10  loop +0 sp S+0 L+0
+  bh_1d_mux sender                           10  loop +0 sp S+0 L+0
+  bh_1d_telemetry receiver                   10  loop +0 sp S+0 L+0
+  bh_1d_telemetry sender                     10  loop +0 sp S+0 L+0
+  bh_1d_trim receiver                        10  loop +0 sp S+0 L+0
+  bh_1d_trim sender                          10  loop +0 sp S+0 L+0
+  bh_1d_trim_w0 receiver                     10  loop +0 sp S+0 L+0
+  bh_1d_trim_w0 sender                       10  loop +0 sp S+0 L+0
+  bh_1d_trim_w0_1erisc receiver              10  loop +0 sp S+0 L+0
+  bh_1d_trim_w0_1erisc sender                10  loop +0 sp S+0 L+0
+  bh_2d receiver                             28  loop +0 sp S+0 L+0
+  bh_2d sender                               28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_1erisc receiver                      28  loop +0 sp S+0 L+0
+  bh_2d_1erisc sender                        28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_delay receiver                28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_delay sender                  28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_passdelay receiver            28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_passdelay sender              28  loop +0 sp S+0 L+0
+  bh_2d_allinstr receiver                    28  loop +0 sp S+0 L+0
+  bh_2d_allinstr sender                      28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_bwtelemetry receiver                 28  loop +0 sp S+0 L+0
+  bh_2d_bwtelemetry sender                   28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_codeprof receiver                    28  loop +0 sp S+0 L+0
+  bh_2d_codeprof sender                      28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_delay receiver                       28  loop +0 sp S+0 L+0
+  bh_2d_delay sender                         28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_mux receiver                         28  loop +0 sp S+0 L+0
+  bh_2d_mux sender                           28  loop +0 sp S+0 L+0
+  bh_2d_mux_delay receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_mux_delay sender                     28  loop +0 sp S+0 L+0
+  bh_2d_mux_trim_all receiver                28  loop +0 sp S+0 L+0
+  bh_2d_mux_trim_all sender                  28  loop +0 sp S+0 L+0
+  bh_2d_passdelay receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_passdelay sender                     28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_telemetry receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_telemetry sender                     28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_trim receiver                        28  loop +0 sp S+0 L+0
+  bh_2d_trim sender                          28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_udm receiver                         28  loop +0 sp S+0 L+0
+  bh_2d_udm sender                           28  loop +0 sp S+0 L+0
+  bh_2d_udm_gtest receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_udm_gtest sender                     28  loop +0 sp S+0 L+0
+  bh_2d_vc2 receiver                         28  loop +0 sp S+0 L+0
+  bh_2d_vc2 sender                           28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_vc2_1erisc receiver                  28  loop +0 sp S+0 L+0
+  bh_2d_vc2_1erisc sender                    28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_rx0 receiver                28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_rx0 sender                  28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_vc2_trim_rx0_1erisc receiver         28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_rx0_1erisc sender           28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0 receiver                 28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0 sender                   28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4']
+  bh_2d_vc2_trim_w02 receiver                28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w02 sender                  28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w02_1erisc receiver         28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w02_1erisc sender           28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc receiver          28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc sender            28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w2 receiver                 28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w2 sender                   28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_2d_vc2_trim_w2_1erisc receiver          28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w2_1erisc sender            28  loop +0 sp S+0 L+0
+  bh_neighbor receiver                        4  loop +0 sp S+0 L+0
+  bh_neighbor sender                          4  loop +0 sp S+0 L+0
+  bh_neighbor_1erisc receiver                 4  loop +0 sp S+0 L+0
+  bh_neighbor_1erisc sender                   4  loop +0 sp S+0 L+0
+  bh_neighbor_delay receiver                  4  loop +0 sp S+0 L+0
+  bh_neighbor_delay sender                    4  loop +0 sp S+0 L+0
+  bh_ring receiver                           10  loop +0 sp S+0 L+0
+  bh_ring sender                             10  loop +0 sp S+0 L+0
+  bh_ring_1erisc receiver                    10  loop +0 sp S+0 L+0
+  bh_ring_1erisc sender                      10  loop +0 sp S+0 L+0
+  bh_ring_allinstr receiver                  10  loop +0 sp S+0 L+0
+  bh_ring_allinstr sender                    10  loop +0 sp S+0 L+0
+  bh_ring_delay receiver                     10  loop +0 sp S+0 L+0
+  bh_ring_delay sender                       10  loop +0 sp S+0 L+0
+  bh_ring_mux receiver                       10  loop +0 sp S+0 L+0
+  bh_ring_mux sender                         10  loop +0 sp S+0 L+0
+  bh_ring_passdelay receiver                 10  loop +0 sp S+0 L+0
+  bh_ring_passdelay sender                   10  loop +0 sp S+0 L+0
+  bh_torus receiver                          12  loop +0 sp S+0 L+0
+  bh_torus sender                            12  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4']
+  bh_torus_1erisc receiver                   12  loop +0 sp S+0 L+0
+  bh_torus_1erisc sender                     12  loop +0 sp S+0 L+0
+  bh_torus_vc2 receiver                      28  loop +0 sp S+0 L+0
+  bh_torus_vc2 sender                        16  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_torus_vc2 sender                        12  loop +0 sp S+0 L+0 +['credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_torus_vc2_1erisc receiver               28  loop +0 sp S+0 L+0
+  bh_torus_vc2_1erisc sender                 28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0 receiver              28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0 sender                28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4']
+  bh_torus_vc2_trim_w0_1erisc receiver       28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0_1erisc sender         28  loop +0 sp S+0 L+0
+  bh_trim_gtest receiver                    110  loop +0 sp S+0 L+0
+  bh_trim_gtest sender                       74  loop +0 sp S+0 L+0
+  bh_trim_gtest sender                       32  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_trim_gtest sender                        8  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4']
+  bh_trim_gtest_1erisc receiver             158  loop +0 sp S+0 L+0
+  bh_trim_gtest_1erisc sender               158  loop +0 sp S+0 L+0
+  bh_vc1 receiver                            22  loop +0 sp S+0 L+0
+  bh_vc1 sender                              22  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<4>:register_addr.@4', 'credit@return_slots<5>:register_addr.@4', 'credit@return_slots<6>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<4>:credit_addr.@4', 'credit_upstream@return_slots<5>:credit_addr.@4', 'credit_upstream@return_slots<6>:credit_addr.@4']
+  bh_vc1_allinstr receiver                    6  loop +0 sp S+0 L+0
+  bh_vc1_allinstr sender                      6  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<4>:register_addr.@4', 'credit@return_slots<5>:register_addr.@4', 'credit@return_slots<6>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<4>:credit_addr.@4', 'credit_upstream@return_slots<5>:credit_addr.@4', 'credit_upstream@return_slots<6>:credit_addr.@4']
+  bh_vc1_delay receiver                      22  loop +0 sp S+0 L+0
+  bh_vc1_delay sender                        22  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<4>:register_addr.@4', 'credit@return_slots<5>:register_addr.@4', 'credit@return_slots<6>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<4>:credit_addr.@4', 'credit_upstream@return_slots<5>:credit_addr.@4', 'credit_upstream@return_slots<6>:credit_addr.@4']
+  bh_vc1_passdelay receiver                  22  loop +0 sp S+0 L+0
+  bh_vc1_passdelay sender                    22  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<4>:register_addr.@4', 'credit@return_slots<5>:register_addr.@4', 'credit@return_slots<6>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<4>:credit_addr.@4', 'credit_upstream@return_slots<5>:credit_addr.@4', 'credit_upstream@return_slots<6>:credit_addr.@4']
+  bh_vc1_trim_rx0 receiver                   22  loop +0 sp S+0 L+0
+  bh_vc1_trim_rx0 sender                     22  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<4>:register_addr.@4', 'credit@return_slots<5>:register_addr.@4', 'credit@return_slots<6>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<4>:credit_addr.@4', 'credit_upstream@return_slots<5>:credit_addr.@4', 'credit_upstream@return_slots<6>:credit_addr.@4']
+  bh_vc1_trim_rx0_1erisc receiver            22  loop +0 sp S+0 L+0
+  bh_vc1_trim_rx0_1erisc sender              22  loop +0 sp S+0 L+0
+  bh_vc1_trim_vc1 receiver                   22  loop +0 sp S+0 L+0
+  bh_vc1_trim_vc1 sender                     22  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  bh_vc1_trim_vc1p receiver                  22  loop +0 sp S+0 L+0
+  bh_vc1_trim_vc1p sender                    22  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4', 'credit@return_slots<4>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4', 'credit_upstream@return_slots<4>:credit_addr.@4']
+  bh_vc1_trim_w0 receiver                    20  loop +0 sp S+0 L+0
+  bh_vc1_trim_w0 sender                      22  loop +0 sp S+0 L+0 +['credit@return_slots<4>:register_addr.@4', 'credit@return_slots<5>:register_addr.@4'] -['credit_upstream@return_slots<4>:credit_addr.@4', 'credit_upstream@return_slots<5>:credit_addr.@4']
+  bh_vc1_trim_w0_1erisc receiver             19  loop +0 sp S+0 L+0
+  bh_vc1_trim_w0_1erisc sender               19  loop +0 sp S+0 L+0
+  glx_1d receiver                            12  loop +0 sp S+0 L+0
+  glx_1d sender                              12  loop +0 sp S+0 L+0
+  glx_2d receiver                            48  loop +0 sp S+0 L+0
+  glx_2d sender                              48  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  glx_express receiver                       28  loop +0 sp S+0 L+0
+  glx_express sender                         28  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  glx_express_1erisc receiver                28  loop +0 sp S+0 L+0
+  glx_express_1erisc sender                  28  loop +0 sp S+0 L+0
+  glx_express_line receiver                  44  loop +0 sp S+0 L+0
+  glx_express_line sender                    44  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  glx_express_line_1erisc receiver           44  loop +0 sp S+0 L+0
+  glx_express_line_1erisc sender             44  loop +0 sp S+0 L+0
+  glx_express_mesh receiver                  48  loop +0 sp S+0 L+0
+  glx_express_mesh sender                    48  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4', 'credit@return_slots<3>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4']
+  glx_ring receiver                           8  loop +0 sp S+0 L+0
+  glx_ring sender                             8  loop +0 sp S+0 L+0
+  glx_torus receiver                          8  loop +0 sp S+0 L+0
+  glx_torus sender                            8  loop +0 sp S+0 L+0 +['credit@return_slots<1>:register_addr.@4', 'credit@return_slots<2>:register_addr.@4'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4']

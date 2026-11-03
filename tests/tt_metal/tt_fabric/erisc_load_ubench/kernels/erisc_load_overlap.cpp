@@ -28,6 +28,9 @@ volatile uint32_t ldm_word = 7;
 volatile uint32_t ldm_word2 = 9;
 volatile uint32_t ldm_word3 = 11;
 volatile uint32_t ldm_slot = 0;
+// The send-batch patterns' parked slots: local-memory words holding the addresses of ring slots 0 and 1.
+volatile uint32_t ldm_slot0 = 0;
+volatile uint32_t ldm_slot1 = 0;
 
 namespace {
 
@@ -72,6 +75,36 @@ namespace {
                    [d2] "r"(reinterpret_cast<uint32_t>(&ldm_word2)),               \
                    [d3] "r"(reinterpret_cast<uint32_t>(&ldm_word3)),               \
                    [ds] "r"(reinterpret_cast<uint32_t>(&ldm_slot))                 \
+                 : "t1", "t2", "t3", "t4", "t5", "t6", "a6", "a7", "memory")
+
+// The send-batch patterns' timed block: the four stream registers, four ring slots (header word at offset 40), the two
+// parked slots, TX queue 1's register base. COUNT_READ is a sender pass's start: the four free-slots registers read as
+// a group, 6 filler, all four used.
+#define COUNT_READ                                                                  \
+    "lw t2,0(%[s])\n lw t3,0(%[s2])\n lw t4,0(%[s3])\n lw t5,0(%[s4])\n"            \
+    ".rept 6\n addi t1,t1,1\n .endr\n" USE("t2") USE("t3") USE("t4") USE("t5")
+#define HDR(reg, slot) "lhu " reg ",40(%[" slot "])\n"
+// The seven TX-queue register writes of a send, to staging registers only (never ETH_TXQ_CMD at 0x4).
+#define TXQ_W4 "sw t1,0x14(%[tx])\n sw t1,0x1c(%[tx])\n sw t1,0x18(%[tx])\n sw t1,0x18(%[tx])\n"
+#define TXQ_W3 "sw t1,0x44(%[tx])\n sw t1,0x1c(%[tx])\n sw t1,0x44(%[tx])\n"
+#define TIMED_BATCH(BODY)                                                          \
+    asm volatile("csrr %[c0], mcycle\n li %[n], %[iters]\n .p2align 5\n 1:\n" BODY \
+                 "addi %[n], %[n], -1\n bnez %[n], 1b\n csrr %[c1], mcycle\n"      \
+                 : [c0] "=&r"(c0), [c1] "=&r"(c1), [n] "=&r"(n), [a] "+r"(acc)     \
+                 : [iters] "n"(kIterations),                                       \
+                   [k] "n"(K),                                                     \
+                   [s] "r"(s),                                                     \
+                   [s2] "r"(s2),                                                   \
+                   [s3] "r"(s3),                                                   \
+                   [s4] "r"(s4),                                                   \
+                   [h0] "r"(h0),                                                   \
+                   [h1] "r"(h0 + kSlotStride),                                     \
+                   [h2] "r"(h0 + 2 * kSlotStride),                                 \
+                   [h3] "r"(h0 + 3 * kSlotStride),                                 \
+                   [ds] "r"(reinterpret_cast<uint32_t>(&ldm_slot0)),               \
+                   [ds2] "r"(reinterpret_cast<uint32_t>(&ldm_slot1)),              \
+                   [tx] "r"(tx),                                                   \
+                   [l] "r"(l)                                                      \
                  : "t1", "t2", "t3", "t4", "t5", "t6", "a6", "a7", "memory")
 
 // Addresses of the non-stream MMIO registers read by the register patterns.
@@ -199,6 +232,83 @@ uint32_t time_block(
                              USE("t2") USE("t3") USE("t4") USE("t5") "lw t6,0(a6)\n" USE("t6"));
         } else if constexpr (P == DEP_DS_HDR) {
             TIMED_CURSOR("lw a6,0(%[ds])\n lw t6,0(a6)\n" USE("t6") FILL_K USE("t1"));
+        } else if constexpr (P >= HB_BASE) {
+            // The send-batch patterns: slots from the L1 word's base, TX queue 1's registers from its command register.
+            const uint32_t h0 = l - kL1WordOffset + kSlotsOffset;
+            const uint32_t tx = regs.txq_cmd - ETH_TXQ_CMD;
+            if constexpr (P == HB_BASE) {
+                TIMED_BATCH(COUNT_READ FILL_K USE("t1") USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HB_H1) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") FILL_K USE("t6") USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HB_H2) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") HDR("a6", "h1") FILL_K USE("t6") USE("a6") USE("t1") USE("t1"));
+            } else if constexpr (P == HB_H3) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") HDR("a6", "h1") HDR("a7", "h2") FILL_K USE("t6") USE("a6")
+                                USE("a7") USE("t1"));
+            } else if constexpr (P == HB_H4) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") HDR("a6", "h1") HDR("a7", "h2") HDR("t2", "h3") FILL_K USE("t6")
+                                USE("a6") USE("a7") USE("t2"));
+            } else if constexpr (P == HB_H2_SEQ) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") USE("t6") HDR("a6", "h1") USE("a6") FILL_K USE("t1") USE("t1"));
+            } else if constexpr (P == HB_H4_SEQ) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") USE("t6") HDR("a6", "h1") USE("a6") HDR("a7", "h2") USE("a7")
+                                HDR("t2", "h3") USE("t2") FILL_K);
+            } else if constexpr (P == HB_C1) {
+                TIMED_BATCH(COUNT_READ "lw a6,0(%[ds])\n lhu t6,40(a6)\n" FILL_K USE("t6") USE("t1") USE("t1")
+                                USE("t1"));
+            } else if constexpr (P == HB_C2) {
+                TIMED_BATCH(COUNT_READ "lw a6,0(%[ds])\n lw a7,0(%[ds2])\n lhu t6,40(a6)\n lhu t2,40(a7)\n" FILL_K
+                                USE("t6") USE("t2") USE("t1") USE("t1"));
+            } else if constexpr (P == HB_C2_SEQ) {
+                TIMED_BATCH(COUNT_READ "lw a6,0(%[ds])\n lhu t6,40(a6)\n" USE("t6") "lw a7,0(%[ds2])\n lhu t2,40(a7)\n"
+                                USE("t2") FILL_K USE("t1") USE("t1"));
+            } else if constexpr (P == HW_BASE) {
+                TIMED_BATCH(COUNT_READ TXQ_W4 TXQ_W3 FILL_K USE("t1") USE("t1"));
+            } else if constexpr (P == HW_PF) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h1") TXQ_W4 TXQ_W3 FILL_K USE("t6") USE("t1"));
+            } else if constexpr (P == HW_PF_MID) {
+                TIMED_BATCH(COUNT_READ TXQ_W4 HDR("t6", "h1") TXQ_W3 FILL_K USE("t6") USE("t1"));
+            } else if constexpr (P == HW_AFTER) {
+                TIMED_BATCH(COUNT_READ TXQ_W4 TXQ_W3 HDR("t6", "h1") FILL_K USE("t6") USE("t1"));
+            } else if constexpr (P == HW_PF_DS) {
+                TIMED_BATCH(COUNT_READ "lw a7,0(%[ds2])\n lhu t6,40(a7)\n" TXQ_W4 TXQ_W3 FILL_K USE("t6") USE("t1"));
+            } else if constexpr (P == HW_PF_SEQ) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h1") USE("t6") TXQ_W4 TXQ_W3 FILL_K USE("t1"));
+            } else if constexpr (P == HP_BASE) {
+                TIMED_BATCH(COUNT_READ FILL_K USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HP_GRP) {
+                TIMED_BATCH(COUNT_READ "lw t3,4(%[tx])\n lw t3,8(%[tx])\n lw t4,0(%[h3])\n" FILL_K USE("t3") USE("t4")
+                                USE("t1"));
+            } else if constexpr (P == HP_GRP_PF) {
+                TIMED_BATCH(COUNT_READ "lw t3,4(%[tx])\n lw t3,8(%[tx])\n lw t4,0(%[h3])\n" HDR("t6", "h1") FILL_K
+                                USE("t3") USE("t4") USE("t6"));
+            } else if constexpr (P == HX_LW40) {
+                TIMED_BATCH(COUNT_READ "lw t6,40(%[h0])\n" FILL_K USE("t6") USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HX_LHU_L) {
+                TIMED_BATCH(COUNT_READ "lhu t6,0(%[l])\n" FILL_K USE("t6") USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HX_LW_L) {
+                TIMED_BATCH(COUNT_READ "lw t6,0(%[l])\n" FILL_K USE("t6") USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HX_LHU40_AT) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") USE("t6") FILL_K USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HX_LW40_AT) {
+                TIMED_BATCH(COUNT_READ "lw t6,40(%[h0])\n" USE("t6") FILL_K USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HX_LW_L_AT) {
+                TIMED_BATCH(COUNT_READ "lw t6,0(%[l])\n" USE("t6") FILL_K USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HX_LW_L_NC) {
+                TIMED_BATCH("lw t6,0(%[l])\n" FILL_K USE("t6") USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HX_LHU40_NC) {
+                TIMED_BATCH(HDR("t6", "h0") FILL_K USE("t6") USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HX_BASE_NC) {
+                TIMED_BATCH(FILL_K USE("t1") USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HS_TQ_AT) {
+                TIMED_BATCH(COUNT_READ "lw t3,4(%[tx])\n lw t3,8(%[tx])\n" USE("t3") FILL_K USE("t1") USE("t1") USE("t1"));
+            } else if constexpr (P == HS_TQH_AT) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") "lw t3,4(%[tx])\n lw t3,8(%[tx])\n" USE("t6") USE("t3") FILL_K
+                                USE("t1") USE("t1"));
+            } else if constexpr (P == HS_TQH2_AT) {
+                TIMED_BATCH(COUNT_READ HDR("t6", "h0") "lw t3,4(%[tx])\n lw t3,8(%[tx])\n" USE("t6") USE("t3")
+                                HDR("a6", "h1") "lw t4,4(%[tx])\n lw t4,8(%[tx])\n" USE("a6") USE("t4") FILL_K);
+            }
         }
         const uint32_t t = c1 - c0;
         best = t < best ? t : best;
@@ -254,6 +364,11 @@ void kernel_main() {
     *reinterpret_cast<volatile uint32_t*>(base + kL1WordOffset) = 3;
     *reinterpret_cast<volatile uint32_t*>(base + kL1Word2Offset) = 5;
     ldm_slot = base + kL1WordOffset;
+    for (uint32_t i = 0; i < 4; i++) {
+        *reinterpret_cast<volatile uint32_t*>(base + kSlotsOffset + i * kSlotStride + kHeaderWordOffset) = 64 + i;
+    }
+    ldm_slot0 = base + kSlotsOffset;
+    ldm_slot1 = base + kSlotsOffset + kSlotStride;
 
     uint32_t cache_csr;
     asm volatile("csrr %0, 0x7c0" : "=r"(cache_csr));

@@ -1,0 +1,40 @@
+== v4rxo4_O3
+  bh_1d          0/10 images with hot values on the stack: {}
+  bh_ring        0/10 images with hot values on the stack: {}
+  bh_2d          0/28 images with hot values on the stack: {}
+  bh_torus       0/12 images with hot values on the stack: {}
+  bh_2d_vc2      0/28 images with hot values on the stack: {}
+  bh_torus_vc2   12/28 images with hot values on the stack: {'deliver<0>:encoding': 12}
+  bh_vc1         0/22 images with hot values on the stack: {}
+== v4rxs2x_O3
+  bh_1d          0/10 images with hot values on the stack: {}
+  bh_ring        0/10 images with hot values on the stack: {}
+  bh_2d          0/28 images with hot values on the stack: {}
+  bh_torus       0/12 images with hot values on the stack: {}
+  bh_2d_vc2      0/28 images with hot values on the stack: {}
+  bh_torus_vc2   12/28 images with hot values on the stack: {'deliver<0>:encoding': 12}
+  bh_vc1         0/22 images with hot values on the stack: {}
+== v4rxo5_O3
+  bh_1d          0/10 images with hot values on the stack: {}
+  bh_ring        0/10 images with hot values on the stack: {}
+  bh_2d          0/28 images with hot values on the stack: {}
+  bh_torus       0/12 images with hot values on the stack: {}
+  bh_2d_vc2      28/28 images with hot values on the stack: {'pass:arrived1': 20, 'deliver<0>:encoding': 16, 'deliver<0>:encoding~': 16, 'deliver<1>:encoding': 16, 'deliver<1>:encoding~': 16}
+  bh_torus_vc2   28/28 images with hot values on the stack: {'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 20, 'deliver<1>:encoding': 20, 'deliver<0>:payload': 16, 'deliver<0>:encoding': 12, 'deliver<0>:encoding~': 12}
+  bh_vc1         0/22 images with hot values on the stack: {}
+== v4rxb2p_O3
+  bh_1d          0/10 images with hot values on the stack: {}
+  bh_ring        0/10 images with hot values on the stack: {}
+  bh_2d          0/28 images with hot values on the stack: {}
+  bh_torus       0/12 images with hot values on the stack: {}
+  bh_2d_vc2      0/28 images with hot values on the stack: {}
+  bh_torus_vc2   12/28 images with hot values on the stack: {'deliver<0>:payload': 8, 'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 4, 'deliver<0>:encoding': 4}
+  bh_vc1         0/22 images with hot values on the stack: {}
+== v4rxp2p_O3
+  bh_1d          0/10 images with hot values on the stack: {}
+  bh_ring        0/10 images with hot values on the stack: {}
+  bh_2d          0/28 images with hot values on the stack: {}
+  bh_torus       0/12 images with hot values on the stack: {}
+  bh_2d_vc2      0/28 images with hot values on the stack: {}
+  bh_torus_vc2   12/28 images with hot values on the stack: {'deliver<0>:encoding': 12}
+  bh_vc1         14/22 images with hot values on the stack: {'step<0>:cursor.counts_': 14, 'step<1>:cursor.counts_': 4}

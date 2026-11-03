@@ -1,0 +1,133 @@
+# Slot study, 3072 B slots: sls_vc2_glx_4k.yaml's VC2-on rows with max_packet_size 3072, 1024 and 3072 B payloads. 8 tests.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Vc2OnVC0
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 3072
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 1000000
+
+- name: Vc2Alone
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 3072
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 2
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 1000000
+
+- name: Vc02A
+  benchmark_mode: true
+  sync: false
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 3072
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 1000000
+  - device:
+    - 0
+    - 0
+    vc_id: 2
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 2000000
+
+- name: Vc02B
+  benchmark_mode: true
+  sync: false
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 3072
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 2000000
+  - device:
+    - 0
+    - 0
+    vc_id: 2
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 1000000

@@ -1,0 +1,5 @@
+# Global channel-trimming override (TT_METAL_FABRIC_TRIMMING_OVERRIDE; channel_trimming_import.cpp): every router keeps
+# VC0's sender channels 1-3 (2D: the forwarding channels) and loses channel 0, the worker channel. Other VCs untouched.
+channel_trimming_overrides:
+  vc0:
+    force_enable_sender_channels: [1, 2, 3]

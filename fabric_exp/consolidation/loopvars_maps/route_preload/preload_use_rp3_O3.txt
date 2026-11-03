@@ -1,0 +1,14 @@
+bh_1d                        preload  loads   10  first use after 10..200 insns  spill stores 0  first-use ops {'(dead:': 3450, 'andi': 1800}
+bh_1d                        load-now loads   10  first use after 3..3 insns  spill stores 0  first-use ops {'andi': 10}
+bh_2d                        preload  loads   40  first use after 9..200 insns  spill stores 0  first-use ops {'(dead:': 15428, 'srl': 7132}
+bh_2d                        load-now loads   40  first use after 1..200 insns  spill stores 0  first-use ops {'(dead:': 5516, 'srl': 1964}
+bh_2d_1erisc                 preload  loads   40  first use after 6..200 insns  spill stores 0  first-use ops {'sw': 8040}
+bh_2d_1erisc                 load-now loads   40  first use after 2..4 insns  spill stores 0  first-use ops {'sw': 32, 'srl': 8}
+bh_ring                      preload  loads   10  first use after 18..200 insns  spill stores 0  first-use ops {'(dead:': 3080, 'andi': 1670}
+bh_ring                      load-now loads   10  first use after 3..3 insns  spill stores 0  first-use ops {'andi': 10}
+bh_torus                     preload  loads   44  first use after 1..200 insns  spill stores 0  first-use ops {'srl': 6248, '(dead:': 6032, 'mv': 684, 'andi': 16}
+bh_torus                     load-now loads   24  first use after 1..200 insns  spill stores 0  first-use ops {'(dead:': 1104, 'mv': 664, 'srl': 616, 'andi': 4}
+bh_vc1                       preload  loads  120  first use after 1..200 insns  spill stores 2780  first-use ops {'srl': 2824, 'sw': 2780, 'jal': 2074, '(dead:': 2016}
+bh_vc1                       load-now loads  120  first use after 1..200 insns  spill stores 2456  first-use ops {'sw': 2456, '(dead:': 1854, 'srl': 1268, 'jal': 622}
+glx_2d                       preload  loads   72  first use after 10..200 insns  spill stores 0  first-use ops {'(dead:': 27936, 'srl': 12660}
+glx_2d                       load-now loads   72  first use after 1..200 insns  spill stores 0  first-use ops {'(dead:': 10948, 'srl': 3848}

@@ -1,0 +1,22 @@
+# Cycle breakdown, phase 2 (fabric_exp/report/BREAKDOWN_PLAN.md): Point 5: GlxFullRingMulticast write 4352 B, long. Duration not calibrated (census rows used 20000 packets); the sampler stops at --max-s.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BdGlxFullRing4352
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 8000000
+  patterns:
+  - type: full_ring
+    iterations: 1

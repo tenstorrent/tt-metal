@@ -1,0 +1,3 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+GlxTorusFullRingMulticast,CHIP_MULTICAST,NOC_UNICAST_WRITE,Torus,"[32]",1,3072,1,30124955.000000,6273868.292915,19.273323,19.273323,19.273323,0.000000,1.000000
+GlxTorusFullRingMulticast,CHIP_MULTICAST,NOC_UNICAST_WRITE,Torus,"[32]",1,4352,1,36609753.000000,5162558.731276,22.467456,22.467456,22.467456,0.000000,1.000000

@@ -1,0 +1,139 @@
+{
+ "version": "provisional-1",
+ "note": "Which sample set stands for each (point, router). Phase 1 (2026-11-02) fills it from samples that already existed; every one is a proxy (another build, size, link or row) and is marked provisional. Phase 2 replaces each entry with that point's own two passes (pass a, pass b), and build_breakdown.py averages them.",
+ "points": [
+  {
+   "point": 1,
+   "label": "2D mesh 1-hop write, 4,352 B",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "2D mesh",
+   "config": "two ERISCs",
+   "send_type": "write",
+   "packet_size_B": 4352,
+   "why": "headline: main ~222 cycles/packet against the new router's ~127 on one link",
+   "slack_test": [
+    "Mesh1HopEW",
+    4352,
+    "write"
+   ],
+   "phase2": {
+    "P150": "fabric_exp/pcs3/ew4352.yaml"
+   },
+   "main": [],
+   "new": [
+    {
+     "set": "new_b2d_ew4352",
+     "provisional": true,
+     "notes": "v4rxv2i3 (the receiver lead before v4rxf4/v4rxg3; its sender is the lead's sender before the sender pass), the same row and size (PcsEW4352, P150, 400G). One sending and one receiving router carry the row."
+    }
+   ]
+  },
+  {
+   "point": 2,
+   "label": "2D mesh 1-hop write, 1,024 B",
+   "link": "200G",
+   "system": "BH Galaxy",
+   "topology": "2D mesh",
+   "config": "two ERISCs",
+   "send_type": "write",
+   "packet_size_B": 1024,
+   "why": "pure per-packet cost, no wire in the way",
+   "slack_test": [
+    "Mesh1HopEW",
+    1024,
+    "write"
+   ],
+   "phase2": {
+    "Galaxy": "fabric_exp/consolidation/bd_rows/glx_ew1024.yaml"
+   },
+   "main": [],
+   "new": [
+    {
+     "set": "new_b2d_bew1024",
+     "provisional": true,
+     "notes": "PROXY: P150 (400G), not the Galaxy. v4rxv2i3, 2D 1-hop E/W write 1024 B (BndEW1024), 116.4 cycles/packet. On the Galaxy the same build runs this row at 122.9 (Sls1HopEW 1024 B, 4352 B slots, Slurm 167648; v4trm 124.2 against main 224.1, Slurm 163369), so the rate, and possibly the split, differ. Router-bound on both links: 1024 B takes ~34 cycles on the 400G wire and ~68 on 200G (wire model, wire.json)."
+    }
+   ]
+  },
+  {
+   "point": 3,
+   "label": "2D mesh multicast write, 4,352 B",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "2D mesh",
+   "config": "two ERISCs",
+   "send_type": "write",
+   "packet_size_B": 4352,
+   "why": "the page's multicast peak, 72.4% of line rate at 400G (the 69-83% range spans the multicast tests of all topologies); the row is exp_2d_4352.yaml's MeshMulticast, write, 4352 B (user, 2026-11-02)",
+   "slack_test": [
+    "MeshMulticast",
+    4352,
+    "write"
+   ],
+   "phase2": {
+    "P150": "fabric_exp/consolidation/bd_rows/mcast.yaml"
+   },
+   "main": [],
+   "new": [
+    {
+     "set": "new_b2d_mcast",
+     "provisional": true,
+     "notes": "v4rxv2i3, PcsMcast = the census MeshMulticast write row (all-to-all, 4352 B, one link) run longer. Every router carries traffic; the routers are picked by the rule (A/B-named, else busiest)."
+    }
+   ],
+   "census_row": [
+    "fabric_exp/exp_2d_4352.yaml",
+    "MeshMulticast",
+    "unicast_write",
+    4352
+   ]
+  },
+  {
+   "point": 4,
+   "label": "Galaxy north-south, 7 hops",
+   "link": "200G",
+   "system": "BH Galaxy",
+   "topology": "2D mesh",
+   "config": "two ERISCs",
+   "send_type": "write",
+   "packet_size_B": 1024,
+   "why": "the ~172-cycle forwarding floor (V4_NS_FLOOR.md)",
+   "slack_test": null,
+   "phase2": {
+    "Galaxy": "fabric_exp/consolidation/bd_rows/glx_ns7_1024.yaml"
+   },
+   "main": [],
+   "new": [
+    {
+     "set": "new_prlg3ml_hop3",
+     "provisional": true,
+     "notes": "PROXY, a diagnostic build: P150 3-hop E/W write 4352 B (PcsEW3Hop) on v4rxg3ml, the receiver lead v4rxg3 with an E/W forwarder forced into the N/S routers' shape (stateless forward plus multi-downstream bookkeeping; V4_NS_FLOOR \u00a72, V4_ROUTE_PRELOAD \u00a78.2), 179.7 cycles/packet. Not a production build or row. Routers picked by the rule (busiest): V4_ROUTE_PRELOAD \u00a78.2 sampled chip 2 channel 4's E1, the West-facing forwarder with two downstreams, which is within one point of the busiest. The Galaxy N/S rows are E1-bound by A/B (V4_NS_FLOOR \u00a71); the proxy's bound side is not measured. The Galaxy row itself (GlxMesh7HopNS 1024 B) runs 186.0 on v4rxv2i3 with the default 4352 B slots and 172-173 with 2 KiB slots (the floor V4_NS_FLOOR \u00a71 names); main 222.9 (Slurm 163369)."
+    }
+   ],
+   "slots": "default (4352 B slots), 1024 B packets (user, 2026-11-02)"
+  },
+  {
+   "point": 5,
+   "label": "Galaxy full-ring multicast, 4,352 B",
+   "link": "200G",
+   "system": "BH Galaxy",
+   "topology": "ring",
+   "config": "two ERISCs",
+   "send_type": "write",
+   "packet_size_B": 4352,
+   "why": "the one regression (0.76x main)",
+   "slack_test": null,
+   "phase2": {
+    "Galaxy": "fabric_exp/consolidation/bd_rows/glx_fullring4352.yaml"
+   },
+   "main": [],
+   "new": []
+  }
+ ],
+ "missing_notes": {
+  "main": "No samples of main's router exist at any of the five points: the only main samples (pcse_v1, a09u32 job 131) are one-ERISC ring 1-hop bidirectional 1024 B, used here only to validate main's map.",
+  "5": "No samples of either router on a full-ring multicast (Galaxy or P150, two ERISCs). The nearest existing new-router samples (ring 1-hop write, job 358) are a different traffic pattern and are not used."
+ },
+ "router_rule": "Per ERISC: the router whose ERISC sets the test's rate where an A/B has identified that router (ab_targets in a point or entry, with its source); otherwise the busiest (largest share of samples in that ERISC's work category: E0 Ethernet send, E1 NoC commands). The one-side delay A/Bs (slack.json, V4_BOUNDS \u00a71, V4_NS_FLOOR \u00a71) spin every router's E0 or every router's E1 at once: they name the bound side, not a router, so today every pick is 'busiest' (user, 2026-11-02)."
+}

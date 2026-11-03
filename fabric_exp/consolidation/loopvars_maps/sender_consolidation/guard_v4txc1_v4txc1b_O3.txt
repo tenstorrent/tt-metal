@@ -1,0 +1,8 @@
+v4txc1_O3 -> v4txc1b_O3: 112 images with different .text, 168 role analyses
+  bh_2d_vc2_trim_w0 sender                   28  loop -2 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc receiver          28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc sender            28  loop +3 sp S+1 L+1
+  bh_torus_vc2_trim_w0 sender                28  loop -2 sp S+0 L+0
+  bh_torus_vc2_trim_w0_1erisc receiver       28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0_1erisc sender         16  loop +3 sp S+1 L+1
+  bh_torus_vc2_trim_w0_1erisc sender         12  loop +0 sp S+1 L+1

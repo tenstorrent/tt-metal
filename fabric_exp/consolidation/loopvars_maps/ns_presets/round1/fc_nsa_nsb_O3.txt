@@ -1,0 +1,37 @@
+images 2863, .text differs 610
+bh_1d                        10x loop {receiver::run}
+bh_1d_allinstr               10x loop {receiver::run}
+bh_1d_delay                  10x loop {receiver::run}
+bh_1d_telemetry              10x loop {receiver::run}
+bh_1d_trim                   10x loop {receiver::run}
+bh_1d_trim_w0                10x loop {receiver::run}
+bh_2d                        20x loop {receiver::run}
+bh_2d_allinstr               20x loop {receiver::run}
+bh_2d_bwtelemetry            20x loop {receiver::run}
+bh_2d_codeprof               20x loop {receiver::run}
+bh_2d_delay                  20x loop {receiver::run}
+bh_2d_passdelay              20x loop {receiver::run}
+bh_2d_telemetry              20x loop {receiver::run}
+bh_2d_trim                   20x loop {receiver::run}
+bh_2d_vc2                    20x loop {receiver::run}
+bh_2d_vc2_trim_rx0           20x loop {none: init only}
+bh_2d_vc2_trim_w0            20x loop {receiver::run}
+bh_2d_vc2_trim_w02           20x loop {receiver::run}
+bh_2d_vc2_trim_w2            20x loop {receiver::run}
+bh_neighbor                  4x loop {none: init only}
+bh_neighbor_delay            4x loop {none: init only}
+bh_ring                      10x loop {receiver::run}
+bh_ring_allinstr             10x loop {receiver::run}
+bh_ring_delay                10x loop {receiver::run}
+bh_ring_passdelay            10x loop {receiver::run}
+bh_torus                     8x loop {receiver::run}
+bh_torus_vc2                 20x loop {receiver::run}
+bh_torus_vc2_trim_w0         20x loop {receiver::run}
+bh_trim_gtest                84x loop {receiver::run}; 6x loop {none: init only}
+glx_1d                       12x loop {receiver::run}
+glx_2d                       28x loop {receiver::run}
+glx_express                  8x loop {receiver::run}
+glx_express_line             16x loop {receiver::run}
+glx_express_mesh             28x loop {receiver::run}
+glx_ring                     8x loop {receiver::run}
+glx_torus                    4x loop {receiver::run}

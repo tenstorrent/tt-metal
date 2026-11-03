@@ -1,0 +1,5 @@
+651 images
+  458  -fabric_router::init_telemetry; +fabric_router::init_telemetry_block; kernel_main
+  158  _start; -fabric_router::init_telemetry; +fabric_router::init_telemetry_block; -kernel_main
+   28  _start; -fabric_router::init_telemetry; +fabric_router::init_telemetry_block
+    7  _start; -fabric_router::init_telemetry; +fabric_router::init_telemetry_block; +kernel_main

@@ -1,0 +1,296 @@
+diff -ruN v4txa2/fabric_erisc_router_v4.cpp v4txa3/fabric_erisc_router_v4.cpp
+--- v4txa2/fabric_erisc_router_v4.cpp	2026-11-03 03:56:11.632116661 +0000
++++ v4txa3/fabric_erisc_router_v4.cpp	2026-11-03 04:07:06.870955901 +0000
+@@ -9,21 +9,11 @@
+ // off the link and write them to this chip, forward them to the next router, or both. Credits flow back the same way.
+ //
+ // On a two-ERISC Blackhole router, ERISC 0 runs the sender program (router/router_sender.hpp) and ERISC 1 the receiver
+-// program (router/router_receiver.hpp). Both run one init and teardown skeleton (router/router_init.hpp), each doing
+-// its own role's part, and meet at every phase.
++// program (router/router_receiver.hpp); on a single-ERISC router one ERISC runs both (router/router_single.hpp).
++// kernel_main is the init and teardown skeleton every ERISC runs (its helpers: router/router_init.hpp): at each phase
++// each role does its own part, and the ERISCs meet at the phase's end.
+ //
+-// Bring-up status: two-ERISC Blackhole routers, 1D and 2D (meshes, lines, rings, tori: bubble flow control and
+-// first-level acks), VC0 and VC1 (multi-mesh fabrics: intermesh landing, crossover and exits), strict atomics;
+-// single-ERISC Blackhole routers (one ERISC runs both roles, router/router_single.hpp; functional, tuned on Wormhole);
+-// and Tensix mux mode on them, VC0 (the fabric's muxes feed the worker channel and take the forwards); UDM mode on 2D
+-// meshes (packets for this chip go to the fabric's relay; router/router_downstream.hpp); VC2 on 2D single-mesh routers
+-// (neighbour exchange: a second worker channel, and a receiver channel that only delivers); and the speedy path (VC0
+-// worker-only routers whose receiver only delivers, e.g. neighbour exchange: the generic loop specializes to them, and
+-// VC0's receiver channel skips decode and admission); with the host's telemetry options (the perf recorder and the
+-// dynamic stats; router/router_telemetry.hpp); and channel trimming (the capture, router/router_receiver.hpp's
+-// record_forwarded; a replay's routers with channels compiled out, an ERISC left with nothing to service running rounds
+-// only, router/router_round.hpp's run_idle).
+-// Other configurations fail to compile here (static_assert below) until their family is brought up.
++// The configurations this router supports are listed at the bring-up gate below; others fail to compile there.
+ 
+ #define FABRIC_ERISC_ROUTER_V4 1
+ 
+@@ -97,6 +87,16 @@
+     !enable_deadlock_avoidance && !ENABLE_FIRST_LEVEL_ACK_VC0 && disable_rx_ch0_forwarding && !udm_mode;
+ 
+ // Bring-up gate: the configurations this router supports so far.
++//   - Blackhole; two ERISCs (one role each, a TX queue each) or one ERISC (both roles);
++//   - 1D and 2D: lines, meshes, rings and tori (bubble flow control; first-level acks on VC0); strict atomics;
++//   - VC0; VC1 on 2D multi-mesh fabrics (intermesh landing, crossover and exits);
++//   - VC2 on 2D single-mesh routers: neighbour exchange (a worker channel into a receiver channel that only delivers);
++//   - Tensix mux mode on one ERISC, VC0 (the fabric's muxes feed the worker channel and take the forwards);
++//   - UDM on 2D meshes, one ERISC (packets for this chip go to the fabric's relay);
++//   - the speedy path (VC0 worker-only routers whose receiver channel only delivers: it skips decode and admission);
++//   - the host's telemetry options: the perf recorder at low resolution and the dynamic stats;
++//   - channel trimming: the capture, and a replay's routers with channels compiled out (an ERISC left with nothing to
++//     service runs rounds only, router_round.hpp's run_idle).
+ constexpr bool brought_up =
+     is_blackhole_arch &&
+     (NUM_ACTIVE_ERISCS == 2 ? multi_txq_enabled && !(is_sender_role && is_receiver_role) : NUM_ACTIVE_ERISCS == 1) &&
+@@ -110,7 +110,7 @@
+      perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH) &&
+     (!tensix_mux_mode || NUM_ACTIVE_ERISCS == 1) &&
+     (num_ds_or_local_tensix_connections == 0 || tensix_mux_mode || udm_mode);
+-static_assert(brought_up, "fabric router v4: this configuration is not brought up yet (see the file header)");
++static_assert(brought_up, "fabric router v4: this configuration is not brought up yet (see the bring-up gate)");
+ 
+ }  // namespace fabric_router
+ 
+@@ -122,7 +122,7 @@
+     postcode(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
+     router_state()->state = RouterState::INITIALIZING;
+     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+-    init_telemetry();
++    init_telemetry_block();
+     telemetry::init();
+ 
+     // Phase: stream registers.
+@@ -143,33 +143,17 @@
+     // The receiver's downstream connections (router_downstream.hpp): set up here, then used by its loop.
+     DownstreamConnections downstreams{};
+     if constexpr (is_sender_role) {
+-        for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
+-            constexpr size_t CH = decltype(i)::value;
+-            if constexpr (is_sender_channel_serviced[CH]) {
+-                *reinterpret_cast<volatile uint32_t*>(args.connection_semaphores[CH]) = 0;
+-                // The producer reads the whole cursor block at connection open, so every word starts at 0.
+-                auto* cursor = reinterpret_cast<volatile uint32_t*>(args.producer_cursors[CH]);
+-                for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
+-                    cursor[w] = 0;
+-                }
+-            }
+-        });
++        sender::reset_connections(args.connection_semaphores, args.producer_cursors);
+     }
+     postcode(tt::tt_fabric::EDMStatus::STARTED);
+     *edm_status() = tt::tt_fabric::EDMStatus::STARTED;
+     postcode(tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED);
+     if constexpr (is_receiver_role) {
+-        init_downstream_connections(downstreams, args);
+-        auto receiver_channels =
+-            ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
+-        receiver_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
++        receiver::set_up_channels(downstreams, args);
+     }
+     postcode(tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE);
+     if constexpr (is_sender_role) {
+-        auto sender_channels =
+-            SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
+-        sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
+-        sender::SenderChannelInterfaces::start(args.connection_semaphores);
++        sender::set_up_channels(args.connection_semaphores);
+     }
+     sync_erisc(Phase::SETUP_DONE);
+ 
+@@ -178,28 +162,14 @@
+     sync_erisc(Phase::HANDSHAKE_DONE);
+     postcode(tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE);
+ 
+-    // Phase: downstream connections. As main, a VC's connections are opened when the host's open gate says so: VC0's
+-    // when receiver channel 0 is serviced, also where no packet uses them (an intermesh router's VC0 connections with
+-    // crossover), since the downstream routers wait for them; VC1's when the receiver channel that forwards on them is
+-    // serviced (channel 0 with crossover, else channel 1; channel trimming may leave a crossover router's channel 1
+-    // unserviced). In Tensix mux mode the downstreams are the other directions' muxes, opened once they are set up; in
+-    // UDM the relay is opened after the downstream routers, once it is set up (as main).
++    // Phase: downstream connections.
+     if constexpr (is_receiver_role) {
+-        wait_for_downstream_muxes();
+-        if constexpr (open_downstream_vc0_connections) {
+-            open_downstreams<0>(args.vc0());
+-        }
+-        if constexpr (has_vc1 && open_downstream_vc1_connections) {
+-            open_downstreams<1>(args.vc1());
+-        }
+-        if constexpr (udm_mode) {
+-            open_relay(args.relay);
+-        }
++        receiver::open_connections(args);
+     }
+     sync_erisc(Phase::DOWNSTREAMS_OPEN);
+     postcode(tt::tt_fabric::EDMStatus::VCS_OPENED);
+     if constexpr (is_receiver_role) {
+-        ForwardCommands<0>::preset(args.vc0());
++        receiver::preset_forward_commands(args);
+     }
+     sync_erisc(Phase::CMD_BUFS_SET);
+     postcode(tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED);
+diff -ruN v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp
+--- v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 03:56:11.629116619 +0000
++++ v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 04:06:53.912780477 +0000
+@@ -137,7 +137,7 @@
+ // Telemetry block
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+-__attribute__((noinline)) void init_telemetry() {
++__attribute__((noinline)) void init_telemetry_block() {
+     volatile tt_l1_ptr FabricTelemetry* telemetry = telemetry_block();
+     const auto& routing_table = l1_routing_table();
+     memset(const_cast<FabricTelemetry*>(telemetry), 0, sizeof(FabricTelemetry));
+@@ -195,19 +195,6 @@
+     }
+ };
+ 
+-// Before the Ethernet handshake, on the receiver ERISC: every downstream connection's links and progress
+-// (router_downstream.hpp). A template, so that an absent connection is named only in template-dependent code.
+-template <typename Connections>
+-FORCE_INLINE void init_downstream_connections(Connections& downstreams, const RuntimeArgs& args) {
+-    init_downstreams(downstreams.vc0, args.vc0());
+-    if constexpr (vc_forwards_to_routers(1)) {
+-        init_downstreams(downstreams.vc1, args.vc1());
+-    }
+-    if constexpr (udm_mode) {
+-        init_relay(downstreams.relay, args.relay);
+-    }
+-}
+-
+ template <size_t N>
+ FORCE_INLINE void read_vc_downstream_args(VcDownstreamArgs<N>& a, size_t& i) {
+     a.mask = get_arg_val<uint32_t>(i++);
+@@ -307,17 +294,6 @@
+     }
+ }
+ 
+-// Tensix mux mode: the receiver forwards into the fabric's mux of each other direction, not into that direction's
+-// router. Each such mux counts itself into this router's sync word once its channels are set up (the host clears the
+-// word before launch); wait for all of them before opening the downstream connections, so no open lands on a mux still
+-// setting up. UDM: the relay counts itself in the same way (one connection). Nothing to wait for otherwise.
+-FORCE_INLINE void wait_for_downstream_muxes() {
+-    if constexpr (num_ds_or_local_tensix_connections != 0) {
+-        wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+-            edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections, termination_signal());
+-    }
+-}
+-
+ // ---------------------------------------------------------------------------------------------------------------------
+ // Teardown
+ // ---------------------------------------------------------------------------------------------------------------------
+diff -ruN v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 03:56:11.631116647 +0000
++++ v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 04:06:53.912780477 +0000
+@@ -41,6 +41,7 @@
+ 
+ #include "router_common.hpp"
+ #include "router_downstream.hpp"
++#include "router_init.hpp"
+ #include "router_local_delivery.hpp"
+ #include "router_round.hpp"
+ #include "router_routing.hpp"
+@@ -763,6 +764,56 @@
+     });
+ }
+ 
++// Before the Ethernet handshake: every downstream connection's links and progress (router_downstream.hpp), then the
++// receiver channels' slot buffers. (Where the router forwards on VC1 or to UDM's relay, those connections too: an
++// absent connection is named only in template-dependent code.)
++template <typename Connections>
++FORCE_INLINE void set_up_channels(Connections& downstreams, const RuntimeArgs& args) {
++    init_downstreams(downstreams.vc0, args.vc0());
++    if constexpr (vc_forwards_to_routers(1)) {
++        init_downstreams(downstreams.vc1, args.vc1());
++    }
++    if constexpr (udm_mode) {
++        init_relay(downstreams.relay, args.relay);
++    }
++    auto receiver_channels =
++        ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
++    receiver_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
++}
++
++// Tensix mux mode: the receiver forwards into the fabric's mux of each other direction, not into that direction's
++// router. Each such mux counts itself into this router's sync word once its channels are set up (the host clears the
++// word before launch); wait for all of them before opening the downstream connections, so no open lands on a mux still
++// setting up. UDM: the relay counts itself in the same way (one connection). Nothing to wait for otherwise.
++FORCE_INLINE void wait_for_downstream_muxes() {
++    if constexpr (num_ds_or_local_tensix_connections != 0) {
++        wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
++            edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections, termination_signal());
++    }
++}
++
++// After the Ethernet handshake: the downstream connections, opened as main opens them, when the host's open gate says
++// so. VC0's when receiver channel 0 is serviced, also where no packet uses them (an intermesh router's VC0 connections
++// with crossover), since the downstream routers wait for them; VC1's when the receiver channel that forwards on them is
++// serviced (channel 0 with crossover, else channel 1; channel trimming may leave a crossover router's channel 1
++// unserviced). In Tensix mux mode the downstreams are the other directions' muxes, opened once they are set up; in UDM
++// the relay is opened after the downstream routers, once it is set up.
++FORCE_INLINE void open_connections(const RuntimeArgs& args) {
++    wait_for_downstream_muxes();
++    if constexpr (open_downstream_vc0_connections) {
++        open_downstreams<0>(args.vc0());
++    }
++    if constexpr (has_vc1 && open_downstream_vc1_connections) {
++        open_downstreams<1>(args.vc1());
++    }
++    if constexpr (udm_mode) {
++        open_relay(args.relay);
++    }
++}
++
++// After every connection is open: the forwards' command buffers preset (ForwardCommands).
++FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) { ForwardCommands<0>::preset(args.vc0()); }
++
+ // The receiver loop: rounds of passes over the serviced VCs' receiver channels until termination. A function of its
+ // own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).
+ //
+diff -ruN v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:56:11.631116647 +0000
++++ v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 04:06:53.913780491 +0000
+@@ -1026,12 +1026,40 @@
+     });
+ }
+ 
++// At init, first: each serviced channel's connection semaphore (its runtime arg's address) at 0, and its producer-cursor
++// block zeroed (the producer reads the whole block when it connects).
++FORCE_INLINE void reset_connections(
++    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
++    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
++    for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
++        constexpr size_t CH = decltype(i)::value;
++        if constexpr (is_sender_channel_serviced[CH]) {
++            *reinterpret_cast<volatile uint32_t*>(connection_semaphores[CH]) = 0;
++            auto* cursor = reinterpret_cast<volatile uint32_t*>(producer_cursors[CH]);
++            for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
++                cursor[w] = 0;
++            }
++        }
++    });
++}
++
++// At init, before the Ethernet handshake: the channels' slot buffers, then their interfaces.
++FORCE_INLINE void set_up_channels(const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
++    auto sender_channels =
++        SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
++    sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
++    SenderChannelInterfaces::start(connection_semaphores);
++}
++
++// While init waits for an upstream router, the base firmware's routing runs once per this many polls.
++constexpr uint32_t POLLS_PER_ROUTING_RUN = 100000;
++
+ // Waits until an upstream router asks to connect on `connection_semaphore`, or termination. One body for every channel.
+ __attribute__((noinline)) void wait_for_connect_request(volatile tt_l1_ptr uint32_t* connection_semaphore) {
+     uint32_t polls = 0;
+     while (!connect_is_requested(*connection_semaphore) && !terminating()) {
+         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+-        if (polls++ == 100000) {
++        if (polls++ == POLLS_PER_ROUTING_RUN) {
+             polls = 0;
+             run_routing();
+         }

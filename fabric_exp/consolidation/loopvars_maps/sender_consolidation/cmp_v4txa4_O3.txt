@@ -1,0 +1,92 @@
+bh_1d                        identical   10  differ   10
+bh_1d_1erisc                 identical    0  differ   10
+bh_1d_allinstr               identical   10  differ   10
+bh_1d_delay                  identical   10  differ   10
+bh_1d_mux                    identical   10  differ    0
+bh_1d_telemetry              identical   10  differ   10
+bh_1d_trim                   identical   10  differ   10
+bh_1d_trim_w0                identical   10  differ   10
+bh_1d_trim_w0_1erisc         identical   10  differ    0
+bh_2d                        identical    0  differ   56
+bh_2d_1erisc                 identical    0  differ   28
+bh_2d_1erisc_delay           identical    0  differ   28
+bh_2d_1erisc_passdelay       identical    0  differ   28
+bh_2d_allinstr               identical    0  differ   56
+bh_2d_bwtelemetry            identical    0  differ   56
+bh_2d_codeprof               identical    0  differ   56
+bh_2d_delay                  identical    0  differ   56
+bh_2d_mux                    identical    0  differ   28
+bh_2d_mux_delay              identical    0  differ   28
+bh_2d_mux_trim_all           identical    0  differ   28
+bh_2d_passdelay              identical    0  differ   56
+bh_2d_telemetry              identical    0  differ   56
+bh_2d_trim                   identical    0  differ   56
+bh_2d_udm                    identical    0  differ   28
+bh_2d_udm_gtest              identical    0  differ   28
+bh_2d_vc2                    identical   28  differ   28
+bh_2d_vc2_1erisc             identical    0  differ   28
+bh_2d_vc2_trim_rx0           identical   28  differ   28
+bh_2d_vc2_trim_rx0_1erisc    identical   28  differ    0
+bh_2d_vc2_trim_w0            identical   28  differ   28
+bh_2d_vc2_trim_w02           identical   28  differ   28
+bh_2d_vc2_trim_w02_1erisc    identical    0  differ   28
+bh_2d_vc2_trim_w0_1erisc     identical    0  differ   28
+bh_2d_vc2_trim_w2            identical    0  differ   56
+bh_2d_vc2_trim_w2_1erisc     identical    0  differ   28
+bh_neighbor                  identical    4  differ    4
+bh_neighbor_1erisc           identical    4  differ    0
+bh_neighbor_delay            identical    4  differ    4
+bh_ring                      identical    0  differ   20
+bh_ring_1erisc               identical    0  differ   10
+bh_ring_allinstr             identical    0  differ   20
+bh_ring_delay                identical    0  differ   20
+bh_ring_mux                  identical   10  differ    0
+bh_ring_passdelay            identical    0  differ   20
+bh_torus                     identical    0  differ   24
+bh_torus_1erisc              identical    0  differ   12
+bh_torus_vc2                 identical   16  differ   40
+bh_torus_vc2_1erisc          identical    0  differ   28
+bh_torus_vc2_trim_w0         identical   28  differ   28
+bh_torus_vc2_trim_w0_1erisc  identical    0  differ   28
+bh_trim_gtest                identical   70  differ  246
+bh_trim_gtest_1erisc         identical   64  differ   94
+bh_vc1                       identical   22  differ   22
+bh_vc1_allinstr              identical    6  differ    6
+bh_vc1_delay                 identical   22  differ   22
+bh_vc1_passdelay             identical   22  differ   22
+bh_vc1_trim_rx0              identical   22  differ   22
+bh_vc1_trim_rx0_1erisc       identical    8  differ   14
+bh_vc1_trim_vc1              identical    0  differ   44
+bh_vc1_trim_vc1p             identical   22  differ   22
+bh_vc1_trim_w0               identical   22  differ   20
+bh_vc1_trim_w0_1erisc        identical    0  differ   19
+glx_1d                       identical   12  differ   12
+glx_2d                       identical    0  differ   96
+glx_express                  identical    0  differ   56
+glx_express_1erisc           identical    0  differ   28
+glx_express_line             identical    0  differ   88
+glx_express_line_1erisc      identical    0  differ   44
+glx_express_mesh             identical    0  differ   96
+glx_ring                     identical    0  differ   16
+glx_torus                    identical    0  differ   16
+shared 2863  identical 578  differ 2285  only in v4txa3_O3 0  only in v4txa4_O3 0
+  differs: bh_1d_1erisc__10063481670200031670/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__10340486281625798581/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__10503249266103532492/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__10889429662373461861/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__12079288260613078559/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__13147797207537219531/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__14060494895717851419/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__15763052715580344904/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__2336592311936046432/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_1erisc__8967483904363914518/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__10711705047208358998/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__11771157836117153027/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__11966589601134953097/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__12151225984416678758/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__12565983335775070686/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__12689859897650825883/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__13045704138935434653/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__15031910185866791319/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__3136893259129657994/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d__9982562484933923760/subordinate_active_erisc/subordinate_active_erisc.elf

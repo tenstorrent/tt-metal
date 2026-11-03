@@ -1,0 +1,654 @@
+10053510129584863541 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+10224524340062716776 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+10469998952405404208 subordinate_active_erisc receiver
+  lead       loop  604  sp S3   L3   unknown 6  
+  v4rxf4     loop  596  sp S3   L3   unknown 6  
+10508890310010974893 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+10717001962181637086 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+10822967940240490184 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+10856289412547510027 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+10950899075844539443 subordinate_active_erisc receiver
+  lead       loop  587  sp S5   L7   unknown 12 
+  v4rxf4     loop  568  sp S5   L8   unknown 11 
+1106906331509444665 subordinate_active_erisc receiver
+  lead       loop  587  sp S5   L7   unknown 12 
+  v4rxf4     loop  568  sp S5   L8   unknown 11 
+1108041171225073974 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+11088770621341138129 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+11102849675925827223 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+11177488258811776764 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+11244095385183970239 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+11334238257358961399 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+11398808720602000511 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+11558546371213663640 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+11583217632935098244 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+11586341372005596605 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+116438929568297610 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+11892443829549803245 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+12160933988419070963 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+12175245829289338344 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+12392145056462833784 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+12408720447542873029 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+12481404790206214709 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+12495739942064638177 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+12707217013984867308 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+12862922935640354656 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+12951497128104931216 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+12987696695286761105 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+1305921458569610445 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+13070078896120672546 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+13091119720597129518 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+13196687718979812822 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+13249987344605867718 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+13250384435435189087 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+13272360096158554096 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+1340894336006728380 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+13475786276836598230 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+13509108895737128535 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+13574277195720349821 subordinate_active_erisc receiver
+  lead       loop  587  sp S5   L7   unknown 12 
+  v4rxf4     loop  568  sp S5   L8   unknown 11 
+13617457533875954996 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+13752006096323136697 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+13851320215214651555 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+13989171346402682967 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+1399591780009166117 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+14080302915106565790 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+14116155764606840719 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+14129648458892557448 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+14161451863040349301 subordinate_active_erisc receiver
+  lead       loop  587  sp S5   L7   unknown 12 
+  v4rxf4     loop  568  sp S5   L8   unknown 11 
+1429233375145710794 subordinate_active_erisc receiver
+  lead       loop  604  sp S3   L3   unknown 6  
+  v4rxf4     loop  596  sp S3   L3   unknown 6  
+14347850555805756908 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+14431816762518449687 subordinate_active_erisc receiver
+  lead       loop  604  sp S3   L3   unknown 6  
+  v4rxf4     loop  596  sp S3   L3   unknown 6  
+14623337702693725303 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+14647514148992548048 subordinate_active_erisc receiver
+  lead       loop  473  sp S9   L13  unknown 14 
+  v4rxf4     loop  473  sp S9   L13  unknown 12 
+14647646677057900914 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+147171563004910059 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+14940022221582141289 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+15123797748620013290 subordinate_active_erisc receiver
+  lead       loop  473  sp S9   L13  unknown 14 
+  v4rxf4     loop  473  sp S9   L13  unknown 12 
+15273499706240660602 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+15307868658033169656 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+15547919564154396150 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+15582735004192224373 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+15831445787531486187 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+15856326970122340574 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+16247419458379636735 subordinate_active_erisc receiver
+  lead       loop  604  sp S3   L3   unknown 6  
+  v4rxf4     loop  596  sp S3   L3   unknown 6  
+16265145613720670239 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+16364265261526096668 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+16382477728184230007 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+16389583754348416496 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+16405670590171022466 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+16500394309347092445 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+1655145630609380998 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+1657994767543065342 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+16729293629826878107 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+16753918769443193703 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+16870156301250480785 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+16901913214727383199 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+16919692630328363893 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+16957491786636177340 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+16978736485370536362 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+17048895331481436694 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+17255458875499500845 subordinate_active_erisc receiver
+  lead       loop  604  sp S3   L3   unknown 6  
+  v4rxf4     loop  596  sp S3   L3   unknown 6  
+17387689202036887541 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+17416447945045614234 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+17435387093229407869 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+1745343613834206203 subordinate_active_erisc receiver
+  lead       loop  473  sp S9   L13  unknown 14 
+  v4rxf4     loop  473  sp S9   L13  unknown 12 
+17458051480481850281 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+17536112393237387076 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+17642625750722232291 subordinate_active_erisc receiver
+  lead       loop  496  sp S3   L3   unknown 6  
+  v4rxf4     loop  488  sp S3   L3   unknown 6  
+17715559177758044310 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+17723528549567500495 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+17801034624426765171 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+17875477544737828471 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+17881085161196306365 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+17922880607709276377 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+17993687128666532680 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+18030477236084517463 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+18120857423038088203 subordinate_active_erisc receiver
+  lead       loop  473  sp S9   L13  unknown 14 
+  v4rxf4     loop  473  sp S9   L13  unknown 12 
+18237792381721537195 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+18338940949766002044 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+18370877964186322346 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+18429658920077081085 subordinate_active_erisc receiver
+  lead       loop  587  sp S5   L7   unknown 12 
+  v4rxf4     loop  568  sp S5   L8   unknown 11 
+1857734555661086121 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+1903803005211593389 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+1908056724385956203 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+1933637370185408803 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+2140009166109087166 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+2141499676252731385 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+2353992287348444881 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+2368741238205340554 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+2428894383984726940 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+2456213312671659679 subordinate_active_erisc receiver
+  lead       loop  587  sp S5   L7   unknown 12 
+  v4rxf4     loop  568  sp S5   L8   unknown 11 
+2520608023272701925 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+2609206316924258795 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+2687245502875289754 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+2716377110609315829 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+2767592459388826558 subordinate_active_erisc receiver
+  lead       loop  496  sp S3   L3   unknown 6  
+  v4rxf4     loop  488  sp S3   L3   unknown 6  
+2929141077356537414 subordinate_active_erisc receiver
+  lead       loop  587  sp S5   L7   unknown 12 
+  v4rxf4     loop  568  sp S5   L8   unknown 11 
+2971521280642960294 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+2988770502131608118 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+3106198235451438996 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+3120708874621425904 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+3145684617251071173 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+323967508472982173 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+3310396784795994969 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+3326842271580192539 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+3360635432668849048 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+3417195534424312855 subordinate_active_erisc receiver
+  lead       loop  496  sp S3   L3   unknown 6  
+  v4rxf4     loop  488  sp S3   L3   unknown 6  
+346965910660720266 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+3486616639706717589 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+3678100827291947382 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+3754972219690478929 subordinate_active_erisc receiver
+  lead       loop  604  sp S3   L3   unknown 6  
+  v4rxf4     loop  596  sp S3   L3   unknown 6  
+3951853253291756185 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+3952194366021959022 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+4080266656586510706 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+419253567368061434 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+4244196822751811806 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+4354174316903933817 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+4530791397393545177 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+4570415887262828117 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+4703774221848007265 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+4715519485243146012 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+4737406737612332454 subordinate_active_erisc receiver
+  lead       loop  604  sp S3   L3   unknown 6  
+  v4rxf4     loop  596  sp S3   L3   unknown 6  
+4880497862025761324 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+4958010149818513467 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+5042110583736270483 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+5077707211477929999 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+5096310415449656806 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+5108819861659422597 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+5263081476126557201 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+5339357191650487067 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+5385704058514444585 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+5476881755066881453 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+5590236245525362978 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+5661918192529890645 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+5670593424105190607 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+5722574695162339789 active_erisc sender
+  lead       loop  651  sp S26  L69  unknown 18 
+  v4rxf4     loop  651  sp S26  L69  unknown 18 
+5762120991903929638 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+5848761659089434215 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+5897926983222271145 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+5902779357972284525 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+6000724018343177383 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+6061306661858758690 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+6171908639076180505 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+617964130140540357 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+6352518852962132331 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+6532268391634414447 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+6646413974237229105 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+6696470434627833255 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+6753123595164897469 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+6796650702499714308 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+6971242198452828325 subordinate_active_erisc receiver
+  lead       loop  496  sp S3   L3   unknown 6  
+  v4rxf4     loop  488  sp S3   L3   unknown 6  
+7006253591810919591 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+7116565077941664409 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+7143589663809868563 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+7320570823507316547 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+7463472068640444980 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+7762403894110286404 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+7773486313747064568 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+7808783516036050871 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+7887314534684317567 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+7947597382632785879 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+7992986633125097002 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+8019788309136598466 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+8098613251346591278 subordinate_active_erisc receiver
+  lead       loop  587  sp S5   L7   unknown 12 
+  v4rxf4     loop  568  sp S5   L8   unknown 11 
+8111148368347043405 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+8118584536937903697 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+822723507152991161 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+8291479364989354287 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+8393239968519929287 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+8426530056958461261 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+8434497389802759055 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+8465418771501436369 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+8570930246161259520 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+8581573913316807200 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+8701187608956562807 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+8885056084572247659 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+8902191268409823169 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+8937196851112472158 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+8983363732518645713 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+9094234757297182756 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+9138620716723112525 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+9187810145136523666 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+9199218071563414173 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+9218773246094524617 active_erisc sender
+  lead       loop  329  sp S13  L31  unknown 11 
+  v4rxf4     loop  329  sp S13  L31  unknown 11 
+9266105786366169798 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+9331428768033930619 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+9348629104245743964 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+9375046249168897390 active_erisc sender
+  lead       loop  509  sp S17  L48  unknown 15 
+  v4rxf4     loop  509  sp S17  L48  unknown 15 
+9427457257656098960 subordinate_active_erisc receiver
+  lead       loop  447  sp S4   L5   unknown 4  
+  v4rxf4     loop  447  sp S4   L5   unknown 4    +['handle<0>:header_word', 'receive<0>:header_word']  -['handle<0>:word_bits', 'receive<0>:word']
+9552628978589714871 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+972192047630470783 subordinate_active_erisc receiver
+  lead       loop  604  sp S3   L3   unknown 6  
+  v4rxf4     loop  596  sp S3   L3   unknown 6  
+9801688627954770924 subordinate_active_erisc receiver
+  lead       loop  503  sp S6   L6   unknown 4  
+  v4rxf4     loop  492  sp S6   L6   unknown 3    +['run:credit_frame_due', 'run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+9811727281230378028 subordinate_active_erisc receiver
+  lead       loop  506  sp S6   L6   unknown 4  
+  v4rxf4     loop  494  sp S3   L3   unknown 2    +['run:first_vc_progress.idle_passes_with_partial_group']  -['run:cursor0.counts.idle_passes', 'run:frame_due']
+
+spilled values, configs per router and role:
+  lead receiver: NOC_CMD_BUF_WRITE_REG@deliver<0>:val x4, handle<0>:word_bits x36, local_write@deliver<0>:dst_noc_addr.@4 x4, receive<0>:word x36, run:cursor0.counts.idle_passes x48, run:frame_due x48
+  lead sender: run:forwarding.records._M_elems[0].acked x48, run:forwarding.records._M_elems[0].completed x108, run:forwarding.records._M_elems[0].sent x108, run:forwarding.records._M_elems[0].slot x108, run:forwarding.records._M_elems[1].acked x12, run:forwarding.records._M_elems[1].completed x72, run:forwarding.records._M_elems[1].sent x72, run:forwarding.records._M_elems[1].slot x72, run:forwarding.records._M_elems[2].acked x12, run:forwarding.records._M_elems[2].completed x72, run:forwarding.records._M_elems[2].sent x72, run:forwarding.records._M_elems[2].slot x72, run:round.attempted x108, run:round.sent_at_round_start x108, send<1>:reported_acks x48, send<2>:reported_acks x12, send<3>:reported_acks x12, visit_forwarding<1>:reported_acks x48, visit_forwarding<1>:sent x108, visit_forwarding<1>:slot x108, visit_forwarding<2>:reported_acks x12, visit_forwarding<2>:sent x72, visit_forwarding<2>:slot x72, visit_forwarding<3>:reported_acks x12, visit_forwarding<3>:sent x72, visit_forwarding<3>:slot x72
+  v4rxf4 receiver: NOC_CMD_BUF_WRITE_REG@deliver<0>:val x4, handle<0>:header_word x36, local_write@deliver<0>:dst_noc_addr.@4 x4, receive<0>:header_word x36, run:credit_frame_due x24, run:first_vc_progress.idle_passes_with_partial_group x48
+  v4rxf4 sender: run:forwarding.records._M_elems[0].acked x48, run:forwarding.records._M_elems[0].completed x108, run:forwarding.records._M_elems[0].sent x108, run:forwarding.records._M_elems[0].slot x108, run:forwarding.records._M_elems[1].acked x12, run:forwarding.records._M_elems[1].completed x72, run:forwarding.records._M_elems[1].sent x72, run:forwarding.records._M_elems[1].slot x72, run:forwarding.records._M_elems[2].acked x12, run:forwarding.records._M_elems[2].completed x72, run:forwarding.records._M_elems[2].sent x72, run:forwarding.records._M_elems[2].slot x72, run:round.attempted x108, run:round.sent_at_round_start x108, send<1>:reported_acks x48, send<2>:reported_acks x12, send<3>:reported_acks x12, visit_forwarding<1>:reported_acks x48, visit_forwarding<1>:sent x108, visit_forwarding<1>:slot x108, visit_forwarding<2>:reported_acks x12, visit_forwarding<2>:sent x72, visit_forwarding<2>:slot x72, visit_forwarding<3>:reported_acks x12, visit_forwarding<3>:sent x72, visit_forwarding<3>:slot x72

@@ -1,0 +1,25 @@
+# Send-batch study (V4_SEND_BATCH.md): pcs3/burstew8.yaml with 625000 bursts, for the delay-perturbation sweep (short runs).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: SbPsBurstEWN8G500Pcs
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    size:
+    - 16
+  defaults:
+    ftype: unicast
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]
+      repeat: 625000
+      stream:
+      - {ntype: unicast_write, count: 8}
+      - {idle: 500}

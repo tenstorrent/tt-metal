@@ -1,0 +1,41 @@
+== one ERISC (pass = receiver_pass, round = single::run size) FLA: 116 images; deltas NEW - BASE: pass-loop insns / sp, round-loop insns / sp, function insns
+    32  pass -5 / -6   round +20 / +0   fn -5   e.g. bh_torus_1erisc__1020447685194979574/subordinate_active_erisc/subordinate_active_erisc.elf
+    30  pass -13 / -10   round +20 / +0   fn -13   e.g. glx_express_1erisc__10222281451654002687/subordinate_active_erisc/subordinate_active_erisc.elf
+    18  pass -17 / -14   round +20 / +0   fn -17   e.g. glx_express_1erisc__10468126389574168585/subordinate_active_erisc/subordinate_active_erisc.elf
+    10  pass -10 / -10   round +24 / +0   fn -10   e.g. bh_ring_1erisc__10153862890632421565/subordinate_active_erisc/subordinate_active_erisc.elf
+    10  pass -4 / -5   round +20 / +0   fn -4   e.g. bh_ring_mux__10196502638280126533/subordinate_active_erisc/subordinate_active_erisc.elf
+     8  pass -23 / -6   round +20 / +0   fn -23   e.g. bh_torus_vc2_1erisc__10350758519294069376/subordinate_active_erisc/subordinate_active_erisc.elf
+     4  pass -9 / -8   round +20 / +0   fn -9   e.g. bh_torus_1erisc__1029980225418434195/subordinate_active_erisc/subordinate_active_erisc.elf
+     4  pass -33 / -13   round +20 / +0   fn -33   e.g. bh_torus_vc2_1erisc__10845273439317318186/subordinate_active_erisc/subordinate_active_erisc.elf
+== one ERISC (pass = receiver_pass, round = single::run size) no-FLA: 264 images; deltas NEW - BASE: pass-loop insns / sp, round-loop insns / sp, function insns
+   174  pass +3 / +0   round +20 / +0   fn +3   e.g. bh_1d_mux__1049769110649099975/subordinate_active_erisc/subordinate_active_erisc.elf
+    44  pass -1 / -1   round +20 / +0   fn -1   e.g. bh_2d_vc2_1erisc__10967133007739697941/subordinate_active_erisc/subordinate_active_erisc.elf
+    28  pass +2 / +0   round +20 / +0   fn +2   e.g. bh_2d_udm__102052891655324652/subordinate_active_erisc/subordinate_active_erisc.elf
+    10  pass +3 / +0   round +24 / +0   fn +3   e.g. bh_1d_1erisc__10063481670200031670/subordinate_active_erisc/subordinate_active_erisc.elf
+     8  pass +7 / +0   round +20 / +0   fn +7   e.g. bh_2d_udm_gtest__1071481085979603656/subordinate_active_erisc/subordinate_active_erisc.elf
+== two ERISCs FLA: 152 images; deltas NEW - BASE: pass-loop insns / sp, round-loop insns / sp, function insns
+    38  pass -8 / +0   round +3 / +2   fn +3   e.g. bh_ring__10444497403978295403/subordinate_active_erisc/subordinate_active_erisc.elf
+    30  pass -8 / -3   round +7 / -3   fn +7   e.g. glx_express__1042132882689061616/subordinate_active_erisc/subordinate_active_erisc.elf
+    22  pass -31 / -1   round -16 / +0   fn -17   e.g. glx_express__1006382163438346105/subordinate_active_erisc/subordinate_active_erisc.elf
+    18  pass -14 / -2   round +0 / -2   fn +0   e.g. bh_torus__10333241838491253444/subordinate_active_erisc/subordinate_active_erisc.elf
+    18  pass -9 / -2   round +5 / -2   fn +5   e.g. bh_torus__10680386503672484080/subordinate_active_erisc/subordinate_active_erisc.elf
+    10  pass -11 / +0   round +4 / +0   fn +6   e.g. bh_ring_allinstr__10352717593566611393/subordinate_active_erisc/subordinate_active_erisc.elf
+     8  pass -16 / -17   round +1 / -12   fn -1   e.g. bh_torus_vc2__10445740379710467010/subordinate_active_erisc/subordinate_active_erisc.elf
+     4  pass -27 / -1   round -12 / +0   fn -12   e.g. bh_torus__10864710172009767666/subordinate_active_erisc/subordinate_active_erisc.elf
+     4  pass +7 / -4   round +34 / +0   fn +33   e.g. bh_torus_vc2__13276095349081623862/subordinate_active_erisc/subordinate_active_erisc.elf
+== two ERISCs no-FLA: 506 images; deltas NEW - BASE: pass-loop insns / sp, round-loop insns / sp, function insns
+   172  pass -1 / +0   round +13 / +0   fn +13   e.g. bh_2d__10229924487725718948/subordinate_active_erisc/subordinate_active_erisc.elf
+    42  pass -3 / -4   round +9 / -8   fn +6   e.g. bh_1d__10711705047208358998/subordinate_active_erisc/subordinate_active_erisc.elf
+    32  pass -1 / +0   round +10 / -2   fn +8   e.g. bh_2d_bwtelemetry__10224847455119251940/subordinate_active_erisc/subordinate_active_erisc.elf
+    30  pass -2 / +0   round +14 / +0   fn +14   e.g. bh_1d_allinstr__10544047754461278761/subordinate_active_erisc/subordinate_active_erisc.elf
+    26  pass -1 / +0   round +15 / +0   fn +15   e.g. bh_2d_allinstr__10725865129013221982/subordinate_active_erisc/subordinate_active_erisc.elf
+    24  pass -1 / +0   round +15 / +1   fn +15   e.g. glx_2d__11309563983543909028/subordinate_active_erisc/subordinate_active_erisc.elf
+    16  pass +9 / +0   round +25 / +5   fn +28   e.g. bh_2d_bwtelemetry__10023918929258469026/subordinate_active_erisc/subordinate_active_erisc.elf
+    12  pass +5 / +0   round +22 / +0   fn +22   e.g. bh_2d_codeprof__1015885481013688514/subordinate_active_erisc/subordinate_active_erisc.elf
+    12  pass -20 / -6   round -4 / -6   fn -7   e.g. bh_vc1__11104469885667852817/subordinate_active_erisc/subordinate_active_erisc.elf
+    10  pass -3 / -4   round +7 / -10   fn +4   e.g. bh_1d_telemetry__10140586602064223532/subordinate_active_erisc/subordinate_active_erisc.elf
+     8  pass +7 / +0   round +23 / +5   fn +26   e.g. bh_2d_bwtelemetry__12389910284542301991/subordinate_active_erisc/subordinate_active_erisc.elf
+     8  pass +0 / +0   round +17 / +0   fn +17   e.g. bh_2d_codeprof__10492187974194425144/subordinate_active_erisc/subordinate_active_erisc.elf
+     8  pass +10 / +0   round +27 / +0   fn +27   e.g. bh_2d_codeprof__11441696381553527815/subordinate_active_erisc/subordinate_active_erisc.elf
+     8  pass -1 / +2   round +10 / +2   fn +19   e.g. bh_2d_trim__10938965340806801191/subordinate_active_erisc/subordinate_active_erisc.elf
+     8  pass +8 / -6   round +29 / -4   fn +25   e.g. bh_2d_vc2__10491303747420227617/subordinate_active_erisc/subordinate_active_erisc.elf

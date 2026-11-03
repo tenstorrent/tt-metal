@@ -1,0 +1,115 @@
+v4txo3_Os -> v4txo3k_Os: 1695 images with different .text, 2380 role analyses
+  bh_1d sender                               10  loop -4 sp S-1 L-1
+  bh_1d_1erisc receiver                      10  loop +0 sp S+0 L+0
+  bh_1d_1erisc sender                        10  loop -6 sp S-1 L-1
+  bh_1d_allinstr sender                      10  loop -3 sp S+0 L-1
+  bh_1d_delay sender                         10  loop -4 sp S-1 L-1
+  bh_1d_mux receiver                         10  loop +0 sp S+0 L+0
+  bh_1d_mux sender                           10  loop -5 sp S-1 L-1
+  bh_1d_telemetry sender                     10  loop -4 sp S-1 L-1
+  bh_1d_trim sender                          10  loop -3 sp S+0 L-1
+  bh_1d_trim_w0 sender                       10  loop -1 sp S+0 L+0
+  bh_1d_trim_w0_1erisc receiver              10  loop +0 sp S+0 L+0
+  bh_1d_trim_w0_1erisc sender                10  loop -4 sp S-1 L-1
+  bh_2d sender                               28  loop -9 sp S-2 L-1
+  bh_2d_1erisc receiver                      28  loop +0 sp S+0 L+0
+  bh_2d_1erisc sender                        28  loop -9 sp S-1 L-1
+  bh_2d_1erisc_delay receiver                28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_delay sender                  28  loop -9 sp S-1 L-1
+  bh_2d_1erisc_passdelay receiver            28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_passdelay sender              28  loop -9 sp S-1 L-1
+  bh_2d_allinstr sender                      28  loop -8 sp S-1 L-1
+  bh_2d_bwtelemetry sender                   28  loop -9 sp S-2 L-1
+  bh_2d_codeprof sender                      28  loop -9 sp S-2 L-1
+  bh_2d_delay sender                         28  loop -9 sp S-2 L-1
+  bh_2d_mux receiver                         28  loop +0 sp S+0 L+0
+  bh_2d_mux sender                           28  loop -5 sp S-1 L-1
+  bh_2d_mux_delay receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_mux_delay sender                     28  loop -5 sp S-1 L-1
+  bh_2d_passdelay sender                     28  loop -9 sp S-2 L-1
+  bh_2d_telemetry sender                     28  loop -9 sp S-2 L-1
+  bh_2d_trim sender                          28  loop -8 sp S-1 L-1
+  bh_2d_udm receiver                         28  loop +0 sp S+0 L+0
+  bh_2d_udm sender                           28  loop -5 sp S-1 L-1
+  bh_2d_udm_gtest receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_udm_gtest sender                     28  loop -9 sp S-1 L-1
+  bh_2d_vc2 sender                           28  loop -26 sp S-4 L-4 +['run:states.vcs.rest.first.remote.word', 'visit_vc<2>:remote.word', 'visit_vc<2>:taken.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<2>:remote.free_slots', 'visit_vc<2>:taken.free_slots', 'visit_vc<2>:taken.next_slot_addr']
+  bh_2d_vc2_1erisc receiver                  28  loop +0 sp S+0 L+0
+  bh_2d_vc2_1erisc sender                    28  loop -19 sp S-1 L-1
+  bh_2d_vc2_trim_rx0 sender                  28  loop -26 sp S-4 L-4 +['run:states.vcs.rest.first.remote.word', 'visit_vc<2>:remote.word', 'visit_vc<2>:taken.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<2>:remote.free_slots', 'visit_vc<2>:taken.free_slots', 'visit_vc<2>:taken.next_slot_addr']
+  bh_2d_vc2_trim_rx0_1erisc receiver         28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_rx0_1erisc sender           28  loop -19 sp S-1 L-1
+  bh_2d_vc2_trim_w0 sender                   28  loop -27 sp S-7 L-7 +['run:states.vcs.rest.first.remote.word', 'visit_vc<2>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<2>:remote.free_slots', 'visit_vc<2>:taken.free_slots']
+  bh_2d_vc2_trim_w02 sender                  28  loop -11 sp S-3 L-3
+  bh_2d_vc2_trim_w02_1erisc receiver         28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w02_1erisc sender           28  loop -8 sp S-1 L-1
+  bh_2d_vc2_trim_w0_1erisc receiver          28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc sender            28  loop -18 sp S-1 L-1
+  bh_2d_vc2_trim_w2 sender                   28  loop -9 sp S-2 L-1
+  bh_2d_vc2_trim_w2_1erisc receiver          28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w2_1erisc sender            28  loop -9 sp S-1 L-1
+  bh_neighbor sender                          4  loop +5 sp S-1 L-2
+  bh_neighbor_1erisc receiver                 4  loop +0 sp S+0 L+0
+  bh_neighbor_1erisc sender                   4  loop -5 sp S-1 L-1
+  bh_neighbor_delay sender                    4  loop +5 sp S-1 L-2
+  bh_ring sender                             10  loop +1 sp S+0 L+0
+  bh_ring_1erisc receiver                    10  loop +0 sp S+0 L+0
+  bh_ring_1erisc sender                      10  loop -4 sp S-1 L-1
+  bh_ring_allinstr sender                    10  loop +0 sp S+0 L+0
+  bh_ring_delay sender                       10  loop +1 sp S+0 L+0
+  bh_ring_mux receiver                       10  loop +0 sp S+0 L+0
+  bh_ring_mux sender                         10  loop -6 sp S-1 L-1
+  bh_ring_passdelay sender                   10  loop +1 sp S+0 L+0
+  bh_torus sender                            12  loop -1 sp S-1 L-4 -['run:loop_copy.worker.connection_state']
+  bh_torus_1erisc receiver                   12  loop +0 sp S+0 L+0
+  bh_torus_1erisc sender                     12  loop -6 sp S-1 L-1
+  bh_torus_vc2 sender                        16  loop -26 sp S-4 L-4 +['run:states.vcs.rest.first.remote.word', 'visit_vc<2>:remote.word', 'visit_vc<2>:taken.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<2>:remote.free_slots', 'visit_vc<2>:taken.free_slots', 'visit_vc<2>:taken.next_slot_addr']
+  bh_torus_vc2 sender                        12  loop -9 sp S-3 L-3 +['run:states.vcs.rest.first.remote.word', 'visit_channel_with_work<2>:acks~', 'visit_vc<2>:remote.word', 'visit_vc<2>:taken.word'] -['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val', 'run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<2>:remote.free_slots', 'visit_vc<2>:taken.free_slots', 'visit_vc<2>:taken.next_slot_addr']
+  bh_torus_vc2_1erisc receiver               28  loop +0 sp S+0 L+0
+  bh_torus_vc2_1erisc sender                 16  loop -19 sp S-1 L-1
+  bh_torus_vc2_1erisc sender                 12  loop -16 sp S-1 L-1
+  bh_torus_vc2_trim_w0 sender                16  loop -27 sp S-7 L-7 +['run:states.vcs.rest.first.remote.word', 'visit_vc<2>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<2>:remote.free_slots', 'visit_vc<2>:taken.free_slots']
+  bh_torus_vc2_trim_w0 sender                12  loop -16 sp S-3 L-3 +['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'credit_upstream@return_slots<3>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val', 'noc_inline_dw_write@return_slots<3>:val', 'run:states.vcs.rest.first.remote.word', 'visit_vc<2>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_channel_with_work<1>:acks~', 'visit_channel_with_work<2>:acks~', 'visit_channel_with_work<3>:acks~', 'visit_vc<2>:remote.free_slots', 'visit_vc<2>:taken.free_slots']
+  bh_torus_vc2_trim_w0_1erisc receiver       28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0_1erisc sender         16  loop -18 sp S-1 L-1
+  bh_torus_vc2_trim_w0_1erisc sender         12  loop -16 sp S-1 L-1
+  bh_trim_gtest sender                       40  loop -4 sp S-1 L-1
+  bh_trim_gtest sender                       32  loop -8 sp S-1 L-1
+  bh_trim_gtest sender                       18  loop +5 sp S-1 L-2
+  bh_trim_gtest sender                       10  loop -3 sp S+0 L-1
+  bh_trim_gtest sender                        8  loop +1 sp S-2 L-1
+  bh_trim_gtest sender                        2  loop +5 sp S-2 L-3
+  bh_trim_gtest sender                        2  loop +1 sp S+0 L+0
+  bh_trim_gtest sender                        1  loop +0 sp S+0 L+0
+  bh_trim_gtest sender                        1  loop -1 sp S+0 L+0
+  bh_trim_gtest_1erisc receiver             114  loop +0 sp S+0 L+0
+  bh_trim_gtest_1erisc sender                60  loop -6 sp S-1 L-1
+  bh_trim_gtest_1erisc sender                32  loop -9 sp S-1 L-1
+  bh_trim_gtest_1erisc sender                18  loop -5 sp S-1 L-1
+  bh_trim_gtest_1erisc sender                 2  loop -4 sp S-1 L-1
+  bh_trim_gtest_1erisc sender                 2  loop -2 sp S+0 L+0
+  bh_vc1 sender                              22  loop -38 sp S-2 L-9 +['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val', 'run:states.vcs.rest.first.remote.word', 'visit_vc<1>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<1>:remote.free_slots', 'visit_vc<1>:remote.next_slot_addr', 'visit_vc<1>:taken.free_slots']
+  bh_vc1_allinstr sender                      6  loop -36 sp S-2 L-9 +['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val', 'run:states.vcs.rest.first.remote.word', 'visit_vc<1>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<1>:remote.free_slots', 'visit_vc<1>:remote.next_slot_addr', 'visit_vc<1>:taken.free_slots']
+  bh_vc1_delay sender                        22  loop -38 sp S-2 L-9 +['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val', 'run:states.vcs.rest.first.remote.word', 'visit_vc<1>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<1>:remote.free_slots', 'visit_vc<1>:remote.next_slot_addr', 'visit_vc<1>:taken.free_slots']
+  bh_vc1_passdelay sender                    22  loop -38 sp S-2 L-9 +['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val', 'run:states.vcs.rest.first.remote.word', 'visit_vc<1>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<1>:remote.free_slots', 'visit_vc<1>:remote.next_slot_addr', 'visit_vc<1>:taken.free_slots']
+  bh_vc1_trim_rx0 sender                     22  loop -38 sp S-2 L-9 +['credit_upstream@return_slots<1>:credit_addr.@4', 'credit_upstream@return_slots<2>:credit_addr.@4', 'noc_inline_dw_write@return_slots<1>:val', 'noc_inline_dw_write@return_slots<2>:val', 'run:states.vcs.rest.first.remote.word', 'visit_vc<1>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<1>:remote.free_slots', 'visit_vc<1>:remote.next_slot_addr', 'visit_vc<1>:taken.free_slots']
+  bh_vc1_trim_rx0_1erisc receiver            22  loop +0 sp S+0 L+0
+  bh_vc1_trim_rx0_1erisc sender              22  loop -26 sp S-2 L-2
+  bh_vc1_trim_vc1 sender                     22  loop -9 sp S-2 L-1
+  bh_vc1_trim_vc1p sender                    22  loop -23 sp S-5 L-4 +['run:states.vcs.rest.first.remote.word', 'visit_vc<1>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<1>:remote.free_slots']
+  bh_vc1_trim_w0 sender                      22  loop -13 sp S+3 L+3 +['run:states.vcs.rest.first.remote.word', 'visit_vc<1>:remote.word'] -['run:states.vcs.rest.first.remote.free_slots', 'run:states.vcs.rest.first.remote.next_slot_addr', 'visit_vc<1>:remote.free_slots', 'visit_vc<1>:remote.next_slot_addr']
+  bh_vc1_trim_w0_1erisc receiver             19  loop +0 sp S+0 L+0
+  bh_vc1_trim_w0_1erisc sender               19  loop -25 sp S-2 L-2
+  glx_1d sender                              12  loop -4 sp S-1 L-1
+  glx_2d sender                              48  loop -9 sp S-2 L-1
+  glx_express sender                         20  loop +2 sp S-1 L-4 -['run:loop_copy.worker.connection_state']
+  glx_express sender                          8  loop +0 sp S+1 L-3 -['run:loop_copy.worker.connection_state']
+  glx_express_1erisc receiver                28  loop +0 sp S+0 L+0
+  glx_express_1erisc sender                  28  loop -7 sp S-1 L-1
+  glx_express_line sender                    36  loop +2 sp S-1 L-4 -['run:loop_copy.worker.connection_state']
+  glx_express_line sender                     8  loop +0 sp S+1 L-3 -['run:loop_copy.worker.connection_state']
+  glx_express_line_1erisc receiver           44  loop +0 sp S+0 L+0
+  glx_express_line_1erisc sender             44  loop -7 sp S-1 L-1
+  glx_express_mesh sender                    48  loop -9 sp S-2 L-1
+  glx_ring sender                             8  loop +1 sp S+0 L+0
+  glx_torus sender                            8  loop -1 sp S-1 L-4 -['run:loop_copy.worker.connection_state']

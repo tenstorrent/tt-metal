@@ -1,0 +1,94 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+// The single-ERISC router (Wormhole; Blackhole with two-ERISC mode off): one ERISC runs both roles. Each role keeps its
+// two-ERISC pass (sender::pass, receiver::pass) and its own state; here each pass runs out of line over a record of its
+// state in memory, so neither role's code has to hold the other's state in registers (V4_SINGLE_ERISC.md). The
+// receiver's pass runs first: it frees ring slots and returns the credits the far sender is waiting on.
+//
+// Rounds, router commands, the heartbeat and the context switch are the sender loop's (router_round.hpp); with one ERISC
+// there is no other ERISC to park or follow. Channel trimming may leave a role without channels: its pass is then empty.
+
+#include "router_receiver.hpp"
+#include "router_sender.hpp"
+
+namespace fabric_router::single {
+
+// The sender's state between passes (sender::run keeps the same groups as loop locals).
+struct SenderState {
+    sender::WorkerChannels workers;
+    sender::ForwardingChannels forwarding;
+    uint32_t in_flight = 0;
+    sender::FarRings far;
+};
+
+// The receiver's state between passes (receiver::run keeps the same groups as loop locals).
+struct ReceiverState {
+    [[no_unique_address]] receiver::CursorOf<0> cursor0 = receiver::start<0>();
+    receiver::Tables tables;
+    receiver::Credits credits{0};
+    bool frame_due = false;  // the credit counts changed since the last frame
+};
+
+template <typename State>
+__attribute__((noinline)) void sender_pass(State& s, bool& attempted) {
+    sender::pass(s.workers, s.forwarding, s.in_flight, s.far, attempted);
+}
+
+template <typename Downstreams1>
+__attribute__((noinline)) void receiver_pass(
+    ReceiverState& r, Downstreams<0>& d0, Downstreams1& d1, const Coordinates& me) {
+    receiver::pass(r.cursor0, r.frame_due, r.tables, r.credits, d0, d1, me);
+}
+
+template <typename WorkerInterfaces, typename Downstreams1>
+__attribute__((noinline)) void run(
+    WorkerInterfaces& interfaces,
+    const sender::UpstreamCredits& upstream,
+    Downstreams<0>& d0,
+    Downstreams1& d1) {
+    const auto& routing_table = *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const Coordinates me{routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+
+    sender::start_worker_interfaces(interfaces);
+    SenderState s{{}, {}, 0, sender::far_rings_start()};
+    s.workers = sender::worker_channels_start(upstream);
+    sender::start_channels<sender::forwarding_channels>(s.forwarding, upstream);
+    ReceiverState r;
+    local_write_init();
+
+    RoundCounters round;
+    while (!terminating()) {
+        if (!start_running()) {
+            continue;
+        }
+        sender::restore_worker_credit_presets(s.workers);
+        while (next_round()) {
+            round.attempted = false;
+            round.sent_at_round_start = sender::total_sent(s.workers, s.forwarding);
+            if constexpr (telemetry::any_option) {
+                telemetry::round_start();
+            }
+            for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
+                receiver_pass(r, d0, d1, me);
+                sender_pass(s, round.attempted);
+            }
+            const uint32_t sent_this_round = sender::total_sent(s.workers, s.forwarding) - round.sent_at_round_start;
+            const bool firmware_ran = end_round(round, !IDLE_CONTEXT_SWITCHING || round.attempted || sent_this_round != 0);
+            if constexpr (telemetry::any_option) {
+                telemetry::round_end<true, true>(
+                    sent_this_round,
+                    [] { return sender::any_channel_holds_packet(); },
+                    [] { return receiver::vc0_register_empty(); });
+            }
+            if (firmware_ran) {
+                sender::restore_worker_credit_presets(s.workers);
+            }
+        }
+    }
+}
+
+}  // namespace fabric_router::single

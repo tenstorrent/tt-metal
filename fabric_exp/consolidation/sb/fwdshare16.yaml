@@ -1,0 +1,36 @@
+# Send-batch study (V4_SEND_BATCH.md): pcs3/fwd.yaml's merge (chip [0,0] -> [0,2] forwarded through [0,1], and [0,1]'s own worker -> [0,2]: one far ring at [0,1]'s east router) with sync off, so each sender times its own run (per-sender lines in the log); 16 B, 40000000 packets each.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: SbFwdShare16
+  benchmark_mode: true
+  sync: false
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 16
+  defaults:
+    ftype: unicast
+    num_packets: 40000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2

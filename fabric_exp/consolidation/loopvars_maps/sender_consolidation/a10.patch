@@ -1,0 +1,545 @@
+diff -ruN v4txa9/fabric_erisc_router_v4.cpp v4txa10/fabric_erisc_router_v4.cpp
+--- v4txa9/fabric_erisc_router_v4.cpp	2026-11-03 04:07:06.870955901 +0000
++++ v4txa10/fabric_erisc_router_v4.cpp	2026-11-03 07:06:44.859968511 +0000
+@@ -4,60 +4,23 @@
+ 
+ // Fabric ERISC router: moves fabric packets across one Ethernet link.
+ //
+-// A router has sender channels, which take packets from a worker on this chip (a VC's worker channel) or from the router
+-// facing another direction (forwarding channels) and send them over the link, and receiver channels, which take packets
+-// off the link and write them to this chip, forward them to the next router, or both. Credits flow back the same way.
++// A router has sender channels, which take packets from a worker on this chip (a VC's worker channel) or from the
++// router facing another direction (forwarding channels) and send them over the link, and receiver channels, which take
++// packets off the link and write them to this chip, forward them to the next router, or both. Credits flow back the
++// same way.
+ //
+ // On a two-ERISC Blackhole router, ERISC 0 runs the sender program (router/router_sender.hpp) and ERISC 1 the receiver
+ // program (router/router_receiver.hpp); on a single-ERISC router one ERISC runs both (router/router_single.hpp).
+-// kernel_main is the init and teardown skeleton every ERISC runs (its helpers: router/router_init.hpp): at each phase
+-// each role does its own part, and the ERISCs meet at the phase's end.
+-//
+-// The configurations this router supports are listed at the bring-up gate below; others fail to compile there.
++// kernel_main is the init and teardown skeleton every ERISC runs (its helpers: router/router_init.hpp): in each phase
++// each role does its own part, and the ERISCs meet at the phase's end. The configurations the router supports are
++// listed in router/router_common.hpp; others fail to compile there.
+ 
++// Selects, in the shared ct-args header, this router's transaction-ID count (rx_batch_completion: 16 IDs on a lone
++// receiver channel without bubble flow control).
+ #define FABRIC_ERISC_ROUTER_V4 1
+ 
+ #include "api/dataflow/dataflow_api.h"
+-#include "api/debug/assert.h"
+-#include "internal/ethernet/tunneling.h"
+-
+-#include "hostdev/fabric_edm_packet_header.hpp"
+-#include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
+-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+-
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+-#include "hostdevcommon/fabric_common.h"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_eth_handshake.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+-#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_tmp_utils.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_packet_recorder.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
+-#include "noc_overlay_parameters.h"
+-#include "api/alignment.h"
+-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
+-#include "hostdevcommon/fabric_telemetry_msgs.h"
+-#ifdef FABRIC_2D
+-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+-#endif
+-
+-#include <limits>
+-
+-using namespace tt::tt_fabric;
+ 
+-#include "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp"
+ #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp"
+ #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp"
+ #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp"
+@@ -65,114 +28,61 @@
+ 
+ namespace fabric_router {
+ 
+-// VC1 traffic would go router to router around the muxes, but the host gives VC1's sender channels no slots there.
+-static_assert(!(tensix_mux_mode && has_vc1), "fabric router v4: VC1 with the Tensix mux extension is not supported");
+-
+-// UDM as the host builds it (compute_mesh_router_builder.cpp, connect_to_local_tensix_builder): one ERISC (any Tensix
+-// extension), 2D meshes, one local Tensix connection (the relay), mux mode off.
+-constexpr bool udm_config_supported = NUM_ACTIVE_ERISCS == 1 && is_2d && !has_vc1 && !enable_deadlock_avoidance &&
+-                                      !tensix_mux_mode && num_ds_or_local_tensix_connections == 1;
+-
+-// VC2 as the host builds it (FabricBuilderConfig: Blackhole 2D, not UDM or the mux), here without VC1: one worker channel
+-// into a receiver channel of its own that only delivers (neighbour exchange; VC2 line mode, which forwards, is not
+-// brought up here), counter credits.
+-constexpr bool vc2_config_supported = is_2d && !has_vc1 && ACTUAL_VC2_SENDER_CHANNELS == 1 &&
+-                                      is_vc_forwarding_disabled[2] &&
+-                                      receiver_channel_uses_counter_credits(VC2_RECEIVER_CHANNEL);
+-
+-// The speedy path as the host selects it (ENABLE_SPEEDY_VC0; main's speedy-path static_asserts): no bubble flow control
+-// or first-level acks on VC0, VC0's receiver forwarding off. Its credit amortization args do not apply here (credits
+-// go back per completion group, as everywhere).
+-constexpr bool speedy_config_supported =
+-    !enable_deadlock_avoidance && !ENABLE_FIRST_LEVEL_ACK_VC0 && disable_rx_ch0_forwarding && !udm_mode;
+-
+-// Bring-up gate: the configurations this router supports so far.
+-//   - Blackhole; two ERISCs (one role each, a TX queue each) or one ERISC (both roles);
+-//   - 1D and 2D: lines, meshes, rings and tori (bubble flow control; first-level acks on VC0); strict atomics;
+-//   - VC0; VC1 on 2D multi-mesh fabrics (intermesh landing, crossover and exits);
+-//   - VC2 on 2D single-mesh routers: neighbour exchange (a worker channel into a receiver channel that only delivers);
+-//   - Tensix mux mode on one ERISC, VC0 (the fabric's muxes feed the worker channel and take the forwards);
+-//   - UDM on 2D meshes, one ERISC (packets for this chip go to the fabric's relay);
+-//   - the speedy path (VC0 worker-only routers whose receiver channel only delivers: it skips decode and admission);
+-//   - the host's telemetry options: the perf recorder at low resolution and the dynamic stats;
+-//   - channel trimming: the capture, and a replay's routers with channels compiled out (an ERISC left with nothing to
+-//     service runs rounds only, router_round.hpp's run_idle).
+-constexpr bool brought_up =
+-    is_blackhole_arch &&
+-    (NUM_ACTIVE_ERISCS == 2 ? multi_txq_enabled && !(is_sender_role && is_receiver_role) : NUM_ACTIVE_ERISCS == 1) &&
+-    (!has_vc2 || vc2_config_supported) && NUM_RECEIVER_CHANNELS == 1 + (has_vc1 ? 1 : 0) + (has_vc2 ? 1 : 0) &&
+-    (!has_vc1 || is_2d) &&
+-    !ENABLE_FIRST_LEVEL_ACK_VC1 && !ENABLE_FIRST_LEVEL_ACK_VC2 && !is_vc_crossover_to_vc1[2] &&
+-    (!udm_mode || udm_config_supported) &&
+-    (!super_speedy_mode || speedy_config_supported) &&
+-    !ENABLE_RISC_CPU_DATA_CACHE && !ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA &&
+-    (perf_telemetry_mode == PerfTelemetryRecorderType::NONE ||
+-     perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH) &&
+-    (!tensix_mux_mode || NUM_ACTIVE_ERISCS == 1) &&
+-    (num_ds_or_local_tensix_connections == 0 || tensix_mux_mode || udm_mode);
+-static_assert(brought_up, "fabric router v4: this configuration is not brought up yet (see the bring-up gate)");
++// The ERISC's loop. One ERISC runs the single-ERISC loop whatever channel trimming left it (a role without channels
++// makes empty passes); on two ERISCs each runs its role's loop, and an ERISC trimming left nothing to service runs
++// rounds only. (A template: an ERISC without the receiver's downstream connections names them only here.)
++template <typename Downstreams>
++FORCE_INLINE void run_loop(Downstreams& downstreams) {
++    if constexpr (NUM_ACTIVE_ERISCS == 1) {
++        single::run(downstreams);
++    } else if constexpr (is_sender_role) {
++        sender::run();
++    } else if constexpr (is_receiver_role) {
++        receiver::run(downstreams);
++    } else {
++        run_idle();
++    }
++}
+ 
+ }  // namespace fabric_router
+ 
+ void kernel_main() {
+     using namespace fabric_router;
+-    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
+-        channel_trimming_usage_recorder.reset();
+-    }
+-    postcode(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
+-    router_state()->state = RouterState::INITIALIZING;
+-    set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+-    init_telemetry_block();
+-    telemetry::init();
++    init_router();
+ 
+-    // Phase: stream registers.
++    // Phase: stream registers, before the Ethernet handshake and before any producer connects.
+     init_txqs();
+-    postcode(tt::tt_fabric::EDMStatus::TXQ_INITIALIZED);
+     receiver::init_channel_streams();
+     sender::init_channel_streams();
+     init_context_switch_state();
+-    sync_erisc(Phase::STREAMS_SET);
+-    postcode(tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED);
+-    if constexpr (code_profiling_enabled_timers_bitfield != 0) {
+-        clear_code_profiling_buffer(code_profiling_buffer_base_addr);
+-    }
++    finish_phase<Phase::STREAMS_SET>();
+ 
+     // Phase: local setup.
+     RuntimeArgs args;
+     read_runtime_args(args);
+-    // The receiver's downstream connections (router_downstream.hpp): set up here, then used by its loop.
+-    DownstreamConnections downstreams{};
+     if constexpr (is_sender_role) {
+         sender::reset_connections(args.connection_semaphores, args.producer_cursors);
+     }
+-    postcode(tt::tt_fabric::EDMStatus::STARTED);
+     *edm_status() = tt::tt_fabric::EDMStatus::STARTED;
+-    postcode(tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED);
+-    if constexpr (is_receiver_role) {
+-        receiver::set_up_channels(downstreams, args);
+-    }
+-    postcode(tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE);
++    auto downstreams = receiver::set_up_channels(args);  // the receiver's downstream connections, for its loop
+     if constexpr (is_sender_role) {
+         sender::set_up_channels(args.connection_semaphores);
+     }
+-    sync_erisc(Phase::SETUP_DONE);
++    finish_phase<Phase::SETUP_DONE>();
+ 
+     // Phase: handshakes.
+     run_handshakes();
+-    sync_erisc(Phase::HANDSHAKE_DONE);
+-    postcode(tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE);
++    finish_phase<Phase::HANDSHAKE_DONE>();
+ 
+-    // Phase: downstream connections.
++    // Phase: downstream connections, then the forwards' command buffers.
+     if constexpr (is_receiver_role) {
+         receiver::open_connections(args);
+     }
+-    sync_erisc(Phase::DOWNSTREAMS_OPEN);
+-    postcode(tt::tt_fabric::EDMStatus::VCS_OPENED);
++    finish_phase<Phase::DOWNSTREAMS_OPEN>();
+     if constexpr (is_receiver_role) {
+         receiver::preset_forward_commands(args);
+     }
+-    sync_erisc(Phase::CMD_BUFS_SET);
+-    postcode(tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED);
++    finish_phase<Phase::CMD_BUFS_SET>();
+ 
+     // Phase: upstream connections.
+     WAYPOINT("FSCW");
+@@ -180,23 +90,13 @@
+         sender::wait_for_upstream_routers();
+     }
+     WAYPOINT("FSCD");
+-    sync_erisc(Phase::CONNECTED);
+-    postcode(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
++    finish_phase<Phase::CONNECTED>();
+     if constexpr (is_teardown_master) {
++        // Again, as main does at this point: the router state reads INITIALIZING until the first round starts running.
+         router_state()->state = RouterState::INITIALIZING;
+     }
+ 
+-    // One ERISC runs the single-ERISC loop whatever channel trimming left it (a role without channels makes empty
+-    // passes); on two ERISCs, an ERISC trimming left nothing to service runs rounds only.
+-    if constexpr (NUM_ACTIVE_ERISCS == 1) {
+-        single::run(downstreams);
+-    } else if constexpr (is_sender_role) {
+-        sender::run();
+-    } else if constexpr (is_receiver_role) {
+-        receiver::run(downstreams);
+-    } else {
+-        run_idle();
+-    }
++    run_loop(downstreams);
+     WAYPOINT("LPDN");
+     teardown();
+     WAYPOINT("TEDN");
+diff -ruN v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp
+--- v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 04:29:29.263215898 +0000
++++ v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 07:06:44.859968511 +0000
+@@ -13,11 +13,27 @@
+ #include <cstddef>
+ #include <cstdint>
+ 
++#include "api/dataflow/dataflow_api.h"
++#include "api/debug/assert.h"
++#include "internal/ethernet/tunneling.h"
++#include "noc_overlay_parameters.h"
++#include "api/alignment.h"
++#include "hostdev/fabric_edm_packet_header.hpp"
++#include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
++#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
++#include "hostdevcommon/fabric_common.h"
++#include "hostdevcommon/fabric_telemetry_msgs.h"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
++
+ #include "router_utils.hpp"
+ 
+ namespace fabric_router {
+ 
+-using tt::tt_fabric::eth_chan_directions;
++// The router is written against the fabric library's names (its packet, channel and connection types, the routing
++// codec, the router state and handshake API), so they are visible here unqualified.
++using namespace tt::tt_fabric;
+ 
+ // ---------------------------------------------------------------------------------------------------------------------
+ // Architecture and small constants
+@@ -243,4 +259,62 @@
+     CommandBuffers::kinds_on[CommandBuffers::atomics] == CommandBuffers::ATOMICS,
+     "only atomics, inline register writes and teardowns go on the atomics buffer");
+ 
++// ---------------------------------------------------------------------------------------------------------------------
++// Supported configurations
++// ---------------------------------------------------------------------------------------------------------------------
++//   - Blackhole; two ERISCs (one role each, a TX queue each) or one ERISC (both roles);
++//   - 1D and 2D: lines, meshes, rings and tori (bubble flow control; first-level acks on VC0); strict atomics;
++//   - VC0; VC1 on 2D multi-mesh fabrics (intermesh landing, crossover and exits);
++//   - VC2 on 2D single-mesh routers: neighbour exchange (a worker channel into a receiver channel that only delivers);
++//   - Tensix mux mode on one ERISC, VC0 (the fabric's muxes feed the worker channel and take the forwards);
++//   - UDM on 2D meshes, one ERISC (packets for this chip go to the fabric's relay);
++//   - the speedy path (VC0 worker-only routers whose receiver channel only delivers: it skips decode and admission);
++//   - the host's telemetry options: the perf recorder at low resolution and the dynamic stats;
++//   - channel trimming: the capture, and a replay's routers with channels compiled out (an ERISC left with nothing to
++//     service runs rounds only, router_round.hpp's run_idle).
++
++// UDM as the host builds it (compute_mesh_router_builder.cpp, connect_to_local_tensix_builder): one ERISC (any Tensix
++// extension), 2D meshes, one local Tensix connection (the relay), mux mode off.
++constexpr bool udm_config_supported = NUM_ACTIVE_ERISCS == 1 && is_2d && !has_vc1 && !enable_deadlock_avoidance &&
++                                      !tensix_mux_mode && num_ds_or_local_tensix_connections == 1;
++
++// VC2 as the host builds it (FabricBuilderConfig: Blackhole 2D, not UDM or the mux), here without VC1: one worker
++// channel into a receiver channel of its own that only delivers (neighbour exchange; VC2 line mode, which forwards, is
++// not supported here), counter credits.
++constexpr bool vc2_config_supported = is_2d && !has_vc1 && ACTUAL_VC2_SENDER_CHANNELS == 1 &&
++                                      is_vc_forwarding_disabled[2] &&
++                                      receiver_channel_uses_counter_credits(VC2_RECEIVER_CHANNEL);
++
++// The speedy path as the host selects it (ENABLE_SPEEDY_VC0; main's speedy-path static_asserts): no bubble flow control
++// or first-level acks on VC0, VC0's receiver forwarding off. Its credit amortization args do not apply here (credits
++// go back per completion group, as everywhere).
++constexpr bool speedy_config_supported =
++    !enable_deadlock_avoidance && !ENABLE_FIRST_LEVEL_ACK_VC0 && disable_rx_ch0_forwarding && !udm_mode;
++
++static_assert(is_blackhole_arch, "the router supports Blackhole only");
++static_assert(NUM_ACTIVE_ERISCS == 1 || NUM_ACTIVE_ERISCS == 2, "the router runs on one ERISC or two");
++static_assert(NUM_ACTIVE_ERISCS == 1 || multi_txq_enabled, "on two ERISCs each role needs a TX queue of its own");
++static_assert(
++    NUM_ACTIVE_ERISCS == 1 || !(is_sender_role && is_receiver_role), "on two ERISCs each ERISC runs one role");
++static_assert(NUM_RECEIVER_CHANNELS == 1 + (has_vc1 ? 1 : 0) + (has_vc2 ? 1 : 0), "one receiver channel per VC");
++static_assert(!has_vc1 || is_2d, "VC1 needs a 2D fabric");
++// VC1 traffic would go router to router around the muxes, but the host gives VC1's sender channels no slots there.
++static_assert(!(tensix_mux_mode && has_vc1), "VC1 with the Tensix mux extension is not supported");
++static_assert(!has_vc2 || vc2_config_supported, "VC2 is supported as neighbour exchange on 2D single-mesh routers");
++static_assert(
++    !ENABLE_FIRST_LEVEL_ACK_VC1 && !ENABLE_FIRST_LEVEL_ACK_VC2, "first-level acks on VC1 / VC2 are not supported");
++static_assert(!is_vc_crossover_to_vc1[2], "VC2's crossover onto VC1 is not supported");
++static_assert(!udm_mode || udm_config_supported, "UDM is supported on one-ERISC 2D meshes with one relay");
++static_assert(!super_speedy_mode || speedy_config_supported, "the speedy path needs VC0 without bubble flow control, "
++                                                             "first-level acks or receiver forwarding");
++static_assert(!ENABLE_RISC_CPU_DATA_CACHE, "the CPU data cache is not supported");
++static_assert(!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA, "the TX queue's spin-wait send is not supported");
++static_assert(
++    perf_telemetry_mode == PerfTelemetryRecorderType::NONE ||
++        perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH,
++    "the perf recorder supports low-resolution bandwidth only");
++static_assert(!tensix_mux_mode || NUM_ACTIVE_ERISCS == 1, "Tensix mux mode is supported on one ERISC");
++static_assert(num_ds_or_local_tensix_connections == 0 || tensix_mux_mode || udm_mode,
++              "local Tensix connections are supported in mux mode and UDM only");
++
+ }  // namespace fabric_router
+diff -ruN v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp
+--- v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-03 04:25:55.121297470 +0000
++++ v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-03 06:58:18.145286738 +0000
+@@ -30,6 +30,9 @@
+ // their NoC work on this chip (writes, atomics, reads), not to their NoC destinations. To the receiver the relay is one
+ // more downstream (Relay).
+ 
++#include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
++
+ #include "router_common.hpp"
+ 
+ namespace fabric_router {
+diff -ruN v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp
+--- v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 04:12:42.883513996 +0000
++++ v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 06:57:51.349938742 +0000
+@@ -10,8 +10,20 @@
+ // owns the receiver side (receiver channels, downstream connections). The phase number travels in the sync value, so
+ // the two can never pass different syncs as one.
+ 
++#include <limits>
++
++#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_eth_handshake.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
++#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
++#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
++
+ #include "router_common.hpp"
+ #include "router_downstream.hpp"
++#include "router_round.hpp"
++#include "router_telemetry.hpp"
+ 
+ namespace fabric_router {
+ 
+@@ -65,6 +77,31 @@
+     return reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+ }
+ 
++// Main's init postcodes, with the phase whose end posts each, in main's order: host tools and hang capture read them.
++// Two keep main's names for steps this router orders differently (marked).
++constexpr std::pair<Phase, tt::tt_fabric::EDMStatus> phase_postcodes[] = {
++    {Phase::STREAMS_SET, tt::tt_fabric::EDMStatus::TXQ_INITIALIZED},
++    {Phase::STREAMS_SET, tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED},
++    {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::STARTED},
++    {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED},
++    {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE},  // main's code, kept for tooling
++    {Phase::HANDSHAKE_DONE, tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE},
++    {Phase::DOWNSTREAMS_OPEN, tt::tt_fabric::EDMStatus::VCS_OPENED},
++    {Phase::CMD_BUFS_SET, tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED},  // main's code, kept for tooling
++    {Phase::CONNECTED, tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE},
++};
++
++// The end of an init phase: the ERISCs meet, then the phase's postcodes.
++template <Phase PHASE>
++FORCE_INLINE void finish_phase() {
++    sync_erisc(PHASE);
++    for_each_index<std::size(phase_postcodes)>([](auto i) {
++        if constexpr (phase_postcodes[decltype(i)::value].first == PHASE) {
++            postcode(phase_postcodes[decltype(i)::value].second);
++        }
++    });
++}
++
+ // ---------------------------------------------------------------------------------------------------------------------
+ // Ethernet TX queues
+ // ---------------------------------------------------------------------------------------------------------------------
+@@ -159,6 +196,23 @@
+     }
+ }
+ 
++// The prologue, before the first phase: the channel-trimming capture's record cleared, the router state INITIALIZING,
++// the RISC's L1 data cache set off (the router reads L1 the NoC and the far router write), the telemetry block's static
++// info and the telemetry counts, and the code profiler's buffer cleared.
++FORCE_INLINE void init_router() {
++    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
++        channel_trimming_usage_recorder.reset();
++    }
++    postcode(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
++    router_state()->state = RouterState::INITIALIZING;
++    set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
++    init_telemetry_block();
++    telemetry::init();
++    if constexpr (code_profiling_enabled_timers_bitfield != 0) {
++        clear_code_profiling_buffer(code_profiling_buffer_base_addr);
++    }
++}
++
+ // ---------------------------------------------------------------------------------------------------------------------
+ // Runtime args
+ // ---------------------------------------------------------------------------------------------------------------------
+diff -ruN v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp
+--- v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-03 05:43:59.465041571 +0000
++++ v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-03 06:58:18.145286738 +0000
+@@ -17,6 +17,9 @@
+ //
+ // Atomics are strict: a flushed atomic waits for every earlier write of this ERISC to be acknowledged first.
+ 
++#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
++
+ #include "router_common.hpp"
+ 
+ namespace fabric_router {
+diff -ruN v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 04:13:10.165884700 +0000
++++ v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 06:58:18.144286725 +0000
+@@ -39,6 +39,12 @@
+ // Sections, in order: tuning; ring arithmetic and completion groups; transaction IDs; channels and their features;
+ // state; arrivals and first-level acks; packets; completions; the pass.
+ 
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
++#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
++
+ #include "router_common.hpp"
+ #include "router_downstream.hpp"
+ #include "router_init.hpp"
+@@ -762,21 +768,30 @@
+     });
+ }
+ 
+-// Before the Ethernet handshake: every downstream connection's links and progress (router_downstream.hpp), then the
+-// receiver channels' slot buffers. (Where the router forwards on VC1 or to UDM's relay, those connections too: an
+-// absent connection is named only in template-dependent code.)
+-template <typename Connections>
+-FORCE_INLINE void set_up_channels(Connections& downstreams, const RuntimeArgs& args) {
+-    init_downstreams(downstreams.vc0, args.vc0());
+-    if constexpr (vc_forwards_to_routers(1)) {
+-        init_downstreams(downstreams.vc1, args.vc1());
+-    }
+-    if constexpr (udm_mode) {
+-        init_relay(downstreams.relay, args.relay);
+-    }
+-    auto receiver_channels =
+-        ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
+-    receiver_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
++// Whether this ERISC holds the receiver's downstream connections: where it runs the receiver; a single-ERISC router's
++// loop takes them whatever channel trimming left it (empty without a receiver channel).
++constexpr bool has_downstream_connections = is_receiver_role || NUM_ACTIVE_ERISCS == 1;
++
++// Before the Ethernet handshake: the receiver's downstream connections (router_downstream.hpp), returned for its loop,
++// with every connection's links and progress where this ERISC runs the receiver (VC1's and UDM's relay where the router
++// has them), then the receiver channels' slot buffers. A sender-only ERISC gets none. (A template, so an absent
++// connection is named only in template-dependent code.)
++template <typename Connections = Present<has_downstream_connections, DownstreamConnections, 0>>
++FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
++    Connections downstreams{};
++    if constexpr (is_receiver_role) {
++        init_downstreams(downstreams.vc0, args.vc0());
++        if constexpr (vc_forwards_to_routers(1)) {
++            init_downstreams(downstreams.vc1, args.vc1());
++        }
++        if constexpr (udm_mode) {
++            init_relay(downstreams.relay, args.relay);
++        }
++        auto receiver_channels =
++            ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
++        receiver_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
++    }
++    return downstreams;
+ }
+ 
+ // Tensix mux mode: the receiver forwards into the fabric's mux of each other direction, not into that direction's
+diff -ruN v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
+--- v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 04:12:42.884514009 +0000
++++ v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 06:58:18.145286738 +0000
+@@ -13,6 +13,8 @@
+ // route meanwhile, so the master first raises RETRAIN_INTENT in a shared stream scratch register and waits for the
+ // other's INTENT_ACK; the other parks until RETRAIN_COMPLETE, acks it, and resumes at NORMAL_EXECUTION.
+ 
++#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
++
+ #include "router_common.hpp"
+ 
+ namespace fabric_router {
+diff -ruN v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp
+--- v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-03 04:09:36.941989681 +0000
++++ v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-03 06:58:18.145286738 +0000
+@@ -27,6 +27,11 @@
+ //     table's intermesh directions, out of line), with no local delivery: its route word is the exit's direction bit.
+ //     The destination mesh is read with the action.
+ 
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
++#if defined(FABRIC_2D)
++#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
++#endif
++
+ #include "router_common.hpp"
+ #include "router_downstream.hpp"
+ 
+diff -ruN v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 04:13:35.714231906 +0000
++++ v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 06:58:18.144286725 +0000
+@@ -38,6 +38,12 @@
+ // Sections, in order: channels and their features; state; producers (the channel kinds' links to their producers);
+ // free-slots registers; sending; visits; where the channel states live, and the loop; init.
+ 
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
++#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
++
+ #include "router_common.hpp"
+ #include "router_round.hpp"
+ #include "router_telemetry.hpp"

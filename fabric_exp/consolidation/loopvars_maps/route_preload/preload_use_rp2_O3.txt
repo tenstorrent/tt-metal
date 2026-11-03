@@ -1,0 +1,8 @@
+bh_1d                        preload  loads   10  first use after 10..200 insns  spill stores 0  first-use ops {'(dead:': 3450, 'andi': 1800}
+bh_1d                        load-now loads   10  first use after 3..3 insns  spill stores 0  first-use ops {'andi': 10}
+bh_2d                        preload  loads   40  first use after 1..2 insns  spill stores 0  first-use ops {'zext.b': 40}
+bh_2d                        load-now loads   40  first use after 1..2 insns  spill stores 0  first-use ops {'zext.b': 40}
+bh_ring                      preload  loads   10  first use after 18..200 insns  spill stores 0  first-use ops {'(dead:': 3080, 'andi': 1670}
+bh_ring                      load-now loads   10  first use after 3..3 insns  spill stores 0  first-use ops {'andi': 10}
+glx_2d                       preload  loads   72  first use after 1..2 insns  spill stores 0  first-use ops {'zext.b': 72}
+glx_2d                       load-now loads   72  first use after 1..2 insns  spill stores 0  first-use ops {'zext.b': 72}

@@ -1,0 +1,730 @@
+10469998952405404208 subordinate_active_erisc receiver
+  S2         loop  604  sp S3   L3   unknown 6  
+  S2x        loop  604  sp S3   L3   unknown 6  
+  B2p        loop  623  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  698  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+10508890310010974893 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+10717001962181637086 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+10822967940240490184 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+10856289412547510027 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+11088770621341138129 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+11558546371213663640 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+11583217632935098244 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+11586341372005596605 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+11892443829549803245 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+12160933988419070963 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+12175245829289338344 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+12408720447542873029 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+12481404790206214709 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+12495739942064638177 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+12707217013984867308 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+12862922935640354656 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+13091119720597129518 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+13249987344605867718 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+13250384435435189087 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+1340894336006728380 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+13475786276836598230 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+13509108895737128535 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+13617457533875954996 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+13851320215214651555 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+13989171346402682967 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+14080302915106565790 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+14116155764606840719 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+14129648458892557448 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+1429233375145710794 subordinate_active_erisc receiver
+  S2         loop  604  sp S3   L3   unknown 6  
+  S2x        loop  604  sp S3   L3   unknown 6  
+  B2p        loop  623  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  698  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+14431816762518449687 subordinate_active_erisc receiver
+  S2         loop  604  sp S3   L3   unknown 6  
+  S2x        loop  604  sp S3   L3   unknown 6  
+  B2p        loop  623  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  698  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+14623337702693725303 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+14647646677057900914 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+147171563004910059 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+14940022221582141289 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+15273499706240660602 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+15307868658033169656 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+15547919564154396150 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+15582735004192224373 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+15831445787531486187 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+15856326970122340574 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+16247419458379636735 subordinate_active_erisc receiver
+  S2         loop  604  sp S3   L3   unknown 6  
+  S2x        loop  604  sp S3   L3   unknown 6  
+  B2p        loop  623  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  698  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+16265145613720670239 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+16364265261526096668 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+16389583754348416496 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+16405670590171022466 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+16500394309347092445 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+1655145630609380998 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+1657994767543065342 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+16729293629826878107 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+16870156301250480785 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+16901913214727383199 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+16919692630328363893 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+16957491786636177340 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+16978736485370536362 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+17255458875499500845 subordinate_active_erisc receiver
+  S2         loop  604  sp S3   L3   unknown 6  
+  S2x        loop  604  sp S3   L3   unknown 6  
+  B2p        loop  623  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  698  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+17387689202036887541 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+17416447945045614234 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+17458051480481850281 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+17536112393237387076 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+17642625750722232291 subordinate_active_erisc receiver
+  S2         loop  496  sp S3   L3   unknown 6  
+  S2x        loop  496  sp S3   L3   unknown 6  
+  B2p        loop  517  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  590  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+17723528549567500495 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+17801034624426765171 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+17875477544737828471 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+17993687128666532680 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+18030477236084517463 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+18237792381721537195 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+18338940949766002044 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+18370877964186322346 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+2353992287348444881 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+2368741238205340554 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+2520608023272701925 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+2716377110609315829 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+2767592459388826558 subordinate_active_erisc receiver
+  S2         loop  496  sp S3   L3   unknown 6  
+  S2x        loop  496  sp S3   L3   unknown 6  
+  B2p        loop  517  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  590  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+2971521280642960294 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+2988770502131608118 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+3106198235451438996 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+3145684617251071173 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+323967508472982173 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+3310396784795994969 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+3417195534424312855 subordinate_active_erisc receiver
+  S2         loop  496  sp S3   L3   unknown 6  
+  S2x        loop  496  sp S3   L3   unknown 6  
+  B2p        loop  517  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  590  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+346965910660720266 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+3486616639706717589 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+3754972219690478929 subordinate_active_erisc receiver
+  S2         loop  604  sp S3   L3   unknown 6  
+  S2x        loop  604  sp S3   L3   unknown 6  
+  B2p        loop  623  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  698  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+3951853253291756185 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+3952194366021959022 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+4080266656586510706 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+4354174316903933817 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+4530791397393545177 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+4703774221848007265 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+4715519485243146012 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+4737406737612332454 subordinate_active_erisc receiver
+  S2         loop  604  sp S3   L3   unknown 6  
+  S2x        loop  604  sp S3   L3   unknown 6  
+  B2p        loop  623  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  698  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+4958010149818513467 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+5096310415449656806 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+5108819861659422597 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+5385704058514444585 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+5476881755066881453 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+5590236245525362978 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+5670593424105190607 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+5762120991903929638 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+5848761659089434215 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+5897926983222271145 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+5902779357972284525 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+6000724018343177383 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+6061306661858758690 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+6171908639076180505 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+617964130140540357 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+6352518852962132331 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+6532268391634414447 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+6646413974237229105 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+6696470434627833255 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+6796650702499714308 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+6971242198452828325 subordinate_active_erisc receiver
+  S2         loop  496  sp S3   L3   unknown 6  
+  S2x        loop  496  sp S3   L3   unknown 6  
+  B2p        loop  517  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  590  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+7143589663809868563 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+7320570823507316547 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+7463472068640444980 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+7762403894110286404 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+7773486313747064568 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+7947597382632785879 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+7992986633125097002 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+8019788309136598466 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+8111148368347043405 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+8118584536937903697 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+8291479364989354287 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+8393239968519929287 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+8570930246161259520 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+8581573913316807200 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+8701187608956562807 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+8885056084572247659 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+8902191268409823169 subordinate_active_erisc receiver
+  S2         loop  503  sp S6   L6   unknown 4  
+  S2x        loop  503  sp S6   L6   unknown 4  
+  B2p        loop  519  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  565  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+8937196851112472158 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+8983363732518645713 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+9094234757297182756 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+9138620716723112525 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+9187810145136523666 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+9199218071563414173 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+9218773246094524617 active_erisc sender
+  S2         loop  329  sp S13  L31  unknown 11 
+  S2x        loop  329  sp S13  L31  unknown 11 
+  B2p        loop  329  sp S13  L31  unknown 11 
+  P2p        loop  329  sp S13  L31  unknown 11 
+9266105786366169798 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+9331428768033930619 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+9348629104245743964 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+9375046249168897390 active_erisc sender
+  S2         loop  509  sp S17  L48  unknown 15 
+  S2x        loop  509  sp S17  L48  unknown 15 
+  B2p        loop  509  sp S17  L48  unknown 15 
+  P2p        loop  509  sp S17  L48  unknown 15 
+9427457257656098960 subordinate_active_erisc receiver
+  S2         loop  447  sp S4   L5   unknown 4  
+  S2x        loop  447  sp S4   L5   unknown 4  
+  B2p        loop  481  sp S6   L6   unknown 4    +['run:credit_frame_due']
+  P2p        loop  533  sp S10  L9   unknown 0    +['of_slot@handle<0>:group', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:before.slot_addr', 'step<0>:cursor.counts_', 'step<0>:cursor.slot_addr']
+972192047630470783 subordinate_active_erisc receiver
+  S2         loop  604  sp S3   L3   unknown 6  
+  S2x        loop  604  sp S3   L3   unknown 6  
+  B2p        loop  623  sp S4   L4   unknown 3    +['run:credit_frame_due']
+  P2p        loop  698  sp S8   L6   unknown 3    +['run:credit_frame_due', 'run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']
+9811727281230378028 subordinate_active_erisc receiver
+  S2         loop  506  sp S6   L6   unknown 4  
+  S2x        loop  506  sp S6   L6   unknown 4  
+  B2p        loop  522  sp S1   L1   unknown 2    -['run:credit_frame_due', 'run:vc0_cursor.counts.idle_passes_with_partial_group']
+  P2p        loop  573  sp S8   L6   unknown 3    +['run:states.ch0.cursor.counts_', 'run:states.ch0.cursor.slot_addr', 'step<0>:cursor.counts_']  -['run:vc0_cursor.counts.idle_passes_with_partial_group']
+
+spilled values, configs per router and role:
+  B2p receiver: handle<0>:header_word x36, receive<0>:header_word x36, run:credit_frame_due x48
+  B2p sender: run:forwarding.records._M_elems[0].acked x36, run:forwarding.records._M_elems[0].completed x72, run:forwarding.records._M_elems[0].sent x72, run:forwarding.records._M_elems[0].slot x72, run:forwarding.records._M_elems[1].completed x36, run:forwarding.records._M_elems[1].sent x36, run:forwarding.records._M_elems[1].slot x36, run:forwarding.records._M_elems[2].completed x36, run:forwarding.records._M_elems[2].sent x36, run:forwarding.records._M_elems[2].slot x36, run:round.attempted x72, run:round.sent_at_round_start x72, send<1>:reported_acks x36, visit_forwarding<1>:reported_acks x36, visit_forwarding<1>:sent x72, visit_forwarding<1>:slot x72, visit_forwarding<2>:sent x36, visit_forwarding<2>:slot x36, visit_forwarding<3>:sent x36, visit_forwarding<3>:slot x36
+  P2p receiver: handle<0>:header_word x36, of_slot@handle<0>:group x36, receive<0>:header_word x36, run:credit_frame_due x36, run:states.ch0.cursor.counts_ x72, run:states.ch0.cursor.slot_addr x72, step<0>:before.slot_addr x36, step<0>:cursor.counts_ x72, step<0>:cursor.slot_addr x36
+  P2p sender: run:forwarding.records._M_elems[0].acked x36, run:forwarding.records._M_elems[0].completed x72, run:forwarding.records._M_elems[0].sent x72, run:forwarding.records._M_elems[0].slot x72, run:forwarding.records._M_elems[1].completed x36, run:forwarding.records._M_elems[1].sent x36, run:forwarding.records._M_elems[1].slot x36, run:forwarding.records._M_elems[2].completed x36, run:forwarding.records._M_elems[2].sent x36, run:forwarding.records._M_elems[2].slot x36, run:round.attempted x72, run:round.sent_at_round_start x72, send<1>:reported_acks x36, visit_forwarding<1>:reported_acks x36, visit_forwarding<1>:sent x72, visit_forwarding<1>:slot x72, visit_forwarding<2>:sent x36, visit_forwarding<2>:slot x36, visit_forwarding<3>:sent x36, visit_forwarding<3>:slot x36
+  S2 receiver: handle<0>:header_word x36, receive<0>:header_word x36, run:credit_frame_due x24, run:vc0_cursor.counts.idle_passes_with_partial_group x24
+  S2 sender: run:forwarding.records._M_elems[0].acked x36, run:forwarding.records._M_elems[0].completed x72, run:forwarding.records._M_elems[0].sent x72, run:forwarding.records._M_elems[0].slot x72, run:forwarding.records._M_elems[1].completed x36, run:forwarding.records._M_elems[1].sent x36, run:forwarding.records._M_elems[1].slot x36, run:forwarding.records._M_elems[2].completed x36, run:forwarding.records._M_elems[2].sent x36, run:forwarding.records._M_elems[2].slot x36, run:round.attempted x72, run:round.sent_at_round_start x72, send<1>:reported_acks x36, visit_forwarding<1>:reported_acks x36, visit_forwarding<1>:sent x72, visit_forwarding<1>:slot x72, visit_forwarding<2>:sent x36, visit_forwarding<2>:slot x36, visit_forwarding<3>:sent x36, visit_forwarding<3>:slot x36
+  S2x receiver: handle<0>:header_word x36, receive<0>:header_word x36, run:credit_frame_due x24, run:vc0_cursor.counts.idle_passes_with_partial_group x24
+  S2x sender: run:forwarding.records._M_elems[0].acked x36, run:forwarding.records._M_elems[0].completed x72, run:forwarding.records._M_elems[0].sent x72, run:forwarding.records._M_elems[0].slot x72, run:forwarding.records._M_elems[1].completed x36, run:forwarding.records._M_elems[1].sent x36, run:forwarding.records._M_elems[1].slot x36, run:forwarding.records._M_elems[2].completed x36, run:forwarding.records._M_elems[2].sent x36, run:forwarding.records._M_elems[2].slot x36, run:round.attempted x72, run:round.sent_at_round_start x72, send<1>:reported_acks x36, visit_forwarding<1>:reported_acks x36, visit_forwarding<1>:sent x72, visit_forwarding<1>:slot x72, visit_forwarding<2>:sent x36, visit_forwarding<2>:slot x36, visit_forwarding<3>:sent x36, visit_forwarding<3>:slot x36

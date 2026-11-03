@@ -1,0 +1,4338 @@
+{
+ "bh_1d__10711705047208358998": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__11771157836117153027": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__11966589601134953097": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__12151225984416678758": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__12565983335775070686": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__12689859897650825883": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__13045704138935434653": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__15031910185866791319": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__3136893259129657994": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_1d__9982562484933923760": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   488,
+   492
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   26,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   8
+  ]
+ },
+ "bh_2d__10229924487725718948": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   19,
+   18
+  ],
+  "loop_insns": [
+   492,
+   482
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   6
+  ]
+ },
+ "bh_2d__10465832971564139790": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   19,
+   19
+  ],
+  "loop_insns": [
+   488,
+   491
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   12
+  ]
+ },
+ "bh_2d__10697509619777523756": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   494,
+   484
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   6
+  ]
+ },
+ "bh_2d__10704913830194341139": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   494,
+   484
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   6
+  ]
+ },
+ "bh_2d__11637908802779522069": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   19,
+   18
+  ],
+  "loop_insns": [
+   492,
+   482
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   6
+  ]
+ },
+ "bh_2d__11660148679966767161": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   19,
+   18
+  ],
+  "loop_insns": [
+   492,
+   482
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   6
+  ]
+ },
+ "bh_2d__15112097005661338": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   494,
+   484
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   6
+  ]
+ },
+ "bh_2d__15188445179684008456": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   494,
+   484
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   6
+  ]
+ },
+ "bh_2d__15568112377219572116": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   19,
+   18
+  ],
+  "loop_insns": [
+   492,
+   482
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   6
+  ]
+ },
+ "bh_2d__17527521829486980796": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   494,
+   484
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   6
+  ]
+ },
+ "bh_2d__1754057734862275905": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   19
+  ],
+  "carried_regs": [
+   19,
+   16
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   9
+  ]
+ },
+ "bh_2d__17689055769058793898": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   494,
+   484
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   6
+  ]
+ },
+ "bh_2d__17764531352640089777": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   19
+  ],
+  "carried_regs": [
+   19,
+   16
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   9
+  ]
+ },
+ "bh_2d__1974893561357350168": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   19,
+   18
+  ],
+  "loop_insns": [
+   492,
+   482
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   6
+  ]
+ },
+ "bh_2d__2002749385377306524": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   19
+  ],
+  "carried_regs": [
+   19,
+   16
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   9
+  ]
+ },
+ "bh_2d__2586450563413941222": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   19
+  ],
+  "carried_regs": [
+   19,
+   16
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   9
+  ]
+ },
+ "bh_2d__2769012262972655444": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   19,
+   19
+  ],
+  "loop_insns": [
+   488,
+   491
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   12
+  ]
+ },
+ "bh_2d__3350086724855746032": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   19
+  ],
+  "carried_regs": [
+   19,
+   16
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   9
+  ]
+ },
+ "bh_2d__3600473431856508845": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   19,
+   18
+  ],
+  "loop_insns": [
+   492,
+   482
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   6
+  ]
+ },
+ "bh_2d__4231842157237622605": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   494,
+   484
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   6
+  ]
+ },
+ "bh_2d__4338045327969131522": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   19
+  ],
+  "carried_regs": [
+   19,
+   16
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   9
+  ]
+ },
+ "bh_2d__4506580340507463438": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   494,
+   484
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   6
+  ]
+ },
+ "bh_2d__4689755091304480639": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   19
+  ],
+  "carried_regs": [
+   19,
+   16
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   9
+  ]
+ },
+ "bh_2d__4837949914138770387": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   19
+  ],
+  "carried_regs": [
+   19,
+   16
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   9
+  ]
+ },
+ "bh_2d__5644309932980480112": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   19,
+   19
+  ],
+  "loop_insns": [
+   488,
+   491
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   12
+  ]
+ },
+ "bh_2d__9113746027361572178": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   19,
+   18
+  ],
+  "loop_insns": [
+   492,
+   482
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   6
+  ]
+ },
+ "bh_2d__9385634899218476589": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   19,
+   18
+  ],
+  "loop_insns": [
+   492,
+   482
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   26
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   6
+  ]
+ },
+ "bh_2d__9724914797274631410": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   19,
+   19
+  ],
+  "loop_insns": [
+   488,
+   491
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   12
+  ]
+ },
+ "bh_2d_vc2__10491303747420227617": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   799,
+   812
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__10513636736344095901": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   931,
+   938
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "credit_completions<2>:waiting~": "designed memory",
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__11568515798073384042": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   799,
+   812
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__11749902526268030851": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   799,
+   812
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__12380335878876205936": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   802,
+   813
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__12633423150643726066": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   931,
+   938
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "credit_completions<2>:waiting~": "designed memory",
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__12668321240468436923": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   799,
+   812
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__12748475856356226632": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   799,
+   812
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__13069477176606242441": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   931,
+   938
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "credit_completions<2>:waiting~": "designed memory",
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__14235488031977759438": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   24,
+   23
+  ],
+  "carried_regs": [
+   17,
+   16
+  ],
+  "loop_insns": [
+   808,
+   830
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__14735271109952707246": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   24,
+   23
+  ],
+  "carried_regs": [
+   17,
+   16
+  ],
+  "loop_insns": [
+   808,
+   830
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__1476527917075241884": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   931,
+   938
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "credit_completions<2>:waiting~": "designed memory",
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__15192080987118350497": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   931,
+   938
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "credit_completions<2>:waiting~": "designed memory",
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__1589996887107137236": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   802,
+   813
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__16341869916784206545": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   802,
+   813
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__18170333042718411155": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   802,
+   813
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__2559961812373025647": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   802,
+   813
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__2611898262892451163": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   799,
+   812
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__4201218614014346960": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   799,
+   812
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__5175127996656567540": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   24,
+   23
+  ],
+  "carried_regs": [
+   17,
+   16
+  ],
+  "loop_insns": [
+   808,
+   830
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__5987849556195362848": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   24,
+   23
+  ],
+  "carried_regs": [
+   17,
+   16
+  ],
+  "loop_insns": [
+   808,
+   830
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__63240486243413017": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   931,
+   938
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "credit_completions<2>:waiting~": "designed memory",
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__6740898362604125226": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   799,
+   812
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__8281669425054507868": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   931,
+   938
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "credit_completions<2>:waiting~": "designed memory",
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__8350144609346096469": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   931,
+   938
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   35,
+   33
+  ],
+  "shed": {
+   "credit_completions<2>:waiting~": "designed memory",
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   37,
+   35
+  ]
+ },
+ "bh_2d_vc2__9010601437863074280": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   802,
+   813
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__9047027645726298819": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   802,
+   813
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_2d_vc2__9200400607298339200": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   22
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   802,
+   813
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   32
+  ],
+  "shed": {
+   "run:loop_copy.idle_passes_with_partial_group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   27
+  ]
+ },
+ "bh_ring__10444497403978295403": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__11116202923778475564": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__11614008442388219330": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__11875136336936699852": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__1231561523136951572": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__143257016412897682": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__15375822987294115367": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__6597404703593289401": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__7228786826164462226": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_ring__9471462709397932891": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   18
+  ],
+  "carried_regs": [
+   18,
+   17
+  ],
+  "loop_insns": [
+   447,
+   502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ],
+   "run:loop_copy.uncredited": [
+    "S NOC_CMD_BUF_READ_REG noc_nonblocking_api.h:180",
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   28
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   9,
+   25
+  ]
+ },
+ "bh_torus__10333241838491253444": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   19
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   465,
+   491
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   11,
+   19
+  ]
+ },
+ "bh_torus__10680386503672484080": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   19
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   453,
+   478
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   29
+  ],
+  "shed": {
+   "pass:txq_status": "around a call"
+  },
+  "sp_accesses": [
+   11,
+   18
+  ]
+ },
+ "bh_torus__10864710172009767666": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   17
+  ],
+  "carried_regs": [
+   16,
+   14
+  ],
+  "loop_insns": [
+   568,
+   587
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   31,
+   29
+  ],
+  "shed": {
+   "pass:txq_status": "around a call"
+  },
+  "sp_accesses": [
+   13,
+   13
+  ]
+ },
+ "bh_torus__11644205323160773140": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   19
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   453,
+   478
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   29
+  ],
+  "shed": {
+   "pass:txq_status": "around a call"
+  },
+  "sp_accesses": [
+   11,
+   18
+  ]
+ },
+ "bh_torus__11880517098734099235": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   17
+  ],
+  "carried_regs": [
+   16,
+   14
+  ],
+  "loop_insns": [
+   568,
+   587
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   31,
+   29
+  ],
+  "shed": {
+   "pass:txq_status": "around a call"
+  },
+  "sp_accesses": [
+   13,
+   13
+  ]
+ },
+ "bh_torus__12230828581117820343": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   19
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   453,
+   478
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   29
+  ],
+  "shed": {
+   "pass:txq_status": "around a call"
+  },
+  "sp_accesses": [
+   11,
+   18
+  ]
+ },
+ "bh_torus__12309172359153696719": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   17
+  ],
+  "carried_regs": [
+   16,
+   14
+  ],
+  "loop_insns": [
+   568,
+   587
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   31,
+   29
+  ],
+  "shed": {
+   "pass:txq_status": "around a call"
+  },
+  "sp_accesses": [
+   13,
+   13
+  ]
+ },
+ "bh_torus__13571380744005912063": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   19
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   453,
+   478
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   29
+  ],
+  "shed": {
+   "pass:txq_status": "around a call"
+  },
+  "sp_accesses": [
+   11,
+   18
+  ]
+ },
+ "bh_torus__1385795977547629022": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   19
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   465,
+   491
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   11,
+   19
+  ]
+ },
+ "bh_torus__17580799059844124282": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   17
+  ],
+  "carried_regs": [
+   16,
+   14
+  ],
+  "loop_insns": [
+   568,
+   587
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   31,
+   29
+  ],
+  "shed": {
+   "pass:txq_status": "around a call"
+  },
+  "sp_accesses": [
+   13,
+   13
+  ]
+ },
+ "bh_torus__2703741712186621509": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   19
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   465,
+   491
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   11,
+   19
+  ]
+ },
+ "bh_torus__3607405762735241707": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   19
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   465,
+   491
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "pass:downstreams": "invariant",
+   "receive<0>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   11,
+   19
+  ]
+ },
+ "bh_torus_vc2__10445740379710467010": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   938,
+   926
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:payload": [
+    "S deliver router_local_delivery.hpp:132"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "pass:txq_status": "around a call",
+   "run:synthetic0": "invariant"
+  },
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_torus_vc2__10697658996405103604": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   807,
+   818
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__10840401577188000890": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   807,
+   818
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__10914443432039824326": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   938,
+   926
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:payload": [
+    "S deliver router_local_delivery.hpp:132"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "pass:txq_status": "around a call",
+   "run:synthetic0": "invariant"
+  },
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_torus_vc2__11796103360794023171": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   804,
+   815
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__11811580684014631720": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   938,
+   926
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:payload": [
+    "S deliver router_local_delivery.hpp:132"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "pass:txq_status": "around a call",
+   "run:synthetic0": "invariant"
+  },
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_torus_vc2__13276095349081623862": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   828,
+   854
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<1>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<1>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   35,
+   34
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "handle<2>:downstreams": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "receive<2>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step<2>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant",
+   "step_channel<2>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   35,
+   49
+  ]
+ },
+ "bh_torus_vc2__13527862631378125536": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   938,
+   926
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:payload": [
+    "S deliver router_local_delivery.hpp:132"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "pass:txq_status": "around a call",
+   "run:synthetic0": "invariant"
+  },
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_torus_vc2__13541065755364179599": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   807,
+   818
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__1432146984554245663": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   807,
+   818
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__14328837056313403009": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   938,
+   926
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:payload": [
+    "S deliver router_local_delivery.hpp:132"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "pass:txq_status": "around a call",
+   "run:synthetic0": "invariant"
+  },
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_torus_vc2__14392712674153387923": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   938,
+   926
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:payload": [
+    "S deliver router_local_delivery.hpp:132"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "pass:txq_status": "around a call",
+   "run:synthetic0": "invariant"
+  },
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_torus_vc2__1444237767951680874": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   804,
+   815
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__14986200078638857340": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   804,
+   815
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__15001124820423506367": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   938,
+   926
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:payload": [
+    "S deliver router_local_delivery.hpp:132"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "pass:txq_status": "around a call",
+   "run:synthetic0": "invariant"
+  },
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_torus_vc2__15496768876022988858": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   804,
+   815
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__17356785069779051563": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   804,
+   815
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__18228677092961731123": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   828,
+   854
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<1>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<1>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   35,
+   34
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "handle<2>:downstreams": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "receive<2>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step<2>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant",
+   "step_channel<2>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   35,
+   49
+  ]
+ },
+ "bh_torus_vc2__2667447885402835965": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   804,
+   815
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__2690972707266229937": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   828,
+   854
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<1>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<1>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   35,
+   34
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "handle<2>:downstreams": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "receive<2>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step<2>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant",
+   "step_channel<2>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   35,
+   49
+  ]
+ },
+ "bh_torus_vc2__3207798875700158167": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   828,
+   854
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<1>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<1>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   35,
+   34
+  ],
+  "shed": {
+   "handle<0>:downstreams": "invariant",
+   "handle<0>:routers": "invariant",
+   "handle<2>:downstreams": "invariant",
+   "pass:downstreams": "invariant",
+   "pass:txq_status": "around a call",
+   "receive<0>:downstreams": "invariant",
+   "receive<2>:downstreams": "invariant",
+   "step<0>:downstreams": "invariant",
+   "step<2>:downstreams": "invariant",
+   "step_channel<0>:downstreams": "invariant",
+   "step_channel<2>:downstreams": "invariant"
+  },
+  "sp_accesses": [
+   35,
+   49
+  ]
+ },
+ "bh_torus_vc2__3767368624116472263": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   807,
+   818
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__3836723351993128075": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   21
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   938,
+   926
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "deliver<0>:payload": [
+    "S deliver router_local_delivery.hpp:132"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "pass:txq_status": "around a call",
+   "run:synthetic0": "invariant"
+  },
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_torus_vc2__40379501982205494": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   807,
+   818
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__4103347680366612614": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   807,
+   818
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__4480490600246433894": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   807,
+   818
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__5311239593400801851": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   804,
+   815
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_torus_vc2__5715947891442415375": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   20
+  ],
+  "carried_regs": [
+   15,
+   14
+  ],
+  "loop_insns": [
+   804,
+   815
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   28,
+   24
+  ]
+ },
+ "bh_vc1__10232162977073177072": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   24,
+   23
+  ],
+  "carried_regs": [
+   15,
+   12
+  ],
+  "loop_insns": [
+   1140,
+   1163
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   36,
+   36
+  ],
+  "shed": {},
+  "sp_accesses": [
+   42,
+   42
+  ]
+ },
+ "bh_vc1__11104469885667852817": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   24
+  ],
+  "carried_regs": [
+   14,
+   13
+  ],
+  "loop_insns": [
+   1306,
+   1330
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S deliver router_local_delivery.hpp:192",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   36,
+   36
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_vc1__11573880575809721320": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   15,
+   13
+  ],
+  "loop_insns": [
+   1317,
+   1315
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S deliver router_local_delivery.hpp:192",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {},
+  "sp_accesses": [
+   37,
+   40
+  ]
+ },
+ "bh_vc1__12623197829360786347": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   24
+  ],
+  "carried_regs": [
+   14,
+   13
+  ],
+  "loop_insns": [
+   1306,
+   1330
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S deliver router_local_delivery.hpp:192",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   36,
+   36
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_vc1__13064152745544985654": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   21
+  ],
+  "carried_regs": [
+   15,
+   12
+  ],
+  "loop_insns": [
+   1317,
+   1312
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {},
+  "sp_accesses": [
+   37,
+   34
+  ]
+ },
+ "bh_vc1__13089072756396762885": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   17,
+   17
+  ],
+  "loop_insns": [
+   668,
+   683
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_vc1__1348480354303653374": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   24
+  ],
+  "carried_regs": [
+   14,
+   13
+  ],
+  "loop_insns": [
+   1300,
+   1328
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S deliver router_local_delivery.hpp:192",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   36,
+   36
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_vc1__14038925932795069196": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   17,
+   17
+  ],
+  "loop_insns": [
+   668,
+   683
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_vc1__14368077009860459152": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   17,
+   17
+  ],
+  "loop_insns": [
+   668,
+   683
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_vc1__14449052750677022402": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   17,
+   17
+  ],
+  "loop_insns": [
+   583,
+   598
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_vc1__14488824508413726305": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   17,
+   17
+  ],
+  "loop_insns": [
+   668,
+   683
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_vc1__1485921802768478078": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   21
+  ],
+  "carried_regs": [
+   15,
+   11
+  ],
+  "loop_insns": [
+   1150,
+   1148
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:credit_frame_due": [
+    "S credit_completions router_receiver.hpp:591",
+    "S send_credit_frame router_receiver.hpp:675"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   32,
+   35
+  ],
+  "shed": {},
+  "sp_accesses": [
+   36,
+   38
+  ]
+ },
+ "bh_vc1__14925557786897369768": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   23
+  ],
+  "carried_regs": [
+   15,
+   13
+  ],
+  "loop_insns": [
+   1317,
+   1315
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S deliver router_local_delivery.hpp:192",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {},
+  "sp_accesses": [
+   37,
+   40
+  ]
+ },
+ "bh_vc1__16301821509454580595": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   17,
+   17
+  ],
+  "loop_insns": [
+   668,
+   683
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_vc1__16621781951172719223": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   21
+  ],
+  "carried_regs": [
+   15,
+   12
+  ],
+  "loop_insns": [
+   1317,
+   1312
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {},
+  "sp_accesses": [
+   37,
+   34
+  ]
+ },
+ "bh_vc1__17679191427983392152": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   24,
+   23
+  ],
+  "carried_regs": [
+   15,
+   12
+  ],
+  "loop_insns": [
+   1140,
+   1163
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   36,
+   36
+  ],
+  "shed": {},
+  "sp_accesses": [
+   42,
+   42
+  ]
+ },
+ "bh_vc1__17731598706269116892": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   24
+  ],
+  "carried_regs": [
+   14,
+   13
+  ],
+  "loop_insns": [
+   1306,
+   1330
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S deliver router_local_delivery.hpp:192",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   36,
+   36
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_vc1__17966234560397861258": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   24
+  ],
+  "carried_regs": [
+   14,
+   13
+  ],
+  "loop_insns": [
+   1306,
+   1330
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S deliver router_local_delivery.hpp:192",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   36,
+   36
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_vc1__1820397891289760981": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   21
+  ],
+  "carried_regs": [
+   15,
+   11
+  ],
+  "loop_insns": [
+   1150,
+   1148
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:credit_frame_due": [
+    "S credit_completions router_receiver.hpp:591",
+    "S send_credit_frame router_receiver.hpp:675"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   32,
+   35
+  ],
+  "shed": {},
+  "sp_accesses": [
+   36,
+   38
+  ]
+ },
+ "bh_vc1__194038721068991495": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   17,
+   17
+  ],
+  "loop_insns": [
+   583,
+   598
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_vc1__2514303246254028150": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   23,
+   24
+  ],
+  "carried_regs": [
+   14,
+   13
+  ],
+  "loop_insns": [
+   1300,
+   1328
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "run:loop_copy.idle_passes_with_partial_group": [
+    "S credit_completions router_receiver.hpp:587",
+    "S deliver router_local_delivery.hpp:192",
+    "S slots_due_for_credit router_receiver.hpp:529"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   36,
+   36
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   42
+  ]
+ },
+ "bh_vc1__6475689126009134489": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   17,
+   17
+  ],
+  "loop_insns": [
+   668,
+   683
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ }
+}

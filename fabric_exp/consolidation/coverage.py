@@ -128,6 +128,9 @@ CASES = {
     # VC1 + VC2 (2026-11-01): the VC1 split with VC2 enabled (v4 admits it from variants/v4rxc7v)
     "bh_vc1_vc2": (BH, None, {"TT_METAL_ENABLE_FABRIC_VC2": "1"}, "bh"),
     "bh_vc1_vc2_1erisc": (BH, None, {"TT_METAL_ENABLE_FABRIC_VC2": "1", **ONE}, "bh"),
+    # Torus (Y) + VC2 (2026-11-01, sender stage 0): the device rows' TorusY1HopNS with VC2 on
+    "bh_torus_vc2": (BH, test_yaml("Torus", "      torus_config: Y\n"), {"TT_METAL_ENABLE_FABRIC_VC2": "1"}, False),
+    "bh_torus_vc2_1erisc": (BH, test_yaml("Torus", "      torus_config: Y\n"), {"TT_METAL_ENABLE_FABRIC_VC2": "1", **ONE}, False),
     "wh_vc1": (WH_T3K, None, {}, "wh"),
     # Single BH Galaxy (8x4); express = the 8x4 torus with one dim-0 express pattern (5 VC0 sender channels, Z routers)
     "glx_2d": (GLX, test_yaml("Mesh"), {}, False),

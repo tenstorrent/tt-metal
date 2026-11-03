@@ -1,0 +1,27 @@
+# DO NOT RUN ON A LOUDBOX (coordinator, 2026-11-03): FrgValFullRingMcast was killed twice ~20 s into "Waiting for
+# programs" (lb2 170018 a08u28, 170023 a07u28; switch off too), once followed by PCI device 2 vanishing. Hypothesis:
+# a hang on the P150 ring; open. FULLRING_MCAST_GAP.md §8.16.
+# FULLRING_MCAST_GAP.md §8.14, P150 validation (ring): data-checked, flow control on, 1 link, 4096 B.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: FrgValFullRingMcast
+  enable_flow_control: true
+  fabric_setup: {topology: Ring, num_links: 1}
+  parametrization_params:
+    ftype: [mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [4096]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: full_ring}
+- name: FrgValRingAllToAll
+  enable_flow_control: true
+  fabric_setup: {topology: Ring, num_links: 1}
+  parametrization_params:
+    ftype: [mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [4096]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: all_to_all}

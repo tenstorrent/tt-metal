@@ -1,0 +1,15 @@
+# FULLRING_MCAST_GAP.md A/B 8 (2026-11-03): glx_sizes_ring.yaml's GlxFullRingMulticast at 3584 / 4000 / 4096 B (one vs
+# two Ethernet frames per packet; the wire crossing), with 3072 and 4352 B as same-job anchors.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: GlxFullRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 3584, 4000, 4096, 4352]
+  defaults: {ftype: mcast, num_packets: 20000}
+  patterns:
+  - {type: full_ring, iterations: 1}

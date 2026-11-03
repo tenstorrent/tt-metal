@@ -1,0 +1,400 @@
+# Slot study, 2 KiB slots: sls_glx_vc1.yaml's rows (the Galaxy split into two 2x2 meshes, VC0 + VC1) with
+# max_packet_size 2048 (~168 slots per ERISC), 16 and 2048 B payloads (the sanity group at 1024 / 2048 B); slots from
+# TT_FABRIC_EXP_SLOTS_VC1 or the builder's default. 49 tests, 98 finishes over both ranks.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "MultiMeshAllToAll"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 100
+    patterns:
+      - type: all_to_all
+
+  - name: "MultiMeshNeighborExchangeInter"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 3000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "VC1Mesh1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "VC1Mesh1HopNS"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 2]
+
+  - name: "VC1MeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [2048]
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+    patterns:
+      - type: all_to_all
+        iterations: 1
+        mesh_scope: intra_mesh
+
+  - name: "VC1Mesh2Hop"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "VC1Mesh2HopMerge"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "VC1BurstEW_N8_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      size: [2048, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 2500
+            stream:
+              - {ntype: unicast_write, count: 8}
+              - {idle: 500}
+
+  - name: "VC1BurstEW_N32_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      size: [2048, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 625
+            stream:
+              - {ntype: unicast_write, count: 32}
+              - {idle: 500}
+
+  - name: "GlxInter_0_1_to_1_0"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 0]
+            num_packets: 50000
+
+  - name: "GlxInter_0_1_to_1_1"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 50000
+
+  - name: "GlxInter_0_1_to_1_2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 2]
+            num_packets: 50000
+
+  - name: "GlxInter_0_1_to_1_3"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 3]
+            num_packets: 50000
+
+  - name: "GlxInter_0_0_to_1_0"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+            num_packets: 50000
+
+  - name: "GlxInter_0_0_to_1_1"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 50000
+
+  - name: "GlxInter_0_0_to_1_2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 2]
+            num_packets: 50000
+
+  - name: "GlxInter_0_0_to_1_3"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 3]
+            num_packets: 50000
+
+  - name: "GlxMixWorker"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 40000
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 100000
+
+  - name: "GlxMixForward"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 40000
+      - device: [1, 2]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 60000
+
+  - name: "GlxSoloWorker"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 100000
+
+  - name: "GlxSoloForward"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 2048]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [1, 2]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 60000

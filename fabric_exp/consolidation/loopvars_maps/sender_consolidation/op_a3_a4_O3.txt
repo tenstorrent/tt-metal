@@ -1,0 +1,5 @@
+   92  fabric_router::run_idle                       OTHER  (e.g. bh_trim_gtest__10124147682226859959)
+    2  fabric_router::sender::run                    OTHER  (e.g. bh_trim_gtest__12591059997308014787)
+  564  fabric_router::sender::run                    same opcodes  (e.g. bh_2d__10043895322277694146)
+  583  fabric_router::single::run                    OTHER  (e.g. bh_2d_1erisc__10303178812664391181)
+   40  fabric_router::single::run                    same opcodes  (e.g. bh_1d_1erisc__10063481670200031670)

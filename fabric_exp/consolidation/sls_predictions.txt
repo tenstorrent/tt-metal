@@ -1,0 +1,100 @@
+# sls_model.py predictions for the P1 sweep (SLOT_STUDY.md), written 2026-11-01 20:17:32 before the runs.
+# prov = v4gi's fit with the intercepts of the kinds the lead has points for (19,9,16,5,4 census sdb + job 360) moved to
+# the lead, and the lead's service bounds (1-hop 142, direct 208/209, VC1 path 295/305 and 2-hop path 298/316 from
+# 13,8,16,7,7, assumed at its bound); v4gi = the 2026-10-28 fit as is (pre-merge placement, 1-hop 158; no 2-VC1 row).
+# Rows: cycles/packet; the window that binds in brackets (P = service bound). Measured columns go in SLOT_STUDY.md.
+
+## sweep
+w12    20,6,16,7,6   prov   16 B  1-hop  142.0 [P]  2-hop  332.8 [f0]  inter direct  208.3 [P]  inter + VC1  295.3 [P]  inter + 2 VC1  298.4 [P]
+w12    20,6,16,7,6   prov 4352 B  1-hop  142.0 [P]  2-hop  364.3 [f0]  inter direct  209.1 [P]  inter + VC1  304.5 [P]  inter + 2 VC1  316.2 [P]
+w12    20,6,16,7,6   v4gi   16 B  1-hop  157.7 [P]  2-hop  371.4 [f0]  inter direct  206.3 [P]  inter + VC1  290.2 [P]
+w12    20,6,16,7,6   v4gi 4352 B  1-hop  157.6 [P]  2-hop  400.6 [f0]  inter direct  207.1 [P]  inter + VC1  293.4 [P]
+j360   13,8,16,7,7   prov   16 B  1-hop  142.0 [P]  2-hop  262.9 [f0]  inter direct  208.3 [P]  inter + VC1  295.3 [P]  inter + 2 VC1  298.4 [P]
+j360   13,8,16,7,7   prov 4352 B  1-hop  142.0 [P]  2-hop  284.6 [f0]  inter direct  209.1 [P]  inter + VC1  304.5 [P]  inter + 2 VC1  316.2 [P]
+j360   13,8,16,7,7   v4gi   16 B  1-hop  157.7 [P]  2-hop  291.8 [f0]  inter direct  206.3 [P]  inter + VC1  290.2 [P]
+j360   13,8,16,7,7   v4gi 4352 B  1-hop  157.6 [P]  2-hop  311.8 [f0]  inter direct  207.1 [P]  inter + VC1  293.4 [P]
+w11    18,8,16,6,5   prov   16 B  1-hop  142.0 [P]  2-hop  262.9 [f0]  inter direct  208.3 [P]  inter + VC1  295.3 [P]  inter + 2 VC1  300.7 [r1]
+w11    18,8,16,6,5   prov 4352 B  1-hop  142.0 [P]  2-hop  284.6 [f0]  inter direct  209.1 [P]  inter + VC1  317.2 [r1]  inter + 2 VC1  331.1 [r1]
+w11    18,8,16,6,5   v4gi   16 B  1-hop  157.7 [P]  2-hop  291.8 [f0]  inter direct  206.3 [P]  inter + VC1  290.2 [P]
+w11    18,8,16,6,5   v4gi 4352 B  1-hop  157.6 [P]  2-hop  311.8 [f0]  inter direct  207.1 [P]  inter + VC1  314.7 [f1]
+w32    18,9,16,5,5   prov   16 B  1-hop  142.0 [P]  2-hop  239.5 [f0]  inter direct  208.3 [P]  inter + VC1  328.5 [f1]  inter + 2 VC1  328.5 [f1]
+w32    18,9,16,5,5   prov 4352 B  1-hop  142.0 [P]  2-hop  258.0 [f0]  inter direct  209.1 [P]  inter + VC1  372.8 [f1]  inter + 2 VC1  372.8 [f1]
+w32    18,9,16,5,5   v4gi   16 B  1-hop  157.7 [P]  2-hop  265.2 [f0]  inter direct  206.3 [P]  inter + VC1  328.5 [f1]
+w32    18,9,16,5,5   v4gi 4352 B  1-hop  157.6 [P]  2-hop  282.2 [f0]  inter direct  207.1 [P]  inter + VC1  372.8 [f1]
+today  19,9,16,5,4   prov   16 B  1-hop  142.0 [P]  2-hop  239.5 [f0]  inter direct  208.3 [P]  inter + VC1  346.6 [r1]  inter + 2 VC1  375.8 [r1]
+today  19,9,16,5,4   prov 4352 B  1-hop  142.0 [P]  2-hop  258.0 [f0]  inter direct  209.1 [P]  inter + VC1  396.5 [r1]  inter + 2 VC1  413.9 [r1]
+today  19,9,16,5,4   v4gi   16 B  1-hop  157.7 [P]  2-hop  265.2 [f0]  inter direct  206.3 [P]  inter + VC1  328.5 [f1]
+today  19,9,16,5,4   v4gi 4352 B  1-hop  157.6 [P]  2-hop  282.2 [f0]  inter direct  207.1 [P]  inter + VC1  374.7 [r1]
+w21    19,10,16,4,4  prov   16 B  1-hop  142.0 [P]  2-hop  220.9 [f0]  inter direct  208.3 [P]  inter + VC1  403.3 [f1]  inter + 2 VC1  403.3 [f1]
+w21    19,10,16,4,4  prov 4352 B  1-hop  142.0 [P]  2-hop  236.8 [f0]  inter direct  209.1 [P]  inter + VC1  460.1 [f1]  inter + 2 VC1  460.1 [f1]
+w21    19,10,16,4,4  v4gi   16 B  1-hop  157.7 [P]  2-hop  244.0 [f0]  inter direct  206.3 [P]  inter + VC1  403.3 [f1]
+w21    19,10,16,4,4  v4gi 4352 B  1-hop  157.6 [P]  2-hop  258.5 [f0]  inter direct  207.1 [P]  inter + VC1  460.1 [f1]
+w31    20,11,16,3,3  prov   16 B  1-hop  142.0 [P]  2-hop  205.6 [f0]  inter direct  208.3 [P]  inter + VC1  528.0 [f1]  inter + 2 VC1  528.0 [f1]
+w31    20,11,16,3,3  prov 4352 B  1-hop  142.0 [P]  2-hop  219.4 [f0]  inter direct  209.1 [P]  inter + VC1  605.4 [f1]  inter + 2 VC1  605.4 [f1]
+w31    20,11,16,3,3  v4gi   16 B  1-hop  157.7 [P]  2-hop  226.6 [f0]  inter direct  206.3 [P]  inter + VC1  528.0 [f1]
+w31    20,11,16,3,3  v4gi 4352 B  1-hop  157.6 [P]  2-hop  239.2 [f0]  inter direct  207.1 [P]  inter + VC1  605.4 [f1]
+main   51,4,8,2,4    prov   16 B  1-hop  183.5 [r0]  2-hop  500.4 [f0]  inter direct  232.5 [r0]  inter + VC1  777.3 [f1]  inter + 2 VC1  777.3 [f1]
+main   51,4,8,2,4    prov 4352 B  1-hop  198.0 [r0]  2-hop  545.1 [f0]  inter direct  236.7 [r0]  inter + VC1  896.2 [f1]  inter + 2 VC1  896.2 [f1]
+main   51,4,8,2,4    v4gi   16 B  1-hop  183.5 [r0]  2-hop  500.4 [f0]  inter direct  232.5 [r0]  inter + VC1  777.3 [f1]
+main   51,4,8,2,4    v4gi 4352 B  1-hop  198.0 [r0]  2-hop  545.1 [f0]  inter direct  236.7 [r0]  inter + VC1  896.2 [f1]
+
+## calibration
+cw8    8,9,16,5,4    prov   16 B  1-hop  142.0 [P]  2-hop  239.5 [f0]  inter direct  208.3 [P]  inter + VC1  346.6 [r1]  inter + 2 VC1  375.8 [r1]
+cw8    8,9,16,5,4    prov 4352 B  1-hop  142.0 [P]  2-hop  258.0 [f0]  inter direct  209.1 [P]  inter + VC1  396.5 [r1]  inter + 2 VC1  413.9 [r1]
+cw8    8,9,16,5,4    v4gi   16 B  1-hop  157.7 [P]  2-hop  265.2 [f0]  inter direct  206.3 [P]  inter + VC1  328.5 [f1]
+cw8    8,9,16,5,4    v4gi 4352 B  1-hop  157.6 [P]  2-hop  282.2 [f0]  inter direct  207.1 [P]  inter + VC1  374.7 [r1]
+cw12   12,9,16,5,4   prov   16 B  1-hop  142.0 [P]  2-hop  239.5 [f0]  inter direct  208.3 [P]  inter + VC1  346.6 [r1]  inter + 2 VC1  375.8 [r1]
+cw12   12,9,16,5,4   prov 4352 B  1-hop  142.0 [P]  2-hop  258.0 [f0]  inter direct  209.1 [P]  inter + VC1  396.5 [r1]  inter + 2 VC1  413.9 [r1]
+cw12   12,9,16,5,4   v4gi   16 B  1-hop  157.7 [P]  2-hop  265.2 [f0]  inter direct  206.3 [P]  inter + VC1  328.5 [f1]
+cw12   12,9,16,5,4   v4gi 4352 B  1-hop  157.6 [P]  2-hop  282.2 [f0]  inter direct  207.1 [P]  inter + VC1  374.7 [r1]
+cw15   15,9,16,5,4   prov   16 B  1-hop  142.0 [P]  2-hop  239.5 [f0]  inter direct  208.3 [P]  inter + VC1  346.6 [r1]  inter + 2 VC1  375.8 [r1]
+cw15   15,9,16,5,4   prov 4352 B  1-hop  142.0 [P]  2-hop  258.0 [f0]  inter direct  209.1 [P]  inter + VC1  396.5 [r1]  inter + 2 VC1  413.9 [r1]
+cw15   15,9,16,5,4   v4gi   16 B  1-hop  157.7 [P]  2-hop  265.2 [f0]  inter direct  206.3 [P]  inter + VC1  328.5 [f1]
+cw15   15,9,16,5,4   v4gi 4352 B  1-hop  157.6 [P]  2-hop  282.2 [f0]  inter direct  207.1 [P]  inter + VC1  374.7 [r1]
+cr0_8  27,9,8,5,4    prov   16 B  1-hop  183.5 [r0]  2-hop  222.4 [f0]  inter direct  232.5 [r0]  inter + VC1  346.6 [r1]  inter + 2 VC1  375.8 [r1]
+cr0_8  27,9,8,5,4    prov 4352 B  1-hop  198.0 [r0]  2-hop  242.2 [f0]  inter direct  236.7 [r0]  inter + VC1  396.5 [r1]  inter + 2 VC1  413.9 [r1]
+cr0_8  27,9,8,5,4    v4gi   16 B  1-hop  183.5 [r0]  2-hop  222.4 [f0]  inter direct  232.5 [r0]  inter + VC1  328.5 [f1]
+cr0_8  27,9,8,5,4    v4gi 4352 B  1-hop  198.0 [r0]  2-hop  242.2 [f0]  inter direct  236.7 [r0]  inter + VC1  374.7 [r1]
+cf3    19,9,16,3,7   prov   16 B  1-hop  142.0 [P]  2-hop  239.5 [f0]  inter direct  208.3 [P]  inter + VC1  528.0 [f1]  inter + 2 VC1  528.0 [f1]
+cf3    19,9,16,3,7   prov 4352 B  1-hop  142.0 [P]  2-hop  258.0 [f0]  inter direct  209.1 [P]  inter + VC1  605.4 [f1]  inter + 2 VC1  605.4 [f1]
+cf3    19,9,16,3,7   v4gi   16 B  1-hop  157.7 [P]  2-hop  265.2 [f0]  inter direct  206.3 [P]  inter + VC1  528.0 [f1]
+cf3    19,9,16,3,7   v4gi 4352 B  1-hop  157.6 [P]  2-hop  282.2 [f0]  inter direct  207.1 [P]  inter + VC1  605.4 [f1]
+cf4    19,9,16,4,7   prov   16 B  1-hop  142.0 [P]  2-hop  239.5 [f0]  inter direct  208.3 [P]  inter + VC1  403.3 [f1]  inter + 2 VC1  403.3 [f1]
+cf4    19,9,16,4,7   prov 4352 B  1-hop  142.0 [P]  2-hop  258.0 [f0]  inter direct  209.1 [P]  inter + VC1  460.1 [f1]  inter + 2 VC1  460.1 [f1]
+cf4    19,9,16,4,7   v4gi   16 B  1-hop  157.7 [P]  2-hop  265.2 [f0]  inter direct  206.3 [P]  inter + VC1  403.3 [f1]
+cf4    19,9,16,4,7   v4gi 4352 B  1-hop  157.6 [P]  2-hop  282.2 [f0]  inter direct  207.1 [P]  inter + VC1  460.1 [f1]
+cf5    16,9,16,5,7   prov   16 B  1-hop  142.0 [P]  2-hop  239.5 [f0]  inter direct  208.3 [P]  inter + VC1  328.5 [f1]  inter + 2 VC1  328.5 [f1]
+cf5    16,9,16,5,7   prov 4352 B  1-hop  142.0 [P]  2-hop  258.0 [f0]  inter direct  209.1 [P]  inter + VC1  372.8 [f1]  inter + 2 VC1  372.8 [f1]
+cf5    16,9,16,5,7   v4gi   16 B  1-hop  157.7 [P]  2-hop  265.2 [f0]  inter direct  206.3 [P]  inter + VC1  328.5 [f1]
+cf5    16,9,16,5,7   v4gi 4352 B  1-hop  157.6 [P]  2-hop  282.2 [f0]  inter direct  207.1 [P]  inter + VC1  372.8 [f1]
+cr3    13,8,16,8,3   prov   16 B  1-hop  142.0 [P]  2-hop  262.9 [f0]  inter direct  208.3 [P]  inter + VC1  462.2 [r1]  inter + 2 VC1  501.1 [r1]
+cr3    13,8,16,8,3   prov 4352 B  1-hop  142.0 [P]  2-hop  284.6 [f0]  inter direct  209.1 [P]  inter + VC1  528.6 [r1]  inter + 2 VC1  551.8 [r1]
+cr3    13,8,16,8,3   v4gi   16 B  1-hop  157.7 [P]  2-hop  291.8 [f0]  inter direct  206.3 [P]  inter + VC1  426.8 [r1]
+cr3    13,8,16,8,3   v4gi 4352 B  1-hop  157.6 [P]  2-hop  311.8 [f0]  inter direct  207.1 [P]  inter + VC1  499.7 [r1]
+cr4    13,8,16,8,4   prov   16 B  1-hop  142.0 [P]  2-hop  262.9 [f0]  inter direct  208.3 [P]  inter + VC1  346.6 [r1]  inter + 2 VC1  375.8 [r1]
+cr4    13,8,16,8,4   prov 4352 B  1-hop  142.0 [P]  2-hop  284.6 [f0]  inter direct  209.1 [P]  inter + VC1  396.5 [r1]  inter + 2 VC1  413.9 [r1]
+cr4    13,8,16,8,4   v4gi   16 B  1-hop  157.7 [P]  2-hop  291.8 [f0]  inter direct  206.3 [P]  inter + VC1  320.1 [r1]
+cr4    13,8,16,8,4   v4gi 4352 B  1-hop  157.6 [P]  2-hop  311.8 [f0]  inter direct  207.1 [P]  inter + VC1  374.7 [r1]
+cr5    12,8,16,8,5   prov   16 B  1-hop  142.0 [P]  2-hop  262.9 [f0]  inter direct  208.3 [P]  inter + VC1  295.3 [P]  inter + 2 VC1  300.7 [r1]
+cr5    12,8,16,8,5   prov 4352 B  1-hop  142.0 [P]  2-hop  284.6 [f0]  inter direct  209.1 [P]  inter + VC1  317.2 [r1]  inter + 2 VC1  331.1 [r1]
+cr5    12,8,16,8,5   v4gi   16 B  1-hop  157.7 [P]  2-hop  291.8 [f0]  inter direct  206.3 [P]  inter + VC1  290.2 [P]
+cr5    12,8,16,8,5   v4gi 4352 B  1-hop  157.6 [P]  2-hop  311.8 [f0]  inter direct  207.1 [P]  inter + VC1  299.8 [r1]
+cp     13,7,16,8,7   prov   16 B  1-hop  142.0 [P]  2-hop  292.9 [f0]  inter direct  208.3 [P]  inter + VC1  295.3 [P]  inter + 2 VC1  298.4 [P]
+cp     13,7,16,8,7   prov 4352 B  1-hop  142.0 [P]  2-hop  318.8 [f0]  inter direct  209.1 [P]  inter + VC1  304.5 [P]  inter + 2 VC1  316.2 [P]
+cp     13,7,16,8,7   v4gi   16 B  1-hop  157.7 [P]  2-hop  325.9 [f0]  inter direct  206.3 [P]  inter + VC1  290.2 [P]
+cp     13,7,16,8,7   v4gi 4352 B  1-hop  157.6 [P]  2-hop  349.8 [f0]  inter direct  207.1 [P]  inter + VC1  293.4 [P]
+
+## the rule's picks (4352 B), prov / v4gi:
+  1:2: prov 20,6,16,7,6; v4gi 20,6,16,7,6
+  1:1: prov 20,7,16,6,6; v4gi 18,8,16,6,5
+  3:2: prov 21,8,16,5,5; v4gi 18,9,16,5,5
+  2:1: prov 22,9,16,4,4; v4gi 19,10,16,4,4
+  3:1: prov 20,11,16,3,3; v4gi 20,11,16,3,3
+
+## not in the model's windows (no fitted kind), predicted by hand (2026-11-01 20:20, before the runs)
+- worker: v4gi's worker round trip ~2,730 (one binding point, bursts) -> 1-hop / burst rows at cw8 ~341, cw12 ~228,
+  cw15 ~182, 18-19 slots ~144-152 (the lead's 1-hop bound 142: the worker stops binding at ~19-20); the model's worker
+  step for the lead: ceil(2730 / 142) = 20.
+- cr0_8 (VC0 receiver 8, T = 2): 1-hop ~183-198 (v4gi's r0 T=2 loop 1,468 / 1,584 over 8), inter direct ~233-237.
+- multicast, 2-hop merged, bursts, mix rows: no model; expected to follow f0 (multicast, merged) and the worker (bursts).
+- mix (new placement): each flow slower than alone if they share [1, 0]'s E/W link; the VC1 flow +40-70 (job 111).

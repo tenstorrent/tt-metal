@@ -119,3 +119,58 @@ explicit ring direction.
    IDs 16-23 (past the 4-bit ID).
 3. VC2 worker API indexes by fabric-max flat position, the kernel by per-router compact `VC2_LOCAL_CHANNEL_START`; they
    differ on Z-boundary fabrics (fabric_vc2_connection.cpp:161-164 vs ct_args:99).
+
+## Extension: several 1D line VCs for native worker fan-in (user, 2026-11-01; queued after the VC2 line bring-up)
+
+The idea (user): allow 1D routing on VC2 too, and more generally up to 3-4 line VCs on a 1D (line or ring) fabric,
+each with its own worker channel. Why: many ops have a fan-in of more than one worker writing into the fabric through
+the same router. Today a router takes one worker connection per VC, so even a fan-in of 2 needs a mux (a Tensix core
+per link that matmuls could use, plus an extra hop). With N line VCs a router takes N worker connections natively. The
+router shape barely changes: the VCs are not special; the host says how many line VCs the fabric has (up to a maximum
+found by experiment; 3 should be reachable, since 2D already runs 3 VCs), and the router follows the host's per-VC
+features (the ownership pass, V4_RECEIVER_OWNERSHIP.md / V4_SENDER_OWNERSHIP.md). Every pass already checks each
+worker connection in one group.
+
+Questions to settle first (main session, not yet checked):
+- Per-VC resources on 1D (one worker sender, one forwarding sender, one receiver per line VC):
+  - slots: 82 at 4352 B with the 29 KiB buffer, split N ways; per-VC windows shrink. That is fine while the workers
+    share the link, but limits a lone busy VC; the slot study's window model applies;
+  - transaction IDs: 16 per NoC on E1, today 8 per receiver channel with deadlock avoidance; with N receivers each
+    gets fewer, which changes completion-group proofs (related problem 2 above);
+  - stream registers per ERISC, the flat sender-channel table (max 10 positions), credit blocks, code size.
+- Per-pass cost of each extra worker channel on E0: its free-slots read and connection check join the group, but a
+  group overlaps only up to 4 reads in flight (RESULTS §17). Idle VC2 cost ~7.7 cycles/packet on 2D (§29-§30); 1D
+  1-hop has ~14 of E0 slack at the wire. Channel trimming removes unused VCs in deployment.
+- Rings: bubble flow control + first-level acks per VC (VC2 rings exist since phase 2); line VCs never cross over, so
+  no inter-VC dependency.
+- Host/API: the number of line VCs as a fabric setting; the worker connection API per VC (VC2 has its own today);
+  slot, stream, trid allocation per VC count; on a 1D fabric VC1 has no inter-mesh role and could be a line VC too.
+- Alternative to compare: several worker channels on one VC (fan-in into one far ring, as forwarding channels merge
+  today). That costs less (no extra receiver, forwarding channel or trid range), but gives no isolation between flows
+  and changes the one-worker-per-VC rule.
+
+Addition (user, 2026-11-01): on 1D fabrics, VC1 need not be the inter-mesh VC; it can be one more line VC. The user
+expects the router shape to be neutral to this, with the change on the host side. Main session's check, from code
+reads, of what must hold for that:
+- Per-VC facts come from the host (the ownership passes: serviced, first-level acks, forwarding, crossover,
+  intermesh ingress per receiver channel). The host fixes VC1's first-level ack at 0 today ("must agree across every
+  VC1 link"); a 1D VC1 ring needs it per VC.
+- Worker role comes from the host arg SENDER_CH_<i>_IS_WORKER_CHANNEL (sender option (a)), so a VC1 worker channel
+  needs no kernel change.
+- Crossover is a VC1-named fact (FABRIC_2D_VC0_CROSSOVER_TO_VC1, VC2_CROSSOVER_TO_VC1). Generalize it to a per-VC
+  "forwards on VC" target when this work starts.
+- The kernel's supported-VC-combination gate (VC1+VC2 / line-mode gates) moves to the host; the kernel keeps
+  consistency static_asserts only.
+- Audit remaining VC-number assumptions: sender channel counts per VC, the flat sender table, trid ranges (ch * 8),
+  telemetry indices, slot rows.
+
+Census and first perf (VC2 line agent, 2026-11-01; /home/aagarwal/tt-metal-vc2line/fabric_exp/consolidation/
+VC2_LINE_1D_VCS.md and VC2_LINE_BRINGUP.md "Perf: idle and full VCs"; Galaxy jobs 167481/167482):
+- N = 3 line VCs fit (code ~24 KB of ~29.2 KB on two ERISCs; 4 transaction IDs per receiver channel; 12 of 30
+  stream registers; 6 of 10 sender-table positions). N = 4 overflows on code (estimate) and needs code past the
+  three-VC structure.
+- An idle line VC costs a busy VC0 1-hop flow +17 to +20 cycles/packet at 256 B-1 KiB (two ERISCs; one ERISC +53);
+  multi-hop and multicast +46 to +65 at 4352 B. The wire hides it only on 1-hop at 4352 B.
+- Several busy VCs on one link: at 4352 B they reach the wire. At 256 B-1 KiB the total is +9% over one VC (+27% with
+  doubled windows), far below the wire. So line VCs buy native fan-in, not router capacity (router per-pass work caps
+  small sizes: hypothesis). VC1's 4/4 windows bind VC0 flows into VC1 (-29% to -39% doubled).

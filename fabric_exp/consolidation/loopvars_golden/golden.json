@@ -1,0 +1,1398 @@
+{
+ "fingerprint": {
+  "binaries": {
+   "addr2line": "5090a437711bb82e",
+   "gcc": "0ee57acbe24a92d7",
+   "nm": "be99542bc483f235",
+   "objdump": "f820d3382baf41cc",
+   "readelf": "ab28ee5f289bdb54"
+  },
+  "binutils": "GNU readelf (tenstorrent/sfpi:7.91.0[1077]) 2.44.20250202",
+  "tool": "4473df9646db8d5b"
+ },
+ "recorded": "2026-11-02T03:52:25",
+ "results": {
+  "lead_torusy_vc2_e1.elf": {
+   "accesses": {
+    "loads": 25,
+    "stores": 14,
+    "total": 39,
+    "unknown": 11
+   },
+   "compiler": "tenstorrent/sfpi:7.91.0[1077] 15.1.0",
+   "dwarf_only": {
+    "NOC_CMD_BUF_WRITE_REG@noc_common_write_with_state<0,0>:val": [
+     8
+    ],
+    "deliver<1>:fused~": [
+     8
+    ],
+    "deliver<1>:header": [
+     76
+    ],
+    "deliver<1>:header~": [
+     8
+    ],
+    "deliver<1>:inc~": [
+     8
+    ],
+    "deliver<1>:scatter~": [
+     8
+    ],
+    "deliver<1>:trid~": [
+     80
+    ],
+    "handle<1>:header": [
+     76
+    ],
+    "handle<1>:header~": [
+     8
+    ],
+    "local_atomic_inc@deliver<1>:flush~": [
+     8
+    ],
+    "local_write@deliver<1>:src_addr~": [
+     8
+    ],
+    "local_write@deliver<1>:trid~": [
+     80
+    ],
+    "ncrisc_noc_set_transaction_id@deliver<1>:trid~": [
+     80
+    ],
+    "noc_common_write_with_state<0,0>:src_addr": [
+     8
+    ],
+    "noc_write_with_state<0,0>:src_addr": [
+     8
+    ],
+    "noc_write_with_state<0,0>:src_addr~": [
+     8
+    ],
+    "oldest_uncredited<4>:next_index": [
+     80
+    ],
+    "receive<1>:header~": [
+     8
+    ],
+    "release_completions<1,4>:next_index": [
+     80
+    ],
+    "ring_add<4>:base": [
+     80
+    ],
+    "run:credits": [
+     96
+    ],
+    "run:round": [
+     40
+    ]
+   },
+   "elf": "lead_torusy_vc2_e1.elf",
+   "frame": 208,
+   "function": "_ZN13fabric_router8receiver3runINS_11DownstreamsILj0EEEEEvRS3_RT_.constprop.0",
+   "insns": 911,
+   "loop": "largest strongly connected region of run()",
+   "loop_insns": 830,
+   "registers": {
+    "s10": {
+     "pass:txq": 820,
+     "send_credit_frame:group_txq": 17,
+     "send_credit_frame:seen_free~": 17
+    },
+    "s3": {
+     "pass:arrived1": 445,
+     "retire<1>:source~": 28,
+     "slot_retired<4>:source~": 10
+    },
+    "s4": {
+     "release_completions<1,16>:next_index": 22,
+     "ring_add<16>:base": 11,
+     "run:cursor0.position.index": 823
+    },
+    "s5": {
+     "action@receive<0>:h": 380,
+     "receive<0>:header": 385,
+     "run:cursor0.position.slot": 820
+    },
+    "s6": {
+     "ring_add<16>:i~": 1,
+     "ring_add<16>:n": 2,
+     "run:cursor0.position.available": 826
+    },
+    "s7": {
+     "oldest_uncredited<16>:waiting": 9,
+     "release_completions<1,16>:waiting": 18,
+     "run:cursor0.counts.uncompleted": 824
+    },
+    "s9": {
+     "run:frame_due": 38
+    }
+   },
+   "role": "receiver",
+   "scope_mismatches": {},
+   "sha": "36b45a8b8f0f0886",
+   "stored": [
+    "deliver<0>:encoding",
+    "handle<0>:downstreams",
+    "pass:d0",
+    "receive<0>:downstreams",
+    "receive<1>:arrived",
+    "release_completions<1,4>:waiting~",
+    "run:tables.ch1.cursor.counts.uncompleted",
+    "run:tables.ch1.cursor.position.available",
+    "run:tables.ch1.cursor.position.index",
+    "run:tables.ch1.cursor.position.slot",
+    "step<0>:downstreams",
+    "step<1>:arrived"
+   ],
+   "unknown": {
+    "L sp+12 Routing2D router_routing.hpp:87": 1,
+    "L sp+16 Routing2D router_routing.hpp:88": 1,
+    "L sp+20 deliver router_local_delivery.hpp:151": 1,
+    "L sp+24 deliver router_local_delivery.hpp:151": 1,
+    "L sp+8 deliver router_local_delivery.hpp:151": 2,
+    "S sp+20 deliver router_local_delivery.hpp:151": 1,
+    "S sp+24 deliver router_local_delivery.hpp:151": 1,
+    "S sp+8 deliver router_local_delivery.hpp:151": 2,
+    "S sp+8 deliver router_local_delivery.hpp:91": 1
+   },
+   "untrusted": [],
+   "values": {
+    "bits@receive<1>:header": {
+     "lines": {
+      "L receive router_receiver.hpp:374": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      76
+     ],
+     "stores": 0
+    },
+    "deliver<0>:encoding": {
+     "lines": {
+      "S deliver router_local_delivery.hpp:102": 1
+     },
+     "loads": 0,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 1
+    },
+    "deliver<0>:encoding~": {
+     "lines": {
+      "L shift_to_next_chunk fabric_edm_packet_transmission.hpp:150": 3
+     },
+     "loads": 3,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 0
+    },
+    "deliver<1>:payload": {
+     "lines": {
+      "L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174": 3,
+      "L deliver router_local_delivery.hpp:117": 1,
+      "L deliver router_local_delivery.hpp:126": 1
+     },
+     "loads": 5,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 0
+    },
+    "handle<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:151": 1,
+      "S deliver router_local_delivery.hpp:151": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "local_write@deliver<1>:src_addr": {
+     "lines": {
+      "L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174": 3
+     },
+     "loads": 3,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 0
+    },
+    "pass:d0": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:151": 1,
+      "S deliver router_local_delivery.hpp:151": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "receive<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:151": 1,
+      "S deliver router_local_delivery.hpp:151": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "receive<1>:arrived": {
+     "lines": {
+      "S receive router_receiver.hpp:368": 1
+     },
+     "loads": 0,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      72
+     ],
+     "stores": 1
+    },
+    "receive<1>:header": {
+     "lines": {
+      "L receive router_receiver.hpp:374": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      76
+     ],
+     "stores": 0
+    },
+    "release_completions<1,4>:waiting": {
+     "lines": {
+      "L release_completions router_completions.hpp:196": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      84
+     ],
+     "stores": 0
+    },
+    "release_completions<1,4>:waiting~": {
+     "lines": {
+      "S release_completions router_completions.hpp:210": 1
+     },
+     "loads": 0,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      84
+     ],
+     "stores": 1
+    },
+    "run:d0": {
+     "lines": {
+      "L run router_completions.hpp:118": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      28
+     ],
+     "stores": 0
+    },
+    "run:tables.ch1.cursor.counts.uncompleted": {
+     "lines": {
+      "L release_completions router_completions.hpp:196": 1,
+      "L slot_retired router_completions.hpp:108": 1,
+      "S release_completions router_completions.hpp:210": 1,
+      "S slot_retired router_completions.hpp:108": 1
+     },
+     "loads": 2,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      84
+     ],
+     "stores": 2
+    },
+    "run:tables.ch1.cursor.position.available": {
+     "lines": {
+      "L receive router_receiver.hpp:364": 1,
+      "L retire router_receiver.hpp:203": 1,
+      "S receive router_receiver.hpp:368": 1,
+      "S retire router_receiver.hpp:203": 1
+     },
+     "loads": 2,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      72
+     ],
+     "stores": 2
+    },
+    "run:tables.ch1.cursor.position.index": {
+     "lines": {
+      "L SlotRecords router_completions.hpp:65": 1,
+      "L handle router_receiver.hpp:349": 1,
+      "L retire router_receiver.hpp:207": 1,
+      "S retire router_receiver.hpp:207": 2
+     },
+     "loads": 3,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      80
+     ],
+     "stores": 2
+    },
+    "run:tables.ch1.cursor.position.slot": {
+     "lines": {
+      "L receive router_receiver.hpp:374": 1,
+      "L retire router_receiver.hpp:208": 1,
+      "S retire router_receiver.hpp:208": 1
+     },
+     "loads": 2,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      76
+     ],
+     "stores": 1
+    },
+    "set@slot_retired<4>:index": {
+     "lines": {
+      "L SlotRecords router_completions.hpp:65": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      80
+     ],
+     "stores": 0
+    },
+    "slot_retired<4>:index": {
+     "lines": {
+      "L SlotRecords router_completions.hpp:65": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      80
+     ],
+     "stores": 0
+    },
+    "step<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:151": 1,
+      "S deliver router_local_delivery.hpp:151": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "step<1>:arrived": {
+     "lines": {
+      "S receive router_receiver.hpp:368": 1
+     },
+     "loads": 0,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      72
+     ],
+     "stores": 1
+    }
+   }
+  },
+  "s2_torusy_vc2_e1.elf": {
+   "accesses": {
+    "loads": 25,
+    "stores": 14,
+    "total": 39,
+    "unknown": 7
+   },
+   "compiler": "tenstorrent/sfpi:7.91.0[1077] 15.1.0",
+   "dwarf_only": {
+    "NOC_CMD_BUF_WRITE_REG@noc_common_write_with_state<0,0>:val": [
+     8
+    ],
+    "credit_completions<1>:next_index": [
+     80
+    ],
+    "deliver<1>:fused~": [
+     8
+    ],
+    "deliver<1>:header": [
+     76
+    ],
+    "deliver<1>:header~": [
+     8
+    ],
+    "deliver<1>:inc~": [
+     8
+    ],
+    "deliver<1>:scatter~": [
+     8
+    ],
+    "deliver<1>:trid~": [
+     80
+    ],
+    "handle<1>:header": [
+     76
+    ],
+    "handle<1>:header~": [
+     8
+    ],
+    "local_atomic_inc@deliver<1>:flush~": [
+     8
+    ],
+    "local_write@deliver<1>:src_addr~": [
+     8
+    ],
+    "local_write@deliver<1>:trid~": [
+     80
+    ],
+    "ncrisc_noc_set_transaction_id@deliver<1>:trid~": [
+     80
+    ],
+    "noc_common_write_with_state<0,0>:src_addr": [
+     8
+    ],
+    "noc_write_with_state<0,0>:src_addr": [
+     8
+    ],
+    "noc_write_with_state<0,0>:src_addr~": [
+     8
+    ],
+    "of_slot@handle<1>:group": [
+     80
+    ],
+    "oldest_uncredited<4>:next_index": [
+     80
+    ],
+    "receive<1>:header~": [
+     8
+    ],
+    "ring_add<4>:index": [
+     80
+    ],
+    "run:round": [
+     40
+    ]
+   },
+   "elf": "s2_torusy_vc2_e1.elf",
+   "frame": 208,
+   "function": "_ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE",
+   "insns": 911,
+   "loop": "largest strongly connected region of run()",
+   "loop_insns": 830,
+   "registers": {
+    "s10": {
+     "pass:txq_status": 820,
+     "send_credit_frame:seen_free~": 17,
+     "send_credit_frame:txq_status_at_pass_start": 17
+    },
+    "s3": {
+     "handle<1>:header_word": 7,
+     "pass:arrived1": 445,
+     "retire<1>:source~": 28
+    },
+    "s4": {
+     "credit_completions<0>:next_index": 22,
+     "of_slot@handle<0>:group": 360,
+     "run:vc0_cursor.position.index": 823
+    },
+    "s5": {
+     "action@receive<0>:volatile_header": 380,
+     "receive<0>:header": 385,
+     "run:vc0_cursor.position.slot_addr": 820
+    },
+    "s6": {
+     "ring_add<16>:n": 2,
+     "run:vc0_cursor.position.ready": 826
+    },
+    "s7": {
+     "credit_completions<0>:waiting": 18,
+     "oldest_uncredited<16>:waiting": 9,
+     "run:vc0_cursor.counts.uncredited": 823
+    },
+    "s9": {
+     "run:credit_frame_due": 38
+    }
+   },
+   "role": "receiver",
+   "scope_mismatches": {},
+   "sha": "652819354f2154c7",
+   "stored": [
+    "credit_completions<1>:waiting~",
+    "deliver<0>:encoding",
+    "handle<0>:downstreams",
+    "handle<0>:routers",
+    "handle<1>:downstreams",
+    "pass:downstreams",
+    "receive<0>:downstreams",
+    "receive<1>:arrived",
+    "receive<1>:downstreams",
+    "run:tables.ch1.cursor.counts.uncredited",
+    "run:tables.ch1.cursor.position.index",
+    "run:tables.ch1.cursor.position.ready",
+    "run:tables.ch1.cursor.position.slot_addr",
+    "step<0>:downstreams",
+    "step<1>:arrived",
+    "step<1>:downstreams"
+   ],
+   "unknown": {
+    "L sp+20 deliver router_local_delivery.hpp:189": 1,
+    "L sp+24 deliver router_local_delivery.hpp:189": 1,
+    "L sp+8 deliver router_local_delivery.hpp:189": 1,
+    "S sp+20 deliver router_local_delivery.hpp:189": 1,
+    "S sp+24 deliver router_local_delivery.hpp:189": 1,
+    "S sp+8 deliver router_local_delivery.hpp:129": 1,
+    "S sp+8 deliver router_local_delivery.hpp:189": 1
+   },
+   "untrusted": [],
+   "values": {
+    "credit_completions<1>:waiting": {
+     "lines": {
+      "L credit_completions router_receiver.hpp:594": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      84
+     ],
+     "stores": 0
+    },
+    "credit_completions<1>:waiting~": {
+     "lines": {
+      "S credit_completions router_receiver.hpp:609": 1
+     },
+     "loads": 0,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      84
+     ],
+     "stores": 1
+    },
+    "deliver<0>:encoding": {
+     "lines": {
+      "S deliver router_local_delivery.hpp:141": 1
+     },
+     "loads": 0,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 1
+    },
+    "deliver<0>:encoding~": {
+     "lines": {
+      "L shift_to_next_chunk fabric_edm_packet_transmission.hpp:150": 3
+     },
+     "loads": 3,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 0
+    },
+    "deliver<1>:payload": {
+     "lines": {
+      "L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174": 3,
+      "L deliver router_local_delivery.hpp:156": 1,
+      "L deliver router_local_delivery.hpp:165": 1
+     },
+     "loads": 5,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 0
+    },
+    "handle<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "handle<0>:routers": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "handle<1>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 1
+    },
+    "load_word@receive<1>:hdr": {
+     "lines": {
+      "L receive router_receiver.hpp:467": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      76
+     ],
+     "stores": 0
+    },
+    "local_write@deliver<1>:src_addr": {
+     "lines": {
+      "L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174": 3
+     },
+     "loads": 3,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 0
+    },
+    "next_index@advance<1>:index": {
+     "lines": {
+      "L advance router_receiver.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      80
+     ],
+     "stores": 0
+    },
+    "pass:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "receive<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "receive<1>:arrived": {
+     "lines": {
+      "S receive router_receiver.hpp:461": 1
+     },
+     "loads": 0,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      72
+     ],
+     "stores": 1
+    },
+    "receive<1>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 1
+    },
+    "receive<1>:header": {
+     "lines": {
+      "L receive router_receiver.hpp:467": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      76
+     ],
+     "stores": 0
+    },
+    "run:downstreams": {
+     "lines": {
+      "L run fabric_router_flow_control.hpp:47": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      28
+     ],
+     "stores": 0
+    },
+    "run:me.x": {
+     "lines": {
+      "L Routing2D router_routing.hpp:93": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      16
+     ],
+     "stores": 0
+    },
+    "run:me.y": {
+     "lines": {
+      "L Routing2D router_routing.hpp:92": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      12
+     ],
+     "stores": 0
+    },
+    "run:tables.ch1.cursor.counts.uncredited": {
+     "lines": {
+      "L credit_completions router_receiver.hpp:594": 1,
+      "L retire router_receiver.hpp:317": 1,
+      "S credit_completions router_receiver.hpp:609": 1,
+      "S retire router_receiver.hpp:317": 1
+     },
+     "loads": 2,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      84
+     ],
+     "stores": 2
+    },
+    "run:tables.ch1.cursor.position.index": {
+     "lines": {
+      "L SlotSources router_receiver.hpp:205": 1,
+      "L advance router_receiver.hpp:189": 1,
+      "L handle router_receiver.hpp:435": 1,
+      "S advance router_receiver.hpp:189": 2
+     },
+     "loads": 3,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      80
+     ],
+     "stores": 2
+    },
+    "run:tables.ch1.cursor.position.ready": {
+     "lines": {
+      "L receive router_receiver.hpp:457": 1,
+      "L retire router_receiver.hpp:318": 1,
+      "S receive router_receiver.hpp:461": 1,
+      "S retire router_receiver.hpp:318": 1
+     },
+     "loads": 2,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      72
+     ],
+     "stores": 2
+    },
+    "run:tables.ch1.cursor.position.slot_addr": {
+     "lines": {
+      "L advance router_receiver.hpp:191": 1,
+      "L receive router_receiver.hpp:467": 1,
+      "S advance router_receiver.hpp:190": 1
+     },
+     "loads": 2,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      76
+     ],
+     "stores": 1
+    },
+    "set@retire<1>:index": {
+     "lines": {
+      "L SlotSources router_receiver.hpp:205": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      80
+     ],
+     "stores": 0
+    },
+    "step<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 1
+    },
+    "step<1>:arrived": {
+     "lines": {
+      "S receive router_receiver.hpp:461": 1
+     },
+     "loads": 0,
+     "methods": [
+      "register"
+     ],
+     "slots": [
+      72
+     ],
+     "stores": 1
+    },
+    "step<1>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      8
+     ],
+     "stores": 1
+    }
+   }
+  },
+  "s3_torusy_vc2_e1.elf": {
+   "accesses": {
+    "loads": 31,
+    "stores": 18,
+    "total": 49,
+    "unknown": 16
+   },
+   "compiler": "tenstorrent/sfpi:7.91.0[1077] 15.1.0",
+   "dwarf_only": {
+    "run:round": [
+     60
+    ],
+    "run:sources": [
+     76
+    ]
+   },
+   "elf": "s3_torusy_vc2_e1.elf",
+   "frame": 208,
+   "function": "_ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE",
+   "insns": 949,
+   "loop": "largest strongly connected region of run()",
+   "loop_insns": 871,
+   "registers": {
+    "s0": {
+     "handle<1>:header": 316,
+     "receive<1>:header": 322,
+     "run:cursor1.position.slot_addr": 856
+    },
+    "s10": {
+     "pass:arrived1": 482,
+     "retire<1>:source~": 21,
+     "step<1>:arrived_raw": 14
+    },
+    "s11": {
+     "receive<1>:arrived": 5,
+     "run:cursor1.position.ready": 823,
+     "step<1>:arrived": 7
+    },
+    "s4": {
+     "deliver<1>:trid~": 254,
+     "of_slot@handle<1>:group": 317,
+     "run:cursor1.position.index": 863
+    },
+    "s5": {
+     "credit_completions<0>:next_index": 23,
+     "of_slot@handle<0>:group": 385,
+     "run:cursor0.position.index": 862
+    },
+    "s6": {
+     "action@receive<0>:volatile_header": 408,
+     "receive<0>:header": 410,
+     "run:cursor0.position.slot_addr": 859
+    },
+    "s7": {
+     "ring_add<16>:n": 2,
+     "run:cursor0.position.ready": 865
+    },
+    "s8": {
+     "accumulate_completion_credits<1,4>:first~": 2,
+     "credit_completions<1>:waiting": 20,
+     "run:cursor1.counts.uncredited": 863
+    },
+    "s9": {
+     "credit_completions<0>:waiting": 23,
+     "oldest_uncredited<16>:waiting": 9,
+     "run:cursor0.counts.uncredited": 871
+    }
+   },
+   "role": "receiver",
+   "scope_mismatches": {
+    "S sp+28 ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485: ['NOC_CMD_BUF_WRITE_REG@deliver<1>:val'] (chain ncrisc_noc_set_transaction_id < local_write < deliver < handle < receive < step < pass < run)": 1,
+    "S sp+32 ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485: ['NOC_CMD_BUF_WRITE_REG@deliver<0>:val'] (chain ncrisc_noc_set_transaction_id < local_write < deliver < handle < receive < step < pass < run)": 1
+   },
+   "sha": "7e5a971f40c56c95",
+   "stored": [
+    "NOC_CMD_BUF_WRITE_REG@deliver<0>:val",
+    "NOC_CMD_BUF_WRITE_REG@deliver<1>:val",
+    "deliver<0>:chunks",
+    "deliver<0>:encoding",
+    "deliver<0>:encoding~",
+    "deliver<1>:encoding",
+    "handle<0>:downstreams",
+    "handle<0>:routers",
+    "handle<1>:downstreams",
+    "pass:downstreams",
+    "pass:txq_status",
+    "receive<0>:downstreams",
+    "receive<1>:downstreams",
+    "step<0>:downstreams",
+    "step<1>:downstreams"
+   ],
+   "unknown": {
+    "L sp+24 deliver router_local_delivery.hpp:189": 2,
+    "L sp+28 count_local_writes router_local_delivery.hpp:92": 1,
+    "L sp+28 deliver router_local_delivery.hpp:189": 2,
+    "L sp+32 deliver router_local_delivery.hpp:189": 1,
+    "L sp+36 deliver router_local_delivery.hpp:189": 1,
+    "L sp+40 deliver router_local_delivery.hpp:189": 1,
+    "S sp+24 deliver router_local_delivery.hpp:189": 2,
+    "S sp+28 deliver fabric_edm_packet_transmission.hpp:150": 1,
+    "S sp+28 deliver router_local_delivery.hpp:189": 2,
+    "S sp+32 deliver router_local_delivery.hpp:189": 1,
+    "S sp+36 deliver router_local_delivery.hpp:189": 1,
+    "S sp+40 deliver router_local_delivery.hpp:189": 1
+   },
+   "untrusted": [],
+   "values": {
+    "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": {
+     "lines": {
+      "L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174": 3,
+      "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485": 1
+     },
+     "loads": 3,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      32
+     ],
+     "stores": 1
+    },
+    "NOC_CMD_BUF_WRITE_REG@deliver<1>:val": {
+     "lines": {
+      "L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174": 3,
+      "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485": 1
+     },
+     "loads": 3,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      28
+     ],
+     "stores": 1
+    },
+    "deliver<0>:chunks": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:148": 1,
+      "L deliver router_local_delivery.hpp:154": 1,
+      "L deliver router_local_delivery.hpp:163": 2,
+      "L deliver router_local_delivery.hpp:172": 1,
+      "S deliver router_local_delivery.hpp:140": 1
+     },
+     "loads": 5,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      24
+     ],
+     "stores": 1
+    },
+    "deliver<0>:encoding": {
+     "lines": {
+      "S deliver router_local_delivery.hpp:141": 1
+     },
+     "loads": 0,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      28
+     ],
+     "stores": 1
+    },
+    "deliver<0>:encoding~": {
+     "lines": {
+      "L shift_to_next_chunk fabric_edm_packet_transmission.hpp:150": 3,
+      "S deliver router_local_delivery.hpp:162": 2
+     },
+     "loads": 3,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      28
+     ],
+     "stores": 2
+    },
+    "deliver<1>:encoding": {
+     "lines": {
+      "S deliver router_local_delivery.hpp:141": 1
+     },
+     "loads": 0,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      24
+     ],
+     "stores": 1
+    },
+    "deliver<1>:encoding~": {
+     "lines": {
+      "L shift_to_next_chunk fabric_edm_packet_transmission.hpp:150": 3
+     },
+     "loads": 3,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      24
+     ],
+     "stores": 0
+    },
+    "handle<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      36
+     ],
+     "stores": 1
+    },
+    "handle<0>:routers": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      36
+     ],
+     "stores": 1
+    },
+    "handle<1>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      32
+     ],
+     "stores": 1
+    },
+    "pass:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      36
+     ],
+     "stores": 1
+    },
+    "pass:txq_status": {
+     "lines": {
+      "L send_credit_frame router_receiver.hpp:662": 1,
+      "S eth_txq_reg_read tt_eth_api.h:31": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      12
+     ],
+     "stores": 1
+    },
+    "receive<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      36
+     ],
+     "stores": 1
+    },
+    "receive<1>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      32
+     ],
+     "stores": 1
+    },
+    "run:downstreams": {
+     "lines": {
+      "L run fabric_router_flow_control.hpp:47": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      44
+     ],
+     "stores": 0
+    },
+    "run:me.x": {
+     "lines": {
+      "L Routing2D router_routing.hpp:93": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      20
+     ],
+     "stores": 0
+    },
+    "run:me.y": {
+     "lines": {
+      "L Routing2D router_routing.hpp:92": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      16
+     ],
+     "stores": 0
+    },
+    "send_credit_frame:seen_free~": {
+     "lines": {
+      "L send_credit_frame router_receiver.hpp:662": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      12
+     ],
+     "stores": 0
+    },
+    "send_credit_frame:txq_status_at_pass_start": {
+     "lines": {
+      "L send_credit_frame router_receiver.hpp:662": 1
+     },
+     "loads": 1,
+     "methods": [
+      "slot"
+     ],
+     "slots": [
+      12
+     ],
+     "stores": 0
+    },
+    "step<0>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      36
+     ],
+     "stores": 1
+    },
+    "step<1>:downstreams": {
+     "lines": {
+      "L deliver router_local_delivery.hpp:189": 1,
+      "S deliver router_local_delivery.hpp:189": 1
+     },
+     "loads": 1,
+     "methods": [
+      "register",
+      "slot"
+     ],
+     "slots": [
+      32
+     ],
+     "stores": 1
+    }
+   }
+  }
+ }
+}

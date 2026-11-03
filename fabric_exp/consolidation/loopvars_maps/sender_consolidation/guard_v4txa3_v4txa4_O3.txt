@@ -1,0 +1,179 @@
+v4txa3_O3 -> v4txa4_O3: 2193 images with different .text, 2816 role analyses
+  bh_1d receiver                             10  loop +0 sp S+0 L+0
+  bh_1d_1erisc receiver                      10  loop +0 sp S+0 L+0
+  bh_1d_1erisc sender                        10  loop +0 sp S+0 L+0
+  bh_1d_allinstr receiver                    10  loop +0 sp S+0 L+0
+  bh_1d_delay receiver                       10  loop +0 sp S+0 L+0
+  bh_1d_telemetry receiver                   10  loop +0 sp S+0 L+0
+  bh_1d_trim receiver                        10  loop +0 sp S+0 L+0
+  bh_1d_trim_w0 receiver                     10  loop +0 sp S+0 L+0
+  bh_2d receiver                             16  loop +0 sp S+0 L+0
+  bh_2d receiver                             12  loop +0 sp S+0 L+0 +['run:loop_copy.uncredited']
+  bh_2d sender                               28  loop +0 sp S+0 L+0
+  bh_2d_1erisc receiver                      28  loop +0 sp S+0 L+0
+  bh_2d_1erisc sender                        28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_delay receiver                28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_delay sender                  28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_passdelay receiver            28  loop +0 sp S+0 L+0
+  bh_2d_1erisc_passdelay sender              28  loop +0 sp S+0 L+0
+  bh_2d_allinstr receiver                    16  loop -2 sp S-2 L-3 +['run:loop_copy.uncredited']
+  bh_2d_allinstr receiver                     8  loop -22 sp S-6 L-9 +['deliver<0>:payload_size'] -['NOC_CMD_BUF_WRITE_REG@deliver<0>:val', 'deliver<0>:header', 'handle<0>:header', 'local_write@deliver<0>:src_addr', 'receive<0>:header', 'run:loop_copy.next_slot_addr']
+  bh_2d_allinstr receiver                     4  loop -22 sp S-6 L-9 +['run:loop_copy.uncredited'] -['NOC_CMD_BUF_WRITE_REG@deliver<0>:val', 'deliver<0>:header', 'handle<0>:header', 'local_write@deliver<0>:dst_noc_addr.@4', 'receive<0>:header', 'run:loop_copy.next_slot_addr']
+  bh_2d_allinstr sender                      28  loop +0 sp S+0 L+0
+  bh_2d_bwtelemetry receiver                 16  loop +0 sp S+0 L+0
+  bh_2d_bwtelemetry receiver                 12  loop +0 sp S+0 L+0 +['run:loop_copy.uncredited']
+  bh_2d_bwtelemetry sender                   28  loop +0 sp S+0 L+0
+  bh_2d_codeprof receiver                    28  loop +0 sp S+0 L+0
+  bh_2d_codeprof sender                      28  loop +0 sp S+0 L+0
+  bh_2d_delay receiver                       16  loop +0 sp S+0 L+0
+  bh_2d_delay receiver                       12  loop +0 sp S+0 L+0 +['run:loop_copy.uncredited']
+  bh_2d_delay sender                         28  loop +0 sp S+0 L+0
+  bh_2d_mux receiver                         28  loop +0 sp S+0 L+0
+  bh_2d_mux sender                           28  loop +0 sp S+0 L+0
+  bh_2d_mux_delay receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_mux_delay sender                     28  loop +0 sp S+0 L+0
+  bh_2d_mux_trim_all receiver                28  loop +0 sp S+0 L+0
+  bh_2d_mux_trim_all sender                  28  loop +0 sp S+0 L+0
+  bh_2d_passdelay receiver                   16  loop +0 sp S+0 L+0
+  bh_2d_passdelay receiver                   12  loop +0 sp S+0 L+0 +['run:loop_copy.uncredited']
+  bh_2d_passdelay sender                     28  loop +0 sp S+0 L+0
+  bh_2d_telemetry receiver                   16  loop +0 sp S+0 L+0
+  bh_2d_telemetry receiver                   12  loop +0 sp S+0 L+0 +['run:loop_copy.uncredited']
+  bh_2d_telemetry sender                     28  loop +0 sp S+0 L+0
+  bh_2d_trim receiver                         8  loop -13 sp S-3 L-2 -['run:credit_frame_due']
+  bh_2d_trim receiver                         8  loop -4 sp S+0 L+2
+  bh_2d_trim receiver                         8  loop -11 sp S+0 L+1
+  bh_2d_trim receiver                         4  loop -28 sp S+0 L+2
+  bh_2d_trim sender                          28  loop +0 sp S+0 L+0
+  bh_2d_udm receiver                         28  loop +0 sp S+0 L+0
+  bh_2d_udm sender                           28  loop +0 sp S+0 L+0
+  bh_2d_udm_gtest receiver                   28  loop +0 sp S+0 L+0
+  bh_2d_udm_gtest sender                     28  loop +0 sp S+0 L+0
+  bh_2d_vc2 receiver                         16  loop -29 sp S-2 L-2 -['run:credit_frame_due']
+  bh_2d_vc2 receiver                          8  loop -46 sp S-6 L-6 +['credit_completions<2>:waiting~']
+  bh_2d_vc2 receiver                          4  loop -30 sp S-6 L-6
+  bh_2d_vc2_1erisc receiver                  28  loop +0 sp S+0 L+0
+  bh_2d_vc2_1erisc sender                    28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_rx0 receiver                28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0 receiver                 16  loop -30 sp S-2 L-2 -['run:credit_frame_due']
+  bh_2d_vc2_trim_w0 receiver                  8  loop -22 sp S-6 L-6
+  bh_2d_vc2_trim_w0 receiver                  4  loop -46 sp S-6 L-6
+  bh_2d_vc2_trim_w02 receiver                16  loop -30 sp S-2 L-2 -['run:credit_frame_due']
+  bh_2d_vc2_trim_w02 receiver                 8  loop -22 sp S-6 L-6
+  bh_2d_vc2_trim_w02 receiver                 4  loop -46 sp S-6 L-6
+  bh_2d_vc2_trim_w02_1erisc receiver         28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w02_1erisc sender           28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc receiver          28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w0_1erisc sender            28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w2 receiver                 16  loop -30 sp S-2 L-2 -['run:credit_frame_due']
+  bh_2d_vc2_trim_w2 receiver                  8  loop -22 sp S-6 L-6
+  bh_2d_vc2_trim_w2 receiver                  4  loop -46 sp S-6 L-6
+  bh_2d_vc2_trim_w2 sender                   28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w2_1erisc receiver          28  loop +0 sp S+0 L+0
+  bh_2d_vc2_trim_w2_1erisc sender            28  loop +0 sp S+0 L+0
+  bh_neighbor receiver                        4  loop +0 sp S+0 L+0
+  bh_neighbor_delay receiver                  4  loop +0 sp S+0 L+0
+  bh_ring receiver                           10  loop +0 sp S+0 L+0
+  bh_ring sender                             10  loop +0 sp S+0 L+0
+  bh_ring_1erisc receiver                    10  loop +0 sp S+0 L+0
+  bh_ring_1erisc sender                      10  loop +0 sp S+0 L+0
+  bh_ring_allinstr receiver                  10  loop +0 sp S+0 L+0
+  bh_ring_allinstr sender                    10  loop +0 sp S+0 L+0
+  bh_ring_delay receiver                     10  loop +0 sp S+0 L+0
+  bh_ring_delay sender                       10  loop +0 sp S+0 L+0
+  bh_ring_passdelay receiver                 10  loop +0 sp S+0 L+0
+  bh_ring_passdelay sender                   10  loop +0 sp S+0 L+0
+  bh_torus receiver                           4  loop +0 sp S+0 L+0 +['of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  bh_torus receiver                           4  loop +0 sp S+0 L+0 +['deliver<0>:trid~', 'handle<0>:trid~', 'local_write@deliver<0>:trid~', 'ncrisc_noc_set_transaction_id@deliver<0>:trid~', 'of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  bh_torus receiver                           4  loop +0 sp S+0 L+0 +['run:loop_copy.next_index']
+  bh_torus sender                            12  loop +0 sp S+0 L+0
+  bh_torus_1erisc receiver                   12  loop +0 sp S+0 L+0
+  bh_torus_1erisc sender                     12  loop +0 sp S+0 L+0
+  bh_torus_vc2 receiver                      16  loop -30 sp S-2 L-2 -['run:credit_frame_due']
+  bh_torus_vc2 receiver                       8  loop -56 sp S+2 L-4 +['pass:txq_status'] -['deliver<0>:encoding']
+  bh_torus_vc2 receiver                       4  loop -49 sp S+2 L-4 +['pass:txq_status'] -['deliver<0>:encoding']
+  bh_torus_vc2 sender                        12  loop +0 sp S+0 L+0
+  bh_torus_vc2_1erisc receiver               28  loop +0 sp S+0 L+0
+  bh_torus_vc2_1erisc sender                 28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0 receiver              16  loop -30 sp S-2 L-2 -['run:credit_frame_due']
+  bh_torus_vc2_trim_w0 receiver               8  loop -56 sp S+2 L-4 +['pass:txq_status'] -['deliver<0>:encoding']
+  bh_torus_vc2_trim_w0 receiver               4  loop -49 sp S+2 L-4 +['pass:txq_status'] -['deliver<0>:encoding']
+  bh_torus_vc2_trim_w0_1erisc receiver       28  loop +0 sp S+0 L+0
+  bh_torus_vc2_trim_w0_1erisc sender         28  loop +0 sp S+0 L+0
+  bh_trim_gtest receiver                     55  loop +0 sp S+0 L+0
+  bh_trim_gtest receiver                     12  loop +0 sp S+0 L+0 +['run:loop_copy.uncredited']
+  bh_trim_gtest receiver                     12  loop -4 sp S+0 L+2
+  bh_trim_gtest receiver                      8  loop -13 sp S-3 L-2 -['run:credit_frame_due']
+  bh_trim_gtest receiver                      8  loop -11 sp S+0 L+1
+  bh_trim_gtest receiver                      4  loop -10 sp S-2 L-3 -['deliver<0>:header', 'handle<0>:header', 'receive<0>:header', 'run:loop_copy.next_slot_addr']
+  bh_trim_gtest receiver                      4  loop -28 sp S+0 L+2
+  bh_trim_gtest receiver                      4  loop -4 sp S-2 L-2 -['deliver<0>:header', 'handle<0>:header', 'receive<0>:header', 'run:loop_copy.next_slot_addr']
+  bh_trim_gtest receiver                      2  loop +0 sp S+0 L+0 +['of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  bh_trim_gtest receiver                      1  loop +0 sp S+0 L+0 +['deliver<0>:trid~', 'handle<0>:trid~', 'local_write@deliver<0>:trid~', 'ncrisc_noc_set_transaction_id@deliver<0>:trid~', 'of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  bh_trim_gtest sender                       42  loop +0 sp S+0 L+0
+  bh_trim_gtest sender                        2  loop +2 sp S+1 L+1
+  bh_trim_gtest_1erisc receiver              94  loop +0 sp S+0 L+0
+  bh_trim_gtest_1erisc sender                94  loop +0 sp S+0 L+0
+  bh_vc1 receiver                             8  loop +0 sp S+0 L+0
+  bh_vc1 receiver                             6  loop +28 sp S-4 L-3 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1 receiver                             4  loop +4 sp S-2 L-1 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1 receiver                             2  loop +21 sp S-2 L+1
+  bh_vc1 receiver                             2  loop -4 sp S+0 L+2
+  bh_vc1_allinstr receiver                    2  loop -15 sp S-1 L+1 -['eth_read_wall_clock@step<1>:wall_clock_high']
+  bh_vc1_allinstr receiver                    2  loop +0 sp S+0 L+0
+  bh_vc1_allinstr receiver                    2  loop -5 sp S-1 L+1 -['eth_read_wall_clock@step<1>:wall_clock_high']
+  bh_vc1_delay receiver                       8  loop +0 sp S+0 L+0
+  bh_vc1_delay receiver                       6  loop +28 sp S-4 L-3 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_delay receiver                       4  loop +4 sp S-2 L-1 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_delay receiver                       2  loop +21 sp S-2 L+1
+  bh_vc1_delay receiver                       2  loop -4 sp S+0 L+2
+  bh_vc1_passdelay receiver                   8  loop +0 sp S+0 L+0
+  bh_vc1_passdelay receiver                   6  loop +28 sp S-4 L-3 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_passdelay receiver                   4  loop +4 sp S-2 L-1 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_passdelay receiver                   2  loop -4 sp S+0 L+2
+  bh_vc1_passdelay receiver                   2  loop +21 sp S-2 L+1
+  bh_vc1_trim_rx0 receiver                   22  loop +0 sp S+0 L+0
+  bh_vc1_trim_rx0_1erisc receiver            14  loop +0 sp S+0 L+0
+  bh_vc1_trim_rx0_1erisc sender              14  loop +0 sp S+0 L+0
+  bh_vc1_trim_vc1 receiver                    8  loop +0 sp S+0 L+0
+  bh_vc1_trim_vc1 receiver                    6  loop +28 sp S-4 L-3 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_trim_vc1 receiver                    4  loop +4 sp S-2 L-1 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_trim_vc1 receiver                    2  loop -4 sp S+0 L+2
+  bh_vc1_trim_vc1 receiver                    2  loop +21 sp S-2 L+1
+  bh_vc1_trim_vc1 sender                     22  loop +0 sp S+0 L+0
+  bh_vc1_trim_vc1p receiver                   8  loop +0 sp S+0 L+0
+  bh_vc1_trim_vc1p receiver                   6  loop +28 sp S-4 L-3 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_trim_vc1p receiver                   4  loop +4 sp S-2 L-1 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_trim_vc1p receiver                   2  loop +21 sp S-2 L+1
+  bh_vc1_trim_vc1p receiver                   2  loop -4 sp S+0 L+2
+  bh_vc1_trim_w0 receiver                     8  loop +0 sp S+0 L+0
+  bh_vc1_trim_w0 receiver                     6  loop +28 sp S-4 L-3 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_trim_w0 receiver                     2  loop +4 sp S-2 L-1 -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<1>:header']
+  bh_vc1_trim_w0 receiver                     2  loop -4 sp S+0 L+2
+  bh_vc1_trim_w0 receiver                     2  loop +21 sp S-2 L+1
+  bh_vc1_trim_w0_1erisc receiver             19  loop +0 sp S+0 L+0
+  bh_vc1_trim_w0_1erisc sender               19  loop +0 sp S+0 L+0
+  glx_1d receiver                            12  loop +0 sp S+0 L+0
+  glx_2d receiver                            24  loop +0 sp S+0 L+0
+  glx_2d receiver                            24  loop +0 sp S+0 L+0 +['run:loop_copy.uncredited']
+  glx_2d sender                              48  loop +0 sp S+0 L+0
+  glx_express receiver                       12  loop +0 sp S+0 L+0 +['deliver<0>:trid~', 'handle<0>:trid~', 'local_write@deliver<0>:trid~', 'ncrisc_noc_set_transaction_id@deliver<0>:trid~', 'of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  glx_express receiver                       12  loop +0 sp S+0 L+0
+  glx_express receiver                        4  loop +0 sp S+0 L+0 +['of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  glx_express sender                         28  loop +0 sp S+0 L+0
+  glx_express_1erisc receiver                28  loop +0 sp S+0 L+0
+  glx_express_1erisc sender                  28  loop +0 sp S+0 L+0
+  glx_express_line receiver                  18  loop +0 sp S+0 L+0 +['deliver<0>:trid~', 'handle<0>:trid~', 'local_write@deliver<0>:trid~', 'ncrisc_noc_set_transaction_id@deliver<0>:trid~', 'of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  glx_express_line receiver                  18  loop +0 sp S+0 L+0
+  glx_express_line receiver                   8  loop +0 sp S+0 L+0 +['of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  glx_express_line sender                    44  loop +0 sp S+0 L+0
+  glx_express_line_1erisc receiver           44  loop +0 sp S+0 L+0
+  glx_express_line_1erisc sender             44  loop +0 sp S+0 L+0
+  glx_express_mesh receiver                  24  loop +0 sp S+0 L+0
+  glx_express_mesh receiver                  24  loop +0 sp S+0 L+0 +['run:loop_copy.uncredited']
+  glx_express_mesh sender                    48  loop +0 sp S+0 L+0
+  glx_ring receiver                           8  loop +0 sp S+0 L+0
+  glx_ring sender                             8  loop +0 sp S+0 L+0
+  glx_torus receiver                          6  loop +0 sp S+0 L+0 +['deliver<0>:trid~', 'handle<0>:trid~', 'local_write@deliver<0>:trid~', 'ncrisc_noc_set_transaction_id@deliver<0>:trid~', 'of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  glx_torus receiver                          2  loop +0 sp S+0 L+0 +['of_slot@handle<0>:group', 'run:loop_copy.next_index']
+  glx_torus sender                            8  loop +0 sp S+0 L+0

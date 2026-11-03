@@ -1,0 +1,61 @@
+subordinate_active_erisc.elf: _ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE
+  pass loop 820 instructions (round loop 830); live values per instruction: mean 28.0, peak 35
+  carried (live at the pass loop's head) d2cc eth_txq_reg_read tt_eth_api.h:31: 22 (15 registers, 7 slots)
+    a1      caller set in the pass: add a1,a1,a6 (count_local_writes router_local_delivery.hpp:92); add a1,a1,a6 (count_local_writes router_local_delivery.hpp:93)
+    a6      caller set in the pass: add a6,a4,t1 (deliver router_local_delivery.hpp:156); add a6,a6,t5 (count_local_writes router_local_delivery.hpp:92)
+    a7      caller pass:downstreams
+    s0      callee invariant: addi s0,s11,-1056 (accumulate_ack_credit fabric_router_flow_control.hpp:47)
+    s1      callee invariant: addi s1,a5,352 (Channel router_receiver.hpp:145)
+    s11     callee invariant: lui s11,0x16 (accumulate_ack_credit fabric_router_flow_control.hpp:47)
+    s2      callee invariant: mv s2,s5 (Channel router_receiver.hpp:145)
+    s4      callee run:vc0_cursor.position.index
+    s5      callee run:vc0_cursor.position.slot_addr
+    s6      callee run:vc0_cursor.position.ready
+    s7      callee run:vc0_cursor.counts.uncredited
+    s8      callee set in the pass: addi s8,s8,-1 (run router_receiver.hpp:756)
+    s9      callee run:credit_frame_due
+    t0      caller set in the pass: lw t0,20(sp) (deliver router_local_delivery.hpp:189); lw t0,24(sp) (deliver router_local_delivery.hpp:189)
+    t2      caller set in the pass: lui t2,0xffb44 (deliver router_local_delivery.hpp:189)
+    sp+12   slot   run:me.y
+    sp+16   slot   run:me.x
+    sp+28   slot   run:downstreams
+    sp+72   slot   run:tables.ch1.cursor.position.ready
+    sp+76   slot   run:tables.ch1.cursor.position.slot_addr
+    sp+80   slot   run:tables.ch1.cursor.position.index
+    sp+84   slot   run:tables.ch1.cursor.counts.uncredited
+  peak d944 ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1483: 35 (27 registers, 8 slots)
+    a0      caller deliver<1>:header, deliver<1>:scatter, handle<1>:header
+    a1      caller deliver<1>:payload_size
+    a2      caller set in the pass: add a2,a2,a6 (noc_common_write_with_state noc_nonblocking_api.h:2256); addi a2,a2,1 (noc_common_write_with_state noc_nonblocking_api.h:2256)
+    a3      caller set in the pass: add a3,a2,t5 (count_local_writes router_local_delivery.hpp:93); add a3,a3,sp (SlotSources router_receiver.hpp:208)
+    a4      caller set in the pass: add a4,a0,a4 (next_ring_slot router_downstream.hpp:184); add a4,a2,t5 (count_local_writes router_local_delivery.hpp:93)
+    a5      caller local_write@deliver<1>:src_addr
+    a6      caller deliver<1>:chunks
+    a7      caller handle<1>:downstreams, receive<1>:downstreams, step<1>:downstreams
+    s0      callee invariant: addi s0,s11,-1056 (accumulate_ack_credit fabric_router_flow_control.hpp:47)
+    s1      callee invariant: addi s1,a5,352 (Channel router_receiver.hpp:145)
+    s10     callee pass:txq_status
+    s11     callee invariant: lui s11,0x16 (accumulate_ack_credit fabric_router_flow_control.hpp:47)
+    s2      callee invariant: mv s2,s5 (Channel router_receiver.hpp:145)
+    s3      callee set in the pass: andi s3,s3,2047 (step router_receiver.hpp:629); li s3,1 (receive router_receiver.hpp:475)
+    s4      callee run:vc0_cursor.position.index
+    s5      callee run:vc0_cursor.position.slot_addr
+    s6      callee run:vc0_cursor.position.ready
+    s7      callee run:vc0_cursor.counts.uncredited
+    s8      callee set in the pass: addi s8,s8,-1 (run router_receiver.hpp:756)
+    s9      callee set in the pass: li s9,0 (send_credit_frame router_receiver.hpp:669); mv s9,t0 (accumulate_first_level_acks router_receiver.hpp:303)
+    t0      caller set in the pass: lw t0,20(sp) (deliver router_local_delivery.hpp:189); lw t0,24(sp) (deliver router_local_delivery.hpp:189)
+    t1      caller deliver<1>:offset
+    t2      caller set in the pass: lui t2,0xffb44 (deliver router_local_delivery.hpp:189)
+    t3      caller local_write@deliver<1>:dst_noc_addr.@4
+    t4      caller deliver<1>:chunk1_size, local_write@deliver<1>:size
+    t5      caller local_write@deliver<1>:dst_noc_addr.@0
+    t6      caller deliver<1>:encoding~
+    sp+12   slot   run:me.y
+    sp+16   slot   run:me.x
+    sp+28   slot   run:downstreams
+    sp+72   slot   run:tables.ch1.cursor.position.ready
+    sp+76   slot   run:tables.ch1.cursor.position.slot_addr
+    sp+8    slot   deliver<1>:payload
+    sp+80   slot   run:tables.ch1.cursor.position.index
+    sp+84   slot   run:tables.ch1.cursor.counts.uncredited

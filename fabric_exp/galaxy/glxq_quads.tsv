@@ -1,0 +1,17 @@
+# Cabled BH Galaxy quads on the 110-a nodes (bh-glx-110-a* only, study rule). One row per quad: four Galaxies cabled
+# as a ring, 8 QSFP-DD cables between ring neighbours (the 32x4 torus of
+# tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto, host_topology 4x1).
+# ring: the hosts in physical ring order, read from each superpod's cabling guide (tt-cluster-config exabox/<leaf>/
+# cabling_guide.csv, /data/pbara/tt-cluster-config checkout, v0.0.8 era, read 2026-11-03); the published aggregated
+# FSD (/data/scaleout_configs/tt-cluster-config-sources/exabox-latest-main) lists the same hosts.
+# slurm: the partition (pod partitions are whole quads: -N 4 --exclusive takes the quad) or partition:nodelist (SC16 racks).
+# name	slurm	ring	leaf
+pod3	bh_sc36_6_110a_pod3	bh-glx-110-a06u02,bh-glx-110-a06u08,bh-glx-110-a06u14,bh-glx-110-a06u20	110-SC4_A06
+pod6	bh_sc36_6_110a_pod6	bh-glx-110-a04u02,bh-glx-110-a04u08,bh-glx-110-a05u08,bh-glx-110-a05u02	110-SC4_A04-05_u02-08
+pod7	bh_sc36_6_110a_pod7	bh-glx-110-a01u02,bh-glx-110-a01u08,bh-glx-110-a01u14,bh-glx-110-a01u20	110-SC4_A01
+pod8	bh_sc36_6_110a_pod8	bh-glx-110-a02u02,bh-glx-110-a02u08,bh-glx-110-a03u08,bh-glx-110-a03u02	110-SC4_A02-03_u02-08
+pod9	bh_sc36_6_110a_pod9	bh-glx-110-a02u14,bh-glx-110-a03u14,bh-glx-110-a04u14,bh-glx-110-a05u14	110-SC4_A02-05_u14
+a07	bh_110a_sc16:bh-glx-110-a07u[02,08,14,20]	bh-glx-110-a07u02,bh-glx-110-a07u08,bh-glx-110-a07u14,bh-glx-110-a07u20	110-SC16_4x4_A7-10
+a08	bh_110a_sc16:bh-glx-110-a08u[02,08,14,20]	bh-glx-110-a08u02,bh-glx-110-a08u08,bh-glx-110-a08u14,bh-glx-110-a08u20	110-SC16_4x4_A7-10
+a09	bh_110a_sc16:bh-glx-110-a09u[02,08,14,20]	bh-glx-110-a09u02,bh-glx-110-a09u08,bh-glx-110-a09u14,bh-glx-110-a09u20	110-SC16_4x4_A7-10
+a10	bh_110a_sc16:bh-glx-110-a10u[02,08,14,20]	bh-glx-110-a10u02,bh-glx-110-a10u08,bh-glx-110-a10u14,bh-glx-110-a10u20	110-SC16_4x4_A7-10

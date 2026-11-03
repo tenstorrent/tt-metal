@@ -1,0 +1,15 @@
+bh_1d__11771157836117153027 1D line
+bh_ring__10444497403978295403 1D ring (deadlock avoidance)
+bh_2d__9385634899218476589 2D E/W in a mesh (3 entries, 1 live)
+bh_2d__9724914797274631410 2D N/S, 1 downstream
+bh_2d__4837949914138770387 2D N/S, 2 live
+bh_2d_vc2__10491303747420227617 2D E/W, VC2 on
+bh_2d_vc2__12633423150643726066 2D N/S 2 live, VC2 on
+bh_torus__11644205323160773140 Y-torus E/W (deadlock avoidance)
+bh_torus__11880517098734099235 Y-torus N/S, 2 live (deadlock avoidance)
+bh_vc1__11573880575809721320 VC1 edge router, 3+3 downstreams
+bh_vc1__14449052750677022402 VC1 intermesh router, 2+2
+glx_2d__10580619657294665664 Galaxy E/W
+glx_2d__13568215798666737538 Galaxy N/S, 2 live
+glx_express__12210747554248498275 Galaxy express N, 4 downstreams
+glx_torus__14163533803936141850 Galaxy torus N, 3 downstreams

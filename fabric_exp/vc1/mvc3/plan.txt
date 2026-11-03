@@ -1,0 +1,20 @@
+A_d     base  V0       measured F0 F0=3080000  longest flow alone-est 0.30 s
+A_d     base  V1       measured F1 F1=1000000  longest flow alone-est 0.30 s
+A_d     base  V2       measured F2 F2=540000  longest flow alone-est 0.30 s
+A_d     lag1  P01m0    measured F0 F0=3080000 F1=5600000  longest flow alone-est 1.86 s
+A_d     lag0  P01m1    measured F1 F0=17000000 F1=1000000  longest flow alone-est 1.84 s
+A_d     base  P02m0    measured F0 F0=3080000 F2=2500000  longest flow alone-est 1.37 s
+A_d     base  P02m2    measured F2 F0=13900000 F2=540000  longest flow alone-est 1.34 s
+A_d     lag0  P12m1    measured F1 F1=1000000 F2=3000000  longest flow alone-est 1.84 s
+A_d     lag1  P12m2    measured F2 F1=5600000 F2=540000  longest flow alone-est 1.86 s
+A_d     lag1  T012m0   measured F0 F0=3080000 F1=5600000 F2=2500000  longest flow alone-est 1.86 s
+A_d     lag0  T012m1   measured F1 F0=17000000 F1=1000000 F2=3000000  longest flow alone-est 1.84 s
+A_d     lag1  T012m2   measured F2 F0=13900000 F1=5600000 F2=540000  longest flow alone-est 1.86 s
+B_new   base  V0       measured F0 F0=3080000  longest flow alone-est 0.30 s
+B_new   base  V1       measured F1 F1=1050000  longest flow alone-est 0.30 s
+B_new   lag1  P01m0    measured F0 F0=3080000 F1=5900000  longest flow alone-est 1.86 s
+B_new   lag0  P01m1    measured F1 F0=17000000 F1=1050000  longest flow alone-est 1.84 s
+B_main  base  V0       measured F0 F0=2220000  longest flow alone-est 0.30 s
+B_main  base  V1       measured F1 F1=440000  longest flow alone-est 0.29 s
+B_main  lag1  P01m0    measured F0 F0=2220000 F1=2500000  longest flow alone-est 1.87 s
+B_main  lag0  P01m1    measured F1 F0=12200000 F1=440000  longest flow alone-est 1.83 s

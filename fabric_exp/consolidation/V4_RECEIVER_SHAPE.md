@@ -704,3 +704,87 @@ SENDER_CH_<i>_CONNECTION_SEMAPHORE_ADDR named args (erisc_datamover_builder.cpp;
 Numbers: §32 (VC2 on 134.6 / 166.9, VC2 off flat), §32-§33 (VC1 1-hop +1.1 to +1.3, a moved stall). Next: the sender
 readability design (agent) and the receiver beautification proposal (agent), both from v4rxv2i3; the non-blocking flush
 design is parked in FLUSH_DEFER_DESIGN.md for the feature pass after.
+
+## 35. VC2 traffic rows (2026-11-01; job 333, vc2rows_runs.sh c, slots logged)
+
+New rows (fabric_exp/pcs3): vc2ew4352.yaml (VC2 alone, chip 0 -> its E neighbour, 4352 B, benchmark mode) and
+vc02ew4352.yaml (VC0 + VC2 senders on chip 0 to the same neighbour, one link). Benchmark mode with a VC2 sender needed a
+worker-API fix: `fabric_detail::update_credits_and_slots` was declared only for VC0's `WorkerToFabricEdmSender`; now
+templated on the sender type (edm_fabric_worker_adapters.hpp). Splits: d = study row (VC0 17/14/16, VC2 2/4); v8 =
+TT_FABRIC_EXP_SLOTS_VC2=17,10,16,8,10 (VC0 17/10/16, VC2 8/10). Cycles/packet, two repetitions within 0.1:
+
+| row | v4rxc7 d | v4rxc7 v8 | v4rxv2i3 d | v4rxv2i3 v8 |
+| --- | ---: | ---: | ---: | ---: |
+| VC0 alone (ew4352, VC2 on) | 152.7 | 152.4 | 134.6 | 134.8 |
+| VC2 alone (vc2ew4352) | 881.8 | 243.4 | 858.1 | 240.6 |
+
+- VC2's own rate is set by its worker window: 2 slots ~880, 8 slots ~240 (still about twice VC0's; by the window
+  model it needs ~16-18 worker slots to reach VC0's 1-hop rate). Placement effects on VC2 traffic cannot show until VC2
+  has that depth.
+- v4rxv2i3 does not slow VC2 traffic (its VC2 credit is now a non-posted `noc_semaphore_set_remote`): -23.7 at 2 slots,
+  -2.8 at 8.
+- VC0 + VC2 on one link: not measured. The bandwidth profiler throws when two cores send on the same (device,
+  direction, link) (tt_fabric_test_bandwidth_profiler.cpp:350-357).
+
+## 36. VC0 + VC2 on one link (2026-11-01; job 340, vc2rows_runs.sh e, vc2rows_report.py)
+
+Test infra: the bandwidth profiler no longer throws on two senders sharing a (device, direction, link); the link gets
+the longest sender's cycles and each sender core's packets and cycles are logged with its VC
+(tt_fabric_test_bandwidth_profiler.cpp). The concurrent rows run with `sync: false`: with sync, the end-of-run syncs give
+every sender the slowest one's cycles (job 338, killed). vc02ew4352 (4M each): VC0 finishes first, so VC0's rate is
+contended; vc02bew4352 (VC0 40M, VC2 2M): VC2 finishes first, so VC2's rate is contended. Two repetitions within 0.5.
+Cycles/packet (alone: job 333):
+
+| sender | v4rxc7 d (VC2 2/4) | v4rxc7 v8 (VC2 8/10) | v4rxv2i3 d | v4rxv2i3 v8 |
+| --- | ---: | ---: | ---: | ---: |
+| VC0 alone | 152.7 | 152.4 | 134.6 | 134.8 |
+| VC0, VC2 active | 175.7 | 217.3 | 163.6 | 190.7 |
+| VC2 alone | 881.8 | 243.4 | 858.1 | 240.6 |
+| VC2, VC0 active | 1043.0 | 307.2 | 989.5 | 368.7 |
+| both, combined (estimate from the two rows) | 150.4 | 127.3 | 140.4 | 125.7 |
+
+- With both VCs busy each slows (v4rxv2i3 v8: VC0 +56, VC2 +128) but the link carries more in total (~126 against
+  VC0 alone's 135): E0 sends from both worker channels per pass.
+- v4rxv2i3 shifts the share toward VC0 against v4rxc7 at v8 (VC0 190.7 vs 217.3, VC2 368.7 vs 307.2; combined about
+  equal). Mechanism not measured (candidates: VC2's credit now a non-posted write; the connection checks moved to the
+  pass's start). VC2 alone is unchanged (240.6 vs 243.4), so it shows only under contention.
+- VC2's depth sets its rate alone and under contention; placement questions (sender stage 2) should be judged on
+  these rows with VC2 at a realistic depth.
+
+## 37. Sender restructure stage 1 (2026-11-01; design agent; validation job 346)
+
+`v4tx1` (shape only, from v4rxv2i3): `Vc<V>` / `Channel<CH>` features (worker and lead roles, per-VC
+`reads_at_pass_start`), one generic `Each<>` container for register channels, far rings, records and connections,
+`pass()` = group read, `check_connections<worker_channels>`, `visit_vc<0..2>`; `return_slots<CH>` by role; placement in
+one place (today's rule). Changed: router_sender.hpp, router_single.hpp (sender half), fabric_erisc_router_v4.cpp
+(sender init). `v4tx1b` = v4tx1 + every worker's credit source its own connection-info read counter (VC2 already did;
+the shared scratch word is gone).
+Static (-O3): sender loop +0 / +0 on every config (txcmp); 878 images byte-identical (every E1); the rest commuted
+compare operands, renamed registers, one per-round load one slot later, one init store dropped; E0 -4 B. Torus (Y) +
+VC2, the case design flagged as missing (coverage cases bh_torus_vc2[_1erisc], captured with v4rxv2i3 in the v2 slot,
+job 345: 80 + 40 configs): v4tx1 renames registers only on E0, E1 identical; one ERISC equal counts; v4tx1b equal
+counts. Validation of v4tx1b (covers v4tx1's code): 13/13 (job 346). Stage 2 (placement) waits for the user (host-set
+masks) and the VC2 traffic rows (§35-§36).
+
+## 38. `slots_due` A/B (2026-11-01; jobs 347-348; v4rxsd = v4rxbt17 + slots_due only, against v4rxv2i3)
+
+Static (receiver loop vs v4rxv2i3): 1D -11/-12 instructions, 2D -8 to -14, VC1 -3 to -16, ring rename only, 2D+VC2
+mixed. Device, cycles/packet, two reps each (row_ab_report.py sdk / sdkv2; census_report.py vc1 vc1i, passes sd and sdb
+in reversed router order):
+
+| rows | v4rxv2i3 | v4rxsd |
+| --- | --- | --- |
+| ew4352 / ns4352 / lin1 / lin3 / ring1 / torusns | 126.9 / 127.2 / 124.4 / 124.4 / 140.9 / 149.2 | 126.8 / 127.3 / 124.4 / 124.4 / 140.9 / 149.2 |
+| ewscatter | 139.7 | 140.1 (both reps) |
+| VC2 on: ew4352 / torusns | 134.6 / 166.9 | 134.6 / 167.0 |
+| VC1 1-hop and bursts (8 rows) | 142.0-142.2 | equal within 0.1 |
+| VC1Mesh2HopMerge 16 / 4352 | 139.5 / 144.3 | 139.0 / 143.8 |
+| VC1Mesh2Hop 16 / 4352 | 239.5 / 258.1 | 239.7 / 258.5 |
+| VC1Inter 1_0 / 1_1 / 1_2 / 1_3 (16 B) | 208.3 / 346.1 / 346.8 / 375.6 | 209.0 / 347.8 / 347.6 / 376.0 |
+| VC1Inter 1_0 / 1_1 / 1_2 / 1_3 (4352 B) | 209.1 / 397.1 / 395.7 / 414.0 | 209.9 / 397.8 / 396.0 / 414.0 |
+| suite means vc1 / vc1i | 159.3 / 336.6 | 159.3 / 337.3 |
+
+Every delta repeats in both passes (pass spread <= 0.3). The instruction savings do not show as rate: flat on the
+E0-bound rows (V4_PROFILE §2 on v4trm; not re-measured on this lead), within +-0.5 on scatter and the VC1 2-hop rows,
+and +0.4 to +1.7 on the inter-mesh rows. Why the inter-mesh rows lose is not known (no isolating A/B); a moved stall
+or layout effect is a hypothesis only. Adoption is a readability call, within the 1-2 cycle tolerance.

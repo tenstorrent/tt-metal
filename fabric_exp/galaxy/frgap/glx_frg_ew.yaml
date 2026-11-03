@@ -1,0 +1,18 @@
+# FULLRING_MCAST_GAP.md §8.14 (injection throttle): glx_frg_axis.yaml's GlxRingMcastEW (4-chip rings only) at 4352 B.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: GlxRingMcastEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [4352]
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+    destination:
+      hops: {E: max, W: max}
+  patterns:
+  - {type: all_devices_uniform_pattern, iterations: 1}

@@ -1,0 +1,21 @@
+# Multi-Galaxy smoke row (MULTI_GALAXY_HARNESS.md): the first run of every quad job, data-checked (benchmark mode off),
+# short. On the 32x4 quad mesh (torus XY over 4 hosts): every chip sends to every other chip, unicast write and fused
+# atomic inc, 1024 B, 20 packets. A failure or hang here stops the job before the requested command.
+Tests:
+- name: GlxqSmokeAllToAll
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+    # the quad MGD's channels are RELAXED; with a Factory System Descriptor the control plane requires the RELAXED
+    # system health mode for a RELAXED mesh graph (control_plane.cpp)
+    fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+  defaults:
+    ftype: unicast
+    size: 1024
+    num_packets: 20
+  patterns:
+  - type: all_to_all

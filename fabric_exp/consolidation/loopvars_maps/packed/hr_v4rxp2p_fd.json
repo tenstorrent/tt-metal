@@ -1,0 +1,4366 @@
+{
+ "bh_1d__10711705047208358998": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__11771157836117153027": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__11966589601134953097": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__12151225984416678758": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__12565983335775070686": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__12689859897650825883": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__13045704138935434653": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__15031910185866791319": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__3136893259129657994": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_1d__9982562484933923760": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   564,
+   619
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   27,
+   28
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   18
+  ]
+ },
+ "bh_2d__10229924487725718948": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   565,
+   590
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__10465832971564139790": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   590,
+   613
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__10697509619777523756": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   573,
+   591
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__10704913830194341139": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   573,
+   591
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__11637908802779522069": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   565,
+   590
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__11660148679966767161": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   565,
+   590
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__15112097005661338": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   573,
+   591
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__15188445179684008456": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   573,
+   591
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__15568112377219572116": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   565,
+   590
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__17527521829486980796": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   573,
+   591
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__1754057734862275905": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   698,
+   708
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__17689055769058793898": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   573,
+   591
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__17764531352640089777": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   698,
+   708
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__1974893561357350168": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   565,
+   590
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__2002749385377306524": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   698,
+   708
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__2586450563413941222": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   698,
+   708
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__2769012262972655444": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   590,
+   613
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__3350086724855746032": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   698,
+   708
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__3600473431856508845": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   565,
+   590
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__4231842157237622605": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   573,
+   591
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__4338045327969131522": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   698,
+   708
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__4506580340507463438": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   573,
+   591
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__4689755091304480639": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   698,
+   708
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__4837949914138770387": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   698,
+   708
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__5644309932980480112": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   590,
+   613
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d__9113746027361572178": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   565,
+   590
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__9385634899218476589": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   17
+  ],
+  "loop_insns": [
+   565,
+   590
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   13
+  ]
+ },
+ "bh_2d__9724914797274631410": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   16,
+   16
+  ],
+  "loop_insns": [
+   590,
+   613
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   14,
+   16
+  ]
+ },
+ "bh_2d_vc2__10491303747420227617": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   910,
+   962
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   29
+  ]
+ },
+ "bh_2d_vc2__10513636736344095901": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   1024,
+   1084
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   30
+  ]
+ },
+ "bh_2d_vc2__11568515798073384042": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   910,
+   962
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   29
+  ]
+ },
+ "bh_2d_vc2__11749902526268030851": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   910,
+   962
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   29
+  ]
+ },
+ "bh_2d_vc2__12380335878876205936": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   912,
+   959
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   30
+  ]
+ },
+ "bh_2d_vc2__12633423150643726066": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   1024,
+   1084
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   30
+  ]
+ },
+ "bh_2d_vc2__12668321240468436923": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   910,
+   962
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   29
+  ]
+ },
+ "bh_2d_vc2__12748475856356226632": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   910,
+   962
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   29
+  ]
+ },
+ "bh_2d_vc2__13069477176606242441": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   1024,
+   1084
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   30
+  ]
+ },
+ "bh_2d_vc2__14235488031977759438": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   916,
+   948
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   31
+  ]
+ },
+ "bh_2d_vc2__14735271109952707246": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   916,
+   948
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   31
+  ]
+ },
+ "bh_2d_vc2__1476527917075241884": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   1024,
+   1084
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   30
+  ]
+ },
+ "bh_2d_vc2__15192080987118350497": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   1024,
+   1084
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   30
+  ]
+ },
+ "bh_2d_vc2__1589996887107137236": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   912,
+   959
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   30
+  ]
+ },
+ "bh_2d_vc2__16341869916784206545": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   912,
+   959
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   30
+  ]
+ },
+ "bh_2d_vc2__18170333042718411155": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   912,
+   959
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   30
+  ]
+ },
+ "bh_2d_vc2__2559961812373025647": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   912,
+   959
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   30
+  ]
+ },
+ "bh_2d_vc2__2611898262892451163": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   910,
+   962
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   29
+  ]
+ },
+ "bh_2d_vc2__4201218614014346960": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   910,
+   962
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   29
+  ]
+ },
+ "bh_2d_vc2__5175127996656567540": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   916,
+   948
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   31
+  ]
+ },
+ "bh_2d_vc2__5987849556195362848": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   916,
+   948
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   31
+  ]
+ },
+ "bh_2d_vc2__63240486243413017": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   1024,
+   1084
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   30
+  ]
+ },
+ "bh_2d_vc2__6740898362604125226": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   910,
+   962
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   29
+  ]
+ },
+ "bh_2d_vc2__8281669425054507868": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   1024,
+   1084
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   30
+  ]
+ },
+ "bh_2d_vc2__8350144609346096469": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   1024,
+   1084
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   34,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   30
+  ]
+ },
+ "bh_2d_vc2__9010601437863074280": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   912,
+   959
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   30
+  ]
+ },
+ "bh_2d_vc2__9047027645726298819": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   912,
+   959
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   30
+  ]
+ },
+ "bh_2d_vc2__9200400607298339200": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   912,
+   959
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   30
+  ]
+ },
+ "bh_ring__10444497403978295403": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__11116202923778475564": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__11614008442388219330": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__11875136336936699852": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__1231561523136951572": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__143257016412897682": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__15375822987294115367": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__6597404703593289401": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__7228786826164462226": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_ring__9471462709397932891": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   18
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   533,
+   540
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S handle router_receiver.hpp:445",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   19,
+   27
+  ]
+ },
+ "bh_torus__10333241838491253444": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   21
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   531,
+   541
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   22,
+   21
+  ]
+ },
+ "bh_torus__10680386503672484080": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   16,
+   21
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   528,
+   541
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   21,
+   21
+  ]
+ },
+ "bh_torus__10864710172009767666": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   20
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   639,
+   656
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   22,
+   17
+  ]
+ },
+ "bh_torus__11644205323160773140": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   16,
+   21
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   528,
+   541
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   21,
+   21
+  ]
+ },
+ "bh_torus__11880517098734099235": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   20
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   639,
+   656
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   22,
+   17
+  ]
+ },
+ "bh_torus__12230828581117820343": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   16,
+   21
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   528,
+   541
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   21,
+   21
+  ]
+ },
+ "bh_torus__12309172359153696719": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   20
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   639,
+   656
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   22,
+   17
+  ]
+ },
+ "bh_torus__13571380744005912063": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   16,
+   21
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   528,
+   541
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   21,
+   21
+  ]
+ },
+ "bh_torus__1385795977547629022": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   21
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   531,
+   541
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   22,
+   21
+  ]
+ },
+ "bh_torus__17580799059844124282": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   20
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   639,
+   656
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   22,
+   17
+  ]
+ },
+ "bh_torus__2703741712186621509": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   21
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   531,
+   541
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   22,
+   21
+  ]
+ },
+ "bh_torus__3607405762735241707": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   17,
+   21
+  ],
+  "carried_regs": [
+   13,
+   15
+  ],
+  "loop_insns": [
+   531,
+   541
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   33
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   22,
+   21
+  ]
+ },
+ "bh_torus_vc2__10445740379710467010": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   21
+  ],
+  "carried_regs": [
+   12,
+   13
+  ],
+  "loop_insns": [
+   1023,
+   1041
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   34
+  ]
+ },
+ "bh_torus_vc2__10697658996405103604": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   14,
+   16
+  ],
+  "loop_insns": [
+   937,
+   980
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<1>:group": "around a call",
+   "receive<0>:header": "around a call",
+   "step<0>:before.slot_addr": "around a call",
+   "step<0>:cursor.slot_addr": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   28
+  ]
+ },
+ "bh_torus_vc2__10840401577188000890": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   14,
+   16
+  ],
+  "loop_insns": [
+   937,
+   980
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<1>:group": "around a call",
+   "receive<0>:header": "around a call",
+   "step<0>:before.slot_addr": "around a call",
+   "step<0>:cursor.slot_addr": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   28
+  ]
+ },
+ "bh_torus_vc2__10914443432039824326": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   21
+  ],
+  "carried_regs": [
+   12,
+   13
+  ],
+  "loop_insns": [
+   1023,
+   1041
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   34
+  ]
+ },
+ "bh_torus_vc2__11796103360794023171": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   20
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   935,
+   985
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   27
+  ]
+ },
+ "bh_torus_vc2__11811580684014631720": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   21
+  ],
+  "carried_regs": [
+   12,
+   13
+  ],
+  "loop_insns": [
+   1023,
+   1041
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   34
+  ]
+ },
+ "bh_torus_vc2__13276095349081623862": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   898,
+   940
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:before.slot_addr": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ],
+   "step<0>:cursor.slot_addr": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   35,
+   35
+  ],
+  "shed": {
+   "action@receive<0>:volatile_header": "around a call",
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<0>:group": "around a call",
+   "receive<0>:header": "around a call"
+  },
+  "sp_accesses": [
+   33,
+   33
+  ]
+ },
+ "bh_torus_vc2__13527862631378125536": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   21
+  ],
+  "carried_regs": [
+   12,
+   13
+  ],
+  "loop_insns": [
+   1023,
+   1041
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   34
+  ]
+ },
+ "bh_torus_vc2__13541065755364179599": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   14,
+   16
+  ],
+  "loop_insns": [
+   937,
+   980
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<1>:group": "around a call",
+   "receive<0>:header": "around a call",
+   "step<0>:before.slot_addr": "around a call",
+   "step<0>:cursor.slot_addr": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   28
+  ]
+ },
+ "bh_torus_vc2__1432146984554245663": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   14,
+   16
+  ],
+  "loop_insns": [
+   937,
+   980
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<1>:group": "around a call",
+   "receive<0>:header": "around a call",
+   "step<0>:before.slot_addr": "around a call",
+   "step<0>:cursor.slot_addr": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   28
+  ]
+ },
+ "bh_torus_vc2__14328837056313403009": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   21
+  ],
+  "carried_regs": [
+   12,
+   13
+  ],
+  "loop_insns": [
+   1023,
+   1041
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   34
+  ]
+ },
+ "bh_torus_vc2__14392712674153387923": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   21
+  ],
+  "carried_regs": [
+   12,
+   13
+  ],
+  "loop_insns": [
+   1023,
+   1041
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   34
+  ]
+ },
+ "bh_torus_vc2__1444237767951680874": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   20
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   935,
+   985
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   27
+  ]
+ },
+ "bh_torus_vc2__14986200078638857340": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   20
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   935,
+   985
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   27
+  ]
+ },
+ "bh_torus_vc2__15001124820423506367": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   21
+  ],
+  "carried_regs": [
+   12,
+   13
+  ],
+  "loop_insns": [
+   1023,
+   1041
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   34
+  ]
+ },
+ "bh_torus_vc2__15496768876022988858": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   20
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   935,
+   985
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   27
+  ]
+ },
+ "bh_torus_vc2__17356785069779051563": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   20
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   935,
+   985
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   27
+  ]
+ },
+ "bh_torus_vc2__18228677092961731123": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   898,
+   940
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:before.slot_addr": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ],
+   "step<0>:cursor.slot_addr": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   35,
+   35
+  ],
+  "shed": {
+   "action@receive<0>:volatile_header": "around a call",
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<0>:group": "around a call",
+   "receive<0>:header": "around a call"
+  },
+  "sp_accesses": [
+   33,
+   33
+  ]
+ },
+ "bh_torus_vc2__2667447885402835965": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   20
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   935,
+   985
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   27
+  ]
+ },
+ "bh_torus_vc2__2690972707266229937": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   898,
+   940
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:before.slot_addr": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ],
+   "step<0>:cursor.slot_addr": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   35,
+   35
+  ],
+  "shed": {
+   "action@receive<0>:volatile_header": "around a call",
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<0>:group": "around a call",
+   "receive<0>:header": "around a call"
+  },
+  "sp_accesses": [
+   33,
+   33
+  ]
+ },
+ "bh_torus_vc2__3207798875700158167": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   13,
+   14
+  ],
+  "loop_insns": [
+   898,
+   940
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:before.slot_addr": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ],
+   "step<0>:cursor.slot_addr": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   35,
+   35
+  ],
+  "shed": {
+   "action@receive<0>:volatile_header": "around a call",
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<0>:group": "around a call",
+   "receive<0>:header": "around a call"
+  },
+  "sp_accesses": [
+   33,
+   33
+  ]
+ },
+ "bh_torus_vc2__3767368624116472263": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   14,
+   16
+  ],
+  "loop_insns": [
+   937,
+   980
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<1>:group": "around a call",
+   "receive<0>:header": "around a call",
+   "step<0>:before.slot_addr": "around a call",
+   "step<0>:cursor.slot_addr": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   28
+  ]
+ },
+ "bh_torus_vc2__3836723351993128075": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   21
+  ],
+  "carried_regs": [
+   12,
+   13
+  ],
+  "loop_insns": [
+   1023,
+   1041
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "of_slot@handle<0>:group": "around a call"
+  },
+  "sp_accesses": [
+   28,
+   34
+  ]
+ },
+ "bh_torus_vc2__40379501982205494": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   14,
+   16
+  ],
+  "loop_insns": [
+   937,
+   980
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<1>:group": "around a call",
+   "receive<0>:header": "around a call",
+   "step<0>:before.slot_addr": "around a call",
+   "step<0>:cursor.slot_addr": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   28
+  ]
+ },
+ "bh_torus_vc2__4103347680366612614": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   14,
+   16
+  ],
+  "loop_insns": [
+   937,
+   980
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<1>:group": "around a call",
+   "receive<0>:header": "around a call",
+   "step<0>:before.slot_addr": "around a call",
+   "step<0>:cursor.slot_addr": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   28
+  ]
+ },
+ "bh_torus_vc2__4480490600246433894": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   14,
+   16
+  ],
+  "loop_insns": [
+   937,
+   980
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   34
+  ],
+  "shed": {
+   "deliver<0>:header": "around a call",
+   "handle<0>:header": "around a call",
+   "of_slot@handle<1>:group": "around a call",
+   "receive<0>:header": "around a call",
+   "step<0>:before.slot_addr": "around a call",
+   "step<0>:cursor.slot_addr": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   28
+  ]
+ },
+ "bh_torus_vc2__5311239593400801851": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   20
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   935,
+   985
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   27
+  ]
+ },
+ "bh_torus_vc2__5715947891442415375": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   20
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   935,
+   985
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "step<0>:cursor.counts_": [
+    "S deliver router_local_delivery.hpp:189",
+    "S step router_receiver.hpp:716"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   33,
+   31
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call"
+  },
+  "sp_accesses": [
+   27,
+   27
+  ]
+ },
+ "bh_vc1__10232162977073177072": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   23
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1259,
+   1352
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   35,
+   41
+  ]
+ },
+ "bh_vc1__11104469885667852817": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   23
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1432,
+   1518
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   36,
+   41
+  ]
+ },
+ "bh_vc1__11573880575809721320": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1404,
+   1502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   34,
+   37
+  ]
+ },
+ "bh_vc1__12623197829360786347": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   23
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1432,
+   1518
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   36,
+   41
+  ]
+ },
+ "bh_vc1__13064152745544985654": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1404,
+   1502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   34,
+   37
+  ]
+ },
+ "bh_vc1__13089072756396762885": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   15,
+   16
+  ],
+  "loop_insns": [
+   767,
+   792
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   15
+  ]
+ },
+ "bh_vc1__1348480354303653374": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   23
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1422,
+   1516
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   36,
+   41
+  ]
+ },
+ "bh_vc1__14038925932795069196": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   15,
+   16
+  ],
+  "loop_insns": [
+   767,
+   792
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   15
+  ]
+ },
+ "bh_vc1__14368077009860459152": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   15,
+   16
+  ],
+  "loop_insns": [
+   767,
+   792
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   15
+  ]
+ },
+ "bh_vc1__14449052750677022402": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   15,
+   16
+  ],
+  "loop_insns": [
+   683,
+   709
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   15
+  ]
+ },
+ "bh_vc1__14488824508413726305": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   15,
+   16
+  ],
+  "loop_insns": [
+   767,
+   792
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   15
+  ]
+ },
+ "bh_vc1__1485921802768478078": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1238,
+   1334
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   34,
+   37
+  ]
+ },
+ "bh_vc1__14925557786897369768": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1404,
+   1502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   34,
+   37
+  ]
+ },
+ "bh_vc1__16301821509454580595": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   15,
+   16
+  ],
+  "loop_insns": [
+   767,
+   792
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   15
+  ]
+ },
+ "bh_vc1__16621781951172719223": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1404,
+   1502
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   34,
+   37
+  ]
+ },
+ "bh_vc1__17679191427983392152": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   21,
+   23
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1259,
+   1352
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   33,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   35,
+   41
+  ]
+ },
+ "bh_vc1__17731598706269116892": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   23
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1432,
+   1518
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   36,
+   41
+  ]
+ },
+ "bh_vc1__17966234560397861258": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   23
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1432,
+   1518
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   36,
+   41
+  ]
+ },
+ "bh_vc1__1820397891289760981": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   20,
+   22
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1238,
+   1334
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   34
+  ],
+  "shed": {
+   "of_slot@handle<1>:group": "around a call",
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   34,
+   37
+  ]
+ },
+ "bh_vc1__194038721068991495": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   15,
+   16
+  ],
+  "loop_insns": [
+   683,
+   709
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   29,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   15
+  ]
+ },
+ "bh_vc1__2514303246254028150": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   22,
+   23
+  ],
+  "carried_regs": [
+   14,
+   15
+  ],
+  "loop_insns": [
+   1422,
+   1516
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   34,
+   35
+  ],
+  "shed": {
+   "step<0>:arrived": "around a call"
+  },
+  "sp_accesses": [
+   36,
+   41
+  ]
+ },
+ "bh_vc1__6475689126009134489": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   21
+  ],
+  "carried_regs": [
+   15,
+   16
+  ],
+  "loop_insns": [
+   767,
+   792
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   30,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   10,
+   15
+  ]
+ }
+}

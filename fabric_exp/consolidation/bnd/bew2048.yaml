@@ -1,0 +1,28 @@
+# Phase/cost analysis stage 3 (RESULTS §98): one long row for PC sampling (bew2048; V4_BOUNDS.md).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BndEW2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 93103448
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

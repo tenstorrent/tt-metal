@@ -1,0 +1,9 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+Mesh3HopEW_capture_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,50000,4352,9356097,31.397708,7214546.835
+Mesh3HopEW_capture_size_4352_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Mesh,8,0,1,E,1,50000,4352,10177702,28.863097,6632145.449
+Mesh3HopEW_replay_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,50000,4352,8287868,35.444580,8144434.733
+Mesh3HopEW_replay_size_4352_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Mesh,8,0,1,E,1,50000,4352,9255294,31.739672,7293123.265
+MeshMulticast_capture_size_4352_ntype_unicast_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_WRITE,Mesh,8,7,1,W,2,20000,4352,22542990,10.424882,2395423.145
+MeshMulticast_capture_size_4352_ntype_unicast_scatter_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Mesh,8,7,1,W,2,20000,4352,26735205,8.790208,2019808.713
+MeshMulticast_replay_size_4352_ntype_unicast_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_WRITE,Mesh,8,7,1,W,2,20000,4352,19544506,12.024249,2762924.783
+MeshMulticast_replay_size_4352_ntype_unicast_scatter_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Mesh,8,7,1,W,2,20000,4352,25352929,9.269462,2129931.417

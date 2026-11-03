@@ -1,0 +1,37 @@
+v4rxg3_O3 -> v4rxrp2_O3: 242 images with different .text, 270 role analyses
+  bh_1d receiver                             10  loop +27 sp S+4 L+4 +['handle<0>:header_word', 'receive<0>:header_word']
+  bh_2d receiver                              8  loop -16 sp S-3 L-3 -['run:credit_frame_due', 'run:loop_copy.idle_passes_with_partial_group']
+  bh_2d receiver                              8  loop -15 sp S+0 L+0 -['run:loop_copy.idle_passes_with_partial_group']
+  bh_2d receiver                              8  loop +26 sp S+1 L+4
+  bh_2d receiver                              4  loop +5 sp S+3 L+6
+  bh_2d_1erisc receiver                       8  loop +23 sp S+2 L+3 +['pass:my_chip', 'receive<0>:my_chip', 'receiver_pass:my_chip', 'step<0>:my_chip', 'step_channel<0>:my_chip']
+  bh_2d_1erisc receiver                       8  loop +42 sp S+3 L+4 +['pass:my_chip', 'receive<0>:my_chip', 'receiver_pass:my_chip', 'step<0>:my_chip', 'step_channel<0>:my_chip']
+  bh_2d_1erisc receiver                       8  loop +22 sp S+2 L+3 +['pass:my_chip', 'receive<0>:my_chip', 'receiver_pass:my_chip', 'step<0>:my_chip', 'step_channel<0>:my_chip']
+  bh_2d_1erisc receiver                       4  loop +28 sp S+2 L+3 +['pass:my_chip', 'receive<0>:my_chip', 'receiver_pass:my_chip', 'step<0>:my_chip', 'step_channel<0>:my_chip']
+  bh_2d_1erisc sender                        28  loop +0 sp S+0 L+0
+  bh_2d_vc2 receiver                         16  loop +11 sp S-1 L+0 +['receive<2>:route_loaded~', 'run:loop_copy.idle_passes_with_partial_group', 'step<2>:route_loaded~'] -['run:credit_frame_due']
+  bh_2d_vc2 receiver                          8  loop +16 sp S-1 L+1 +['credit_completions<2>:waiting~', 'receive<2>:route_loaded~', 'run:loop_copy.idle_passes_with_partial_group', 'run:loop_copy.uncredited', 'step<2>:route_loaded~']
+  bh_2d_vc2 receiver                          4  loop +26 sp S-2 L+2 +['NOC_CMD_BUF_WRITE_REG@deliver<1>:val', 'receive<2>:route_loaded~', 'run:loop_copy.idle_passes_with_partial_group', 'step<2>:route_loaded~']
+  bh_ring receiver                           10  loop +17 sp S+4 L+4 +['handle<0>:downstreams', 'handle<0>:routers', 'pass:downstreams', 'pass:txq_status', 'receive<0>:downstreams', 'run:loop_copy.uncredited', 'step<0>:downstreams', 'step_channel<0>:downstreams'] -['handle<0>:header_word', 'receive<0>:header_word']
+  bh_torus receiver                           4  loop +35 sp S+4 L+7 +['NOC_CMD_BUF_WRITE_REG@deliver<0>:val', 'handle<0>:downstreams', 'handle<0>:routers', 'local_write@deliver<0>:dst_noc_addr.@4', 'pass:downstreams', 'receive<0>:downstreams', 'step<0>:downstreams', 'step_channel<0>:downstreams']
+  bh_torus receiver                           4  loop +39 sp S+4 L+6 +['NOC_CMD_BUF_WRITE_REG@deliver<0>:val', 'local_write@deliver<0>:dst_noc_addr.@4', 'pass:txq_status']
+  bh_torus receiver                           4  loop +38 sp S-1 L+3 +['deliver<0>:encoding', 'pass:txq_status']
+  bh_torus_vc2 receiver                      16  loop +46 sp S-1 L+0 +['receive<2>:route_loaded~', 'run:loop_copy.idle_passes_with_partial_group', 'step<2>:route_loaded~'] -['credit_completions<2>:waiting~', 'run:credit_frame_due']
+  bh_torus_vc2 receiver                       8  loop -1 sp S+3 L-2 +['pass:txq_status', 'receive<2>:route_loaded~', 'route_word@receive<0>:bytes.x', 'run:loop_copy.next_route.x', 'step<0>:next_route.x', 'step<2>:route_loaded~'] -['credit_completions<2>:waiting~', 'deliver<0>:encoding']
+  bh_torus_vc2 receiver                       4  loop +50 sp S+12 L+12 +['NOC_CMD_BUF_WRITE_REG@deliver<1>:val', 'handle<0>:downstreams', 'handle<0>:routers', 'handle<2>:downstreams', 'local_write@deliver<1>:dst_noc_addr.@4', 'pass:downstreams', 'pass:txq_status', 'receive<0>:downstreams', 'receive<2>:downstreams', 'receive<2>:route_loaded~', 'run:loop_copy.packets_ready', 'step<0>:downstreams', 'step<0>:route_loaded~', 'step<2>:downstreams', 'step<2>:route_loaded~', 'step_channel<0>:downstreams', 'step_channel<2>:downstreams'] -['credit_completions<2>:waiting~']
+  bh_vc1 receiver                             6  loop +31 sp S+1 L+5 +['run:loop_copy.next_route.x']
+  bh_vc1 receiver                             4  loop +65 sp S+8 L+15 +['credit_completions<1>:waiting~', 'receive<1>:route_loaded~', 'route_word@receive<1>:bytes.x', 'run:loop_copy.idle_passes_with_partial_group', 'step<1>:route_loaded~']
+  bh_vc1 receiver                             4  loop +2 sp S+1 L+8 +['receive<1>:route_loaded~', 'route_word@receive<1>:bytes.x', 'route_word@receive<1>:route_action~', 'step<1>:route_loaded~'] -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<0>:header_word', 'receive<1>:header', 'receive<1>:header_word']
+  bh_vc1 receiver                             2  loop +65 sp S+2 L+11 +['receive<1>:route_loaded~', 'route_word@receive<1>:bytes.x', 'run:credit_frame_due', 'step<1>:route_loaded~'] -['read@receive<1>:header', 'read@receive<1>:volatile_header', 'receive<0>:header_word', 'receive<1>:header', 'receive<1>:header_word']
+  bh_vc1 receiver                             2  loop +69 sp S+8 L+15 +['credit_completions<1>:waiting~', 'receive<1>:route_loaded~', 'route_word@receive<1>:bytes.x', 'run:loop_copy.idle_passes_with_partial_group', 'step<1>:route_loaded~']
+  bh_vc1 receiver                             2  loop +55 sp S+1 L+4 +['run:loop_copy.next_route.x', 'run:loop_copy.next_route.y']
+  bh_vc1 receiver                             2  loop +20 sp S+6 L+10 +['receive<1>:route_loaded~', 'route_word@receive<1>:bytes.x', 'route_word@receive<1>:header', 'route_word@receive<1>:route_action~', 'route_word@receive<1>:volatile_header', 'step<1>:route_loaded~'] -['read@receive<1>:header', 'read@receive<1>:volatile_header']
+  glx_2d receiver                            12  loop -15 sp S+0 L+0 -['run:loop_copy.idle_passes_with_partial_group']
+  glx_2d receiver                            12  loop -16 sp S-3 L-3 -['run:credit_frame_due', 'run:loop_copy.idle_passes_with_partial_group']
+  glx_2d receiver                            12  loop +16 sp S+2 L+5 -['run:loop_copy.idle_passes_with_partial_group']
+  glx_2d receiver                             8  loop +26 sp S+1 L+4
+  glx_2d receiver                             4  loop +5 sp S+3 L+6
+  glx_express receiver                       12  loop +40 sp S+1 L+5 +['pass:txq_status']
+  glx_express receiver                        8  loop +40 sp S+1 L+3 +['pass:txq_status']
+  glx_express receiver                        4  loop +39 sp S+4 L+6 +['NOC_CMD_BUF_WRITE_REG@deliver<0>:val', 'local_write@deliver<0>:dst_noc_addr.@4', 'pass:txq_status']
+  glx_express receiver                        4  loop +35 sp S+4 L+7 +['NOC_CMD_BUF_WRITE_REG@deliver<0>:val', 'handle<0>:downstreams', 'handle<0>:routers', 'local_write@deliver<0>:dst_noc_addr.@4', 'pass:downstreams', 'receive<0>:downstreams', 'step<0>:downstreams', 'step_channel<0>:downstreams']

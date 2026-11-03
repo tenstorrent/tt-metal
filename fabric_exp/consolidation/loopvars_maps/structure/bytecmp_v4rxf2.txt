@@ -1,0 +1,90 @@
+v4rxf2 O3: built 2713/2974 into /home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4rxf2_O3
+  configs 2974, ok 2713, not in base 0
+  ok-set mismatches: 0 []
+  bytecmp exit 1
+  bh_1d                        identical   10  differ   10
+  bh_1d_1erisc                 identical    0  differ   10
+  bh_1d_allinstr               identical   10  differ   10
+  bh_1d_delay                  identical   10  differ   10
+  bh_1d_mux                    identical    0  differ   10
+  bh_1d_telemetry              identical   10  differ   10
+  bh_1d_trim                   identical   10  differ   10
+  bh_1d_trim_w0                identical   10  differ   10
+  bh_1d_trim_w0_1erisc         identical    0  differ   10
+  bh_2d                        identical   28  differ   28
+  bh_2d_1erisc                 identical    0  differ   28
+  bh_2d_1erisc_delay           identical    0  differ   28
+  bh_2d_1erisc_passdelay       identical    0  differ   28
+  bh_2d_allinstr               identical   28  differ   28
+  bh_2d_bwtelemetry            identical   28  differ   28
+  bh_2d_codeprof               identical   28  differ   28
+  bh_2d_delay                  identical   28  differ   28
+  bh_2d_mux                    identical    0  differ   28
+  bh_2d_mux_delay              identical    0  differ   28
+  bh_2d_mux_trim_all           identical    0  differ   28
+  bh_2d_passdelay              identical   28  differ   28
+  bh_2d_telemetry              identical   28  differ   28
+  bh_2d_trim                   identical   28  differ   28
+  bh_2d_udm                    identical    0  differ   28
+  bh_2d_udm_gtest              identical    0  differ   28
+  bh_2d_vc2                    identical   28  differ   28
+  bh_2d_vc2_1erisc             identical    0  differ   28
+  bh_2d_vc2_trim_w0            identical   28  differ   28
+  bh_2d_vc2_trim_w02           identical   28  differ   28
+  bh_2d_vc2_trim_w02_1erisc    identical    0  differ   28
+  bh_2d_vc2_trim_w0_1erisc     identical    0  differ   28
+  bh_2d_vc2_trim_w2            identical   28  differ   28
+  bh_2d_vc2_trim_w2_1erisc     identical    0  differ   28
+  bh_neighbor                  identical    4  differ    4
+  bh_neighbor_1erisc           identical    0  differ    4
+  bh_neighbor_delay            identical    4  differ    4
+  bh_ring                      identical   10  differ   10
+  bh_ring_allinstr             identical   10  differ   10
+  bh_ring_delay                identical   10  differ   10
+  bh_ring_passdelay            identical   10  differ   10
+v4rxf2 Os: built 2713/2974 into /home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4rxf2_Os
+  configs 2974, ok 2713, not in base 0
+  ok-set mismatches: 0 []
+  bytecmp exit 1
+  bh_1d                        identical   10  differ   10
+  bh_1d_1erisc                 identical    0  differ   10
+  bh_1d_allinstr               identical   10  differ   10
+  bh_1d_delay                  identical   10  differ   10
+  bh_1d_mux                    identical    0  differ   10
+  bh_1d_telemetry              identical   10  differ   10
+  bh_1d_trim                   identical   10  differ   10
+  bh_1d_trim_w0                identical   10  differ   10
+  bh_1d_trim_w0_1erisc         identical    0  differ   10
+  bh_2d                        identical   28  differ   28
+  bh_2d_1erisc                 identical    0  differ   28
+  bh_2d_1erisc_delay           identical    0  differ   28
+  bh_2d_1erisc_passdelay       identical    0  differ   28
+  bh_2d_allinstr               identical   28  differ   28
+  bh_2d_bwtelemetry            identical   28  differ   28
+  bh_2d_codeprof               identical   28  differ   28
+  bh_2d_delay                  identical   28  differ   28
+  bh_2d_mux                    identical    0  differ   28
+  bh_2d_mux_delay              identical    0  differ   28
+  bh_2d_mux_trim_all           identical    0  differ   28
+  bh_2d_passdelay              identical   28  differ   28
+  bh_2d_telemetry              identical   28  differ   28
+  bh_2d_trim                   identical   28  differ   28
+  bh_2d_udm                    identical    0  differ   28
+  bh_2d_udm_gtest              identical    0  differ   28
+  bh_2d_vc2                    identical   28  differ   28
+  bh_2d_vc2_1erisc             identical    0  differ   28
+  bh_2d_vc2_trim_w0            identical   28  differ   28
+  bh_2d_vc2_trim_w02           identical   28  differ   28
+  bh_2d_vc2_trim_w02_1erisc    identical    0  differ   28
+  bh_2d_vc2_trim_w0_1erisc     identical    0  differ   28
+  bh_2d_vc2_trim_w2            identical   28  differ   28
+  bh_2d_vc2_trim_w2_1erisc     identical    0  differ   28
+  bh_neighbor                  identical    4  differ    4
+  bh_neighbor_1erisc           identical    0  differ    4
+  bh_neighbor_delay            identical    4  differ    4
+  bh_ring_1erisc               identical    0  differ   10
+  bh_ring_mux                  identical    0  differ   10
+  bh_torus_1erisc              identical    0  differ   12
+  bh_torus_vc2                 identical   40  differ   16
+v4rxf2 O3: shared 2713  identical 1231  differ 1482  only in v4rxf1_O3 0  only in v4rxf2_O3 0
+v4rxf2 Os: shared 2713  identical 1275  differ 1438  only in v4rxf1_Os 0  only in v4rxf2_Os 0

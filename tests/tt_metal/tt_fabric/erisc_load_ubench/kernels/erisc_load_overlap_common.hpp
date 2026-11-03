@@ -65,6 +65,52 @@ enum Pattern : uint32_t {
     PRE_S4_HDR,      // S..S4, K, use them, then L (the header, slot in a register) used at once
     PRE_S4_DS_HDR,   // S..S4 + DS (the slot, loaded with the group), K, use S..S4, then L through DS used at once
     DEP_DS_HDR,      // DS, then L through it used at once (slot loaded right before the header), K
+    // Several packets per visit (fabric_exp/consolidation/V4_SEND_BATCH.md, 2026-11-01). Every block starts as a sender
+    // pass does: the four stream registers read as a group, 6 filler, all four used (the count read). Then header loads:
+    // H0..H3 = the payload-size halfword (offset 40) of four ring slots 4448 B apart (a 4352 B packet's slot); DS, DS2 =
+    // local-memory words holding H0's and H1's slot addresses (a forwarding channel's parked slot). Cost = cycles per
+    // block minus HB_BASE (same shape, no header loads; 4 uses).
+    HB_BASE,   // count read; K; 4 uses of filler
+    HB_H1,     // count read; H0, K, use
+    HB_H2,     // count read; H0 H1 issued together, K, use both
+    HB_H3,     // count read; H0 H1 H2 together, K, use all
+    HB_H4,     // count read; H0..H3 together, K, use all
+    HB_H2_SEQ, // count read; H0 used at once, H1 used at once, K
+    HB_H4_SEQ, // count read; H0..H3 each used at once, K
+    HB_C1,     // count read; DS, then H0 through it, K, use (one forwarding channel, slot parked)
+    HB_C2,     // count read; DS DS2 together, then H0 H1 through them together, K, use both
+    HB_C2_SEQ, // count read; DS, H0 through it used at once; DS2, H1 through it used at once; K
+    // One-ahead header prefetch behind the send's TX-queue writes. W = the seven TX-queue register writes of a send (data
+    // command 4, packets-received update 3), here to TX queue 1's staging registers only (start address, destination,
+    // size, remote register data: never the command register, so nothing is sent). Cost against HW_BASE.
+    HW_BASE,   // count read; 7 writes, K, 2 uses of filler
+    HW_PF,     // count read; H1, 7 writes, K, use (the next header issued before the writes)
+    HW_PF_MID, // count read; 4 writes, H1, 3 writes, K, use
+    HW_AFTER,  // count read; 7 writes, H1, K, use
+    HW_PF_DS,  // count read; DS2, H1 through it, 7 writes, K, use (a forwarding channel's next header)
+    HW_PF_SEQ, // count read; H1 used at once, then 7 writes, K (no prefetch: the header read at the next send's start)
+    // The post-send group (TX-queue status: command read discarded, status; the completion counter, an L1 word) with
+    // and without the next header in it. Cost against HP_BASE.
+    HP_BASE,   // count read; K, 3 uses of filler
+    HP_GRP,    // count read; T Q + completion counter, K, use status and counter
+    HP_GRP_PF, // count read; T Q + completion counter + H1, K, use all three
+    // Which load form costs what after the count read (HB_H1's lone lhu cost 2, RESULTS §17's lone L1 lw 7-8). Cost
+    // against HB_BASE. L = RESULTS §17's L1 word.
+    HX_LW40,     // count read; lw of H0's word 40, K, use
+    HX_LHU_L,    // count read; lhu of L, K, use
+    HX_LW_L,     // count read; lw of L, K, use
+    HX_LHU40_AT, // count read; lhu of H0's word 40 used at once, K
+    HX_LW40_AT,  // count read; lw of H0's word 40 used at once, K
+    HX_LW_L_AT,  // count read; lw of L used at once, K
+    HX_LW_L_NC,  // no count read; lw of L, K, use (RESULTS §17's "L, K, use" in this block shape; against HX_BASE_NC)
+    HX_LHU40_NC, // no count read; lhu of H0's word 40, K, use (against HX_BASE_NC)
+    HX_BASE_NC,  // no count read; K, 4 uses of filler
+    // The send's pre-send group as the router has it (TX-queue status: command read discarded, then status; and the
+    // packet's header word), used at once, against the status alone: what the header costs inside that group.
+    // Against HB_BASE.
+    HS_TQ_AT,    // count read; T Q, status used at once, K
+    HS_TQH_AT,   // count read; H0 T Q, header and status used at once, K
+    HS_TQH2_AT,  // count read; H0 T Q used at once, then H1 T Q used at once (two sends' pre-send groups), K
     kNumPatterns,
 };
 
@@ -79,14 +125,30 @@ constexpr uint32_t kStream4 = 3;
 // The patterns do not all fit the 24 KB kernel code limit at once; the host runs the kernel once per group,
 // selected by ERISC_LOAD_GROUP (patterns [first, last) of each group).
 constexpr uint32_t kGroups[][2] = {
-    {0, PRE_BOTH_REV}, {PRE_BOTH_REV, BASE3}, {BASE3, BASE5}, {BASE5, DEP_CMDBUF}, {DEP_CMDBUF, BASE7}, {BASE7, kNumPatterns}};
-constexpr uint32_t kNumGroups = 6;
+    {0, PRE_BOTH_REV},
+    {PRE_BOTH_REV, BASE3},
+    {BASE3, BASE5},
+    {BASE5, DEP_CMDBUF},
+    {DEP_CMDBUF, BASE7},
+    {BASE7, HB_BASE},
+    {HB_BASE, HB_H2_SEQ},
+    {HB_H2_SEQ, HW_BASE},
+    {HW_BASE, HP_BASE},
+    {HP_BASE, HX_LW40},
+    {HX_LW40, HX_LW40_AT},
+    {HX_LW40_AT, HS_TQ_AT},
+    {HS_TQ_AT, kNumPatterns}};
+constexpr uint32_t kNumGroups = 13;
 constexpr uint32_t kTxq = 1;     // TX queue whose registers are read (the receiving ERISC's ack queue)
 constexpr uint32_t kNiuNoc = 1;  // NoC whose status registers are read (the router's local-write NoC)
 
 constexpr uint32_t kResultsOffset = 0x0;  // from the unreserved base
 constexpr uint32_t kL1WordOffset = 0x1000;
 constexpr uint32_t kL1Word2Offset = 0x1040;
+// The send-batch patterns' four ring slots (4448 B apart: a 4352 B packet's slot) and the header word they read.
+constexpr uint32_t kSlotsOffset = 0x2000;
+constexpr uint32_t kSlotStride = 4448;
+constexpr uint32_t kHeaderWordOffset = 40;
 // Results: [pattern][fill] cycles for kIterations blocks, then acc, done flag, CSR 0x7c0 at kernel start.
 constexpr uint32_t kResultWords = kNumPatterns * kNumFill + 3;
 constexpr uint32_t kDone = 0xD0D0;

@@ -1,0 +1,15 @@
+# The row that was killed on a08u28 (lb2 170018) and a07u28 (170023) with v4rxg3, FrgValFullRingMcast of
+# p150_frg_val_ring.yaml alone: main vs v4rxg3 on a09u32 (TODO: possible v4rxg3 P150 defect).
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: FrgValFullRingMcast
+  enable_flow_control: true
+  fabric_setup: {topology: Ring, num_links: 1}
+  parametrization_params:
+    ftype: [mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [4096]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: full_ring}

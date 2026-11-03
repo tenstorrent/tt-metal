@@ -1,0 +1,14 @@
+v4rxe3 O3: built 2713/2974 into /home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4rxe3_O3
+  configs 2974, ok 2713, not in base 0
+  ok-set mismatches: 0 []
+  bytecmp exit 1
+  bh_2d_udm                    identical   20  differ    8
+  bh_2d_udm_gtest              identical   20  differ    8
+  shared 2713  identical 2697  differ 16  only in v4rxf3_O3 0  only in v4rxe3_O3 0
+v4rxe3 Os: built 2713/2974 into /home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4rxe3_Os
+  configs 2974, ok 2713, not in base 0
+  ok-set mismatches: 0 []
+  bytecmp exit 0
+  shared 2713  identical 2713  differ 0  only in v4rxf3_Os 0  only in v4rxe3_Os 0
+v4rxe3 O3: shared 2713  identical 2697  differ 16  only in v4rxf3_O3 0  only in v4rxe3_O3 0
+v4rxe3 Os: shared 2713  identical 2713  differ 0  only in v4rxf3_Os 0  only in v4rxe3_Os 0

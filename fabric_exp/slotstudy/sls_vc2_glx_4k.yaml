@@ -1,0 +1,128 @@
+# Slot study, 2 KiB slots: VC2-on rows on one Galaxy (8x4 mesh, 200G; needs TT_METAL_ENABLE_FABRIC_VC2=1), as pcs3's
+# ew / vc2ew / vc02ew / vc02bew rows: VC0 alone with VC2 on, VC2 alone, VC0 + VC2 from chip [0, 0] to its E/W neighbour
+# on one link (Vc02A: VC0 finishes first; Vc02B: VC2 first; per-sender rates from the profiler's log lines; sync off),
+# default 4352 B slots, 2048 B payloads. Slots from TT_FABRIC_EXP_SLOTS_VC2 or the builder's row. 4 tests.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Vc2OnVC0
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 1000000
+
+- name: Vc2Alone
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 2
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 1000000
+
+- name: Vc02A
+  benchmark_mode: true
+  sync: false
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 1000000
+  - device:
+    - 0
+    - 0
+    vc_id: 2
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 2000000
+
+- name: Vc02B
+  benchmark_mode: true
+  sync: false
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 2000000
+  - device:
+    - 0
+    - 0
+    vc_id: 2
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+      num_packets: 1000000

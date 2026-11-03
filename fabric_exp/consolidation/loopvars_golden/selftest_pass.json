@@ -1,0 +1,14 @@
+{
+ "fingerprint": {
+  "tool": "adc246b0e2b8a00d",
+  "binutils": "GNU readelf (tenstorrent/sfpi:7.91.0[1077]) 2.44.20250202",
+  "binaries": {
+   "readelf": "ab28ee5f289bdb54",
+   "objdump": "f820d3382baf41cc",
+   "addr2line": "5090a437711bb82e",
+   "nm": "be99542bc483f235",
+   "gcc": "0ee57acbe24a92d7"
+  }
+ },
+ "passed": "2026-11-02T17:49:27"
+}

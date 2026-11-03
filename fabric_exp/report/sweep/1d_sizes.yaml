@@ -1,0 +1,104 @@
+# Generated from fabric_exp/exp_1d_4352.yaml (report size sweep, 2026-11-02): every test at [256, 1024, 2048, 3072, 4352] B; otherwise unchanged.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: Linear1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Linear}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]
+- name: Linear1HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Linear}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 4]
+- name: Linear1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Linear}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]
+  - device: [0, 1]
+    patterns:
+    - destination:
+        device: [0, 0]
+- name: Linear3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Linear}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 3]
+- name: LinearMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Linear}
+  parametrization_params:
+    num_links: [1]
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: mcast, num_packets: 20000}
+  patterns:
+  - {type: all_to_all, iterations: 1}
+- name: UnidirLinearMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Linear}
+  parametrization_params:
+    num_links: [1]
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: mcast, num_packets: 20000}
+  patterns:
+  - {type: unidirectional_linear, iterations: 1}
+- name: HalfRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    num_links: [1]
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: mcast, num_packets: 50000}
+  patterns:
+  - {type: half_ring, iterations: 1}
+- name: NeighborExchange
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: NeighborExchange}
+  parametrization_params:
+    num_links: [1]
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  patterns:
+  - {type: neighbor_exchange, iterations: 1}

@@ -1,0 +1,8 @@
+v4rxg2a_O3 -> v4rxg2_O3: 1601 images differ in .text
+     56  swapped offsets                          fabric_router10init_relayINS_5RelayENS_9
+   1555  swapped, reordered (same offsets, other order) fabric_router16init_downstreamsILj0EEEvR
+    155  swapped, reordered (same offsets, other order) fabric_router16init_downstreamsILj1EEEvR
+    649  swapped offsets                          fabric_router6single13receiver_passERNS0
+    230  swapped offsets                          fabric_router8receiver20sparse_multicast
+    940  swapped offsets                          fabric_router8receiver3runERNS_21Downstr
+OTHER: 0

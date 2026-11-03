@@ -1,0 +1,6 @@
+# Global channel-trimming override (TT_METAL_FABRIC_TRIMMING_OVERRIDE; channel_trimming_import.cpp): every router loses
+# VC0's receiver channel; sender channels untouched. The shape where the lowest receiver VC a router runs is not VC0
+# (V4_RECEIVER_OWNERSHIP.md §18, loop_local_vc). Build checks only: the far senders still send on VC0.
+channel_trimming_overrides:
+  vc0:
+    force_enable_receiver_channels: []

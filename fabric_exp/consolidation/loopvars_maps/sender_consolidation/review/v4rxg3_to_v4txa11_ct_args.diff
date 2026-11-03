@@ -1,0 +1,90 @@
+--- v4rxg3/fabric_erisc_router_ct_args.hpp	2026-11-01 20:10:38.696357422 +0000
++++ v4txa11/fabric_erisc_router_ct_args.hpp	2026-11-03 03:52:42.007239224 +0000
+@@ -127,6 +127,34 @@
+     return ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS + (position - VC2_FABRIC_POSITION_START);
+ }
+ 
++// The free-slots stream register of each sender channel, by fabric position (the host's
++// SENDER_CHANNEL_<p>_FREE_SLOTS_STREAM_ID: the table is the same on every router, so a router can name a downstream
++// router's register).
++constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_free_slots_streams = {
++    sender_channel_0_free_slots_stream_id,
++    sender_channel_1_free_slots_stream_id,
++    sender_channel_2_free_slots_stream_id,
++    sender_channel_3_free_slots_stream_id,
++    sender_channel_4_free_slots_stream_id,
++    sender_channel_5_free_slots_stream_id,
++    sender_channel_6_free_slots_stream_id,
++    sender_channel_7_free_slots_stream_id,
++    sender_channel_8_free_slots_stream_id,
++    sender_channel_9_free_slots_stream_id};
++
++// This router's local copy of each downstream router's free slots, by VC that forwards to routers (VC0, VC1) and by
++// downstream entry (the host's compact order: VC<n>_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_<entry + 1>_STREAM_ID).
++constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 2> local_downstream_credit_streams = {{
++    {vc_0_free_slots_from_downstream_edge_1_stream_id,
++     vc_0_free_slots_from_downstream_edge_2_stream_id,
++     vc_0_free_slots_from_downstream_edge_3_stream_id,
++     vc_0_free_slots_from_downstream_edge_4_stream_id},
++    {vc_1_free_slots_from_downstream_edge_1_stream_id,
++     vc_1_free_slots_from_downstream_edge_2_stream_id,
++     vc_1_free_slots_from_downstream_edge_3_stream_id,
++     vc_1_free_slots_from_downstream_edge_4_stream_id},
++}};
++
+ // Does this router service a channel at this fabric position?
+ constexpr bool services_fabric_position(size_t position) {
+     if (position < VC1_FABRIC_POSITION_START) {
+@@ -222,6 +250,9 @@
+ // arrived, on an ack, rather than when it is completed (ENABLE_FIRST_LEVEL_ACK_VC<n>).
+ constexpr std::array<bool, MAX_NUM_VCS> is_vc_first_level_ack_enabled = {
+     ENABLE_FIRST_LEVEL_ACK_VC0, ENABLE_FIRST_LEVEL_ACK_VC1, ENABLE_FIRST_LEVEL_ACK_VC2};
++// The VC's receiver channel's index in the host's per-receiver-channel arrays (on both routers of a link).
++constexpr std::array<size_t, MAX_NUM_VCS> receiver_channel_by_vc = {
++    VC0_RECEIVER_CHANNEL, VC1_RECEIVER_CHANNEL, VC2_RECEIVER_CHANNEL};
+ // Whether the VC's receiver channel forwards onto VC1's downstream routers here (crossover, on an intermesh router:
+ // FABRIC_2D_VC0_CROSSOVER_TO_VC1, VC2_CROSSOVER_TO_VC1); VC1's forwards on VC1.
+ constexpr std::array<bool, MAX_NUM_VCS> is_vc_crossover_to_vc1 = {
+@@ -324,6 +355,21 @@
+     NAMED_CT_ARG("SENDER_CH_8_CONNECTION_SEMAPHORE_ADDR");
+ constexpr size_t local_sender_channel_9_connection_semaphore_addr =
+     NAMED_CT_ARG("SENDER_CH_9_CONNECTION_SEMAPHORE_ADDR");
++// The same, by channel: each sender channel's connection info (its worker's location, the read counter a disconnected
++// worker's credits go to) and its connection semaphore (a worker channel's connection state, read every pass), in L1
++// at compile-time addresses.
++constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_addrs = {
++    local_sender_channel_0_connection_info_addr, local_sender_channel_1_connection_info_addr,
++    local_sender_channel_2_connection_info_addr, local_sender_channel_3_connection_info_addr,
++    local_sender_channel_4_connection_info_addr, local_sender_channel_5_connection_info_addr,
++    local_sender_channel_6_connection_info_addr, local_sender_channel_7_connection_info_addr,
++    local_sender_channel_8_connection_info_addr, local_sender_channel_9_connection_info_addr};
++constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_semaphore_addrs = {
++    local_sender_channel_0_connection_semaphore_addr, local_sender_channel_1_connection_semaphore_addr,
++    local_sender_channel_2_connection_semaphore_addr, local_sender_channel_3_connection_semaphore_addr,
++    local_sender_channel_4_connection_semaphore_addr, local_sender_channel_5_connection_semaphore_addr,
++    local_sender_channel_6_connection_semaphore_addr, local_sender_channel_7_connection_semaphore_addr,
++    local_sender_channel_8_connection_semaphore_addr, local_sender_channel_9_connection_semaphore_addr};
+ 
+ // ============================================================================
+ // Status pointers
+@@ -343,6 +389,20 @@
+ // ============================================================================
+ // Channel servicing flags
+ // ============================================================================
++// Whether a sender channel position takes a worker: the first sender channel of each VC whose routing mode has a worker
++// (SENDER_CH_<i>_IS_WORKER_CHANNEL; erisc_datamover_builder.cpp), whether or not trimming services it.
++constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_worker = {
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_3_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_4_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_5_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_WORKER_CHANNEL")),
++    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_WORKER_CHANNEL")),
++};
+ constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
+     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_0_SERVICED")),
+     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_1_SERVICED")),

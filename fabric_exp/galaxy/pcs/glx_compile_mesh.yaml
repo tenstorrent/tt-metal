@@ -1,0 +1,51 @@
+# Cycle breakdown, phase 2 (fabric_exp/report/BREAKDOWN_PLAN.md): Galaxy: short mesh rows that compile the routers of points 2 and 4 (compile commands logged).
+# Copy of fabric_exp/consolidation/bd_rows/glx_compile_mesh.yaml (unchanged; Galaxy report runs, frs_glx_rsz.sbatch).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BdGlxCompileEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+  defaults:
+    ftype: unicast
+    num_packets: 2000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: BdGlxCompileNS7
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+  defaults:
+    ftype: unicast
+    num_packets: 2000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 28

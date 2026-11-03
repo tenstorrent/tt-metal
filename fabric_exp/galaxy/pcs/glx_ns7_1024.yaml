@@ -1,0 +1,29 @@
+# Cycle breakdown, phase 2 (fabric_exp/report/BREAKDOWN_PLAN.md): Point 4: GlxMesh7HopNS write 1024 B (chip 0 -> 28, column 0), long (new ~186: ~8 s; main ~223: ~10 s).
+# Copy of fabric_exp/consolidation/bd_rows/glx_ns7_1024.yaml (mock-vetted on the Galaxy descriptor) with num_packets 540,000,000 for ~75 s of traffic on the faster router (Galaxy report runs, frs_glx_rsz.sbatch).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BdGlxNS7
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+  defaults:
+    ftype: unicast
+    num_packets: 540000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 28

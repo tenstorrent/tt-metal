@@ -1,0 +1,129 @@
+{
+ "version": "phase2-costliest",
+ "note": "Costliest two-ERISC rows on the new router only, both ERISCs (memory project-pending-costliest-rows-profile); P150, 4352 B. Descriptive only.",
+ "points": [
+  {
+   "point": 101,
+   "label": "BdMcastScatter (MeshMulticast scatter (169.9 on v4pl6))",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "2D mesh",
+   "config": "two ERISCs",
+   "send_type": "scatter_write",
+   "packet_size_B": 4352,
+   "why": "MeshMulticast scatter (169.9 on v4pl6)",
+   "slack_test": null,
+   "main": [],
+   "new": [
+    {
+     "set": "bd_x11p_x_new_mcast_scatter",
+     "provisional": false,
+     "notes": "v4txa11, one pass."
+    }
+   ]
+  },
+  {
+   "point": 102,
+   "label": "BdHalfRingScatter (HalfRingMulticast scatter (234.7 on v4pl6))",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "ring",
+   "config": "two ERISCs",
+   "send_type": "scatter_write",
+   "packet_size_B": 4352,
+   "why": "HalfRingMulticast scatter (234.7 on v4pl6)",
+   "slack_test": null,
+   "main": [],
+   "new": [
+    {
+     "set": "bd_x11p_x_new_halfring_scatter",
+     "provisional": false,
+     "notes": "v4txa11, one pass."
+    }
+   ]
+  },
+  {
+   "point": 103,
+   "label": "BdRing1Scatter (Ring1Hop scatter (189.5))",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "ring",
+   "config": "two ERISCs",
+   "send_type": "scatter_write",
+   "packet_size_B": 4352,
+   "why": "Ring1Hop scatter (189.5)",
+   "slack_test": null,
+   "main": [],
+   "new": [
+    {
+     "set": "bd_x11p_x_new_ring1_scatter",
+     "provisional": false,
+     "notes": "v4txa11, one pass."
+    }
+   ]
+  },
+  {
+   "point": 104,
+   "label": "BdUnidirLinWrite (UnidirLinearMulticast write (186.9))",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "1D line",
+   "config": "two ERISCs",
+   "send_type": "write",
+   "packet_size_B": 4352,
+   "why": "UnidirLinearMulticast write (186.9)",
+   "slack_test": null,
+   "main": [],
+   "new": [
+    {
+     "set": "bd_x11p_x_new_unidirlin_write",
+     "provisional": false,
+     "notes": "v4txa11, one pass."
+    }
+   ]
+  },
+  {
+   "point": 105,
+   "label": "BdUnidirLinScatter (UnidirLinearMulticast scatter (227.3))",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "1D line",
+   "config": "two ERISCs",
+   "send_type": "scatter_write",
+   "packet_size_B": 4352,
+   "why": "UnidirLinearMulticast scatter (227.3)",
+   "slack_test": null,
+   "main": [],
+   "new": [
+    {
+     "set": "bd_x11p_x_new_unidirlin_scatter",
+     "provisional": false,
+     "notes": "v4txa11, one pass."
+    }
+   ]
+  },
+  {
+   "point": 106,
+   "label": "torusns_scatter (TorusY1HopNS scatter (200.8))",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "Y-torus",
+   "config": "two ERISCs",
+   "send_type": "scatter_write",
+   "packet_size_B": 4352,
+   "why": "TorusY1HopNS scatter (200.8)",
+   "slack_test": null,
+   "main": [],
+   "new": [
+    {
+     "set": "bd_x11p_x_new_torusns_scatter",
+     "provisional": false,
+     "notes": "v4txa11, one pass."
+    }
+   ]
+  }
+ ],
+ "missing_notes": {
+  "main": "Not sampled for main (the costliest-rows profile is the new router's)."
+ }
+}

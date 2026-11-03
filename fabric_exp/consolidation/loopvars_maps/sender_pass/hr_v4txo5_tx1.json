@@ -1,0 +1,6058 @@
+{
+ "bh_1d__10640509689287669773/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__11042674216320686258/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__11046823463237673750/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__1283581182907255335/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__13249516677932696482/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__13679914673122586415/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__15353216641188265035/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__15519085081258820244/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__16720517760101515252/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_1d__3894359675624286988/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   26,
+   26
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   260,
+   261
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   31,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   26,
+   26
+  ]
+ },
+ "bh_2d__10043895322277694146/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__1015631657213667946/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__10219848046396326874/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__10580962028631296656/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__1121438015175258957/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__11598761790692955527/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__11629230771107254122/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__1231919463778499736/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__14234181637611867168/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__14750525919105284437/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__14788979884386172683/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__15821689503272558399/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__16997008373213032932/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__2044160537419471260/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__3586153850620664130/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__3631562725844585963/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__3656813917193034524/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__4256334596728300217/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__4258181418831060436/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__4331292596957292451/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__6030885290442547773/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__6064538520040876898/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__6121809340761182001/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__6479957956460390535/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__6489675864452277454/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__8293404209875194312/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__8299351427172991464/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d__9835994671411073843/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   33,
+   33
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   505,
+   508
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   41,
+   42
+  ],
+  "shed": {},
+  "sp_accesses": [
+   52,
+   55
+  ]
+ },
+ "bh_2d_vc2__10740105522294516597/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__10965218927825635551/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__12300015397152557112/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__13607047246787885549/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__13671285127506016038/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__13815453395155339468/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__13910454151406307022/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__14491196996250902447/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__14760273284944586766/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__14837601328010760418/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__15081424042831113324/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__15130827535517084791/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__15136754552664652520/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__15433714388340383473/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__15862798814762355730/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__16165591314967959766/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__16695480556619822021/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__1686793859011393556/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__17407750594803660477/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__17529727644471711333/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__1999119816083003154/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__2978610762824945513/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__4063137263599020850/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__4599970767876547830/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__4603716136605226742/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__4991575732060307243/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__6461853764013067790/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2__6843460297837707550/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_2d_vc2_trim_w0__10557485083425749555/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__11169715139163746932/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__1125567430588550364/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__1157382223910118869/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__12361795572457358303/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__12370483399512638400/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__12456193154330600030/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__12697626631102955844/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__13944961445110407658/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__14696142510217142448/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__15006644139716432849/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__15346979396456452957/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__1626117434585864875/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__16556802005241985532/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__17669826268527703101/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__17760213414788548590/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__18193928843767338087/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__2425684029858034513/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__2618422452865223258/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__3352369442360427371/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__4599287724069188882/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__4869800040907138016/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__523070843006128494/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__5341667245857088355/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__6519028407976489609/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__6772573458219377141/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__7649817673471237874/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_2d_vc2_trim_w0__9070734142058180376/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   38,
+   37
+  ],
+  "carried_regs": [
+   10,
+   9
+  ],
+  "loop_insns": [
+   551,
+   555
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   48,
+   47
+  ],
+  "shed": {},
+  "sp_accesses": [
+   73,
+   73
+  ]
+ },
+ "bh_ring__10306205654684026666/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__10648496738413523562/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__10932731083599162671/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__12073547915361822318/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__13850945040829515340/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__14784728488228090721/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__14871092212778053398/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__16955031953102993280/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__3564371335767427288/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_ring__4173881355414784126/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   27,
+   27
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   323,
+   324
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   32,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   34,
+   34
+  ]
+ },
+ "bh_torus__10070109607385107920/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__10136690231140048636/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__10622038576844232020/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__12230029935330914029/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__12613501537790447004/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__14076609052309806745/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__14769895960861640620/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__14935141293469463664/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__15440979496059064641/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__15454157390961289283/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__15561534740264772573/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus__16653163506123846660/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   36,
+   36
+  ],
+  "carried_regs": [
+   13,
+   12
+  ],
+  "loop_insns": [
+   648,
+   651
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   44,
+   45
+  ],
+  "shed": {},
+  "sp_accesses": [
+   77,
+   80
+  ]
+ },
+ "bh_torus_vc2__10472704665700710383/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__10534107478092602709/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__10966287227592502845/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__12047000729536626869/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__12521975080935542905/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__13474647769374785348/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__13728982395961438756/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__13808909941400750561/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__14019672987245972155/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__15887048882723472976/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__16044536323643431478/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__16238173417980955245/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__16612970861422311610/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__16978426762414611581/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__17039188818850725970/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__17234735773143097509/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__18119431037471272168/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__18413783468637359695/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__204311414218664421/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__316687745384250155/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__335085283527104557/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__364369421661957392/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__4055703081428370640/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__7139431816556534156/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__8509332988136516492/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__9103023341833527062/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   40,
+   39
+  ],
+  "carried_regs": [
+   12,
+   12
+  ],
+  "loop_insns": [
+   668,
+   668
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   49,
+   48
+  ],
+  "shed": {
+   "check_connection<4>:before": "around a call",
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   83,
+   85
+  ]
+ },
+ "bh_torus_vc2__9484974076488767507/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_torus_vc2__9892180998112571137/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   42,
+   43
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   810
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   51,
+   52
+  ],
+  "shed": {
+   "return_slots<0>:returned": "around a call",
+   "run:loop_copy.worker.progress.first_level_acked": "around a call",
+   "visit_worker<0>:reported_acks": "around a call"
+  },
+  "sp_accesses": [
+   107,
+   111
+  ]
+ },
+ "bh_vc1__10354273653968310346/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__10443452627108607025/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__10556981527465796430/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__10592457990398019408/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__10693245698401083026/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__11788140784071736185/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__1186636425174098983/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__12532947705469032845/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__14380485705387094582/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__15577298905155796890/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__15606817773935518898/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__15664338442647506277/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__15683417872071607813/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__16039677352679308801/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__17126073560006470507/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__17423367361585483092/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__2011386018634096909/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__3020441818453841320/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__3825554557052809914/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__4162388424538505077/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__4545589871721764938/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1__5375156756798819221/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   50,
+   49
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   887,
+   886
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   60,
+   60
+  ],
+  "shed": {
+   "run:loop_copy.worker.connection_state": "around a call"
+  },
+  "sp_accesses": [
+   95,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__1000377899423394325/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__10259939771470511789/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__11119521458102584981/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__11444636389971300213/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__12192918107424126402/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__12513278406501951929/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__12984108326870742400/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__13302036143310224109/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__14307207631132369447/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__14383660027605444702/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__14472299360591294077/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__14606340142239377539/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__15561452250092222308/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__16374667785445249457/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__16402784942200953651/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__16833508788342249719/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__17149260836017700468/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__17226739052628822147/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__18384806683197319895/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__2328220604148987423/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__2673609849920906946/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "bh_vc1_trim_w0__6129815644126535806/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   55,
+   55
+  ],
+  "carried_regs": [
+   16,
+   15
+  ],
+  "loop_insns": [
+   773,
+   774
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   66,
+   66
+  ],
+  "shed": {},
+  "sp_accesses": [
+   96,
+   97
+  ]
+ },
+ "glx_express__10140102946396992901/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   809,
+   813
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__10272759166485736937/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   810,
+   814
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__10292248779589189858/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   809,
+   813
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__10303555625317252787/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   810,
+   814
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__10408663069787198993/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   809,
+   813
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__10674322212542837998/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   810,
+   814
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__10711899011540825071/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   812
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__11302532640402901026/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   43,
+   44
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   804,
+   808
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   52,
+   53
+  ],
+  "shed": {},
+  "sp_accesses": [
+   106,
+   110
+  ]
+ },
+ "glx_express__11358286951677212026/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   809,
+   813
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__11374682743857864950/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   43,
+   44
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   804,
+   808
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   52,
+   53
+  ],
+  "shed": {},
+  "sp_accesses": [
+   106,
+   110
+  ]
+ },
+ "glx_express__11944979163898622528/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   812
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__12022587983759253034/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   807,
+   811
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__1250939665549547850/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   43,
+   44
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   804,
+   808
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   52,
+   53
+  ],
+  "shed": {},
+  "sp_accesses": [
+   106,
+   110
+  ]
+ },
+ "glx_express__12560318475906909550/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   43,
+   44
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   804,
+   808
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   52,
+   53
+  ],
+  "shed": {},
+  "sp_accesses": [
+   106,
+   110
+  ]
+ },
+ "glx_express__12886266170994064888/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   43,
+   44
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   804,
+   808
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   52,
+   53
+  ],
+  "shed": {},
+  "sp_accesses": [
+   106,
+   110
+  ]
+ },
+ "glx_express__13191226530909731524/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   812
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__13404482225282063041/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   812
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__13814699303105148555/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   812
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__13871951094050823068/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   807,
+   811
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__14109758244676091414/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   807,
+   811
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__14789025525110182960/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   810,
+   814
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__15234866883449178830/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   807,
+   811
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__15298082759323855880/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   43,
+   44
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   804,
+   808
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   52,
+   53
+  ],
+  "shed": {},
+  "sp_accesses": [
+   106,
+   110
+  ]
+ },
+ "glx_express__1762981036548033569/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   43,
+   44
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   804,
+   808
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   52,
+   53
+  ],
+  "shed": {},
+  "sp_accesses": [
+   106,
+   110
+  ]
+ },
+ "glx_express__4918157909869048028/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   812
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__6032811902809867277/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   812
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ },
+ "glx_express__7177919060799802681/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   43,
+   44
+  ],
+  "carried_regs": [
+   14,
+   14
+  ],
+  "loop_insns": [
+   804,
+   808
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   52,
+   53
+  ],
+  "shed": {},
+  "sp_accesses": [
+   106,
+   110
+  ]
+ },
+ "glx_express__9592441469732401730/active_erisc": {
+  "base": "active_erisc.elf",
+  "carried": [
+   41,
+   42
+  ],
+  "carried_regs": [
+   13,
+   13
+  ],
+  "loop_insns": [
+   808,
+   812
+  ],
+  "new": "active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   50,
+   51
+  ],
+  "shed": {},
+  "sp_accesses": [
+   100,
+   104
+  ]
+ }
+}

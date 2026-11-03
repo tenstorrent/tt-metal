@@ -1,0 +1,2 @@
+axes=Y=RING X=LINE
+deadlock_avoidance=E: {'1': 16}, N: {'1': 32}, S: {'1': 32}, W: {'1': 16}

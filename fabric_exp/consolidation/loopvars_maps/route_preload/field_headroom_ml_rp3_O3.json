@@ -1,0 +1,2110 @@
+{
+ "bh_2d__10229924487725718948": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   22
+  ],
+  "carried_regs": [
+   18,
+   20
+  ],
+  "loop_insns": [
+   685,
+   695
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_2d__10465832971564139790": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   25
+  ],
+  "carried_regs": [
+   19,
+   21
+  ],
+  "loop_insns": [
+   488,
+   536
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   33
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   20
+  ]
+ },
+ "bh_2d__10697509619777523756": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   612
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "bh_2d__10704913830194341139": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   22
+  ],
+  "carried_regs": [
+   18,
+   20
+  ],
+  "loop_insns": [
+   685,
+   695
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_2d__11637908802779522069": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   612
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "bh_2d__11660148679966767161": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   22
+  ],
+  "carried_regs": [
+   18,
+   20
+  ],
+  "loop_insns": [
+   685,
+   695
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_2d__15112097005661338": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   612
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "bh_2d__15188445179684008456": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   612
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "bh_2d__15568112377219572116": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   612
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "bh_2d__17527521829486980796": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   22
+  ],
+  "carried_regs": [
+   18,
+   20
+  ],
+  "loop_insns": [
+   685,
+   695
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_2d__1754057734862275905": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   24
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   606
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   16
+  ]
+ },
+ "bh_2d__17689055769058793898": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   22
+  ],
+  "carried_regs": [
+   18,
+   20
+  ],
+  "loop_insns": [
+   685,
+   695
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_2d__17764531352640089777": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   24
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   606
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   16
+  ]
+ },
+ "bh_2d__1974893561357350168": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   22
+  ],
+  "carried_regs": [
+   18,
+   20
+  ],
+  "loop_insns": [
+   685,
+   695
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_2d__2002749385377306524": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   24
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   606
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   16
+  ]
+ },
+ "bh_2d__2586450563413941222": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   24
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   606
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   16
+  ]
+ },
+ "bh_2d__2769012262972655444": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   25
+  ],
+  "carried_regs": [
+   19,
+   21
+  ],
+  "loop_insns": [
+   488,
+   536
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   33
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   20
+  ]
+ },
+ "bh_2d__3350086724855746032": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   24
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   606
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   16
+  ]
+ },
+ "bh_2d__3600473431856508845": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   612
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "bh_2d__4231842157237622605": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   22
+  ],
+  "carried_regs": [
+   18,
+   20
+  ],
+  "loop_insns": [
+   685,
+   695
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_2d__4338045327969131522": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   24
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   606
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   16
+  ]
+ },
+ "bh_2d__4506580340507463438": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   612
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "bh_2d__4689755091304480639": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   24
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   606
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   16
+  ]
+ },
+ "bh_2d__4837949914138770387": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   24
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   606
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   16
+  ]
+ },
+ "bh_2d__5644309932980480112": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   25
+  ],
+  "carried_regs": [
+   19,
+   21
+  ],
+  "loop_insns": [
+   488,
+   536
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   33
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   20
+  ]
+ },
+ "bh_2d__9113746027361572178": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   20
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   612
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "bh_2d__9385634899218476589": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   22
+  ],
+  "carried_regs": [
+   18,
+   20
+  ],
+  "loop_insns": [
+   685,
+   695
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   29
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "bh_2d__9724914797274631410": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   25
+  ],
+  "carried_regs": [
+   19,
+   21
+  ],
+  "loop_insns": [
+   488,
+   536
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "deliver<0>:encoding": [
+    "S deliver router_local_delivery.hpp:144"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   33
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   20
+  ]
+ },
+ "glx_2d__10118688113972166690": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   685,
+   697
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__10580619657294665664": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   19
+  ],
+  "carried_regs": [
+   18,
+   19
+  ],
+  "loop_insns": [
+   685,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__10677912988240960601": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   19
+  ],
+  "carried_regs": [
+   18,
+   19
+  ],
+  "loop_insns": [
+   685,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__10780391914424816141": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   685,
+   697
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__10999344769318078692": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   19
+  ],
+  "carried_regs": [
+   18,
+   19
+  ],
+  "loop_insns": [
+   685,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__11309563983543909028": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__1181529335820670703": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   488,
+   515
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   23
+  ]
+ },
+ "glx_2d__12035290070435373331": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   614
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "glx_2d__12059670406331647674": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__12102621547991560513": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   685,
+   697
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__12135748872781504727": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   685,
+   697
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__12600721234007124665": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   19
+  ],
+  "carried_regs": [
+   18,
+   19
+  ],
+  "loop_insns": [
+   685,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__12715765343094432314": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   614
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "glx_2d__12721659409515356069": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   614
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "glx_2d__13024171652615414041": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__13568215798666737538": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   15
+  ]
+ },
+ "glx_2d__1372962315628879155": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   15
+  ]
+ },
+ "glx_2d__13782520963806365633": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   488,
+   515
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   23
+  ]
+ },
+ "glx_2d__13830218742620654099": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__14986417830893920487": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   15
+  ]
+ },
+ "glx_2d__15192193799472682424": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__15211234215886271875": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__15783704637667641506": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   614
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "glx_2d__15856206073968599815": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   685,
+   697
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__15872442242515483642": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   15
+  ]
+ },
+ "glx_2d__16077906477425799015": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__16844820503202155557": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   685,
+   697
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__16865781436770569383": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   19
+  ],
+  "carried_regs": [
+   18,
+   19
+  ],
+  "loop_insns": [
+   685,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__16893511912387925869": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   15
+  ]
+ },
+ "glx_2d__16987210744318958848": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__17046951855664991847": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   685,
+   697
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__17182742063016610439": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   488,
+   515
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   23
+  ]
+ },
+ "glx_2d__1746075159459564843": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   15
+  ]
+ },
+ "glx_2d__17561400948695775947": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__3028348243952643790": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   614
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "glx_2d__3169908268949471329": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__3337909062007559361": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   19
+  ],
+  "carried_regs": [
+   18,
+   19
+  ],
+  "loop_insns": [
+   685,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__336006370156587733": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__3865703782564829077": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   614
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "glx_2d__4391002270427140897": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   15
+  ]
+ },
+ "glx_2d__4996211202521571548": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   19
+  ],
+  "carried_regs": [
+   18,
+   19
+  ],
+  "loop_insns": [
+   685,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__5196701334785744357": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   685,
+   697
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__5528491218019695438": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   19
+  ],
+  "carried_regs": [
+   18,
+   19
+  ],
+  "loop_insns": [
+   685,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   8
+  ]
+ },
+ "glx_2d__5901561093175664691": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   614
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ },
+ "glx_2d__6898432787584202173": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   488,
+   515
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {
+   "NOC_CMD_BUF_WRITE_REG@deliver<0>:val": [
+    "S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485"
+   ],
+   "local_write@deliver<0>:dst_noc_addr.@4": [
+    "S NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174"
+   ]
+  },
+  "passes": false,
+  "peak": [
+   28,
+   32
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   23
+  ]
+ },
+ "glx_2d__7541070412913481541": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   689,
+   693
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   30
+  ],
+  "shed": {},
+  "sp_accesses": [
+   4,
+   9
+  ]
+ },
+ "glx_2d__8773344936159668090": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   19,
+   23
+  ],
+  "carried_regs": [
+   19,
+   20
+  ],
+  "loop_insns": [
+   596,
+   608
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   28,
+   31
+  ],
+  "shed": {},
+  "sp_accesses": [
+   6,
+   15
+  ]
+ },
+ "glx_2d__9633279940612974733": {
+  "base": "subordinate_active_erisc.elf",
+  "carried": [
+   18,
+   18
+  ],
+  "carried_regs": [
+   18,
+   18
+  ],
+  "loop_insns": [
+   604,
+   614
+  ],
+  "new": "subordinate_active_erisc.elf",
+  "new_hot": {},
+  "passes": true,
+  "peak": [
+   27,
+   27
+  ],
+  "shed": {},
+  "sp_accesses": [
+   12,
+   8
+  ]
+ }
+}

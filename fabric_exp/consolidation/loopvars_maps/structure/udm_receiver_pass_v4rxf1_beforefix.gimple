@@ -1,0 +1,2720 @@
+
+Removing basic block 62
+Removing basic block 63
+Removing basic block 64
+Removing basic block 65
+Removing basic block 66
+Removing basic block 67
+Removing basic block 68
+Removing basic block 69
+Removing basic block 70
+Removing basic block 71
+Removing basic block 72
+Removing basic block 73
+Removing basic block 74
+Removing basic block 75
+Removing basic block 76
+Removing basic block 77
+Removing basic block 78
+Removing basic block 79
+Removing basic block 80
+Removing basic block 81
+Removing basic block 82
+Removing basic block 83
+Removing basic block 84
+Removing basic block 85
+Removing basic block 86
+Removing basic block 87
+Removing basic block 88
+Removing basic block 89
+Removing basic block 90
+Removing basic block 91
+Removing basic block 92
+Removing basic block 93
+Removing basic block 94
+Removing basic block 95
+Removing basic block 96
+Removing basic block 97
+Removing basic block 98
+Removing basic block 99
+Removing basic block 100
+__attribute__((noinline))
+void receiver_pass (struct ReceiverState & r, struct DownstreamConnections & downstreams, const struct ChipCoordinates & my_chip)
+{
+  const uint32_t arrived;
+  const uint32_t first_source;
+  const uint32_t one_per_slot;
+  const uint32_t word;
+  const uint32_t c;
+  const uint32_t c;
+  const uint32_t group;
+  volatile uint32_t * ptr;
+  uint32_t offset;
+  const uint32_t sum;
+  const uint32_t waiting;
+  const uint32_t next_index;
+  const struct Route route;
+  const uint32_t size;
+  const uint32_t group;
+  uint32_t be_shift;
+  uint32_t be32;
+  const uint32_t dst;
+  uint32_t be_shift;
+  uint32_t be32;
+  const uint32_t dst;
+  struct UDMHybridMeshPacketHeader * const header;
+  unsigned int _5;
+  unsigned int _9;
+  unsigned int _10;
+  unsigned int _12;
+  const volatile uint32_t * _13;
+  unsigned int _14;
+  unsigned char _15;
+  unsigned int _16;
+  unsigned int _17;
+  unsigned char _18;
+  unsigned int _19;
+  unsigned char _20;
+  unsigned int _21;
+  unsigned int _22;
+  unsigned int _23;
+  unsigned int _25;
+  unsigned int _26;
+  unsigned int _27;
+  unsigned int _29;
+  unsigned char _31;
+  unsigned char _32;
+  unsigned int _33;
+  unsigned int _35;
+  unsigned int _37;
+  long long unsigned int _38;
+  long long unsigned int _39;
+  long long unsigned int _40;
+  long long unsigned int _41;
+  unsigned int _42;
+  unsigned int _43;
+  unsigned int _44;
+  unsigned int _45;
+  long long unsigned int _46;
+  unsigned int _47;
+  unsigned int _48;
+  unsigned int _49;
+  unsigned int _50;
+  long long unsigned int _51;
+  unsigned int _52;
+  unsigned int _55;
+  long long unsigned int _56;
+  unsigned int _57;
+  unsigned int _58;
+  long long unsigned int _59;
+  unsigned int _60;
+  unsigned int _61;
+  unsigned int _62;
+  unsigned int _63;
+  unsigned int _64;
+  unsigned int _65;
+  unsigned int _66;
+  unsigned int _67;
+  unsigned int _68;
+  unsigned int _69;
+  unsigned int _70;
+  unsigned int _71;
+  unsigned int _73;
+  unsigned int _74;
+  unsigned int _76;
+  long long unsigned int _77;
+  long long unsigned int _78;
+  long long unsigned int _79;
+  long long unsigned int _80;
+  unsigned int _81;
+  unsigned int _82;
+  unsigned int _83;
+  unsigned int _84;
+  long long unsigned int _85;
+  unsigned int _86;
+  unsigned int _87;
+  unsigned int _88;
+  unsigned int _89;
+  long long unsigned int _90;
+  unsigned int _91;
+  unsigned int _94;
+  long long unsigned int _95;
+  unsigned int _96;
+  unsigned int _97;
+  long long unsigned int _98;
+  unsigned int _99;
+  unsigned int _100;
+  unsigned int _101;
+  unsigned int _102;
+  unsigned int _103;
+  unsigned int _104;
+  unsigned int _105;
+  unsigned int _106;
+  unsigned int _107;
+  unsigned int _108;
+  unsigned int _109;
+  unsigned int _110;
+  unsigned int _111;
+  value_type * _112;
+  uint8_t * _113;
+  unsigned int _114;
+  unsigned int _115;
+  unsigned int _116;
+  unsigned int _117;
+  unsigned int _118;
+  unsigned int _119;
+  unsigned int _120;
+  unsigned int _121;
+  unsigned int _122;
+  unsigned char _125;
+  unsigned int _126;
+  unsigned int _127;
+  unsigned int _130;
+  unsigned int _133;
+  unsigned int _134;
+  unsigned int _136;
+  unsigned int _139;
+  unsigned int _142;
+  unsigned int _143;
+  unsigned int _145;
+  unsigned int _147;
+  unsigned int _148;
+  unsigned int _149;
+  unsigned int _150;
+  unsigned char _152;
+  unsigned int _153;
+  unsigned int _154;
+  unsigned int _155;
+  unsigned int _156;
+  unsigned int _161;
+  unsigned int _163;
+  unsigned int _164;
+  volatile uint32_t * _166;
+  volatile uint32_t * _168;
+  sizetype _170;
+  unsigned int _171;
+  unsigned int _172;
+  unsigned int _173;
+  volatile uint32_t * _175;
+  volatile uint32_t * _177;
+  value_type & _178;
+  unsigned int _179;
+  bool _180;
+  unsigned int _182;
+  unsigned int _183;
+  unsigned int _184;
+  unsigned int _185;
+  unsigned int _188;
+  value_type & _196;
+  unsigned int _197;
+  unsigned int _198;
+  unsigned int ivtmp_203;
+  unsigned int _279;
+  sizetype _284;
+  value_type & _285;
+  unsigned char _289;
+  unsigned char _305;
+  unsigned char _306;
+  unsigned int _309;
+  unsigned int ivtmp_310;
+  unsigned int pretmp_463;
+  unsigned char _464;
+  unsigned char _466;
+  unsigned int _467;
+  volatile uint32_t * _469;
+  unsigned int _470;
+  unsigned int _473;
+  unsigned int prephitmp_474;
+  unsigned char _475;
+  unsigned char _476;
+  unsigned int _478;
+  sizetype _481;
+  unsigned int _482;
+  volatile uint32_t * _483;
+  sizetype _487;
+  value_type & _488;
+  value_type & _489;
+  unsigned char _490;
+  volatile uint32_t * _493;
+  unsigned int _494;
+  unsigned int _497;
+  unsigned int _498;
+  unsigned int _499;
+  volatile uint32_t * _500;
+  sizetype _502;
+  value_type & _503;
+  volatile uint32_t * _505;
+  unsigned int _509;
+  unsigned int _510;
+  unsigned int _511;
+  unsigned char _512;
+  sizetype _515;
+  volatile uint32_t * _518;
+  bool prephitmp_522;
+  unsigned int pretmp_523;
+
+  <bb 2> [local count: 131826785]:
+  # DEBUG BEGIN_STMT
+  # DEBUG D#171 => &r_3(D)->states
+  # DEBUG D#172 => &MEM[(struct ReceiverChannelState &)r_3(D)].progress
+  # DEBUG D#173 => &r_3(D)->credit_frame_due
+  # DEBUG D#174 => &r_3(D)->states
+  # DEBUG D#175 => &r_3(D)->credits
+  # DEBUG first_vc_progress => D#172
+  # DEBUG credit_frame_due => D#173
+  # DEBUG states => D#174
+  # DEBUG credits => D#175
+  # DEBUG downstreams => downstreams_6(D)
+  # DEBUG my_chip => my_chip_7(D)
+  # DEBUG INLINE_ENTRY pass
+  # DEBUG INLINE_ENTRY begin_read_group
+  # DEBUG BEGIN_STMT
+  # DEBUG __m => 5
+  # DEBUG INLINE_ENTRY atomic_signal_fence
+  # DEBUG BEGIN_STMT
+  __atomic_signal_fence (5);
+  # DEBUG __m => NULL
+  # DEBUG INLINE_ENTRY read_packets_received
+  # DEBUG INLINE_ENTRY read_stream_raw
+  _5 ={v} MEM[(volatile uint32_t *)4290004132B];
+  # DEBUG arrived$_M_elems$0 => _5
+  # DEBUG arrived$_M_elems$1 => 0
+  # DEBUG arrived$_M_elems$2 => 0
+  # DEBUG txq_status => 0
+  # DEBUG INLINE_ENTRY end_read_group
+  # DEBUG BEGIN_STMT
+  # DEBUG __m => 5
+  # DEBUG INLINE_ENTRY atomic_signal_fence
+  # DEBUG BEGIN_STMT
+  __atomic_signal_fence (5);
+  # DEBUG __m => NULL
+  # DEBUG first_vc_progress => D#172
+  # DEBUG states => D#174
+  # DEBUG downstreams => downstreams_6(D)
+  # DEBUG credits => D#175
+  # DEBUG credit_frame_due => D#173
+  # DEBUG arrived_raw => _5
+  # DEBUG my_chip => my_chip_7(D)
+  # DEBUG INLINE_ENTRY step_channel
+  # DEBUG state => &MEM[(struct Each *)D#174].first
+  # DEBUG D#176 => &MEM[(struct ReceiverChannelState &)D#174].sources
+  # DEBUG progress => D#172
+  # DEBUG sources => D#176
+  # DEBUG downstreams => downstreams_6(D)
+  # DEBUG credits => D#175
+  # DEBUG credit_frame_due => D#173
+  # DEBUG arrived_raw => _5
+  # DEBUG my_chip => my_chip_7(D)
+  # DEBUG INLINE_ENTRY step
+  # DEBUG D#197 => _5 & 2047
+  # DEBUG arrived => D#197
+  _9 = MEM[(struct RingProgress &)r_3(D)].packets_ready;
+  # DEBUG progress => D#172
+  # DEBUG sources => D#176
+  # DEBUG downstreams => downstreams_6(D)
+  # DEBUG arrived => D#197
+  # DEBUG my_chip => my_chip_7(D)
+  # DEBUG INLINE_ENTRY receive
+  if (_9 == 0)
+    goto <bb 3>; [50.00%]
+  else
+    goto <bb 5>; [50.00%]
+
+  <bb 3> [local count: 65913392]:
+  arrived_8 = _5 & 2047;
+  MEM[(struct RingProgress &)r_3(D)].packets_ready = arrived_8;
+  if (arrived_8 == 0)
+    goto <bb 4>; [34.00%]
+  else
+    goto <bb 5>; [66.00%]
+
+  <bb 4> [local count: 22410554]:
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG header_word => NULL
+  # DEBUG route_word => NULL
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG arrived => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG size => NULL
+  # DEBUG group => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG header => NULL
+  # DEBUG handled_packet => 0
+  # DEBUG progress => D#172
+  # DEBUG sources => D#176
+  # DEBUG handled_packet => 0
+  # DEBUG credits => D#175
+  # DEBUG INLINE_ENTRY credit_completions
+  # DEBUG completion_group_size => 4
+  # DEBUG num_slots => 16
+  next_index_287 = MEM[(struct RingProgress &)r_3(D)].next_index;
+  # DEBUG next_index => next_index_287
+  waiting_288 = MEM[(struct RingProgress &)r_3(D)].uncredited;
+  # DEBUG waiting => waiting_288
+  # DEBUG progress => D#172
+  # DEBUG next_index => next_index_287
+  # DEBUG handled_packet => 0
+  # DEBUG count => &count
+  # DEBUG INLINE_ENTRY slots_due_for_credit
+  goto <bb 32>; [100.00%]
+
+  <bb 5> [local count: 109416231]:
+  _10 = MEM[(struct RingProgress &)r_3(D)].next_slot_addr;
+  header_11 = (struct UDMHybridMeshPacketHeader * const) _10;
+  # DEBUG header => header_11
+  # DEBUG hdr => header_11
+  # DEBUG INLINE_ENTRY load_word
+  _12 = _10 + 40;
+  _13 = (const volatile uint32_t *) _12;
+  _14 ={v} *_13;
+  # DEBUG hdr => NULL
+  # DEBUG header_word => _14
+  # DEBUG route_word => 0
+  # DEBUG header => header_11
+  # DEBUG my_chip => my_chip_7(D)
+  # DEBUG INLINE_ENTRY read
+  # DEBUG header => header_11
+  # DEBUG my_chip => my_chip_7(D)
+  # DEBUG INLINE_ENTRY action
+  _15 = my_chip_7(D)->x;
+  _16 = (unsigned int) _15;
+  _17 = _16 + 2;
+  _18 = header_11->D.2492.route_buffer[_17];
+  # DEBUG header => NULL
+  # DEBUG my_chip => NULL
+  _19 = (unsigned int) _18;
+  # DEBUG header => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG route_word => _19
+  # DEBUG progress => D#172
+  # DEBUG sources => D#176
+  # DEBUG downstreams => downstreams_6(D)
+  # DEBUG header_word => _14
+  # DEBUG route_word => _19
+  # DEBUG INLINE_ENTRY handle
+  # DEBUG word_offset => 40
+  # DEBUG D#177 => _14 >> 16
+  # DEBUG D#178 => _14 >> 24
+  # DEBUG D#179 => (unsigned char) D#178
+  # DEBUG D#180 => D#172->next_slot_addr
+  # DEBUG D#181 => (struct UDMHybridMeshPacketHeader * const) D#180
+  # DEBUG header => D#181
+  # DEBUG D#182 => &downstreams_6(D)->vc0
+  # DEBUG routers => D#182
+  # DEBUG this => &route
+  # DEBUG route_word => _19
+  # DEBUG INLINE_ENTRY __ct 
+  MEM[(struct Route *)&route] ={v} {CLOBBER(bob)};
+  MEM[(struct Route *)&route].action_ = _19;
+  # DEBUG this => NULL
+  # DEBUG route_word => NULL
+  # DEBUG this => &route
+  # DEBUG this => &route
+  _20 = _18 & 2;
+  # DEBUG D#183 => (unsigned int) _20
+  # DEBUG this => NULL
+  # DEBUG this => NULL
+  if (_20 != 0)
+    goto <bb 6>; [50.00%]
+  else
+    goto <bb 57>; [50.00%]
+
+  <bb 6> [local count: 54708115]:
+  # DEBUG this => D#182
+  # DEBUG forward_to => D#183
+  # DEBUG INLINE_ENTRY admit
+  # DEBUG this => D#182
+  # DEBUG forward_to => D#183
+  # DEBUG INLINE_ENTRY any_without_free_slot
+  # DEBUG name => 1
+  _21 = MEM[(const struct value_type &)downstreams_6(D)].free_slots;
+  # DEBUG this => NULL
+  # DEBUG forward_to => NULL
+  if (_21 == 0)
+    goto <bb 7>; [48.88%]
+  else
+    goto <bb 56>; [51.12%]
+
+  <bb 7> [local count: 26741327]:
+  # DEBUG INLINE_ENTRY begin_read_group
+  # DEBUG BEGIN_STMT
+  # DEBUG __m => 5
+  # DEBUG INLINE_ENTRY atomic_signal_fence
+  # DEBUG BEGIN_STMT
+  __atomic_signal_fence (5);
+  # DEBUG __m => NULL
+  # DEBUG raw => &raw
+  # DEBUG INLINE_ENTRY read_local_credits
+  # DEBUG entry => 0
+  # DEBUG INLINE_ENTRY read_stream_raw
+  _22 ={v} MEM[(volatile uint32_t *)4290008228B];
+  # DEBUG raw => _22
+  # DEBUG raw => NULL
+  # DEBUG INLINE_ENTRY end_read_group
+  # DEBUG BEGIN_STMT
+  # DEBUG __m => 5
+  # DEBUG INLINE_ENTRY atomic_signal_fence
+  # DEBUG BEGIN_STMT
+  __atomic_signal_fence (5);
+  # DEBUG __m => NULL
+  # DEBUG this => D#182
+  # DEBUG raw => &raw
+  # DEBUG INLINE_ENTRY set_free_slots
+  # DEBUG entry => 0
+  _23 = _22 & 2047;
+  MEM[(struct value_type &)downstreams_6(D)].free_slots = _23;
+  # DEBUG this => NULL
+  # DEBUG raw => NULL
+  # DEBUG name => 1
+  # DEBUG this => NULL
+  # DEBUG forward_to => NULL
+  if (_23 != 0)
+    goto <bb 56>; [66.00%]
+  else
+    goto <bb 31>; [34.00%]
+
+  <bb 8> [local count: 27354057]:
+  # DEBUG this => &downstreams_6(D)->relay
+  # DEBUG INLINE_ENTRY admit
+  # DEBUG BEGIN_STMT
+  _25 = MEM[(struct Relay *)downstreams_6(D) + 48B].cursor.free_slots;
+  if (_25 == 0)
+    goto <bb 11>; [50.00%]
+  else
+    goto <bb 9>; [50.00%]
+
+  <bb 9> [local count: 13677029]:
+  # DEBUG this => NULL
+  _494 = MEM[(struct RingProgress &)r_3(D)].next_index;
+  # DEBUG index => _494
+  # DEBUG INLINE_ENTRY of_slot
+  group_514 = _494 >> 2;
+  # DEBUG group => group_514
+  _512 = (unsigned char) group_514;
+  _464 = _512 & 15;
+  # DEBUG index => NULL
+  # DEBUG group => NULL
+  # DEBUG trid => _464
+  _309 = _14 & 65535;
+  size_307 = _309 + 112;
+  # DEBUG size => size_307
+  # DEBUG this => &channel_trimming_usage_recorder
+  goto <bb 59>; [100.00%]
+
+  <bb 10> [local count: 8025934]:
+  # DEBUG this => NULL
+  _29 = MEM[(struct RingProgress &)r_3(D)].next_index;
+  # DEBUG index => _29
+  # DEBUG INLINE_ENTRY of_slot
+  group_30 = _29 >> 2;
+  # DEBUG group => group_30
+  _31 = (unsigned char) group_30;
+  _32 = _31 & 15;
+  # DEBUG index => NULL
+  # DEBUG group => NULL
+  # DEBUG trid => _32
+  _33 = _14 & 65535;
+  size_34 = _33 + 112;
+  # DEBUG size => size_34
+  # DEBUG this => &channel_trimming_usage_recorder
+  if (_20 != 0)
+    goto <bb 12>; [92.48%]
+  else
+    goto <bb 59>; [7.52%]
+
+  <bb 11> [local count: 25081045]:
+  # DEBUG BEGIN_STMT
+  # DEBUG INLINE_ENTRY read_stream_count
+  _26 ={v} MEM[(volatile uint32_t *)4290118820B];
+  _27 = _26 & 2047;
+  MEM[(struct Relay *)downstreams_6(D) + 48B].cursor.free_slots = _27;
+  # DEBUG BEGIN_STMT
+  # DEBUG this => NULL
+  if (_27 == 0)
+    goto <bb 31>; [68.00%]
+  else
+    goto <bb 10>; [32.00%]
+
+  <bb 12> [local count: 41634535]:
+  # _306 = PHI <_32(10), _289(55), _475(60)>
+  # size_308 = PHI <size_34(10), size_194(55), size_472(60)>
+  # DEBUG index => NULL
+  # DEBUG group => NULL
+  # DEBUG trid => _306
+  # DEBUG size => size_308
+  # DEBUG this => &channel_trimming_usage_recorder
+  _35 = MEM[(struct RingProgress &)r_3(D)].next_slot_addr;
+  # DEBUG this => D#182
+  # DEBUG forward_to => D#183
+  # DEBUG src_addr => _35
+  # DEBUG size_bytes => size_308
+  # DEBUG trid => _306
+  # DEBUG INLINE_ENTRY forward_all
+  # DEBUG this => D#182
+  # DEBUG forward_to => D#183
+  # DEBUG src_addr => _35
+  # DEBUG size_bytes => size_308
+  # DEBUG trid => _306
+  # DEBUG INLINE_ENTRY forward_each
+  # DEBUG name => 1
+  # DEBUG this => D#182
+  # DEBUG src_addr => _35
+  # DEBUG size_bytes => size_308
+  # DEBUG trid => _306
+  # DEBUG INLINE_ENTRY forward
+  # DEBUG entry => 0
+  # DEBUG downstream => &MEM[(struct array *)D#182]._M_elems[0]
+  dst_36 = MEM[(struct DownstreamCursor &)downstreams_6(D)].next_slot;
+  # DEBUG dst => dst_36
+  # DEBUG D#184 => &MEM[(struct array *)D#182 + 16B]._M_elems[0]
+  # DEBUG link => D#184
+  # DEBUG dst => dst_36
+  # DEBUG src_addr => _35
+  # DEBUG size_bytes => size_308
+  # DEBUG trid => _306
+  # DEBUG INLINE_ENTRY forward_stateless
+  # DEBUG this => D#184
+  # DEBUG addr => dst_36
+  # DEBUG INLINE_ENTRY noc_addr
+  # DEBUG BEGIN_STMT
+  _37 = MEM[(const struct DownstreamLink *)downstreams_6(D) + 16B].noc_coord;
+  _38 = (long long unsigned int) _37;
+  _39 = _38 << 36;
+  _40 = (long long unsigned int) dst_36;
+  _41 = _39 | _40;
+  # DEBUG this => NULL
+  # DEBUG addr => NULL
+  _42 = (unsigned int) _306;
+  # DEBUG src_local_l1_addr => _35
+  # DEBUG dst_noc_addr => _41
+  # DEBUG size => size_308
+  # DEBUG trid => _42
+  # DEBUG cmd_buf => 0
+  # DEBUG noc => 1
+  # DEBUG vc => 1
+  # DEBUG INLINE_ENTRY noc_async_write_one_packet_with_trid
+  # DEBUG INLINE_ENTRY note_opaque
+  # DEBUG BEGIN_STMT
+  # DEBUG INLINE_ENTRY note
+  __asm__ __volatile__(".pushsection .tt.BUF_RW,"",@note
+	.4byte %0
+	.4byte %1
+	.popsection" :  : "n" 4294967295, "n" 0);
+  # DEBUG src_local_l1_addr => _35
+  # DEBUG dst_noc_addr => _41
+  # DEBUG size => size_308
+  # DEBUG trid => _42
+  # DEBUG cmd_buf => 0
+  # DEBUG noc => 1
+  # DEBUG vc => 1
+  # DEBUG INLINE_ENTRY noc_async_write_one_packet_with_trid_impl
+
+  <bb 13> [local count: 378495771]:
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 0
+  # DEBUG INLINE_ENTRY noc_cmd_buf_ready
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855552
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_READ_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921088
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921088B
+  # DEBUG BEGIN_STMT
+  _43 ={v} MEM[(volatile uint32_t *)4289921088B];
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  if (_43 != 0)
+    goto <bb 13>; [89.00%]
+  else
+    goto <bb 14>; [11.00%]
+
+  <bb 14> [local count: 41634535]:
+  # DEBUG update_counter_in_callee => 1
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 0
+  # DEBUG src_addr => _35
+  # DEBUG dest_addr => _41
+  # DEBUG len_bytes => size_308
+  # DEBUG vc => 1
+  # DEBUG mcast => 0
+  # DEBUG linked => 0
+  # DEBUG num_dests => 1
+  # DEBUG multicast_path_reserve => 1
+  # DEBUG posted => 1
+  # DEBUG trid => _42
+  # DEBUG INLINE_ENTRY ncrisc_noc_fast_write
+  # DEBUG noc_cmd_field => 8322
+  _44 = _42 << 10;
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855512
+  # DEBUG val => _44
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921048
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921048B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921048B] ={v} _44;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855516
+  # DEBUG val => 8322
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921052
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921052B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921052B] ={v} 8322;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855488
+  # DEBUG val => _35
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921024
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921024B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921024B] ={v} _35;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _45 = (unsigned int) _41;
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855500
+  # DEBUG val => _45
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921036
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921036B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921036B] ={v} _45;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _46 = _41 >> 36;
+  _47 = (unsigned int) _46;
+  _48 = _47 & 16777215;
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855508
+  # DEBUG val => _48
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921044
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921044B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921044B] ={v} _48;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855520
+  # DEBUG val => size_308
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921056
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921056B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921056B] ={v} size_308;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855552
+  # DEBUG val => 1
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921088
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921088B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921088B] ={v} 1;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _49 = noc_posted_writes_num_issued[1];
+  _50 = _49 + 1;
+  noc_posted_writes_num_issued[1] = _50;
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG len_bytes => NULL
+  # DEBUG vc => NULL
+  # DEBUG mcast => NULL
+  # DEBUG linked => NULL
+  # DEBUG num_dests => NULL
+  # DEBUG multicast_path_reserve => NULL
+  # DEBUG posted => NULL
+  # DEBUG trid => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG src_local_l1_addr => NULL
+  # DEBUG dst_noc_addr => NULL
+  # DEBUG size => NULL
+  # DEBUG trid => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG noc => NULL
+  # DEBUG vc => NULL
+  # DEBUG src_local_l1_addr => NULL
+  # DEBUG dst_noc_addr => NULL
+  # DEBUG size => NULL
+  # DEBUG trid => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG noc => NULL
+  # DEBUG vc => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG noc_cmd_field => NULL
+  _51 = MEM[(const struct DownstreamLink &)downstreams_6(D) + 16].credit_noc_addr;
+  # DEBUG addr => _51
+  # DEBUG val => 4294967232
+  # DEBUG be => 15
+  # DEBUG noc => 1
+  # DEBUG vc => 1
+  # DEBUG customized_src_addr => 0
+  # DEBUG cmd_buf => 3
+  # DEBUG INLINE_ENTRY noc_inline_dw_write
+  # DEBUG INLINE_ENTRY note_opaque
+  # DEBUG BEGIN_STMT
+  # DEBUG INLINE_ENTRY note
+  __asm__ __volatile__(".pushsection .tt.BUF_RW,"",@note
+	.4byte %0
+	.4byte %1
+	.popsection" :  : "n" 4294967295, "n" 0);
+  # DEBUG addr => _51
+  # DEBUG val => 4294967232
+  # DEBUG be => 15
+  # DEBUG noc => 1
+  # DEBUG vc => 1
+  # DEBUG customized_src_addr => 0
+  # DEBUG cmd_buf => 3
+  # DEBUG INLINE_ENTRY noc_inline_dw_write_impl
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 3
+  # DEBUG val => 4294967232
+  # DEBUG dest_addr => _51
+  # DEBUG be => 15
+  # DEBUG static_vc => 1
+  # DEBUG mcast => 0
+  # DEBUG posted => 0
+  # DEBUG customized_src_addr => 0
+  # DEBUG INLINE_ENTRY noc_fast_write_dw_inline
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 3
+  # DEBUG val => 4294967232
+  # DEBUG dest_addr => _51
+  # DEBUG be => 15
+  # DEBUG static_vc => 1
+  # DEBUG mcast => 0
+  # DEBUG posted => 0
+  # DEBUG customized_src_addr => 0
+  # DEBUG num_dests => 1
+  # DEBUG INLINE_ENTRY noc_fast_write_dw_inline_impl
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 3
+  # DEBUG val => 4294967232
+  # DEBUG dest_addr => _51
+  # DEBUG be => 15
+  # DEBUG static_vc => 1
+  # DEBUG mcast => 0
+  # DEBUG posted => 0
+  # DEBUG num_dests => 1
+  # DEBUG INLINE_ENTRY noc_fast_default_write_dw_inline
+  # DEBUG static_vc_alloc => 1
+  # DEBUG noc_cmd_field => 8346
+  # DEBUG be32 => 15
+  _52 = (unsigned int) _51;
+  be_shift_53 = _52 & 63;
+  # DEBUG be_shift => be_shift_53
+  be32_54 = 15 << be_shift_53;
+  # DEBUG be32 => be32_54
+
+  <bb 15> [local count: 378495771]:
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 3
+  # DEBUG INLINE_ENTRY noc_cmd_buf_ready
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855552
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_READ_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927232
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927232B
+  # DEBUG BEGIN_STMT
+  _55 ={v} MEM[(volatile uint32_t *)4289927232B];
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  if (_55 != 0)
+    goto <bb 15>; [89.00%]
+  else
+    goto <bb 16>; [11.00%]
+
+  <bb 16> [local count: 41634535]:
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855528
+  # DEBUG val => 4294967232
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927208
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927208B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927208B] ={v} 4294967232;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855516
+  # DEBUG val => 8346
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927196
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927196B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927196B] ={v} 8346;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855488
+  # DEBUG val => _52
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927168
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927168B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927168B] ={v} _52;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _56 = _51 >> 32;
+  _57 = (unsigned int) _56;
+  _58 = _57 & 268435471;
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855492
+  # DEBUG val => _58
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927172
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927172B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927172B] ={v} _58;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _59 = _51 >> 36;
+  _60 = (unsigned int) _59;
+  _61 = _60 & 16777215;
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855496
+  # DEBUG val => _61
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927176
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927176B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927176B] ={v} _61;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855520
+  # DEBUG val => be32_54
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927200
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927200B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927200B] ={v} be32_54;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855552
+  # DEBUG val => 1
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927232
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927232B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927232B] ={v} 1;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _62 = noc_nonposted_writes_num_issued[1];
+  _63 = _62 + 1;
+  noc_nonposted_writes_num_issued[1] = _63;
+  _64 = noc_nonposted_writes_acked[1];
+  _65 = _64 + 1;
+  noc_nonposted_writes_acked[1] = _65;
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG val => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG be => NULL
+  # DEBUG static_vc => NULL
+  # DEBUG mcast => NULL
+  # DEBUG posted => NULL
+  # DEBUG num_dests => NULL
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG val => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG be => NULL
+  # DEBUG static_vc => NULL
+  # DEBUG mcast => NULL
+  # DEBUG posted => NULL
+  # DEBUG customized_src_addr => NULL
+  # DEBUG num_dests => NULL
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG val => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG be => NULL
+  # DEBUG static_vc => NULL
+  # DEBUG mcast => NULL
+  # DEBUG posted => NULL
+  # DEBUG customized_src_addr => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG be => NULL
+  # DEBUG noc => NULL
+  # DEBUG vc => NULL
+  # DEBUG customized_src_addr => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG be => NULL
+  # DEBUG noc => NULL
+  # DEBUG vc => NULL
+  # DEBUG customized_src_addr => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc_cmd_field => NULL
+  # DEBUG link => NULL
+  # DEBUG dst => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG size_bytes => NULL
+  # DEBUG trid => NULL
+  # DEBUG be32 => NULL
+  # DEBUG be_shift => NULL
+  _66 = MEM[(struct value_type &)downstreams_6(D) + 16].ring_base;
+  # DEBUG slot => dst_36
+  # DEBUG ring_base => _66
+  # DEBUG last_slot_offset => 280224
+  # DEBUG INLINE_ENTRY next_ring_slot
+  # DEBUG BEGIN_STMT
+  _67 = _66 + 280224;
+  if (dst_36 != _67)
+    goto <bb 17>; [66.00%]
+  else
+    goto <bb 18>; [34.00%]
+
+  <bb 17> [local count: 27478793]:
+  _68 = dst_36 + 4448;
+
+  <bb 18> [local count: 41634535]:
+  # _69 = PHI <_66(16), _68(17)>
+  # DEBUG slot => NULL
+  # DEBUG ring_base => NULL
+  # DEBUG last_slot_offset => NULL
+  MEM[(struct DownstreamCursor &)downstreams_6(D)].next_slot = _69;
+  _70 = MEM[(struct DownstreamCursor &)downstreams_6(D)].free_slots;
+  _71 = _70 + 4294967295;
+  MEM[(struct DownstreamCursor &)downstreams_6(D)].free_slots = _71;
+  # DEBUG val => -1
+  # DEBUG INLINE_ENTRY increment_local_update_ptr_val
+  MEM[(volatile uint32_t *)4290008120B] ={v} 4294967232;
+  # DEBUG val => NULL
+  # DEBUG this => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG size_bytes => NULL
+  # DEBUG trid => NULL
+  # DEBUG this => NULL
+  # DEBUG forward_to => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG size_bytes => NULL
+  # DEBUG trid => NULL
+  # DEBUG this => NULL
+  # DEBUG forward_to => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG size_bytes => NULL
+  # DEBUG trid => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG D#185 => route.action_
+  pretmp_463 = route.action_;
+  # DEBUG this => &route
+  # DEBUG INLINE_ENTRY delivers
+  _73 = pretmp_463 & 32;
+  # DEBUG this => NULL
+  if (_73 != 0)
+    goto <bb 19>; [65.70%]
+  else
+    goto <bb 26>; [34.30%]
+
+  <bb 19> [local count: 41634535]:
+  # _466 = PHI <_306(18), _490(59)>
+  # size_465 = PHI <size_308(18), size_485(59)>
+  # DEBUG this => NULL
+  # DEBUG D#186 => &downstreams_6(D)->relay
+  _74 = MEM[(struct RingProgress &)r_3(D)].next_slot_addr;
+  # DEBUG this => D#186
+  # DEBUG src_addr => _74
+  # DEBUG size_bytes => size_465
+  # DEBUG trid => _466
+  # DEBUG INLINE_ENTRY forward
+  # DEBUG BEGIN_STMT
+  # DEBUG BEGIN_STMT
+  dst_75 = MEM[(struct Relay *)downstreams_6(D) + 48B].cursor.next_slot;
+  # DEBUG dst => dst_75
+  # DEBUG BEGIN_STMT
+  # DEBUG D#187 => &MEM[(struct Relay *)D#186].link
+  # DEBUG link => D#187
+  # DEBUG dst => dst_75
+  # DEBUG src_addr => _74
+  # DEBUG size_bytes => size_465
+  # DEBUG trid => _466
+  # DEBUG INLINE_ENTRY forward_stateless
+  # DEBUG this => D#187
+  # DEBUG addr => dst_75
+  # DEBUG INLINE_ENTRY noc_addr
+  # DEBUG BEGIN_STMT
+  _76 = MEM[(const struct DownstreamLink *)downstreams_6(D) + 48B].noc_coord;
+  _77 = (long long unsigned int) _76;
+  _78 = _77 << 36;
+  _79 = (long long unsigned int) dst_75;
+  _80 = _78 | _79;
+  # DEBUG this => NULL
+  # DEBUG addr => NULL
+  _81 = (unsigned int) _466;
+  # DEBUG src_local_l1_addr => _74
+  # DEBUG dst_noc_addr => _80
+  # DEBUG size => size_465
+  # DEBUG trid => _81
+  # DEBUG cmd_buf => 0
+  # DEBUG noc => 1
+  # DEBUG vc => 1
+  # DEBUG INLINE_ENTRY noc_async_write_one_packet_with_trid
+  # DEBUG INLINE_ENTRY note_opaque
+  # DEBUG BEGIN_STMT
+  # DEBUG INLINE_ENTRY note
+  __asm__ __volatile__(".pushsection .tt.BUF_RW,"",@note
+	.4byte %0
+	.4byte %1
+	.popsection" :  : "n" 4294967295, "n" 0);
+  # DEBUG src_local_l1_addr => _74
+  # DEBUG dst_noc_addr => _80
+  # DEBUG size => size_465
+  # DEBUG trid => _81
+  # DEBUG cmd_buf => 0
+  # DEBUG noc => 1
+  # DEBUG vc => 1
+  # DEBUG INLINE_ENTRY noc_async_write_one_packet_with_trid_impl
+
+  <bb 20> [local count: 378495771]:
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 0
+  # DEBUG INLINE_ENTRY noc_cmd_buf_ready
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855552
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_READ_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921088
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921088B
+  # DEBUG BEGIN_STMT
+  _82 ={v} MEM[(volatile uint32_t *)4289921088B];
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  if (_82 != 0)
+    goto <bb 20>; [89.00%]
+  else
+    goto <bb 21>; [11.00%]
+
+  <bb 21> [local count: 41634535]:
+  # DEBUG update_counter_in_callee => 1
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 0
+  # DEBUG src_addr => _74
+  # DEBUG dest_addr => _80
+  # DEBUG len_bytes => size_465
+  # DEBUG vc => 1
+  # DEBUG mcast => 0
+  # DEBUG linked => 0
+  # DEBUG num_dests => 1
+  # DEBUG multicast_path_reserve => 1
+  # DEBUG posted => 1
+  # DEBUG trid => _81
+  # DEBUG INLINE_ENTRY ncrisc_noc_fast_write
+  # DEBUG noc_cmd_field => 8322
+  _83 = _81 << 10;
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855512
+  # DEBUG val => _83
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921048
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921048B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921048B] ={v} _83;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855516
+  # DEBUG val => 8322
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921052
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921052B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921052B] ={v} 8322;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855488
+  # DEBUG val => _74
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921024
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921024B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921024B] ={v} _74;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _84 = (unsigned int) _80;
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855500
+  # DEBUG val => _84
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921036
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921036B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921036B] ={v} _84;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _85 = _80 >> 36;
+  _86 = (unsigned int) _85;
+  _87 = _86 & 16777215;
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855508
+  # DEBUG val => _87
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921044
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921044B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921044B] ={v} _87;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855520
+  # DEBUG val => size_465
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921056
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921056B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921056B] ={v} size_465;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 0
+  # DEBUG addr => 4289855552
+  # DEBUG val => 1
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289921088
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289921088B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289921088B] ={v} 1;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _88 = noc_posted_writes_num_issued[1];
+  _89 = _88 + 1;
+  noc_posted_writes_num_issued[1] = _89;
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG len_bytes => NULL
+  # DEBUG vc => NULL
+  # DEBUG mcast => NULL
+  # DEBUG linked => NULL
+  # DEBUG num_dests => NULL
+  # DEBUG multicast_path_reserve => NULL
+  # DEBUG posted => NULL
+  # DEBUG trid => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG src_local_l1_addr => NULL
+  # DEBUG dst_noc_addr => NULL
+  # DEBUG size => NULL
+  # DEBUG trid => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG noc => NULL
+  # DEBUG vc => NULL
+  # DEBUG src_local_l1_addr => NULL
+  # DEBUG dst_noc_addr => NULL
+  # DEBUG size => NULL
+  # DEBUG trid => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG noc => NULL
+  # DEBUG vc => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG noc_cmd_field => NULL
+  _90 = MEM[(const struct DownstreamLink &)downstreams_6(D) + 48].credit_noc_addr;
+  # DEBUG addr => _90
+  # DEBUG val => 4294967232
+  # DEBUG be => 15
+  # DEBUG noc => 1
+  # DEBUG vc => 1
+  # DEBUG customized_src_addr => 0
+  # DEBUG cmd_buf => 3
+  # DEBUG INLINE_ENTRY noc_inline_dw_write
+  # DEBUG INLINE_ENTRY note_opaque
+  # DEBUG BEGIN_STMT
+  # DEBUG INLINE_ENTRY note
+  __asm__ __volatile__(".pushsection .tt.BUF_RW,"",@note
+	.4byte %0
+	.4byte %1
+	.popsection" :  : "n" 4294967295, "n" 0);
+  # DEBUG addr => _90
+  # DEBUG val => 4294967232
+  # DEBUG be => 15
+  # DEBUG noc => 1
+  # DEBUG vc => 1
+  # DEBUG customized_src_addr => 0
+  # DEBUG cmd_buf => 3
+  # DEBUG INLINE_ENTRY noc_inline_dw_write_impl
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 3
+  # DEBUG val => 4294967232
+  # DEBUG dest_addr => _90
+  # DEBUG be => 15
+  # DEBUG static_vc => 1
+  # DEBUG mcast => 0
+  # DEBUG posted => 0
+  # DEBUG customized_src_addr => 0
+  # DEBUG INLINE_ENTRY noc_fast_write_dw_inline
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 3
+  # DEBUG val => 4294967232
+  # DEBUG dest_addr => _90
+  # DEBUG be => 15
+  # DEBUG static_vc => 1
+  # DEBUG mcast => 0
+  # DEBUG posted => 0
+  # DEBUG customized_src_addr => 0
+  # DEBUG num_dests => 1
+  # DEBUG INLINE_ENTRY noc_fast_write_dw_inline_impl
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 3
+  # DEBUG val => 4294967232
+  # DEBUG dest_addr => _90
+  # DEBUG be => 15
+  # DEBUG static_vc => 1
+  # DEBUG mcast => 0
+  # DEBUG posted => 0
+  # DEBUG num_dests => 1
+  # DEBUG INLINE_ENTRY noc_fast_default_write_dw_inline
+  # DEBUG static_vc_alloc => 1
+  # DEBUG noc_cmd_field => 8346
+  # DEBUG be32 => 15
+  _91 = (unsigned int) _90;
+  be_shift_92 = _91 & 63;
+  # DEBUG be_shift => be_shift_92
+  be32_93 = 15 << be_shift_92;
+  # DEBUG be32 => be32_93
+
+  <bb 22> [local count: 378495771]:
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG cmd_buf => 3
+  # DEBUG INLINE_ENTRY noc_cmd_buf_ready
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855552
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_READ_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927232
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927232B
+  # DEBUG BEGIN_STMT
+  _94 ={v} MEM[(volatile uint32_t *)4289927232B];
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  if (_94 != 0)
+    goto <bb 22>; [89.00%]
+  else
+    goto <bb 23>; [11.00%]
+
+  <bb 23> [local count: 41634535]:
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855528
+  # DEBUG val => 4294967232
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927208
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927208B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927208B] ={v} 4294967232;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855516
+  # DEBUG val => 8346
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927196
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927196B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927196B] ={v} 8346;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855488
+  # DEBUG val => _91
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927168
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927168B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927168B] ={v} _91;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _95 = _90 >> 32;
+  _96 = (unsigned int) _95;
+  _97 = _96 & 268435471;
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855492
+  # DEBUG val => _97
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927172
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927172B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927172B] ={v} _97;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _98 = _90 >> 36;
+  _99 = (unsigned int) _98;
+  _100 = _99 & 16777215;
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855496
+  # DEBUG val => _100
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927176
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927176B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927176B] ={v} _100;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855520
+  # DEBUG val => be32_93
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927200
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927200B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927200B] ={v} be32_93;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc => 1
+  # DEBUG buf => 3
+  # DEBUG addr => 4289855552
+  # DEBUG val => 1
+  # DEBUG INLINE_ENTRY NOC_CMD_BUF_WRITE_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => 4289927232
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => 4289927232B
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4289927232B] ={v} 1;
+  # DEBUG noc => NULL
+  # DEBUG buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  _101 = noc_nonposted_writes_num_issued[1];
+  _102 = _101 + 1;
+  noc_nonposted_writes_num_issued[1] = _102;
+  _103 = noc_nonposted_writes_acked[1];
+  _104 = _103 + 1;
+  noc_nonposted_writes_acked[1] = _104;
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG val => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG be => NULL
+  # DEBUG static_vc => NULL
+  # DEBUG mcast => NULL
+  # DEBUG posted => NULL
+  # DEBUG num_dests => NULL
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG val => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG be => NULL
+  # DEBUG static_vc => NULL
+  # DEBUG mcast => NULL
+  # DEBUG posted => NULL
+  # DEBUG customized_src_addr => NULL
+  # DEBUG num_dests => NULL
+  # DEBUG noc => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG val => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG be => NULL
+  # DEBUG static_vc => NULL
+  # DEBUG mcast => NULL
+  # DEBUG posted => NULL
+  # DEBUG customized_src_addr => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG be => NULL
+  # DEBUG noc => NULL
+  # DEBUG vc => NULL
+  # DEBUG customized_src_addr => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG addr => NULL
+  # DEBUG val => NULL
+  # DEBUG be => NULL
+  # DEBUG noc => NULL
+  # DEBUG vc => NULL
+  # DEBUG customized_src_addr => NULL
+  # DEBUG cmd_buf => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG noc_cmd_field => NULL
+  # DEBUG link => NULL
+  # DEBUG dst => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG size_bytes => NULL
+  # DEBUG trid => NULL
+  # DEBUG be32 => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG BEGIN_STMT
+  _105 = MEM[(struct Relay *)downstreams_6(D) + 48B].link.ring_base;
+  # DEBUG slot => dst_75
+  # DEBUG ring_base => _105
+  # DEBUG last_slot_offset => 31136
+  # DEBUG INLINE_ENTRY next_ring_slot
+  # DEBUG BEGIN_STMT
+  _106 = _105 + 31136;
+  if (dst_75 != _106)
+    goto <bb 24>; [66.00%]
+  else
+    goto <bb 25>; [34.00%]
+
+  <bb 24> [local count: 27478793]:
+  _107 = dst_75 + 4448;
+
+  <bb 25> [local count: 41634535]:
+  # _108 = PHI <_105(23), _107(24)>
+  # DEBUG slot => NULL
+  # DEBUG ring_base => NULL
+  # DEBUG last_slot_offset => NULL
+  MEM[(struct Relay *)downstreams_6(D) + 48B].cursor.next_slot = _108;
+  # DEBUG BEGIN_STMT
+  _109 = MEM[(struct Relay *)downstreams_6(D) + 48B].cursor.free_slots;
+  _110 = _109 + 4294967295;
+  MEM[(struct Relay *)downstreams_6(D) + 48B].cursor.free_slots = _110;
+  # DEBUG BEGIN_STMT
+  # DEBUG val => -1
+  # DEBUG INLINE_ENTRY increment_local_update_ptr_val
+  MEM[(volatile uint32_t *)4290118712B] ={v} 4294967232;
+  # DEBUG val => NULL
+  # DEBUG this => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG size_bytes => NULL
+  # DEBUG trid => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+
+  <bb 26> [local count: 83269069]:
+  # DEBUG index => NULL
+  # DEBUG group => NULL
+  # DEBUG trid => NULL
+  # DEBUG size => NULL
+  # DEBUG this => NULL
+  # DEBUG this => NULL
+  route ={v} {CLOBBER(eos)};
+  # DEBUG progress => D#172
+  # DEBUG sources => D#176
+  # DEBUG source => 0
+  # DEBUG INLINE_ENTRY retire
+  _111 = MEM[(struct RingProgress &)r_3(D)].next_index;
+  # DEBUG this => D#176
+  # DEBUG index => _111
+  # DEBUG source => 0
+  # DEBUG INLINE_ENTRY set
+  # DEBUG this => D#176
+  # DEBUG INLINE_ENTRY bytes
+  # DEBUG this => &MEM[(struct SlotSources *)D#176].words
+  # DEBUG INLINE_ENTRY data
+  _112 = &MEM[(struct array *)r_3(D) + 20B]._M_elems;
+  # DEBUG this => NULL
+  # DEBUG this => NULL
+  _113 = _112 + _111;
+  *_113 = 0;
+  # DEBUG this => NULL
+  # DEBUG index => NULL
+  # DEBUG source => NULL
+  _114 = MEM[(struct RingProgress &)r_3(D)].uncredited;
+  _115 = _114 + 1;
+  MEM[(struct RingProgress &)r_3(D)].uncredited = _115;
+  _116 = MEM[(struct RingProgress &)r_3(D)].packets_ready;
+  _117 = _116 + 4294967295;
+  MEM[(struct RingProgress &)r_3(D)].packets_ready = _117;
+  # DEBUG val => -1
+  # DEBUG INLINE_ENTRY increment_local_update_ptr_val
+  MEM[(volatile uint32_t *)4290004024B] ={v} 4294967232;
+  # DEBUG val => NULL
+  # DEBUG progress => D#172
+  # DEBUG INLINE_ENTRY advance
+  _118 = MEM[(struct RingProgress &)r_3(D)].next_index;
+  # DEBUG index => _118
+  # DEBUG INLINE_ENTRY index_after
+  if (_118 != 15)
+    goto <bb 28>; [66.00%]
+  else
+    goto <bb 27>; [34.00%]
+
+  <bb 27> [local count: 28311484]:
+  # DEBUG index => NULL
+  MEM[(struct RingProgress &)r_3(D)].next_index = 0;
+  goto <bb 30>; [100.00%]
+
+  <bb 28> [local count: 54957585]:
+  _119 = _118 + 1;
+  # DEBUG index => NULL
+  MEM[(struct RingProgress &)r_3(D)].next_index = _119;
+  if (_119 != 0)
+    goto <bb 29>; [50.00%]
+  else
+    goto <bb 30>; [50.00%]
+
+  <bb 29> [local count: 27478793]:
+  _120 = MEM[(struct RingProgress &)r_3(D)].next_slot_addr;
+  _121 = _120 + 4448;
+
+  <bb 30> [local count: 83269069]:
+  # _122 = PHI <162080(28), _121(29), 162080(27)>
+  # prephitmp_474 = PHI <_119(28), _119(29), 0(27)>
+  MEM[(struct RingProgress &)r_3(D)].next_slot_addr = _122;
+  # DEBUG progress => NULL
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG source => NULL
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG header_word => NULL
+  # DEBUG route_word => NULL
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG arrived => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG size => NULL
+  # DEBUG group => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG header => NULL
+  # DEBUG handled_packet => 1
+  # DEBUG progress => D#172
+  # DEBUG sources => D#176
+  # DEBUG handled_packet => 1
+  # DEBUG credits => D#175
+  # DEBUG INLINE_ENTRY credit_completions
+  # DEBUG completion_group_size => 4
+  # DEBUG num_slots => 16
+  # DEBUG D#192 => MEM[(struct RingProgress &)r_3(D)].next_index
+  # DEBUG next_index => D#192
+  waiting_281 = MEM[(struct RingProgress &)r_3(D)].uncredited;
+  # DEBUG waiting => waiting_281
+  # DEBUG progress => D#172
+  # DEBUG next_index => D#192
+  # DEBUG handled_packet => 1
+  # DEBUG count => &count
+  # DEBUG INLINE_ENTRY slots_due_for_credit
+  MEM[(struct RingProgress &)r_3(D)].idle_passes_with_partial_group = 0;
+  # DEBUG D#188 => waiting_281 > 4
+  # DEBUG is_due => D#188
+  if (waiting_281 > 4)
+    goto <bb 36>; [66.00%]
+  else
+    goto <bb 50>; [34.00%]
+
+  <bb 31> [local count: 26147162]:
+  route ={v} {CLOBBER(eos)};
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG header_word => NULL
+  # DEBUG route_word => NULL
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG arrived => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG size => NULL
+  # DEBUG group => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG header => NULL
+  # DEBUG handled_packet => 0
+  # DEBUG progress => D#172
+  # DEBUG sources => D#176
+  # DEBUG handled_packet => 0
+  # DEBUG credits => D#175
+  # DEBUG INLINE_ENTRY credit_completions
+  # DEBUG completion_group_size => 4
+  # DEBUG num_slots => 16
+  next_index_291 = MEM[(struct RingProgress &)r_3(D)].next_index;
+  # DEBUG next_index => next_index_291
+  waiting_292 = MEM[(struct RingProgress &)r_3(D)].uncredited;
+  # DEBUG waiting => waiting_292
+  # DEBUG progress => D#172
+  # DEBUG next_index => next_index_291
+  # DEBUG handled_packet => 0
+  # DEBUG count => &count
+  # DEBUG INLINE_ENTRY slots_due_for_credit
+
+  <bb 32> [local count: 65913393]:
+  # next_index_293 = PHI <next_index_291(31), next_index_287(4)>
+  # waiting_295 = PHI <waiting_292(31), waiting_288(4)>
+  if (waiting_295 > 3)
+    goto <bb 35>; [50.00%]
+  else
+    goto <bb 33>; [50.00%]
+
+  <bb 33> [local count: 32956696]:
+  if (waiting_295 != 0)
+    goto <bb 34>; [66.00%]
+  else
+    goto <bb 50>; [34.00%]
+
+  <bb 34> [local count: 21751419]:
+  _126 = MEM[(struct RingProgress &)r_3(D)].idle_passes_with_partial_group;
+  _127 = _126 + 1;
+  MEM[(struct RingProgress &)r_3(D)].idle_passes_with_partial_group = _127;
+  if (_127 > 3)
+    goto <bb 35>; [66.00%]
+  else
+    goto <bb 50>; [34.00%]
+
+  <bb 35> [local count: 47312633]:
+
+  <bb 36> [local count: 90815472]:
+  # next_index_294 = PHI <prephitmp_474(30), next_index_293(35)>
+  # waiting_296 = PHI <waiting_281(30), waiting_295(35)>
+  # DEBUG is_due => NULL
+  # DEBUG next_index => next_index_294
+  # DEBUG waiting => waiting_296
+  # DEBUG INLINE_ENTRY oldest_uncredited
+  # DEBUG D#189 => -waiting_296
+  _142 = next_index_294 + 16;
+  # DEBUG index => next_index_294
+  # DEBUG n => 16 + D#189
+  # DEBUG INLINE_ENTRY ring_add
+  sum_129 = _142 - waiting_296;
+  # DEBUG sum => sum_129
+  _130 = sum_129 & 15;
+  # DEBUG index => NULL
+  # DEBUG n => NULL
+  # DEBUG next_index => NULL
+  # DEBUG waiting => NULL
+  # DEBUG sum => NULL
+  # DEBUG first => _130
+  # DEBUG D#196 => ~_130
+  # DEBUG D#195 => D#196 & 3
+  # DEBUG D#194 => D#195 + 1
+  # DEBUG __a => &waiting
+  # DEBUG __b => &left_in_group
+  # DEBUG INLINE_ENTRY min
+  # DEBUG D#193 => MIN_EXPR <D#194, waiting_296>
+  # DEBUG __a => NULL
+  # DEBUG __b => NULL
+  # DEBUG count => D#193
+  # DEBUG progress => NULL
+  # DEBUG next_index => NULL
+  # DEBUG handled_packet => NULL
+  # DEBUG count => NULL
+  # DEBUG sum => NULL
+  # DEBUG proof_checks => 32
+  # DEBUG first => _130
+  # DEBUG index => _130
+  # DEBUG INLINE_ENTRY of_slot
+  group_135 = _130 >> 2;
+  # DEBUG index => NULL
+  # DEBUG group => NULL
+  # DEBUG trid => group_135
+  # DEBUG INLINE_ENTRY trid_writes_sent_within
+  # DEBUG check => 1
+  # DEBUG BEGIN_STMT
+  _136 = group_135 + 4293705888;
+  offset_137 = _136 * 4;
+  ptr_138 = (volatile uint32_t *) offset_137;
+
+  <bb 37> [local count: 1040133703]:
+  # ivtmp_310 = PHI <ivtmp_203(38), 31(36)>
+  # DEBUG check => NULL
+  # DEBUG trid => group_135
+  # DEBUG INLINE_ENTRY trid_writes_sent
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG transcation_id => group_135
+  # DEBUG INLINE_ENTRY ncrisc_noc_nonposted_write_with_transaction_id_sent
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG reg_id => group_135 + 32
+  # DEBUG INLINE_ENTRY NOC_STATUS_READ_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG D#190 => _136 * 4
+  # DEBUG offset => D#190
+  # DEBUG BEGIN_STMT
+  # DEBUG D#191 => (volatile uint32_t *) offset_137
+  # DEBUG ptr => D#191
+  # DEBUG BEGIN_STMT
+  _139 ={v} *ptr_138;
+  # DEBUG noc => NULL
+  # DEBUG reg_id => NULL
+  # DEBUG noc => NULL
+  # DEBUG transcation_id => NULL
+  # DEBUG trid => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  if (_139 == 0)
+    goto <bb 40>; [5.50%]
+  else
+    goto <bb 38>; [94.50%]
+
+  <bb 38> [local count: 982926352]:
+  # DEBUG BEGIN_STMT
+  # DEBUG check => NULL
+  # DEBUG BEGIN_STMT
+  ivtmp_203 = ivtmp_310 + 4294967295;
+  if (ivtmp_203 != 0)
+    goto <bb 37>; [96.58%]
+  else
+    goto <bb 39>; [3.42%]
+
+  <bb 39> [local count: 33608120]:
+  # DEBUG trid => group_135
+  # DEBUG INLINE_ENTRY trid_writes_sent
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG transcation_id => group_135
+  # DEBUG INLINE_ENTRY ncrisc_noc_nonposted_write_with_transaction_id_sent
+  # DEBUG BEGIN_STMT
+  # DEBUG noc => 1
+  # DEBUG reg_id => group_135 + 32
+  # DEBUG INLINE_ENTRY NOC_STATUS_READ_REG
+  # DEBUG BEGIN_STMT
+  # DEBUG offset => D#190
+  # DEBUG BEGIN_STMT
+  # DEBUG ptr => D#191
+  # DEBUG BEGIN_STMT
+  _145 ={v} *ptr_138;
+  # DEBUG noc => NULL
+  # DEBUG reg_id => NULL
+  # DEBUG noc => NULL
+  # DEBUG transcation_id => NULL
+  # DEBUG trid => NULL
+  # DEBUG trid => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG check => NULL
+  if (_145 == 0)
+    goto <bb 40>; [66.00%]
+  else
+    goto <bb 50>; [34.00%]
+
+  <bb 40> [local count: 59938212]:
+  _147 = ~_130;
+  _143 = _147 & 3;
+  _133 = _143 + 1;
+  _134 = MIN_EXPR <_133, waiting_296>;
+  # DEBUG trid => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG check => NULL
+  MEM[(struct RingProgress &)r_3(D)].idle_passes_with_partial_group = 0;
+  # DEBUG sources => D#176
+  # DEBUG first => _130
+  # DEBUG count => D#193
+  # DEBUG credits => D#175
+  # DEBUG INLINE_ENTRY accumulate_completion_credits
+  # DEBUG this => D#176
+  # DEBUG first => _130
+  # DEBUG n => D#193
+  # DEBUG INLINE_ENTRY completion_group_sources
+  # DEBUG this => &MEM[(const struct SlotSources *)D#176].words
+  # DEBUG __n => group_135
+  # DEBUG INLINE_ENTRY operator[]
+  # DEBUG BEGIN_STMT
+  # DEBUG this => NULL
+  # DEBUG __n => NULL
+  _148 = MEM <const struct array> [(const value_type &)r_3(D) + 20]._M_elems[group_135];
+  _149 = sum_129 & 3;
+  _150 = _149 * 8;
+  word_151 = _148 >> _150;
+  # DEBUG word => word_151
+  if (_134 != 4)
+    goto <bb 42>; [66.00%]
+  else
+    goto <bb 41>; [34.00%]
+
+  <bb 41> [local count: 20378992]:
+  # DEBUG this => NULL
+  # DEBUG first => NULL
+  # DEBUG n => NULL
+  # DEBUG word => NULL
+  # DEBUG group => word_151
+  first_source_201 = word_151 & 255;
+  # DEBUG first_source => first_source_201
+  # DEBUG one_per_slot => 16843009
+  _182 = first_source_201 * 16843009;
+  if (word_151 == _182)
+    goto <bb 43>; [34.00%]
+  else
+    goto <bb 58>; [66.00%]
+
+  <bb 42> [local count: 39559220]:
+  _153 = _134 * 8;
+  _154 = 4294967295 << _153;
+  _155 = ~_154;
+  _156 = word_151 & _155;
+  # DEBUG this => NULL
+  # DEBUG first => NULL
+  # DEBUG n => NULL
+  # DEBUG word => NULL
+  # DEBUG group => _156
+  first_source_157 = _156 & 255;
+  # DEBUG first_source => first_source_157
+  one_per_slot_158 = _155 & 16843009;
+  # DEBUG one_per_slot => one_per_slot_158
+  _161 = first_source_157 * one_per_slot_158;
+  if (_156 == _161)
+    goto <bb 43>; [34.00%]
+  else
+    goto <bb 44>; [66.00%]
+
+  <bb 43> [local count: 20378992]:
+  # _279 = PHI <_161(42), _182(41)>
+  # DEBUG this => D#175
+  # DEBUG src_id => (unsigned char) _279
+  # DEBUG num_completions => D#193
+  # DEBUG INLINE_ENTRY accumulate_completion_credit
+  # DEBUG BEGIN_STMT
+  _163 = _279 & 255;
+  _284 = _163 * 4;
+  _489 = r_3(D) + _284;
+  _164 = MEM[(value_type &)_489 + 44];
+  c_165 = _134 + _164;
+  # DEBUG c => c_165
+  # DEBUG BEGIN_STMT
+  MEM[(value_type &)_489 + 44] = c_165;
+  # DEBUG BEGIN_STMT
+  _166 = MEM[(struct ReceiverChannelCounterBasedResponseCreditSender *)r_3(D) + 36B].completion_counters_base_ptr;
+  _168 = _166 + _284;
+  *_168 ={v} c_165;
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  goto <bb 49>; [100.00%]
+
+  <bb 44> [local count: 21757571]:
+  # DEBUG BEGIN_STMT
+  # DEBUG k => NULL
+  _175 = MEM[(struct ReceiverChannelCounterBasedResponseCreditSender *)r_3(D) + 36B].completion_counters_base_ptr;
+  # DEBUG c => NULL
+  # DEBUG k => 0
+  # DEBUG this => D#175
+  # DEBUG src_id => (unsigned char) _156
+  # DEBUG num_completions => 1
+  # DEBUG INLINE_ENTRY accumulate_completion_credit
+  # DEBUG BEGIN_STMT
+  _198 = _156 & 255;
+  _487 = _198 * 4;
+  _488 = r_3(D) + _487;
+  _188 = MEM[(value_type &)_488 + 44];
+  c_521 = _188 + 1;
+  # DEBUG c => c_521
+  # DEBUG BEGIN_STMT
+  MEM[(value_type &)_488 + 44] = c_521;
+  # DEBUG BEGIN_STMT
+  _518 = _175 + _487;
+  *_518 ={v} c_521;
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG k => 1
+  # DEBUG BEGIN_STMT
+  if (_134 != 1)
+    goto <bb 45>; [59.55%]
+  else
+    goto <bb 48>; [40.45%]
+
+  <bb 45> [local count: 26405779]:
+  # _469 = PHI <_175(44), _483(58)>
+  # _467 = PHI <_156(44), word_151(58)>
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  # DEBUG k => 1
+  _511 = _467 >> 8;
+  # DEBUG this => D#175
+  # DEBUG src_id => (unsigned char) _511
+  # DEBUG num_completions => 1
+  # DEBUG INLINE_ENTRY accumulate_completion_credit
+  # DEBUG BEGIN_STMT
+  _510 = _511 & 255;
+  _170 = _510 * 4;
+  _285 = r_3(D) + _170;
+  _509 = MEM[(value_type &)_285 + 44];
+  c_508 = _509 + 1;
+  # DEBUG c => c_508
+  # DEBUG BEGIN_STMT
+  MEM[(value_type &)_285 + 44] = c_508;
+  # DEBUG BEGIN_STMT
+  _505 = _469 + _170;
+  *_505 ={v} c_508;
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG k => 2
+  # DEBUG BEGIN_STMT
+  if (_134 != 2)
+    goto <bb 46>; [75.00%]
+  else
+    goto <bb 48>; [25.00%]
+
+  <bb 46> [local count: 19804334]:
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  # DEBUG k => 2
+  _499 = _467 >> 16;
+  # DEBUG this => D#175
+  # DEBUG src_id => (unsigned char) _499
+  # DEBUG num_completions => 1
+  # DEBUG INLINE_ENTRY accumulate_completion_credit
+  # DEBUG BEGIN_STMT
+  _498 = _499 & 255;
+  _502 = _498 * 4;
+  _503 = r_3(D) + _502;
+  _497 = MEM[(value_type &)_503 + 44];
+  c_496 = _497 + 1;
+  # DEBUG c => c_496
+  # DEBUG BEGIN_STMT
+  MEM[(value_type &)_503 + 44] = c_496;
+  # DEBUG BEGIN_STMT
+  _493 = _469 + _502;
+  *_493 ={v} c_496;
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG k => 3
+  # DEBUG BEGIN_STMT
+  if (_134 == 4)
+    goto <bb 47>; [75.00%]
+  else
+    goto <bb 48>; [25.00%]
+
+  <bb 47> [local count: 14853250]:
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  # DEBUG k => 3
+  _171 = _467 >> 24;
+  # DEBUG this => D#175
+  # DEBUG src_id => (unsigned char) _171
+  # DEBUG num_completions => 1
+  # DEBUG INLINE_ENTRY accumulate_completion_credit
+  # DEBUG BEGIN_STMT
+  _515 = _171 * 4;
+  _196 = r_3(D) + _515;
+  _173 = MEM[(value_type &)_196 + 44];
+  c_174 = _173 + 1;
+  # DEBUG c => c_174
+  # DEBUG BEGIN_STMT
+  MEM[(value_type &)_196 + 44] = c_174;
+  # DEBUG BEGIN_STMT
+  _177 = _469 + _515;
+  *_177 ={v} c_174;
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG k => 4
+  # DEBUG BEGIN_STMT
+
+  <bb 48> [local count: 35207706]:
+
+  <bb 49> [local count: 59938212]:
+  # DEBUG sources => NULL
+  # DEBUG first => NULL
+  # DEBUG count => NULL
+  # DEBUG credits => NULL
+  # DEBUG c => NULL
+  # DEBUG c => NULL
+  # DEBUG word => NULL
+  # DEBUG k => NULL
+  # DEBUG one_per_slot => NULL
+  # DEBUG first_source => NULL
+  _179 = waiting_296 - _134;
+  MEM[(struct RingProgress &)r_3(D)].uncredited = _179;
+  # DEBUG is_due => NULL
+  # DEBUG progress => NULL
+  # DEBUG next_index => NULL
+  # DEBUG handled_packet => NULL
+  # DEBUG count => NULL
+  # DEBUG count => NULL
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG handled_packet => NULL
+  # DEBUG credits => NULL
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG credits => NULL
+  # DEBUG credit_frame_due => NULL
+  # DEBUG arrived_raw => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG first_vc_progress => NULL
+  # DEBUG states => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG credits => NULL
+  # DEBUG credit_frame_due => NULL
+  # DEBUG arrived_raw => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG arrived => NULL
+  # DEBUG first_source => NULL
+  # DEBUG one_per_slot => NULL
+  # DEBUG k => NULL
+  # DEBUG word => NULL
+  # DEBUG c => NULL
+  # DEBUG c => NULL
+  # DEBUG group => NULL
+  # DEBUG check => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG sum => NULL
+  # DEBUG waiting => NULL
+  # DEBUG next_index => NULL
+  # DEBUG size => NULL
+  # DEBUG group => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG header => NULL
+  goto <bb 51>; [100.00%]
+
+  <bb 50> [local count: 71888575]:
+  # DEBUG is_due => NULL
+  # DEBUG progress => NULL
+  # DEBUG next_index => NULL
+  # DEBUG handled_packet => NULL
+  # DEBUG count => NULL
+  # DEBUG count => NULL
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG handled_packet => NULL
+  # DEBUG credits => NULL
+  # DEBUG first_source => NULL
+  # DEBUG one_per_slot => NULL
+  # DEBUG k => NULL
+  # DEBUG word => NULL
+  # DEBUG c => NULL
+  # DEBUG c => NULL
+  # DEBUG group => NULL
+  # DEBUG check => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG sum => NULL
+  # DEBUG waiting => NULL
+  # DEBUG next_index => NULL
+  _180 = MEM[(bool &)r_3(D) + 76];
+  # DEBUG progress => NULL
+  # DEBUG sources => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG credits => NULL
+  # DEBUG credit_frame_due => NULL
+  # DEBUG arrived_raw => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG first_vc_progress => NULL
+  # DEBUG states => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG credits => NULL
+  # DEBUG credit_frame_due => NULL
+  # DEBUG arrived_raw => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG arrived => NULL
+  # DEBUG first_source => NULL
+  # DEBUG one_per_slot => NULL
+  # DEBUG k => NULL
+  # DEBUG word => NULL
+  # DEBUG c => NULL
+  # DEBUG c => NULL
+  # DEBUG group => NULL
+  # DEBUG check => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG sum => NULL
+  # DEBUG waiting => NULL
+  # DEBUG next_index => NULL
+  # DEBUG size => NULL
+  # DEBUG group => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG be32 => NULL
+  # DEBUG dst => NULL
+  # DEBUG header => NULL
+  if (_180 != 0)
+    goto <bb 51>; [8.31%]
+  else
+    goto <bb 54>; [91.69%]
+
+  <bb 51> [local count: 65913393]:
+  # DEBUG credits => D#175
+  # DEBUG txq_status_at_pass_start => 0
+  # DEBUG INLINE_ENTRY send_credit_frame
+  # DEBUG BEGIN_STMT
+  # DEBUG BEGIN_STMT
+  # DEBUG seen_free => 0
+  # DEBUG BEGIN_STMT
+  # DEBUG q_num => 0
+  # DEBUG INLINE_ENTRY eth_txq_is_busy
+  # DEBUG BEGIN_STMT
+  # DEBUG qnum => 0
+  # DEBUG offset => 4
+  # DEBUG INLINE_ENTRY eth_txq_reg_read
+  # DEBUG BEGIN_STMT
+  _183 ={v} MEM[(volatile uint32_t *)4290314244B];
+  # DEBUG qnum => NULL
+  # DEBUG offset => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG qnum => 0
+  # DEBUG offset => 8
+  # DEBUG INLINE_ENTRY eth_txq_reg_read
+  # DEBUG BEGIN_STMT
+  _184 ={v} MEM[(volatile uint32_t *)4290314248B];
+  # DEBUG qnum => NULL
+  # DEBUG offset => NULL
+  _185 = _184 & 65536;
+  # DEBUG q_num => NULL
+  if (_185 != 0)
+    goto <bb 53>; [34.00%]
+  else
+    goto <bb 52>; [66.00%]
+
+  <bb 52> [local count: 43502839]:
+  # DEBUG BEGIN_STMT
+  # DEBUG this => D#175
+  # DEBUG INLINE_ENTRY flush_completion_credits
+  # DEBUG BEGIN_STMT
+  # DEBUG this => D#175
+  # DEBUG INLINE_ENTRY update_sender_side_credits
+  # DEBUG BEGIN_STMT
+  # DEBUG src_addr => 89056
+  # DEBUG dest_addr => 88960
+  # DEBUG num_bytes => 96
+  # DEBUG INLINE_ENTRY send_packet
+  # DEBUG q_num => 0
+  # DEBUG src_addr => 89056
+  # DEBUG dest_addr => 88960
+  # DEBUG num_bytes => 96
+  # DEBUG INLINE_ENTRY eth_send_packet_bytes_unsafe
+  # DEBUG BEGIN_STMT
+  # DEBUG q_num => 0
+  # DEBUG src_addr => 89056
+  # DEBUG dest_addr => 88960
+  # DEBUG num_bytes => 96
+  # DEBUG INLINE_ENTRY eth_send_packet_bytes_without_txq_busy_check
+  # DEBUG BEGIN_STMT
+  # DEBUG BEGIN_STMT
+  # DEBUG BEGIN_STMT
+  # DEBUG BEGIN_STMT
+  # DEBUG qnum => 0
+  # DEBUG offset => 20
+  # DEBUG val => 89056
+  # DEBUG INLINE_ENTRY eth_txq_reg_write
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4290314260B] ={v} 89056;
+  # DEBUG qnum => NULL
+  # DEBUG offset => NULL
+  # DEBUG val => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG qnum => 0
+  # DEBUG offset => 28
+  # DEBUG val => 88960
+  # DEBUG INLINE_ENTRY eth_txq_reg_write
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4290314268B] ={v} 88960;
+  # DEBUG qnum => NULL
+  # DEBUG offset => NULL
+  # DEBUG val => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG qnum => 0
+  # DEBUG offset => 24
+  # DEBUG val => 96
+  # DEBUG INLINE_ENTRY eth_txq_reg_write
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4290314264B] ={v} 96;
+  # DEBUG qnum => NULL
+  # DEBUG offset => NULL
+  # DEBUG val => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG qnum => 0
+  # DEBUG offset => 4
+  # DEBUG val => 2
+  # DEBUG INLINE_ENTRY eth_txq_reg_write
+  # DEBUG BEGIN_STMT
+  MEM[(volatile uint32_t *)4290314244B] ={v} 2;
+  # DEBUG qnum => NULL
+  # DEBUG offset => NULL
+  # DEBUG val => NULL
+  # DEBUG q_num => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG num_bytes => NULL
+  # DEBUG q_num => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG num_bytes => NULL
+  # DEBUG src_addr => NULL
+  # DEBUG dest_addr => NULL
+  # DEBUG num_bytes => NULL
+  # DEBUG this => NULL
+  # DEBUG this => NULL
+  # DEBUG BEGIN_STMT
+
+  <bb 53> [local count: 65913393]:
+  # prephitmp_522 = PHI <1(51), 0(52)>
+  # DEBUG credits => NULL
+  # DEBUG txq_status_at_pass_start => NULL
+  MEM[(bool &)r_3(D) + 76] = prephitmp_522;
+
+  <bb 54> [local count: 131826787]:
+  # DEBUG first_vc_progress => NULL
+  # DEBUG credit_frame_due => NULL
+  # DEBUG states => NULL
+  # DEBUG credits => NULL
+  # DEBUG downstreams => NULL
+  # DEBUG my_chip => NULL
+  # DEBUG header => NULL
+  # DEBUG dst => NULL
+  # DEBUG be32 => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG dst => NULL
+  # DEBUG be32 => NULL
+  # DEBUG be_shift => NULL
+  # DEBUG group => NULL
+  # DEBUG size => NULL
+  # DEBUG next_index => NULL
+  # DEBUG waiting => NULL
+  # DEBUG sum => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG offset => NULL
+  # DEBUG ptr => NULL
+  # DEBUG check => NULL
+  # DEBUG group => NULL
+  # DEBUG c => NULL
+  # DEBUG c => NULL
+  # DEBUG word => NULL
+  # DEBUG k => NULL
+  # DEBUG one_per_slot => NULL
+  # DEBUG first_source => NULL
+  # DEBUG arrived => NULL
+  return;
+
+  <bb 55> [local count: 22808032]:
+  pretmp_523 = MEM[(struct RingProgress &)r_3(D)].next_index;
+  # DEBUG index => MEM[(struct RingProgress &)r_3(D)].next_index
+  # DEBUG INLINE_ENTRY of_slot
+  group_160 = pretmp_523 >> 2;
+  # DEBUG group => group_160
+  _152 = (unsigned char) group_160;
+  _289 = _152 & 15;
+  # DEBUG index => NULL
+  # DEBUG group => NULL
+  # DEBUG trid => _289
+  _197 = _14 & 65535;
+  size_194 = _197 + 112;
+  # DEBUG size => size_194
+  # DEBUG this => &channel_trimming_usage_recorder
+  goto <bb 12>; [100.00%]
+
+  <bb 56> [local count: 45616065]:
+  # DEBUG this => NULL
+  # DEBUG forward_to => NULL
+  # DEBUG this => &route
+  _125 = _18 & 32;
+  # DEBUG this => NULL
+  if (_125 != 0)
+    goto <bb 61>; [50.00%]
+  else
+    goto <bb 55>; [50.00%]
+
+  <bb 57> [local count: 54708116]:
+  # DEBUG this => NULL
+  # DEBUG forward_to => NULL
+  # DEBUG this => &route
+  _305 = _18 & 32;
+  # DEBUG this => NULL
+  if (_305 != 0)
+    goto <bb 8>; [50.00%]
+  else
+    goto <bb 26>; [50.00%]
+
+  <bb 58> [local count: 13450135]:
+  # DEBUG k => NULL
+  _483 = MEM[(struct ReceiverChannelCounterBasedResponseCreditSender *)r_3(D) + 36B].completion_counters_base_ptr;
+  # DEBUG c => NULL
+  # DEBUG k => 0
+  # DEBUG this => D#175
+  # DEBUG src_id => (unsigned char) word_151
+  # DEBUG num_completions => 1
+  # DEBUG INLINE_ENTRY accumulate_completion_credit
+  # DEBUG BEGIN_STMT
+  _482 = word_151 & 255;
+  _481 = _482 * 4;
+  _178 = r_3(D) + _481;
+  _172 = MEM[(value_type &)_178 + 44];
+  c_519 = _172 + 1;
+  # DEBUG c => c_519
+  # DEBUG BEGIN_STMT
+  MEM[(value_type &)_178 + 44] = c_519;
+  # DEBUG BEGIN_STMT
+  _500 = _483 + _481;
+  *_500 ={v} c_519;
+  # DEBUG this => NULL
+  # DEBUG src_id => NULL
+  # DEBUG num_completions => NULL
+  # DEBUG c => NULL
+  # DEBUG BEGIN_STMT
+  # DEBUG k => 1
+  # DEBUG BEGIN_STMT
+  goto <bb 45>; [100.00%]
+
+  <bb 59> [local count: 14280477]:
+  # _490 = PHI <_32(10), _464(9)>
+  # size_485 = PHI <size_34(10), size_307(9)>
+  # DEBUG this => &route
+  # DEBUG INLINE_ENTRY delivers
+  # DEBUG this => NULL
+  goto <bb 19>; [100.00%]
+
+  <bb 60> [local count: 11404016]:
+  # DEBUG this => NULL
+  _478 = MEM[(struct RingProgress &)r_3(D)].next_index;
+  # DEBUG index => _478
+  # DEBUG INLINE_ENTRY of_slot
+  group_477 = _478 >> 2;
+  # DEBUG group => group_477
+  _476 = (unsigned char) group_477;
+  _475 = _476 & 15;
+  # DEBUG index => NULL
+  # DEBUG group => NULL
+  # DEBUG trid => _475
+  _473 = _14 & 65535;
+  size_472 = _473 + 112;
+  # DEBUG size => size_472
+  # DEBUG this => &channel_trimming_usage_recorder
+  goto <bb 12>; [100.00%]
+
+  <bb 61> [local count: 22808033]:
+  # DEBUG this => &downstreams_6(D)->relay
+  # DEBUG INLINE_ENTRY admit
+  # DEBUG BEGIN_STMT
+  _470 = MEM[(struct Relay *)downstreams_6(D) + 48B].cursor.free_slots;
+  if (_470 == 0)
+    goto <bb 11>; [50.00%]
+  else
+    goto <bb 60>; [50.00%]
+
+}
+
+

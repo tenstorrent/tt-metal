@@ -1,0 +1,307 @@
+diff -ruN v4txa1/fabric_erisc_router_v4.cpp v4txa2/fabric_erisc_router_v4.cpp
+--- v4txa1/fabric_erisc_router_v4.cpp	2026-11-03 03:33:26.641241521 +0000
++++ v4txa2/fabric_erisc_router_v4.cpp	2026-11-03 03:56:11.632116661 +0000
+@@ -128,9 +128,10 @@
+     // Phase: stream registers.
+     init_txqs();
+     postcode(tt::tt_fabric::EDMStatus::TXQ_INITIALIZED);
+-    init_link_streams();
++    receiver::init_channel_streams();
++    sender::init_channel_streams();
++    init_context_switch_state();
+     sync_erisc(Phase::STREAMS_SET);
+-    init_2d_streams();
+     postcode(tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED);
+     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
+         clear_code_profiling_buffer(code_profiling_buffer_base_addr);
+diff -ruN v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp
+--- v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 04:24:42.556308722 +0000
++++ v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 04:24:42.556308722 +0000
+@@ -66,6 +66,25 @@
+ static_assert((HEARTBEAT_INTERVAL & (HEARTBEAT_INTERVAL - 1)) == 0, "the round count is tested with a mask");
+ 
+ // ---------------------------------------------------------------------------------------------------------------------
++// Blocks in L1 the host and the base firmware share with the router
++// ---------------------------------------------------------------------------------------------------------------------
++
++// The host's termination signal for this router.
++FORCE_INLINE volatile tt::tt_fabric::TerminationSignal* termination_signal() {
++    return reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
++}
++
++// The routing table in this router's L1 (written by the host).
++FORCE_INLINE const tt::tt_fabric::routing_l1_info_t& l1_routing_table() {
++    return *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
++}
++
++// The FabricTelemetry block the host reads (static info, router state, heartbeats, the dynamic bandwidth).
++FORCE_INLINE volatile tt_l1_ptr FabricTelemetry* telemetry_block() {
++    return reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
++}
++
++// ---------------------------------------------------------------------------------------------------------------------
+ // Stream registers
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+diff -ruN v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp
+--- v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 03:52:42.005239197 +0000
++++ v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 03:56:11.629116619 +0000
+@@ -97,6 +97,15 @@
+     }
+ }
+ 
++// Zeroes one block of L1 credit counters (a word per sender channel): this router's receiver's first-level-ack and
++// completion counts, which its credit frames carry to the far sender, or the far receiver's, into which its frames land
++// for this router's sender.
++FORCE_INLINE void zero_credit_counters(size_t block_addr) {
++    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
++        reinterpret_cast<volatile uint32_t*>(block_addr)[i] = 0;
++    }
++}
++
+ __attribute__((noinline)) void init_txqs() {
+     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+     set_keepalive();
+@@ -106,64 +115,21 @@
+             // The receiver's queue carries completion credits; its counters start at 0. The credit block holds a count
+             // per far sender channel (and every frame carries all of them), so all of them are zeroed.
+             eth_enable_packet_mode(receiver_txq_id);
+-            for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+-                reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
+-                reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
+-            }
++            zero_credit_counters(local_receiver_ack_counters_base_address);
++            zero_credit_counters(local_receiver_completion_counters_base_address);
+             eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+         }
+         if constexpr (is_sender_role) {
+-            for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+-                reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
+-                reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
+-            }
++            zero_credit_counters(to_sender_remote_ack_counters_base_address);
++            zero_credit_counters(to_sender_remote_completion_counters_base_address);
+         }
+     } else if constexpr (any_vc_uses_counter_credits) {
+         // Counter credits on the one TX queue (a single-ERISC router): both blocks start at 0 here, since the host
+         // clears them only for two-TXQ routers. Before the handshake, so the far router's first frame comes after.
+-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+-            reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
+-            reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
+-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
+-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
+-        }
+-    }
+-}
+-
+-// ---------------------------------------------------------------------------------------------------------------------
+-// Stream registers
+-// ---------------------------------------------------------------------------------------------------------------------
+-
+-// Before the first sync: the credit registers both link ends may touch, so they are set before the other side can.
+-__attribute__((noinline)) void init_link_streams() {
+-    init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
+-    init_stream_if_used<to_sender_packets_acked_streams[0]>(0);
+-    init_stream_if_used<to_sender_packets_acked_streams[1]>(0);
+-    init_stream_if_used<to_sender_packets_completed_streams[0]>(0);
+-    init_stream_if_used<to_sender_packets_completed_streams[1]>(0);
+-    init_ptr_val<sender_free_slots_streams[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);
+-    init_ptr_val<sender_free_slots_streams[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);
+-    if constexpr (enable_context_switch) {
+-        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(0);  // ContextSwitchState::NORMAL_EXECUTION
+-    }
+-}
+-
+-// After the first sync (2D): the other receiver channels and sender channels.
+-__attribute__((noinline)) void init_2d_streams() {
+-    if constexpr (is_2d) {
+-        init_stream_if_used<to_receiver_packets_sent_streams[1]>(0);
+-        init_stream_if_used<to_receiver_packets_sent_streams[2]>(0);
+-        init_stream_if_used<to_sender_packets_acked_streams[2]>(0);
+-        init_stream_if_used<to_sender_packets_acked_streams[3]>(0);
+-        init_stream_if_used<to_sender_packets_acked_streams[4]>(0);
+-        for_each_index<8>([&](auto i) {
+-            constexpr size_t POSITION = decltype(i)::value + 2;
+-            init_stream_if_used<to_sender_packets_completed_streams[POSITION]>(0);
+-            if constexpr (services_fabric_position(POSITION)) {
+-                init_ptr_val<sender_free_slots_streams[POSITION]>(
+-                    SENDER_NUM_BUFFERS_ARRAY[compact_sender_for_fabric_position(POSITION)]);
+-            }
+-        });
++        zero_credit_counters(local_receiver_ack_counters_base_address);
++        zero_credit_counters(local_receiver_completion_counters_base_address);
++        zero_credit_counters(to_sender_remote_ack_counters_base_address);
++        zero_credit_counters(to_sender_remote_completion_counters_base_address);
+     }
+ }
+ 
+@@ -172,12 +138,11 @@
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+ __attribute__((noinline)) void init_telemetry() {
+-    volatile tt_l1_ptr FabricTelemetry* telemetry =
+-        reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+-    const auto* routing_table = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
++    volatile tt_l1_ptr FabricTelemetry* telemetry = telemetry_block();
++    const auto& routing_table = l1_routing_table();
+     memset(const_cast<FabricTelemetry*>(telemetry), 0, sizeof(FabricTelemetry));
+-    telemetry->static_info.mesh_id = routing_table->my_mesh_id;
+-    telemetry->static_info.device_id = routing_table->my_device_id;
++    telemetry->static_info.mesh_id = routing_table.my_mesh_id;
++    telemetry->static_info.device_id = routing_table.my_device_id;
+     telemetry->static_info.direction = static_cast<uint8_t>(my_direction);
+     telemetry->static_info.version = FABRIC_TELEMETRY_VERSION;
+     telemetry->static_info.fabric_config = 0;
+@@ -304,20 +269,19 @@
+ // for size, as main's init code is: it runs once.
+ __attribute__((noinline, optimize("Os"))) void run_handshakes() {
+     if constexpr (enable_ethernet_handshake) {
+-        const auto* routing_table = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+-        auto* termination = reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
++        const auto& routing_table = l1_routing_table();
++        auto* termination = termination_signal();
+         if constexpr (is_handshake_sender) {
+             erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+-                handshake_addr, routing_table->my_mesh_id, routing_table->my_device_id, termination,
++                handshake_addr, routing_table.my_mesh_id, routing_table.my_device_id, termination,
+                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+         } else {
+             erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+-                handshake_addr, routing_table->my_mesh_id, routing_table->my_device_id, termination,
++                handshake_addr, routing_table.my_mesh_id, routing_table.my_device_id, termination,
+                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+         }
+         auto* info = reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
+-        auto* telemetry =
+-            reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
++        auto* telemetry = telemetry_block();
+         telemetry->static_info.neighbor_mesh_id = info->neighbor_mesh_id;
+         telemetry->static_info.neighbor_device_id = info->neighbor_device_id;
+         *edm_status() = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
+@@ -349,9 +313,8 @@
+ // setting up. UDM: the relay counts itself in the same way (one connection). Nothing to wait for otherwise.
+ FORCE_INLINE void wait_for_downstream_muxes() {
+     if constexpr (num_ds_or_local_tensix_connections != 0) {
+-        auto* termination = reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
+         wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+-            edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections, termination);
++            edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections, termination_signal());
+     }
+ }
+ 
+@@ -359,6 +322,8 @@
+ // Teardown
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
++// Receiver channel CH's transaction IDs (RX_CH_TRID_STARTS[CH], NUM_TRANSACTION_IDS of them; the receiver tags its slots'
++// commands with the same IDs, CompletionGroupTrids) as the library's tracker, used here only to wait for all of them.
+ template <size_t CH>
+ using TeardownTrids = WriteTransactionIdTracker<
+     RECEIVER_NUM_BUFFERS_ARRAY[CH], NUM_TRANSACTION_IDS, RX_CH_TRID_STARTS[CH], tt::tt_fabric::edm_to_local_chip_noc,
+@@ -379,7 +344,7 @@
+     ncrisc_noc_counters_init();  // the router's writes do not all update the software counters
+     sync_erisc(Phase::TRANSACTIONS_DONE);
+     if constexpr (wait_for_host_signal && is_local_handshake_master) {
+-        auto* termination = reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
++        auto* termination = termination_signal();
+         notify_subordinate_routers(edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)termination, *termination);
+     }
+     noc_async_write_barrier();
+diff -ruN v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 17:05:39.733619353 +0000
++++ v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 03:56:11.631116647 +0000
+@@ -751,6 +751,18 @@
+     }
+ }
+ 
++// ---------------------------------------------------------------------------------------------------------------------
++// Init (out of line, once)
++// ---------------------------------------------------------------------------------------------------------------------
++
++// Before the Ethernet handshake (both ERISCs, before their first sync): each receiver channel's packets-received
++// register at 0, before the far router's sender can increment it. Every channel the router has, serviced or not.
++__attribute__((noinline)) void init_channel_streams() {
++    for_each_index<NUM_RECEIVER_CHANNELS>([](auto rx) {
++        init_stream_if_used<to_receiver_packets_sent_streams[decltype(rx)::value]>(0);
++    });
++}
++
+ // The receiver loop: rounds of passes over the serviced VCs' receiver channels until termination. A function of its
+ // own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).
+ //
+diff -ruN v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
+--- v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 03:52:42.005239197 +0000
++++ v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 03:56:11.631116647 +0000
+@@ -32,13 +32,15 @@
+ 
+ constexpr bool is_context_switch_master = enable_context_switch;
+ 
+-FORCE_INLINE volatile tt::tt_fabric::TerminationSignal* termination_signal() {
+-    return reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
++// At init, before the ERISCs' first sync: the context-switch register in its start state, where this router switches.
++FORCE_INLINE void init_context_switch_state() {
++    if constexpr (is_context_switch_master) {
++        set_context_switch_state(ContextSwitchState::NORMAL_EXECUTION);
++    }
+ }
+ 
+ FORCE_INLINE tt_l1_ptr RouterStateManager* router_state() {
+-    auto* routing_table = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+-    return const_cast<tt_l1_ptr RouterStateManager*>(&routing_table->state_manager);
++    return const_cast<tt_l1_ptr RouterStateManager*>(&l1_routing_table().state_manager);
+ }
+ 
+ FORCE_INLINE bool terminating() { return got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal()); }
+diff -ruN v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp
+--- v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-02 06:49:43.964114972 +0000
++++ v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-03 03:55:22.607443963 +0000
+@@ -32,11 +32,6 @@
+ 
+ namespace fabric_router {
+ 
+-// The routing table in this router's L1 (written by the host).
+-FORCE_INLINE const tt::tt_fabric::routing_l1_info_t& l1_routing_table() {
+-    return *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+-}
+-
+ // This chip's place in the fabric, as routing uses it (2D): the routing table's my_mesh_coord_y / _x and my_mesh_id.
+ struct ChipCoordinates {
+     uint8_t y;
+diff -ruN v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:52:42.006239211 +0000
++++ v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:56:11.631116647 +0000
+@@ -1012,6 +1012,20 @@
+ // Init (out of line, once)
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
++// Before the Ethernet handshake and before any producer connects (both ERISCs, before their first sync): each sender
++// channel's registers, at its fabric position: its free-slots register at its slot count (this chip's producer takes a
++// slot from it per packet), and its first-level-ack and completion registers at 0 where its VC takes stream credits
++// (the far router's receiver increments them). Every channel the router has, serviced or not.
++__attribute__((noinline)) void init_channel_streams() {
++    for_each_index<NUM_SENDER_CHANNELS>([](auto ch) {
++        constexpr size_t CH = decltype(ch)::value;
++        constexpr size_t position = fabric_position_for_compact_sender(CH);
++        init_ptr_val<sender_free_slots_streams[position]>(SENDER_NUM_BUFFERS_ARRAY[CH]);
++        init_stream_if_used<to_sender_packets_acked_streams[position]>(0);
++        init_stream_if_used<to_sender_packets_completed_streams[position]>(0);
++    });
++}
++
+ // Waits until an upstream router asks to connect on `connection_semaphore`, or termination. One body for every channel.
+ __attribute__((noinline)) void wait_for_connect_request(volatile tt_l1_ptr uint32_t* connection_semaphore) {
+     uint32_t polls = 0;
+diff -ruN v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp
+--- v4txa1/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp	2026-11-02 22:39:48.078703578 +0000
++++ v4txa2/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp	2026-11-03 03:55:22.607443963 +0000
+@@ -50,10 +50,6 @@
+ };
+ inline Counters counters;  // used only with an option on; zeroed in init()
+ 
+-FORCE_INLINE volatile tt_l1_ptr FabricTelemetry* telemetry_block() {
+-    return reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+-}
+-
+ // At init, after the FabricTelemetry block's own init: the counts, and the perf recorder's buffer on the sender side.
+ // (The out-of-line functions here are templates so that a build with both options off emits none of them.)
+ template <int = 0>

@@ -1,0 +1,29 @@
+v4txa3_O3 -> v4txa4_O3: 2285 of 2863 images differ in .text
+   1451  identical (targets)    _Z11kernel_mainv
+     44  identical (targets)    _ZN13fabric_router14run_handshakesEv
+   1619  identical (targets)    _ZN13fabric_router20init_telemetry_block
+     92  OTHER                  _ZN13fabric_router8run_idleEv
+    120  identical (targets)    _ZN13fabric_router9telemetry9init_implIL
+     44  identical (targets)    _ZN2tt9tt_fabric21wait_for_notificationI
+      3  OTHER                  _start
+   1616  identical (targets)    _start
+   1619  identical (targets)    memset
+    203  OTHER (loop scheduling receiver3runERNS_21DownstreamConnections
+    396  OTHER (loop)           receiver3runERNS_21DownstreamConnections
+    405  OTHER (outside loop)   receiver3runERNS_21DownstreamConnections
+    188  OTHER (only in one build) sender11after_roundILb0ENS2_13SenderVcSt
+    566  OTHER                  sender3runEv
+    583  OTHER                  single3runERNS_21DownstreamConnectionsE
+     40  identical (targets)    single3runERNS_21DownstreamConnectionsE
+OTHER: 2436
+   glx_express__10272759166485736937/active_erisc/active_erisc.elf _ZN13fabric_router6sender3runEv OTHER: +li s11,0; +li s5,0; -li s5,0; -li s11,0; -bnez s10,T; +bnez s11,T
+   bh_2d_codeprof__11441696381553527815/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE OTHER (outside loop): -sh R,N(R); -sb R,N(R)
+   bh_2d_codeprof__11441696381553527815/subordinate_active_erisc/subordinate_active_erisc.elf _start OTHER: -mv a4,a4; +addi a4,a4,-8
+   glx_express_mesh__16893511912387925869/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE OTHER (loop scheduling: same instructions, registers abstracted; order or registers differ)
+   bh_2d_udm_gtest__14839402670775346366/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single3runERNS_21DownstreamConnectionsE OTHER: -lui a4,0x6f; -addi a5,a4,2047; +lui a5,0x6f; -addi a5,a5,832; -lhu a5,653(a5); +addi a4,a5,2047
+   glx_express_line_1erisc__12205246647094569429/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single3runERNS_21DownstreamConnectionsE OTHER: -lui a4,0x6f; -addi a5,a4,2047; +lui a5,0x6f; -addi a5,a5,832; -lhu a5,653(a5); +addi a4,a5,2047
+   glx_express_line__10303555625317252787/active_erisc/active_erisc.elf _ZN13fabric_router6sender3runEv OTHER: +li s11,0; +li s5,0; -li s5,0; -li s11,0; -bnez s10,T; +bnez s11,T
+   bh_trim_gtest__17043325822595939271/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE OTHER (loop scheduling: same instructions, registers abstracted; order or registers differ)
+   bh_vc1_trim_vc1p__6946144478792262092/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE OTHER (outside loop): -sh R,N(R); -sb R,N(R)
+   bh_torus__12613501537790447004/active_erisc/active_erisc.elf _ZN13fabric_router6sender3runEv OTHER: +li s10,0; +li s5,0; -li s5,0; -li s10,0; -bnez s11,T; +bnez s10,T
+DONE

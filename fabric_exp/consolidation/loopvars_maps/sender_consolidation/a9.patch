@@ -1,0 +1,406 @@
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 04:24:42.557308735 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 04:29:29.263215898 +0000
+@@ -44,9 +44,9 @@
+ // VC2 (neighbour exchange): a worker channel and a receiver channel that only delivers.
+ constexpr bool has_vc2 = ACTUAL_VC2_SENDER_CHANNELS > 0;
+ 
+-// Tensix mux mode (FabricTensixConfig::MUX; V4_TENSIX_MUX.md): the fabric's mux of each direction feeds that router's
+-// worker channel with everything for its link and takes the forwards of the other directions' routers. The host's flag
+-// is also set under UDM, which is its own mode.
++// Tensix mux mode (FabricTensixConfig::MUX): the fabric's mux of each direction feeds that router's worker channel with
++// everything for its link and takes the forwards of the other directions' routers. The host's flag is also set under
++// UDM, which is its own mode.
+ constexpr bool tensix_mux_mode = fabric_tensix_extension_mux_mode && !udm_mode;
+ 
+ // The count in a stream credit register (packets received, free slots). A count never exceeds its channel's slot
+@@ -163,13 +163,12 @@
+ 
+ // Which NoC command buffer each kind of command uses on this ERISC (the host's ids), which kinds keep their buffer
+ // programmed between commands (a preset, through the stateful NoC API), and the rule they follow. A buffer that a kind
+-// keeps preset carries that kind only: any other command on it rewrites the preset (VC2's credit on VC0's credit
+-// preset, job 142; an inline write on the local-write preset, job 351). The atomics buffer carries no preset and no
+-// write from L1: atomics need the return address the firmware keeps there (job 366); upstream-router credits,
+-// stateless forward credits and teardowns, whole inline-register writes and increments, go on it too. Each ERISC's
+-// buffers are its own: two ERISCs issue on different NoCs (V4_BOUNDS.md §4). The table holds the router's own commands;
+-// an API that ignores its buffer argument is outside it (Blackhole's emulated L1 inline write always issues on
+-// write_cmd_buf, job 142).
++// keeps preset carries that kind only: any other command on it rewrites the preset (a second worker channel's credit,
++// or an inline write, on a preset buffer would). The atomics buffer carries no preset and no write from L1: atomics
++// need the return address the firmware keeps there; upstream-router credits, stateless forward credits and teardowns,
++// whole inline-register writes and increments, go on it too. Each ERISC's buffers are its own: two ERISCs issue on
++// different NoCs. The table holds the router's own commands; an API that ignores its buffer argument is outside it
++// (Blackhole's emulated L1 inline write always issues on write_cmd_buf).
+ struct CommandBuffers {
+     // The host's buffer of each kind.
+     static constexpr uint8_t atomics = write_at_cmd_buf;
+@@ -178,7 +177,7 @@
+     static constexpr const auto& forward_data = receiver_channel_forwarding_data_cmd_buf_ids;    // receiver, by VC
+     static constexpr const auto& forward_credits = receiver_channel_forwarding_sync_cmd_buf_ids;  // receiver, by VC
+ 
+-    // Which kinds keep presets: none on one ERISC (both roles' commands share its buffers; V4_SINGLE_ERISC.md) or with
++    // Which kinds keep presets: none on one ERISC (both roles' commands share its buffers) or with
+     // DPRINT or the watcher (their traffic shares them); forwards also not where every path uses one NoC, or in UDM
+     // mode (the relay's stateless forwards share the data buffer).
+     static constexpr bool presets =
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-03 04:25:55.121297470 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-03 04:25:55.121297470 +0000
+@@ -13,7 +13,7 @@
+ // Credits. The downstream's sender channel has a free-slots stream register; this router keeps a local copy of it,
+ // which the downstream increments as it frees slots. A forward decrements both (the downstream's is its doorbell), and
+ // the progress's known-free count is a lower bound of the local copy, re-read only when it reaches zero. So admission
+-// usually costs no register read (cached downstream credits, LEDGER E1-2).
++// usually costs no register read (cached downstream credits).
+ //
+ // Forwards go through the NoC API. How a VC's forwards use their command buffers is fixed at compile time
+ // (ForwardCommands): with one destination for the whole run the buffers keep it, with several they keep only what no
+@@ -28,7 +28,7 @@
+ //
+ // UDM (FabricTensixConfig::UDM). Packets for this chip go to the fabric's relay, a kernel on a Tensix core that does
+ // their NoC work on this chip (writes, atomics, reads), not to their NoC destinations. To the receiver the relay is one
+-// more downstream (Relay, V4_UDM.md).
++// more downstream (Relay).
+ 
+ #include "router_common.hpp"
+ 
+@@ -233,7 +233,7 @@
+         const DownstreamLink&, uint32_t dst, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
+ #if defined(ARCH_BLACKHOLE)
+         // The forward's two commands go on the data and credit command buffers: their ready state is read as a pair, so
+-        // the two reads overlap (RESULTS §17) instead of each being a lone read inside the NoC API, and a buffer not
++        // the two reads overlap instead of each being a lone read inside the NoC API, and a buffer not
+         // ready yet is waited for just before its command, as the API would. Only this ERISC issues on them, so a
+         // buffer seen ready stays ready until its next command.
+         const bool data_ready = noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf);
+@@ -294,7 +294,7 @@
+     }
+ 
+     // The packet into `dst` on the node at `link`, tagged with `trid`, then -1 on that node's free-slots register. The
+-    // two buffers' ready state is read as a pair, so the two reads overlap (RESULTS §17), and tested together: when
++    // two buffers' ready state is read as a pair, so the two reads overlap, and tested together: when
+     // either is busy (rare), both are waited for before either command, so no ready state is held across the data
+     // command. Only this ERISC issues on them, so a buffer seen ready stays ready until its next command.
+     template <size_t ENTRY>
+@@ -420,8 +420,8 @@
+     }
+ 
+ private:
+-    // Per-packet helpers recurse over a mask of names rather than take per-bit closures (router_sender.hpp, "The loop
+-    // function takes no closures").
++    // Per-packet helpers recurse over a mask of names rather than take per-bit closures: a lambda capturing the loop's
++    // state can keep that state in memory.
+ 
+     // Whether a downstream in NAMES that `forward_to` needs has no known free slot. Bitwise & and | on the tests: no
+     // branch per downstream.
+@@ -470,7 +470,7 @@
+ // The receiver's downstream connections: the downstream routers of each VC that forwards to other routers (VC0's;
+ // VC1's on multi-mesh routers) and UDM's relay, each where this router has it.
+ // Placement: only forwards touch them, so they stay in memory (the receiver loop takes them by reference), not in the
+-// registers every packet needs (RESULTS §98).
++// registers every packet needs.
+ struct DownstreamConnections {
+     Downstreams<0> vc0;
+     [[no_unique_address]] Present<vc_forwards_to_routers(1), Downstreams<1>, 1> vc1;
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 04:06:53.912780477 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp	2026-11-03 04:12:42.883513996 +0000
+@@ -72,7 +72,7 @@
+ // Keepalive: the TX queues' sequence-update timeout. A TX queue with nothing to send returns its paired RX queue's
+ // acknowledgements only in a keepalive, so one-way traffic waits on this period once the sender's window is full. The
+ // teardown master sets it on both queues at init and restores the firmware's values at teardown; 0 (the builder's
+-// default off Blackhole) leaves the firmware's value (RESULTS §15, §98).
++// default off Blackhole) leaves the firmware's value.
+ constexpr uint32_t keepalive_timeout = get_named_compile_time_arg_val("ETH_TXQ_SEQ_UPDATE_TIMEOUT");
+ constexpr bool sets_keepalive = keepalive_timeout != 0 && is_teardown_master;
+ uint32_t firmware_keepalive[2];
+@@ -252,8 +252,9 @@
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+ // The Ethernet handshake with the far router, then (with the host's start signal) the handshake among this chip's
+-// routers: the local master collects every router's arrival, releases them, and passes on READY_FOR_TRAFFIC. Compiled
+-// for size, as main's init code is: it runs once.
++// routers: the local master collects every router's arrival, releases them, and passes on READY_FOR_TRAFFIC.
++// Compiled for size, as main's init code is: it runs once, and at -O3 it takes 0.6-0.8 KB more code space in every
++// image that sends the handshake.
+ __attribute__((noinline, optimize("Os"))) void run_handshakes() {
+     if constexpr (enable_ethernet_handshake) {
+         const auto& routing_table = l1_routing_table();
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-03 05:43:59.450041379 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-03 05:43:59.465041571 +0000
+@@ -6,15 +6,14 @@
+ 
+ // Local delivery: a packet's NoC commands on this chip. Plain writes, scatter writes, atomic increments and fused write
+ // + atomic increments (the common send types) are issued here directly, with the NoC commands of the matching arm of
+-// execute_chip_unicast_to_local_chip_impl but without its send-type dispatch (LEDGER E1-8, E1-10). Every other send
+-// type goes out of line (deliver_other): inline writes to local_inline_write, the rest through
+-// execute_chip_unicast_to_local_chip_impl.
++// execute_chip_unicast_to_local_chip_impl but without its send-type dispatch, so a common packet takes one test per
++// type it is not. Every other send type goes out of line (deliver_other): inline writes to local_inline_write, the rest
++// through execute_chip_unicast_to_local_chip_impl.
+ //
+-// Local writes use one command buffer, programmed once with the write state that never changes (local_write_init),
+-// so each write sets only its transaction ID, source, destination and length (LEDGER E1-17). Nothing else on this
+-// ERISC uses that command buffer while the loop runs (CommandBuffers) but an inline write, which restores it after.
+-// Where command buffers keep no presets (one ERISC; DPRINT or the watcher), each write programs its whole state
+-// instead.
++// Local writes use one command buffer, programmed once with the write state that never changes (local_write_init), so
++// each write sets only its transaction ID, source, destination and length. Nothing else on this ERISC uses that command
++// buffer while the loop runs (CommandBuffers) but an inline write, which restores it after. Where command buffers keep
++// no presets (one ERISC; DPRINT or the watcher), each write programs its whole state instead.
+ //
+ // Atomics are strict: a flushed atomic waits for every earlier write of this ERISC to be acknowledged first.
+ 
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 04:09:36.945989735 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 04:13:10.165884700 +0000
+@@ -153,7 +153,7 @@
+ #endif
+ 
+     // Completions (Completions, below). Slots per completion group: one under first-level acks, where held completion
+-    // credits stall bubble flow control (RESULTS §98).
++    // credits stall bubble flow control.
+     static constexpr uint32_t completion_group_size = first_level_ack ? 1 : completion_group_size_for<num_slots>;
+     // The transaction IDs of the slots' NoC commands: one per completion group, from the channel's own range.
+     using CompletionTrids = CompletionGroupTrids<completion_group_size, RX_CH_TRID_STARTS[rx], NUM_TRANSACTION_IDS>;
+@@ -260,7 +260,7 @@
+ // One credit sender for every receiver channel: counter credits are one L1 block indexed by the far sender channel, and
+ // the channels' far sender channels are different channels, so one frame per pass carries every channel's credits.
+ // Placement: an object of its own; inside an aggregate with the channel states its constant block addresses would be
+-// loaded from the stack at each use (V4_RECEIVER_SHAPE.md §5).
++// loaded from the stack at each use.
+ using Credits = ReceiverChannelCounterBasedResponseCreditSender;
+ 
+ // ---------------------------------------------------------------------------------------------------------------------
+@@ -487,12 +487,11 @@
+ //   proof   the oldest group's transaction ID: a single slot is checked once, a group waits for it (bounded);
+ //   credit  one count of n to the slots' sender channel when they all came from one (usual), else one per slot.
+ //
+-// Why (measured):
+-//   - a channel holds back at most a group minus one of its slots, and only until its next packet or a few idle passes
+-//     (LEDGER E1-28);
++// Why:
++//   - a channel holds back at most a group minus one of its slots, and only until its next packet or a few idle passes;
+ //   - a group waits for its proof: left to the next pass, which under load handles the next packet first, its credit
+-//     would come a packet later (LEDGER E1-24);
+-//   - a single slot is checked once: on rings and tori waiting for it costs more than it saves (RESULTS §98).
++//     would come a packet later;
++//   - a single slot is checked once: on rings and tori waiting for it costs more than it saves.
+ 
+ // Whether every write tagged `trid` has left this ERISC's NIU (local writes and forwards share one NoC: one register).
+ static_assert(tt::tt_fabric::local_chip_noc_equals_downstream_noc);
+@@ -659,14 +658,13 @@
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+ // Every serviced VC's receiver channel state (get<VC>()) and where it lives. The loop-local VC's progress is copied
+-// into a local of run()'s loop, so the compiler can keep it in registers (loopvars.py --headroom checks); every other
+-// VC's state stays in memory, kept there after each of its steps (keep_in_memory), so it does not take the loop-local
+-// VC's registers on its packet path (V4_RECEIVER_OWNERSHIP.md §14). A one-ERISC router keeps every state in memory and
+-// steps the loop-local VC's progress in place (router_single.hpp). The accessors are templates on the VC so that an
+-// absent channel's state is named only in template-dependent code.
++// into a local of run()'s loop, so the compiler can keep it in registers; every other VC's state stays in memory, kept
++// there after each of its steps (keep_in_memory), so it does not take the loop-local VC's registers on its packet path.
++// A one-ERISC router keeps every state in memory and steps the loop-local VC's progress in place (router_single.hpp).
++// The accessors are templates on the VC so that an absent channel's state is named only in template-dependent code.
+ struct ReceiverChannelStates : Each<receiver_vcs, ReceiverChannelState> {
+     // The VC whose progress run() carries as a loop local: the lowest VC whose receiver channel this router runs (a
+-    // trimmed router can run VC1's and not VC0's, V4_TRIM.md §1). 0 where none runs: then nothing is stepped.
++    // trimmed router can run VC1's and not VC0's). 0 where none runs: then nothing is stepped.
+     static constexpr size_t loop_local_vc = receiver_vcs != 0 ? lowest_bit(receiver_vcs) : 0;
+ 
+     // The loop-local VC's progress in place: what run() copies at its start; a one-ERISC router steps on it in place.
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 04:09:36.940989667 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 04:12:42.884514009 +0000
+@@ -6,7 +6,7 @@
+ 
+ // Once-per-round and rare work, shared by every loop: termination, router commands, the heartbeat and the context
+ // switch. Each is a small function of its own, called out of line between rounds, so editing it never changes a loop's
+-// per-pass code (RESULTS §97: per-round work inlined into a loop made unrelated edits re-lay out the whole loop).
++// per-pass code (per-round work inlined into a loop lets an unrelated edit re-lay out the whole loop).
+ //
+ // Context switch. The context-switch master (the ERISC with enable_context_switch, ERISC 0) hands the core to the base
+ // firmware when idle, and runs router commands (PAUSE, DRAIN, RETRAIN). On a two-ERISC router the other ERISC must not
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 04:09:36.941989681 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 04:13:35.714231906 +0000
+@@ -19,9 +19,9 @@
+ //                 each one with work sends, takes completions and credits its upstream router.
+ //             The loop-local VC is visited every pass; a later VC is skipped with one test when none of its channels
+ //             holds a packet or has packets in flight (SenderChannelStates).
+-// The pass makes no call while it sends; the worker credit and the connection event are out of line (LEDGER E0-11).
+-// It takes no closures: a lambda capturing the loop's state can keep that state in memory (RESULTS §98), so the helpers
+-// recurse over their channel mask with their inputs as arguments.
++// The pass makes no call while it sends; the worker credit and the connection event are out of line. It takes no
++// closures: a lambda capturing the loop's state can keep that state in memory, so the helpers recurse over their
++// channel mask with their inputs as arguments.
+ //
+ // Channels and VCs. Each sender channel (SenderChannel<CH>) belongs to one VC (SenderVc<VC>). A VC has at most one
+ // worker channel, which takes a worker on this chip (WorkerChannel<CH>; the host's role, by channel); its other
+@@ -79,8 +79,7 @@
+     // Whether its free-slots register (raw) says it holds a packet. The register counts the free slots of the channel:
+     // the producer takes one for each packet it writes, this router gives one back for each packet it sends. Anything
+     // but the slot count means a packet: "below the slot count" would not do, since a count out of range (an over-fill)
+-    // must read as holding packets, as the generic loop reads it, or the channel is never served (LEDGER E0-10,
+-    // RESULTS §93).
++    // must read as holding packets, as the generic loop reads it, or the channel is never served.
+     static FORCE_INLINE bool holds_packet(uint32_t free_slots_register) {
+         return (free_slots_register & stream_count_mask) != num_slots;
+     }
+@@ -120,7 +119,7 @@
+     static constexpr size_t worker_channel = has_worker_channel ? lowest_bit(worker_channels) : 0;
+     // Where its free-slots registers are read: in the pass's first read group where VC has a worker channel (with its
+     // connection semaphore, which that group reads anyway); otherwise right before VC's own visits, so a packet landing
+-    // during the earlier VCs' visits does not wait a pass (V4_SENDER_SHAPE.md).
++    // during the earlier VCs' visits does not wait a pass.
+     static constexpr bool reads_free_slots_at_pass_start = has_worker_channel;
+ };
+ 
+@@ -176,8 +175,8 @@
+ 
+ // This router's progress into VC's remote receiver channel, in one word: the slots known free there (low 16 bits) and
+ // the next slot to fill, its address / 16 (high 16 bits). One word, so a VC kept in memory takes and puts back its
+-// progress with one load and one store (V4_SENDER_OWNERSHIP.md §8.4). The encoding is for ERISC L1 only (the remote
+-// receiver channel is always in the far ERISC's L1); a Tensix downstream must not reuse it.
++// progress with one load and one store. The encoding is for ERISC L1 only (the remote receiver channel is always in the
++// far ERISC's L1); a Tensix downstream must not reuse it.
+ template <size_t VC>
+ class RemoteReceiverChannelProgress {
+ public:
+@@ -339,8 +338,7 @@
+ // programmed for the connection (at the connection, and again after the base firmware ran), so a credit only issues
+ // the write; elsewhere every credit is a whole command. The credit and the connection event are out of line: a credit
+ // goes back once per completion group from the far router (every few packets), or under first-level acks once per ack
+-// frame, and its constants are built then instead of being held in the sender loop's registers for its whole run
+-// (RESULTS §98).
++// frame, and its constants are built then instead of being held in the sender loop's registers for its whole run.
+ template <size_t CH>
+ struct WorkerChannel {
+     static_assert(SenderChannel<CH>::worker);
+@@ -444,7 +442,7 @@
+         return SenderChannelInterfaces::of<CH>().cached_worker_semaphore_address;
+     }
+ 
+-    // +n on the upstream router's free-slots register (at `register_addr`, its address as the channel's state holds it).
++    // +n on the upstream router's free-slots register, at `register_addr` (as the channel's state holds it).
+     static FORCE_INLINE void credit(uint64_t register_addr, uint32_t n) {
+         noc_inline_dw_write<InlineWriteDst::REG, true>(
+             register_addr,
+@@ -521,8 +519,8 @@
+ //   - increment the far router's packets-received register (after the data, on the same queue).
+ // The channel enters only through four values of SenderChannel<CH>: its slot bounds (the slot advance), its completion
+ // counter, its free-slots register and its id (stamped into the header); the rest is the same for every channel. It is
+-// inlined once per channel with those values as immediates: one copy shared at run time is slower on forwarded packets
+-// (RESULTS §98).
++// inlined once per channel with those values as immediates: one copy shared at run time is slower on forwarded
++// packets.
+ template <size_t CH>
+ FORCE_INLINE bool send(
+     uint32_t& next_slot_addr,
+@@ -570,7 +568,7 @@
+     end_read_group();
+ 
+     increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
+-    order_point();  // the free-slots update stays before the TX-queue wait (V4_SENDER_OWNERSHIP.md §12)
++    order_point();  // the free-slots update stays before the TX-queue wait
+     if (txq_busy(status_after)) {
+         while (internal_::eth_txq_is_busy(sender_txq_id)) {
+         }
+@@ -716,20 +714,20 @@
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+ // Every serviced VC's send state (vcs.get<VC>()) and every forwarding channel's state (forwarding.get<CH>()), and where
+-// they live. The loop-local VC's send state (its remote receiver progress and its worker channel's state) is copied into
+-// a local of run()'s loop, so the compiler can keep it in registers (loopvars.py --headroom checks). Every other VC's
+-// send state and every forwarding channel's state stays in memory: such a channel is visited only when the pass's reads
+-// show it work (it holds a packet, or has packets in flight: channels_in_flight), its fields are taken into locals where
+-// first needed and written back where they change, and its state is kept in memory after the visit (keep_in_memory),
+-// so it does not take the loop-local VC's registers on its packet path (V4_SENDER_OWNERSHIP.md §8). A one-ERISC router
+-// keeps every state in memory and visits the loop-local VC's in place (router_single.hpp). The accessors are templates
+-// on the VC so that an absent VC's state is named only in template-dependent code.
++// they live. The loop-local VC's send state (its remote receiver progress and its worker channel's state) is copied
++// into a local of run()'s loop, so the compiler can keep it in registers. Every other VC's send state and every
++// forwarding channel's state stays in memory: such a channel is visited only when the pass's reads show it work (it
++// holds a packet, or has packets in flight: channels_in_flight), its fields are taken into locals where first needed
++// and written back where they change, and its state is kept in memory after the visit (keep_in_memory), so it does not
++// take the loop-local VC's registers on its packet path. A one-ERISC router keeps every state in memory and visits the
++// loop-local VC's in place (router_single.hpp). The accessors are templates on the VC so that an absent VC's state is
++// named only in template-dependent code.
+ struct SenderChannelStates {
+     Each<SenderChannels::serviced_vcs, SenderVcState> vcs;
+     Each<SenderChannels::forwarding_channels, SenderChannelState> forwarding;
+ 
+     // The VC whose send state run() carries as a loop local: the lowest VC this router sends on (channel trimming can
+-    // leave a router sending on VC2 and not VC0, V4_TRIM.md). 0 where it sends on none: then nothing is visited.
++    // leave a router sending on VC2 and not VC0). 0 where it sends on none: then nothing is visited.
+     static constexpr size_t loop_local_vc =
+         SenderChannels::serviced_vcs != 0 ? lowest_bit(SenderChannels::serviced_vcs) : 0;
+ 
+@@ -1035,8 +1033,8 @@
+     });
+ }
+ 
+-// At init, first: each serviced channel's connection semaphore (its runtime arg's address) at 0, and its producer-cursor
+-// block zeroed (the producer reads the whole block when it connects).
++// At init, first: each serviced channel's connection semaphore (its runtime arg's address) at 0, and its
++// producer-cursor block zeroed (the producer reads the whole block when it connects).
+ FORCE_INLINE void reset_connections(
+     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
+     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-03 04:09:36.942989694 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-03 04:13:10.201885189 +0000
+@@ -6,8 +6,8 @@
+ 
+ // The single-ERISC router (Wormhole; Blackhole with two-ERISC mode off): one ERISC runs both roles. Each role keeps its
+ // two-ERISC pass (sender::pass, receiver::pass) and its own state; here each pass runs out of line over a record of its
+-// state in memory, so neither role's code has to hold the other's state in registers (V4_SINGLE_ERISC.md). The
+-// receiver's pass runs first: it frees ring slots and returns the credits the far sender is waiting on.
++// state in memory, so neither role's code has to hold the other's state in registers. The receiver's pass runs first:
++// it frees ring slots and returns the credits the far sender is waiting on.
+ //
+ // Rounds, router commands, the heartbeat and the context switch are the sender loop's (router_round.hpp); with one ERISC
+ // there is no other ERISC to park or follow. Channel trimming may leave a role without channels: its pass is then empty.
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp	2026-11-03 04:09:36.945989735 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp	2026-11-03 04:12:42.886514036 +0000
+@@ -4,7 +4,7 @@
+ 
+ #pragma once
+ 
+-// Telemetry: the host's two options (V4_TELEMETRY.md), both off by default and then compiled away.
++// Telemetry: the host's two options, both off by default and then compiled away.
+ //   perf recorder  ("bandwidth telemetry" in test_tt_fabric; PERF_TELEMETRY_MODE): the sender side adds each round's
+ //                  busy cycles, words (16 B) and packets to an L1 buffer, for rounds that sent a packet or ended with one
+ //                  waiting in a sender channel
+@@ -15,7 +15,7 @@
+ // loop's register state. A round is one run of passes between end_round calls (router_round.hpp), as main's.
+ // The call sites guard each call with `if constexpr` on the option, so a build with both options off carries no call,
+ // argument or lambda: dead inline calls alone shifted register allocation in the spill-heavy loops (VC1 senders,
+-// VC2 and speedy receivers; offline check 2026-10-29).
++// VC2 and speedy receivers).
+ 
+ #include "router_common.hpp"
+ #include "router_round.hpp"
+diff -ruN v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp
+--- v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp	2026-11-03 03:52:42.004239183 +0000
++++ v4txa9/tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp	2026-11-03 04:12:42.886514036 +0000
+@@ -30,7 +30,7 @@
+ constexpr uint32_t popcount(uint32_t mask) { return static_cast<uint32_t>(__builtin_popcount(mask)); }
+ 
+ // For plain recursion over a channel mask: the lowest channel in MASK, and MASK without it. The per-pass code recurses
+-// over its masks instead of iterating with a closure (router_sender.hpp, "The loop function takes no closures").
++// over its masks instead of iterating with a closure: a lambda capturing a loop's state can keep that state in memory.
+ constexpr size_t lowest_bit(uint32_t mask) { return static_cast<size_t>(__builtin_ctz(mask)); }
+ constexpr uint32_t without_lowest_bit(uint32_t mask) { return mask & (mask - 1); }
+ 
+@@ -106,7 +106,7 @@
+ // semantics of an asm memory operand). The whole object is affected, so state meant to stay in registers must not
+ // share an object with it. It says nothing about where `obj` lives between such points. Use: state touched only on some
+ // passes (a forwarding channel's record, a later VC's receiver state), so the registers go to the state every pass
+-// touches (V4_PLACEMENT.md).
++// touches.
+ template <typename T>
+ FORCE_INLINE void keep_in_memory(T& obj) {
+     asm volatile("" : "+m"(obj));

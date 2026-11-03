@@ -1,0 +1,185 @@
+[
+ {
+  "id": "main_pcse_v1",
+  "prefix": "pcse_v1_samples",
+  "cache": "/home/aagarwal/.tt-metal-cache-cen-main_fw-one",
+  "logs": [
+   "pcse_v1_compile.log"
+  ],
+  "sources": [
+   "git:HEAD"
+  ],
+  "map": "main",
+  "router": "main",
+  "build": "main (kernel v1, flags 0, firmware keepalive)",
+  "eriscs": [
+   1
+  ],
+  "targets": [
+   "0/6/E1",
+   "1/5/E1"
+  ],
+  "job": "a09u32 job 131",
+  "date": "2026-10-28",
+  "test": "ring 1-hop bidirectional 1024 B, one ERISC (pcse/bidir.yaml)",
+  "system": "P150x8",
+  "rate_csv": "pcse_v1_bidir.csv",
+  "runner": "pcse_runs.sh",
+  "notes": "The run's own cache was deleted; its images (packed size and first 256 B) match builds of the same config hashes in ~/.tt-metal-cache-cen-main_fw-one (main as shipped, census 2026-10-29, same post-merge sources); several builds per image differ only in constants, and the line maps agree on every sample.",
+  "packet_size_B": 1024
+ },
+ {
+  "id": "new_b2d_ew4352",
+  "prefix": "bndp_b2d_ew4352_samples",
+  "cache": "/home/aagarwal/.tt-metal-cache-bndp-b2d",
+  "logs": [
+   "bndp_b2d_*_13129088_trial.log"
+  ],
+  "sources": [
+   "variant:fabric_exp/variants/v4rxv2i3",
+   "git:HEAD"
+  ],
+  "map": "new",
+  "router": "new",
+  "build": "v4rxv2i3",
+  "job": "a09u32 job 358",
+  "date": "2026-11-01",
+  "test": "PcsEW4352",
+  "system": "P150x8",
+  "rate_csv": "bndp_b2d_ew4352_13129088_trial.csv",
+  "runner": "bnd_pcs_runs.sh",
+  "packet_size_B": 4352
+ },
+ {
+  "id": "new_b2d_bew1024",
+  "prefix": "bndp_b2d_bew1024_samples",
+  "cache": "/home/aagarwal/.tt-metal-cache-bndp-b2d",
+  "logs": [
+   "bndp_b2d_*_13129088_trial.log"
+  ],
+  "sources": [
+   "variant:fabric_exp/variants/v4rxv2i3",
+   "git:HEAD"
+  ],
+  "map": "new",
+  "router": "new",
+  "build": "v4rxv2i3",
+  "job": "a09u32 job 358",
+  "date": "2026-11-01",
+  "test": "BndEW1024",
+  "system": "P150x8",
+  "rate_csv": "bndp_b2d_bew1024_13129088_trial.csv",
+  "runner": "bnd_pcs_runs.sh",
+  "packet_size_B": 1024
+ },
+ {
+  "id": "new_b2d_mcast",
+  "prefix": "bndp_b2d_mcast_samples",
+  "cache": "/home/aagarwal/.tt-metal-cache-bndp-b2d",
+  "logs": [
+   "bndp_b2d_*_13129088_trial.log"
+  ],
+  "sources": [
+   "variant:fabric_exp/variants/v4rxv2i3",
+   "git:HEAD"
+  ],
+  "map": "new",
+  "router": "new",
+  "build": "v4rxv2i3",
+  "job": "a09u32 job 358",
+  "date": "2026-11-01",
+  "test": "PcsMcast",
+  "system": "P150x8",
+  "rate_csv": "bndp_b2d_mcast_13129088_trial.csv",
+  "runner": "bnd_pcs_runs.sh",
+  "packet_size_B": 4352
+ },
+ {
+  "id": "new_b2d_hop3",
+  "prefix": "bndp_b2d_hop3_samples",
+  "cache": "/home/aagarwal/.tt-metal-cache-bndp-b2d",
+  "logs": [
+   "bndp_b2d_*_13129088_trial.log"
+  ],
+  "sources": [
+   "variant:fabric_exp/variants/v4rxv2i3",
+   "git:HEAD"
+  ],
+  "map": "new",
+  "router": "new",
+  "build": "v4rxv2i3",
+  "job": "a09u32 job 358",
+  "date": "2026-11-01",
+  "test": "PcsEW3Hop",
+  "system": "P150x8",
+  "rate_csv": "bndp_b2d_hop3_13129088_trial.csv",
+  "runner": "bnd_pcs_runs.sh",
+  "packet_size_B": 4352
+ },
+ {
+  "id": "new_prlg3ml_hop3",
+  "prefix": "bndp_prlg3ml_hop3_samples",
+  "cache": "/home/aagarwal/.tt-metal-cache-bndp-prlg3ml",
+  "logs": [
+   "bndp_prlg3ml_*_13129088_trial.log"
+  ],
+  "sources": [
+   "variant:fabric_exp/variants/v4rxg3ml",
+   "git:HEAD"
+  ],
+  "map": "new",
+  "router": "new",
+  "build": "v4rxg3ml",
+  "job": "a09u32 job 459",
+  "date": "2026-11-02",
+  "test": "PcsEW3Hop",
+  "system": "P150x8",
+  "rate_csv": "bndp_prlg3ml_hop3_13129088_trial.csv",
+  "runner": "bnd_pcs_runs.sh",
+  "packet_size_B": 4352
+ },
+ {
+  "id": "new_bring_ring1",
+  "prefix": "bndp_bring_ring1_samples",
+  "cache": "/home/aagarwal/.tt-metal-cache-bndp-bring",
+  "logs": [
+   "bndp_bring_*_13129088_trial.log"
+  ],
+  "sources": [
+   "variant:fabric_exp/variants/v4rxv2i3",
+   "git:HEAD"
+  ],
+  "map": "new",
+  "router": "new",
+  "build": "v4rxv2i3",
+  "job": "a09u32 job 358",
+  "date": "2026-11-01",
+  "test": "ring1",
+  "system": "P150x8",
+  "rate_csv": "bndp_bring_ring1_13129088_trial.csv",
+  "runner": "bnd_pcs_runs.sh",
+  "packet_size_B": 4352
+ },
+ {
+  "id": "new_btor_torusns",
+  "prefix": "bndp_btor_torusns_samples",
+  "cache": "/home/aagarwal/.tt-metal-cache-bndp-btor",
+  "logs": [
+   "bndp_btor_*_13129088_trial.log"
+  ],
+  "sources": [
+   "variant:fabric_exp/variants/v4rxv2i3",
+   "git:HEAD"
+  ],
+  "map": "new",
+  "router": "new",
+  "build": "v4rxv2i3",
+  "job": "a09u32 job 358",
+  "date": "2026-11-01",
+  "test": "torusns",
+  "system": "P150x8",
+  "rate_csv": "bndp_btor_torusns_13129088_trial.csv",
+  "runner": "bnd_pcs_runs.sh",
+  "packet_size_B": 4352
+ }
+]

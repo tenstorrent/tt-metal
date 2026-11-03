@@ -1,0 +1,19 @@
+# FULLRING_MCAST_GAP.md RX-delay sweep (§8.7/§8.9, 2026-11-03): glx_frg_ns.yaml's GlxRingMcastNS (8-chip rings only)
+# at 3072 (control), 3584 and 4352 B.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: GlxRingMcastNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 3584, 4352]
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+    destination:
+      hops: {N: max, S: max}
+  patterns:
+  - {type: all_devices_uniform_pattern, iterations: 1}

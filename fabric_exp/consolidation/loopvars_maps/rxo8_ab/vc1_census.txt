@@ -1,0 +1,488 @@
+10236747728244687033 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+10258384477336860141 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+10551078354145749659 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+10612106344056357410 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+10654264163824556977 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+10801701094854420939 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+10906874113424411602 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+11495782461183356549 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+1171884908514053579 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1118  sp S14  L23  unknown 7  
+  S3         loop 1124  sp S6   L14  unknown 8  
+  o8         loop 1140  sp S15  L18  unknown 12 
+11796730659351424098 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+1227674923902752095 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+12550471081858984422 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+12619563712125269671 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+12989469610019328729 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+13052745497111941677 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+13061807278344058630 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+13320072957132173290 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1153  sp S15  L27  unknown 10 
+  S3         loop 1147  sp S8   L18  unknown 14 
+  o8         loop 1169  sp S15  L20  unknown 12 
+13388812314399738221 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+13507035239109691603 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+13682178445843849996 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+13751326857992382470 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+1377798049624127214 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+13888206324200270205 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+14024259889232434259 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+1428295231109462873 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1311  sp S10  L24  unknown 10 
+  S3         loop 1305  sp S8   L18  unknown 14 
+  o8         loop 1328  sp S13  L20  unknown 12 
+14662212520010288880 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+14778331009880243355 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1311  sp S10  L24  unknown 10 
+  S3         loop 1305  sp S8   L18  unknown 14 
+  o8         loop 1328  sp S13  L20  unknown 12 
+14847521819498826130 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+15020154040794824066 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+15392116810543678813 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1118  sp S14  L23  unknown 7  
+  S3         loop 1124  sp S6   L14  unknown 8  
+  o8         loop 1140  sp S15  L18  unknown 12 
+15897641059982938141 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+15985969928696476368 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+16029292866519484323 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1153  sp S15  L27  unknown 10 
+  S3         loop 1147  sp S8   L18  unknown 14 
+  o8         loop 1169  sp S15  L20  unknown 12 
+16124956942516838526 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+16147033266089190928 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+163656167544217160 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+16674156305633178632 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  592  sp S1   L5   unknown 4  
+  S3         loop  592  sp S1   L5   unknown 4  
+  o8         loop  619  sp S7   L8   unknown 6  
+16753880320854945016 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+16809167763694143476 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1153  sp S15  L27  unknown 10 
+  S3         loop 1147  sp S8   L18  unknown 14 
+  o8         loop 1169  sp S15  L20  unknown 12 
+16827314886766370900 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  592  sp S1   L5   unknown 4  
+  S3         loop  592  sp S1   L5   unknown 4  
+  o8         loop  619  sp S7   L8   unknown 6  
+1685292985465921336 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1118  sp S14  L23  unknown 7  
+  S3         loop 1124  sp S6   L14  unknown 8  
+  o8         loop 1140  sp S15  L18  unknown 12 
+16986054640745556468 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1311  sp S10  L24  unknown 10 
+  S3         loop 1305  sp S8   L18  unknown 14 
+  o8         loop 1328  sp S13  L20  unknown 12 
+17309363155961330447 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+17506927743929346541 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+17529562243063560821 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+17765756735907231518 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1311  sp S10  L24  unknown 10 
+  S3         loop 1305  sp S8   L18  unknown 14 
+  o8         loop 1328  sp S13  L20  unknown 12 
+17911632671270362404 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+1798285804067332853 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+1804031260372135304 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+18131901547860197404 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+18223913437333933296 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+1900111129869111930 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+2176225223514111492 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+2320193681360389073 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+2391041572270187480 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1311  sp S10  L24  unknown 10 
+  S3         loop 1305  sp S8   L18  unknown 14 
+  o8         loop 1328  sp S13  L20  unknown 12 
+25973191081527706 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1305  sp S10  L24  unknown 10 
+  S3         loop 1303  sp S8   L18  unknown 14 
+  o8         loop 1325  sp S13  L20  unknown 12 
+2655469555680501702 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+2764255765651881530 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1311  sp S10  L24  unknown 10 
+  S3         loop 1305  sp S8   L18  unknown 14 
+  o8         loop 1328  sp S13  L20  unknown 12 
+3290161241810360897 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+377580761253287941 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1305  sp S10  L24  unknown 10 
+  S3         loop 1303  sp S8   L18  unknown 14 
+  o8         loop 1325  sp S13  L20  unknown 12 
+3976389269455134800 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+439469277188759728 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+4454597807240027285 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+4603225931931704804 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+4696873826740929893 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+4736981752506574771 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+5185401727546241837 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+5438289686410136517 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+5520333488624053808 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+5538114681778386565 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+5576230236225685187 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+5879871473144171230 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1311  sp S10  L24  unknown 10 
+  S3         loop 1305  sp S8   L18  unknown 14 
+  o8         loop 1328  sp S13  L20  unknown 12 
+6407410857333490569 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+6760623983087965642 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+6994322814157498978 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+7063847454867196917 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+7212353962683260767 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+7319066077419761093 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  592  sp S1   L5   unknown 4  
+  S3         loop  592  sp S1   L5   unknown 4  
+  o8         loop  619  sp S7   L8   unknown 6  
+7647164423775673529 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+7687392944835780189 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+7792825754207081366 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+785426028357638126 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+8214575435770949530 subordinate_active_erisc receiver
+  lead       loop  592  sp S1   L5   unknown 6  
+  S2         loop  592  sp S1   L5   unknown 4  
+  S3         loop  592  sp S1   L5   unknown 4  
+  o8         loop  619  sp S7   L8   unknown 6    +['run:completions.ch0.counts.idle_passes_with_partial_group', 'run:completions.ch0.counts.uncredited']
+855035644786731401 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+8673459275261740323 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+8710681263280926292 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+8814155705378743422 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1305  sp S10  L24  unknown 10 
+  S3         loop 1303  sp S8   L18  unknown 14 
+  o8         loop 1325  sp S13  L20  unknown 12 
+8994064948791651610 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+9021238509567661901 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1305  sp S10  L24  unknown 10 
+  S3         loop 1303  sp S8   L18  unknown 14 
+  o8         loop 1325  sp S13  L20  unknown 12 
+9172965972728662114 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1311  sp S10  L24  unknown 10 
+  S3         loop 1305  sp S8   L18  unknown 14 
+  o8         loop 1328  sp S13  L20  unknown 12 
+924824291456454239 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1118  sp S14  L23  unknown 7  
+  S3         loop 1124  sp S6   L14  unknown 8  
+  o8         loop 1140  sp S15  L18  unknown 12 
+9403212289866685119 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop  675  sp S2   L5   unknown 6  
+  S3         loop  675  sp S2   L5   unknown 6  
+  o8         loop  703  sp S7   L8   unknown 6  
+9462314885209640798 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+9510384067601439538 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1153  sp S15  L27  unknown 10 
+  S3         loop 1147  sp S8   L18  unknown 14 
+  o8         loop 1169  sp S15  L20  unknown 12 
+9867282372694847891 subordinate_active_erisc receiver
+  lead       missing
+  S2         loop 1285  sp S14  L24  unknown 7  
+  S3         loop 1291  sp S8   L16  unknown 14 
+  o8         loop 1307  sp S15  L19  unknown 12 
+9875346805987108598 active_erisc sender
+  lead       missing
+  S2         loop  898  sp S36  L82  unknown 20 
+  S3         loop  898  sp S36  L82  unknown 20 
+  o8         loop  898  sp S36  L82  unknown 20 
+
+spilled values, configs per router and role:
+  S2 receiver: action@receive<1>:volatile_header x20, credit_completions<1>:waiting~ x32, pass:arrived1 x20, read@receive<1>:header x20, read@receive<1>:volatile_header x20, receive<0>:header_word x20, receive<1>:arrived x32, receive<1>:header x20, receive<1>:header_word x20, run:tables.ch1.cursor.counts.uncredited x32, run:tables.ch1.cursor.position.index x32, run:tables.ch1.cursor.position.ready x32, run:tables.ch1.cursor.position.slot_addr x32, step<1>:arrived x32
+  S2 sender: run:far.vc1.next_slot x48, run:forwarding.records._M_elems[0].completed x48, run:forwarding.records._M_elems[0].sent x48, run:forwarding.records._M_elems[0].slot x48, run:forwarding.records._M_elems[1].completed x48, run:forwarding.records._M_elems[1].sent x48, run:forwarding.records._M_elems[1].slot x48, run:forwarding.records._M_elems[2].completed x48, run:forwarding.records._M_elems[2].sent x48, run:forwarding.records._M_elems[2].slot x48, run:forwarding.records._M_elems[3].completed x48, run:forwarding.records._M_elems[3].sent x48, run:forwarding.records._M_elems[3].slot x48, run:forwarding.records._M_elems[4].completed x48, run:forwarding.records._M_elems[4].sent x48, run:forwarding.records._M_elems[4].slot x48, run:forwarding.records._M_elems[5].completed x48, run:forwarding.records._M_elems[5].sent x48, run:forwarding.records._M_elems[5].slot x48, run:round.attempted x48, run:round.sent_at_round_start x48, visit_forwarding<1>:sent x48, visit_forwarding<1>:slot x48, visit_forwarding<2>:sent x48, visit_forwarding<2>:slot x48, visit_forwarding<3>:sent x48, visit_forwarding<3>:slot x48, visit_forwarding<4>:sent x48, visit_forwarding<4>:slot x48, visit_forwarding<5>:sent x48, visit_forwarding<5>:slot x48, visit_forwarding<6>:sent x48, visit_forwarding<6>:slot x48
+  S3 receiver: pass:arrived1 x32, receive<0>:header_word x4, receive<1>:header_word x4, run:cursor0.counts.idle_passes_with_partial_group x28
+  S3 sender: run:far.vc1.next_slot x48, run:forwarding.records._M_elems[0].completed x48, run:forwarding.records._M_elems[0].sent x48, run:forwarding.records._M_elems[0].slot x48, run:forwarding.records._M_elems[1].completed x48, run:forwarding.records._M_elems[1].sent x48, run:forwarding.records._M_elems[1].slot x48, run:forwarding.records._M_elems[2].completed x48, run:forwarding.records._M_elems[2].sent x48, run:forwarding.records._M_elems[2].slot x48, run:forwarding.records._M_elems[3].completed x48, run:forwarding.records._M_elems[3].sent x48, run:forwarding.records._M_elems[3].slot x48, run:forwarding.records._M_elems[4].completed x48, run:forwarding.records._M_elems[4].sent x48, run:forwarding.records._M_elems[4].slot x48, run:forwarding.records._M_elems[5].completed x48, run:forwarding.records._M_elems[5].sent x48, run:forwarding.records._M_elems[5].slot x48, run:round.attempted x48, run:round.sent_at_round_start x48, visit_forwarding<1>:sent x48, visit_forwarding<1>:slot x48, visit_forwarding<2>:sent x48, visit_forwarding<2>:slot x48, visit_forwarding<3>:sent x48, visit_forwarding<3>:slot x48, visit_forwarding<4>:sent x48, visit_forwarding<4>:slot x48, visit_forwarding<5>:sent x48, visit_forwarding<5>:slot x48, visit_forwarding<6>:sent x48, visit_forwarding<6>:slot x48
+  o8 receiver: accumulate_completion_credits<1,4>:first~ x32, credit_completions<1>:first~ x32, credit_completions<1>:waiting~ x32, pass:arrived1 x32, receive<0>:header_word x20, receive<1>:header_word x20, run:completions.ch0.counts.idle_passes_with_partial_group x48, run:completions.ch0.counts.uncredited x48, run:completions.ch1.counts.uncredited x32
+  o8 sender: run:far.vc1.next_slot x48, run:forwarding.records._M_elems[0].completed x48, run:forwarding.records._M_elems[0].sent x48, run:forwarding.records._M_elems[0].slot x48, run:forwarding.records._M_elems[1].completed x48, run:forwarding.records._M_elems[1].sent x48, run:forwarding.records._M_elems[1].slot x48, run:forwarding.records._M_elems[2].completed x48, run:forwarding.records._M_elems[2].sent x48, run:forwarding.records._M_elems[2].slot x48, run:forwarding.records._M_elems[3].completed x48, run:forwarding.records._M_elems[3].sent x48, run:forwarding.records._M_elems[3].slot x48, run:forwarding.records._M_elems[4].completed x48, run:forwarding.records._M_elems[4].sent x48, run:forwarding.records._M_elems[4].slot x48, run:forwarding.records._M_elems[5].completed x48, run:forwarding.records._M_elems[5].sent x48, run:forwarding.records._M_elems[5].slot x48, run:round.attempted x48, run:round.sent_at_round_start x48, visit_forwarding<1>:sent x48, visit_forwarding<1>:slot x48, visit_forwarding<2>:sent x48, visit_forwarding<2>:slot x48, visit_forwarding<3>:sent x48, visit_forwarding<3>:slot x48, visit_forwarding<4>:sent x48, visit_forwarding<4>:slot x48, visit_forwarding<5>:sent x48, visit_forwarding<5>:slot x48, visit_forwarding<6>:sent x48, visit_forwarding<6>:slot x48

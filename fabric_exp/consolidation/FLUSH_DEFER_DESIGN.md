@@ -11,7 +11,7 @@ SEMINC_FLUSH) calls `flush_write_to_noc_pipeline(channel)` in `deliver` (router_
 which spins until the earlier writes are acknowledged, then issues the atomic: every ID of the channel's range with
 deadlock avoidance; the global ERISC-wide ack counter (`ncrisc_noc_nonposted_writes_flushed`) on Blackhole without it.
 The spin blocks everything on E1 (first-level acks, completions, credit frames, other VCs' channels) and, on one-ERISC
-routers, the sender half. Main's router: flushed fused ~495 vs ~154 cycles/packet unflushed (meas, RESULTS §63).
+routers, the sender half. ~~Main's router: flushed fused ~495 vs ~154 cycles/packet unflushed (meas, RESULTS §63).~~ **WRONG (2026-11-02, report data check): those are kernel v1 at the study flags, not main as shipped; neither main as shipped nor v4 has been measured with flushing. Study builds: 522.8 vs 152.0 on E/W fused 4352 B (RESULTS §58).**
 History: RESULTS §63-§64 (main's deferral staged in write_at_cmd_buf: -55 on flushed fused, +2 to +3 on every E1-bound
 row, likely code growth from three inlined drain sites, hyp), V4_FEATURE_SPEC.md §14.5.
 
@@ -125,3 +125,52 @@ Rejected: holding the slot (rings collapse); staging the atomic in buffer 3 (ove
    would hang or a proof pass early). No test yaml sends inline writes. Check independently.
 2. Main's router: a VC1/VC2 flushed atomic waits on IDs 0..3 (VC0's), not its own (no global branch in main's flush).
 3. With deadlock avoidance and three receiver channels, IDs run past 15 (8 per channel).
+
+## Revision note (user, 2026-11-02): keep the current VC working too
+
+The user: with deferral, not only do the other VCs stay unblocked, the current VC can do useful work as well, e.g. the
+next packet's route word loaded ahead (TODO.md, N/S floor fix 2). The complication is storing the state correctly and
+watching for transaction-ID completions (full acks, not just a flush); part of it is already in the completion logic.
+
+Main session's analysis (to settle before any build):
+- **WRONG (2026-11-02, user's clarification below): item 3 is not relaxed in this work.** ~~Item 3 above is relaxed.~~ While an atomic is pending, the channel may keep handling later packets.
+  - The argument: a strict atomic promises only that writes before it landed first. A later packet's writes landing
+    before an earlier deferred atomic don't break it.
+  - A later atomic's own proof covers every earlier write, the earlier packet's included.
+  - Deferred atomics sit in a small in-order queue per channel, in channel state (memory). Each is issued when its
+    proof holds; proofs only grow, so they complete in order. When the queue is full, the channel stalls as today.
+  - Write the argument down and check it against every fabric atomic type (unicast inc, fused write+inc, multicast
+    variants) before building.
+- **The proof is "acknowledged", not "sent".**
+  - Completions use NIU_MST_WRITE_REQS_OUTGOING_ID(trid) (`writes_left` / `trid_writes_sent`: the data has left L1,
+    so the slot can be reused).
+  - A strict atomic needs NIU_MST_REQS_OUTSTANDING_ID(trid) == 0
+    (`ncrisc_noc_nonposted_write_with_transaction_id_flushed`).
+  - Reuse the completion logic's transaction-ID bookkeeping, but cover every ID the channel wrote since its last
+    proven point, not only the current group.
+  - Posted writes stay uncovered, as today.
+- **Placement and budget.** Records and the prefetched route word live in channel state (memory). The headroom check
+  flagged torus + VC2 with a flush-defer-sized record on S2-explicit, so design against the stable placement and gate
+  on --headroom. Check pending atomics outside the pass's opening read group (already 4 reads), and only when one is
+  pending.
+- **Sequencing:** design together with the route-word prefetch (shared mechanism); after the receiver and sender
+  passes.
+
+**User's clarification (2026-11-02), which supersedes the relaxation above.** This work is the *strict* flush mode with
+the stall removed:
+- Item 3 stands: while an atomic is pending, the channel takes no new packet (no writes or forwards from later
+  packets).
+- E1 doesn't spin on the flush. Other VCs keep going, and the current VC does only useful non-ordering work: its acks
+  and completions, and loading the next packet's header/route word ahead (reads only).
+- One pending atomic per channel, so no queue is needed.
+- Letting later writes go through is the *relaxed* flush mode (FLUSH_RELAXED). It is a separate, more complicated
+  piece of logic and stays out of scope here.
+
+What still holds from the analysis above: the proof is "acknowledged" (REQS_OUTSTANDING_ID), not "sent"; reuse the
+completion bookkeeping, covering every ID the channel wrote since its last proven point; channel-state placement; the
+--headroom gate; checking outside the opening read group; designing it together with the route-word prefetch.
+
+## Design with the route preload (2026-11-02)
+
+The strict flush-defer is designed together with the route preload in V4_ROUTE_PRELOAD.md (§1.4: the record, gate,
+proof and drain; §4 predictions; §6 stage S3, after the preload lands; §7 open questions 4-7).

@@ -1,0 +1,6 @@
+326 images
+  152  _start; kernel_main
+  144  kernel_main
+   14  _start; fabric_router::receiver::run; kernel_main; void fabric_router::telemetry::init_impl<0>; -void fabric_router::telemetry::round_end_impl<false, true, fabric_router::receiver::run; +void fabric_router::telemetry::round_end_impl<false, true, fabric_router::receiver::run; void fabric_router::telemetry::round_start_impl<0>
+    8  _start; fabric_router::receiver::run; void fabric_router::telemetry::init_impl<0>; -void fabric_router::telemetry::round_end_impl<false, true, fabric_router::receiver::run; +void fabric_router::telemetry::round_end_impl<false, true, fabric_router::receiver::run; void fabric_router::telemetry::round_start_impl<0>
+    8  _start; kernel_main; void fabric_router::telemetry::init_impl<0>; void fabric_router::telemetry::round_start_impl<0>

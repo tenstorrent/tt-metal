@@ -1,0 +1,55 @@
+# Slot study, 3072 / 3584 B slots: predictions written 2026-11-02 05:05:57 before Galaxy job G3 (sls_glx2k.sbatch kinds 2d3k/2d35k, vc13k/vc135k, vc23k/vc235k).
+# Slots per ERISC (mock captures): 2D / VC1 split / VC2-on 115 at 3072 B (3168 B slots), 99 at 3584 B (3680 B); 1D 117 at 3072 B.
+# Builder defaults: 2D 35,16,32 (3072) / 19,16,32 (3584); VC1 53,9,16,5,4 / 37,9,16,5,4; VC2-on 51,14,16 + 2,4 / 35,14,16 + 2,4.
+## VC1 split: sls3k_model.py (window round trips interpolated in payload between the Galaxy fits at 2048 B and 4352 B; bounds max(router, wire))
+bounds (max(router, wire 178.9)):
+  1-hop            router  137.7 ->  178.9
+  2-hop            router  167.9 ->  178.9
+  VC0 hop + inter  router  231.6 ->  231.6
+  inter + 2 VC1    router  283.7 ->  283.7
+  inter + VC1      router  286.1 ->  286.1
+  inter + VC1 N/S  router  285.1 ->  285.1
+  inter direct     router  206.6 ->  206.6
+rule's picks: 1:2 24,15,16,8,6; 1:1 24,15,16,8,6; 3:2 24,15,16,8,6; 2:1 24,15,16,8,6; 3:1 24,15,16,8,6
+  24,15,16,8,6     1-hop 178.9  2-hop 178.9  VC0 hop + inter 231.6  inter + 2 VC1 283.7  inter + VC1 286.1  inter + VC1 N/S 285.1  inter direct 206.6
+  53,9,16,5,4      1-hop 178.9 [P]  2-hop 264.7 [f0]  VC0 hop + inter 313.4 [f0]  inter + 2 VC1 415.4 [r1]  inter + VC1 413.7 [f1]  inter + VC1 N/S 382.1 [r1]  inter direct 206.6 [P]
+  24,15,16,8,6     1-hop 178.9 [P]  2-hop 178.9 [P]  VC0 hop + inter 231.6 [P]  inter + 2 VC1 283.7 [P]  inter + VC1 286.1 [P]  inter + VC1 N/S 285.1 [P]  inter direct 206.6 [P]
+  20,15,16,9,7     1-hop 178.9 [P]  2-hop 178.9 [P]  VC0 hop + inter 231.6 [P]  inter + 2 VC1 283.7 [P]  inter + VC1 286.1 [P]  inter + VC1 N/S 285.1 [P]  inter direct 206.6 [P]
+  30,10,16,8,8     1-hop 178.9 [P]  2-hop 241.9 [f0]  VC0 hop + inter 284.0 [f0]  inter + 2 VC1 283.7 [P]  inter + VC1 286.1 [P]  inter + VC1 N/S 285.1 [P]  inter direct 206.6 [P]
+  24,15,16,4,7     1-hop 178.9 [P]  2-hop 178.9 [P]  VC0 hop + inter 231.6 [P]  inter + 2 VC1 505.1 [f1]  inter + VC1 514.4 [f1]  inter + VC1 N/S 468.5 [f1]  inter direct 206.6 [P]
+bounds (max(router, wire 206.5)):
+  1-hop            router  137.7 ->  206.5
+  2-hop            router  167.9 ->  206.5
+  VC0 hop + inter  router  231.6 ->  231.6
+  inter + 2 VC1    router  288.6 ->  288.6
+  inter + VC1      router  291.1 ->  291.1
+  inter + VC1 N/S  router  289.3 ->  289.3
+  inter direct     router  206.6 ->  206.6
+rule's picks: 1:2 14,13,16,8,6; 1:1 14,13,16,8,6; 3:2 14,13,16,8,6; 2:1 14,13,16,8,6; 3:1 14,13,16,8,6
+  14,13,16,8,6     1-hop 206.5  2-hop 206.5  VC0 hop + inter 231.6  inter + 2 VC1 288.6  inter + VC1 291.1  inter + VC1 N/S 289.3  inter direct 206.6
+  37,9,16,5,4      1-hop 206.5 [P]  2-hop 269.6 [f0]  VC0 hop + inter 319.2 [f0]  inter + 2 VC1 416.2 [r1]  inter + VC1 423.2 [f1]  inter + VC1 N/S 391.9 [r1]  inter direct 206.6 [P]
+  14,13,16,8,6     1-hop 206.5 [P]  2-hop 206.5 [P]  VC0 hop + inter 231.6 [P]  inter + 2 VC1 288.6 [P]  inter + VC1 291.1 [P]  inter + VC1 N/S 289.3 [P]  inter direct 206.6 [P]
+  20,11,16,8,6     1-hop 206.5 [P]  2-hop 230.4 [f0]  VC0 hop + inter 266.4 [f0]  inter + 2 VC1 288.6 [P]  inter + VC1 291.1 [P]  inter + VC1 N/S 289.3 [P]  inter direct 206.6 [P]
+  20,9,16,8,6      1-hop 206.5 [P]  2-hop 269.6 [f0]  VC0 hop + inter 319.2 [f0]  inter + 2 VC1 288.6 [P]  inter + VC1 291.1 [P]  inter + VC1 N/S 289.3 [P]  inter direct 206.6 [P]
+  20,13,16,4,7     1-hop 206.5 [P]  2-hop 206.5 [P]  VC0 hop + inter 231.6 [P]  inter + 2 VC1 509.0 [f1]  inter + VC1 525.0 [f1]  inter + VC1 N/S 476.8 [f1]  inter direct 206.6 [P]
+## 2D (by hand: bound = max(router, wire, window); router: 1-hop E0 ~110 (<= 2 KiB) / ~120-128 at large payloads (P150 4352 B: 127),
+## E/W 3-hop E0 ~140, N/S rows E1 ~172-173, turn ~170.5; windows at 1 KiB from the 2D fits, at 3072 / 3584 B
+## interpolated: worker ~2,200, E/W forwarding ~2,300, N/S 3-hop ~2,600, N/S 7-hop / corner ~3,000)
+3072 B slots, payload 3072 B (wire 178.9): d 35,16,32: 1-hop 178.9, 3-hop E/W 178.9, 3-hop N/S 178.9, 7-hop N/S / corner ~188 (window: 3,000 / 16),
+  turn 178.9; 20,21,32: every row 178.9 (7-hop 3,000 / 21 = 143); 20,12,32 (calibration): 3-hop E/W ~192, 3-hop N/S ~217, 7-hop ~250.
+3072 B slots, payload 1024 B: d: 1-hop ~110, 3-hop E/W ~140, N/S 3-hop ~172.5, 7-hop / corner ~186 (window at 16); 20,21,32: 1-hop ~110,
+  N/S ~172-173 (E1); 20,12,32: N/S 7-hop ~247, 3-hop N/S ~217.
+3584 B slots, payload 3584 B (wire 206.5): d 19,16,32: every row 206.5 (7-hop 3,000 / 16 = 188 < 206.5); 20,21,16 and 22,15,32: 206.5;
+  20,12,32: 7-hop ~250.
+3584 B slots, payload 1024 B: d 19,16,32: 1-hop ~112, 7-hop ~186 (window); 20,21,16: 1-hop ~110, N/S ~172-173; 22,15,32: 7-hop ~197.
+256 B payloads: as 1 KiB within a few (router-bound; no data at 256 B yet on the lead's Galaxy 2D: hypothesis).
+Large-transfer payload GB/s at the wire: 3072 B 23.2, 3584 B 23.4 (4352 B 23.3, 2048 B 22.3); a path stays on the wire while its router
+  per-packet cost is under the wire time: at 3072 B (178.9) every VC0 path measured so far (E0 110-140, E1 172-173) when its windows allow;
+  at 3584 B (206.5) the same with more margin. The VC1 path (~276-297) and VC0 hop + inter-mesh direct (~232) stay router-bound.
+## VC2-on (VC0 and VC2 from [0,0] to [0,1])
+VC2 alone: 2 / 4 slots (defaults) ~870-900 at both sizes and payloads; 16 / 16 slots: ~144 at 1024 B, the wire at 3072 / 3584 B
+  (178.9 / 206.5). VC0 alone with VC2 on: 1024 B ~117 (E0 ~110 + ~7 idle-VC2 cost), 3072 / 3584 B at the wire.
+VC0 + VC2 on one link: the two rates add up to the wire (or to the router's ~124-130 per packet at 1 KiB).
+## VC1 split, small payloads (256 B rows; by hand from the 16 B fits: worker round trip ~2,170-2,290 at 13 slots, VC1 routers' 1-hop E0 ~138)
+14,13,16,8,6 (the 3584 B rule's pick, its worker sized for 3584 B packets): 1-hop / bursts at 256 B ~155-165 (the worker window binds small
+  packets); 20,11,16,8,6 and every 3072 B allocation with a worker >= 20: ~138. VC1 rows at 256 B: as at the large payload minus ~5-15.

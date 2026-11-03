@@ -1,0 +1,27 @@
+O3 _start: OTHER in 182 images
+O3 _start: merge of both changes in 144 images
+O3 fabric_router::receiver::run: merge of both changes in 326 images
+O3 kernel_main: merge of both changes in 326 images
+  OTHER: bh_2d_allinstr__10725865129013221982/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__13098883684590607072/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__13616617469312639212/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__14261113225409535754/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__15074683560130888156/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__15275818210426352585/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__1536129211033872792/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__17602349977987281329/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_bwtelemetry__12389910284542301991/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_bwtelemetry__13199178763138608053/subordinate_active_erisc/subordinate_active_erisc.elf _start
+Os _start: OTHER in 394 images
+Os fabric_router::receiver::run: merge of both changes in 394 images
+Os kernel_main: merge of both changes in 394 images
+  OTHER: bh_2d__1754057734862275905/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d__17764531352640089777/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d__2002749385377306524/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d__2586450563413941222/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d__3350086724855746032/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d__4338045327969131522/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d__4689755091304480639/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d__4837949914138770387/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__10725865129013221982/subordinate_active_erisc/subordinate_active_erisc.elf _start
+  OTHER: bh_2d_allinstr__13098883684590607072/subordinate_active_erisc/subordinate_active_erisc.elf _start

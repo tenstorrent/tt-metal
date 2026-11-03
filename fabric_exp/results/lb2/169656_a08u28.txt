@@ -1,0 +1,21 @@
+job 169656 on bh-lb-120-a08u28
+command: bash fabric_exp/consolidation/lb2_calib_runs.sh a08
+summary: rc=0 hung=0 node=bh-lb-120-a08u28 job=169656 post=none start=2026-11-03 02:30:05 end=2026-11-03T02:36:50Z
+[lb2 02:28:34 +0s] node=bh-lb-120-a08u28 job=169656 mode=run start=2026-11-03T02:28:34Z timeout=1800s
+[lb2 02:28:34 +0s] command: bash fabric_exp/consolidation/lb2_calib_runs.sh a08
+[lb2 02:28:34 +0s] stage src-20261103-022819 (full full-20261103-004550), staged 2026-11-03T02:28:31Z
+[lb2 02:28:34 +0s] busy check: clear
+[lb2 02:28:34 +0s] space: 54 GB free on /home
+[lb2 02:28:40 +6s] verify: 27434 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-03T02:28:31Z)
+[lb2 02:28:42 +8s] verify: 3452 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-03T02:28:31Z)
+[lb2 02:28:51 +17s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-03T02:28:31Z)
+[lb2 02:28:53 +19s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-03T02:28:31Z)
+[lb2 02:28:53 +19s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-03T02:28:31Z)
+[lb2 02:28:57 +23s] git: HEAD 5578d6292a6; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 02:28:57 +23s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 02:28:57 +23s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 704 GB available
+[lb2 02:28:57 +23s] reset (start): tt-smi -r
+[lb2 02:30:06 +92s] run: bash fabric_exp/consolidation/lb2_calib_runs.sh a08
+[lb2 02:35:46 +432s] command exit 0
+[lb2 02:36:50 +496s] copied back: 32 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 2 caches -> /data/aagarwal/lb2/jobs/169656 (MANIFEST.tsv)
+[lb2 02:36:51 +497s] done: rc 0, hung 0; 50 GB free on /home

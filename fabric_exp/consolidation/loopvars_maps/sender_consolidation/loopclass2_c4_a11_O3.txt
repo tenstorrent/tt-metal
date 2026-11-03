@@ -1,0 +1,35 @@
+  102  receiver::run            OTHER
+  688  receiver::run            identical
+  170  receiver::run            memory offsets only
+   44  receiver::run            same opcodes
+    2  sender::run              OTHER
+  418  sender::run              identical
+  590  sender::run              same opcodes
+  757  single::receiver_pass    identical
+  757  single::run              identical
+  757  single::sender_pass      identical
+offset shifts: {-16: 524}
+FAM   10 bh_1d_allinstr                     OTHER
+FAM   28 bh_2d_allinstr                     OTHER
+FAM   24 bh_2d_telemetry                    OTHER
+FAM    4 bh_2d_telemetry                    same opcodes
+FAM   28 bh_2d_vc2                          memory offsets only
+FAM   28 bh_2d_vc2_trim_rx0                 OTHER
+FAM    4 bh_neighbor                        memory offsets only
+FAM    4 bh_neighbor_delay                  memory offsets only
+FAM   10 bh_ring                            same opcodes
+FAM   10 bh_ring_delay                      same opcodes
+FAM   10 bh_ring_passdelay                  same opcodes
+FAM    8 bh_vc1                             memory offsets only
+FAM    4 bh_vc1_allinstr                    OTHER
+FAM    2 bh_vc1_allinstr                    same opcodes
+FAM    8 bh_vc1_delay                       memory offsets only
+FAM    8 bh_vc1_passdelay                   memory offsets only
+FAM    8 bh_vc1_trim_rx0                    OTHER
+FAM   14 bh_vc1_trim_rx0                    memory offsets only
+FAM    8 bh_vc1_trim_vc1                    memory offsets only
+FAM    8 bh_vc1_trim_vc1p                   memory offsets only
+FAM    8 bh_vc1_trim_w0                     memory offsets only
+FAM   28 glx_express                        memory offsets only
+FAM   44 glx_express_line                   memory offsets only
+FAM    8 glx_ring                           same opcodes

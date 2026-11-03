@@ -1,0 +1,34 @@
+diff -ru v4rxg2a/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp v4rxg2/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp
+--- v4rxg2a/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-02 17:04:56.599032195 +0000
++++ v4rxg2/tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp	2026-11-02 16:55:11.950063595 +0000
+@@ -185,10 +185,10 @@
+     return slot == first_slot_addr + last_slot_offset ? first_slot_addr : slot + channel_buffer_size;
+ }
+ 
+-// Changes with every forward.
++// A downstream sender channel's progress: changes with every forward.
+ struct DownstreamSenderChannelProgress {
+-    uint32_t next_slot_addr;  // the downstream sender channel's next slot
+     uint32_t free_slots;      // slots known free there (a lower bound of the local credit register)
++    uint32_t next_slot_addr;  // its next slot
+ };
+ 
+ // A stateless forward's two commands: the packet into `dst` on the node at `link`, tagged with `trid`, then -1 on the
+@@ -428,7 +428,7 @@
+                 get_noc_addr(x, y, get_stream_reg_write_addr(Traits::template remote_credit_stream<entry>), Traits::noc);
+             dense++;
+         }
+-        downstreams.progress[entry] = {links[entry].first_slot_addr, 0};
++        downstreams.progress[entry] = {/*free_slots=*/0, /*next_slot_addr=*/links[entry].first_slot_addr};
+     });
+ }
+ 
+@@ -487,7 +487,7 @@
+         relay.link.noc_coord = static_cast<uint32_t>(get_noc_addr(args.noc_x, args.noc_y, 0) >> NOC_ADDR_COORD_SHIFT);
+         relay.link.credit_noc_addr = get_noc_addr(
+             args.noc_x, args.noc_y, get_stream_reg_write_addr(args.free_slots_stream), tt::tt_fabric::edm_to_downstream_noc);
+-        relay.progress = {relay.link.first_slot_addr, 0};
++        relay.progress = {/*free_slots=*/0, /*next_slot_addr=*/relay.link.first_slot_addr};
+     }
+ }
+ 

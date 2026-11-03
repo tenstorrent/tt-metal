@@ -1,0 +1,16 @@
+@@ -268,9 +268,13 @@
+     alignas(WorkerInterfaces) unsigned char bytes[sizeof(WorkerInterfaces)];
+ };
+ inline WorkerInterfaceStorage worker_interface_storage;
+-// Builds the interfaces at their location (once, at init); the kernel then sets each one up.
++// Builds the interfaces at their location (once, at init) where this ERISC serves sender channels; the kernel then sets
++// each one up.
+ FORCE_INLINE WorkerInterfaces& start_worker_interfaces() {
+-    return *new (worker_interface_storage.bytes) WorkerInterfaces{};
++    if constexpr (any_sender_channel_serviced) {
++        new (worker_interface_storage.bytes) WorkerInterfaces{};
++    }
++    return *std::launder(reinterpret_cast<WorkerInterfaces*>(worker_interface_storage.bytes));
+ }
+ template <size_t CH>
+ FORCE_INLINE auto& worker_interface() {

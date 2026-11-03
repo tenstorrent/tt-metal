@@ -1,0 +1,5 @@
+# P150 jobs held for after the sender pass's final round (user priority, 2026-11-02).
+# Status 2026-11-03 00:07: the sender round 496-501 is queued first. Everything held earlier is now queued behind it:
+#   502 / 503  N/S probe A/B (lead / nsb / nsbr / nsbs), passes a / b
+#   504 / 505  the receiver's former nfka (+ 1D lin3 PC samples) / nfkb
+# Nothing is held. Still to come from the receiver agent: one proxy job (ml copies of the probes), to be queued after 505.

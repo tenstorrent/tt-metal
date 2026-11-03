@@ -1,0 +1,2 @@
+  bh_2d                    24/28 pass; carried [2, 4, 5, 6], peak [2, 4, 5], sp accesses [-4, 2, 10, 14]; HOT MOVED {'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 4, 'deliver<0>:encoding': 4}
+  glx_2d                   44/48 pass; carried [0, 1, 4], peak [0, 3, 4], sp accesses [-4, 2, 5, 9, 17]; HOT MOVED {'NOC_CMD_BUF_WRITE_REG@deliver<0>:val': 4, 'local_write@deliver<0>:dst_noc_addr.@4': 4}

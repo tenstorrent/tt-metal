@@ -1,0 +1,171 @@
+diff -ruN v4txc3/fabric_erisc_router_v4.cpp v4txc4/fabric_erisc_router_v4.cpp
+--- v4txc3/fabric_erisc_router_v4.cpp	2026-11-03 03:27:51.948476151 +0000
++++ v4txc4/fabric_erisc_router_v4.cpp	2026-11-03 03:28:43.530218892 +0000
+@@ -4,7 +4,7 @@
+ 
+ // Fabric ERISC router: moves fabric packets across one Ethernet link.
+ //
+-// A router has sender channels, which take packets from a worker on this chip (channel 0 of a VC) or from the router
++// A router has sender channels, which take packets from a worker on this chip (a VC's worker channel) or from the router
+ // facing another direction (forwarding channels) and send them over the link, and receiver channels, which take packets
+ // off the link and write them to this chip, forward them to the next router, or both. Credits flow back the same way.
+ //
+diff -ruN v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp
+--- v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 03:27:46.851402554 +0000
++++ v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-03 03:28:43.530218892 +0000
+@@ -103,9 +103,9 @@
+ }
+ 
+ // ---------------------------------------------------------------------------------------------------------------------
+-// Downstream routers (2D): the other directions of this chip, in compact order
++// Sender channels' connection blocks
+ // ---------------------------------------------------------------------------------------------------------------------
+-//
++
+ // Each sender channel's connection info (its worker's location, the read counter a disconnected worker's credits go
+ // to), in L1 at a compile-time address.
+ constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_addrs = {
+@@ -124,6 +124,10 @@
+     local_sender_channel_6_connection_semaphore_addr, local_sender_channel_7_connection_semaphore_addr,
+     local_sender_channel_8_connection_semaphore_addr, local_sender_channel_9_connection_semaphore_addr};
+ 
++// ---------------------------------------------------------------------------------------------------------------------
++// Downstream routers (2D): the other directions of this chip, in compact order
++// ---------------------------------------------------------------------------------------------------------------------
++
+ // A router never forwards back out its own facing, so its downstream routers are the other four directions, packed
+ // densely in enum order (E, W, N, S, Z) with its own direction removed (the codec's compact dispatch order): the
+ // compact index of a downstream direction.
+diff -ruN v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
+--- v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-02 17:54:36.204701003 +0000
++++ v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 03:28:53.103356344 +0000
+@@ -90,8 +90,6 @@
+     }
+ }
+ 
+-// The heartbeat, then the context switch: the master hands the core to the base firmware after `idle_interval` rounds
+-// in a row without a send attempt (IDLE_CONTEXT_SWITCHING; otherwise every interval); the other ERISC follows.
+ // Per-round bookkeeping. It lives in memory (end_round takes it by reference, out of line), so the loops' registers stay
+ // free for per-pass state; the loops touch it once per round, and on the rare yields.
+ struct RoundCounters {
+@@ -101,14 +99,16 @@
+     uint32_t sent_at_round_start = 0;  // sender: packets sent before this round
+ };
+ 
+-// Returns whether the base firmware ran on this ERISC (the master's context switch), which may have used its command
+-// buffers.
+-__attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_yielded) {
++// The heartbeat, then the context switch: with IDLE_CONTEXT_SWITCHING the master hands the core to the base firmware
++// after SWITCH_INTERVAL rounds in a row without a send attempt (`send_attempted`: a send went out or yielded this
++// round), otherwise every SWITCH_INTERVAL rounds; the other ERISC follows. Returns whether the base firmware ran on this
++// ERISC (the master's context switch), which may have used its command buffers.
++__attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_attempted) {
+     if ((++counters.heartbeat & 0x3F) == 0) {
+         *reinterpret_cast<volatile uint32_t*>(heartbeat_addr) = 0xDCBA0000 | counters.heartbeat;
+     }
+     if constexpr (is_context_switch_master) {
+-        if (IDLE_CONTEXT_SWITCHING && send_yielded) {
++        if (IDLE_CONTEXT_SWITCHING && send_attempted) {
+             counters.idle_rounds = 0;
+         } else if (counters.idle_rounds++ > SWITCH_INTERVAL) {
+             counters.idle_rounds = 0;
+diff -ruN v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txc3/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:28:10.407742376 +0000
++++ v4txc4/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:29:28.872868899 +0000
+@@ -8,22 +8,26 @@
+ // receiver channel of the same VC, and returns each slot to its producer once the far router completes it.
+ //
+ // Each pass (pass, below):
+-//   reads     the free-slots registers of VC0's channels and VC2's worker channel, and the worker channels' connection
+-//             semaphores, as one read group (begin_read_group)
++//   reads     the worker channels' connection semaphores and the free-slots registers of every VC with a worker
++//             channel, as one read group (begin_read_group); a VC without one reads its registers right before its
++//             visit, so a packet landing during the earlier VCs' visits does not wait a pass
+ //   connect   each worker channel's connection, checked every pass (by rule); a change is handled out of line
+-//   send      VC0's worker channel: send if it holds a packet and the remote receiver channel has room; take
+-//             completions and credit the worker (out of line, once per completion batch)
+-//   forward   each VC's forwarding channels (VC0's; VC1's after a read group of its own), skipped with one test when
+-//             none holds a packet or has packets in flight; each one with work sends, takes completions and credits
+-//             its upstream router
+-//   VC2       its one channel, a worker channel, as VC0's (neighbour exchange; V4_VC2.md)
++//   visit     each VC in turn, against its remote receiver channel's progress:
++//               - its worker channel: send if it holds a packet and the remote receiver channel has room; take
++//                 completions (and first-level acks) and credit the worker (out of line, once per completion group);
++//               - its forwarding channels, skipped with one test when none holds a packet or has packets in flight;
++//                 each one with work sends, takes completions and credits its upstream router.
++//             The loop-local VC is visited every pass; a later VC is skipped with one test when none of its channels
++//             holds a packet or has packets in flight (SenderChannelStates).
+ // The pass makes no call while it sends; the worker credit and the connection event are out of line (LEDGER E0-11).
+ // It takes no closures: a lambda capturing the loop's state can keep that state in memory (RESULTS §98), so the helpers
+ // recurse over their channel mask with their inputs as arguments.
+ //
+-// Channels and VCs. Each sender channel (SenderChannel<CH>) belongs to one VC. A VC's first channel takes a worker
+-// (VC0's channel 0, VC2's channel); the others are forwarding channels, written by the routers on this chip that face
+-// other directions. A VC's packets go into the far router's receiver channel of that VC (RemoteReceiverChannel<VC>).
++// Channels and VCs. Each sender channel (SenderChannel<CH>) belongs to one VC (SenderVc<VC>). A VC has at most one
++// worker channel, which takes a worker on this chip (WorkerChannel<CH>; the host's role, by channel); its other
++// channels are forwarding channels, written by the routers on this chip that face other directions
++// (ForwardingChannel<CH>). A VC's packets go into the far router's receiver channel of that VC
++// (RemoteReceiverChannel<VC>).
+ //
+ // State, by placement class: the loop-local VC's send state (its remote receiver progress and its worker channel's
+ // progress and connection state) and which channels kept in memory have packets in flight, loop locals; every other
+@@ -119,8 +123,8 @@
+     static constexpr bool reads_free_slots_at_pass_start = has_worker_channel;
+ };
+ 
+-// The router's serviced sender channels, every VC's together, one bit per channel: all of them, by kind, and those whose
+-// free-slots registers the pass's first read group reads; and the VCs they belong to, one bit per VC.
++// The router's serviced sender channels, every VC's together, one bit per channel: all of them, by kind, and those
++// whose free-slots registers the pass's first read group reads; and the VCs they belong to, one bit per VC.
+ struct SenderChannels {
+     static_assert(MAX_NUM_VCS == 3, "the sender's features and its pass name VCs 0, 1 and 2");
+     static constexpr uint32_t serviced =
+@@ -136,15 +140,15 @@
+                                              (SenderVc<1>::sender_channels != 0 ? 2u : 0u) |
+                                              (SenderVc<2>::sender_channels != 0 ? 4u : 0u);
+ 
+-    // In Tensix mux mode the mux is the only producer: no router forwards into this one. (Channel trimming may leave the
+-    // mux's worker channel unserviced too.)
++    // In Tensix mux mode the mux is the only producer: no router forwards into this one. (Channel trimming may leave
++    // the mux's worker channel unserviced too.)
+     static_assert(!tensix_mux_mode || forwarding_channels == 0);
+-    // A channel the host has wait for a static connection from an upstream router (SENDER_CH_<i>_WAIT_STATIC_CONNECTION)
+-    // is a forwarding channel.
++    // A channel the host has wait for a static connection from an upstream router
++    // (SENDER_CH_<i>_WAIT_STATIC_CONNECTION) is a forwarding channel.
+     static_assert(
+         [] {
+             for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
+-                if (is_sender_channel_serviced[ch] && sender_ch_wait_static_connection_all_[ch] &&
++                if (is_sender_channel_serviced[ch] && sender_ch_wait_static_connection[ch] &&
+                     ((forwarding_channels >> ch) & 1u) == 0) {
+                     return false;
+                 }
+@@ -203,10 +207,13 @@
+     FORCE_INLINE bool operator!=(const RemoteReceiverChannelProgress& other) const { return word != other.word; }
+ 
+ private:
+-    static constexpr uint32_t encode(uint32_t free_slots, uint32_t slot_addr) { return (slot_addr / 16) << 16 | free_slots; }
++    static constexpr uint32_t encode(uint32_t free_slots, uint32_t slot_addr) {
++        return (slot_addr / 16) << 16 | free_slots;
++    }
+     static constexpr uint32_t last_slot_word = encode(0, RemoteReceiverChannel<VC>::last_slot_addr);
+     static constexpr uint32_t advance_add = encode(0, channel_buffer_size) - 1;
+-    static constexpr uint32_t wrap_add = encode(0, RemoteReceiverChannel<VC>::first_slot_addr) - last_slot_word - 1;  // mod 2^32
++    static constexpr uint32_t wrap_add =
++        encode(0, RemoteReceiverChannel<VC>::first_slot_addr) - last_slot_word - 1;  // mod 2^32
+     static_assert(RemoteReceiverChannel<VC>::first_slot_addr % 16 == 0 && channel_buffer_size % 16 == 0);
+     static_assert(RemoteReceiverChannel<VC>::last_slot_addr / 16 < (1u << 16), "a slot address / 16 fits in 16 bits");
+     static_assert(RemoteReceiverChannel<VC>::num_slots < (1u << 12), "the free-slot count stays below bit 12");
+@@ -595,8 +602,8 @@
+ }
+ 
+ // The loop-local VC's worker channel, its state on the loop's copy (visited every pass): send if it has a packet and the
+-// remote receiver channel has room, take completions (and first-level acks), return the slots to the worker. (Its connection is checked at the
+-// top of the pass: check_worker_connection.)
++// remote receiver channel has room, take completions (and first-level acks), return the slots to the worker. (Its
++// connection is checked at the top of the pass: check_worker_connection.)
+ template <size_t CH>
+ FORCE_INLINE void visit_worker(
+     SenderChannelState<CH>& state,

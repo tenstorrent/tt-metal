@@ -1,0 +1,219 @@
+# FULLRING_MCAST_GAP.md Linear row (coordinator, 2026-11-03): saturated multicast on a Linear (non-ring) Galaxy, i.e.
+# no deadlock avoidance, no first-level acks, grouped completions. GlxLineMcastNS: every chip multicasts to every other
+# chip of its 8-chip column (N: row hops, S: 7 - row), the line analogue of A/B 1's 8-ring-only row (busiest links,
+# into rows 0 and 7, carry 7 flows as on the ring). GlxLinearMulticast: glx_sizes_linear.yaml's all_to_all row (both
+# axes), re-run as the same-job reference. 3072 and 4352 B, 20000 packets.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: GlxLineMcastNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Linear}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 4352]
+  defaults: {ftype: mcast, num_packets: 20000}
+  senders:
+  - device:
+    - 0
+    - [0, 0]
+    patterns:
+    - destination:
+        hops: {S: 7}
+  - device:
+    - 0
+    - [0, 1]
+    patterns:
+    - destination:
+        hops: {S: 7}
+  - device:
+    - 0
+    - [0, 2]
+    patterns:
+    - destination:
+        hops: {S: 7}
+  - device:
+    - 0
+    - [0, 3]
+    patterns:
+    - destination:
+        hops: {S: 7}
+  - device:
+    - 0
+    - [1, 0]
+    patterns:
+    - destination:
+        hops: {N: 1, S: 6}
+  - device:
+    - 0
+    - [1, 1]
+    patterns:
+    - destination:
+        hops: {N: 1, S: 6}
+  - device:
+    - 0
+    - [1, 2]
+    patterns:
+    - destination:
+        hops: {N: 1, S: 6}
+  - device:
+    - 0
+    - [1, 3]
+    patterns:
+    - destination:
+        hops: {N: 1, S: 6}
+  - device:
+    - 0
+    - [2, 0]
+    patterns:
+    - destination:
+        hops: {N: 2, S: 5}
+  - device:
+    - 0
+    - [2, 1]
+    patterns:
+    - destination:
+        hops: {N: 2, S: 5}
+  - device:
+    - 0
+    - [2, 2]
+    patterns:
+    - destination:
+        hops: {N: 2, S: 5}
+  - device:
+    - 0
+    - [2, 3]
+    patterns:
+    - destination:
+        hops: {N: 2, S: 5}
+  - device:
+    - 0
+    - [3, 0]
+    patterns:
+    - destination:
+        hops: {N: 3, S: 4}
+  - device:
+    - 0
+    - [3, 1]
+    patterns:
+    - destination:
+        hops: {N: 3, S: 4}
+  - device:
+    - 0
+    - [3, 2]
+    patterns:
+    - destination:
+        hops: {N: 3, S: 4}
+  - device:
+    - 0
+    - [3, 3]
+    patterns:
+    - destination:
+        hops: {N: 3, S: 4}
+  - device:
+    - 0
+    - [4, 0]
+    patterns:
+    - destination:
+        hops: {N: 4, S: 3}
+  - device:
+    - 0
+    - [4, 1]
+    patterns:
+    - destination:
+        hops: {N: 4, S: 3}
+  - device:
+    - 0
+    - [4, 2]
+    patterns:
+    - destination:
+        hops: {N: 4, S: 3}
+  - device:
+    - 0
+    - [4, 3]
+    patterns:
+    - destination:
+        hops: {N: 4, S: 3}
+  - device:
+    - 0
+    - [5, 0]
+    patterns:
+    - destination:
+        hops: {N: 5, S: 2}
+  - device:
+    - 0
+    - [5, 1]
+    patterns:
+    - destination:
+        hops: {N: 5, S: 2}
+  - device:
+    - 0
+    - [5, 2]
+    patterns:
+    - destination:
+        hops: {N: 5, S: 2}
+  - device:
+    - 0
+    - [5, 3]
+    patterns:
+    - destination:
+        hops: {N: 5, S: 2}
+  - device:
+    - 0
+    - [6, 0]
+    patterns:
+    - destination:
+        hops: {N: 6, S: 1}
+  - device:
+    - 0
+    - [6, 1]
+    patterns:
+    - destination:
+        hops: {N: 6, S: 1}
+  - device:
+    - 0
+    - [6, 2]
+    patterns:
+    - destination:
+        hops: {N: 6, S: 1}
+  - device:
+    - 0
+    - [6, 3]
+    patterns:
+    - destination:
+        hops: {N: 6, S: 1}
+  - device:
+    - 0
+    - [7, 0]
+    patterns:
+    - destination:
+        hops: {N: 7}
+  - device:
+    - 0
+    - [7, 1]
+    patterns:
+    - destination:
+        hops: {N: 7}
+  - device:
+    - 0
+    - [7, 2]
+    patterns:
+    - destination:
+        hops: {N: 7}
+  - device:
+    - 0
+    - [7, 3]
+    patterns:
+    - destination:
+        hops: {N: 7}
+- name: GlxLinearMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Linear}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 4352]
+  defaults: {ftype: mcast, num_packets: 20000}
+  patterns:
+  - {type: all_to_all, iterations: 1}

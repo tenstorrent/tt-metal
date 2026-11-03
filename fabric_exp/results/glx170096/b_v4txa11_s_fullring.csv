@@ -1,0 +1,2 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+BdGlxFullRing4352,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,"[20]",1,4352,1,308539557305.000000,3675379.617139,15.995252,15.995252,15.995252,0.000000,1.000000

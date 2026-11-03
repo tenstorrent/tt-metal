@@ -1,0 +1,2 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+BdHalfRingScatter,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Ring,"[8]",1,4352,1,14420034019.000000,5991664.089430,26.075722,26.075722,26.075722,0.000000,1.000000

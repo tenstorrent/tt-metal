@@ -1,0 +1,60 @@
+s3_torusy_vc2_e1.elf: _ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE
+  pass loop 859 instructions (round loop 871); live values per instruction: mean 27.5, peak 34
+  carried (live at the pass loop's head) d2c8 read_stream_raw router_common.hpp:102: 22 (19 registers, 3 slots)
+    a2      caller set in the pass: addi a2,a2,1 (accumulate_first_level_acks router_receiver.hpp:294); addi a2,a2,1 (noc_common_write_with_state noc_nonblocking_api.h:2255)
+    a6      caller set in the pass: add a6,a4,a7 (deliver router_local_delivery.hpp:156); add a6,a6,a5 (count_local_writes router_local_delivery.hpp:92)
+    a7      caller set in the pass: add a7,a6,s2 (next_ring_slot router_downstream.hpp:184); add a7,a7,a5 (count_local_writes router_local_delivery.hpp:93)
+    s0      callee run:cursor1.position.slot_addr
+    s1      callee invariant: addi s1,a5,-1056 (accumulate_ack_credit fabric_router_flow_control.hpp:47)
+    s11     callee run:cursor1.position.ready
+    s2      callee invariant: addi s2,a5,352 (Channel router_receiver.hpp:145)
+    s3      callee invariant: mv s3,s6 (Channel router_receiver.hpp:145)
+    s4      callee run:cursor1.position.index
+    s5      callee run:cursor0.position.index
+    s6      callee run:cursor0.position.slot_addr
+    s7      callee run:cursor0.position.ready
+    s8      callee run:cursor1.counts.uncredited
+    s9      callee run:cursor0.counts.uncredited
+    t0      caller run:credit_frame_due
+    t2      caller set in the pass: lui t2,0xffb44 (deliver router_local_delivery.hpp:189)
+    t4      caller set in the pass: lw t4,36(sp) (deliver router_local_delivery.hpp:189); lw t4,40(sp) (deliver router_local_delivery.hpp:189)
+    t5      caller set in the pass: addi t5,t5,-1 (run router_receiver.hpp:758); lw t5,28(sp) (deliver router_local_delivery.hpp:189)
+    t6      caller pass:downstreams
+    sp+16   slot   run:me.y
+    sp+20   slot   run:me.x
+    sp+44   slot   run:downstreams
+  peak def8 ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1483: 34 (27 registers, 7 slots)
+    a0      caller local_write@deliver<0>:dst_noc_addr.@4
+    a1      caller set in the pass: add a1,a1,a6 (count_local_writes router_local_delivery.hpp:92); add a1,a1,a6 (count_local_writes router_local_delivery.hpp:93)
+    a2      caller set in the pass: addi a2,a2,1 (accumulate_first_level_acks router_receiver.hpp:294); addi a2,a2,1 (noc_common_write_with_state noc_nonblocking_api.h:2255)
+    a3      caller set in the pass: add a3,a1,a2 (count_local_writes router_local_delivery.hpp:92); add a3,a3,a2 (NOC_STATUS_READ_REG noc_nonblocking_api.h:184)
+    a4      caller deliver<0>:payload
+    a5      caller local_write@deliver<0>:src_addr
+    a6      caller set in the pass: add a6,a4,a7 (deliver router_local_delivery.hpp:156); add a6,a6,a5 (count_local_writes router_local_delivery.hpp:92)
+    a7      caller deliver<0>:chunk1_size, local_write@deliver<0>:size
+    s0      callee run:cursor1.position.slot_addr
+    s1      callee invariant: addi s1,a5,-1056 (accumulate_ack_credit fabric_router_flow_control.hpp:47)
+    s10     callee pass:arrived1
+    s11     callee run:cursor1.position.ready
+    s2      callee invariant: addi s2,a5,352 (Channel router_receiver.hpp:145)
+    s3      callee invariant: mv s3,s6 (Channel router_receiver.hpp:145)
+    s4      callee run:cursor1.position.index
+    s5      callee of_slot@handle<0>:group, run:cursor0.position.index
+    s6      callee action@receive<0>:volatile_header, deliver<0>:header, deliver<0>:scatter
+    s7      callee run:cursor0.position.ready
+    s8      callee run:cursor1.counts.uncredited
+    s9      callee run:cursor0.counts.uncredited
+    t0      caller set in the pass: li t0,0 (send_credit_frame router_receiver.hpp:667); lw t0,24(sp) (deliver router_local_delivery.hpp:189)
+    t1      caller local_write@deliver<0>:dst_noc_addr.@0
+    t2      caller set in the pass: lui t2,0xffb44 (deliver router_local_delivery.hpp:189)
+    t3      caller deliver<0>:offset
+    t4      caller set in the pass: lw t4,36(sp) (deliver router_local_delivery.hpp:189); lw t4,40(sp) (deliver router_local_delivery.hpp:189)
+    t5      caller set in the pass: addi t5,t5,-1 (run router_receiver.hpp:758); lw t5,28(sp) (deliver router_local_delivery.hpp:189)
+    t6      caller handle<0>:downstreams, handle<0>:routers, pass:downstreams
+    sp+12   slot   pass:txq_status
+    sp+16   slot   run:me.y
+    sp+20   slot   run:me.x
+    sp+24   slot   deliver<0>:chunks
+    sp+28   slot   deliver<0>:encoding~
+    sp+32   slot   set in the pass: sw a5,32(sp) (ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485); sw t5,32(sp) (deliver router_local_delivery.hpp:189)
+    sp+44   slot   run:downstreams

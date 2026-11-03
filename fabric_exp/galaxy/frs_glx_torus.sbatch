@@ -3,6 +3,7 @@
 # v4 on the Galaxy's 2D torus and rings (the yamls vetted on the mock Galaxy, fabric_exp/v4/glxprobe), then ring rows.
 #
 #   CONFIGS="main v4r" STEPS="main:ds v4r:ds ... v4r:nt" sbatch fabric_exp/galaxy/frs_glx_torus.sbatch
+#   dry run (stubs, no device): G=<scratch> SLURM_JOB_ID=dry DRY_NODE_OK=1 IGNORE_BUSY=1 bash frs_glx_torus.sbatch
 #
 # STEPS are config:suite pairs run in order. Suites (yamls vetted on the mock Galaxy): ds = test_fabric_2d_torus_
 # deadlock_stability, st = the torus stability suite's _short tests, nt = test_fabric_2d_torus_nightly (long: v4 only by
@@ -31,6 +32,12 @@ J=$G/jobs/${SLURM_JOB_ID:-manual}
 CONFIGS=${CONFIGS:-main v4r}
 mkdir -p $J/results
 echo "node=$(hostname) job=${SLURM_JOB_ID:-} start=$(date -u +%FT%TZ) configs=$CONFIGS"
+# User rule (2026-11-02): Galaxy jobs only on the 110-a machines (partition bh_sc36_6, nodes bh-glx-110-a*); stop anywhere
+# else before touching the device or copying trees. DRY_NODE_OK=1 skips the check for a dry run off the Galaxy.
+case "${SLURMD_NODENAME:-$(hostname)}" in
+    bh-glx-110-a*) ;;
+    *) [ -z "${DRY_NODE_OK:-}" ] && { echo "!!! node ${SLURMD_NODENAME:-$(hostname)} is not a bh-glx-110-a* machine: stopping"; exit 1; } ;;
+esac
 # Nodes are also used outside Slurm (jobs 155971, 157726, 157804: another user's tests held the device on an --exclusive
 # node, and the first step waited on the KMD lock after the tree copies). Look for other users' device work first and
 # stop before the slow copies (IGNORE_BUSY=1 skips the check).

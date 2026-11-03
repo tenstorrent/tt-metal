@@ -1,0 +1,46 @@
+# FULLRING_MCAST_GAP.md §8.14 (injection throttle): validation before any benchmark row, per on-arm. Data-checked
+# (benchmark_mode off), flow control on, 1 link, 4096 B: full-ring multicast and all-to-all on Ring and on the 2D
+# torus XY, unicast write and fused atomic inc.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: FrgValFullRingMcast
+  enable_flow_control: true
+  fabric_setup: {topology: Ring, num_links: 1}
+  parametrization_params:
+    ftype: [mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [4096]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: full_ring}
+- name: FrgValRingAllToAll
+  enable_flow_control: true
+  fabric_setup: {topology: Ring, num_links: 1}
+  parametrization_params:
+    ftype: [mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [4096]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: all_to_all}
+- name: FrgValTorusAllToAll
+  enable_flow_control: true
+  fabric_setup: {topology: Torus, torus_config: XY, num_links: 1}
+  parametrization_params:
+    ftype: [unicast, mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [4096]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: all_to_all}
+- name: FrgValTorusFullRingMcast
+  enable_flow_control: true
+  fabric_setup: {topology: Torus, torus_config: XY, num_links: 1}
+  parametrization_params:
+    ftype: [mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [4096]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: full_ring}

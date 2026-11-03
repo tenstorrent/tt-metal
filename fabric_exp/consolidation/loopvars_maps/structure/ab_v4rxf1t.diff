@@ -1,0 +1,127 @@
+diff -ru v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp v4rxf1t/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp
+--- v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-02 05:38:22.839471740 +0000
++++ v4rxf1t/tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp	2026-11-02 05:31:30.118865323 +0000
+@@ -272,11 +272,10 @@
+     asm volatile("" : "+m"(obj));
+ }
+ 
+-// Read group boundaries (std::atomic_signal_fence): a compiler barrier for memory. No access to memory other code could
+-// see (device registers, L1, any object whose address escapes) moves across either one, so the reads written between
+-// a begin and an end stay together, with no other such access among them, and their latencies overlap when their
+-// values are first used after the end. They do not stop arithmetic, or locals kept in registers, moving between the
+-// reads, and such memory used on both sides of a boundary is stored before it and reloaded after it.
++// Read group boundaries: no memory access moves across either one (a compiler barrier for memory), so the reads
++// written between a begin and an end stay together, with no other memory access among them, and their latencies
++// overlap when their values are first used after the end. They do not stop arithmetic being scheduled between the
++// reads, and memory state used on both sides of a boundary is stored before it and reloaded after it.
+ FORCE_INLINE void begin_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
+ FORCE_INLINE void end_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
+ 
+diff -ru v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4rxf1t/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:58:52.331086875 +0000
++++ v4rxf1t/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:33:51.280782878 +0000
+@@ -272,15 +272,22 @@
+ // The first VC's ring progress where this router runs its channel (Present, router_common.hpp).
+ using FirstVcProgress = Present<runs_vc(FIRST_VC), RingProgress, FIRST_VC>;
+ 
+-// The first VC's ring progress in `states` (Absent where its channel does not run: no step uses it). A template, so
+-// that an absent channel's state is named only in template-dependent code.
++// The first VC's ring progress in `states`, in place (a single-ERISC router's pass), and as the receiver loop's local
++// copy. Templates, so that an absent channel's state is named only in template-dependent code.
+ template <typename States>
+-FORCE_INLINE FirstVcProgress& first_vc_progress_in(States& states) {
++FORCE_INLINE auto& first_vc_progress_in(States& states) {
+     if constexpr (runs_vc(FIRST_VC)) {
+         return states.template get<FIRST_VC>().progress;
+     } else {
+-        static FirstVcProgress absent;
+-        return absent;
++        return states;  // not used: no step for an absent channel
++    }
++}
++template <typename States>
++FORCE_INLINE FirstVcProgress first_vc_progress_copy(States& states) {
++    if constexpr (runs_vc(FIRST_VC)) {
++        return states.template get<FIRST_VC>().progress;
++    } else {
++        return {};
+     }
+ }
+ 
+@@ -542,8 +549,7 @@
+ // Whether the oldest uncredited slots are due for credit this pass, and how many (`count`; the Completions
+ // introduction).
+ template <uint32_t GROUP_SIZE, uint32_t NUM_SLOTS>
+-FORCE_INLINE bool slots_due_for_credit(
+-    RingProgress& progress, uint32_t next_index, bool handled_packet, uint32_t& count) {
++FORCE_INLINE bool slots_due_for_credit(RingProgress& progress, uint32_t next_index, bool handled_packet, uint32_t& count) {
+     const uint32_t waiting = progress.uncredited;
+     if constexpr (GROUP_SIZE == 1) {
+         // One slot as soon as a slot other than this pass's waits (no partial group, so no idle count).
+@@ -598,11 +604,14 @@
+ // `handled_packet` says whether this pass handled a packet.
+ template <size_t VC, typename CreditSender>
+ FORCE_INLINE bool credit_completions(
+-    RingProgress& progress, const SlotSourcesOf<VC>& sources, bool handled_packet, CreditSender& credits) {
++    RingProgress& progress,
++    const SlotSourcesOf<VC>& sources,
++    uint32_t next_index,
++    bool handled_packet,
++    CreditSender& credits) {
+     constexpr uint32_t completion_group_size = ReceiverChannel<VC>::completion_group_size;
+     constexpr uint32_t num_slots = ReceiverChannel<VC>::num_slots;
+     static_assert(completion_group_size >= 1 && completion_group_size <= 4 && completion_group_size <= num_slots);
+-    const uint32_t next_index = progress.next_index;  // as the pass's step left it
+     const uint32_t waiting = progress.uncredited;
+     uint32_t count;
+     if (!slots_due_for_credit<completion_group_size, num_slots>(progress, next_index, handled_packet, count)) {
+@@ -651,7 +660,7 @@
+     timer.open();
+     const bool handled_packet = receive<VC>(progress, sources, downstreams, arrived, my_chip);
+     timer.close();
+-    credit_frame_due |= credit_completions<VC>(progress, sources, handled_packet, credits);
++    credit_frame_due |= credit_completions<VC>(progress, sources, progress.next_index, handled_packet, credits);
+ }
+ 
+ // VC's packets-received register, raw, for the pass's grouped reads; none (0) where its channel does not run.
+@@ -713,7 +722,7 @@
+ // The body of run()'s loop; a single-ERISC router runs it as the receiver half of each pass over its state in memory
+ // (router_single.hpp). The state types are template parameters so that an absent channel's state is named only in
+ // template-dependent code.
+-static_assert(MAX_NUM_VCS == 3, "pass() steps the receiver channels of VCs 0, 1 and 2");
++static_assert(MAX_NUM_RECEIVER_CHANNELS == 3, "pass() steps the receiver channels of VCs 0, 1 and 2");
+ template <typename FirstProgress, typename States, typename Connections>
+ FORCE_INLINE void pass(
+     FirstProgress& first_vc_progress,
+@@ -723,16 +732,17 @@
+     Connections& downstreams,
+     const ChipCoordinates& my_chip) {
+     begin_read_group();
+-    const std::array<uint32_t, MAX_NUM_VCS> arrived = {  // by VC, in order
+-        read_packets_received<0>(), read_packets_received<1>(), read_packets_received<2>()};
++    const uint32_t arrived0 = read_packets_received<0>();
++    const uint32_t arrived1 = read_packets_received<1>();
++    const uint32_t arrived2 = read_packets_received<2>();
+     uint32_t txq_status = 0;
+     if constexpr (any_first_level_ack_channel) {
+         txq_status = read_txq_status(receiver_txq_id);
+     }
+     end_read_group();
+-    step_channel<0>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived[0], my_chip);
+-    step_channel<1>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived[1], my_chip);
+-    step_channel<2>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived[2], my_chip);
++    step_channel<0>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived0, my_chip);
++    step_channel<1>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived1, my_chip);
++    step_channel<2>(first_vc_progress, states, downstreams, credits, credit_frame_due, arrived2, my_chip);
+     if (credit_frame_due) {
+         credit_frame_due = !send_credit_frame(credits, txq_status);
+     }
+@@ -749,7 +759,7 @@
+         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     ReceiverChannelStates states;
+-    FirstVcProgress first_vc_progress = first_vc_progress_in(states);  // a copy, carried through the loop
++    FirstVcProgress first_vc_progress = first_vc_progress_copy(states);  // carried through the loop
+     local_write_init();
+     Credits credits(0);
+     bool credit_frame_due = false;  // the credit counts changed since the last frame

@@ -1,0 +1,233 @@
+diff -ruN v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp
+--- v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-03 03:08:10.506141958 +0000
++++ v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp	2026-11-03 05:43:59.450041379 +0000
+@@ -69,8 +69,9 @@
+     WAYPOINT("NWPD");
+ }
+ 
+-// Adds `writes` local writes to the software write counters (noc_nonposted_writes_num_issued/acked), as the write API
+-// does for each write.
++// Adds `writes` local writes to the software write counters (noc_nonposted_writes_num_issued/acked), which the write
++// API updates itself for each write it counts (update_counter): a scatter packet's writes skip that and are counted
++// here once. The one place the router touches the API's counters.
+ FORCE_INLINE void count_local_writes(uint32_t writes) {
+     noc_nonposted_writes_num_issued[LOCAL_NOC] += writes;
+     noc_nonposted_writes_acked[LOCAL_NOC] += writes;
+@@ -88,7 +89,13 @@
+ // Blackhole a write to L1 is emulated there by a posted write, which leaves the buffer posted.
+ FORCE_INLINE void local_inline_write(uint64_t dst_noc_addr, uint32_t value) {
+     noc_inline_dw_write<InlineWriteDst::DEFAULT, /*posted=*/true, /*flush=*/true, /*emulated_write_on_cmd_buf=*/true>(
+-        dst_noc_addr, value, 0xF, LOCAL_NOC, LOCAL_NOC_VC, /*customized_src_addr=*/0, CommandBuffers::local_writes);
++        dst_noc_addr,
++        value,
++        INLINE_WRITE_ALL_BYTES,
++        LOCAL_NOC,
++        LOCAL_NOC_VC,
++        /*customized_src_addr=*/0,
++        CommandBuffers::local_writes);
+     local_write_init();
+ }
+ 
+@@ -119,7 +126,8 @@
+     if (type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
+         using ChunkEncoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
+-        constexpr uint8_t chunk_encoding_mask = 0b11;  // the current chunk's encoding (main: CHUNK_ENCODING_MASK)
++        // The current chunk's encoding: the low two bits (the library's CHUNK_ENCODING_MASK, local to its delivery code).
++        constexpr uint8_t CHUNK_ENCODING_MASK = 0b11;
+         const auto& scatter = header->command_fields.unicast_scatter_write;
+         const uint8_t chunks = scatter.chunk_count;
+         uint8_t encoding = scatter.chunk_encoding;
+@@ -143,7 +151,7 @@
+                 writes++;
+             }
+         }
+-        const auto last = static_cast<ChunkEncoding>(encoding & chunk_encoding_mask);
++        const auto last = static_cast<ChunkEncoding>(encoding & CHUNK_ENCODING_MASK);
+         const uint64_t last_noc_addr = scatter.noc_address[chunks - 1];
+         if (last == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
+             local_write<false>(payload + offset, last_noc_addr, static_cast<uint16_t>(payload_size - offset), trid);
+diff -ruN v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 04:06:53.912780477 +0000
++++ v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 04:09:36.945989735 +0000
+@@ -313,7 +313,7 @@
+ FORCE_INLINE void note_received(uint32_t size) {
+     channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(ReceiverChannel<VC>::rx);
+     if constexpr (telemetry::counts_received) {
+-        telemetry::count_received(size);
++        telemetry::note_received(size);
+     }
+ }
+ 
+@@ -820,9 +820,7 @@
+ // The downstream connections are passed in (router_downstream.hpp); each channel forwards on its VC's downstream
+ // routers (ReceiverChannel<VC>::forwards_on_vc).
+ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+-    const auto& routing_table = *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+-    const ChipCoordinates my_chip{
+-        routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
++    const ChipCoordinates my_chip = this_chip();
+ 
+     ReceiverChannelStates states;
+     auto loop_copy = states.loop_local_progress();  // carried through the loop (ReceiverChannelStates)
+diff -ruN v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
+--- v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 03:56:11.631116647 +0000
++++ v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp	2026-11-03 04:09:36.940989667 +0000
+@@ -92,13 +92,12 @@
+     }
+ }
+ 
+-// Per-round bookkeeping. It lives in memory (end_round takes it by reference, out of line), so the loops' registers stay
+-// free for per-pass state; the loops touch it once per round, and on the rare yields.
++// Every loop's per-round bookkeeping: the heartbeat's count and the rounds since the last send attempt. It lives in
++// memory (end_round takes it by reference, out of line), so the loops' registers stay free for per-pass state; the
++// loops touch it once per round.
+ struct RoundCounters {
+     uint16_t heartbeat = 0;
+     uint32_t idle_rounds = 0;
+-    bool send_yielded = false;      // sender: a send yielded (TX queue busy) this round
+-    uint32_t sent_at_round_start = 0;  // sender: packets sent before this round
+ };
+ 
+ // The heartbeat, then the context switch: with IDLE_CONTEXT_SWITCHING the master hands the core to the base firmware
+diff -ruN v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp
+--- v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-03 03:55:22.607443963 +0000
++++ v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-03 04:09:36.941989681 +0000
+@@ -39,6 +39,12 @@
+     uint16_t mesh_id;
+ };
+ 
++// This chip's coordinates, from the routing table (the loops read them once, before their first round).
++FORCE_INLINE ChipCoordinates this_chip() {
++    const auto& routing_table = l1_routing_table();
++    return {routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
++}
++
+ #if defined(FABRIC_2D)
+ static_assert(Routing2DCodec::action_bit(eth_chan_directions::EAST) == 1u << eth_chan_directions::EAST);
+ static_assert(Routing2DCodec::action_bit(eth_chan_directions::Z) == 1u << eth_chan_directions::Z);
+diff -ruN v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 04:06:53.913780491 +0000
++++ v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 04:09:36.941989681 +0000
+@@ -941,10 +941,19 @@
+     visit_vc<2>(loop_copy, states, holding, channels_in_flight, send_yielded);
+ }
+ 
++// The sender's round state: every loop's round counters, whether a send yielded this round (the TX queue was busy) and
++// the packets sent before it (for the idle context switch and telemetry). In memory, as RoundCounters: the loops touch
++// it once per round, and on the rare yields.
++struct SenderRound {
++    RoundCounters counters;
++    bool send_yielded = false;
++    uint32_t sent_at_round_start = 0;
++};
++
+ // The sender's work before a round's passes: nothing yielded yet, the packets sent so far (for the idle context switch
+ // and telemetry), telemetry's round start. (run() and the single-ERISC loop.)
+ template <typename LoopCopy>
+-FORCE_INLINE void before_round(RoundCounters& round, LoopCopy& loop_copy, SenderChannelStates& states) {
++FORCE_INLINE void before_round(SenderRound& round, LoopCopy& loop_copy, SenderChannelStates& states) {
+     round.send_yielded = false;
+     round.sent_at_round_start = total_sent(loop_copy, states);
+     if constexpr (telemetry::any_option) {
+@@ -957,9 +966,9 @@
+ // the credit presets again where the base firmware ran. (run() and the single-ERISC loop.)
+ template <bool RECEIVER, typename LoopCopy, typename RxRegisterEmpty>
+ FORCE_INLINE void after_round(
+-    RoundCounters& round, LoopCopy& loop_copy, SenderChannelStates& states, RxRegisterEmpty rx_register_empty) {
++    SenderRound& round, LoopCopy& loop_copy, SenderChannelStates& states, RxRegisterEmpty rx_register_empty) {
+     const bool firmware_ran = end_round(
+-        round,
++        round.counters,
+         !IDLE_CONTEXT_SWITCHING || round.send_yielded || total_sent(loop_copy, states) != round.sent_at_round_start);
+     if constexpr (telemetry::any_option) {
+         telemetry::round_end<true, RECEIVER>(
+@@ -992,7 +1001,7 @@
+     auto loop_copy = states.loop_local_progress();  // carried through the loop (SenderChannelStates)
+     uint32_t channels_in_flight = 0;  // the channels kept in memory with packets not yet completed (or acked)
+ 
+-    RoundCounters round;
++    SenderRound round;
+     while (!terminating()) {
+         if (!start_running()) {
+             continue;
+diff -ruN v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp
+--- v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-03 03:27:51.949476166 +0000
++++ v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-03 04:09:36.942989694 +0000
+@@ -43,16 +43,14 @@
+ }
+ 
+ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+-    const auto& routing_table = *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+-    const ChipCoordinates my_chip{
+-        routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
++    const ChipCoordinates my_chip = this_chip();
+ 
+     SenderState s;
+     sender::start_forwarding_channels(s.states);
+     ReceiverState r;
+     local_write_init();
+ 
+-    RoundCounters round;
++    sender::SenderRound round;
+     while (!terminating()) {
+         if (!start_running()) {
+             continue;
+diff -ruN v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp
+--- v4txa3/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp	2026-11-03 03:55:22.607443963 +0000
++++ v4txa4/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp	2026-11-03 04:09:36.945989735 +0000
+@@ -50,6 +50,14 @@
+ };
+ inline Counters counters;  // used only with an option on; zeroed in init()
+ 
++// `bytes` in 4 B words, rounded up (the dynamic bandwidth's unit).
++FORCE_INLINE uint32_t words_of(uint32_t bytes) { return (bytes + 3) >> 2; }
++
++// The perf recorder's buffer in L1 (the host reads it).
++FORCE_INLINE volatile tt_l1_ptr LowResolutionBandwidthTelemetry* perf_buffer() {
++    return reinterpret_cast<volatile tt_l1_ptr LowResolutionBandwidthTelemetry*>(perf_telemetry_buffer_addr);
++}
++
+ // At init, after the FabricTelemetry block's own init: the counts, and the perf recorder's buffer on the sender side.
+ // (The out-of-line functions here are templates so that a build with both options off emits none of them.)
+ template <int = 0>
+@@ -58,7 +66,7 @@
+         counters = {};
+     }
+     if constexpr (perf_recorder && any_sender_channel_serviced) {
+-        auto* buffer = reinterpret_cast<volatile tt_l1_ptr LowResolutionBandwidthTelemetry*>(perf_telemetry_buffer_addr);
++        auto* buffer = perf_buffer();
+         buffer->timestamp_start.full = 0;
+         buffer->timestamp_end.full = 0;
+         buffer->num_words_sent = 0;
+@@ -80,17 +88,17 @@
+             counters.round_tx_eth_words += bytes_to_eth_words_truncated(bytes);
+         }
+         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+-            counters.round_tx_words += (bytes + 3) >> 2;
++            counters.round_tx_words += words_of(bytes);
+         }
+     }
+ }
+ 
+ // A packet taken off the link (forwarded, delivered or both), `bytes` with its header.
+-FORCE_INLINE void count_received(uint32_t bytes) {
++FORCE_INLINE void note_received(uint32_t bytes) {
+     if constexpr (counts_received) {
+         counters.rx_packets++;
+         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+-            counters.rx_words += (bytes + 3) >> 2;
++            counters.rx_words += words_of(bytes);
+         }
+     }
+ }
+@@ -136,8 +144,7 @@
+         const uint64_t now = eth_read_wall_clock();
+         if (tx_progress || any_held()) {
+             // As main: the busy cycles accumulate in timestamp_start (idle rounds left out); timestamp_end is unused.
+-            auto* buffer =
+-                reinterpret_cast<volatile tt_l1_ptr LowResolutionBandwidthTelemetry*>(perf_telemetry_buffer_addr);
++            auto* buffer = perf_buffer();
+             buffer->timestamp_start.full = buffer->timestamp_start.full + (now - c.round_wall_clock);
+             buffer->num_words_sent = buffer->num_words_sent + c.round_tx_eth_words;
+             buffer->num_packets_sent = buffer->num_packets_sent + tx_packets;

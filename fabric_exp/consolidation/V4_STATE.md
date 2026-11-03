@@ -300,7 +300,10 @@ Register writes per command (each command also reads its buffer's ready state fi
 Buffer use: E1 with one live downstream uses all four; E1 with several leaves buffer 1 unused (its forward credits go on
 the atomics buffer); E0 on two ERISCs uses 0 and 3 and leaves 1 and 2 unused. The emulated inline-write delivery
 (`noc_fast_spoof_write_dw_inline`) also writes buffer 0's NOC_CTRL; it writes the value the local-write preset holds,
-so the preset survives, by coincidence of equal values.
+so the preset survives, by coincidence of equal values. **WRONG (2026-11-01, V4_BOUNDS.md §B; same code in v4pl6 and
+v4rxv2i3):** the inline delivery is posted (`noc_inline_dw_write<DEFAULT, true>`) and writes NOC_CTRL 0x4082, the
+preset is non-posted 0x4092 (RESP_MARKED); disassembly of v4rxv2i3's 2D E/W E1 (cov_m bddlead_O3
+bh_2d__11660148679966767161: d260-d268 vs d3a0-d3a8). Nothing restores the preset, so later local writes go out posted.
 
 **Microbenchmark** (`EriscLoadOverlap.NocCmdBufOverlap`, kernel `erisc_load_ubench/kernels/noc_cmdbuf_overlap.cpp`;
 `results/noc_cmdbuf_overlap.csv`): ERISC1 / NOC1 as the receiver, non-posted transaction-ID writes to a Tensix L1,

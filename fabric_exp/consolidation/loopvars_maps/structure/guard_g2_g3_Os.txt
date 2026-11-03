@@ -1,0 +1,10 @@
+v4rxg2t_Os -> v4rxg3_Os: 84 images with different .text, 126 role analyses
+  bh_2d_vc2_trim_rx0 receiver                28  loop -12 sp S-6 L-9 -['credit_completions<2>:waiting~', 'run:states']
+  bh_2d_vc2_trim_rx0_1erisc receiver         28  loop -1 sp S+0 L+0
+  bh_2d_vc2_trim_rx0_1erisc sender           28  loop +0 sp S+0 L+0
+  bh_vc1_trim_rx0 receiver                    6  loop -9 sp S-2 L+0 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'handle<1>:size~', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:header_word'] -['ncrisc_noc_fast_write<0>:dest_addr.@4', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@4', 'run:states']
+  bh_vc1_trim_rx0 receiver                    4  loop -9 sp S-2 L+0 +['NOC_CMD_BUF_WRITE_REG@ncrisc_noc_fast_write<0>:val', 'handle<1>:size~', 'ncrisc_noc_fast_write<0>:dest_addr.@0', 'noc_async_write_one_packet_with_trid@forward_stateless<1,2>:dst_noc_addr.@0', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@0', 'receive<1>:header_word'] -['credit_completions<1>:waiting~', 'ncrisc_noc_fast_write<0>:dest_addr.@4', 'noc_async_write_one_packet_with_trid_impl@forward_stateless<1,2>:dst_noc_addr.@4', 'run:states']
+  bh_vc1_trim_rx0 receiver                    2  loop -24 sp S-3 L-5 +['forward<1>:size_bytes', 'forward_all@handle<1>:size_bytes', 'forward_each<2>:size_bytes', 'forward_each<3>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'receive<1>:header_word'] -['credit_completions<1>:waiting~', 'run:states']
+  bh_vc1_trim_rx0 receiver                    2  loop -24 sp S-3 L-5 +['forward<2>:size_bytes', 'forward_all@handle<1>:size_bytes', 'forward_each<4>:size_bytes', 'forward_each<5>:size_bytes', 'forward_stateless<1,2>:size_bytes', 'receive<1>:header_word'] -['credit_completions<1>:waiting~', 'run:states']
+  bh_vc1_trim_rx0_1erisc receiver            14  loop -1 sp S+0 L+0
+  bh_vc1_trim_rx0_1erisc sender              14  loop +0 sp S+0 L+0

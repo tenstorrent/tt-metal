@@ -1,0 +1,17 @@
+  318  receiver::run            OTHER
+   44  receiver::run            identical
+  173  receiver::run            same opcodes
+  623  single::receiver_pass    identical
+  623  single::run              identical
+  623  single::sender_pass      identical
+offset shifts: {}
+  OTHER: bh_2d_trim__10676576595029844670/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__10938965340806801191/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__1134133528946450530/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__11372072001925793684/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__11629920025524043912/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__11874507524863479438/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__11938194104373614323/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__12071426536387549396/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__15269074295190870653/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run
+  OTHER: bh_2d_trim__15562277645544150357/subordinate_active_erisc/subordinate_active_erisc.elf receiver::run

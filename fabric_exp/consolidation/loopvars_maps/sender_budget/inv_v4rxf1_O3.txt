@@ -1,0 +1,50 @@
+== v4rxf1_O3: 1667 sender images
+case                           n      pass  carried regs  carried slots  peak regs  peak slots  carried registers by class
+bh_1d                         10       213            14             15         20          15  in_flight 1, invariant 2, other 4, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+bh_1d_1erisc                  10       271             4              0          9           2  other 2, other named 1, pass 1
+bh_1d_mux                     10       124             5              0          9           2  invariant 1, other 2, pass 1, worker interfaces 1
+bh_1d_trim                    10       233            14             16         20          16  in_flight 1, invariant 2, other 4, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+bh_1d_trim_w0                 10       107            19             10         25          10  in_flight 1, invariant 15, pass counter 1, remote receiver 2
+bh_1d_trim_w0_1erisc          10       142             2              0          9           0  pass 1, worker interfaces 1
+bh_2d                         28       455            13             23         22          23  in_flight 1, invariant 3, other 2, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+bh_2d_1erisc                  28       551             4              0          9           2  other 1, other named 1, pass 1, promoted / temporaries 1
+bh_2d_mux                     28       124             5              0          9           2  invariant 1, other 2, pass 1, worker interfaces 1
+bh_2d_mux_trim_all            28         1             0              0          0           0  
+bh_2d_trim                    28       496            14             24         22          24  in_flight 1, invariant 3, other 3, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+bh_2d_udm                     28       124             5              0          9           2  invariant 1, other 2, pass 1, worker interfaces 1
+bh_2d_udm_gtest               28       551             4              0          9           2  other 1, other named 1, pass 1, promoted / temporaries 1
+bh_2d_vc2                     28       596            15             31         24          31  in_flight 1, invariant 4, other 4, pass counter 1, remote receiver 2, worker channel state 3
+bh_2d_vc2_1erisc              28       677             6              0         11           1  other 3, pass 1, promoted / temporaries 1, worker interfaces 1
+bh_2d_vc2_trim_w0             28       471            16             24         24          24  in_flight 1, invariant 4, other 2, pass counter 1, promoted / temporaries 1, remote receiver 4, worker channel state 3
+bh_2d_vc2_trim_w02            28       340            17             21         26          21  in_flight 1, invariant 13, pass counter 1, remote receiver 2
+bh_2d_vc2_trim_w02_1erisc     28       422             2              0         11           0  pass 1, worker interfaces 1
+bh_2d_vc2_trim_w0_1erisc      28       555             2              0         11           0  pass 1, worker interfaces 1
+bh_2d_vc2_trim_w2             28       455            13             23         22          23  in_flight 1, invariant 3, other 2, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+bh_2d_vc2_trim_w2_1erisc      28       551             4              0          9           2  other 1, other named 1, pass 1, promoted / temporaries 1
+bh_neighbor                    4        85            17              9         19           9  invariant 6, other 3, pass counter 1, promoted / temporaries 2, remote receiver 2, worker channel state 3
+bh_neighbor_1erisc             4       125             5              0          9           2  invariant 1, other 2, pass 1, worker interfaces 1
+bh_ring                       10       279            13             16         20          16  in_flight 1, invariant 3, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 5
+bh_ring_1erisc                10       332             5              0          9           2  other 2, other named 1, pass 1, promoted / temporaries 1
+bh_ring_mux                   10       152             5              0          9           2  other 3, pass 1, worker interfaces 1
+bh_torus                      12       597            13             27         22          27  in_flight 1, invariant 3, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 5
+bh_torus_1erisc               12       675             4              0         12           0  other 1, other named 1, pass 1, promoted / temporaries 1
+bh_torus_vc2                  28   596-735         14-15          31-33         24       31-33  in_flight 1, invariant 2-4, other 3-4, pass counter 1, remote receiver 2, worker channel state 3-5
+bh_torus_vc2_1erisc           28   677-801             6              0         11           1  other 3, pass 1, promoted / temporaries 1, worker interfaces 1
+bh_torus_vc2_trim_w0          28   471-582            16          24-27      24-25       24-27  in_flight 1, invariant 4, other 2, pass counter 1, promoted / temporaries 1, remote receiver 4, worker channel state 3
+bh_torus_vc2_trim_w0_1erisc   28   555-652             2              0      11-12           0  pass 1, worker interfaces 1
+bh_trim_gtest                114    85-628         13-19           9-27      19-25        9-27  in_flight 0-1, invariant 2-15, other 0-4, pass counter 1, promoted / temporaries 0-2, remote receiver 2, worker channel state 0-5
+bh_trim_gtest_1erisc         158     1-728           0-5              0       0-12         0-3  invariant 0-1, other 0-2, other named 0-1, pass 0-1, promoted / temporaries 0-1, worker interfaces 0-1
+bh_vc1                        22       832            15             39         24          39  in_flight 1, invariant 5, other 2, pass counter 1, remote receiver 3, worker channel state 3
+bh_vc1_trim_vc1               22       455            13             23         22          23  in_flight 1, invariant 3, other 2, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+bh_vc1_trim_vc1p              22       582            16             29         24          29  in_flight 1, invariant 6, other 2, pass counter 1, remote receiver 3, worker channel state 3
+bh_vc1_trim_w0                22       699            18             37         27          37  in_flight 1, invariant 12, pass counter 1, remote receiver 4
+bh_vc1_trim_w0_1erisc         19       846             2              0         11           0  pass 1, worker interfaces 1
+glx_1d                        12       213            14             15         20          15  in_flight 1, invariant 2, other 4, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+glx_2d                        48       455            13             23         22          23  in_flight 1, invariant 3, other 2, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+glx_express                   28   752-753            15             32      23-24          32  in_flight 1, invariant 5, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 5
+glx_express_1erisc            28   848-863             3              0         12           0  other 1, other named 1, pass 1
+glx_express_line              44   752-753            15             32      23-24          32  in_flight 1, invariant 5, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 5
+glx_express_line_1erisc       44   848-863             3              0         12           0  other 1, other named 1, pass 1
+glx_express_mesh              48       455            13             23         22          23  in_flight 1, invariant 3, other 2, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 3
+glx_ring                       8       279            13             16         20          16  in_flight 1, invariant 3, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 5
+glx_torus                      8       597            13             27         22          27  in_flight 1, invariant 3, pass counter 1, promoted / temporaries 1, remote receiver 2, worker channel state 5

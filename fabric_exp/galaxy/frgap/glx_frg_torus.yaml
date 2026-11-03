@@ -1,0 +1,17 @@
+# FULLRING_MCAST_GAP.md, torus row (coordinator, 2026-11-03): the full-ring multicast on the 2D XY torus. full_ring
+# expands per axis (no folded perimeter on a torus Galaxy): every chip multicasts around its column ring (N/S, 7 hops
+# each way) and its row ring (E/W, 3 hops each way), one sender per axis, at 3072 and 4352 B. Same defaults as
+# glx_sizes_ring.yaml's GlxFullRingMulticast; fabric_setup as glx_sizes_torus.yaml (110-a nodes realize Y=RING X=RING).
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: GlxTorusFullRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 4352]
+  defaults: {ftype: mcast, num_packets: 20000}
+  patterns:
+  - {type: full_ring, iterations: 1}

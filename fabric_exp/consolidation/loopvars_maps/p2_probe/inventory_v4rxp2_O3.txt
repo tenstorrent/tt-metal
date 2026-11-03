@@ -1,0 +1,135 @@
+== v4rxp2_O3: 1661 E1 images
+  bh_1d                        n= 10 carried 18 (regs 14, slots 4)  peak 26 (regs 26, slots 0)
+      channel state 4; invariant (constant/pointer) 6; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_1d_1erisc                 n= 10 carried 5 (regs 5, slots 0)  peak 20 (regs 18, slots 2)
+      invariant (pointer/coords) 1; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 2
+  bh_1d_allinstr               n= 10 carried 19 (regs 15, slots 4)  peak 29 (regs 27, slots 2)
+      channel state 4; invariant (constant/pointer) 2; invariant (pointer/coords) 1; other 5; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_1d_delay                  n= 10 carried 18 (regs 14, slots 4)  peak 26 (regs 26, slots 0)
+      channel state 4; invariant (constant/pointer) 6; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_1d_mux                    n= 10 carried 4 (regs 4, slots 0)  peak 19 (regs 17, slots 2)
+      invariant (pointer/coords) 1; other named 1; promoted memory (NoC counters / downstream cursors) 2
+  bh_1d_telemetry              n= 10 carried 18 (regs 14, slots 4)  peak 26 (regs 26, slots 0)
+      channel state 4; invariant (constant/pointer) 6; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_1d_trim                   n= 10 carried 18 (regs 14, slots 4)  peak 26 (regs 25, slots 1)
+      channel state 4; invariant (constant/pointer) 6; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_1d_trim_w0                n= 10 carried 18 (regs 14, slots 4)  peak 26 (regs 26, slots 0)
+      channel state 4; invariant (constant/pointer) 6; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_1d_trim_w0_1erisc         n= 10 carried 5 (regs 5, slots 0)  peak 20 (regs 18, slots 2)
+      invariant (pointer/coords) 1; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 2
+  bh_2d                        n= 28 carried 18-19 (regs 14-15, slots 4)  peak 27-28 (regs 27, slots 0-1)
+      channel state 4; invariant (constant/pointer) 3-6; invariant (pointer/coords) 2-3; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 3-7
+  bh_2d_1erisc                 n= 28 carried 6-7 (regs 6-7, slots 0)  peak 19-23 (regs 18-19, slots 1-4)
+      invariant (pointer/coords) 2; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 2-4
+  bh_2d_1erisc_delay           n= 28 carried 6-7 (regs 6-7, slots 0)  peak 19-23 (regs 18-19, slots 1-4)
+      invariant (pointer/coords) 2; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 2-4
+  bh_2d_1erisc_passdelay       n= 28 carried 6-7 (regs 6-7, slots 0)  peak 19-23 (regs 18-19, slots 1-4)
+      invariant (pointer/coords) 2; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 2-4
+  bh_2d_allinstr               n= 28 carried 21-23 (regs 14-16, slots 5-8)  peak 31-33 (regs 27, slots 4-6)
+      channel state 4; invariant (constant/pointer) 2-5; invariant (pointer/coords) 2-3; other 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5-8
+  bh_2d_bwtelemetry            n= 28 carried 18-19 (regs 14-15, slots 4)  peak 27 (regs 27, slots 0)
+      channel state 4; invariant (constant/pointer) 5; invariant (pointer/coords) 2-3; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 3-5
+  bh_2d_codeprof               n= 28 carried 21-22 (regs 14-15, slots 6-8)  peak 31-33 (regs 27, slots 4-6)
+      channel state 4; invariant (constant/pointer) 3-4; invariant (pointer/coords) 2-3; other 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 6-8
+  bh_2d_delay                  n= 28 carried 18-19 (regs 14-15, slots 4)  peak 27-28 (regs 27, slots 0-1)
+      channel state 4; invariant (constant/pointer) 3-6; invariant (pointer/coords) 2-3; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 3-7
+  bh_2d_mux                    n= 28 carried 5-7 (regs 5-7, slots 0)  peak 17-23 (regs 17-19, slots 0-4)
+      invariant (pointer/coords) 2; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 1-3
+  bh_2d_mux_delay              n= 28 carried 5-7 (regs 5-7, slots 0)  peak 17-23 (regs 17-19, slots 0-4)
+      invariant (pointer/coords) 2; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 1-3
+  bh_2d_mux_trim_all           n= 28 carried 5-7 (regs 5-7, slots 0)  peak 17-23 (regs 17-19, slots 0-4)
+      invariant (pointer/coords) 2; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 1-3
+  bh_2d_passdelay              n= 28 carried 18-19 (regs 14-15, slots 4)  peak 27-28 (regs 27, slots 0-1)
+      channel state 4; invariant (constant/pointer) 3-6; invariant (pointer/coords) 2-3; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 3-7
+  bh_2d_telemetry              n= 28 carried 18 (regs 14, slots 4)  peak 27 (regs 27, slots 0)
+      channel state 4; invariant (constant/pointer) 5; invariant (pointer/coords) 2-3; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 3-4
+  bh_2d_trim                   n= 28 carried 18 (regs 14, slots 4)  peak 27-29 (regs 26-27, slots 1-2)
+      channel state 4; invariant (constant/pointer) 4-6; invariant (pointer/coords) 2-3; other 1-2; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-4
+  bh_2d_udm                    n= 28 carried 4 (regs 4, slots 0)  peak 16-17 (regs 16, slots 0-1)
+      invariant (pointer/coords) 2; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1
+  bh_2d_udm_gtest              n= 28 carried 5 (regs 5, slots 0)  peak 18 (regs 17, slots 1)
+      invariant (pointer/coords) 2; other 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1-2
+  bh_2d_vc2                    n= 28 carried 20-21 (regs 11, slots 9-10)  peak 31-33 (regs 26-27, slots 5-6)
+      channel state 8; invariant (constant/pointer) 5-7; invariant (pointer/coords) 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-3
+  bh_2d_vc2_1erisc             n= 28 carried 7-8 (regs 7-8, slots 0)  peak 20-25 (regs 19-20, slots 1-5)
+      invariant (pointer/coords) 2; other named 1; promoted memory (NoC counters / downstream cursors) 4-5
+  bh_2d_vc2_trim_w0            n= 28 carried 20-22 (regs 12, slots 8-10)  peak 31-33 (regs 27, slots 4-6)
+      channel state 8; invariant (constant/pointer) 5-7; invariant (pointer/coords) 2-3; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-3
+  bh_2d_vc2_trim_w02           n= 28 carried 20-22 (regs 12, slots 8-10)  peak 31-33 (regs 27, slots 4-6)
+      channel state 8; invariant (constant/pointer) 5-7; invariant (pointer/coords) 2-3; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-3
+  bh_2d_vc2_trim_w02_1erisc    n= 28 carried 7-8 (regs 7-8, slots 0)  peak 20-25 (regs 19-20, slots 1-5)
+      invariant (pointer/coords) 2; other named 1; promoted memory (NoC counters / downstream cursors) 4-5
+  bh_2d_vc2_trim_w0_1erisc     n= 28 carried 7-8 (regs 7-8, slots 0)  peak 20-25 (regs 19-20, slots 1-5)
+      invariant (pointer/coords) 2; other named 1; promoted memory (NoC counters / downstream cursors) 4-5
+  bh_2d_vc2_trim_w2            n= 28 carried 20-22 (regs 12, slots 8-10)  peak 31-33 (regs 27, slots 4-6)
+      channel state 8; invariant (constant/pointer) 5-7; invariant (pointer/coords) 2-3; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-3
+  bh_2d_vc2_trim_w2_1erisc     n= 28 carried 7-8 (regs 7-8, slots 0)  peak 20-25 (regs 19-20, slots 1-5)
+      invariant (pointer/coords) 2; other named 1; promoted memory (NoC counters / downstream cursors) 4-5
+  bh_neighbor                  n=  4 carried 17 (regs 13, slots 4)  peak 25 (regs 25, slots 0)
+      channel state 4; invariant (constant/pointer) 6; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_neighbor_1erisc           n=  4 carried 4 (regs 4, slots 0)  peak 21 (regs 18, slots 3)
+      other named 1; promoted memory (NoC counters / downstream cursors) 3
+  bh_neighbor_delay            n=  4 carried 17 (regs 13, slots 4)  peak 25 (regs 25, slots 0)
+      channel state 4; invariant (constant/pointer) 6; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_ring                      n= 10 carried 18 (regs 14, slots 4)  peak 29 (regs 27, slots 2)
+      channel state 4; invariant (constant/pointer) 3; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 8
+  bh_ring_1erisc               n= 10 carried 8 (regs 8, slots 0)  peak 25 (regs 21, slots 4)
+      invariant (pointer/coords) 1; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_ring_allinstr             n= 10 carried 17 (regs 11, slots 6)  peak 31 (regs 27, slots 4)
+      channel state 4; invariant (constant/pointer) 5; invariant (pointer/coords) 2; other 2; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2
+  bh_ring_delay                n= 10 carried 18 (regs 14, slots 4)  peak 29 (regs 27, slots 2)
+      channel state 4; invariant (constant/pointer) 3; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 8
+  bh_ring_mux                  n= 10 carried 7 (regs 7, slots 0)  peak 24 (regs 20, slots 4)
+      invariant (pointer/coords) 1; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 4
+  bh_ring_passdelay            n= 10 carried 18 (regs 14, slots 4)  peak 29 (regs 27, slots 2)
+      channel state 4; invariant (constant/pointer) 3; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 8
+  bh_torus                     n= 12 carried 18-20 (regs 12-15, slots 5-6)  peak 29-31 (regs 27, slots 2-4)
+      channel state 4; invariant (constant/pointer) 3-4; invariant (pointer/coords) 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5-9
+  bh_torus_1erisc              n= 12 carried 9 (regs 9, slots 0)  peak 24-25 (regs 20-21, slots 4)
+      invariant (pointer/coords) 2; other 1; other named 1; promoted memory (NoC counters / downstream cursors) 5
+  bh_torus_vc2                 n= 28 carried 20-21 (regs 9-12, slots 8-11)  peak 31-35 (regs 27, slots 4-8)
+      channel state 8; invariant (constant/pointer) 4-5; invariant (pointer/coords) 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-4
+  bh_torus_vc2_1erisc          n= 28 carried 7-11 (regs 7-11, slots 0)  peak 20-28 (regs 19-23, slots 1-5)
+      invariant (pointer/coords) 2; other 2; other named 1; promoted memory (NoC counters / downstream cursors) 4-6
+  bh_torus_vc2_trim_w0         n= 28 carried 20-21 (regs 9-12, slots 8-11)  peak 31-35 (regs 27, slots 4-8)
+      channel state 8; invariant (constant/pointer) 4-5; invariant (pointer/coords) 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-4
+  bh_torus_vc2_trim_w0_1erisc  n= 28 carried 7-11 (regs 7-11, slots 0)  peak 20-28 (regs 19-23, slots 1-5)
+      invariant (pointer/coords) 2; other 2; other named 1; promoted memory (NoC counters / downstream cursors) 4-6
+  bh_trim_gtest                n=110 carried 17-20 (regs 13-15, slots 4-5)  peak 25-31 (regs 25-27, slots 0-4)
+      channel state 4; invariant (constant/pointer) 3-6; invariant (pointer/coords) 1-3; other 1-2; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-9
+  bh_trim_gtest_1erisc         n=158 carried 1-9 (regs 1-9, slots 0)  peak 4-25 (regs 4-20, slots 0-6)
+      invariant (pointer/coords) 1-2; other 1; other named 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 2-5
+  bh_vc1                       n= 22 carried 20-24 (regs 9-12, slots 9-12)  peak 29-35 (regs 24-27, slots 5-8)
+      channel state 4-8; invariant (constant/pointer) 4-5; invariant (pointer/coords) 3-4; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1-6
+  bh_vc1_allinstr              n=  6 carried 21-27 (regs 9-11, slots 10-18)  peak 33-41 (regs 27, slots 6-14)
+      channel state 4-8; invariant (constant/pointer) 5-6; invariant (pointer/coords) 3-4; other 2-6; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1-5
+  bh_vc1_delay                 n= 22 carried 20-24 (regs 9-12, slots 9-12)  peak 29-35 (regs 24-27, slots 5-8)
+      channel state 4-8; invariant (constant/pointer) 4-5; invariant (pointer/coords) 3-4; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1-6
+  bh_vc1_passdelay             n= 22 carried 20-24 (regs 9-12, slots 9-12)  peak 29-35 (regs 24-27, slots 5-8)
+      channel state 4-8; invariant (constant/pointer) 4-5; invariant (pointer/coords) 3-4; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1-6
+  bh_vc1_trim_vc1              n= 22 carried 20-24 (regs 9-12, slots 9-12)  peak 29-35 (regs 24-27, slots 5-8)
+      channel state 4-8; invariant (constant/pointer) 4-5; invariant (pointer/coords) 3-4; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1-6
+  bh_vc1_trim_vc1p             n= 22 carried 20-24 (regs 9-12, slots 9-12)  peak 29-35 (regs 24-27, slots 5-8)
+      channel state 4-8; invariant (constant/pointer) 4-5; invariant (pointer/coords) 3-4; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1-6
+  bh_vc1_trim_w0               n= 20 carried 20-24 (regs 9-12, slots 9-12)  peak 29-35 (regs 24-27, slots 5-8)
+      channel state 4-8; invariant (constant/pointer) 4-5; invariant (pointer/coords) 3-4; other 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 1-6
+  bh_vc1_trim_w0_1erisc        n= 19 carried 8-10 (regs 8-10, slots 0)  peak 22-26 (regs 19-22, slots 3-5)
+      invariant (pointer/coords) 2; other 1-2; other named 1; promoted memory (NoC counters / downstream cursors) 4-5
+  glx_1d                       n= 12 carried 18 (regs 14, slots 4)  peak 26 (regs 26, slots 0)
+      channel state 4; invariant (constant/pointer) 6; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 5
+  glx_2d                       n= 48 carried 18-19 (regs 14-15, slots 4-5)  peak 27-28 (regs 27, slots 0-1)
+      channel state 4; invariant (constant/pointer) 3-6; invariant (pointer/coords) 2-3; other 1-2; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 3-7
+  glx_express                  n= 28 carried 18-20 (regs 11-15, slots 5-7)  peak 30-31 (regs 27, slots 3-4)
+      channel state 4; invariant (constant/pointer) 3-5; invariant (pointer/coords) 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 4-9
+  glx_express_1erisc           n= 28 carried 9-11 (regs 9-11, slots 0)  peak 24-29 (regs 20-23, slots 4-6)
+      invariant (pointer/coords) 2; other 1-2; other named 1; promoted memory (NoC counters / downstream cursors) 5-7
+  glx_express_line             n= 44 carried 18-20 (regs 11-15, slots 5-7)  peak 30-31 (regs 27, slots 3-4)
+      channel state 4; invariant (constant/pointer) 3-5; invariant (pointer/coords) 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 4-9
+  glx_express_line_1erisc      n= 44 carried 9-11 (regs 9-11, slots 0)  peak 24-29 (regs 20-23, slots 4-6)
+      invariant (pointer/coords) 2; other 1-2; other named 1; promoted memory (NoC counters / downstream cursors) 5-7
+  glx_express_mesh             n= 48 carried 18-19 (regs 14-15, slots 4-5)  peak 27-28 (regs 27, slots 0-1)
+      channel state 4; invariant (constant/pointer) 3-6; invariant (pointer/coords) 2-3; other 1-2; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 3-7
+  glx_ring                     n=  8 carried 18 (regs 14, slots 4)  peak 29 (regs 27, slots 2)
+      channel state 4; invariant (constant/pointer) 3; invariant (pointer/coords) 1; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 8
+  glx_torus                    n=  8 carried 18-20 (regs 11-15, slots 5-7)  peak 30-31 (regs 27, slots 3-4)
+      channel state 4; invariant (constant/pointer) 3-5; invariant (pointer/coords) 2-3; pass counter 1; pass: frame due 1; promoted memory (NoC counters / downstream cursors) 4-9

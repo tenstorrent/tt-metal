@@ -1,0 +1,13 @@
+## -O3: code bytes (largest per ERISC; E0+E1 vs 26624) and least free stack bytes
+case                     |  v4txc4p E0  E1  E0+E1  free E0  E1 | v4txc4pn E0  E1  E0+E1  free E0  E1
+bh_1d                    |   8548   6204  14752    2068   4496 |   9300   6204  15504    2068   4496
+bh_2d                    |   9960   6352  16312    1924   4448 |  10720   6352  17072    1924   4448
+bh_2d_1erisc             |      -  11064  11064       -   4120 |      -  11208  11208       -   4120
+bh_vc1                   |  12120  10128  22248    1684   4236 |  12876  10128  23004    1684   4236
+bh_vc1_vc2               |  13216  11600  24816    1588   4204 |  13972  11600  25572    1588   4204
+bh_vc1_vc2_1erisc        |      -  20164  20164       -   3616 |      -  20304  20304       -   3616
+glx_express              |  11404   7176  18580    1812   4368 |  12156   7176  19332    1812   4368
+
+## -O3: worst over the 7 cases every build has
+v4txc4p    ELFs   270  largest code E0  13216 E1  20164  E0+E1 24816 (bh_vc1_vc2, +1808 left)  least free E0 1588 E1 3616  deepest E0 628 E1 912
+v4txc4pn   ELFs   270  largest code E0  13972 E1  20304  E0+E1 25572 (bh_vc1_vc2, +1052 left)  least free E0 1588 E1 3616  deepest E0 628 E1 912

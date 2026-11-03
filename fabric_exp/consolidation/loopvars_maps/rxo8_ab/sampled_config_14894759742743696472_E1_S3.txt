@@ -1,0 +1,53 @@
+subordinate_active_erisc.elf (aa9089051bc19480, tenstorrent/sfpi:7.91.0[1077] 15.1.0): receiver _ZN13fabric_router8receiver3runERNS_21DownstreamConnectionsE
+  loop: largest strongly connected region of run(): 871 of 949 instructions, frame 208
+  sp accesses in the loop: 49 (31 loads, 18 stores), unknown 16
+  stored to the stack in the loop (spills):
+    NOC_CMD_BUF_WRITE_REG@deliver<0>:val         sp+32     S1 L3 [register+slot]  L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174 x3; S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485 x1
+    NOC_CMD_BUF_WRITE_REG@deliver<1>:val         sp+28     S1 L3 [register+slot]  L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174 x3; S ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485 x1
+    deliver<0>:chunks                            sp+24     S1 L5 [slot]  L deliver router_local_delivery.hpp:148 x1; L deliver router_local_delivery.hpp:154 x1; L deliver router_local_delivery.hpp:163 x2; L deliver router_local_delivery.hpp:172 x1; S deliver router_local_delivery.hpp:140 x1
+    deliver<0>:encoding                          sp+28     S1 L0 [slot]  S deliver router_local_delivery.hpp:141 x1
+    deliver<0>:encoding~                         sp+28     S2 L3 [slot]  L shift_to_next_chunk fabric_edm_packet_transmission.hpp:150 x3; S deliver router_local_delivery.hpp:162 x2
+    deliver<1>:encoding                          sp+24     S1 L0 [slot]  S deliver router_local_delivery.hpp:141 x1
+    handle<0>:downstreams                        sp+36     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:189 x1; S deliver router_local_delivery.hpp:189 x1
+    handle<0>:routers                            sp+36     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:189 x1; S deliver router_local_delivery.hpp:189 x1
+    handle<1>:downstreams                        sp+32     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:189 x1; S deliver router_local_delivery.hpp:189 x1
+    pass:downstreams                             sp+36     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:189 x1; S deliver router_local_delivery.hpp:189 x1
+    pass:txq_status                              sp+12     S1 L1 [register+slot]  L send_credit_frame router_receiver.hpp:662 x1; S eth_txq_reg_read tt_eth_api.h:31 x1
+    receive<0>:downstreams                       sp+36     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:189 x1; S deliver router_local_delivery.hpp:189 x1
+    receive<1>:downstreams                       sp+32     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:189 x1; S deliver router_local_delivery.hpp:189 x1
+    step<0>:downstreams                          sp+36     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:189 x1; S deliver router_local_delivery.hpp:189 x1
+    step<1>:downstreams                          sp+32     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:189 x1; S deliver router_local_delivery.hpp:189 x1
+  loaded only (on the stack before the loop):
+    deliver<1>:encoding~                         sp+24     S0 L3 [slot]  L shift_to_next_chunk fabric_edm_packet_transmission.hpp:150 x3
+    run:downstreams                              sp+44     S0 L1 [slot]  L run fabric_router_flow_control.hpp:47 x1
+    run:me.x                                     sp+20     S0 L1 [slot]  L Routing2D router_routing.hpp:93 x1
+    run:me.y                                     sp+16     S0 L1 [slot]  L Routing2D router_routing.hpp:92 x1
+    send_credit_frame:seen_free~                 sp+12     S0 L1 [slot]  L send_credit_frame router_receiver.hpp:662 x1
+    send_credit_frame:txq_status_at_pass_start   sp+12     S0 L1 [slot]  L send_credit_frame router_receiver.hpp:662 x1
+  unknown (no DWARF variable by slot or register):
+      2  L sp+24 deliver router_local_delivery.hpp:189
+      1  L sp+28 count_local_writes router_local_delivery.hpp:92
+      2  L sp+28 deliver router_local_delivery.hpp:189
+      1  L sp+32 deliver router_local_delivery.hpp:189
+      1  L sp+36 deliver router_local_delivery.hpp:189
+      1  L sp+40 deliver router_local_delivery.hpp:189
+      2  S sp+24 deliver router_local_delivery.hpp:189
+      1  S sp+28 deliver fabric_edm_packet_transmission.hpp:150
+      2  S sp+28 deliver router_local_delivery.hpp:189
+      1  S sp+32 deliver router_local_delivery.hpp:189
+      1  S sp+36 deliver router_local_delivery.hpp:189
+      1  S sp+40 deliver router_local_delivery.hpp:189
+  DISAGREE (value's scope not in the access's inline chain):
+      1  S sp+28 ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485: ['NOC_CMD_BUF_WRITE_REG@deliver<1>:val'] (chain ncrisc_noc_set_transaction_id < local_write < deliver < handle < receive < step < pass < run)
+      1  S sp+32 ncrisc_noc_set_transaction_id noc_nonblocking_api.h:1485: ['NOC_CMD_BUF_WRITE_REG@deliver<0>:val'] (chain ncrisc_noc_set_transaction_id < local_write < deliver < handle < receive < step < pass < run)
+  DWARF only (placed on the stack in the loop, no access found): run:round sp+60, run:sources sp+76
+  callee-saved registers (values, loop instructions):
+    s0   {'run:cursor1.position.slot_addr': 856, 'receive<1>:header': 322, 'handle<1>:header': 316}
+    s4   {'run:cursor1.position.index': 863, 'of_slot@handle<1>:group': 317, 'deliver<1>:trid~': 254}
+    s5   {'run:cursor0.position.index': 862, 'of_slot@handle<0>:group': 385, 'credit_completions<0>:next_index': 23}
+    s6   {'run:cursor0.position.slot_addr': 859, 'receive<0>:header': 410, 'action@receive<0>:volatile_header': 408}
+    s7   {'run:cursor0.position.ready': 865, 'ring_add<16>:n': 2}
+    s8   {'run:cursor1.counts.uncredited': 863, 'credit_completions<1>:waiting': 20, 'accumulate_completion_credits<1,4>:first~': 2}
+    s9   {'run:cursor0.counts.uncredited': 871, 'credit_completions<0>:waiting': 23, 'oldest_uncredited<16>:waiting': 9}
+    s10  {'pass:arrived1': 482, 'retire<1>:source~': 21, 'step<1>:arrived_raw': 14}
+    s11  {'run:cursor1.position.ready': 823, 'step<1>:arrived': 7, 'receive<1>:arrived': 5}

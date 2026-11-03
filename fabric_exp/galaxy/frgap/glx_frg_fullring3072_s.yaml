@@ -1,0 +1,23 @@
+# FULLRING_MCAST_GAP.md probe P1 (2026-11-03): pcs/glx_fullring4352.yaml (point 5, sampled) at 3072 B, for the
+# within-ERISC split at the router-bound size. 120,000,000 packets (~120-170 s of traffic at 3072 B).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BdGlxFullRing3072
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 3072
+  defaults:
+    ftype: mcast
+    num_packets: 120000000
+  patterns:
+  - type: full_ring
+    iterations: 1

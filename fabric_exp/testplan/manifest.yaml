@@ -1,0 +1,356 @@
+# Regression groups for landing the new fabric router (TEST_PLAN.md §4). Read by run_group.py.
+#
+# A group is one Slurm-sized unit: one system, one allocation (or a series of <= 25 min broker jobs on a09u32), and a
+# list of steps. A step is one CI entry (`from_ci`, so the command is read from the tree under test and never drifts)
+# or an explicit `cmd`. Each step's timeout is its CI timeout unless `timeout_min` overrides it.
+#
+# Step fields:
+#   id            TEST_PLAN §1 ID (B0-1d, G1-night, ...); unique within the group
+#   from_ci       {list: <tests/pipeline_reorg file>, name: <entry name>, sku: <sku whose timeout / {placeholders} apply>,
+#                  lines_matching: <regex, keep only these lines>, drop_lines: [<regex>, ...]}
+#   cmd           explicit shell command (run from TT_METAL_HOME); `ci_ref` names the CI entry it mirrors, if any
+#   timeout_min   overrides the CI timeout
+#   result        collector(s): gtest | pytest | fabric_csv | benchmark_json | metrics | log_marker (several: a list)
+#   metrics       for result metrics: regex with named groups; group `value` is the number, the others the row key
+#   marker        for result log_marker: regex that must appear in the log for PASS
+#   env           extra environment for this step only
+#   needs         [weights_mlperf, mpi, ring_mapping, study_tree]: preflight checks; a step whose need is unmet is SKIP
+#   status        planned: listed by `plan`, never run (with `why`)
+#
+# Group fields: id, level (L0 | L1 | L2), system, kind (coverage | perf), routers (modes it runs), passes (perf A/B
+# orders, one list per pass), status (ready | held | planned | ci_only | multi_galaxy) + why, steps.
+version: 1
+ci_lists: tests/pipeline_reorg
+
+# The one place that maps a router mode to environment (MAINLINE_PLAN §1.6). `new` is a placeholder until the port names
+# its switch; the runner refuses to run `new` while it says TBD.
+router_env:
+  main: {}
+  new: {TT_METAL_FABRIC_ROLE_ROUTER: "TBD"}
+
+# Environment of every step: the CI container defaults (tm-fabric-tests-impl, blackhole-e2e-tests-impl and
+# setup-job: auto-triage's 5 s dispatch timeout, no triage command). TT_METAL_HOME, PYTHONPATH, LD_LIBRARY_PATH,
+# GTEST_OUTPUT, TT_METAL_CACHE are set by the runner per tree and step.
+ci_env:
+  ARCH_NAME: blackhole
+  LOGURU_LEVEL: INFO
+  TT_LOGGER_LEVEL: warn
+  TT_METAL_OPERATION_TIMEOUT_SECONDS: "5"   # setup-job auto-triage default; dropped for entries with auto_triage: false
+  TRACY_NO_WEB_SERVER: "1"                  # tools/tracy would otherwise leave a web server running after the step
+# Extra CI env per workflow family, applied by test list.
+ci_env_by_list:
+  fabric_tests.yaml: {TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'}
+
+# Model weights. CI mounts /mnt/MLPerf; the runner sets these only for steps that `need` weights.
+weights:
+  weights_mlperf: {mount: /mnt/MLPerf, env: {HF_HOME: /mnt/MLPerf/huggingface}}
+
+# Named trees. `path` is the tree on a09u32 (built there); `data_path` its lean copy on /data that Slurm nodes run
+# (stage with `run_group.py stage`). A later new-router tree is added here the same way.
+trees:
+  main:
+    path: /home/aagarwal/tt-metal-main
+    data_path: /data/aagarwal/regress/trees/main_d2bd12f
+    sha: d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1
+
+results:
+  local: /home/aagarwal/tt-metal/fabric_exp/testplan/results     # a09u32 broker runs write here; `collect` copies Slurm results here
+  data: /data/aagarwal/regress/results                           # Slurm jobs write here
+
+systems:
+  bh_loudbox:
+    arch: blackhole
+    chips: 8
+    sku: bh_loudbox
+    broker:                                   # a09u32: the user's tt-device broker queue (commands go through the user)
+      node: bh-lb-120-a09u32
+      workspace: /home/aagarwal
+      max_job_s: 1500
+      budget_s: 1380                          # what one broker job may spend on steps (margin for startup and copies)
+      cache: /home/aagarwal/.tt-metal-cache-regress
+    slurm:                                    # extra LoudBoxes (LB2_HARNESS.md); one job per node at a time
+      nodes: {bh-lb-120-a07u28: bh_lb_C45, bh-lb-120-a08u28: bh_lb_C67, bh-lb-120-a04u24: bh_lb_120_A45}
+      reset: tt-smi -r
+  bh_galaxy:
+    arch: blackhole
+    chips: 32
+    sku: bh_galaxy
+    slurm:
+      partition: bh_sc36_6
+      node_regex: '^bh-glx-110-a'             # user rule 2026-11-02: 110-a Galaxies only
+      exclude_for_ring: [bh-glx-110-a02u14]   # cannot map ring / torus (one link per chip pair)
+      max_concurrent: 4                       # study Galaxy allocations, all agents, running + pending
+      reset: tt-smi -glx_reset
+  bh_qb2:
+    status: not_approved                      # partition bh_qb2: ask the user first
+    sku: bh_quietbox_2
+    slurm: {partition: bh_qb2}
+  bh_p150_single:
+    status: not_approved                      # bh_lb_single not approved; P300 stand-in question open
+  bh_quad:
+    status: multi_galaxy                      # fabric_exp/galaxy/glxq_run.sh (the multi-Galaxy agent)
+  cpu:
+    status: not_approved
+    slurm: {partition: cpu_only, time_limit: "01:00:00"}
+
+groups:
+  # ---------------------------------------------------------------- L0 fabric, BH LoudBox (P150x8)
+  - id: LB-L0-a
+    level: L0
+    system: bh_loudbox
+    kind: coverage
+    routers: [main, new]
+    steps:
+      - {id: B0-1d, from_ci: {list: fabric_tests.yaml, name: "BH fabric 1D unit tests", sku: bh_loudbox}, result: gtest}
+      - {id: B0-2d, from_ci: {list: fabric_tests.yaml, name: "BH fabric 2D fixture unit tests", sku: bh_loudbox}, result: gtest}
+      - id: B0-1e        # the single-ERISC line of the fast set (its other lines are B0-1d / B0-2d / B0-mux)
+        from_ci: {list: blackhole_e2e_tests.yaml, name: "fabric fast unit tests (1D, 2D, single erisc)", sku: bh_loudbox, lines_matching: DISABLE_MULTI_AERISC}
+        result: gtest
+      - {id: B0-mux, from_ci: {list: fabric_tests.yaml, name: "BH fabric mux v2 unit tests", sku: bh_loudbox}, result: gtest}
+      - {id: B0-trim, from_ci: {list: fabric_tests.yaml, name: "BH fabric channel trimming tests", sku: bh_loudbox}, result: gtest}
+      - {id: B0-udm, from_ci: {list: fabric_tests.yaml, name: "BH fabric UDM mode unit tests", sku: bh_loudbox}, result: gtest}
+      - {id: B0-udm-ttnn, from_ci: {list: fabric_tests.yaml, name: "BH ttnn UDM unit tests", sku: bh_loudbox}, result: gtest}
+  - id: LB-L0-b
+    level: L0
+    system: bh_loudbox
+    kind: coverage
+    routers: [main, new]
+    steps:
+      - {id: B0-health, from_ci: {list: fabric_tests.yaml, name: "BH fabric system health tests", sku: bh_loudbox}, result: gtest}
+      - {id: B0-infra, from_ci: {list: fabric_tests.yaml, name: "BH fabric infra unit tests", sku: bh_loudbox}, result: log_marker, marker: "Tests: \\d+ executed, 0 failed"}
+      - {id: B0-stab, from_ci: {list: fabric_tests.yaml, name: "BH fabric stability nightly tests", sku: bh_loudbox}, result: log_marker, marker: "Tests: \\d+ executed, 0 failed"}
+      - id: B0-night     # NightlyFabric*: in CI for T3K / Galaxy, not BH boxes; same command as the Galaxy entry
+        from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric unit tests", sku: bh_galaxy}
+        result: gtest
+      - {id: B0-eth, from_ci: {list: runtime_integration_tests.yaml, name: bh_multicard_eth, sku: bh_loudbox}, result: gtest}
+  - id: LB-L0-study
+    level: L0
+    system: bh_loudbox
+    kind: coverage
+    routers: [main, new]
+    status: planned
+    why: "the study's validation yamls (fabric_exp/v4/val_*.yaml) use study-only test_tt_fabric keys; MAINLINE_PLAN commit 8 moves them"
+    steps:
+      - {id: B0-study, cmd: "echo planned", needs: [study_tree], timeout_min: 25, result: log_marker, marker: "never"}
+  - id: LB-P
+    level: L0
+    system: bh_loudbox
+    kind: perf
+    routers: [main, new]
+    passes: [[main, new], [new, main]]
+    status: held
+    why: "telemetry decision pending: CI default (BW telemetry on in benchmark mode) vs TT_FABRIC_NO_BW_TELEMETRY=1"
+    steps:
+      - {id: B0-bench, from_ci: {list: blackhole_e2e_tests.yaml, name: "fabric sanity benchmark", sku: bh_loudbox}, result: [fabric_csv, log_marker], marker: "Tests: \\d+ executed, 0 failed"}
+
+  # ---------------------------------------------------------------- L1 CCL, BH LoudBox
+  - id: LB-L1
+    level: L1
+    system: bh_loudbox
+    kind: coverage
+    routers: [main, new]
+    steps:
+      - {id: B1-apc, from_ci: {list: blackhole_e2e_tests.yaml, name: "ttnn ops fast unit tests (ccl, DRAM prefetcher)", sku: bh_loudbox}, result: pytest}
+      - {id: B1-night, from_ci: {list: fabric_tests.yaml, name: "BH ccl nightly tests", sku: bh_loudbox}, result: pytest}
+      - id: B1-watch     # the box/watcher half of the QB2 "ccl nightly tests" entry (its box/nightly half is B1-night)
+        from_ci: {list: ops_unit_tests.yaml, name: "ccl nightly tests", sku: bh_quietbox_2, drop_lines: ['^pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly\s*$']}
+        timeout_min: 30
+        result: pytest
+      - {id: B1-dp, from_ci: {list: ops_unit_tests.yaml, name: "Disaggregated prefill op unit tests (LB)", sku: bh_loudbox}, result: pytest}
+      - {id: B1-sock, from_ci: {list: runtime_integration_tests.yaml, name: bh_multicard_sockets, sku: bh_loudbox}, result: gtest}
+  - id: LB-L1P
+    level: L1
+    system: bh_loudbox
+    kind: perf
+    routers: [main, new]
+    passes: [[main, new], [new, main]]
+    why: "DeepSeek CCL trace perf matrix (the study's CCL_MATRIX.md rows), device-profiler op times; telemetry-independent"
+    steps:
+      - id: B1-ccl-ag
+        cmd: "for s in 2048 4096 4352 8192 15232; do python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl all_gather --max-payload-sizes $s --output-dir $REGRESS_STEP_DIR/ccl; done"
+        timeout_min: 15
+        result: metrics
+        metrics: 'Updated reports after ccl=(?P<ccl>\w+), num_links=(?P<links>\d+), max_payload_size_bytes=(?P<payload>\d+): op_time=(?P<value>[\d.]+) us'
+      - id: B1-ccl-ar
+        cmd: "for l in 1 2; do for s in 2048 4096 4352 8192 15232; do python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl all_reduce --max-payload-sizes $s --num-links $l --output-dir $REGRESS_STEP_DIR/ccl; done; done"
+        timeout_min: 20
+        result: metrics
+        metrics: 'Updated reports after ccl=(?P<ccl>\w+), num_links=(?P<links>\d+), max_payload_size_bytes=(?P<payload>\d+): op_time=(?P<value>[\d.]+) us'
+      - id: B1-ccl-bc
+        cmd: "for l in 1 2; do for s in 2048 4096 4352 8192 15232; do python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl broadcast --max-payload-sizes $s --num-links $l --output-dir $REGRESS_STEP_DIR/ccl; done; done"
+        timeout_min: 20
+        result: metrics
+        metrics: 'Updated reports after ccl=(?P<ccl>\w+), num_links=(?P<links>\d+), max_payload_size_bytes=(?P<payload>\d+): op_time=(?P<value>[\d.]+) us'
+      - id: B1-ccl-sdpa
+        cmd: "python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl sdpa_reduce_to_all --max-payload-sizes 4096 --sdpa-num-l-chunks 2 --sdpa-compute-block-sizes 4 --output-dir $REGRESS_STEP_DIR/ccl && python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl sdpa_reduce_to_all --max-payload-sizes 8192 --sdpa-num-l-chunks 2 --sdpa-compute-block-sizes 8 --output-dir $REGRESS_STEP_DIR/ccl && python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl sdpa_reduce_to_all --max-payload-sizes 15232 --sdpa-num-l-chunks 2 --sdpa-compute-block-sizes 8 --output-dir $REGRESS_STEP_DIR/ccl"
+        timeout_min: 10
+        result: metrics
+        metrics: 'Updated reports after ccl=(?P<ccl>\w+), (?:num_links=(?P<links>\d+), )?max_payload_size_bytes=(?P<payload>\d+): op_time=(?P<value>[\d.]+) us'
+
+  # ---------------------------------------------------------------- L2 models, BH LoudBox
+  - id: LB-L2
+    level: L2
+    system: bh_loudbox
+    kind: perf
+    routers: [main, new]
+    steps:
+      - {id: B2-dp-perf, from_ci: {list: blackhole_e2e_tests.yaml, name: "Disaggregated prefill perf tests", sku: bh_loudbox}, needs: [weights_mlperf], result: [pytest, benchmark_json]}
+      - {id: B2-dp-k3, from_ci: {list: blackhole_e2e_tests.yaml, name: "Disaggregated prefill Kimi-K3 MLA + AttnRes perf tests (LoudBox)", sku: bh_loudbox}, needs: [weights_mlperf], result: [pytest, benchmark_json]}
+  - id: LB-L2-vllm
+    level: L2
+    system: bh_loudbox
+    kind: perf
+    routers: [main, new]
+    status: ci_only
+    why: "needs the vLLM install CI images carry; vllm-model-tests.yaml (Gemma4-31B tp=8, Llama-3.1-8B sampling P150x8)"
+    steps: []
+
+  # ---------------------------------------------------------------- L0 fabric, BH Galaxy (110-a, Slurm)
+  - id: G-L0-a
+    level: L0
+    system: bh_galaxy
+    kind: coverage
+    routers: [main, new]
+    steps:
+      - {id: G0-health, from_ci: {list: galaxy_health_tests.yaml, name: "Galaxy Blackhole health", sku: bh_galaxy}, needs: [ring_mapping], result: log_marker, marker: "Tests: \\d+ executed, 0 failed"}
+      - {id: G0-night, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric unit tests", sku: bh_galaxy}, result: gtest}
+      - {id: G0-torus-n, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric 2D Torus Nightly Tests", sku: bh_galaxy}, needs: [ring_mapping], result: log_marker, marker: "Tests: \\d+ executed, 0 failed"}
+      - {id: G0-fix-1d, from_ci: {list: fabric_tests.yaml, name: "BH fabric 1D unit tests", sku: bh_loudbox}, timeout_min: 20, result: gtest}
+      - {id: G0-fix-2d, from_ci: {list: fabric_tests.yaml, name: "BH fabric 2D fixture unit tests", sku: bh_loudbox}, timeout_min: 20, result: gtest}
+      - {id: G0-fix-mux, from_ci: {list: fabric_tests.yaml, name: "BH fabric mux v2 unit tests", sku: bh_loudbox}, timeout_min: 10, result: gtest}
+  - id: G-L0-b
+    level: L0
+    system: bh_galaxy
+    kind: coverage
+    routers: [main, new]
+    steps:
+      - {id: G0-torus-s, from_ci: {list: galaxy_e2e_tests.yaml, name: "BH Galaxy Fabric Torus Stability Tests", sku: bh_galaxy}, needs: [ring_mapping], result: log_marker, marker: "Tests: \\d+ executed, 0 failed"}
+      - {id: G0-mm-z, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric 2x2 multi-mesh sanity (inter-mesh over Z)", sku: bh_galaxy}, needs: [mpi, ring_mapping], result: log_marker, marker: "All tests completed successfully"}
+      - {id: G0-mm-nsew, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric 2x2 multi-mesh sanity (inter-mesh over N/S/E/W)", sku: bh_galaxy}, needs: [mpi, ring_mapping], result: log_marker, marker: "All tests completed successfully"}
+      - {id: G0-mm-trim-nsew, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric 2x2 multi-mesh channel trimming (inter-mesh over N/S/E/W)", sku: bh_galaxy}, needs: [mpi, ring_mapping], result: log_marker, marker: "All tests completed successfully"}
+      - {id: G0-mm-trim-z, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric 2x2 multi-mesh channel trimming (inter-mesh over Z)", sku: bh_galaxy}, needs: [mpi, ring_mapping], result: log_marker, marker: "All tests completed successfully"}
+      - {id: G0-mm-hetero, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric per-mesh heterogeneous-config sanity + multicast (4 MGDs)", sku: bh_galaxy}, needs: [mpi, ring_mapping], result: log_marker, marker: "All tests completed successfully"}
+      - {id: G0-mm-4x4, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests", sku: bh_galaxy}, needs: [mpi], result: log_marker, marker: "All tests completed successfully"}
+      - {id: G0-mm-2x8, from_ci: {list: galaxy_e2e_tests.yaml, name: "Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests", sku: bh_galaxy}, needs: [mpi], result: log_marker, marker: "All tests completed successfully"}
+      - {id: G0-sock, from_ci: {list: galaxy_e2e_tests.yaml, name: "BH Galaxy Socket Pipeline Single Galaxy Cross-Tray", sku: bh_galaxy}, needs: [mpi, ring_mapping], result: gtest}
+      - {id: G0-d2d, from_ci: {list: galaxy_e2e_tests.yaml, name: "BH Galaxy D2D socket sync shared links (direct and relay)", sku: bh_galaxy}, result: pytest}
+      - {id: G0-eth, from_ci: {list: runtime_integration_tests.yaml, name: galaxy_eth, sku: bh_galaxy}, result: gtest}
+  - id: G-P
+    level: L0
+    system: bh_galaxy
+    kind: perf
+    routers: [main, new]
+    passes: [[main, new], [new, main]]
+    status: held
+    why: "telemetry decision pending (test_tt_fabric benchmark mode); no BH Galaxy golden exists, so this is the only baseline"
+    steps:
+      - {id: G0-bench, cmd: "./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_2d_torus_6U_galaxy.yaml", timeout_min: 30, needs: [ring_mapping], result: [fabric_csv, log_marker], marker: "Tests: \\d+ executed, 0 failed"}
+
+  # ---------------------------------------------------------------- L1 CCL, BH Galaxy
+  - id: G-L1
+    level: L1
+    system: bh_galaxy
+    kind: coverage
+    routers: [main, new]
+    steps:
+      - {id: G1-night, from_ci: {list: ops_unit_tests.yaml, name: "BH Galaxy CCL tests", sku: bh_galaxy}, result: pytest}
+      - {id: G1-dp, from_ci: {list: ops_unit_tests.yaml, name: "Disaggregated prefill op unit tests (BH Galaxy)", sku: bh_galaxy}, needs: [ring_mapping], result: pytest}
+      - id: G1-mh        # not in CI; the exabox multi-host CCL suite on one Galaxy (8x4, no MPI)
+        cmd: "MESH_DEVICE=SINGLE_BH bash tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/scripts/run_multi_host_ccl_tests.sh"
+        timeout_min: 40
+        result: pytest
+  - id: G-L1P
+    level: L1
+    system: bh_galaxy
+    kind: perf
+    routers: [main, new]
+    passes: [[main, new], [new, main]]
+    why: "exabox high-BW all-gather CCL perf + accuracy (bh_sc1_high_power entry; the 110-a Galaxies are exabox SC1 nodes)"
+    steps:
+      - id: G1-hbw       # the CI entry's pytest lines without its `mpirun --pernode bash -lc` wrapper (one host = one rank; a login shell would drop the venv)
+        ci_ref: {list: blaze_models_prefill_tests.yaml, name: "high_bw_all_gather CCL perf + accuracy", sku: bh_sc1_high_power}
+        cmd: |
+          export MESH_DEVICE=TG
+          export TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1
+          export OMP_NUM_THREADS=$(nproc)
+          python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q
+          python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_whole_mesh_accuracy -q
+          python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q
+          python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q
+          python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q
+          python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)"
+          python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)"
+        timeout_min: 20
+        needs: [ring_mapping]
+        result: [pytest, benchmark_json]
+  - id: G-L1-iso
+    level: L1
+    system: bh_galaxy
+    kind: coverage
+    routers: [main, new]
+    status: ci_only
+    why: "multi-user isolation runs one docker container per sub-mesh (galaxy-multi-user-isolation-tests-impl); not reproducible from Slurm"
+    steps: []
+
+  # ---------------------------------------------------------------- L2 models, BH Galaxy
+  - id: G-L2-a
+    level: L2
+    system: bh_galaxy
+    kind: perf
+    routers: [main, new]
+    steps:
+      - {id: G2-qwen, from_ci: {list: models_e2e_tests.yaml, name: "Qwen3-32B e2e tests (Galaxy)", sku: bh_galaxy}, needs: [weights_mlperf], result: [pytest, benchmark_json]}
+      - {id: G2-oss, from_ci: {list: models_e2e_tests.yaml, name: "GPT-OSS 120B e2e tests", sku: bh_galaxy}, needs: [weights_mlperf], result: [pytest, benchmark_json]}
+      - {id: G2-mm3, from_ci: {list: models_unit_tests.yaml, name: "MiniMax-M3 unit tests (BH Galaxy 8x4)", sku: bh_galaxy}, needs: [weights_mlperf], result: pytest}
+  - id: G-L2-b
+    level: L2
+    system: bh_galaxy
+    kind: coverage
+    routers: [main, new]
+    steps:
+      - {id: G2-dsb1-sweep, from_ci: {list: demo_sp_release_tests.yaml, name: "Single Galaxy - Decoder Sweep vs reference (DeepSeek V3 B1)", sku: bh_galaxy}, needs: [weights_mlperf], result: pytest}
+      - {id: G2-dsb1-fab, from_ci: {list: demo_sp_release_tests.yaml, name: "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO", sku: bh_galaxy}, needs: [weights_mlperf], result: pytest}
+      - {id: G2-dsb1-more, from_ci: {list: demo_sp_release_tests.yaml, name: "bh_galaxy_DeepSeek_B1_Unit_Tests_MoreFabric", sku: bh_galaxy}, needs: [weights_mlperf], result: pytest}
+  - id: G-L2-vllm
+    level: L2
+    system: bh_galaxy
+    kind: perf
+    routers: [main, new]
+    status: ci_only
+    why: "vLLM Qwen3-32B device (BH Galaxy): needs CI's vLLM image"
+    steps: []
+
+  # ---------------------------------------------------------------- not yet approved / other harnesses
+  - id: X-cpu
+    level: L0
+    system: cpu
+    kind: coverage
+    routers: [main, new]
+    status: planned
+    why: "cpu_only partition not on the approved list; CI tm-fabric-tests runs fabric_cpu_only_unit_tests.yaml"
+    steps:
+      - {id: X0-cpu, cmd: "./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group all", timeout_min: 60, result: gtest}
+  - id: QB-all
+    level: L0
+    system: bh_qb2
+    kind: coverage
+    routers: [main, new]
+    status: planned
+    why: "bh_qb2 not approved (QB-L0, QB-P, QB-L1, QB-L2 of TEST_PLAN §4.4)"
+    steps: []
+  - id: MG-all
+    level: L0
+    system: bh_quad
+    kind: coverage
+    routers: [main, new]
+    status: multi_galaxy
+    why: "MG0-*, MG1-mh, MG2-*: the multi-Galaxy harness (fabric_exp/galaxy/glxq_run.sh)"
+    steps: []
+  - id: WH-all
+    level: L0
+    system: wh
+    kind: coverage
+    routers: [main, new]
+    status: ci_only
+    why: "every Wormhole row (N300-fab, W0-*, W1-*, W2-*): see README 'CI dispatch list'"
+    steps: []

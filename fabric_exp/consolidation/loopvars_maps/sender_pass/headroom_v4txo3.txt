@@ -1,0 +1,44 @@
+== v4txo3 + tx1
+  bh_1d                    10/10 pass; carried [0], peak [0], sp accesses [2]
+  bh_2d                    28/28 pass; carried [1], peak [1], sp accesses [3]
+  bh_2d_vc2                28/28 pass; carried [-1], peak [-1], sp accesses [2]
+  bh_2d_vc2_trim_w0        28/28 pass; carried [-1], peak [-1], sp accesses [0]; shed {'visit_vc<2>:taken.free_slots (around a call)': 28}
+  bh_ring                  10/10 pass; carried [0], peak [0], sp accesses [2]; shed {'return_slots<0>:returned (around a call)': 10, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 10, 'visit_worker<0>:reported_acks (around a call)': 10}
+  bh_torus                 12/12 pass; carried [1], peak [1], sp accesses [2]; shed {'return_slots<0>:returned (around a call)': 12, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_torus_vc2             16/28 pass; carried [-2, -1], peak [-1, 0], sp accesses [2, 4]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 12, 'send<0>:header': 12, 'send<0>:slot_addr': 12}
+  bh_vc1                   22/22 pass; carried [0], peak [-2], sp accesses [7]; shed {'run:loop_copy.worker.progress.next_slot_addr (around a call)': 22}
+  bh_vc1_trim_w0           22/22 pass; carried [0], peak [0], sp accesses [3]
+  glx_express              28/28 pass; carried [1], peak [1], sp accesses [4]
+== v4txo3 + tx2
+  bh_1d                    10/10 pass; carried [0], peak [1], sp accesses [4]
+  bh_2d                    28/28 pass; carried [2], peak [1], sp accesses [5]
+  bh_2d_vc2                0/28 pass; carried [-2], peak [-1], sp accesses [6]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28}
+  bh_2d_vc2_trim_w0        28/28 pass; carried [-1], peak [-2], sp accesses [0]; shed {'visit_vc<2>:taken.free_slots (around a call)': 28, 'visit_vc<2>:taken.next_slot_addr (around a call)': 28}
+  bh_ring                  0/10 pass; carried [0], peak [0], sp accesses [8]; HOT MOVED {'run:loop_copy.remote.next_slot_addr': 10, 'visit_vc<0>:remote.next_slot_addr': 10, 'visit_vc<0>:taken.next_slot_addr': 10}; shed {'return_slots<0>:returned (around a call)': 10, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 10, 'visit_worker<0>:reported_acks (around a call)': 10}
+  bh_torus                 12/12 pass; carried [0], peak [0], sp accesses [15]; shed {'return_slots<0>:connected (around a call)': 12, 'return_slots<0>:returned (around a call)': 12, 'run:loop_copy.worker.connection_state (around a call)': 12, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 12}
+  bh_torus_vc2             0/28 pass; carried [-2], peak [-1, 0], sp accesses [6, 8]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28}; shed {'return_slots<0>:returned (around a call)': 12, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_vc1                   22/22 pass; carried [1], peak [-1], sp accesses [13]; shed {'run:loop_copy.worker.progress.next_slot_addr (around a call)': 22}
+  bh_vc1_trim_w0           22/22 pass; carried [-2], peak [-2], sp accesses [1]
+  glx_express              28/28 pass; carried [0], peak [0], sp accesses [17]; shed {'return_slots<0>:connected (around a call)': 28, 'run:loop_copy.worker.connection_state (around a call)': 28}
+== v4txo3 + twk
+  bh_1d                    0/10 pass; carried [1], peak [1], sp accesses [15]; HOT MOVED {'run:loop_copy.remote.next_slot_addr': 10, 'run:loop_copy.worker.progress.next_slot_addr': 10, 'send<0>:header': 10, 'send<0>:slot_addr': 10, 'visit_vc<0>:remote.next_slot_addr': 10, 'visit_vc<0>:taken.next_slot_addr': 10}
+  bh_2d                    0/28 pass; carried [-2], peak [-2], sp accesses [16]; HOT MOVED {'run:loop_copy.remote.next_slot_addr': 28, 'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28}; shed {'run:loop_copy.worker.connection_state (around a call)': 28}
+  bh_2d_vc2                0/28 pass; carried [-5], peak [-3], sp accesses [21]; HOT MOVED {'run:loop_copy.remote.next_slot_addr': 28, 'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28, 'visit_vc<0>:remote.next_slot_addr': 28, 'visit_vc<0>:taken.next_slot_addr': 28}
+  bh_2d_vc2_trim_w0        28/28 pass; carried [-1], peak [-3], sp accesses [8]; shed {'visit_vc<2>:taken.free_slots (around a call)': 28, 'visit_vc<2>:taken.next_slot_addr (around a call)': 28}
+  bh_ring                  0/10 pass; carried [-3], peak [-4], sp accesses [13]; HOT MOVED {'run:loop_copy.remote.next_slot_addr': 10, 'run:loop_copy.worker.progress.next_slot_addr': 10, 'send<0>:header': 10, 'send<0>:slot_addr': 10, 'visit_vc<0>:remote.next_slot_addr': 10, 'visit_vc<0>:taken.next_slot_addr': 10}; shed {'return_slots<0>:returned (around a call)': 10, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 10, 'visit_worker<0>:reported_acks (around a call)': 10}
+  bh_torus                 0/12 pass; carried [-5], peak [-5], sp accesses [16]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 12, 'send<0>:header': 12, 'send<0>:slot_addr': 12}; shed {'return_slots<0>:connected (around a call)': 12, 'return_slots<0>:returned (around a call)': 12, 'run:loop_copy.worker.connection_state (around a call)': 12, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 12}
+  bh_torus_vc2             0/28 pass; carried [-5, -3], peak [-3, -1], sp accesses [21, 24]; HOT MOVED {'run:loop_copy.remote.next_slot_addr': 28, 'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28, 'visit_vc<0>:remote.next_slot_addr': 28, 'visit_vc<0>:taken.next_slot_addr': 28}; shed {'return_slots<0>:returned (around a call)': 12, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_vc1                   0/22 pass; carried [-1], peak [-2], sp accesses [25]; HOT MOVED {'run:loop_copy.remote.next_slot_addr': 22, 'run:loop_copy.worker.progress.next_slot_addr': 22, 'send<0>:header': 22, 'send<0>:slot_addr': 22}; shed {'run:loop_copy.worker.connection_state (around a call)': 22}
+  bh_vc1_trim_w0           22/22 pass; carried [-6], peak [-6], sp accesses [-1]
+  glx_express              0/28 pass; carried [-5], peak [-4, -3], sp accesses [20, 30]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28, 'run:loop_copy.worker.progress.completed': 20, 'run:loop_copy.remote.next_slot_addr': 8, 'visit_vc<0>:remote.next_slot_addr': 8}; shed {'run:loop_copy.worker.progress.sent (around a call)': 20}
+== v4txo3 + trr
+  bh_1d                    10/10 pass; carried [-1], peak [0], sp accesses [3]
+  bh_2d                    28/28 pass; carried [2], peak [1], sp accesses [5]
+  bh_2d_vc2                0/28 pass; carried [-2], peak [-1], sp accesses [6]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28}
+  bh_2d_vc2_trim_w0        28/28 pass; carried [-1], peak [-2], sp accesses [0]; shed {'visit_vc<2>:taken.free_slots (around a call)': 28, 'visit_vc<2>:taken.next_slot_addr (around a call)': 28}
+  bh_ring                  0/10 pass; carried [-1], peak [-1], sp accesses [6]; HOT MOVED {'run:loop_copy.remote.next_slot_addr': 10, 'visit_vc<0>:remote.next_slot_addr': 10, 'visit_vc<0>:taken.next_slot_addr': 10}; shed {'return_slots<0>:returned (around a call)': 10, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 10, 'visit_worker<0>:reported_acks (around a call)': 10}
+  bh_torus                 0/12 pass; carried [0], peak [0], sp accesses [7]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 12, 'send<0>:header': 12, 'send<0>:slot_addr': 12}; shed {'return_slots<0>:returned (around a call)': 12, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_torus_vc2             0/28 pass; carried [-2], peak [-1, 0], sp accesses [6, 8]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28}; shed {'return_slots<0>:returned (around a call)': 12, 'run:loop_copy.worker.progress.first_level_acked (around a call)': 12, 'visit_worker<0>:reported_acks (around a call)': 12}
+  bh_vc1                   22/22 pass; carried [-1], peak [-3], sp accesses [10]
+  bh_vc1_trim_w0           22/22 pass; carried [-2], peak [-2], sp accesses [1]
+  glx_express              0/28 pass; carried [0], peak [0], sp accesses [7, 9]; HOT MOVED {'run:loop_copy.worker.progress.next_slot_addr': 28, 'send<0>:header': 28, 'send<0>:slot_addr': 28}

@@ -1,0 +1,25 @@
+# One row for the ring-multicast write A/B (2026-11-03): RingMulticast (all_to_all, every chip multicasts around the
+# ring, both directions), unicast_write, 4352 B, 1 link; the census row from fabric_exp/v4/exp_ring.yaml, write only.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: RingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1

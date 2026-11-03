@@ -1,0 +1,25 @@
+v4rxe1_O3 -> v4rxf1_O3: 16 of 2713 images differ in .text
+     16  identical (targets)    _Z11kernel_mainv
+     16  identical (targets)    _ZN13fabric_router14init_telemetryEv
+     16  identical (targets)    _start
+     16  identical (targets)    memset
+     16  identical (targets)    single11sender_passINS0_11SenderStateINS
+     16  OTHER                  single13receiver_passERNS0_13ReceiverSta
+     16  identical (targets)    single3runIN2tt9tt_fabric30EdmChannelWor
+OTHER: 16
+   bh_2d_udm_gtest__8652876603898242844/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw t6,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(t6); +add a5,a5,t6
+   bh_2d_udm__761506416545962139/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw a7,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(a7); +add a5,a5,a7
+   bh_2d_udm__517613678205663476/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw a7,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(a7); +add a5,a5,a7
+   bh_2d_udm__109476326121024731/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw a7,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(a7); +add a5,a5,a7
+   bh_2d_udm_gtest__5775343641888821867/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw t6,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(t6); +add a5,a5,t6
+   bh_2d_udm__142886903550079069/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw a7,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(a7); +add a5,a5,a7
+   bh_2d_udm_gtest__14265598163965523303/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw t6,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(t6); +add a5,a5,t6
+   bh_2d_udm__502063425415620656/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw a7,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(a7); +add a5,a5,a7
+   bh_2d_udm_gtest__7813585331422023928/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw t6,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(t6); +add a5,a5,t6
+   bh_2d_udm__273414102745527290/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw a7,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(a7); +add a5,a5,a7
+   bh_2d_udm_gtest__14376048047855918305/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw t6,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(t6); +add a5,a5,t6
+   bh_2d_udm__843829024378286704/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw a7,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(a7); +add a5,a5,a7
+   bh_2d_udm_gtest__833208951867417585/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw t6,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(t6); +add a5,a5,t6
+   bh_2d_udm_gtest__12522799788160687408/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw t6,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(t6); +add a5,a5,t6
+   bh_2d_udm_gtest__11119267643608314226/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw t6,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(t6); +add a5,a5,t6
+   bh_2d_udm__846802646111493047/subordinate_active_erisc/subordinate_active_erisc.elf _ZN13fabric_router6single13receiver_passERNS0_13ReceiverStat OTHER: -lw a4,4(a0); +lw a7,4(a0); -lw a6,40(a4); -add a5,a4,a5; +lw a6,40(a7); +add a5,a5,a7

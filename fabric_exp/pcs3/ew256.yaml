@@ -1,0 +1,29 @@
+# VC0 alone, one sender on chip 0 to its E/W neighbour (chip 1), 256 B, benchmark mode (2026-11-01, multi-VC
+# throughput rows; companion of vc2ew256 / vc02ew256 / vc02bew256).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsEW256
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+  defaults:
+    ftype: unicast
+    num_packets: 4000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

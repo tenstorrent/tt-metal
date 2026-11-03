@@ -1,0 +1,24 @@
+# Cycle breakdown, phase 2 (fabric_exp/report/BREAKDOWN_PLAN.md): Costliest rows: UnidirLinearMulticast write 4352 B (exp_1d_4352.yaml's row, long).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BdUnidirLinWrite
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+    num_links:
+    - 1
+  defaults:
+    ftype: mcast
+    num_packets: 16000000
+  patterns:
+  - type: unidirectional_linear
+    iterations: 1

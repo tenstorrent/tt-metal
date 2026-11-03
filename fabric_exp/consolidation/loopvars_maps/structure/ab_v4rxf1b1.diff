@@ -1,0 +1,60 @@
+diff -ru v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4rxf1b1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:58:52.331086875 +0000
++++ v4rxf1b1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:48:55.518038544 +0000
+@@ -267,20 +267,41 @@
+ // Placement: the first VC's ring progress is carried through the receiver loop as a local copy (run); every later VC's
+ // state stays in memory between its steps (keep_in_memory, step_channel), so it does not take the first VC's registers
+ // on its packet path (V4_RECEIVER_OWNERSHIP.md §14; loopvars.py's headroom check guards it).
+-using ReceiverChannelStates = Each<receiver_vcs, ReceiverChannelState>;
++struct ReceiverChannelStates {  // experiment: v4rxe1's shape (three Present members)
++    [[no_unique_address]] Present<runs_vc(0), ReceiverChannelState<0>, 0> vc0;
++    [[no_unique_address]] Present<runs_vc(1), ReceiverChannelState<1>, 1> vc1;
++    [[no_unique_address]] Present<runs_vc(2), ReceiverChannelState<2>, 2> vc2;
++    template <size_t VC>
++    FORCE_INLINE auto& get() {
++        if constexpr (VC == 0) {
++            return vc0;
++        } else if constexpr (VC == 1) {
++            return vc1;
++        } else {
++            return vc2;
++        }
++    }
++};
+ 
+ // The first VC's ring progress where this router runs its channel (Present, router_common.hpp).
+ using FirstVcProgress = Present<runs_vc(FIRST_VC), RingProgress, FIRST_VC>;
+ 
+-// The first VC's ring progress in `states` (Absent where its channel does not run: no step uses it). A template, so
+-// that an absent channel's state is named only in template-dependent code.
++// The first VC's ring progress in `states`, in place (a single-ERISC router's pass), and as the receiver loop's local
++// copy. Templates, so that an absent channel's state is named only in template-dependent code.
++template <typename States>
++FORCE_INLINE auto& first_vc_progress_in(States& states) {
++    if constexpr (runs_vc(FIRST_VC)) {
++        return states.template get<FIRST_VC>().progress;
++    } else {
++        return states;  // not used: no step for an absent channel
++    }
++}
+ template <typename States>
+-FORCE_INLINE FirstVcProgress& first_vc_progress_in(States& states) {
++FORCE_INLINE FirstVcProgress first_vc_progress_copy(States& states) {
+     if constexpr (runs_vc(FIRST_VC)) {
+         return states.template get<FIRST_VC>().progress;
+     } else {
+-        static FirstVcProgress absent;
+-        return absent;
++        return {};
+     }
+ }
+ 
+@@ -749,7 +770,7 @@
+         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     ReceiverChannelStates states;
+-    FirstVcProgress first_vc_progress = first_vc_progress_in(states);  // a copy, carried through the loop
++    FirstVcProgress first_vc_progress = first_vc_progress_copy(states);  // carried through the loop
+     local_write_init();
+     Credits credits(0);
+     bool credit_frame_due = false;  // the credit counts changed since the last frame

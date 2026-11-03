@@ -1,0 +1,243 @@
+diff -ru v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4rxf1a1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4rxf1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:58:52.331086875 +0000
++++ v4rxf1a1/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-02 05:49:55.270841756 +0000
+@@ -194,21 +194,26 @@
+ // ---------------------------------------------------------------------------------------------------------------------
+ 
+ // A receiver channel's progress through its ring: its per-packet state.
+-struct RingProgress {
+-    uint32_t packets_ready = 0;   // packets it may process (present, and acked under first-level acks), not retired
+-    uint32_t next_slot_addr = 0;  // header address of the next slot
+-    uint32_t next_index = 0;      // ring index of the next slot
+-    uint32_t uncredited = 0;      // slots retired (NoC commands issued) but not yet credited
+-    // Groups of several slots: passes without a packet while a partial completion group waits.
++struct RingPosition {
++    uint32_t packets_ready = 0;
++    uint32_t next_slot_addr = 0;
++    uint32_t next_index = 0;
++};
++struct RingCounts {
++    uint32_t uncredited = 0;
+     uint32_t idle_passes_with_partial_group = 0;
+ };
++struct RingProgress {  // experiment: nested as v4rxe1's Cursor{Position, CompletionCounts}
++    RingPosition position;
++    RingCounts counts;
++};
+ 
+ // Moves `progress` to the slot after its next one in VC's ring.
+ template <size_t VC>
+ FORCE_INLINE void advance(RingProgress& progress) {
+-    progress.next_index = ReceiverChannel<VC>::index_after(progress.next_index);
+-    progress.next_slot_addr = progress.next_index == 0 ? ReceiverChannel<VC>::first_slot_addr
+-                                                       : progress.next_slot_addr + channel_buffer_size;
++    progress.position.next_index = ReceiverChannel<VC>::index_after(progress.position.next_index);
++    progress.position.next_slot_addr = progress.position.next_index == 0 ? ReceiverChannel<VC>::first_slot_addr
++                                                       : progress.position.next_slot_addr + channel_buffer_size;
+ }
+ 
+ static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__);
+@@ -244,7 +249,7 @@
+ template <size_t VC>
+ constexpr RingProgress progress_start() {
+     RingProgress progress;
+-    progress.next_slot_addr = ReceiverChannel<VC>::first_slot_addr;
++    progress.position.next_slot_addr = ReceiverChannel<VC>::first_slot_addr;
+     return progress;
+ }
+ 
+@@ -272,15 +277,22 @@
+ // The first VC's ring progress where this router runs its channel (Present, router_common.hpp).
+ using FirstVcProgress = Present<runs_vc(FIRST_VC), RingProgress, FIRST_VC>;
+ 
+-// The first VC's ring progress in `states` (Absent where its channel does not run: no step uses it). A template, so
+-// that an absent channel's state is named only in template-dependent code.
++// The first VC's ring progress in `states`, in place (a single-ERISC router's pass), and as the receiver loop's local
++// copy. Templates, so that an absent channel's state is named only in template-dependent code.
++template <typename States>
++FORCE_INLINE auto& first_vc_progress_in(States& states) {
++    if constexpr (runs_vc(FIRST_VC)) {
++        return states.template get<FIRST_VC>().progress;
++    } else {
++        return states;  // not used: no step for an absent channel
++    }
++}
+ template <typename States>
+-FORCE_INLINE FirstVcProgress& first_vc_progress_in(States& states) {
++FORCE_INLINE FirstVcProgress first_vc_progress_copy(States& states) {
+     if constexpr (runs_vc(FIRST_VC)) {
+         return states.template get<FIRST_VC>().progress;
+     } else {
+-        static FirstVcProgress absent;
+-        return absent;
++        return {};
+     }
+ }
+ 
+@@ -306,14 +318,14 @@
+     }
+     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+     increment_local_update_ptr_val<ReceiverChannel<VC>::packets_received_stream>(-static_cast<int32_t>(arrived));
+-    uint32_t index = ring_add<ReceiverChannel<VC>::num_slots>(progress.next_index, progress.packets_ready);
++    uint32_t index = ring_add<ReceiverChannel<VC>::num_slots>(progress.position.next_index, progress.position.packets_ready);
+     for (uint32_t i = 0; i < arrived; i++) {
+         const auto* header =
+             reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(ReceiverChannel<VC>::slot_addr(index));
+         credits.accumulate_ack_credit(source_channel(header->src_ch_id));
+         index = ring_add<ReceiverChannel<VC>::num_slots>(index, 1);
+     }
+-    progress.packets_ready += arrived;
++    progress.position.packets_ready += arrived;
+     return true;
+ }
+ 
+@@ -326,9 +338,9 @@
+ // the next slot.
+ template <size_t VC>
+ FORCE_INLINE void retire(RingProgress& progress, SlotSourcesOf<VC>& sources, uint32_t source) {
+-    sources.set(progress.next_index, source);
+-    progress.uncredited++;
+-    progress.packets_ready--;
++    sources.set(progress.position.next_index, source);
++    progress.counts.uncredited++;
++    progress.position.packets_ready--;
+     if constexpr (!ReceiverChannel<VC>::first_level_ack) {
+         increment_local_update_ptr_val<ReceiverChannel<VC>::packets_received_stream>(-1);
+     }
+@@ -403,7 +415,7 @@
+     uint32_t route_word) {
+     using Routing = typename ReceiverChannel<VC>::Routing;
+     const auto packet = PACKET_HEADER_TYPE::PackedPayloadAndSendType::unpack(header_word);
+-    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
++    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.position.next_slot_addr);
+     if constexpr (ReceiverChannel<VC>::forwards) {
+         // The downstream routers it forwards to.
+         auto& routers = downstreams.template of<ReceiverChannel<VC>::forwards_on_vc>();
+@@ -416,7 +428,7 @@
+                 return false;
+             }
+         }
+-        const uint8_t trid = ReceiverChannel<VC>::CompletionTrids::of_slot(progress.next_index);
++        const uint8_t trid = ReceiverChannel<VC>::CompletionTrids::of_slot(progress.position.next_index);
+         const uint32_t size = packet.payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
+         note_received<VC>(size);
+         if (!is_2d && route.delivers() && route.forwards() &&
+@@ -427,19 +439,19 @@
+                 route_word,
+                 route.forward_to(),
+                 routers,
+-                progress.next_slot_addr,
++                progress.position.next_slot_addr,
+                 size,
+                 trid);
+         } else {
+             // Forward first (the next router starts sooner), then write here.
+             if (route.forwards()) {
+                 Routing::update_for_next_hop(header, route_word);
+-                routers.forward_all(route.forward_to(), progress.next_slot_addr, size, trid);
++                routers.forward_all(route.forward_to(), progress.position.next_slot_addr, size, trid);
+                 record_forwarded<VC>(route.forward_to());
+             }
+             if (route.delivers()) {
+                 if constexpr (ReceiverChannel<VC>::delivers_through_relay) {
+-                    downstreams.relay.forward(progress.next_slot_addr, size, trid);
++                    downstreams.relay.forward(progress.position.next_slot_addr, size, trid);
+                 } else {
+                     deliver<ReceiverChannel<VC>::rx>(header, packet.payload_size_bytes, packet.noc_send_type, trid);
+                 }
+@@ -451,7 +463,7 @@
+             header,
+             packet.payload_size_bytes,
+             packet.noc_send_type,
+-            ReceiverChannel<VC>::CompletionTrids::of_slot(progress.next_index));
++            ReceiverChannel<VC>::CompletionTrids::of_slot(progress.position.next_index));
+     }
+     retire<VC>(progress, sources, source_channel(packet.src_ch_id));
+     return true;
+@@ -468,17 +480,17 @@
+     uint32_t arrived,
+     const ChipCoordinates& my_chip) {
+     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+-    if (progress.packets_ready == 0) {
++    if (progress.position.packets_ready == 0) {
+         if constexpr (ReceiverChannel<VC>::first_level_ack) {
+             return false;  // nothing acked to process
+         } else {
+-            progress.packets_ready = arrived;  // the register's count, from the pass's grouped reads
+-            if (progress.packets_ready == 0) {
++            progress.position.packets_ready = arrived;  // the register's count, from the pass's grouped reads
++            if (progress.position.packets_ready == 0) {
+                 return false;
+             }
+         }
+     }
+-    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
++    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.position.next_slot_addr);
+     // Payload size, send type and source channel: one header word, one load (the header's accessor), kept as it is
+     // until the packet is handled.
+     const uint32_t header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);
+@@ -544,7 +556,7 @@
+ template <uint32_t GROUP_SIZE, uint32_t NUM_SLOTS>
+ FORCE_INLINE bool slots_due_for_credit(
+     RingProgress& progress, uint32_t next_index, bool handled_packet, uint32_t& count) {
+-    const uint32_t waiting = progress.uncredited;
++    const uint32_t waiting = progress.counts.uncredited;
+     if constexpr (GROUP_SIZE == 1) {
+         // One slot as soon as a slot other than this pass's waits (no partial group, so no idle count).
+         count = 1;
+@@ -552,11 +564,11 @@
+     } else {
+         bool is_due;
+         if (handled_packet) {
+-            progress.idle_passes_with_partial_group = 0;
++            progress.counts.idle_passes_with_partial_group = 0;
+             is_due = waiting > GROUP_SIZE;
+         } else {
+             is_due = waiting >= GROUP_SIZE ||
+-                     (waiting != 0 && ++progress.idle_passes_with_partial_group >= IDLE_PASSES_BEFORE_PARTIAL_CREDIT);
++                     (waiting != 0 && ++progress.counts.idle_passes_with_partial_group >= IDLE_PASSES_BEFORE_PARTIAL_CREDIT);
+         }
+         if (!is_due) {
+             return false;
+@@ -602,8 +614,8 @@
+     constexpr uint32_t completion_group_size = ReceiverChannel<VC>::completion_group_size;
+     constexpr uint32_t num_slots = ReceiverChannel<VC>::num_slots;
+     static_assert(completion_group_size >= 1 && completion_group_size <= 4 && completion_group_size <= num_slots);
+-    const uint32_t next_index = progress.next_index;  // as the pass's step left it
+-    const uint32_t waiting = progress.uncredited;
++    const uint32_t next_index = progress.position.next_index;  // as the pass's step left it
++    const uint32_t waiting = progress.counts.uncredited;
+     uint32_t count;
+     if (!slots_due_for_credit<completion_group_size, num_slots>(progress, next_index, handled_packet, count)) {
+         return false;
+@@ -615,10 +627,10 @@
+         return false;
+     }
+     if constexpr (completion_group_size > 1) {
+-        progress.idle_passes_with_partial_group = 0;
++        progress.counts.idle_passes_with_partial_group = 0;
+     }
+     accumulate_completion_credits<completion_group_size>(sources, first, count, credits);
+-    progress.uncredited = waiting - count;
++    progress.counts.uncredited = waiting - count;
+     return true;
+ }
+ 
+@@ -647,7 +659,7 @@
+         code_profiling_enabled_timers_bitfield,
+         code_profiling_buffer_base_addr>
+         timer;
+-    timer.set_should_dump(progress.packets_ready != 0);
++    timer.set_should_dump(progress.position.packets_ready != 0);
+     timer.open();
+     const bool handled_packet = receive<VC>(progress, sources, downstreams, arrived, my_chip);
+     timer.close();
+@@ -749,7 +761,7 @@
+         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     ReceiverChannelStates states;
+-    FirstVcProgress first_vc_progress = first_vc_progress_in(states);  // a copy, carried through the loop
++    FirstVcProgress first_vc_progress = first_vc_progress_copy(states);  // carried through the loop
+     local_write_init();
+     Credits credits(0);
+     bool credit_frame_due = false;  // the credit counts changed since the last frame

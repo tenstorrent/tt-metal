@@ -1,0 +1,64 @@
+{
+ "version": 2,
+ "date": "2026-11-02",
+ "scope": "Where an ERISC's cycles go, split by source line (addr2line inline chains). Descriptive only: a profile does not say which ERISC bounds a row or why one router is faster (repo CLAUDE.md).",
+ "categories": [
+  {
+   "id": "checks",
+   "label": "Packet polls and room checks",
+   "def": "Per-pass tests for work. Is there a packet: the receive ring's packets-received register, a sender channel's free-slots register. Is there room: free slots in the far receiver's ring, downstream admission, a transaction ID free for reuse.",
+   "notes": "Idle time shares these lines with real work, and it cannot be separated by profile: a router polls without stopping, so an empty pass runs the same tests as a busy one and skips the work. The receiver's early return on a pass with no packet ready is counted here. A register read stalls at its first use: on main the load and its test are separate lines, both counted here. On a forwarding router the downstream credit reads count here."
+  },
+  {
+   "id": "decode",
+   "label": "Header and route decode",
+   "def": "Locating and reading the packet header, decoding the route (forward, deliver or both, and which downstreams), dispatching on the command type, and rewriting the header for the next hop.",
+   "notes": "The header word's load latency shows where it is first used. That is usually here (the route test or the command switch), but it can land in a NoC command when the command reads the header first."
+  },
+  {
+   "id": "noc",
+   "label": "NoC commands",
+   "def": "Forwarding to a downstream router and delivering locally (write, scatter, atomic, inline write): command-buffer waits, register writes, transaction IDs, and the downstream ring's slot and credit-register updates that go with a forward.",
+   "notes": "Command-buffer ready spins are counted here because they are part of issuing a command, not idle passes."
+  },
+  {
+   "id": "eth_send",
+   "label": "Ethernet send",
+   "def": "Sending a packet over the link: the header size read, TX-queue status checks and busy spins, the TX-queue register writes, the far ring's packets-received update, and advancing the channel's and the far ring's slots.",
+   "notes": "Credit-counter loads that the new router places inside the send are counted under credits. Their latency can show at a send line that follows them."
+  },
+  {
+   "id": "credits",
+   "label": "Acks, completions and credits",
+   "def": "Receiving ERISC: first-level acks, completion proofs (have the slot's NoC writes left), credit messages and frames to the far sender, and releasing a slot after dispatch (ring counters, source-channel record). Sending ERISC: reading and processing the far receiver's acks and completions, and crediting producers (worker semaphore writes, upstream router credit registers).",
+   "notes": "Per-pass credit tests (are there new completions or acks?) count here, with their idle time. Releasing a slot is counted here because it is what makes the slot creditable. The receiver's partial-group timeout count, which runs only on passes with no packet, is counted here with the credit decision it belongs to."
+  },
+  {
+   "id": "loop",
+   "label": "Connection and loop overhead",
+   "def": "Worker connection and teardown checks, termination and context-switch checks, round and loop bookkeeping, the pass structure (channel visits, out-of-line pass calls, saving and reloading per-channel state), telemetry and trimming hooks.",
+   "notes": "Outer-loop fallback rules map here. Lines that reach this category only through a fallback rule are listed for review in each validation report."
+  },
+  {
+   "id": "other",
+   "label": "Other router code",
+   "def": "Router code outside the steady-state loop (init, rare paths) that a rule names explicitly.",
+   "notes": "Unmapped samples (no rule anywhere in the chain) are reported separately and are not part of this category."
+  }
+ ],
+ "excluded": "Samples outside the kernel image (firmware, the idle context switch) and the first and last 5% of each target's kernel samples (outside the traffic window). Shares are of the kernel samples in the window.",
+ "noise": "About 500 samples per run is roughly +/-2.5 cycles per entry. Entries under 3 cycles/packet are flagged as noise. Every record carries its sample count.",
+ "dropped": [
+  {
+   "id": "waiting",
+   "date": "2026-11-02",
+   "decision": "user",
+   "why": "Lines that run only on empty passes came to 0.0-0.1 cycles/packet on every sample set: idle time lands in the per-pass lines (checks, credits, loop), not in idle-only code, so a 'waiting' bar would mislead.",
+   "folded_into": {
+    "rx.idle.receive_return (the receiver's early return when no packet is ready)": "checks",
+    "rx.idle.partial_group (the partial completion group's idle-pass count)": "credits"
+   },
+   "instead": "Spare time per ERISC from the one-side delay A/Bs (slack.json), attached to the new router's records as spare_cycles / spare_label; main has no such measurement (spare_cycles null, said so in spare_label)."
+  }
+ ]
+}

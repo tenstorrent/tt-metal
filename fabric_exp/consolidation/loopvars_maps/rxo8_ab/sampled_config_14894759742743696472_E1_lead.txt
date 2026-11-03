@@ -1,0 +1,45 @@
+subordinate_active_erisc.elf (f7095b519de8af91, tenstorrent/sfpi:7.91.0[1077] 15.1.0): receiver _ZN13fabric_router8receiver3runINS_11DownstreamsILj0EEEEEvRS
+  loop: largest strongly connected region of run(): 830 of 911 instructions, frame 208
+  sp accesses in the loop: 39 (25 loads, 14 stores), unknown 11
+  stored to the stack in the loop (spills):
+    deliver<0>:encoding                          sp+8      S1 L0 [slot]  S deliver router_local_delivery.hpp:102 x1
+    handle<0>:downstreams                        sp+20     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:151 x1; S deliver router_local_delivery.hpp:151 x1
+    pass:d0                                      sp+20     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:151 x1; S deliver router_local_delivery.hpp:151 x1
+    receive<0>:downstreams                       sp+20     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:151 x1; S deliver router_local_delivery.hpp:151 x1
+    receive<1>:arrived                           sp+72     S1 L0 [register]  S receive router_receiver.hpp:368 x1
+    release_completions<1,4>:waiting~            sp+84     S1 L0 [register]  S release_completions router_completions.hpp:210 x1
+    run:tables.ch1.cursor.counts.uncompleted     sp+84     S2 L2 [slot]  L release_completions router_completions.hpp:196 x1; L slot_retired router_completions.hpp:108 x1; S release_completions router_completions.hpp:210 x1; S slot_retired router_completions.hpp:108 x1
+    run:tables.ch1.cursor.position.available     sp+72     S2 L2 [slot]  L receive router_receiver.hpp:364 x1; L retire router_receiver.hpp:203 x1; S receive router_receiver.hpp:368 x1; S retire router_receiver.hpp:203 x1
+    run:tables.ch1.cursor.position.index         sp+80     S2 L3 [slot]  L SlotRecords router_completions.hpp:65 x1; L handle router_receiver.hpp:349 x1; L retire router_receiver.hpp:207 x1; S retire router_receiver.hpp:207 x2
+    run:tables.ch1.cursor.position.slot          sp+76     S1 L2 [slot]  L receive router_receiver.hpp:374 x1; L retire router_receiver.hpp:208 x1; S retire router_receiver.hpp:208 x1
+    step<0>:downstreams                          sp+20     S1 L1 [register+slot]  L deliver router_local_delivery.hpp:151 x1; S deliver router_local_delivery.hpp:151 x1
+    step<1>:arrived                              sp+72     S1 L0 [register]  S receive router_receiver.hpp:368 x1
+  loaded only (on the stack before the loop):
+    bits@receive<1>:header                       sp+76     S0 L1 [register]  L receive router_receiver.hpp:374 x1
+    deliver<0>:encoding~                         sp+8      S0 L3 [slot]  L shift_to_next_chunk fabric_edm_packet_transmission.hpp:150 x3
+    deliver<1>:payload                           sp+8      S0 L5 [slot]  L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174 x3; L deliver router_local_delivery.hpp:117 x1; L deliver router_local_delivery.hpp:126 x1
+    local_write@deliver<1>:src_addr              sp+8      S0 L3 [slot]  L NOC_CMD_BUF_WRITE_REG noc_nonblocking_api.h:174 x3
+    receive<1>:header                            sp+76     S0 L1 [register]  L receive router_receiver.hpp:374 x1
+    release_completions<1,4>:waiting             sp+84     S0 L1 [register]  L release_completions router_completions.hpp:196 x1
+    run:d0                                       sp+28     S0 L1 [slot]  L run router_completions.hpp:118 x1
+    set@slot_retired<4>:index                    sp+80     S0 L1 [slot]  L SlotRecords router_completions.hpp:65 x1
+    slot_retired<4>:index                        sp+80     S0 L1 [slot]  L SlotRecords router_completions.hpp:65 x1
+  unknown (no DWARF variable by slot or register):
+      1  L sp+12 Routing2D router_routing.hpp:87
+      1  L sp+16 Routing2D router_routing.hpp:88
+      1  L sp+20 deliver router_local_delivery.hpp:151
+      1  L sp+24 deliver router_local_delivery.hpp:151
+      2  L sp+8 deliver router_local_delivery.hpp:151
+      1  S sp+20 deliver router_local_delivery.hpp:151
+      1  S sp+24 deliver router_local_delivery.hpp:151
+      2  S sp+8 deliver router_local_delivery.hpp:151
+      1  S sp+8 deliver router_local_delivery.hpp:91
+  DWARF only (placed on the stack in the loop, no access found): NOC_CMD_BUF_WRITE_REG@noc_common_write_with_state<0,0>:val sp+8, deliver<1>:fused~ sp+8, deliver<1>:header sp+76, deliver<1>:header~ sp+8, deliver<1>:inc~ sp+8, deliver<1>:scatter~ sp+8, deliver<1>:trid~ sp+80, handle<1>:header sp+76, handle<1>:header~ sp+8, local_atomic_inc@deliver<1>:flush~ sp+8, local_write@deliver<1>:src_addr~ sp+8, local_write@deliver<1>:trid~ sp+80, ncrisc_noc_set_transaction_id@deliver<1>:trid~ sp+80, noc_common_write_with_state<0,0>:src_addr sp+8, noc_write_with_state<0,0>:src_addr sp+8, noc_write_with_state<0,0>:src_addr~ sp+8, oldest_uncredited<4>:next_index sp+80, receive<1>:header~ sp+8, release_completions<1,4>:next_index sp+80, ring_add<4>:base sp+80, run:credits sp+96, run:round sp+40
+  callee-saved registers (values, loop instructions):
+    s3   {'pass:arrived1': 445, 'retire<1>:source~': 28, 'slot_retired<4>:source~': 10}
+    s4   {'run:cursor0.position.index': 823, 'release_completions<1,16>:next_index': 22, 'ring_add<16>:base': 11}
+    s5   {'run:cursor0.position.slot': 820, 'receive<0>:header': 385, 'action@receive<0>:h': 380}
+    s6   {'run:cursor0.position.available': 826, 'ring_add<16>:n': 2, 'ring_add<16>:i~': 1}
+    s7   {'run:cursor0.counts.uncompleted': 824, 'release_completions<1,16>:waiting': 18, 'oldest_uncredited<16>:waiting': 9}
+    s9   {'run:frame_due': 38}
+    s10  {'pass:txq': 820, 'send_credit_frame:group_txq': 17, 'send_credit_frame:seen_free~': 17}

@@ -1,0 +1,126 @@
+# Slot study (SLOT_STUDY.md), P3 on one Blackhole Galaxy (8x4, 200G): 1D Linear rows; slots from
+# TT_FABRIC_EXP_SLOTS_1D. The P150 rows (1-hop, 3-hop E/W, row merge) plus a 7-hop N/S line down column 0 and a column
+# merge (7 flows into [0, 28]). 10 tests.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+
+  - name: "SlsLin1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "SlsLin3HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "SlsLinRowMerge"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "SlsLin7HopNS"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 28]
+
+  - name: "SlsLinColMerge"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 28]
+      - device: [0, 4]
+        patterns:
+          - destination:
+              device: [0, 28]
+      - device: [0, 8]
+        patterns:
+          - destination:
+              device: [0, 28]
+      - device: [0, 12]
+        patterns:
+          - destination:
+              device: [0, 28]
+      - device: [0, 16]
+        patterns:
+          - destination:
+              device: [0, 28]
+      - device: [0, 20]
+        patterns:
+          - destination:
+              device: [0, 28]
+      - device: [0, 24]
+        patterns:
+          - destination:
+              device: [0, 28]

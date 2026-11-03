@@ -1,0 +1,67 @@
+# Slot study (SLOT_STUDY.md), P3 on the P150x8: 1D Linear rows shared with the Galaxy (sls_1d_glx.yaml); slots from
+# TT_FABRIC_EXP_SLOTS_1D=worker,forwarding,receiver. 1-hop and 3-hop E/W, a row merge (3 flows into [0, 3]). 6 tests.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+
+  - name: "SlsLin1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "SlsLin3HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "SlsLinRowMerge"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [0, 3]

@@ -1,0 +1,43 @@
+# Slot study, 2 KiB slots: predictions written 2026-11-02 02:41:18 before Galaxy job G1 (sls_glx2k.sbatch).
+# Sources: RESULTS §98 Galaxy size sweep (job 155281, v3q): wire = 12.80 + P / 18.50 cycles/packet in 2D (+3.0 above
+# ~4 KiB: a second Ethernet frame), v3q saturates from ~2.3 KiB (2D) / ~2.5 KiB (1D), 4.5-5 short at 2048 B.
+# SLOT_STUDY.md P3 (job 167464, the lead): 2D 1-hop router floor at 1 KiB 113 (worker >= 19), worker window
+# 1,853 + 14.3 W at 1 KiB, N/S forwarding 2,511 + 28.8 W (7 hops), 3-hop N/S ~2,550, E/W ~2,100; N/S floor ~178-187.
+
+## Line rate (lr, 1-hop E/W and N/S, default slots of each configuration)
+wire (2D, cycles/packet): 1024 68.2 | 1536 95.8 | 2048 123.5 | 2304 137.3 | 2560 151.2 | 3072 178.9 | 3584 206.5 | 4096 237.2 | 4352 251.0
+4352 B slots (worker 17): 1024 ~123 (worker window, measured 122.9) | 1536 ~126 | 2048 ~129 (worker window: ~2,200 / 17;
+  above the wire by ~6) | 2304 ~137 (wire) | 2560 and up: the wire. Reaches the wire at ~2.2-2.3 KiB (v3q's ~2.3 KiB).
+2560 B slots (worker 57): 1024-1536 at the router floor (~113-116); 2048 ~123.5 (wire, if the router floor stays
+  under it); 2304 / 2560 the wire.
+2048 B slots (worker 41): 1024 ~113, 1536 ~116, 2048 ~123.5 (the wire, if E0's per-packet time at 2 KiB, ~116-119 on
+  the P150, stays under it). So 2 KiB slots reach the wire at 2 KiB where 4352 B slots miss it by ~5 (hypothesis: the
+  worker window, not the router).
+Effective GB/s on a saturated link: 2048 B packets 2048 / 123.5 x 1.35 = 22.4 GB/s against 4352 B 4352 / 251 x 1.35 =
+  23.4 GB/s (-4.4 %: the 237 B per-packet framing over twice the packets).
+
+## 2D rows at 2 KiB slots (default 41,32,32 and the c-splits), payload 1024 / 2048 B
+- 1-hop: 113 / 123.5 for worker >= ~19 (1 KiB) / >= ~19 (2 KiB, the loop ~2,200 / 123.5 = 18); worker 16 (c2): ~123 /
+  ~138; worker 8 (c6): ~245 / ~275.
+- E/W 3-hop: forwarding 32 -> 1 KiB ~144 (as at 16: the E/W floor), 2 KiB ~124-145; forwarding 16 (c4, c0) as at 4352 B
+  slots at 1 KiB (window ~2,100-2,300 / 16 = ~140).
+- N/S 7-hop / corner at 1 KiB: forwarding 32 -> the floor (~182-187) if the floor is not a window; forwarding 16 -> 186
+  (as at 4352 B slots). If the floor is a per-packet router cost it is the same at 1024 and 2048 B and at both slot sizes.
+- Receiver 8 (c5): 1-hop ~177 (1 KiB), multi-hop rows ~210-250; merges ~216.
+
+## VC1 split at 2 KiB slots (payload 2048 B; the 4352 B-slot control vc1k at 2048 B)
+- Default (107,9,16,5,4): the same windows as 4352 B slots, so at 2048 B: VC1 one hop ~ forwarding 5 window (P150 /
+  Galaxy loop ~2,000-2,200 at 4352 B, shorter at 2048 B: ~1,900 / 5 = ~380), not better than the 4352 B config's VC1 rows
+  in cycles/packet; the worker's 107 slots buy nothing past ~19.
+- Doubled windows (38,18,32,10,8): VC1 rows reach the VC1 path's bound (~295, router) at 16 B and 2048 B; VC0 2-hop
+  ~150-200 at 2048 B (forwarding 18: ~2,300 / 18 = ~128 -> the 2-hop path's own bound ~220 on the P150 lead binds).
+- The VC1 path's bound (~295) is per packet, so at 2048 B the VC1 rows carry half the bytes per packet of 4352 B ones:
+  effective VC1 GB/s at 2 KiB ~ half of 4352 B's at the same cycles/packet (2048 / 295 x 1.35 = 9.4 GB/s against 19.9).
+
+## VC2-on rows (payload 2048 B)
+- The study row keeps VC2 at 2 / 4 slots at both slot sizes: VC2 alone stays window-bound (~2,000 / 2 = ~1,000);
+  VC2 16 / 16 (v16) -> VC2 alone near the router floor (~120-140).
+
+## N/S floor arms (2dk / 2d2k base, tx16, tx32, rx16, rx32)
+No prediction of the bound side (that is what the arms decide). Reading: a side with no slack pays ~44 for a 32-cycle
+spin, ~28 for 16; a row bound by a window or the link pays a fraction of either.

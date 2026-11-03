@@ -1,0 +1,19 @@
+diff -ruN v4txc1/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+--- v4txc1/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:04:49.790400987 +0000
++++ v4txc1b/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp	2026-11-03 03:06:57.644148008 +0000
+@@ -126,11 +126,10 @@
+     // VC's worker channel, where this router serves one (named only under has_worker_channel).
+     static constexpr bool has_worker_channel = worker_channels != 0;
+     static constexpr size_t worker_channel = has_worker_channel ? lowest_bit(worker_channels) : 0;
+-    // Where its free-slots registers are read: in the pass's first read group when VC has a worker position (with the
+-    // worker channel's connection semaphore, which that group reads anyway where this router serves it); otherwise right
+-    // before VC's own visits, so a packet landing during the earlier VCs' visits does not wait a pass
+-    // (V4_SENDER_SHAPE.md).
+-    static constexpr bool reads_free_slots_at_pass_start = worker_positions != 0;
++    // Where its free-slots registers are read: in the pass's first read group where VC has a worker channel (with its
++    // connection semaphore, which that group reads anyway); otherwise right before VC's own visits, so a packet landing
++    // during the earlier VCs' visits does not wait a pass (V4_SENDER_SHAPE.md).
++    static constexpr bool reads_free_slots_at_pass_start = has_worker_channel;
+ };
+ 
+ // The router's serviced sender channels, every VC's together, one bit per channel: all of them, by kind, and those whose

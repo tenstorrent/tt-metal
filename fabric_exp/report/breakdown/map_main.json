@@ -1,0 +1,574 @@
+{
+ "router": "main",
+ "description": "Main's router as shipped: kernel v1 (fabric_erisc_router.cpp), TT_FABRIC_EXP_FLAGS=0. Its sender and receiver channel steps are inlined into the main loop, so most rules are blocks of run_sender_channel_step_impl / run_receiver_channel_step_impl found by their text. Sources: git HEAD (main's router files are unchanged since the merge of main 6d8a103; read them with git show, never from the live tree while a broker swap is active).",
+ "router_files": [
+  "fabric_erisc_router\\.cpp$",
+  "edm_fabric/",
+  "tt_fabric_utils\\.h$"
+ ],
+ "work_categories": {
+  "E0": [
+   "eth_send"
+  ],
+  "E1": [
+   "noc"
+  ]
+ },
+ "rules": [
+  {
+   "id": "m.tx.room_and_packet",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_sender_channel_step_impl$",
+   "from": [
+    1877,
+    "bool receiver_has_space_for_packet;"
+   ],
+   "to": [
+    1892,
+    "bool can_send = receiver_has_space_for_packet && has_unsent_packet;"
+   ],
+   "cat": "checks",
+   "note": "far ring room (num_free_slots) and the channel's free-slots register (has_unsent_packet): read and tested every pass"
+  },
+  {
+   "id": "m.tx.send",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_sender_channel_step_impl$",
+   "from": [
+    1896,
+    "uint32_t exp_payload_size_bytes = 0;"
+   ],
+   "to": [
+    2071,
+    "phase_profiler.close<PHASE_TX_SEND>(send_start);"
+   ],
+   "cat": "eth_send",
+   "note": "TX-queue busy test (only with a packet and room), the send, the channel's free-slots register update"
+  },
+  {
+   "id": "m.tx.blocked",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_sender_channel_step_impl$",
+   "from": [
+    2074,
+    "} else if (has_unsent_packet) {"
+   ],
+   "cat": "checks"
+  },
+  {
+   "id": "m.tx.completions",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_sender_channel_step_impl$",
+   "from": [
+    2079,
+    "// Process COMPLETIONs from receiver"
+   ],
+   "to": [
+    2111,
+    "// Process ACKs from receiver"
+   ],
+   "to_excl": true,
+   "cat": "credits",
+   "note": "the completion counter is read every pass (its idle time lands here), then free slots and worker credits"
+  },
+  {
+   "id": "m.tx.acks",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_sender_channel_step_impl$",
+   "from": [
+    2111,
+    "// Process ACKs from receiver"
+   ],
+   "to": [
+    2148,
+    "if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK && !exp_tx_upstream_moved_off_this_erisc) {"
+   ],
+   "to_excl": true,
+   "cat": "credits",
+   "note": "first-level acks: read every pass, worker credit per ack change"
+  },
+  {
+   "id": "m.tx.connection",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_sender_channel_step_impl$",
+   "from": [
+    2148,
+    "if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK && !exp_tx_upstream_moved_off_this_erisc) {"
+   ],
+   "to": [
+    2165,
+    "return progress;"
+   ],
+   "to_excl": true,
+   "cat": "loop",
+   "note": "worker connection / teardown check every pass"
+  },
+  {
+   "id": "m.tx.step",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_sender_channel_step_impl$",
+   "cat": "loop",
+   "note": "the step's own entry and exit (register saves, progress flag)"
+  },
+  {
+   "id": "m.tx.step_wrapper",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_sender_channel_step$",
+   "cat": "loop"
+  },
+  {
+   "id": "m.tx.send_next_data",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "send_next_data$",
+   "cat": "eth_send",
+   "note": "header size read, src_ch_id stamp, TXQ send, write counter, far ring and channel slot advance, TXQ busy spin, packets-received register update"
+  },
+  {
+   "id": "m.tx.credit_workers",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "send_credits_to_upstream_workers$",
+   "cat": "credits"
+  },
+  {
+   "id": "m.tx.check_worker_connections",
+   "file": "tt_fabric_utils.h",
+   "fn": "check_worker_connections$",
+   "cat": "loop"
+  },
+  {
+   "id": "m.rx.poll",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "from": [
+    2279,
+    "int32_t pkts_received_since_last_check;"
+   ],
+   "to": [
+    2283,
+    "pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();"
+   ],
+   "cat": "checks",
+   "note": "the packets-received register, every pass"
+  },
+  {
+   "id": "m.rx.ack_block",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "from": [
+    2288,
+    "auto& ack_counter = receiver_channel_pointers.ack_counter;"
+   ],
+   "to": [
+    2318,
+    "unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);"
+   ],
+   "to_excl": true,
+   "cat": "credits",
+   "note": "first-level ack per packet: TX-queue busy test, header src_ch_id read, the ack's remote register write"
+  },
+  {
+   "id": "m.rx.poll_use",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "match": "bool pkts_received = pkts_received_since_last_check > 0;|unwritten_packets = !wr_sent_counter\\.is_caught_up_to\\(ack_counter\\);|unwritten_packets = pkts_received_since_last_check != 0;|if \\(unwritten_packets\\) \\{",
+   "cat": "checks",
+   "note": "first uses of the packets-received read (its latency shows here)"
+  },
+  {
+   "id": "m.rx.timer",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "match": "receiver_forward_timer|NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD",
+   "cat": "loop"
+  },
+  {
+   "id": "m.rx.header_locate",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "from": [
+    2330,
+    "const uint32_t rx_start = phase_profiler.open<PHASE_RX_DECODE_ADMIT>();"
+   ],
+   "to": [
+    2334,
+    "local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));"
+   ],
+   "cat": "decode"
+  },
+  {
+   "id": "m.rx.decode",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "from": [
+    2376,
+    "ROUTING_FIELDS_TYPE cached_routing_fields{};"
+   ],
+   "to": [
+    2456,
+    "const bool admitted = can_send_to_all_local_chip_receivers;"
+   ],
+   "to_excl": true,
+   "cat": "decode",
+   "note": "routing fields (1D) / route buffer decode (2D); the admission calls inside it map by their own rules"
+  },
+  {
+   "id": "m.rx.src_record",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "match": "receiver_channel_pointers\\.set_src_chan_id\\(receiver_buffer_index, packet_header->src_ch_id\\);",
+   "cat": "credits",
+   "note": "the header's source channel, kept for the completion credit (debatable: a header read)"
+  },
+  {
+   "id": "m.rx.admit_result",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "match": "can_send_to_all_local_chip_receivers( &)?=|const bool admitted = can_send_to_all_local_chip_receivers;|bool trid_flushed = receiver_channel_trid_tracker\\.transaction_flushed|if \\(can_send_to_all_local_chip_receivers\\) \\{",
+   "cat": "checks",
+   "note": "admission result and the slot's transaction-ID reuse test; first use of the downstream credit reads"
+  },
+  {
+   "id": "m.rx.progress_marks",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "from": [
+    2462,
+    "did_something = true;"
+   ],
+   "to": [
+    2465,
+    "phase_profiler.close<PHASE_RX_DECODE_ADMIT>(rx_start);"
+   ],
+   "cat": "loop"
+  },
+  {
+   "id": "m.rx.dispatch",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "from": [
+    2470,
+    "channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);"
+   ],
+   "to": [
+    2510,
+    "wr_sent_counter.increment();"
+   ],
+   "to_excl": true,
+   "cat": "noc",
+   "note": "transaction ID, forward / local delivery calls"
+  },
+  {
+   "id": "m.rx.release",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "from": [
+    2510,
+    "wr_sent_counter.increment();"
+   ],
+   "to": [
+    2513,
+    "increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);"
+   ],
+   "cat": "credits",
+   "note": "slot release: write counter, packets-received register decrement"
+  },
+  {
+   "id": "m.rx.completions",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "from": [
+    2528,
+    "if constexpr (!fuse_receiver_flush_and_completion_ptr) {"
+   ],
+   "to": [
+    2670,
+    "return progress;"
+   ],
+   "to_excl": true,
+   "cat": "credits",
+   "note": "completion proof (NoC writes sent for the slot's transaction ID), TX-queue busy test, completion credit, every pass"
+  },
+  {
+   "id": "m.rx.step",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step_impl$",
+   "cat": "loop"
+  },
+  {
+   "id": "m.rx.step_wrapper",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_receiver_channel_step$",
+   "cat": "loop"
+  },
+  {
+   "id": "m.rx.can_forward.route",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "can_forward_packet_completely$",
+   "from": [
+    902,
+    "bool deliver_locally_only;"
+   ],
+   "to": [
+    907,
+    "(cached_routing_fields.value & LowLatencyFields::FIELD_MASK) == LowLatencyFields::WRITE_ONLY;"
+   ],
+   "cat": "decode"
+  },
+  {
+   "id": "m.rx.can_forward.space",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "can_forward_packet_completely$",
+   "match": "return deliver_locally_only \\|\\| downstream_edm_interface",
+   "cat": "checks"
+  },
+  {
+   "id": "m.rx.can_forward",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "can_forward_packet_completely$",
+   "cat": "checks"
+  },
+  {
+   "id": "m.rx.admit_2d",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "admit_2d_dispatch$|downstreams_have_space$|check_downstream_has_space$",
+   "cat": "checks"
+  },
+  {
+   "id": "m.rx.forward_2d",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "forward_2d_dispatch$",
+   "cat": "noc"
+  },
+  {
+   "id": "m.rx.record_2d",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "record_2d_forwarded_slots$",
+   "cat": "loop"
+  },
+  {
+   "id": "m.rx.forward_1d",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "receiver_forward_packet$",
+   "cat": "decode",
+   "note": "1D: the routing-field switch and the payload size read; its forward and local-delivery calls map by their own rules"
+  },
+  {
+   "id": "m.rx.local_header",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "generic_rx_local_delivery$",
+   "cat": "decode",
+   "note": "reads the packet's send type from the header"
+  },
+  {
+   "id": "m.rx.local",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "generic_rx_local_delivery_impl$|forward_to_local_destination$",
+   "cat": "noc"
+  },
+  {
+   "id": "m.pt.dispatch",
+   "file": "fabric_edm_packet_transmission.hpp",
+   "fn": "execute_chip_unicast_to_local_chip_impl$",
+   "match": "switch \\(noc_send_type\\)|if \\(noc_send_type == ",
+   "cat": "decode",
+   "note": "the command switch: first use of the send type read from the header"
+  },
+  {
+   "id": "m.pt.local",
+   "file": "fabric_edm_packet_transmission.hpp",
+   "fn": "execute_chip_unicast_to_local_chip_impl$",
+   "cat": "noc"
+  },
+  {
+   "id": "m.pt.forward",
+   "file": "fabric_edm_packet_transmission.hpp",
+   "fn": "forward_payload_to_downstream_edm$",
+   "cat": "noc"
+  },
+  {
+   "id": "m.sp.tx.room_and_packet",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_sender_channel_step_speedy$",
+   "from": [
+    116,
+    "bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();"
+   ],
+   "to": [
+    119,
+    "bool can_send = receiver_has_space_for_packet && has_unsent_packet;"
+   ],
+   "cat": "checks",
+   "note": "speedy path (worker-only VC0 routers: ENABLE_SPEEDY_VC0, e.g. trimmed or NeighborExchange shapes)"
+  },
+  {
+   "id": "m.sp.tx.send",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_sender_channel_step_speedy$",
+   "from": [
+    121,
+    "if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !fabric_exp_tx_no_send_txq_check) {"
+   ],
+   "to": [
+    187,
+    "phase_profiler.close<PHASE_TX_SEND>(send_start);"
+   ],
+   "cat": "eth_send"
+  },
+  {
+   "id": "m.sp.tx.blocked",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_sender_channel_step_speedy$",
+   "from": [
+    191,
+    "} else if (has_unsent_packet) {"
+   ],
+   "cat": "checks"
+  },
+  {
+   "id": "m.sp.tx.credits",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_sender_channel_step_speedy$",
+   "from": [
+    198,
+    "bool check_completions = sender_state.sender_amort_counter >= SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL;"
+   ],
+   "to": [
+    224,
+    "if constexpr (MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER) {"
+   ],
+   "to_excl": true,
+   "cat": "credits"
+  },
+  {
+   "id": "m.sp.tx.connection",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_sender_channel_step_speedy$",
+   "from": [
+    224,
+    "if constexpr (MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER) {"
+   ],
+   "to": [
+    251,
+    "return progress;"
+   ],
+   "to_excl": true,
+   "cat": "loop"
+  },
+  {
+   "id": "m.sp.tx.step",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_sender_channel_step_speedy$",
+   "cat": "loop"
+  },
+  {
+   "id": "m.sp.rx.poll",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_receiver_channel_step_speedy$",
+   "match": "auto pkts_received = get_ptr_val<to_receiver_pkts_sent_id>\\(\\);|bool unwritten_packets = pkts_received != 0;|if \\(unwritten_packets\\) \\{",
+   "cat": "checks"
+  },
+  {
+   "id": "m.sp.rx.header",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_receiver_channel_step_speedy$",
+   "from": [
+    289,
+    "const uint32_t rx_start = phase_profiler.open<PHASE_RX_DECODE_ADMIT>();"
+   ],
+   "to": [
+    298,
+    "auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);"
+   ],
+   "cat": "decode"
+  },
+  {
+   "id": "m.sp.rx.local",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_receiver_channel_step_speedy$",
+   "from": [
+    301,
+    "const uint32_t local_start = phase_profiler.open<PHASE_RX_LOCAL>();"
+   ],
+   "to": [
+    311,
+    "phase_profiler.close<PHASE_RX_LOCAL>(local_start);"
+   ],
+   "cat": "noc"
+  },
+  {
+   "id": "m.sp.rx.release",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_receiver_channel_step_speedy$",
+   "from": [
+    320,
+    "wr_sent_counter.increment();"
+   ],
+   "to": [
+    322,
+    "receiver_state.unacked_sends++;"
+   ],
+   "cat": "credits"
+  },
+  {
+   "id": "m.sp.rx.completions",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_receiver_channel_step_speedy$",
+   "from": [
+    336,
+    "if ((receiver_state.unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL) &&"
+   ],
+   "to": [
+    362,
+    "return progress;"
+   ],
+   "to_excl": true,
+   "cat": "credits"
+  },
+  {
+   "id": "m.sp.rx.step",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "fn": "run_receiver_channel_step_speedy$",
+   "cat": "loop"
+  },
+  {
+   "id": "m.sp.file",
+   "file": "fabric_erisc_router_speedy_path.hpp",
+   "cat": "loop",
+   "fallback": true
+  },
+  {
+   "id": "m.loop.idle_switch",
+   "file": "fabric_erisc_router.cpp",
+   "fn": "run_fabric_edm_main_loop|operator",
+   "from": [
+    3375,
+    "if (did_something) {"
+   ],
+   "to": [
+    3382,
+    "}"
+   ],
+   "cat": "loop",
+   "note": "idle context-switch counting: once per round, mixed idle / busy (not pure waiting)"
+  },
+  {
+   "id": "m.loop.utils",
+   "file": "tt_fabric_utils.h",
+   "cat": "loop",
+   "note": "termination signal and connection helpers"
+  },
+  {
+   "id": "m.loop.telemetry",
+   "file": "fabric_bandwidth_telemetry.hpp",
+   "cat": "loop"
+  },
+  {
+   "id": "m.loop.file",
+   "file": "fabric_erisc_router.cpp",
+   "cat": "loop",
+   "fallback": true,
+   "note": "main loop, lambdas, kernel_main: anything in the kernel file no specific rule names"
+  }
+ ],
+ "loop_fn": "run_fabric_edm_main_loop|run_sender_channel_step|run_receiver_channel_step"
+}

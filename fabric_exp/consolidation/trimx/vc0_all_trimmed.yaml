@@ -1,0 +1,4 @@
+# Every router loses all of VC0's sender channels (on a mux router: its one serviced channel, the worker channel).
+channel_trimming_overrides:
+  vc0:
+    force_enable_sender_channels: []

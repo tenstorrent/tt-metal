@@ -1,0 +1,31 @@
+images 2863, .text differs 394
+bh_2d                        8x loop {receiver::run}
+bh_2d_allinstr               8x loop {receiver::run}
+bh_2d_bwtelemetry            8x loop {receiver::run}
+bh_2d_codeprof               8x loop {receiver::run}
+bh_2d_delay                  8x loop {receiver::run}
+bh_2d_passdelay              8x loop {receiver::run}
+bh_2d_telemetry              8x loop {receiver::run}
+bh_2d_trim                   8x loop {receiver::run}
+bh_2d_vc2                    8x loop {receiver::run}
+bh_2d_vc2_trim_rx0           8x loop {none: init only}
+bh_2d_vc2_trim_w0            8x loop {receiver::run}
+bh_2d_vc2_trim_w02           8x loop {receiver::run}
+bh_2d_vc2_trim_w2            8x loop {receiver::run}
+bh_torus                     4x loop {receiver::run}
+bh_torus_vc2                 8x loop {receiver::run}
+bh_torus_vc2_trim_w0         8x loop {receiver::run}
+bh_trim_gtest                20x loop {receiver::run}
+bh_vc1                       22x loop {receiver::run}
+bh_vc1_allinstr              6x loop {receiver::run}
+bh_vc1_delay                 22x loop {receiver::run}
+bh_vc1_passdelay             22x loop {receiver::run}
+bh_vc1_trim_rx0              14x loop {receiver::run}; 8x loop {none: init only}
+bh_vc1_trim_vc1              22x loop {receiver::run}
+bh_vc1_trim_vc1p             22x loop {receiver::run}
+bh_vc1_trim_w0               20x loop {receiver::run}
+glx_2d                       20x loop {receiver::run}
+glx_express                  20x loop {receiver::run}
+glx_express_line             28x loop {receiver::run}
+glx_express_mesh             20x loop {receiver::run}
+glx_torus                    4x loop {receiver::run}

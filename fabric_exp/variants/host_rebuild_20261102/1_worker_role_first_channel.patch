@@ -1,0 +1,23 @@
+--- a/tt_metal/fabric/erisc_datamover_builder.cpp	2026-11-02 17:41:28.212834195 +0000
++++ b/tt_metal/fabric/erisc_datamover_builder.cpp	2026-11-02 17:41:28.226834385 +0000
+@@ -1194,14 +1194,14 @@
+         return this->is_sender_channel_serviced_[risc_id][channel_id] ||
+                (exp_upstream_on_e1 && risc_id == 1 && this->is_sender_channel_serviced_[0][channel_id]);
+     };
+-    // A worker channel: a sender channel a worker (or the fabric's mux) connects to at run time, the others being
+-    // forwarded into by the upstream routers. VC0's is the worker-connected sender channel; VC2's channels are
+-    // worker-type (neighbour exchange; builder_config). A channel position's role, whether or not trimming services it.
++    // A worker channel: the first sender channel of each VC whose routing mode has a worker, which a worker (or the
++    // fabric's mux) connects to at run time; every other sender channel is forwarded into by an upstream router.
++    // VC0: the worker-connected channel; VC1 (inter-mesh): none; VC2 (neighbour exchange): its first channel.
++    // A channel position's role, whether or not trimming services it.
+     auto is_worker_channel = [&](size_t channel_id) -> bool {
+-        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+-        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
++        const size_t vc2_first = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+         return channel_id == get_worker_connected_sender_channel() ||
+-               (channel_id >= vc2_start && channel_id < vc2_end);
++               (actual_sender_channels_vc2 > 0 && channel_id == vc2_first);
+     };
+     auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
+         if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {

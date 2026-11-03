@@ -1,0 +1,11 @@
+v4rxg2t_O3 -> v4rxg3_O3: 84 images with different .text, 126 role analyses
+  bh_2d_vc2_trim_rx0 receiver                28  loop -36 sp S-7 L-9 -['credit_completions<2>:waiting~', 'receive<2>:arrived', 'run:states', 'step<2>:arrived']
+  bh_2d_vc2_trim_rx0_1erisc receiver         28  loop +1 sp S+0 L+1
+  bh_2d_vc2_trim_rx0_1erisc sender           28  loop +0 sp S+0 L+0
+  bh_vc1_trim_rx0 receiver                    4  loop +2 sp S-5 L-10 +['receive<1>:header_word'] -['credit_completions<1>:waiting~', 'receive<1>:arrived', 'run:states', 'step<1>:arrived']
+  bh_vc1_trim_rx0 receiver                    4  loop -16 sp S-6 L-11 -['credit_completions<1>:waiting~', 'receive<1>:arrived', 'run:states', 'step<1>:arrived']
+  bh_vc1_trim_rx0 receiver                    2  loop +3 sp S-5 L-10 +['receive<1>:header_word'] -['credit_completions<1>:waiting~', 'receive<1>:arrived', 'run:states', 'step<1>:arrived']
+  bh_vc1_trim_rx0 receiver                    2  loop +1 sp S-5 L-10 +['receive<1>:header_word'] -['credit_completions<1>:waiting~', 'receive<1>:arrived', 'run:states', 'step<1>:arrived']
+  bh_vc1_trim_rx0 receiver                    2  loop -15 sp S-6 L-11 -['credit_completions<1>:waiting~', 'receive<1>:arrived', 'run:states', 'step<1>:arrived']
+  bh_vc1_trim_rx0_1erisc receiver            14  loop +1 sp S+0 L+1
+  bh_vc1_trim_rx0_1erisc sender              14  loop +0 sp S+0 L+0

@@ -12,6 +12,7 @@
 #   v3q     tree "v3q", the lead in v2's place, keepalive from the host setting (1000 on Blackhole)
 #   v3qfw   v3q with the firmware keepalive (override 0: the router leaves the firmware's value)
 #   v3qr    v3q again (same kernel cache): a repeat, for run-to-run spread
+# Dry run (stubs, no device): G=<scratch> SLURM_JOB_ID=dry DRY_NODE_OK=1 IGNORE_BUSY=1 bash frs_glx.sbatch
 # With VALIDATE=1 (default), first a data-checked validation of both routers (mesh sanity). Per-job copies of the trees
 # (hard links, no extra space) keep this job's generated/ CSVs its own; each config has its own kernel cache.
 #SBATCH --partition=bh_sc36_6
@@ -27,6 +28,22 @@ G=${G:-/data/aagarwal/frs-glx}
 J=$G/jobs/${SLURM_JOB_ID:-manual}
 mkdir -p $J/results
 echo "node=$(hostname) job=${SLURM_JOB_ID:-} start=$(date -u +%FT%TZ)"
+# User rule (2026-11-02): Galaxy jobs only on the 110-a machines (partition bh_sc36_6, nodes bh-glx-110-a*); stop anywhere
+# else before touching the device or copying trees. DRY_NODE_OK=1 skips the check for a dry run off the Galaxy.
+case "${SLURMD_NODENAME:-$(hostname)}" in
+    bh-glx-110-a*) ;;
+    *) [ -z "${DRY_NODE_OK:-}" ] && { echo "!!! node ${SLURMD_NODENAME:-$(hostname)} is not a bh-glx-110-a* machine: stopping"; exit 1; } ;;
+esac
+# Nodes are also used outside Slurm (jobs 155971, 157726, 157804: another user's tests held the device on an --exclusive
+# node, and the first step waited on the KMD lock after the tree copies). Look for other users' device work first and
+# stop before the slow copies (IGNORE_BUSY=1 skips the check).
+busy=$(ps -eo user:20,etime,args --no-headers | awk -v me="$USER" '$1 != me && $1 != "root" && /pytest|python|test_|tt-metal|ttnn/' |
+    grep -v -e tt-fabric-manager -e tt-metrics-exporter -e tt_telemetry | cut -c1-200 | head -5)
+if [ -n "$busy" ] && [ -z "${IGNORE_BUSY:-}" ]; then
+    echo "!!! $(hostname): other users' processes that may hold the device; stopping before the tree copies:"
+    echo "$busy"
+    exit 1
+fi
 for t in base v3q; do cp -al $G/trees/$t $J/$t || { echo "!!! copy of $t failed"; exit 1; }; done
 echo "trees copied $(date -u +%T)"
 

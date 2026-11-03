@@ -1,0 +1,84 @@
+bh_1d                        same   20  differ    0  only-in-one    0
+bh_1d_1erisc                 same   10  differ    0  only-in-one    0
+bh_1d_allinstr               same   20  differ    0  only-in-one    0
+bh_1d_delay                  same    0  differ   20  only-in-one    0
+bh_1d_mux                    same   10  differ    0  only-in-one    0
+bh_1d_telemetry              same   20  differ    0  only-in-one    0
+bh_1d_trim                   same   20  differ    0  only-in-one    0
+bh_1d_trim_w0                same   20  differ    0  only-in-one    0
+bh_1d_trim_w0_1erisc         same   10  differ    0  only-in-one    0
+bh_2d                        same   56  differ    0  only-in-one    0
+bh_2d_1erisc                 same   28  differ    0  only-in-one    0
+bh_2d_1erisc_delay           same    0  differ   28  only-in-one    0
+bh_2d_1erisc_passdelay       same    0  differ   28  only-in-one    0
+bh_2d_allinstr               same   56  differ    0  only-in-one    0
+bh_2d_bwtelemetry            same   56  differ    0  only-in-one    0
+bh_2d_codeprof               same   56  differ    0  only-in-one    0
+bh_2d_delay                  same    0  differ   56  only-in-one    0
+bh_2d_mux                    same   28  differ    0  only-in-one    0
+bh_2d_mux_delay              same    0  differ   28  only-in-one    0
+bh_2d_mux_trim_all           same   28  differ    0  only-in-one    0
+bh_2d_passdelay              same    0  differ   56  only-in-one    0
+bh_2d_telemetry              same   56  differ    0  only-in-one    0
+bh_2d_trim                   same   56  differ    0  only-in-one    0
+bh_2d_udm                    same   28  differ    0  only-in-one    0
+bh_2d_udm_gtest              same   28  differ    0  only-in-one    0
+bh_2d_vc2                    same   56  differ    0  only-in-one    0
+bh_2d_vc2_1erisc             same   28  differ    0  only-in-one    0
+bh_2d_vc2_trim_rx0           same   56  differ    0  only-in-one    0
+bh_2d_vc2_trim_rx0_1erisc    same   28  differ    0  only-in-one    0
+bh_2d_vc2_trim_w0            same   56  differ    0  only-in-one    0
+bh_2d_vc2_trim_w02           same   56  differ    0  only-in-one    0
+bh_2d_vc2_trim_w02_1erisc    same   28  differ    0  only-in-one    0
+bh_2d_vc2_trim_w0_1erisc     same   28  differ    0  only-in-one    0
+bh_2d_vc2_trim_w2            same   56  differ    0  only-in-one    0
+bh_2d_vc2_trim_w2_1erisc     same   28  differ    0  only-in-one    0
+bh_neighbor                  same    8  differ    0  only-in-one    0
+bh_neighbor_1erisc           same    4  differ    0  only-in-one    0
+bh_neighbor_delay            same    0  differ    8  only-in-one    0
+bh_ring                      same   20  differ    0  only-in-one    0
+bh_ring_1erisc               same   10  differ    0  only-in-one    0
+bh_ring_allinstr             same   20  differ    0  only-in-one    0
+bh_ring_delay                same    0  differ   20  only-in-one    0
+bh_ring_mux                  same   10  differ    0  only-in-one    0
+bh_ring_passdelay            same    0  differ   20  only-in-one    0
+bh_torus                     same   24  differ    0  only-in-one    0
+bh_torus_1erisc              same   12  differ    0  only-in-one    0
+bh_torus_vc2                 same   56  differ    0  only-in-one    0
+bh_torus_vc2_1erisc          same   28  differ    0  only-in-one    0
+bh_torus_vc2_trim_w0         same   56  differ    0  only-in-one    0
+bh_torus_vc2_trim_w0_1erisc  same   28  differ    0  only-in-one    0
+bh_trim_gtest                same  316  differ    0  only-in-one    0
+bh_trim_gtest_1erisc         same  158  differ    0  only-in-one    0
+bh_vc1                       same   44  differ    0  only-in-one    0
+bh_vc1_allinstr              same   12  differ    0  only-in-one    0
+bh_vc1_delay                 same    0  differ   44  only-in-one    0
+bh_vc1_passdelay             same    0  differ   44  only-in-one    0
+bh_vc1_trim_rx0              same   44  differ    0  only-in-one    0
+bh_vc1_trim_rx0_1erisc       same   22  differ    0  only-in-one    0
+bh_vc1_trim_vc1              same   44  differ    0  only-in-one    0
+bh_vc1_trim_vc1p             same   44  differ    0  only-in-one    0
+bh_vc1_trim_w0               same   42  differ    0  only-in-one    0
+bh_vc1_trim_w0_1erisc        same   19  differ    0  only-in-one    0
+glx_1d                       same   24  differ    0  only-in-one    0
+glx_2d                       same   96  differ    0  only-in-one    0
+glx_express                  same   56  differ    0  only-in-one    0
+glx_express_1erisc           same   28  differ    0  only-in-one    0
+glx_express_line             same   88  differ    0  only-in-one    0
+glx_express_line_1erisc      same   44  differ    0  only-in-one    0
+glx_express_mesh             same   96  differ    0  only-in-one    0
+glx_ring                     same   16  differ    0  only-in-one    0
+glx_torus                    same   16  differ    0  only-in-one    0
+TOTAL                        same 2511  differ  352  only-in-one    0
+  differs: bh_1d_delay__1026789670871966731/active_erisc/active_erisc.elf
+  differs: bh_1d_delay__1055856049329037561/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_delay__1061255109184565716/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_delay__1078583689861020210/active_erisc/active_erisc.elf
+  differs: bh_1d_delay__1081813303705157802/active_erisc/active_erisc.elf
+  differs: bh_1d_delay__1095322151485923635/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_delay__1131289661401523306/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_delay__140786861237297570/active_erisc/active_erisc.elf
+  differs: bh_1d_delay__153613345144789183/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_delay__161411194578150705/active_erisc/active_erisc.elf
+  differs: bh_1d_delay__163579880774406566/subordinate_active_erisc/subordinate_active_erisc.elf
+  differs: bh_1d_delay__206112315302813658/active_erisc/active_erisc.elf

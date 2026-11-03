@@ -1,0 +1,65 @@
+5/11/E1: 6530 samples, 5700 kernel samples in the window; build fabric_erisc_router_v2/14894759742743696472/subordinate_active_erisc/subordinate_active_erisc.elf
+
+by innermost line (top 30):
+    7.3%  hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174  (NOC_CMD_BUF_WRITE_REG)
+    7.0%  hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1483  (ncrisc_noc_set_transaction_id)
+    5.3%  hw/inc/internal/ethernet/tt_eth_api.h:31  (eth_txq_reg_read)
+    5.0%  fabric/hw/inc/edm_fabric/router/router_routing.hpp:93  (Routing2D::action)
+    4.6%  fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:45  (ReceiverChannelCounterBasedResponseCreditSender::accumulate_ack_credit)
+    4.0%  hw/inc/internal/ethernet/tt_eth_api.h:27  (eth_txq_reg_write)
+    3.2%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:591  (receiver::credit_completions)
+    2.5%  fabric/hw/inc/edm_fabric/router/router_routing.hpp:92  (Routing2D::action)
+    2.4%  fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp:141  (deliver)
+    2.4%  fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp:93  (count_local_writes)
+    2.0%  hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:2288  (noc_write_with_state)
+    1.9%  fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp:92  (count_local_writes)
+    1.9%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:654  (receiver::send_credit_frame)
+    1.9%  hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:184  (NOC_STATUS_READ_REG)
+    1.9%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:67  (receiver::ring_add)
+    1.8%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:287  (receiver::accumulate_first_level_acks)
+    1.7%  fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:38  (ReceiverChannelCounterBasedResponseCreditSender::accumulate_completion_credit)
+    1.7%  fabric/hw/inc/edm_fabric/router/router_common.hpp:102  (read_stream_raw)
+    1.6%  fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp:163  (deliver)
+    1.5%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:65  (receiver::ring_add)
+    1.5%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:386  (receiver::handle)
+    1.4%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:191  (receiver::advance)
+    1.4%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:307  (receiver::retire)
+    1.4%  fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:150  (shift_to_next_chunk)
+    1.4%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:585  (receiver::credit_completions)
+    1.3%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:147  (receiver::Channel::next_index)
+    1.3%  hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180  (NOC_CMD_BUF_READ_REG)
+    1.3%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:145  (receiver::Channel::slot_addr)
+    1.2%  fabric/hw/inc/edm_fabric/router/router_receiver.hpp:446  (receiver::receive)
+    1.2%  fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp:165  (deliver)
+
+by inline chain, 2 frames (top 30):
+   10.9%  deliver < receiver::handle
+    7.8%  ncrisc_noc_set_transaction_id < local_write
+    7.7%  Routing2D::action < Routing2D::read
+    6.1%  receiver::credit_completions < receiver::step
+    6.1%  ReceiverChannelCounterBasedResponseCreditSender::accumulate_ack_credit < receiver::accumulate_first_level_acks
+    5.3%  eth_txq_reg_read < read_txq_status
+    4.4%  receiver::accumulate_first_level_acks < receiver::step
+    4.3%  count_local_writes < deliver
+    4.0%  eth_txq_reg_write < internal_::eth_send_packet_bytes_without_txq_busy_check
+    3.7%  NOC_CMD_BUF_WRITE_REG < noc_write_with_state
+    2.9%  ReceiverChannelCounterBasedResponseCreditSender::accumulate_completion_credit < receiver::accumulate_completion_credits
+    2.4%  receiver::send_credit_frame < receiver::pass
+    2.3%  receiver::receive < receiver::step
+    2.1%  NOC_STATUS_READ_REG < ncrisc_noc_nonposted_write_with_transaction_id_sent
+    2.0%  noc_write_with_state < local_write
+    1.9%  receiver::handle < receiver::receive
+    1.9%  receiver::ring_add < receiver::accumulate_first_level_acks
+    1.8%  NOC_CMD_BUF_WRITE_REG < noc_common_write_with_state
+    1.8%  NOC_CMD_BUF_WRITE_REG < ncrisc_noc_set_transaction_id
+    1.7%  receiver::retire < receiver::handle
+    1.7%  read_stream_raw < receiver::read_packets_received
+    1.5%  tt::tt_fabric::PacketHeaderBase::PackedPayloadAndSendType::unpack < receiver::handle
+    1.5%  receiver::ring_add < receiver::oldest_uncredited
+    1.4%  receiver::advance < receiver::retire
+    1.4%  shift_to_next_chunk < deliver
+    1.4%  receiver::Channel::next_index < receiver::advance
+    1.3%  NOC_CMD_BUF_READ_REG < noc_cmd_buf_ready
+    1.3%  receiver::Channel::slot_addr < receiver::accumulate_first_level_acks
+    1.2%  receiver::run
+    1.1%  receiver::SlotSources::set < receiver::retire

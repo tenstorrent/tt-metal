@@ -1,0 +1,19 @@
+# The VC1 split's rank bindings (p150x8_2x2_split_rank_bindings.yaml: chips {0,1,2,3} | {4,5,6,7}) with TT_RUN_RANK
+# swapped (2026-11-02, multi-VC rows, consolidation/mvc3_yamls.py "lag0" group). test_tt_fabric's diagnostic launch delay
+# (TT_FABRIC_TEST_DIAG_LAUNCH_DELAY_MS) delays every process whose TT_RUN_RANK is not 0, so with these bindings mesh 0's
+# process (MPI rank 0) launches later and mesh 1's flows start first. TT_RUN_RANK is read only by that delay and by
+# tt-triage; MPI ranks, meshes and devices are unchanged (env_overrides apply after tt-run's own TT_RUN_RANK).
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3"
+      TT_RUN_RANK: "1"
+
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "4,5,6,7"
+      TT_RUN_RANK: "0"
+
+mesh_graph_desc_path: "fabric_exp/vc1/p150x8_2x2_split_mgd.textproto"

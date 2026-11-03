@@ -1,0 +1,42 @@
+# VC0 + VC2 traffic row (2026-11-01): one VC0 sender and one VC2 sender on chip 0 (separate cores) to the same E/W
+# neighbour (chip 1), so both share one link; 4352 B, 4M packets each, benchmark mode. Needs TT_METAL_ENABLE_FABRIC_VC2=1.
+# VC0 finishes first, so its rate (the profiler logs each sender core's packets and cycles) is its rate under
+# contention; vc02bew4352.yaml gives VC2's. The summary CSV is the link's combined rate (longest sender's cycles).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsVC02EW4352
+  benchmark_mode: true
+  sync: false  # each sender times its own run (with sync, the end-of-run syncs give every sender the slowest one's cycles)
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 4000000
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 0
+    vc_id: 2
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

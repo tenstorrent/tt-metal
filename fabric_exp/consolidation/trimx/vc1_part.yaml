@@ -1,0 +1,4 @@
+# Every router keeps only VC1's first sender channel (VC1 is forwarding only).
+channel_trimming_overrides:
+  vc1:
+    force_enable_sender_channels: [0]

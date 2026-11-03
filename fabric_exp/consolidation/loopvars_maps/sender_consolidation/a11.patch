@@ -1,0 +1,43 @@
+diff -ruN v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp v4txa11/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+--- v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 06:58:18.144286725 +0000
++++ v4txa11/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp	2026-11-03 07:06:44.875968724 +0000
+@@ -833,7 +833,9 @@
+ // The downstream connections are passed in (router_downstream.hpp); each channel forwards on its VC's downstream
+ // routers (ReceiverChannel<VC>::forwards_on_vc).
+ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+-    const ChipCoordinates my_chip = this_chip();
++    const auto& routing_table = l1_routing_table();
++    const ChipCoordinates my_chip{
++        routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     ReceiverChannelStates states;
+     auto loop_copy = states.loop_local_progress();  // carried through the loop (ReceiverChannelStates)
+diff -ruN v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp v4txa11/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp
+--- v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-03 06:58:18.145286738 +0000
++++ v4txa11/tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp	2026-11-03 07:03:24.911313580 +0000
+@@ -44,11 +44,6 @@
+     uint16_t mesh_id;
+ };
+ 
+-// This chip's coordinates, from the routing table (the loops read them once, before their first round).
+-FORCE_INLINE ChipCoordinates this_chip() {
+-    const auto& routing_table = l1_routing_table();
+-    return {routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+-}
+ 
+ #if defined(FABRIC_2D)
+ static_assert(Routing2DCodec::action_bit(eth_chan_directions::EAST) == 1u << eth_chan_directions::EAST);
+diff -ruN v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp v4txa11/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp
+--- v4txa10/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-03 04:13:10.201885189 +0000
++++ v4txa11/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp	2026-11-03 07:06:44.875968724 +0000
+@@ -43,7 +43,9 @@
+ }
+ 
+ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+-    const ChipCoordinates my_chip = this_chip();
++    const auto& routing_table = l1_routing_table();
++    const ChipCoordinates my_chip{
++        routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
+ 
+     SenderState s;
+     sender::start_forwarding_channels(s.states);
