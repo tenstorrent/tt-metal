@@ -94,15 +94,7 @@ std::vector<tt::tt_metal::TensorTopology> MorehDotBackwardOperation::compute_out
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // input_grad = output_grad * other and other_grad = output_grad * input, both caller-owned. Each is checked only
     // against the two tensors it is computed from, where the framework default would check it against every tensor
-    // here; a grad the rule rejects takes the union of all of them.
-    std::vector<std::reference_wrapper<const Tensor>> all_tensors = {
-        tensor_args.output_grad, tensor_args.input, tensor_args.other};
-    for (const auto& output_tensor : tensor_args.output_tensors) {
-        if (output_tensor.has_value()) {
-            all_tensors.emplace_back(*output_tensor);
-        }
-    }
-    std::optional<tt::tt_metal::TensorTopology> union_topology;
+    // here; a grad the rule rejects takes the union of its two factors, on its own mesh coordinates.
     std::vector<tt::tt_metal::TensorTopology> topologies;
     topologies.reserve(tensor_args.output_tensors.size());
     for (size_t slot = 0; slot < tensor_args.output_tensors.size(); ++slot) {
@@ -110,18 +102,16 @@ std::vector<tt::tt_metal::TensorTopology> MorehDotBackwardOperation::compute_out
         if (!output_tensor.has_value()) {
             continue;
         }
-        const Tensor* factor = slot == 0 ? &tensor_args.other : &tensor_args.input;
+        const Tensor& factor = slot == 0 ? tensor_args.other : tensor_args.input;
         if (auto label = ttnn::device_operation::detail::caller_owned_output_topology(
-                *output_tensor, {&tensor_args.output_grad, factor}, "ttnn::moreh_dot_backward")) {
+                *output_tensor, {&tensor_args.output_grad, &factor}, "ttnn::moreh_dot_backward")) {
             topologies.push_back(std::move(*label));
             continue;
         }
-        if (!union_topology.has_value()) {
-            auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(all_tensors);
-            union_topology.emplace(
-                std::move(shape), std::move(placements), tensor_args.input.tensor_topology().mesh_coords());
-        }
-        topologies.push_back(*union_topology);
+        const std::vector<std::reference_wrapper<const Tensor>> factors = {tensor_args.output_grad, factor};
+        auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(factors);
+        topologies.emplace_back(
+            std::move(shape), std::move(placements), output_tensor->tensor_topology().mesh_coords());
     }
     return topologies;
 }
