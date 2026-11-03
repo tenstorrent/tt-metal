@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <graph_tracking.hpp>
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt_stl/fmt.hpp>
@@ -147,6 +148,19 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     if (programs_.size() == 1 || this->is_finalized()) {
         // Compile from main thread for homogeneous workloads
         for (auto& [device_range, _] : programs_) {
+            this->compile_program(device_range, mesh_device);
+        }
+    } else if (GraphTracker::instance().is_enabled()) {
+        // Graph capture is thread-local: CB allocations made on the thread pool never reach the capturing
+        // thread. Compile heterogeneous workloads serially while a capture is active. Each program's CBs are
+        // reported for every sub-device, so release the previous program's CBs before the next one is
+        // allocated - the trace then carries each program's own footprint instead of their sum.
+        bool first = true;
+        for (auto& [device_range, _] : programs_) {
+            if (!first) {
+                GraphTracker::instance().track_deallocate_cb(mesh_device);
+            }
+            first = false;
             this->compile_program(device_range, mesh_device);
         }
     } else {
