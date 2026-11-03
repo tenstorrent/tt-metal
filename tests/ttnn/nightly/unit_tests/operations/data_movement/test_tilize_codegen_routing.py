@@ -476,8 +476,10 @@ def test_tilize_codegen_demotion_boundary(device, shape, in_dtype, kwargs, demot
     torch.manual_seed(0)
     host = _make_input(shape, in_dtype)
     xt = ttnn.from_torch(host, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    reference = _reference(host, **kwargs)
-    expected = host if reference is None else reference
+    # The device copy, not host: an integer input dtype truncates the fractional bf16 draw on upload.
+    stored = ttnn.to_torch(xt)
+    reference = _reference(stored, **kwargs)
+    expected = stored if reference is None else reference
     device.clear_program_cache()
     # Primes the native program, so only a route to codegen grows the cache on the auto call.
     _force_native(xt, **kwargs)
