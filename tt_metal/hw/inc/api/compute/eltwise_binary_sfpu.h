@@ -102,15 +102,8 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::ADD, is_fp32_dest_acc_en, dst_rounding_mode),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    // The Dest op type; same instructions as the former calculate_sfpu_binary<ADD> macro path.
+    MATH((sfpu::AddDest<is_fp32_dest_acc_en, dst_rounding_mode>::run(idst0, idst1, odst)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -270,7 +263,11 @@ ALWI void mul_binary_tile_init() {
 }
 
 ALWI void add_binary_tile_init() {
+#ifdef ARCH_QUASAR
+    MATH((sfpu::AddDest<DST_ACCUM_MODE>::init()));  // init does not depend on the rounding mode
+#else
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::ADD))));
+#endif
 }
 
 ALWI void sub_binary_tile_init() {

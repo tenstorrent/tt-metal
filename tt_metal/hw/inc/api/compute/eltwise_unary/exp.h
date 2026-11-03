@@ -38,10 +38,16 @@ template <
     uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_tile_init() {
+#ifdef ARCH_QUASAR
+    static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
+    static_assert(input_clamping == InputClamping::ClampToNegative, "Non-default clamping not supported in Quasar exp");
+    MATH((sfpu::ExpDest<approx, is_fp32_dest_acc_en>::init()));
+#else
     MATH(SFPU_UNARY_INIT_FN(
         exponential,
         sfpu::exp_init,
         (approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en)));
+#endif
 }
 
 // clang-format off
@@ -83,6 +89,15 @@ template <
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+#ifdef ARCH_QUASAR
+    // The Dest op type; same instructions as the former calculate_exponential macro path.
+    static_assert(scale_en == false, "Non-default SCALE_EN not supported in Quasar exp");
+    static_assert(input_clamping == InputClamping::ClampToNegative, "Non-default clamping not supported in Quasar exp");
+    MATH((LLK_ASSERT(
+        scale == p_sfpu::kCONST_1_FP16B, "Scaling is not supported in the current version of exp on Quasar.")));
+    MATH((sfpu::ExpDest<approx, is_fp32_dest_acc_en, sfpu::dest_float_layout<is_fp32_dest_acc_en>, iterations>::run(
+        idst, vector_mode)));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -91,6 +106,7 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
         idst,
         vector_mode,
         scale));
+#endif
 }
 
 #ifndef ARCH_QUASAR

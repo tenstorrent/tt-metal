@@ -101,6 +101,13 @@
 #define PACK(...)
 #endif
 
+// Quasar SFPU thread (TRISC3): runs SrcS ops. Expands to nothing on the other three threads.
+#if defined(ARCH_QUASAR) && defined(TRISC_ISOLATE_SFPU)
+#define SFPU_SRCS(...) __VA_ARGS__
+#else
+#define SFPU_SRCS(...)
+#endif
+
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_AB_matmul_api.h"
@@ -292,7 +299,7 @@ ALWI void square_tile(uint32_t idst) {
         vec_mode));
 #else
     static_assert(vec_mode == VectorMode::RC && iterations == 8, "Quasar square_tile computes whole tiles only");
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
+    MATH((sfpu::SquareDest<>::run(idst)));
 #endif
 }
 
@@ -303,7 +310,7 @@ ALWI void square_tile_init() {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(square));
 #else
-    MATH(SFPU_UNARY_INIT(square, sfpu::init_square));
+    MATH((sfpu::SquareDest<>::init()));
 #endif
 }
 

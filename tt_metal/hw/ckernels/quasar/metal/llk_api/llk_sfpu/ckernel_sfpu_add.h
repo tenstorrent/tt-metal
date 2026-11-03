@@ -101,5 +101,15 @@ using AddMath =
 template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using AddSrcs = SrcsBinary<AddMath<LAYOUT>, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 
+/** @brief Float ADD on SrcS only: a non-float layout is rejected by srcs_op_supports, so the dispatch never picks it.
+ */
+template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using AddFloatSrcs = SrcsBinary<AddFloatMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
+
+/** @brief Int32 ADD on SrcS only (sign-magnitude, as SrcS holds Int32); float layouts are never picked. */
+template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using AddIntSrcs =
+    SrcsBinary<AddIntMath<true /*SIGN_MAGNITUDE_FORMAT*/>, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
+
 }  // namespace sfpu
 }  // namespace ckernel

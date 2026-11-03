@@ -65,6 +65,7 @@ class SfpuOperand {
 
 public:
     using value_type = typename FORMAT::value_type;
+    static constexpr SfpuReg reg = REG;
 
     sfpi_inline constexpr explicit SfpuOperand(int base_offset = 0) : base_offset_(base_offset) {}
 
@@ -87,6 +88,8 @@ template <typename MATH, int ITERATIONS, typename Input, typename Output>
 sfpi_inline void calculate_unary_operands(const Input& input, const Output& output) {
     static_assert(ITERATIONS > 0, "A unary SFPU op requires at least one SFPI access");
     static_assert(
+        Input::reg == Output::reg, "An SFPU op reads and writes one register file; no pipeline delivers a mixed set");
+    static_assert(
         std::is_same_v<decltype(MATH::apply(std::declval<typename Input::value_type>())), typename Output::value_type>,
         "MATH::apply must map the input operand's value type to the output operand's value type");
 #pragma GCC unroll 8
@@ -103,6 +106,9 @@ sfpi_inline void calculate_unary_operands(const Input& input, const Output& outp
 template <typename MATH, int ITERATIONS, typename Input0, typename Input1, typename Output>
 sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& input1, const Output& output) {
     static_assert(ITERATIONS > 0, "A binary SFPU op requires at least one SFPI access");
+    static_assert(
+        Input0::reg == Output::reg && Input1::reg == Output::reg,
+        "An SFPU op reads and writes one register file; no pipeline delivers a mixed set");
     static_assert(
         std::is_same_v<
             decltype(MATH::apply(

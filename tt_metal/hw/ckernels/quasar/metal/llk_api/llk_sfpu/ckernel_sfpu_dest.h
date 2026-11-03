@@ -34,6 +34,14 @@ inline void check_dest_index([[maybe_unused]] const std::uint32_t dst_index) {
 #endif
 }
 
+/// Quasar SFPU vector modes; the check the SFPU_*_CALL macros made before an op ran.
+inline void check_vector_mode([[maybe_unused]] const VectorMode vector_mode) {
+    LLK_ASSERT(
+        vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
+            vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,
+        "Quasar SFPU supports vector modes R, C, RC, None, RC_custom");
+}
+
 }  // namespace detail
 
 /** @brief Explicit F32 on a 32-bit Dest, HW-implied on a 16-bit one: all an entry without a CB (exp_tile) can know. */
@@ -54,6 +62,7 @@ struct SfpuDestUnaryOp {
     template <trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
     static void run(const std::uint32_t dst_index, const VectorMode vector_mode = VectorMode::RC) {
         detail::check_dest_index<SLOT>(dst_index);
+        detail::check_vector_mode(vector_mode);
         _llk_math_eltwise_unary_sfpu_params_<SLOT>(Op::calculate, dst_index, vector_mode);
     }
 };
@@ -77,6 +86,7 @@ struct SfpuDestBinaryOp {
         detail::check_dest_index<SLOT>(dst_index_in0);
         detail::check_dest_index<SLOT>(dst_index_in1);
         detail::check_dest_index<SLOT>(dst_index_out);
+        detail::check_vector_mode(vector_mode);
         _llk_math_eltwise_binary_sfpu_params_<SLOT>(
             Op::calculate, dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
