@@ -749,8 +749,10 @@ def test_transpose_hc_sharded_cache_hit_new_input(device, n, c, h, w, grid_size)
             ), "transpose must reuse the cached program on a hit"
 
 
-# The sharded HC factory used to place its runtime args on an origin-anchored walk of the shard grid's
-# bounding box, so on any other grid the kernels ran on cores whose args were never written (a hang).
+# The sharded HC factory used to place its runtime args, and find each input shard's core, by an
+# origin-anchored walk of the shard grid's bounding box. Where the walk left the grid, program build hit a
+# TT_FATAL (runtime args for a core the kernel does not run on). Where it stayed inside the grid but in
+# another order (two_row_ranges_col), the output values were wrong.
 # Each grid reaches the special case with one H block per shard, with several, and the generic path.
 @pytest.mark.parametrize(
     "grid_ranges, orientation, layout",
