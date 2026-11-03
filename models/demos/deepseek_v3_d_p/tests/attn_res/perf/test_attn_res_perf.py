@@ -94,8 +94,8 @@ _GALAXY = "SP8xTP4"
 # bound, with the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Galaxies
 # off the pool can sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
 _GALAXY_REFERENCE_E2E_US = {
-    "traced": {"boundary": 1720.0, "ordinary": 141.0},
-    "untraced": {"boundary": 4620.0, "ordinary": 323.0},
+    "traced": {"boundary": 1700.0, "ordinary": 140.0},
+    "untraced": {"boundary": 4140.0, "ordinary": 284.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
