@@ -844,7 +844,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
 
 // Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
 // accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
-TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Multi-head attention with equal query and KV heads (standard MHA)
     // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
@@ -923,7 +923,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 
 // Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
 // accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
-TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
+TEST_F(SDPAForwardTest, NIGHTLY_ValidationTest_EdgeCaseDimensions) {
     using namespace ttml;
 
     // Test Case 1: Minimum viable dimensions
@@ -2180,28 +2180,34 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_RingChunking_SingleDevice) {
     // (causal on the diagonal shard, none on the earlier shards), on per-device shards as short as a tile
     // or two. Only the Galaxy ring test runs that path end to end, so this walks the same steps on one
     // device: every (shard length, mask) the ring sends, each twice, so the second shard of a shape is a
-    // program-cache hit that must read the new buffers.
+    // program-cache hit that must read the new buffers. The op only sees the (shard, mask) pair, so a mask
+    // the ring sends a device at several steps (none, at steps 1 and 2 of a 4-ring) runs once.
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     using namespace ttml;
     constexpr uint32_t kRingSize = 4U, kDeviceRingId = 2U;  // steps 0..2 run: causal, none, none; step 3 skips
     constexpr uint32_t kQHeads = 4U, kKvHeads = 2U, kHeadDim = 64U;
+    std::vector<metal::AttentionMaskType> masks;
+    for (uint32_t step = 0; step < kRingSize; ++step) {
+        const auto [runs, mask_type] = metal::ops::get_device_execution_info(
+            kDeviceRingId,
+            step,
+            kRingSize,
+            metal::AttentionMaskType::Causal,
+            ttnn_fixed::distributed::RingShiftDirection::Forward);
+        if (runs && std::find(masks.begin(), masks.end(), mask_type) == masks.end()) {
+            masks.push_back(mask_type);
+        }
+    }
+    ASSERT_EQ(masks.size(), 2U) << "device 2 of a 4-ring sees the causal and the unmasked step";
     auto* device = &autograd::ctx().get_device();
     device->enable_program_cache();
     for (const uint32_t shard_len : {32U, 64U, 96U, 256U}) {  // 1, 2, 3 (no pairs) and 8 tiles
         const metal::SDPAForwardProgramConfig config = metal::ops::ring_sdpa_fw::ring_chunking(shard_len);
         ASSERT_EQ(config.q_chunk_size, 32U) << "ring runs one query tile-row per item";
         ASSERT_EQ(shard_len % config.k_chunk_size, 0U) << "the K/V step must divide the shard";
-        for (uint32_t step = 0; step < kRingSize; ++step) {
-            const auto [runs, mask_type] = metal::ops::get_device_execution_info(
-                kDeviceRingId,
-                step,
-                kRingSize,
-                metal::AttentionMaskType::Causal,
-                ttnn_fixed::distributed::RingShiftDirection::Forward);
-            if (!runs) {
-                continue;
-            }
-            const std::string name = "RingChunking_S" + std::to_string(shard_len) + "_step" + std::to_string(step);
+        for (const auto mask_type : masks) {
+            const std::string name = "RingChunking_S" + std::to_string(shard_len) +
+                                     (mask_type == metal::AttentionMaskType::Causal ? "_causal" : "_none");
             const SDPATestConfig shard{
                 .batch_size = 1U,
                 .sequence_length = shard_len,
