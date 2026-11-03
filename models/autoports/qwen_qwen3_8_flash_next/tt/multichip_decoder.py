@@ -1274,11 +1274,13 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
         self.conv_bank = ops.upload(torch.zeros(max_requests, 3, 2560))
 
     def _linear(self, x, weight):
+        # Single-row decode: more cores only split the output columns (same K blocking, bit-identical).
+        cores = int(os.environ.get("QWEN_FLASH_GDN_PROJ_CORES", "20"))
         return self.ops.linear(
             x,
             weight,
             compute_kernel_config=self.projection_compute,
-            max_cores=20 if weight is self.packed_weight else 10,
+            max_cores=cores if weight is self.packed_weight else 10,
         )
 
     def prefill_forward(self, hidden_states, *, current_positions=None, slots=None, _decode=False):
@@ -1346,6 +1348,33 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             )
             ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
 
+    def decode_forward_b1(self, hidden_states, *, current_positions=None, slots=None):
+        """One-row decode (QWEN_FLASH_GDN_B1): packed history convolution, slot-indexed recurrence and the
+        flat scalar layout, with the same projection program and B1 output projection as decode_forward
+        (bit-identical). Returns [1,1,1,640]."""
+        if tuple(hidden_states.shape) != (1, 1, 1, 2560) or self.batch_size != 1:
+            raise ValueError("decode_forward_b1 expects the one-row [1,1,1,2560] decode input")
+        self._conv_decode_phase = True
+        self.output_sequence = 1
+        self._b1_flat = True
+        direct = slots is not None and os.environ.get("QWEN_FLASH_SLOT_RECURRENCE", "1") == "1"
+        banks = ("conv",) if direct else ("recurrent", "conv")
+        self._decode_slots, self._decode_positions = (slots, current_positions) if direct else (None, None)
+        try:
+            if slots is not None:
+                if current_positions is None:
+                    raise ValueError("Slot routing requires device current_positions")
+                self._route_state(slots, current_positions, store=False, banks=banks)
+            else:
+                self._reset_fresh_lanes(current_positions)
+            out = self._chunk_body(self._linear(hidden_states, self.packed_weight), 1, 1, flat=True)
+            if slots is not None:
+                self._route_state(slots, current_positions, store=True, banks=banks)
+        finally:
+            self._decode_slots = self._decode_positions = None
+            self._b1_flat = False
+        return ttnn.reshape(out, (1, 1, 1, out.shape[-1]))
+
     def decode_forward_flat(self, flat, *, current_positions=None, slots=None):
         """One token per lane from a flat [1,1,B,2560] input; returns the flat [1,1,B,640] shard.
 
@@ -1384,7 +1413,15 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
         self._decode_conv_history_packed = (
             self._conv_decode_phase and b in flat_gdn_batches() and s == 1 and self.conv_decode_history_enabled
         )
-        if flat and not self._decode_conv_history_packed:
+        lane_conv = (
+            flat and getattr(self, "_b1_flat", False) and os.environ.get("QWEN_FLASH_GDN_B1_LANECONV", "1") == "1"
+        )
+        if lane_conv:
+            # One row: the single-lane convolution (~45 us) beats the packed one (~65 us); same per-lane
+            # [B,S,2560] contract as decode_forward, so the conv and roll below are the per-lane ones.
+            self._decode_conv_history_packed = False
+            projected = ttnn.reshape(projected, (1, 1, 2560))
+        elif flat and not self._decode_conv_history_packed:
             raise ValueError("Flat decode requires the packed history convolution")
         if self._decode_conv_history_packed:
             from .gdn_conv_pack import history_convolution
@@ -1411,7 +1448,7 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
                 )
             q, k, v = [ttnn.concat([row[i] for row in lanes], dim=0) if b > 1 else lanes[0][i] for i in range(3)]
             q, k, v = [ttnn.to_layout(t[:, :s, :], ttnn.TILE_LAYOUT) for t in (q, k, v)]
-        self._roll_conv(projected, flat=flat)
+        self._roll_conv(projected, flat=flat and not lane_conv)
         a = ttnn.typecast(ttnn.to_layout(projections[..., 4096:4108], ttnn.TILE_LAYOUT), ttnn.float32)
         # Chunked prefill consumes log-space decay; every other recurrence takes exp(g).
         g = ttnn.multiply(
@@ -1454,7 +1491,7 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             output_dtype=ttnn.bfloat16,
         )
         gated = ttnn.to_layout(gated[:, :s, :], ttnn.TILE_LAYOUT)
-        if flat:
+        if flat and not getattr(self, "_b1_flat", False):
             gated = ttnn.to_layout(
                 ttnn.reshape(ttnn.to_layout(gated, ttnn.ROW_MAJOR_LAYOUT), (1, 1, b, 1536)), ttnn.TILE_LAYOUT
             )
@@ -3052,7 +3089,16 @@ class MultichipDecoder(OptimizedDecoder):
             return self._prefill_sm(x, positions=positions, slots=slots, page_table=page_table)
         mixed, inject = self.attn_hyper.read(x, decode=decode)
         forward = self.attention.decode_forward if decode else self.attention.prefill_forward
-        if self.kind == "linear_attention":
+        if (
+            self.kind == "linear_attention"
+            and decode
+            and self.batch_size == 1
+            and size == 1
+            and self.attention.conv_decode_history_enabled
+            and os.environ.get("QWEN_FLASH_GDN_B1", "1") == "1"
+        ):
+            update = self.attention.decode_forward_b1(mixed, current_positions=positions, slots=slots)
+        elif self.kind == "linear_attention":
             update = forward(mixed, current_positions=positions, slots=slots)
         else:
             update = forward(mixed, current_pos=positions, page_table=page_table, slots=slots)
