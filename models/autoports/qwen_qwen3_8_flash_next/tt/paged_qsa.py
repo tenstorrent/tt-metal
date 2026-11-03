@@ -243,6 +243,7 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
     # Reuse the canonical mask kernel with its actual one-lane shape, without
     # mutating the live attention object's batch size during trace construction.
     mask_context = SimpleNamespace(batch_size=1, device=attention.device, blocks=attention.blocks)
+    defer_rounding = os.environ.get("QWEN_FLASH_QSA_JOINT_ROUND", "1") == "1"
     selected_rows = []
     for lane in range(attention.batch_size):
         transfer(attention, attention.pooled_cache, attention.pooled_keys, positions, page_table, seq=seq, lane=lane)
@@ -273,6 +274,9 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
             **prefix_args,
         )
         scores = scores[:, :, 31 : 31 + seq, :]
+        if batched_selection and defer_rounding:
+            selected_rows.append(scores)  # FP32 row; rounded once for all lanes below
+            continue
         scores = ttnn.to_layout(ttnn.typecast(scores, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
         if batched_selection:
             selected_rows.append(scores)
@@ -285,6 +289,9 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
         del scores, bound
     if batched_selection:
         scores = ttnn.concat(selected_rows, dim=0)
+        if defer_rounding:
+            # Elementwise rounding commutes with the row concat: bit-identical, one op instead of B.
+            scores = ttnn.to_layout(ttnn.typecast(scores, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
         bound = mask_scores_per_row(attention, scores, positions, seq)
         selected = ttnn.experimental.topk_large_indices(scores, k=512, valid_length_tensor=bound)
         grid = attention.device.compute_with_storage_grid_size()
