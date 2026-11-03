@@ -1413,6 +1413,9 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
     const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
+    // TL1 keeps its contents across processes and the inputs are the same every run, so without the poison a read that
+    // never lands would leave the last run's staging for the write to copy.
+    const std::vector<uint32_t> staging_poison(transfer_size / sizeof(uint32_t), 0xDEADBEEFu);
 
     for (const GddrTarget& target : targets) {
         std::vector<std::vector<uint32_t>> inputs(
@@ -1444,6 +1447,7 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
                     target.slot_stride,
                     target.slot_base}});
 
+        write_cce_sram(device, logical_dram_core, staging_noc_addr, staging_poison.data(), transfer_size);
         LaunchProgram(*mesh_device, program);
 
         std::vector<uint32_t> staged(cleared.size(), 0);
@@ -1496,8 +1500,12 @@ TEST_P(CopiesGddrWithRuntimeArgs, RoundTrip) {
     const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
     const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
+    // TL1 keeps its contents across processes and the inputs are the same every run, so without the poison a read that
+    // never lands would leave the last run's staging for the write to copy.
+    const std::vector<uint32_t> staging_poison(transfer_size / sizeof(uint32_t), 0xDEADBEEFu);
 
     for (const GddrTarget& target : targets) {
         std::vector<std::vector<uint32_t>> inputs(
@@ -1531,7 +1539,12 @@ TEST_P(CopiesGddrWithRuntimeArgs, RoundTrip) {
              target.slot_stride,
              target.slot_base});
 
+        write_cce_sram(device, logical_dram_core, staging_noc_addr, staging_poison.data(), transfer_size);
         LaunchProgram(*mesh_device, program);
+
+        std::vector<uint32_t> staged(cleared.size(), 0);
+        read_cce_sram(device, logical_dram_core, staging_noc_addr, staged.data(), transfer_size);
+        EXPECT_EQ(staged, inputs.back()) << "mimir " << target.mimir_index << " location " << target.location;
 
         for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
             std::vector<uint32_t> output;
@@ -1578,8 +1591,12 @@ TEST_P(CopiesGddrLargerThanAlignment, RoundTrip) {
     const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
     const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
+    // TL1 keeps its contents across processes and the inputs are the same every run, so without the poison a read that
+    // never lands would leave the last run's staging for the write to copy.
+    const std::vector<uint32_t> staging_poison(transfer_size / sizeof(uint32_t), 0xDEADBEEFu);
 
     for (const GddrTarget& target : targets) {
         std::vector<std::vector<uint32_t>> inputs(
@@ -1613,7 +1630,12 @@ TEST_P(CopiesGddrLargerThanAlignment, RoundTrip) {
              target.slot_stride,
              target.slot_base});
 
+        write_cce_sram(device, logical_dram_core, staging_noc_addr, staging_poison.data(), transfer_size);
         LaunchProgram(*mesh_device, program);
+
+        std::vector<uint32_t> staged(cleared.size(), 0);
+        read_cce_sram(device, logical_dram_core, staging_noc_addr, staged.data(), transfer_size);
+        EXPECT_EQ(staged, inputs.back()) << "mimir " << target.mimir_index << " location " << target.location;
 
         for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
             std::vector<uint32_t> output;
@@ -1729,9 +1751,13 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
     const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
     const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
     std::vector<std::vector<uint32_t>> inputs(num_mimirs, std::vector<uint32_t>(transfer_size / sizeof(uint32_t)));
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
+    // TL1 keeps its contents across processes and the inputs are the same every run, so without the poison a read that
+    // never lands would leave the last run's staging for the write to copy.
+    const std::vector<uint32_t> staging_poison(transfer_size / sizeof(uint32_t), 0xDEADBEEFu);
     for (uint32_t mimir_index = 0; mimir_index < num_mimirs; ++mimir_index) {
         for (std::size_t i = 0; i < inputs[mimir_index].size(); ++i) {
             inputs[mimir_index][i] = 0xE1E10000u | (cce_index << 12) | (mimir_index << 8) | static_cast<uint32_t>(i);
@@ -1753,7 +1779,12 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
         logical_dram_core,
         {src_dram_offset, dst_dram_offset, num_mimirs, staging_dev_addr, static_cast<uint32_t>(cleared.size())});
 
+    write_cce_sram(device, logical_dram_core, staging_noc_addr, staging_poison.data(), transfer_size);
     LaunchProgram(*mesh_device, program);
+
+    std::vector<uint32_t> staged(cleared.size(), 0);
+    read_cce_sram(device, logical_dram_core, staging_noc_addr, staged.data(), transfer_size);
+    EXPECT_EQ(staged, inputs.back()) << "staging";
 
     for (uint32_t mimir_index = 0; mimir_index < num_mimirs; ++mimir_index) {
         std::vector<uint32_t> output;
