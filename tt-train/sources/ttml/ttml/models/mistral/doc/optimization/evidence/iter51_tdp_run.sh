@@ -8,6 +8,8 @@ W=${1:-175}
 cd /home/ttuser/agobeljic/tt-metal/tt-train
 export TT_METAL_HOME=/home/ttuser/agobeljic/tt-metal TT_METAL_RUNTIME_ROOT=/home/ttuser/agobeljic/tt-metal
 export TT_MESH_GRAPH_DESC_PATH=/home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto
+# ttnn links the ULFM OpenMPI build; a shell without the profile's loader path fails on libmpi.so.40.
+export LD_LIBRARY_PATH=/opt/openmpi-v5.0.7-ulfm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 O=/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence
 PY=../python_env/bin/python
 LUWEN=/home/ttuser/.tenstorrent-venv/bin/python
@@ -15,10 +17,11 @@ TAG=iter51_tdp${W}
 restore() { echo "=== restoring the default TDP limit $(date -u +%FT%TZ)"; $LUWEN $O/iter51_set_tdp.py restore; }
 trap restore EXIT
 echo "=== $TAG set the TDP limit to ${W} W $(date -u +%FT%TZ)"
-$LUWEN $O/iter51_set_tdp.py $W || exit 1
+$LUWEN $O/iter51_set_tdp.py $W 2>&1 | tee $O/${TAG}_set_tdp.log || exit 1
 rm -f /dev/shm/sm_segment.* 2>/dev/null
 echo "=== $TAG power-cap repro $(date -u +%FT%TZ)"
-timeout 900 $PY $O/iter51_power_cap_repro.py $O/${TAG}_power_cap 30 > $O/${TAG}_power_cap_repro.log 2>&1; echo "rc=$?"
+timeout 900 $PY $O/iter51_power_cap_repro.py $O/${TAG}_power_cap 30 > $O/${TAG}_power_cap_repro.log 2>&1; RC=$?; echo "rc=$RC"
+if [ $RC -ne 0 ]; then tail -5 $O/${TAG}_power_cap_repro.log; echo "repro failed, stopping"; exit 1; fi
 grep -E "^(HiFi)" $O/${TAG}_power_cap_repro.log
 $PY $O/iter51_power_cap_plot.py $O/${TAG}_power_cap
 echo "=== $TAG cool-down 300 s $(date -u +%FT%TZ)"; sleep 300

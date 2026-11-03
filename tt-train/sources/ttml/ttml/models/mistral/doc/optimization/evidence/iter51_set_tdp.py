@@ -14,9 +14,10 @@ for i, c in enumerate(chips):
     )
 for i, c in enumerate(chips):
     if arg == "restore":
-        c.arc_msg(0x22, wait_for_done=True, arg0=0, arg1=1, timeout=2.0)
+        r = c.arc_msg(0x22, wait_for_done=True, arg0=0, arg1=1, timeout=2.0)
     else:
-        c.arc_msg(0x22, wait_for_done=True, arg0=int(arg), arg1=0, timeout=2.0)
+        r = c.arc_msg(0x22, wait_for_done=True, arg0=int(arg), arg1=0, timeout=2.0)
+    print(f"chip {i} SET_TDP_LIMIT reply: {r}")
 time.sleep(0.5)
 for i, c in enumerate(chips):
     t = c.get_telemetry()

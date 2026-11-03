@@ -1,0 +1,19 @@
+=== iter51_tdp175 (the limit set by the user) measurements 2026-11-03T10:06:59Z
+=== iter51_tdp175 power-cap repro 2026-11-03T10:06:59Z
+rc=0
+HiFi4: 30.0 s
+HiFi2: 30.0 s
+HiFi4: first batch 76.0 TFLOP/s per chip, last 76.1, mean 76.4
+HiFi2: first batch 136.6 TFLOP/s per chip, last 117.1, mean 117.2
+wrote /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter51_tdp175_power_cap.png
+=== iter51_tdp175 cool-down 300 s 2026-11-03T10:08:45Z
+=== iter51_tdp175 TP=4 MFU 12 steps with 20 Hz telemetry 2026-11-03T10:13:45Z
+rc=0
+40 of 40 layers, tp 4: 436.9 ms/step over 10 steps (best 432.1), 220.6 TFLOP/s, MFU 37.13%
+step phase: 5.2 s, 81 samples at 16 Hz
+chip 0: aiclk mean   1077 MHz (min 906, max 1350), tdp mean   133 W (max 218), tdc mean  183 A, temp max 74 C, throttler {'0': 81}
+chip 1: aiclk mean   1100 MHz (min 931, max 1350), tdp mean   127 W (max 231), tdc mean  172 A, temp max 75 C, throttler {'0': 81}
+chip 2: aiclk mean    996 MHz (min 856, max 1200), tdp mean   125 W (max 211), tdc mean  177 A, temp max 74 C, throttler {'0': 81}
+chip 3: aiclk mean   1100 MHz (min 931, max 1281), tdp mean   152 W (max 222), tdc mean  207 A, temp max 76 C, throttler {'0': 81}
+MFU 37.13 % of the 1350 MHz peak = 50.3 % at the slowest chip's delivered clock (996 MHz), 46.9 % at the mean delivered clock (1068 MHz)
+=== iter51_tdp175 done 2026-11-03T10:17:12Z
