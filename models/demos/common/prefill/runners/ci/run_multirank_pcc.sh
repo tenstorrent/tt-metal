@@ -148,6 +148,12 @@ case "${MODEL}" in
       DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
+    elif [ "${VARIANT}" = _packed ]; then
+      # Two 5,120-token chunks per forward (PREFILL_FORWARD_TOKENS_BUDGET=10240, 1,280 MoE rows per chip, under
+      # Kimi-K3's 2,016-row packing limit): the producer packs the same golden request into packed forwards, traced
+      # with D2H acks, every rank's AttnRes planes carrying both chunks. Same golden and PCC gate: packing moves
+      # AttnRes output by rounding only.
+      MANIFEST="${MANIFEST_DIR}/kimi_k3${VARIANT}.json"
     fi
     ;;
   mistral4)

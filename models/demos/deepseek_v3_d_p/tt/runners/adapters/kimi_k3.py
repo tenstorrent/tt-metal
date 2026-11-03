@@ -51,6 +51,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
     routing_use_l1_small_for_semaphores = True
 
+    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET > chunk size): TtKimiK3Runtime.prefill_forward, traced and with
+    # per-chunk D2H acks, on any pipeline rank. No indexer, so supports_packed_forward_indexer_indices stays off. At most
+    # MAX_PACKED_ROWS_PER_CHIP MoE rows per chip per forward (the model refuses more at build).
+    supports_packed_forward = True
+    supports_packed_forward_trace = True
+    supports_packed_forward_d2h_acks = True
+
     # Dedups the MLA KV cache only. PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated cache.
     supports_tp_shard_kv = True
     tp_shard_kv_default = True
