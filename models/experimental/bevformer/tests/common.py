@@ -85,6 +85,7 @@ from models.experimental.bevformer.tests.fixtures.camera_rigs import (
     build_lidar2img,
     ring_camera_rig,
 )
+from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 # The variant is fixed when model_config is first imported; the log says which one a run tests.
 logger.info(f"BEVFormer variant {VARIANT}")
@@ -134,6 +135,44 @@ def img_metas_for_dataset(dataset_config, batch_size: int, dtype: torch.dtype = 
     ]
 
 
+def turn_rig(lidar2img, degrees: float) -> torch.Tensor:
+    """``lidar2img`` ``[..., 4, 4]`` of the rig turned by ``degrees`` about the vertical axis."""
+    yaw = math.radians(degrees)
+    turn = torch.eye(4)
+    turn[:2, :2] = torch.tensor([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
+    return torch.as_tensor(lidar2img, dtype=torch.float32) @ turn
+
+
+def zoom_cameras(lidar2img, scale: float, image_size) -> torch.Tensor:
+    """``lidar2img`` ``[..., 4, 4]`` of cameras whose ``(width, height)`` images are scaled by ``scale``
+    about their centre, as a resize and centre crop would: above 1 narrows every field of view,
+    below 1 widens it."""
+    width, height = image_size
+    zoom = torch.tensor(
+        [
+            [scale, 0.0, (1.0 - scale) * width / 2, 0.0],
+            [0.0, scale, (1.0 - scale) * height / 2, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    return zoom @ torch.as_tensor(lidar2img, dtype=torch.float32)
+
+
+def rig_sequence_metas(dataset_config, steps, batch_size: int = 1) -> List[List[dict]]:
+    """One frame's ``img_metas`` per ``(yaw_deg, zoom)`` step: the dataset's rig turned and zoomed
+    (:func:`turn_rig`, :func:`zoom_cameras`). Each camera's visible BEV cells change from frame to
+    frame while every projection stays a valid camera's."""
+    frames = []
+    for yaw_deg, zoom in steps:
+        metas = img_metas_for_dataset(dataset_config, batch_size)
+        for meta in metas:
+            lidar2img = zoom_cameras(turn_rig(meta["lidar2img"], yaw_deg), zoom, dataset_config.input_size)
+            meta["lidar2img"] = lidar2img.tolist()
+        frames.append(metas)
+    return frames
+
+
 # --- Dataset presets --------------------------------------------------------------------------
 
 
@@ -149,6 +188,8 @@ class DatasetPreset:
         embed_dims, num_heads, num_levels, num_points: The spatial cross-attention's deformable
             attention sizes. Every BEV pillar samples ``NUM_POINTS_IN_PILLAR`` heights.
         tsa_num_points: The temporal self-attention's points per head.
+        first_stride: The first feature level's stride in image pixels: 8 for an FPN over C3-C5,
+            32 for one over C5 alone.
     """
 
     name: str
@@ -160,12 +201,13 @@ class DatasetPreset:
     num_levels: int
     num_points: int
     tsa_num_points: int
+    first_stride: int = 8
 
     @property
     def spatial_shapes(self):
         """The preset's feature levels, each as (h, w), as ``SPATIAL_SHAPES``."""
         width, height = self.input_size
-        return list(fpn_spatial_shapes(height, width, self.num_levels))
+        return list(fpn_spatial_shapes(height, width, self.num_levels, self.first_stride))
 
     @property
     def z_cfg(self):
@@ -186,6 +228,21 @@ _BASE = dict(
     tsa_num_points=TSA_NUM_POINTS,
 )
 
+
+def _upstream_preset(variant):
+    """An upstream variant's encoder attention, whichever variant is selected: base's sizes over the
+    variant's camera levels and images."""
+    v = VARIANTS[variant]
+    size = tuple(round(side * v.image_scale) for side in CAMERA_IMAGE_SIZE)
+    return DatasetPreset(
+        "nuscenes_v1.0_full_{}x{}".format(*size),
+        PC_RANGE,
+        NUM_CAMS,
+        size,
+        **dict(_BASE, num_levels=v.num_levels, first_stride=4 << v.out_indices[0]),
+    )
+
+
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
     "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, CAMERA_IMAGE_SIZE, **_BASE),
@@ -204,6 +261,8 @@ PRESETS = {
         num_points=SCA_NUM_POINTS,
         tsa_num_points=TSA_NUM_POINTS,
     ),
+    "nuscenes_small_upstream": _upstream_preset("small"),
+    "nuscenes_tiny_upstream": _upstream_preset("tiny"),
 }
 
 
@@ -322,7 +381,12 @@ def build_reference_fpn(seed=0):
 
 
 def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
-    """NCHW torch tensor -> (1, 1, N*H*W, C) device tensor, the layout conv2d reads and writes."""
+    """NCHW torch tensor -> (1, 1, N*H*W, C) ttnn tensor, the layout conv2d reads and writes
+    (``device`` None keeps it on the host)."""
+    if dtype == ttnn.bfloat16:
+        # torch rounds float32 to bfloat16 bit for bit as from_torch does, several times faster, and
+        # the permute then moves half the bytes.
+        nchw = nchw.to(torch.bfloat16)
     n, c, h, w = nchw.shape
     nhwc = nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c)
     return ttnn.from_torch(nhwc, device=device, dtype=dtype, layout=layout)
@@ -473,10 +537,7 @@ def camera_img_metas(batch_size, preset="nuscenes_variant", yaw_step_deg=0.0):
     the samples' cameras see different BEV cells."""
     metas = img_metas_for_dataset(PRESETS[preset], batch_size)
     for b, meta in enumerate(metas):
-        yaw = math.radians(b * yaw_step_deg)
-        turn = torch.eye(4)
-        turn[:2, :2] = torch.tensor([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
-        meta["lidar2img"] = (torch.tensor(meta["lidar2img"]) @ turn).tolist()
+        meta["lidar2img"] = turn_rig(meta["lidar2img"], b * yaw_step_deg).tolist()
     return metas
 
 
@@ -717,8 +778,11 @@ def check_head_outputs(expected, actual):
     finite, the centers within ``assert_centers_close``'s bounds, and the logits and the boxes over
     all layers, then the last alone, which the coder reads and where the bfloat16 error has built up
     most. The boxes go channel by channel: a joint PCC would be the centers' alone, as x and y span
-    102.4 m against z's 8 m and the other channels' O(1)."""
-    actual = tuple(ttnn.to_torch(t).float() for t in actual)
+    102.4 m against z's 8 m and the other channels' O(1). A single-layer ``actual``, a head without
+    ``all_layers``, is the last layer's."""
+    actual = (ttnn.to_torch(actual[0]).float(), box_preds_to_torch(actual[1]).float())
+    if actual[0].shape[0] == 1:
+        expected = tuple(t[-1:] for t in expected)
     for name, tensor in zip(("class logits", "box predictions"), actual):
         assert_finite(f"the head {name}", tensor)
     assert_centers_close(expected[1], actual[1])
@@ -771,8 +835,9 @@ def assert_topk_close(cls_scores, bbox_preds, tt_cls_scores, tt_bbox_preds, tt_t
     where the error carried from the BEV lowers the PCC further.
 
     ``cls_scores`` and ``bbox_preds`` are the reference's last-layer ``(bs, num_query, *)``
-    outputs, ``tt_cls_scores`` and ``tt_bbox_preds`` the device's as torch tensors, ``tt_topk``
-    ``TTNMSFreeCoder.topk``'s outputs as torch tensors, or ``TTBEVFormer.detect``'s first four with
+    outputs, ``tt_cls_scores`` and ``tt_bbox_preds`` the device's as torch tensors, the boxes in the
+    reference's code order (``box_preds_to_torch``), ``tt_topk`` ``TTNMSFreeCoder.topk``'s outputs
+    as torch tensors, or ``TTBEVFormer.detect``'s first four with
     ``bottom_center``, whose boxes have z at the bottom face. The device's logits differ from the
     reference's slightly, so near-equal scores may rank in a different order and the two top-k
     sets differ at their tail. The scores are compared by their error, not PCC: the top-k's span
@@ -854,10 +919,10 @@ LOW_PRECISION_BOX_CODE_PCC = 0.94
 
 def check_detector_outputs(expected, actual, pcc):
     """The TT detector's class logits, box predictions, BEV and ``TTBEVFormer.detect``'s first four
-    outputs, as torch tensors, against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the
-    BEV, the last layer's logits and boxes at ``pcc`` (``LOW_PRECISION_BOX_CODES`` at
-    ``LOW_PRECISION_BOX_CODE_PCC``), and the detections by ``assert_topk_close``.
-    Logs the box center error."""
+    outputs, as torch tensors, the boxes in the reference's code order (``box_preds_to_torch``),
+    against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the BEV, the last layer's
+    logits and boxes at ``pcc`` (``LOW_PRECISION_BOX_CODES`` at ``LOW_PRECISION_BOX_CODE_PCC``),
+    and the detections by ``assert_topk_close``. Logs the box center error."""
     cls_scores, bbox_preds, bev = expected
     tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk = actual
     for name, tensor in (("BEV", tt_bev), ("class logits", tt_cls_scores), ("boxes", tt_bbox_preds)):

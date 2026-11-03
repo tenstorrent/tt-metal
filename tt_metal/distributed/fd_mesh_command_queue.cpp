@@ -241,7 +241,9 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     auto target_type = this->get_target_device_type();
     bool is_mock = target_type == tt::TargetDevice::Mock || target_type == tt::TargetDevice::Emule;
 
-    if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire)) {
+    // After an L1 ECC halt the dispatcher waits forever on the halted worker, so this would never complete.
+    if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire) &&
+        !mesh_device_->impl().metal_context().l1_ecc_halt_detected()) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
         // for all queued up work to complete.
@@ -732,6 +734,18 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking, sub_device_ids);
 }
 
+void FDMeshCommandQueue::throw_if_reader_failed() {
+    if (!thread_exception_state_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+    if (thread_exception_ptr_) {
+        std::rethrow_exception(thread_exception_ptr_);
+    }
+    // finish_nolock has already rethrown and cleared the exception; the reader thread has exited.
+    TT_THROW("The completion queue reader thread stopped after an earlier error.");
+}
+
 void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
 
@@ -770,6 +784,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
             std::rethrow_exception(exception_ptr);
         }
     }
+    this->throw_if_reader_failed();
 }
 
 void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {

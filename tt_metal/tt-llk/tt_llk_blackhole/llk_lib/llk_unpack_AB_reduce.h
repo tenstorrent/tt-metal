@@ -73,8 +73,7 @@ inline bool _llk_unpack_AB_reduce_scaler_whole_tile_(const ckernel::TensorShape 
  *
  * @note For faces shorter than 16 rows, the data bank is cleared before each face.
  * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
- * @note With a short scaler on the swapped path, both SrcA banks are zeroed once here. This math path never writes
- *       SrcA, so they stay zero; re-run the init after any op that does (e.g. MOVD2A, MOVB2A).
+ * @note With a short scaler on the swapped path, the unpacker's own SrcA bank is zeroed before each scaler unpack.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape, const ckernel::TensorShape tensor_shape_scaler)
@@ -93,15 +92,11 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
     const std::uint32_t num_faces        = tensor_shape.total_num_faces();
     const std::uint32_t num_scaler_faces = tensor_shape_scaler.total_num_faces();
 
-    if (swap_operands && _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler))
-    {
-        _llk_unpack_clear_src_banks_<SrcA>();
-    }
-
     if (swap_operands && num_faces == MAX_NUM_FACES)
     {
         // One handoff per tile: the whole data tile, and scaler faces 0 and 1 into the SrcA faces MVMUL reads.
         LLK_ASSERT(tensor_shape_scaler.num_faces_c_dim == tensor_shape.num_faces_c_dim, "The scaler needs a face for every column of data faces");
+        const bool clear_scaler = _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler);
         if (_llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler))
         {
             constexpr std::uint32_t whole_tile_replay_len = 2;
@@ -117,12 +112,16 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
             tmp.program();
             return;
         }
-        constexpr std::uint32_t replay_len = 3;
+        const std::uint32_t replay_len = (clear_scaler ? 1 : 0) + 3;
         load_replay_buf(
             0,
             replay_len,
-            []
+            [clear_scaler]
             {
+                if (clear_scaler)
+                {
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                }
                 TTI_UNPACR(SrcA, 0b00010001 /*ch0_z+=1, ch1_z+=1*/, 0, 0, 0, 1, 0 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
                 TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -141,16 +140,21 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
     const std::uint32_t outerloop = wrap_scaler ? num_faces / num_scaler_faces : 1;
     const std::uint32_t innerloop = wrap_scaler ? num_scaler_faces : num_faces;
     const bool clear_data         = is_scalar || tensor_shape.face_r_dim < FACE_R_DIM;
+    const bool clear_scaler       = swap_operands && _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler);
 
-    const std::uint32_t replay_len = (clear_data ? 1 : 0) + 2;
+    const std::uint32_t replay_len = (clear_data ? 1 : 0) + (clear_scaler ? 1 : 0) + 2;
     load_replay_buf(
         0,
         replay_len,
-        [clear_data]
+        [clear_data, clear_scaler]
         {
             if (clear_data)
             {
                 TTI_UNPACR_NOP(data_unpacker, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, data_clear_val, p_unpacr_nop::CLR_SRC);
+            }
+            if (clear_scaler)
+            {
+                TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
             }
             TTI_UNPACR(SrcA, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             TTI_UNPACR(SrcB, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);

@@ -13,7 +13,7 @@
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 #include <variant>
 #include <vector>

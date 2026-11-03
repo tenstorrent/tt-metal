@@ -15,6 +15,7 @@ from loguru import logger
 import pytest
 
 import ttnn
+from model_tracer.object_addresses import strip_object_addresses
 
 
 def pytest_addoption(parser):
@@ -35,7 +36,10 @@ def pytest_make_parametrize_id(config, val, argname):
     # that differs per xdist worker process, which aborts collection with a mismatch
     elif isinstance(val, (BuiltinFunctionType, FunctionType)):
         val = val.__name__
-    return f"{argname}={val}"
+    # Default reprs of bound objects, also when nested in a dict or list (e.g. FabricRouterConfig in
+    # device_params, compute kernel configs), embed a per-process memory address. Strip it, as the model
+    # tracer does, so every xdist worker collects the same IDs.
+    return strip_object_addresses(f"{argname}={val}")
 
 
 def pytest_collection_modifyitems(config, items):

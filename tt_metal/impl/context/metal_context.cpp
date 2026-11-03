@@ -143,6 +143,10 @@ void MetalContext::initialize(
     if (MetalEnvAccessor(*env_).impl().consume_force_reinit()) {
         force_reinit_ = true;
     }
+    // After an L1 ECC halt, tear down so the dispatch cores stuck on the halted worker are reset.
+    if (l1_ecc_halt_detected()) {
+        force_reinit_ = true;
+    }
 
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
@@ -185,6 +189,8 @@ void MetalContext::initialize(
             }
         }
     }
+    // run_launch_phase below releases any BRISC still halted and zeroes every halt record.
+    set_l1_ecc_halt_detected(false);
 
     initialized_ = true;
 
@@ -439,10 +445,6 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
     instance->env_owned_ = true;
 
     g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
-    // Seed the per-context BuildEnvManager slot with this context's HAL on first call,
-    // no-op thereafter. Using the by-HAL form (rather than get_instance(ContextId)) avoids
-    // re-entering MetalContext::instance() while we hold g_instance_mutex.
-    BuildEnvManager::seed_if_unseeded_with_hal(DEFAULT_CONTEXT_ID, instance->hal());
     return DEFAULT_CONTEXT_ID;
 }
 
@@ -457,16 +459,12 @@ ContextId MetalContext::create_instance(MetalEnv& env_to_use) {
         }
         MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, env_to_use);
         g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
-        // Seed the per-context BuildEnvManager slot with this context's HAL on first call.
-        // By-HAL form avoids re-entering MetalContext::instance() while holding g_instance_mutex.
-        BuildEnvManager::seed_if_unseeded_with_hal(DEFAULT_CONTEXT_ID, instance->hal());
         return DEFAULT_CONTEXT_ID;
     }
 
     ContextId context_id = find_free_context_id_locked();
     MetalContext* instance = new MetalContext(context_id, env_to_use);
     g_instances[context_id.get()].store(instance, std::memory_order_release);
-    BuildEnvManager::seed_if_unseeded_with_hal(context_id, instance->hal());
     return context_id;
 }
 
@@ -487,8 +485,6 @@ void MetalContext::destroy_instance(bool check_device_count, ContextId context_i
     // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
     // return the old instance.
     g_instances[index].store(nullptr, std::memory_order_release);
-    // Free the slot so a recycled context_id reseeds fresh.
-    BuildEnvManager::destroy_for_context(context_id);
 }
 
 void MetalContext::destroy_all_instances(bool check_device_count) {
@@ -518,6 +514,7 @@ void MetalContext::teardown_dispatch_state() {
 MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env) :
     env_(&metal_env), context_id_(context_id) {
     check_context_id(context_id);
+    build_env_manager_ = std::make_unique<BuildEnvManager>(hal());
     // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
     // claimed service cores from the FD pool.
     service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl(), *this);

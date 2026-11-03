@@ -54,8 +54,8 @@ inline std::uint32_t _llk_unpack_AB_srcb_face_r_dim_(const ckernel::TensorShape 
  * - ROW: B's first row of faces, for every row of A faces.
  * - SCALAR: B's first face, once per tile.
  *
- * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows zeroes both SrcA and
- * both SrcB banks here, because the FPU reads at least MAX_FPU_ROWS rows per face.
+ * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows zeroes the unpacker's
+ * own SrcA and SrcB banks before each face, because the FPU reads at least MAX_FPU_ROWS rows per face.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param transpose_of_faces: Whether to transpose faces (reorder faces 0,2,1,3)
@@ -121,10 +121,42 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         LLK_ASSERT(tensor_shape_b.total_num_faces() >= tensor_shape_a.total_num_faces(), "SrcB needs a face for every SrcA face");
         if (!transpose_of_faces && tensor_shape_a.face_r_dim < MAX_FPU_ROWS)
         {
-            // The FPU reads at least MAX_FPU_ROWS rows per face. Clear both sources so ELWADD and ELWSUB also
-            // see zeros in the rows past the face.
-            _llk_unpack_clear_src_banks_<SrcA>();
-            _llk_unpack_clear_src_banks_<SrcB>();
+            // The FPU reads at least MAX_FPU_ROWS rows per face. Zero the unpacker's own bank of both sources
+            // before each face, so ELWADD and ELWSUB also see zeros in the rows past the face.
+            static constexpr std::uint32_t clear_srca = TT_OP_UNPACR_NOP(
+                SrcA,
+                0 /*Stream_Id*/,
+                0 /*Msg_Clr_Cnt*/,
+                0 /*Set_Dvalid*/,
+                0 /*Clr_to1_fmt_Ctrl*/,
+                p_unpacr_nop::WAIT_LIKE_UNPACR,
+                0 /*Bank_Clr_Ctrl*/,
+                p_unpacr_nop::CLR_SRC_0,
+                p_unpacr_nop::CLR_SRC);
+            static constexpr std::uint32_t clear_srcb = TT_OP_UNPACR_NOP(
+                SrcB,
+                0 /*Stream_Id*/,
+                0 /*Msg_Clr_Cnt*/,
+                0 /*Set_Dvalid*/,
+                0 /*Clr_to1_fmt_Ctrl*/,
+                p_unpacr_nop::WAIT_LIKE_UNPACR,
+                0 /*Bank_Clr_Ctrl*/,
+                p_unpacr_nop::CLR_SRC_0,
+                p_unpacr_nop::CLR_SRC);
+            constexpr std::uint32_t replay_buf_len = 4;
+            load_replay_buf(
+                0,
+                replay_buf_len,
+                []
+                {
+                    TTI_INSN(clear_srca);
+                    TTI_INSN(unpack_srca);
+                    TTI_INSN(clear_srcb);
+                    TTI_INSN(unpack_srcb);
+                });
+            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, lltt::replay_insn(0, replay_buf_len));
+            tmp.program();
+            return;
         }
         ckernel_template tmp(outerloop, innerloop, srca_op, unpack_srcb);
         tmp.set_end_op(srca_next_column);
@@ -142,9 +174,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  * @param tensor_shape_a: Tensor shape of source A
  * @param tensor_shape_b: Tensor shape of source B, e.g. [1,32] for ROW/SCALAR broadcast
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
- * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows waits for math and
- * zeroes both SrcA and both SrcB banks (see @ref _llk_unpack_AB_mop_config_). Re-run this init after any op that
- * writes SrcA or SrcB, for example a MOVD2A or MOVD2B.
+ * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows zeroes the unpacker's
+ * own SrcA and SrcB banks before each face (see @ref _llk_unpack_AB_mop_config_).
  * @note B's datum count (x_end) can differ from A's. Each op's init sets the counts it uses, so
  * @ref _llk_unpack_AB_uninit_ is a no-op.
  * @ref _llk_unpack_AB_ is the matching execute call.
