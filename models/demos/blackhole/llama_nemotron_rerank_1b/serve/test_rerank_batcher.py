@@ -4,10 +4,15 @@
 """CPU-only: batch collection and result split of the rerank server worker (no ttnn, no tokenizer).
 Fake clock as in atupe/strands-decider-fastapi serve/test_batcher.py. Run: pytest -q test_rerank_batcher.py"""
 
+import os
 import queue
+import sys
 
 import pytest
-import rerank_batcher as batcher
+
+# the server runs as a script from this folder; tt-metal's pytest does not put the test's folder on sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rerank_batcher as batcher  # noqa: E402
 
 
 def item(i, pairs=1, length=5):
