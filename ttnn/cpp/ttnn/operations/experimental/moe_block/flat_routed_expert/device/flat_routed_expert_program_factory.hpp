@@ -7,22 +7,25 @@
 #include "flat_program.hpp"
 #include "flat_routed_expert_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
 
-// The plain op: one program, the same on every chip (the flat fragment alone). Cache hits re-apply the buffer
-// addresses (the arena / words are per-call buffers, so they move between calls).
+// The plain op: one program per chip (the flat fragment alone; the auto gate/up placements differ per chip,
+// flat_routed_expert_chip_plan). Cache hits re-apply the buffer addresses (the arena / words are per-call buffers, so
+// they move between calls).
 struct FlatRoutedExpertProgramFactory {
     using shared_variables_t = FlatProgramHandles;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-    static cached_program_t create(
+    static cached_mesh_workload_t create_mesh_workload(
         const FlatRoutedExpertParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const FlatRoutedExpertInputs& tensor_args,
         Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        cached_mesh_workload_t& cached,
         const FlatRoutedExpertParams& operation_attributes,
         const FlatRoutedExpertInputs& tensor_args,
         Tensor& tensor_return_value);

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include "flat_routed_expert_device_operation_types.hpp"
 
@@ -84,6 +85,8 @@ struct FlatRoutedExpertPlan {
     // tensix_noc1 its own reads); per weight slot: served by a DRISC
     std::vector<uint32_t> gu_how;
     std::vector<bool> slot_drisc;
+    // the expected rows per expert the plan was made for (layout.rows_hint; -1 unknown): the placement's x weight
+    int32_t rows_hint = -1;
     // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
     uint32_t ti_off = 0;
     // down
@@ -110,6 +113,18 @@ struct FlatRoutedExpertPlan {
     static uint32_t kd_of(uint32_t pcd, uint32_t it);
 };
 
+struct FlatGuGeom;
+struct FlatGuAssign;
+struct FlatGuTraffic;
+// the link-load placement search's iterations (plan time, per distinct chip geometry)
+inline constexpr uint32_t kFlatGuIters = 20000;
+// Sets the plan's gate/up cores (slot order), their delivery and the DRISC slots from FlatLayoutOptions.gu_place
+// words (one per gate/up cell)
+void flat_apply_gu_place(FlatRoutedExpertPlan& p, const std::vector<uint32_t>& words);
+// The auto sources' placement for one chip's geometry, and the traffic the search weighs
+FlatGuAssign flat_gu_auto(const FlatRoutedExpertPlan& p, const FlatGuGeom& g);
+FlatGuTraffic flat_gu_traffic(const FlatRoutedExpertPlan& p);
+
 // Builds the plan for the mesh device's chips (all of them laid out as its first local chip, as the program is).
 FlatRoutedExpertPlan make_flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg);
@@ -118,6 +133,15 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
 // config fields the plan depends on): what the program factory, the weight layout and the done words use.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg);
+
+// Chip `coord`'s plan: the mesh plan, with the gate/up placement of that chip's own geometry for the auto sources
+// (gu_source auto_tensix / auto_hybrid; harvesting differs per chip); else the mesh plan itself. Cached per distinct
+// geometry. Only the gate/up cores' order, delivery and DRISC slots differ from the mesh plan (same cells, same
+// weight layout).
+std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_chip_plan(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FlatRoutedExpertConfig& cfg,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
 
 // Greedy maximal rectangles over a core list (one range per core makes every dispatch write a unicast).
 tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<tt::tt_metal::CoreCoord>& cores);

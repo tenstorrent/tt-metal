@@ -11,6 +11,7 @@ device, so one cached program serves every routing.
 | | Use |
 |---|---|
 | `ttnn.experimental.moe_block.flat_routed_expert` | The plain op: y as bfp8 / bf16 tiles or row-major bf16 in DRAM. |
+| `flat_routed_expert_chip_plan` (C++) | One chip's plan: the mesh plan with that chip's gate/up placement (auto sources). The plain op and routed_experts_combine build one program per chip from it. |
 | `device/flat_program.hpp` (C++) | The program-building form: `add_flat_routed_expert_program` adds the flat expert's kernels, CBs and semaphores to a caller's per-chip `Program` (routed_experts_combine composes flat + combine in one program); `override_flat_routed_expert_addresses` patches its buffer addresses on cache hits; `with_combine_overlap` / `set_flat_combine_report` wire the y writers' reports to the combine. The header documents the contract (cores, semaphores, CB ids, arena, DRISC, hash). |
 | `ensure_flat_routed_expert_resources(MoEBlockResources&, config)` (C++) | The plan, persistent done / relay words and the DRISC senders, owned by the MoE block's resources. |
 | `flat_routed_expert_plan`, `create_flat_routed_expert_done_words`, `FlatDriscSenders`, `FlatLayoutOptions` | The plan's layout facts (`as_dict()`), the done words, the persistent DRISC senders, the layout choices. |
@@ -75,6 +76,7 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 | `gu_read_depth` | -1 (2) | `gu_source` tensix*: weight reads in flight a gate/up core, 1..6 |
 | `gu_read_pieces` | -1 (1) | `gu_source` tensix* / placed: each weight block read as 1 / 2 / 4 reads (more, smaller reads are slower in the op) |
 | `gu_place` | [] | `gu_source` `placed` (also `tensix_noc1`: all reads on NOC1): per gate/up cell `x << 24 \| y << 16 \| bank << 8 \| how` (1 Tensix NOC0, 2 Tensix NOC1, 3 / 4 the bank's free DRAM_TILE DRISC on NOC1 / NOC0, `drisc_tiles` free_only: hybrid); 2 x RG cores a bank, a slot all DRISC or all Tensix. A NoC-link-load placement (K3 Galaxy 4x4 load): experts + combine 2254 us vs 2279 with `drisc` |
+| `gu_source` `auto_tensix` / `auto_hybrid` | | the gate/up placement chosen per chip at plan time by a NoC link-load search (`device/flat_gu_place.hpp`) over that chip's own geometry (harvested columns, DRAM tiles): `flat_routed_expert_chip_plan`; chips of one geometry share it, and a chip takes the mesh's compromise placement when that loads its busiest link less. Same weight layout on every chip. `auto_hybrid` needs `drisc_tiles` free_only. `flat_gu_placement_report` (host only, also on a mock cluster) shows the per-chip / reference / compromise model |
 
 ## Tests
 

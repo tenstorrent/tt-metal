@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -42,6 +43,12 @@ struct FlatDriscTopology {
 
     static FlatDriscTopology of(
         tt::tt_metal::distributed::MeshDevice& mesh_device, FlatDriscTiles tiles = FlatDriscTiles::both);
+    // the DRAM tiles' geometry alone (no sender L1 region; also on devices without programmable DRAM cores, e.g. a
+    // mock cluster) of one chip (default: the reference chip)
+    static FlatDriscTopology geometry(
+        tt::tt_metal::distributed::MeshDevice& mesh_device,
+        FlatDriscTiles tiles = FlatDriscTiles::both,
+        const std::optional<tt::tt_metal::distributed::MeshCoordinate>& coord = std::nullopt);
 
     // the bank's free tile index
     uint32_t free_tile(uint32_t bank) const;
@@ -120,9 +127,14 @@ private:
     std::unique_ptr<tt::tt_metal::experimental::DramCoreKernels> kernels_;
 };
 
-// The NOC0 grid coordinates of a worker core (what its kernels read as their own NoC position).
+// The NOC0 grid coordinates of a worker core (what its kernels read as their own NoC position), on the reference chip
+// or on chip `coord` (harvesting moves the physical columns)
 tt::tt_metal::CoreCoord flat_worker_noc0(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const tt::tt_metal::CoreCoord& logical);
+tt::tt_metal::CoreCoord flat_worker_noc0(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const tt::tt_metal::CoreCoord& logical,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
 
 // The first chip this rank drives (the plan and the topology are read from it).
 tt::tt_metal::distributed::MeshCoordinate flat_reference_coord(tt::tt_metal::distributed::MeshDevice& mesh_device);
