@@ -342,11 +342,9 @@ jobs:
           LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
         run: |
           ${{ matrix.test-group.cmd }}
+          mkdir -p perf_data/runs && touch perf_data/runs/leg-complete
 
-      # The gate refuses to compare when a leg did not complete, so one reset
-      # connection on FinalizeArtifact costs the whole architecture a verdict.
-      # The bytes are already in blob storage by then; only the last call fails.
-      # Try once more before giving the leg up.
+      # One retry: a reset on FinalizeArtifact must not cost the architecture its verdict.
       - name: Upload performance data
         id: upload-perf-data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -557,12 +555,11 @@ jobs:
 
   upload-perf-data:
     name: "Upload perf data to the warehouse"
-    needs: [build-images, llk-perf-exec, load-test-matrix]
+    needs: [build-images, load-test-matrix, llk-perf-exec]
     # always(): a night that lost shards still produced the ones that finished,
     # and partial coverage is real data. Publishing it is safe because the
     # merged run_id carries no attempt, so re-running the failed shards and
     # re-uploading replays over the partial night instead of adding a second.
-    # A baseline pipeline is the exception; baseline_completeness.py below says why.
     if: ${{ always() && inputs.upload-to-warehouse }}
     runs-on: ubuntu-latest
     # The merge lives in helpers.perf.core, whose imports reach the device
@@ -598,35 +595,28 @@ jobs:
             --in-dir "$GITHUB_WORKSPACE/perf-data" \
             --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
           ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
-
-      - name: Keep a partial run out of the baseline
-        id: baseline-guard
+      # A baseline is what later runs compare against: publish an architecture only if every leg completed.
+      - name: Drop a short architecture from a baseline
+        if: inputs.pipeline == 'baseline' || inputs.pipeline == 'merge_baseline'
         env:
-          EXPECTED_MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
-          PIPELINE: ${{ inputs.pipeline }}
+          MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
         run: |
-          python3 "${LLK_PATH}/perf/baseline_completeness.py" \
-            --matrix "$EXPECTED_MATRIX" \
-            --in-dir "$GITHUB_WORKSPACE/perf-data" \
-            --out-dir "$GITHUB_WORKSPACE/generated/llk_perf" \
-            --pipeline "$PIPELINE"
-          ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
-          # The batchfile globs *.parquet, and sftp fails on a glob that matches
-          # nothing. Every architecture being short is rare but not impossible.
-          if ls "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet >/dev/null 2>&1; then
-            echo "have-files=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::Nothing is complete enough to publish."
-            echo "have-files=false" >> "$GITHUB_OUTPUT"
-          fi
-
+          for f in "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet; do
+            arch=$(basename "$f" .parquet); arch=${arch##*-}
+            case "$arch" in wormhole) label=N150 ;; blackhole) label=P150 ;; *) label=none ;; esac
+            want=$(python3 -c 'import json, os, sys; print(sum(sys.argv[1] in t["runs_on"][0] for t in json.loads(os.environ["MATRIX"] or "[]")))' "$label")
+            got=$(ls "$GITHUB_WORKSPACE"/perf-data/perf-data-"$arch"-*/leg-complete 2>/dev/null | wc -l)
+            if (( want == 0 || got < want )); then
+              echo "::warning::$arch: $got of $want legs completed; not published as a baseline."
+              rm "$f"
+            fi
+          done
+          ls "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet || { echo "::error::No complete architecture to publish."; exit 1; }
       # The LLK test image has the python env but no ssh client, and the
       # upload action shells out to sftp.
       - name: Install the SFTP client
-        if: steps.baseline-guard.outputs.have-files == 'true'
         run: apt-get update -qq && apt-get install -y -qq openssh-client
       - name: Upload perf data
-        if: steps.baseline-guard.outputs.have-files == 'true'
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_LLK_PERF_WRITER_KEY }}
