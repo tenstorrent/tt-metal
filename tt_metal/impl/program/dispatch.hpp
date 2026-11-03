@@ -157,9 +157,8 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
         per_core_cross_node_dfbs,
     uint8_t num_program_slots);
 
-// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the
-// pipe's active credit lane count, resolved from the program's attachment at build time so a
-// relay / Attach that armed lanes after this core's participant record was added is picked up.
+// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the bound
+// pipe's credit lane count, which the participant record copied from the pipe at bind.
 std::vector<uint32_t> build_prefetcher_pipe_config_payload(
     const detail::ProgramImpl& program,
     const std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>& sparse_participants);

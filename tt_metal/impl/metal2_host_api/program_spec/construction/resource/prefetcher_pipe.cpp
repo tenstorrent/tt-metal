@@ -71,8 +71,7 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
             .device = &mesh_device,
             .receivers = to_node_range_set(pipe.receivers),
             .ring_size = pipe.ring_size,
-            .slots = {},
-            .bound_pipe = nullptr};
+            .slots = {}};
     }
 
     // Relay DFBs keyed by their (sorted) relayed pipe set, so a group can find its relay.
