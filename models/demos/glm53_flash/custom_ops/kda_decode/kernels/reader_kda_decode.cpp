@@ -15,6 +15,12 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
+// per-phase profiler zones: only where the kernel profiler provides the macro (compiled out otherwise)
+#if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
+#define KDA_RZONE(name) DeviceZoneScopedN(name)
+#else
+#define KDA_RZONE(name)
+#endif
 constexpr uint32_t cb_hist = 0, cb_taps = 1, cb_gf = 2, cb_gog = 3, cb_gb = 4, cb_cc = 5, cb_onw = 6, cb_sel = 7;
 constexpr uint32_t cb_selT = 8, cb_S = 9, cb_gather = 24;
 constexpr uint32_t SEM_READY = 0, SEM_VALID = 1, SEM_ONE = 2, SEM_GATHER = 3;
@@ -83,9 +89,22 @@ void kernel_main() {
         cb.push_back(n);
     };
 
-    // once per core: the o_norm weight tiles, the all-ones and identity selector tiles
-    read_tiles(onw_acc, cb_onw, t32, 0, Vt);
-    read_tiles(sel_acc, cb_sel, t16, ONES_PAGE, 2);
+    // once per core: the o_norm weight tiles, the all-ones and identity selector tiles -- issued now, landed with
+    // the first item's inputs (two serialized DRAM round trips here cost ~10 us before the item reads began:
+    // chip-8 zones 2026-11-03, kda_rd_item starting 11-14 us into the kernel)
+    CircularBuffer onw_cb(cb_onw), sel_cb(cb_sel);
+    onw_cb.reserve_back(Vt);
+    sel_cb.reserve_back(2);
+    issue(onw_acc, onw_cb, t32, 0, Vt, 0);
+    issue(sel_acc, sel_cb, t16, ONES_PAGE, 2, 0);
+    bool prologue_pending = true;
+    auto finish_prologue = [&]() {  // after a read barrier on this core
+        if (prologue_pending) {
+            onw_cb.push_back(Vt);
+            sel_cb.push_back(2);
+            prologue_pending = false;
+        }
+    };
 
     volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_READY));
     volatile tt_l1_ptr uint32_t* valid = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_VALID));
@@ -123,6 +142,7 @@ void kernel_main() {
             issue(st_acc, S, t32, ((tb * 32 + u0) * H + h) * Kt * Vt, Kt * Vt, 0);
         }
         if (part == 0) {
+            KDA_RZONE("kda_rd_item");
             // every per-item input in flight at once: the 3 x (3 history + raw) blocks, taps, gates, constants
             for (uint32_t br = 0; br < 3; br++) {
                 for (uint32_t j = 0; j < conv_taps; j++) {
@@ -136,11 +156,13 @@ void kernel_main() {
             issue(gates_acc, gb, t32, tb * Wg_t + HK_t + HV_t + (h >> 5), 1, 0);
             issue(gates_acc, gog, t32, tb * Wg_t + HK_t + h * Vt, Vt, 0);
             noc.async_read_barrier();
+            finish_prologue();
             if (active) {
                 selT.push_back(2);
                 S.push_back(Kt * Vt);
             }
             if constexpr (parts > 1) {
+                KDA_RZONE("kda_rd_mcast");
                 // multicast the item's inputs into the other parts' CBs (same L1 addresses) once they are ready
                 noc_semaphore_wait(ready, parts - 1);
                 noc_semaphore_set(ready, 0);
@@ -172,11 +194,13 @@ void kernel_main() {
                     n_dst);
             }
         } else {
+            KDA_RZONE("kda_rd_wait_mcast");
             noc_semaphore_set(valid, 0);
             noc_semaphore_inc(get_noc_addr(p0_x, p0_y, get_semaphore(SEM_READY)), 1);
             noc_semaphore_wait(valid, 1);
+            noc.async_read_barrier();
+            finish_prologue();
             if (active) {
-                noc.async_read_barrier();
                 selT.push_back(2);
                 S.push_back(Kt * Vt);
             }
@@ -188,6 +212,7 @@ void kernel_main() {
         gb.push_back(1);
         cc.push_back(Kt);
         if (part == 0) {
+            KDA_RZONE("kda_rd_shift");
             // history shift: tap j -> tap j-1, raw -> tap 2 (the old tiles stay in L1 until the item is done)
             for (uint32_t br = 0; br < 3; br++) {
                 for (uint32_t j = 1; j <= conv_taps; j++) {
@@ -210,12 +235,16 @@ void kernel_main() {
             gather.reserve_back((parts - 1) * Vt);  // the other parts write their output blocks here
         }
         // the remaining users: the selector tile E_r^T and the recurrent state block (b*H + h)
-        for (uint32_t r = u0 + 1; r < u1; r++) {
-            read_tiles(sel_acc, cb_selT, t16, r, 1);
-            read_tiles(st_acc, cb_S, t32, ((tb * 32 + r) * H + h) * Kt * Vt, Kt * Vt);
+        {
+            KDA_RZONE("kda_rd_state");
+            for (uint32_t r = u0 + 1; r < u1; r++) {
+                read_tiles(sel_acc, cb_selT, t16, r, 1);
+                read_tiles(st_acc, cb_S, t32, ((tb * 32 + r) * H + h) * Kt * Vt, Kt * Vt);
+            }
         }
         noc.async_write_barrier();  // the shift writes (before any reuse of the hist CB)
         if (part == 0 && parts > 1) {
+            KDA_RZONE("kda_rd_gather");
             noc_semaphore_wait(gath, n_active - 1);
             noc_semaphore_set(gath, 0);
             gather.push_back((parts - 1) * Vt);
@@ -225,5 +254,7 @@ void kernel_main() {
     // acknowledged before the kernel returns: an atomic acked after the next kernel's noc_local_state_init
     // leaves that kernel's atomic counters unequal forever (its noc_async_atomic_barrier hangs; seen on the 8x4
     // o_proj matmul in0 receiver after kda_decode, 2026-10-20)
+    noc.async_read_barrier();
+    finish_prologue();
     noc_async_full_barrier();
 }

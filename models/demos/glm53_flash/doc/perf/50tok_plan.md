@@ -148,3 +148,7 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   ~45 us is the serialized input movement + the phase chain. Lever: start the state and history reads before /
   during the conv phase on every part (today they wait on part 0's multicast), and run the out-norm on all parts:
   69 -> ~40 us at B = 4 = -1 ms per step over 34 layers. Scheduled after the pre-block items.
+* 22:20 KDA reader zones (chip 8, B = 4, H = 16, async prologue): item reads 1.5 -> 30-35 us on the 16 part-0 cores
+  (DRAM-rate bound per core, ~230 KB each), multicast 3, conv 8, gates 5, derived 2, user 8 (compute), gather +
+  out-norm 10 on part 0: span 69 us. Design for the next step: every part reads a fifth of the item inputs and
+  multicasts its share (reads ~6 us), the out-norm per part on its own rows: ~40 us per op, -1 ms per step.
