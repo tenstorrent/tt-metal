@@ -35,9 +35,9 @@ sfpi_inline sfpi::vUInt mxfp8_decode_bits(sfpi::vUInt code, sfpi::vInt scale) {
 }
 
 // Decode one output plane from the packed tile in D0 into D(plane + 1).
-// `scales` points at this plane's 32 E8M0 bytes: byte r is the scale of tile row r.
+// `scales` holds this plane's 32 E8M0 bytes as 8 words: byte r is the scale of tile row r.
 template <bool byte_input, bool fp32_dest>
-inline void mxfp8_decode_plane(const volatile uint32_t* scales, uint32_t plane) {
+inline void mxfp8_decode_plane(const uint32_t* scales, uint32_t plane) {
     _llk_math_eltwise_sfpu_start_(0);
     // An SFPU vector holds even or odd columns of four face rows; eight lanes share
     // a row. LREG15 holds 2 * lane_id, so (id & 48) >> 1 is 8 * (row within the four).

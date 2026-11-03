@@ -157,6 +157,21 @@ def test_mxfp8_streaming(device, container, memory_config):
 
 
 @requires_blackhole
+@pytest.mark.parametrize("container", list(CONTAINERS))
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+def test_mxfp8_many_tiles_per_core(device, container, memory_config):
+    # Sixteen packed tiles on every core lets the compute UNPACK thread run ahead
+    # of MATH and the reader refill consumed CB pages; catches kernels that read a
+    # popped scale page. The streaming case alone (~4 tiles/core) can miss it.
+    _, planes = CONTAINERS[container]
+    grid = device.compute_with_storage_grid_size()
+    packed_tiles = grid.x * grid.y * 16
+    codes, scales = _random_inputs(packed_tiles // 8 * 32, 8 * 32 * planes, seed=211)
+    actual, _ = run_decode(device, codes, scales, container=container, memory_config=memory_config)
+    assert_exact(actual, codes, scales, "bfloat16")
+
+
+@requires_blackhole
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 262144}], indirect=True)
 def test_mxfp8_batched_trace(device):
     device.enable_program_cache()
