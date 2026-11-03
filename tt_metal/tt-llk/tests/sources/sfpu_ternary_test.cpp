@@ -16,7 +16,6 @@
 #include "perf.h"
 #include "profiler.h"
 
-// Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -25,7 +24,7 @@ static constexpr std::uint32_t MAX_TILES_DEST          = is_fp32_dest_acc_en ? 4
 static constexpr ckernel::DstSync DST_SYNC_MODE        = dest_sync;
 static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType::NONE;
 
-// Perf schema v3 omits block runtimes and derives one full-tensor block from TILE_CNT.
+// The perf schema omits block runtimes and derives one full-tensor block from TILE_CNT.
 template <typename T, typename = void>
 struct has_num_blocks : std::false_type
 {
@@ -238,7 +237,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             APPROX_MODE,
                             is_fp32_dest_acc_en,
                             MATH_FORMAT_ENUM,
-                            8 /* ITERATIONS */>(
+                            ITERATIONS>(
                             block_tile /* dst_index_in0 */,
                             (block_tile + 1) % MAX_TILES_DEST /* dst_index_in1 */,
                             (block_tile + 2) % MAX_TILES_DEST /* dst_index_in2 */,
@@ -279,7 +278,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             APPROX_MODE,
                             is_fp32_dest_acc_en,
                             MATH_FORMAT_ENUM,
-                            8 /* ITERATIONS */>(
+                            ITERATIONS>(
                             0 /* dst_index_in0 */,
                             1 /* dst_index_in1 */,
                             2 /* dst_index_in2 */,

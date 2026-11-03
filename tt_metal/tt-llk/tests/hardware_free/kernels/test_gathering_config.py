@@ -380,7 +380,6 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
     from helpers.test_variant_parameters import (
         APPROX_MODE,
         DEST_SYNC,
-        DISABLE_SRC_ZERO_FLAG,
         LOOP_FACTOR,
         NUM_BLOCKS,
         NUM_FACES,
@@ -410,7 +409,6 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
             SFPU_TERNARY_OP(MathOperation.TTNNWhere),
             SFPU_TERNARY_SCALAR(0x40000000),
             APPROX_MODE(ApproximationMode.No),
-            DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
             TILE_COUNT(tile_cnt_A),
             LOOP_FACTOR(1),

@@ -1,27 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-MATH_ISOLATE (and full run-type) perf for the ternary SFPU kernels that lack
-dedicated coverage. The addc kernels are flagged in the PR #48696 verification
-(table 3); lerp/snake_beta are the other standalone ternary-dispatch SFPU ops
-with no perf test of their own:
+"""Ternary SFPU perf, sharing sources/sfpu_ternary_test.cpp with the functional tests.
 
-  addcmul    -> metal llk_sfpu/ckernel_sfpu_addcmul.h     (out = a + value*b*c)
-  addcdiv    -> metal llk_sfpu/ckernel_sfpu_addcdiv.h     (out = a + value*b/c)
-  lerp       -> metal llk_sfpu/ckernel_sfpu_lerp.h        (out = a + c*(b - a))
-  snake_beta -> metal llk_sfpu/ckernel_sfpu_snake_beta.h  (out = x + sin(alpha*x)^2/beta)
-  where      -> metal llk_sfpu/ckernel_sfpu_where.h         (out = a != 0 ? b : c)
-
-These are ternary (3 Dest tiles, plus a scalar for the addc kernels) and share
-the functional ``sources/sfpu_ternary_test.cpp`` kernel. L1_TO_L1 unpacks all
-three A/B/C operands; the isolation modes retain their targeted microbenchmarks.
-The cycles/tile number lands in the TILE_LOOP row of the .post.csv, and each
-thread's ELF size is reported for its run type.
+LOOP_FACTOR is 16 here and 1 in the functional tests. The .post.csv divides by
+loop_factor * tile_cnt, so the two stay comparable.
 """
 
 import pytest
 import test_sfpu_ternary as _func
+from conftest import blackhole_only
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -30,6 +19,16 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
+
+
+def _perf_formats(mathop):
+    formats = [DataFormat.Float16_b, DataFormat.Float32]
+    if mathop == MathOperation.SfpuAddcmul:
+        formats.append(DataFormat.Bfp8_b)
+    # where is the only ternary op whose functional tests cover Int32.
+    if mathop == MathOperation.SfpuWhere:
+        formats.append(DataFormat.Int32)
+    return input_output_formats(formats, same=True)
 
 
 @pytest.mark.perf
@@ -41,18 +40,13 @@ from helpers.perf.core import ALL_PERF_RUN_TYPES
         MathOperation.SfpuSnakeBeta,
         MathOperation.SfpuWhere,
     ],
-    formats=lambda mathop: input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float32]
-        + ([DataFormat.Bfp8_b] if mathop == MathOperation.SfpuAddcmul else []),
-        same=True,
-    ),
+    formats=_perf_formats,
     dest_acc=[
         DestAccumulation.Yes,
         DestAccumulation.No,
     ],
     loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
+    input_dimensions=_func._INPUT_DIMENSIONS,
 )
 def test_perf_sfpu_ternary(
     perf_report,
@@ -60,17 +54,53 @@ def test_perf_sfpu_ternary(
     formats,
     dest_acc,
     loop_factor,
-    iterations,
     input_dimensions,
 ):
-    configuration = _func._build_sfpu_ternary_perf_config(
+    if mathop == MathOperation.SfpuWhere:
+        _func._skip_where_config(formats, dest_acc)
+    else:
+        skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    _func._run_sfpu_ternary(
         formats,
         dest_acc,
         mathop,
         input_dimensions=input_dimensions,
         loop_factor=loop_factor,
-        iterations=iterations,
         approx_mode=ApproximationMode.No,
+        is_perf=True,
+        perf_report=perf_report,
         run_types=ALL_PERF_RUN_TYPES,
     )
-    configuration.run(perf_report)
+
+
+# Same Blackhole regression as test_sfpu_ternary_approx_after_lreg_clobber.
+@blackhole_only
+@pytest.mark.perf
+@parametrize(
+    mathop=_func._TERNARY_RECIP_NEWTON_OPS,
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    loop_factor=[16],
+    input_dimensions=_func._INPUT_DIMENSIONS,
+)
+def test_perf_sfpu_ternary_approx_after_lreg_clobber(
+    perf_report,
+    mathop,
+    formats,
+    dest_acc,
+    loop_factor,
+    input_dimensions,
+):
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    _func._run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions=input_dimensions,
+        loop_factor=loop_factor,
+        approx_mode=ApproximationMode.Yes,
+        clobber_lregs=True,
+        is_perf=True,
+        perf_report=perf_report,
+        run_types=ALL_PERF_RUN_TYPES,
+    )
