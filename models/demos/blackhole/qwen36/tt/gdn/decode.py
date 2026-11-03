@@ -42,6 +42,26 @@ class _DecodeOProjTtnn:
                     fused_activation=None,
                     mcast_in0=True,
                 )
+        elif kwargs.get("program_config") is None and list(b.shape)[-2:] == [5120, 16480]:
+            # decode in_proj (qkvz+ab) 32x5120x16480: explicit 1D config with fuse_batch=True (swept on BH)
+            shp = list(a.shape)
+            m = 1
+            for d in shp[:-1]:
+                m *= d
+            if m <= 32:
+                kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                    in0_block_w=2,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    out_block_h=1,
+                    out_block_w=4,
+                    per_core_M=1,
+                    per_core_N=4,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
         return ttnn.linear(a, b, *args, **kwargs)
 
 
