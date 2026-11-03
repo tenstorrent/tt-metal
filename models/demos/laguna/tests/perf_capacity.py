@@ -34,6 +34,7 @@ try:
     dt = time.perf_counter() - t0
     got = ttnn.to_torch(out).float()
     finite = bool(torch.isfinite(got).all())
+    assert finite, f"layer {LAYER} prefill of {SEQ} tokens produced non-finite output"
     res = {
         "layer": LAYER,
         "attention_type": cfg.layer_types[LAYER],

@@ -22,6 +22,11 @@ _KDIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
 
 
+# The argmax keys pack a shard column into 16 bits (kernels/argmax_part.cpp, argmax2_writer.cpp), so a chip's
+# vocabulary shard may hold at most 65,536 columns (Laguna's 100,352-token vocabulary needs >= 2 chips).
+MAX_SHARD_COLUMNS = 1 << 16
+
+
 def chip_offsets(mesh, v_local):
     """Mesh-sharded uint32 [1, 8] per chip: chip d's first vocabulary id (d * v_local) in word 0."""
     D = mesh.get_num_devices()
@@ -82,6 +87,7 @@ def greedy_pick(shards, out_tok, offsets, rows_out=None, cluster_axis=1, topolog
     V = int(shards.shape[-1])
     rows_out = int(out_tok.shape[-1]) if rows_out is None else int(rows_out)
     assert shards.dtype == ttnn.bfloat16 and shards.layout == ttnn.TILE_LAYOUT and V % TILE == 0, (shards.dtype, V)
+    assert V <= MAX_SHARD_COLUMNS, f"vocabulary shard of {V} columns overflows the 16-bit argmax column field"
     Vt, Rt = V // TILE, R // TILE
     gs = device.compute_with_storage_grid_size()
     D = device.get_num_devices()

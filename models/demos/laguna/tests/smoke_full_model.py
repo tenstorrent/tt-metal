@@ -77,11 +77,12 @@ def main():
         # host-argmax control on the first few tokens (correctness of device greedy)
         gen.host_sampling = True
         gen.reset()
-        seq_h = gen.generate(prompt, 8, next_input=None, enable_trace=False)
+        n_ctl = min(8, len(seq))  # no more than the device generated (--gen may be below 8)
+        seq_h = gen.generate(prompt, n_ctl, next_input=None, enable_trace=False)
         gen.host_sampling = False
-        match = sum(int(a == b) for a, b in zip(seq, seq_h))
-        print(f"device-vs-host greedy first-8 match: {match}/8  host={seq_h}")
-        assert match == 8, f"device sampler disagrees with host argmax for {8 - match}/8 tokens"
+        match = sum(int(a == b) for a, b in zip(seq[:n_ctl], seq_h))
+        print(f"device-vs-host greedy first-{n_ctl} match: {match}/{n_ctl}  host={seq_h}")
+        assert match == n_ctl, f"device sampler disagrees with host argmax for {n_ctl - match}/{n_ctl} tokens"
         print("PROBE_SMOKE_DONE")
     finally:
         try:

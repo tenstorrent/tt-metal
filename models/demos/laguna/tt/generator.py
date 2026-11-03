@@ -76,6 +76,7 @@ class _LagunaSampling1D(Sampling1D):
 BLOCK_SIZE = 32
 # greedy picks with the greedy_pick kernels instead of the batch sampler's top-k path (TT_LAGUNA_GREEDY_PICK=0: sampler)
 _GREEDY_PICK = __import__("os").environ.get("TT_LAGUNA_GREEDY_PICK", "1") == "1"
+_GREEDY_PICK_MAX_COLUMNS = 1 << 16  # greedy_pick.MAX_SHARD_COLUMNS (not imported: greedy_pick loads lazily)
 # The standalone KV cache length must be a whole number of SDPA K chunks, not just of BLOCK_SIZE: decode
 # reads the cache in k_chunk_size blocks (64; prefill and the verify option use 128), and a final chunk
 # that runs past the last page-table entry reads unrelated memory as K/V. Found on Laguna-S: a 336-token
@@ -287,7 +288,13 @@ class LagunaGenerator(ReadinessGenerator):
 
     def _greedy_sample(self, logit_shards, batch, tt_out_tok):
         rows = int(logit_shards.shape[-2])
-        if _GREEDY_PICK and logit_shards.layout == ttnn.TILE_LAYOUT and (rows <= 32 or rows % 32 == 0):
+        if (
+            _GREEDY_PICK
+            and logit_shards.layout == ttnn.TILE_LAYOUT
+            and (rows <= 32 or rows % 32 == 0)
+            # the pick's argmax keys hold a 16-bit shard column: a single-chip 100,352-column vocabulary uses the sampler
+            and int(logit_shards.shape[-1]) <= _GREEDY_PICK_MAX_COLUMNS
+        ):
             # the greedy pick kernels (greedy_pick.py): the argmax over every chip's vocabulary shard (~78 vs ~170 us
             # for the sampler's top-k + sampling at 32 rows), same ids
             from .greedy_pick import chip_offsets, greedy_pick
