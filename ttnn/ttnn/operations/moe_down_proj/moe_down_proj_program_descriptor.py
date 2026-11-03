@@ -40,6 +40,10 @@ K_BLOCK_ONE_PASS_MIN = 6
 X_STEP_ROUNDS_MAX = 1
 ONE_PASS_MAX_ROWS = 24
 MAX_WAVES = 4
+# With y in DRAM one wave exposes the whole store as the tail, so it is taken only up to this many rows per core.
+# k = 8, one wave -> two waves: t3072 (23 rows) DRAM y 160.7-162.1 -> 158.0-159.1 us, DRAM x and y 193.4-193.8 ->
+# 189.9-190.0 us; t4096 (30 rows) DRAM x and y 246-253 -> 241-243 us. t2048 (15 rows) and below stay one wave.
+DRAM_Y_ONE_PASS_MAX_ROWS = 16
 X_DEPTH = 2
 W_DEPTH = 2
 OUT_DEPTH = 2
@@ -283,7 +287,7 @@ def output_l1_bank_bytes(device, rows, out_memory):
 def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, out_in_dram=False):
     """Unless out_in_dram, the fewest waves (<= ONE_PASS_MAX_ROWS rows per core), then the largest
     x K block >= K_BLOCK_ONE_PASS_MIN, that fit budget_bytes; failing that the largest x K block (divisor of
-    96, <= K_BLOCK_MAX), then the fewest waves. Each candidate x K block first tries one compute round per x step,
+    96, <= K_BLOCK_MAX), then the fewest waves (one wave with out_in_dram only up to DRAM_Y_ONE_PASS_MAX_ROWS). Each candidate x K block first tries one compute round per x step,
     then splits it into x_step_rounds compute (and w) rounds, which shrinks the w CBs but not the x chain's steps."""
     k_blocks = [k for k in range(K_BLOCK_MAX, 0, -1) if TENSOR_K_TILES % k == 0]
     waves = range(1, MAX_WAVES + 1)
@@ -292,7 +296,7 @@ def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, o
     order = (
         [] if out_in_dram else [(k, w, ONE_PASS_MAX_ROWS) for w in waves for k in k_blocks if k >= K_BLOCK_ONE_PASS_MIN]
     )
-    order += [(k, w, None) for k in k_blocks for w in waves]
+    order += [(k, w, DRAM_Y_ONE_PASS_MAX_ROWS if out_in_dram and w == 1 else None) for k in k_blocks for w in waves]
     for x_k_block_tiles, num_waves, max_rows in order:
         core_row_tiles_max = _div_up(_div_up(tensor_row_tiles, num_waves), layout.num_m_groups)
         if max_rows is not None and core_row_tiles_max > max_rows:

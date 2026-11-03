@@ -65,11 +65,13 @@ def test_sweep(device, cand, monkeypatch):
 
     op = sys.modules["ttnn.operations.moe_down_proj.moe_down_proj"]
     monkeypatch.setattr(op, "select_blocking", lambda *a, **kw: None)
-    x_dev, w_dev, counts_dev, xq, wq = make_operands(device, TOKENS, COUNTS)
+    x_mem = ttnn.DRAM_MEMORY_CONFIG if os.environ.get("XDRAM") == "1" else ttnn.L1_MEMORY_CONFIG
+    out_mem = ttnn.DRAM_MEMORY_CONFIG if os.environ.get("ODRAM") == "1" else ttnn.L1_MEMORY_CONFIG
+    x_dev, w_dev, counts_dev, xq, wq = make_operands(device, TOKENS, COUNTS, x_mem)
     filler = (
         occupy(device, FREE + pd._div_up(rows_for(TOKENS), 110) * 1536) if os.environ.get("OCC", "1") == "1" else None
     )
-    out = run(x_dev, w_dev, counts_dev, memory_config=ttnn.L1_MEMORY_CONFIG)
+    out = run(x_dev, w_dev, counts_dev, memory_config=out_mem)
     if filler is not None:
         ttnn.deallocate(filler)
-    check(out, xq, wq, COUNTS, ttnn.L1_MEMORY_CONFIG)
+    check(out, xq, wq, COUNTS, out_mem)

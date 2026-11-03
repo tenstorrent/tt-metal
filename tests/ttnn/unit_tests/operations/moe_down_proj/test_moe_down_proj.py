@@ -263,3 +263,54 @@ def test_model_constants_refused(device, expect_error, x_shape, w_shape, counts_
     counts_dev = device_tensor(device, counts_shape, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     with expect_error(SupportRefusal, ""):
         moe_down_proj(x_dev, w_dev, counts_dev)
+
+
+# L1 the Nomic 8x512 forward leaves free per bank below its lowest live L1 buffer before the call (p100a, x in L1).
+MODEL_L1_FREE_BYTES = 853568
+
+
+def l1_view(device):
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    return view, [(int(b["address"]), int(b["size"])) for b in view.block_table if b["allocated"] == "yes"]
+
+
+def occupy_l1(device, free_bytes):
+    """Allocate a filler below every live L1 buffer so `free_bytes` per bank stay free under it (None if already)."""
+    view, live = l1_view(device)
+    page_bytes = 2048
+    pages_per_bank = (min((addr for addr, _ in live), default=view.total_bytes_per_bank) - free_bytes) // page_bytes
+    if pages_per_bank <= 0:
+        return None
+    filler = torch.zeros(pages_per_bank * view.num_banks, page_bytes // 2, dtype=torch.bfloat16)
+    return ttnn.from_torch(
+        filler, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+
+def out_bank_bytes(device, rows):
+    return math.ceil(rows / ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks) * HIDDEN * 2
+
+
+def test_model_l1_occupancy(device):
+    """The model's L1 occupancy: the CB budget comes from the live allocator state, not an empty-L1 constant."""
+    x_dev, w_dev, counts_dev, xq, wq = make_operands(device, 4096, LAYER0)
+    # In the model the output lands in a hole above the lowest live buffer; here it lands below the filler.
+    filler = occupy_l1(device, MODEL_L1_FREE_BYTES + out_bank_bytes(device, rows_for(4096)))
+    try:
+        out = moe_down_proj(x_dev, w_dev, counts_dev, memory_config=ttnn.L1_MEMORY_CONFIG)
+    finally:
+        ttnn.deallocate(filler)
+    check(out, xq, wq, LAYER0, ttnn.L1_MEMORY_CONFIG)
+
+
+def test_l1_occupancy_without_any_fit_refused(device, expect_error):
+    """No blocking fits the free L1: a support refusal before anything is allocated, not a CB clash."""
+    x_dev, w_dev, counts_dev, _, _ = make_operands(device, 4096, LAYER0)
+    filler = occupy_l1(device, 64 * 1024)
+    try:
+        _, live_before = l1_view(device)
+        with expect_error(SupportRefusal, "free for CBs"):
+            moe_down_proj(x_dev, w_dev, counts_dev, memory_config=ttnn.L1_MEMORY_CONFIG)
+        assert l1_view(device)[1] == live_before
+    finally:
+        ttnn.deallocate(filler)
