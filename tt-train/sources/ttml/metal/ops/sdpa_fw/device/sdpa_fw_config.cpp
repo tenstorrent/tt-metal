@@ -88,7 +88,7 @@ uint64_t l1_bytes(const SDPAForwardCbTiles& t) {
 
 uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
     const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
-    return num_stacks * (shape.St / chunks.Sq_chunk_t);
+    return sdpa_items::num_items(num_stacks, shape.St / chunks.Sq_chunk_t);
 }
 
 uint32_t num_causal_pairs(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
