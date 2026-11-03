@@ -2623,6 +2623,69 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     }
 }
 
+namespace {
+// Union of the cores claimed through ServiceCoreManager on the physical devices behind `device`
+// (each chip of a MeshDevice, or the device itself).
+std::unordered_set<CoreCoord> claimed_cores_behind(
+    const tt::tt_metal::internal::ServiceCoreManagerImpl& svc, const IDevice* device) {
+    if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+        std::unordered_set<CoreCoord> claimed;
+        for (auto device_id : mesh->get_device_ids()) {
+            auto chip_claimed = svc.claimed_cores(device_id);
+            claimed.insert(chip_claimed.begin(), chip_claimed.end());
+        }
+        return claimed;
+    }
+    return svc.claimed_cores(device->id());
+}
+}  // namespace
+
+bool detail::ProgramImpl::cb_regions_touch_service_cores(const IDevice* device) const {
+    const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();
+    if (!svc.has_any_claims()) {
+        return false;
+    }
+    // Test the CB ranges against the claimed cores (usually a few dispatch-column cores), not core by core.
+    const auto claimed = claimed_cores_behind(svc, device);
+    auto range_touches = [&](const CoreRange& range) {
+        return std::any_of(claimed.begin(), claimed.end(), [&](const CoreCoord& core) { return range.contains(core); });
+    };
+    for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
+        if (range_touches(cb_allocator.core_range)) {
+            return true;
+        }
+    }
+    for (const auto& cb : circular_buffers_) {
+        for (const auto& range : cb->core_ranges().ranges()) {
+            if (range_touches(range)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void detail::ProgramImpl::cache_simple_l1_validation(const IDevice* device) {
+    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+    // Claims change only sequentially (see ServiceCoreManagerImpl), so the generation read here matches
+    // the claims the full validation just checked against.
+    this->simple_l1_validation_claims_gen_ = svc.claims_generation();
+    this->simple_l1_validation_touches_service_ = this->cb_regions_touch_service_cores(device);
+    this->simple_l1_validation_cached_ =
+        device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+    this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+}
+
+bool detail::ProgramImpl::simple_l1_validation_usable(const IDevice* device) const {
+    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+    // Service claims matter only to CB regions on a claimed core; with claims unchanged since the
+    // last full validation and no such region, the lockstep frontier check is still complete.
+    return this->simple_l1_validation_cached_ && !this->simple_l1_validation_touches_service_ &&
+           this->simple_l1_validation_claims_gen_ == svc.claims_generation() &&
+           device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&
+           device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+}
+
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
     // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
@@ -2630,14 +2693,7 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();
     std::unordered_set<CoreCoord> claimed;
     if (svc.has_any_claims()) {
-        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (auto device_id : mesh->get_device_ids()) {
-                auto chip_claimed = svc.claimed_cores(device_id);
-                claimed.insert(chip_claimed.begin(), chip_claimed.end());
-            }
-        } else {
-            claimed = svc.claimed_cores(device->id());
-        }
+        claimed = claimed_cores_behind(svc, device);
     }
     auto entirely_on_service_cores = [&](const CoreRange& cr) {
         if (claimed.empty()) {
@@ -3404,10 +3460,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // program. Validation still reads live device state. In the lockstep case,
     // one L1 frontier covers all static CB and DFB regions.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
-        const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
-        if (this->simple_l1_validation_cached_ && !svc.has_any_claims() &&
-            device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&
-            device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP) {
+        if (this->simple_l1_validation_usable(device)) {
             if (this->simple_l1_validation_region_end_ == 0) {
                 return;
             }
@@ -3421,9 +3474,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         this->validate_circular_buffer_core_ranges(device);
         this->validate_circular_buffer_region(device);
         this->validate_dataflow_buffer_region(device);
-        this->simple_l1_validation_cached_ =
-            !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
-        this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+        this->cache_simple_l1_validation(device);
         return;
     }
     this->compile(device, force_slow_dispatch);
@@ -3442,10 +3493,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     this->allocate_scratchpads(device);
     this->validate_dataflow_buffer_region(device);
 
-    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
-    this->simple_l1_validation_cached_ =
-        !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
-    this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+    this->cache_simple_l1_validation(device);
     this->simple_l1_validation_region_end_ = 0;
     for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
         if (!cb_allocator.l1_regions.empty()) {
