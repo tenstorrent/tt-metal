@@ -573,20 +573,10 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
             "PrefetcherPipe slot {} is not bound to a PrefetcherPipe object; supply a PrefetcherPipeArgument for "
             "every PrefetcherPipeParameter via SetProgramRunArgs before enqueueing the program",
             participant.prefetcher_pipe_id);
-        const std::shared_ptr<const experimental::PrefetcherPipeImpl> pipe = participant.pipe.lock();
-        TT_FATAL(
-            pipe != nullptr,
-            "PrefetcherPipe slot {} is bound to a PrefetcherPipe that has been destroyed; supply the pipe that "
-            "replaces it (same addresses and geometry) via UpdateProgramRunArgs before enqueueing the program again",
-            participant.prefetcher_pipe_id);
-        // P is a pipe-lifetime property read at build time, not a participant field: a relay or
-        // later Attach (possibly in another program) may arm lanes after this record was added.
-        // Packing it here (rather than poking the persistent page) keeps it ordered with this
-        // program in the command queue.
-        const uint32_t num_credit_lanes = pipe->num_credit_lanes();
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;
-        payload[base + 2] = pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, num_credit_lanes);
+        payload[base + 2] =
+            pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, participant.num_credit_lanes);
     }
     return payload;
 }

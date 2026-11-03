@@ -405,7 +405,10 @@ CoreRangeSet PrefetcherPipeSpaceImpl::unclaimed_cores() const {
 }
 
 void PrefetcherPipeSpaceImpl::validate_carve(
-    CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const {
+    CoreCoord sender,
+    const CoreRangeSet& receivers,
+    uint32_t num_credit_lanes,
+    const std::unordered_set<CoreCoord>* pending) const {
     TT_FATAL(
         config_.sender_cores.contains(sender),
         "PrefetcherPipeSpace::create_pipe: sender {} is not one of the space's sender_cores {} (worker cores only; "
@@ -428,6 +431,12 @@ void PrefetcherPipeSpaceImpl::validate_carve(
         "PrefetcherPipeSpace::create_pipe: sender {} must not be one of the receivers {}",
         sender.str(),
         receivers.str());
+    TT_FATAL(
+        num_credit_lanes >= 1 && num_credit_lanes <= credit_lane_capacity_,
+        "PrefetcherPipeSpace::create_pipe: num_credit_lanes {} must be in [1, {}], the credit lanes this space's "
+        "config pages reserve per receiver (PREFETCHER_PIPE_MAX_CREDIT_LANES on Quasar, 1 elsewhere)",
+        num_credit_lanes,
+        credit_lane_capacity_);
     const auto check_free = [&](const CoreCoord& core) {
         TT_FATAL(
             !claimed_.contains(core),
@@ -530,17 +539,18 @@ void PrefetcherPipeSpaceImpl::order_dram_sender_pages() const {
     }
 }
 
-PrefetcherPipe PrefetcherPipeSpaceImpl::create_pipe(CoreCoord sender, const CoreRangeSet& receivers) {
-    return PrefetcherPipe(std::make_unique<PrefetcherPipeImpl>(*this, sender, receivers));
+PrefetcherPipe PrefetcherPipeSpaceImpl::create_pipe(
+    CoreCoord sender, const CoreRangeSet& receivers, uint32_t num_credit_lanes) {
+    return PrefetcherPipe(std::make_unique<PrefetcherPipeImpl>(*this, sender, receivers, num_credit_lanes));
 }
 
 std::vector<PrefetcherPipe> PrefetcherPipeSpaceImpl::create_pipes(
-    std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes) {
+    std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes, uint32_t num_credit_lanes) {
     // Validate the whole batch before claiming anything, so a bad mapping leaves the space as
     // it was.
     std::unordered_set<CoreCoord> pending;
     for (const auto& [sender, receivers] : pipes) {
-        validate_carve(sender, receivers, &pending);
+        validate_carve(sender, receivers, num_credit_lanes, &pending);
         pending.insert(sender);
         for (const CoreCoord& core : corerange_to_cores(receivers)) {
             pending.insert(core);
@@ -549,7 +559,7 @@ std::vector<PrefetcherPipe> PrefetcherPipeSpaceImpl::create_pipes(
     std::vector<PrefetcherPipe> result;
     result.reserve(pipes.size());
     for (const auto& [sender, receivers] : pipes) {
-        result.push_back(create_pipe(sender, receivers));
+        result.push_back(create_pipe(sender, receivers, num_credit_lanes));
     }
     return result;
 }
@@ -700,13 +710,17 @@ PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
 // ---------------------------------------------------------------------------------------------
 
 PrefetcherPipeImpl::PrefetcherPipeImpl(
-    PrefetcherPipeSpaceImpl& space, CoreCoord sender_core, const CoreRangeSet& receiver_cores) :
+    PrefetcherPipeSpaceImpl& space,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
+    uint32_t num_credit_lanes) :
     space_(&space),
     identity_(PrefetcherPipeIdentity{next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)}),
     sender_core_(sender_core),
     receiver_cores_(receiver_cores),
-    claimed_(true) {
-    space_->validate_carve(sender_core_, receiver_cores_, nullptr);
+    claimed_(true),
+    num_credit_lanes_(num_credit_lanes) {
+    space_->validate_carve(sender_core_, receiver_cores_, num_credit_lanes_, nullptr);
     sender_cores_ = CoreRangeSet(CoreRange(sender_core_));
     all_cores_ = sender_cores_.merge(receiver_cores_);
     space_->claim(all_cores_, *this);
@@ -897,35 +911,8 @@ const std::vector<uint32_t>& PrefetcherPipeImpl::config_page(const CoreCoord& co
     return it->second;
 }
 
-void PrefetcherPipeImpl::validate_credit_lane_transition(uint32_t from_lanes, uint32_t num_lanes) const {
-    TT_FATAL(num_lanes >= 1, "active credit lanes must be >= 1");
-    TT_FATAL(
-        num_lanes <= credit_lane_capacity(),
-        "active credit lanes {} exceeds allocated capacity {} "
-        "(Quasar spaces reserve PREFETCHER_PIPE_MAX_CREDIT_LANES per receiver slot)",
-        num_lanes,
-        credit_lane_capacity());
-    TT_FATAL(
-        num_lanes == from_lanes || from_lanes == 1,
-        "PrefetcherPipe credit lanes already set to {}, cannot reprogram to {}",
-        from_lanes,
-        num_lanes);
-}
-
-void PrefetcherPipeImpl::set_active_credit_lanes(uint32_t num_lanes) {
-    validate_credit_lane_transition(active_credit_lanes_, num_lanes);
-    if (num_lanes == active_credit_lanes_) {
-        return;
-    }
-    // Host state only. P reaches the device packed into each program's kernel-config slot
-    // (build_prefetcher_pipe_config_payload), so it is ordered with the program that uses it;
-    // nothing in the persistent config page is touched after carve. The one-shot 1 -> P guard
-    // above stays because the persistent credit block is interpreted through P.
-    active_credit_lanes_ = num_lanes;
-}
-
-void PrefetcherPipeImpl::validate_lane_geometry(uint32_t entry_size, uint32_t num_lanes) const {
-    TT_FATAL(num_lanes >= 1, "PrefetcherPipe lane count must be >= 1");
+void PrefetcherPipeImpl::validate_lane_geometry(uint32_t entry_size) const {
+    const uint32_t num_lanes = num_credit_lanes_;
     if (num_lanes == 1) {
         return;
     }
@@ -963,9 +950,10 @@ PrefetcherPipe& PrefetcherPipe::operator=(PrefetcherPipe&&) noexcept = default;
 
 PrefetcherPipe::~PrefetcherPipe() = default;
 
-// A Program records a binding as a weak reference to the PrefetcherPipeImpl, so relocating a handle
-// has to leave that object alone; holding it behind a pointer is what makes that true. Containers relocate
-// on growth, and a throwing move there would strand the claim, so require the move to be noexcept.
+// The space tracks each live PrefetcherPipeImpl by address (to detach it if the space dies first), so
+// relocating a handle has to leave that object alone; holding it behind a pointer is what makes that
+// true. Containers relocate on growth, and a throwing move there would strand the claim, so require
+// the move to be noexcept.
 static_assert(
     std::is_nothrow_move_constructible_v<PrefetcherPipe> && !std::is_copy_constructible_v<PrefetcherPipe>,
     "PrefetcherPipe must move without throwing and must not copy: two handles would release one claim");
@@ -997,6 +985,8 @@ SenderCoreType PrefetcherPipe::sender_core_type() const { return pimpl_->sender_
 PrefetcherPipeIdentity PrefetcherPipe::identity() const { return pimpl_->identity(); }
 
 uint32_t PrefetcherPipe::initial_entry_size() const { return pimpl_->initial_entry_size(); }
+
+uint32_t PrefetcherPipe::num_credit_lanes() const { return pimpl_->num_credit_lanes(); }
 
 PrefetcherPipeSpace::PrefetcherPipeSpace(std::unique_ptr<PrefetcherPipeSpaceImpl> impl) : pimpl_(std::move(impl)) {
     TT_FATAL(pimpl_ != nullptr, "PrefetcherPipeSpace requires an implementation object");
@@ -1030,13 +1020,14 @@ CoreRangeSet PrefetcherPipeSpace::unclaimed_cores() const { return pimpl_->uncla
 
 const distributed::MeshDevice* PrefetcherPipeSpace::get_device() const { return pimpl_->get_device(); }
 
-PrefetcherPipe PrefetcherPipeSpace::create_pipe(CoreCoord sender, const CoreRangeSet& receivers) {
-    return pimpl_->create_pipe(sender, receivers);
+PrefetcherPipe PrefetcherPipeSpace::create_pipe(
+    CoreCoord sender, const CoreRangeSet& receivers, uint32_t num_credit_lanes) {
+    return pimpl_->create_pipe(sender, receivers, num_credit_lanes);
 }
 
 std::vector<PrefetcherPipe> PrefetcherPipeSpace::create_pipes(
-    std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes) {
-    return pimpl_->create_pipes(pipes);
+    std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes, uint32_t num_credit_lanes) {
+    return pimpl_->create_pipes(pipes, num_credit_lanes);
 }
 
 PrefetcherPipeL1Source PrefetcherPipeSpace::l1_source() const { return pimpl_->l1_source(); }

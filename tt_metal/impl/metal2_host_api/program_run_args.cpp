@@ -293,7 +293,7 @@ void ValidatePrefetcherPipeArgs(
 }
 
 // Bind every supplied PrefetcherPipe to its parameter's slots, as one all-or-nothing batch: the
-// program preflights every binding (slot geometry, lane capacity, relay ring agreement) before it
+// program preflights every binding (slot geometry, credit lanes, relay ring agreement) before it
 // mutates anything, so a rejected SetProgramRunArgs leaves no parameter half-bound. Sticky: an
 // already-bound parameter re-supplied with the same object is a no-op (validation rejected a
 // different object).

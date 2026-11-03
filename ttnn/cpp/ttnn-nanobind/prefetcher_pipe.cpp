@@ -121,6 +121,10 @@ void py_module_types(nb::module_& mod) {
         .def("ring_size", &PrefetcherPipe::ring_size, "Per-core data ring size in bytes.")
         .def("initial_entry_size", &PrefetcherPipe::initial_entry_size)
         .def("config_page_size", &PrefetcherPipe::config_page_size, "Config page size in bytes.")
+        .def(
+            "num_credit_lanes",
+            &PrefetcherPipe::num_credit_lanes,
+            "Credit lanes the pipe was carved with: data-movement threads consuming it per receiver core.")
         .def("sender_core", &PrefetcherPipe::sender_core)
         .def("sender_cores", &PrefetcherPipe::sender_cores, nb::rv_policy::reference_internal)
         .def("receiver_cores", &PrefetcherPipe::receiver_cores, nb::rv_policy::reference_internal)
@@ -158,6 +162,8 @@ void py_module_types(nb::module_& mod) {
             nb::keep_alive<0, 1>(),
             nb::arg("sender"),
             nb::arg("receivers"),
+            nb::kw_only(),
+            nb::arg("num_credit_lanes") = 1,
             R"doc(
                 Carve one pipe. `sender` must be one of the space's sender_cores and `receivers` a
                 non-empty subset of receiver_domain with at most max_receivers_per_pipe cores, none
@@ -167,6 +173,8 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     sender (CoreCoord): the sender worker core.
                     receivers (CoreRangeSet): the receiver worker cores.
+                    num_credit_lanes (int): data-movement threads that consume the pipe on each
+                        receiver core. Greater than 1 only on Quasar.
 
                 Returns:
                     PrefetcherPipe
@@ -174,13 +182,14 @@ void py_module_types(nb::module_& mod) {
         .def(
             "create_pipes",
             [](nb::handle self_obj,
-               const std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreRangeSet>>& pipes) {
+               const std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreRangeSet>>& pipes,
+               uint32_t num_credit_lanes) {
                 auto& self = nb::cast<PrefetcherPipeSpace&>(self_obj);
                 // Same lifetime tie as create_pipe, applied per element: nb::keep_alive<0, 1> cannot
                 // be used here because the return value is a Python list, which is not
                 // weak-referenceable, so nanobind would raise at call time.
                 nb::list out;
-                for (PrefetcherPipe& pipe : self.create_pipes(pipes)) {
+                for (PrefetcherPipe& pipe : self.create_pipes(pipes, num_credit_lanes)) {
                     nb::object pipe_obj = nb::cast(std::move(pipe));
                     nb::detail::keep_alive(pipe_obj.ptr(), self_obj.ptr());
                     out.append(std::move(pipe_obj));
@@ -188,12 +197,15 @@ void py_module_types(nb::module_& mod) {
                 return out;
             },
             nb::arg("pipes"),
+            nb::kw_only(),
+            nb::arg("num_credit_lanes") = 1,
             R"doc(
                 Carve several disjoint pipes in one call. The batch is validated as a whole before
                 anything is claimed.
 
                 Args:
                     pipes (List[Tuple[CoreCoord, CoreRangeSet]]): (sender, receivers) per pipe.
+                    num_credit_lanes (int): as for create_pipe, for every pipe of the batch.
 
                 Returns:
                     List[PrefetcherPipe]

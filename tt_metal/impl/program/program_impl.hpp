@@ -388,21 +388,20 @@ public:
     };
 
     // Per-core PrefetcherPipe slot record. A slot is reserved (geometry only) before the program
-    // compiles and bound to a live pipe object afterwards: `pipe` / `pipe_identity` /
-    // `config_page_addr` stay empty / 0 / 0 until commit_prefetcher_pipe_slot_bind runs for this core.
-    // Dispatch reads the record only when a program is enqueued, by which point every participant
-    // must be bound to a pipe that is still alive.
+    // compiles and bound to a live pipe object afterwards: `pipe_identity` / `config_page_addr` /
+    // `num_credit_lanes` stay 0 / 0 / 1 until commit_prefetcher_pipe_slot_bind copies them from the
+    // pipe for this core. The record holds values only, so dispatch never reads the pipe itself;
+    // by the time a program is enqueued every participant must be bound.
     struct PrefetcherPipeParticipant {
         uint8_t prefetcher_pipe_id;
         uint32_t config_page_addr;
         uint32_t entry_size;
         uint8_t relay_dfb_id;
-        // Pipe this core's slot is bound to. Weak: a cached program can outlive its pipe until a pipe
-        // with the same binding key replaces it, and dispatch rejects a binding whose pipe is gone.
-        std::weak_ptr<experimental::PrefetcherPipeImpl> pipe;
-        // identity() of `pipe`, 0 until bound. It outlives the pipe, so the sticky-binding checks
-        // still know which pipe a slot was bound to after that pipe is destroyed.
+        // identity() of the pipe this core's slot is bound to, 0 until bound. The pipe may be
+        // destroyed while the program lives on; the sticky-binding checks still know which pipe it was.
         experimental::PrefetcherPipeIdentity pipe_identity{0};
+        // The bound pipe's num_credit_lanes(). On a sender-only slot it can differ from the slot's.
+        uint32_t num_credit_lanes = 1;
         bool is_bound() const { return pipe_identity != experimental::PrefetcherPipeIdentity{0}; }
     };
 
@@ -417,8 +416,8 @@ public:
         uint32_t ring_size = 0;
         uint32_t entry_size = 0;
         // Receiver-side credit lanes P this program declares for the slot (the receiver kernel's
-        // num_threads, which a relay DFB's num_producers must equal). 1 on sender-only slots; the
-        // bound pipe's live value is what dispatch packs.
+        // num_threads, which a relay DFB's num_producers must equal). A pipe binding receivers here
+        // must have been carved with this many. 1 on sender-only slots, which take the bound pipe's.
         uint32_t num_credit_lanes = 1;
         std::optional<uint32_t> relay_dfb_host_id;
     };
@@ -467,20 +466,18 @@ public:
     // Binding a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
     // receiver split matches the pipe's) is split in two so a batch of bindings can be checked in
     // full before any of it lands (a rejected SetProgramRunArgs must leave the program untouched):
-    //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry, the sticky
-    //     per-core binding, the credit-lane transition and the relay ring agreement. No mutation.
-    //     `preflight` accumulates what earlier checks in the same batch would commit (lanes armed
-    //     per pipe, ring address per relay slot) so two bindings in one batch are checked against
-    //     each other as well as against committed state.
-    //   commit_prefetcher_pipe_slot_bind arms the pipe's credit lanes when receivers are bound,
-    //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records.
-    //     Only valid right after a successful check of the same batch.
+    //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry and credit
+    //     lanes, the sticky per-core binding and the relay ring agreement. No mutation.
+    //     `preflight` accumulates what earlier checks in the same batch would commit (ring address
+    //     per relay slot, pipe per core) so two bindings in one batch are checked against each
+    //     other as well as against committed state.
+    //   commit_prefetcher_pipe_slot_bind points the slot's relay DFB (if any) at the pipe ring and
+    //     fills the per-core records. Only valid right after a successful check of the same batch.
     // Rebinding the same pipe is a no-op. A different pipe on an already-bound core is rejected
     // unless it replaces `replaced`, the identity of the pipe the parameter was bound to, whose key
     // it matches.
     // Legal after compile.
     struct PrefetcherPipeBindPreflight {
-        std::unordered_map<const experimental::PrefetcherPipeImpl*, uint32_t> armed_lanes;
         std::unordered_map<uint8_t, DeviceAddr> relay_rings;
         // (slot, core) -> pipe checked earlier in this batch; a second pipe on the same core is a
         // collision (e.g. two pipes carved with the same sender node under one sender accessor).
@@ -493,7 +490,7 @@ public:
         experimental::PrefetcherPipeIdentity replaced,
         PrefetcherPipeBindPreflight& preflight) const;
     void commit_prefetcher_pipe_slot_bind(
-        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
+        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, const experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
     // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
@@ -511,9 +508,10 @@ public:
     // on receiver cores and consumed by PrefetcherPipe::bind_relay().
     void register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
 
-    // What a program bakes in from the pipe it binds: config page and ring addresses, entry size
-    // and core layout. A pipe whose key matches the bound one's can replace it, e.g. one re-carved at
-    // the same addresses after the bound pipe was destroyed; the program cache keys pipes the same way.
+    // What a program bakes in from the pipe it binds: config page and ring addresses, entry size,
+    // credit lanes and core layout. A pipe whose key matches the bound one's can replace it, e.g. one
+    // re-carved at the same addresses after the bound pipe was destroyed; the program cache keys pipes
+    // the same way.
     struct PrefetcherPipeBindingKey {
         experimental::SenderCoreType sender_core_type{};
         CoreRangeSet sender_cores;
@@ -522,6 +520,7 @@ public:
         uint32_t buffer_address = 0;
         uint32_t initial_entry_size = 0;
         uint32_t ring_size = 0;
+        uint32_t num_credit_lanes = 1;
         bool operator==(const PrefetcherPipeBindingKey&) const = default;
     };
     static PrefetcherPipeBindingKey prefetcher_pipe_binding_key(
@@ -565,7 +564,7 @@ public:
     // new pipe replaces it; to any other pipe: rejected.
     struct PrefetcherPipeParameterBind {
         std::string name;
-        experimental::PrefetcherPipeImpl* pipe;
+        const experimental::PrefetcherPipeImpl* pipe;
     };
     void bind_prefetcher_pipe_parameters(std::span<const PrefetcherPipeParameterBind> binds);
     // The cores a parameter's slot placement binds for `prefetcher_pipe`: the placement's cores

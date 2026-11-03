@@ -131,8 +131,9 @@ public:
     bool is_claimed(const CoreCoord& core) const { return claimed_.contains(core); }
     const distributed::MeshDevice* get_device() const { return device_; }
 
-    PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers);
-    std::vector<PrefetcherPipe> create_pipes(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes);
+    PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers, uint32_t num_credit_lanes);
+    std::vector<PrefetcherPipe> create_pipes(
+        std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes, uint32_t num_credit_lanes);
     void set_dram_sender_cores(std::span<const CoreCoord> dram_senders);
     void validate_dram_carves(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes) const;
     PrefetcherPipe create_dram_sender_pipe(
@@ -145,7 +146,10 @@ public:
     // Used by PrefetcherPipeImpl. `pending` holds cores claimed earlier in the same create_pipes
     // batch (validation runs before any claim is taken).
     void validate_carve(
-        CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const;
+        CoreCoord sender,
+        const CoreRangeSet& receivers,
+        uint32_t num_credit_lanes,
+        const std::unordered_set<CoreCoord>* pending) const;
     void validate_dram_carve(CoreCoord sender, const CoreRangeSet& receivers) const;
     // `owner` is the pipe taking / releasing the claim; the space tracks it so it can detach the
     // pipe if the space is destroyed first.
@@ -189,18 +193,19 @@ private:
 // tt-metalium/experimental/prefetcher_pipe.hpp: one sender -> receivers mapping carved from a
 // space. It claims its cores in the space, composes each core's config page and stamps those
 // pages onto the device; addresses come from the space. A PrefetcherPipe owns one of these and
-// forwards to it, and the host runtime records a binding as a weak reference to one. Destroying the
-// PrefetcherPipe destroys this object and releases the claim. A Program bound to it must then be
-// rebound, to a pipe with the same binding key, before dispatch reads the binding again; dispatch
-// rejects one that was not. Moving a handle hands this object to the new owner without relocating
-// it, so destruction is the only way to get there.
+// forwards to it. A Program that binds the pipe copies what it needs from this object and keeps no
+// reference to it. Destroying the PrefetcherPipe destroys this object and releases the claim.
 //
 // The space pointer is non-owning (the PrefetcherPipeSpace handle owns the space). Every
 // accessor that needs the space goes through space(), which rejects a pipe whose space has
 // already been destroyed.
-class PrefetcherPipeImpl : public std::enable_shared_from_this<PrefetcherPipeImpl> {
+class PrefetcherPipeImpl {
 public:
-    PrefetcherPipeImpl(PrefetcherPipeSpaceImpl& space, CoreCoord sender_core, const CoreRangeSet& receiver_cores);
+    PrefetcherPipeImpl(
+        PrefetcherPipeSpaceImpl& space,
+        CoreCoord sender_core,
+        const CoreRangeSet& receiver_cores,
+        uint32_t num_credit_lanes);
     PrefetcherPipeImpl(
         PrefetcherPipeSpaceImpl& space,
         CoreCoord dram_sender,
@@ -219,23 +224,15 @@ public:
     uint32_t buffer_address() const { return space().buffer_address(); }
     uint32_t config_address() const { return space().config_address(); }
     uint32_t ring_size() const { return space().ring_size(); }
-    // Active pipe-consumer lanes (matches relay num_producers when multi-producer).
-    uint32_t num_credit_lanes() const { return active_credit_lanes_; }
-    // Slots allocated in the config page (Quasar may reserve headroom above active).
+    // Pipe-consumer lanes P, fixed at carve (matches relay num_producers when multi-producer). A
+    // bound Program packs it into its kernel-config slot on sender and receiver cores alike;
+    // nothing in persistent L1 holds it.
+    uint32_t num_credit_lanes() const { return num_credit_lanes_; }
+    // Slots allocated in the config page (Quasar may reserve headroom above num_credit_lanes()).
     uint32_t credit_lane_capacity() const { return space().credit_lane_capacity(); }
-    // Set active lanes from consumer geometry. Host state only: dispatch packs the value into
-    // every bound program's kernel-config slot (ordered with that program), nothing in
-    // persistent L1 is written. May upgrade from the carve-time default of 1, or no-op if
-    // already equal. Reprogramming to a different value after arming is rejected.
-    void set_active_credit_lanes(uint32_t num_lanes);
-    // The checks set_active_credit_lanes(num_lanes) would apply if the pipe were currently armed
-    // with `from_lanes`; throws on rejection, no state change. Lets a program preflight a batch of
-    // bindings (which may arm the same pipe more than once) before committing any of them.
-    void validate_credit_lane_transition(uint32_t from_lanes, uint32_t num_lanes) const;
-    // Lane mode (num_lanes > 1) needs an exact entry ring whose entry count is a multiple of
-    // num_lanes; throws otherwise. Call before set_active_credit_lanes so a rejected bind
-    // does not leave the persistent pipe re-armed.
-    void validate_lane_geometry(uint32_t entry_size, uint32_t num_lanes) const;
+    // Lane mode (num_credit_lanes() > 1) needs an exact entry ring whose entry count is a multiple
+    // of num_credit_lanes(); throws otherwise.
+    void validate_lane_geometry(uint32_t entry_size) const;
 
     uint32_t config_page_size() const { return space().config_page_size(); }
     uint32_t credit_reset_offset() const { return space().layout().sent_offset; }
@@ -279,9 +276,7 @@ private:
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
     bool claimed_ = false;
-    // Active lanes for striping / wait_front (per-program kernel-config slot); set from the
-    // receiver kernel's thread count when a Program binds the pipe.
-    uint32_t active_credit_lanes_ = 1;
+    uint32_t num_credit_lanes_ = 1;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> config_pages_;
     SenderCoreType sender_core_type_{};
     uint32_t initial_entry_size_ = 0;
