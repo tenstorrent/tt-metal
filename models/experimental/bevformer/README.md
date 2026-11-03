@@ -92,11 +92,13 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 - `test_resnet.py`: the backbone's bottlenecks and layers against the reference.
 - `test_fpn.py`: the FPN neck on random backbone outputs in the dtypes the backbone emits.
 - `test_backbone_fpn.py`: camera images through the backbone and the FPN end to end.
-- `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module and the fused MSDA op.
+- `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module, with each
+  of its attention-weight softmaxes, and the fused MSDA op.
 - `test_point_sampling_3d_2d.py`: the BEV pillars' projection into the cameras and the visibility mask.
 - `test_temporal_self_attention.py`: the temporal self-attention, batch-first and sequence-first;
   a previous BEV with per-sample ego shifts (bs 1 and 2, up to highway speed), with the
-  intermediates around the fused op in L1 or DRAM; the grouped softmax.
+  intermediates around the fused op in L1 or DRAM; the grouped softmax the deformable attention
+  modules share.
 - `test_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch, with
   the intermediates around the fused op in L1 or DRAM, and the device-built rebatch plan against
   a host build and its capacity over frame sequences.

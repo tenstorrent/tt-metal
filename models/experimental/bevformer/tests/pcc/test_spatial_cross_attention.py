@@ -56,6 +56,8 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
         # across cameras differently and pads the rebatch differently.
         ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5, (), None),  # CARLA base model
         ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),), None),  # bs=2, blind cam in one item
+        # BEVFormer-small's camera level and BEV grid at bs=2: the grouped softmax.
+        ("nuscenes_small_upstream", 2, 150, 150, 0.998, 0.04, 1.3, 0.5, (), None),
         ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, "all", None),  # max_len == 0: residual-only return
         # max_len at the tile edge: the extra row still leaves the padding row unfilled slots read.
         ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 0),), 32),
@@ -464,19 +466,25 @@ def test_rebatch_plan_over_a_sequence(device, bs):
     assert reallocations >= 2
 
 
-def test_spatial_cross_attention_glue_intermediates_in_dram(device, monkeypatch):
-    """The 100x100 base case with every group of intermediates around the fused op in DRAM, as
-    ``tt_common.l1_if_fits`` places them when they do not fit L1. Where the fused op stages its
-    own value is decided apart, by ``value_memory`` (``test_fused_msda.py``)."""
+@pytest.mark.parametrize("config_name", ["nuscenes_base", "nuscenes_small_upstream"])
+def test_spatial_cross_attention_glue_intermediates_in_dram(device, monkeypatch, config_name):
+    """The 100x100 case with every group of intermediates around the fused op in DRAM, as
+    ``tt_common.l1_if_fits`` places them when they do not fit L1; for small's camera level, the
+    grouped softmax in DRAM. Where the fused op stages its own value is decided apart, by
+    ``value_memory`` (``test_fused_msda.py``)."""
     monkeypatch.setattr(tt_common, "L1_INTERMEDIATE_SHARE", 0.0)
     test_spatial_cross_attention_forward(
-        device, "nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, blank_cams=(), valid_per_pair=None, seed=0
+        device, config_name, 1, 100, 100, 0.999, 0.04, 1.3, 0.5, blank_cams=(), valid_per_pair=None, seed=0
     )
 
 
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, blank_cams",
-    [("nuscenes_base", 1, 100, 100, ()), ("nuscenes_base", 2, 30, 30, ((2, 1),))],
+    [
+        ("nuscenes_base", 1, 100, 100, ()),
+        ("nuscenes_base", 2, 30, 30, ((2, 1),)),
+        ("nuscenes_small_upstream", 1, 100, 100, ()),
+    ],
 )
 def test_spatial_cross_attention_ignores_unwritten_padding(
     device, monkeypatch, config_name, batch_size, bev_h, bev_w, blank_cams

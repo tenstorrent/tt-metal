@@ -305,8 +305,13 @@ def test_temporal_self_attention_previous_bev(
     assert passed, f"PCC check failed: {message}"
 
 
-# TSA's groups of 4, and groups a tile wide.
-@pytest.mark.parametrize("num_groups, group_size", [(16, 4), (8, 32)], ids=["groups_of_4", "groups_of_32"])
+# TSA's groups of 4, the decoder's (one tile wide), SCA's of 8 at one camera level, and groups a
+# tile wide.
+@pytest.mark.parametrize(
+    "num_groups, group_size",
+    [(16, 4), (8, 4), (8, 8), (8, 32)],
+    ids=["groups_of_4", "decoder_groups_of_4", "groups_of_8", "groups_of_32"],
+)
 def test_grouped_softmax_matches_per_group_softmax(device, num_groups, group_size):
     """The (Q, groups*size) softmax must match softmax over each group of columns.
 

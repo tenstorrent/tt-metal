@@ -73,15 +73,22 @@ def group_sum_compute_config(device):
 
 # Floor on (logit - row max) before exp. exp(-80) is still a normal bf16, so a
 # group whose logits all sit far below another group's max cannot sum to 0.
+# The trained base, small and tiny checkpoints, on a nuScenes frame, keep every
+# group's max within 14 of the row max, in TSA, SCA and the decoder.
 _SOFTMAX_EXP_FLOOR = -80.0
+
+
+GROUPED_SOFTMAX_LIVE = 4
 
 
 def grouped_softmax(logits, group_sum, compute_kernel_config):
     """Softmax over each group of columns of TILE ``logits`` (..., num_groups * group_size), with
     ``group_sum`` from :func:`group_sum_matrix`.
 
-    Splitting off the group dim in TILE layout would pad every group to a whole tile. Here the
-    tensor keeps its shape and the group sums come from one matmul. Subtracting the row max over
+    Splitting off the group dim in TILE layout would pad every group to a whole tile row. Here the
+    tensor keeps its shape and the group sums come from one matmul. At its peak
+    ``GROUPED_SOFTMAX_LIVE`` tensors of the logits' size live at once: the logits, the
+    exponentials, the group sums and the result. Subtracting the row max over
     all groups leaves each group's softmax unchanged as long as its logits stay within 80 of it;
     past that the floor makes them equal instead of 0 / 0.
     """
@@ -299,6 +306,23 @@ class TTMSDeformableAttention:
         self.residual = residual
         self.linear_kwargs = grid_linear_kwargs(device)
 
+        # The attention weights' softmax over each head's samples:
+        # - "tile_row" when they are one tile row (base's SCA, 4 levels x 8 points);
+        # - "grouped" over each head's group of the Linear's columns when they are not, but all
+        #   heads' samples fill whole tiles (small's and tiny's SCA, 8 x 8, and every decoder,
+        #   8 heads x 4 points);
+        # - "padded" otherwise: the heads split off in TILE layout, every query's (heads, samples)
+        #   padded to 32x32.
+        samples = self.num_levels * self.num_points
+        if samples == ttnn.TILE_SIZE:
+            self.attention_softmax = "tile_row"
+        elif (self.num_heads * samples) % ttnn.TILE_SIZE == 0:
+            self.attention_softmax = "grouped"
+            self.attention_group_sum = group_sum_matrix(self.num_heads, samples, device)
+            self.attention_group_sum_config = group_sum_compute_config(device)
+        else:
+            self.attention_softmax = "padded"
+
     def forward(
         self,
         *,
@@ -426,15 +450,19 @@ class TTMSDeformableAttention:
         bs, num_queries, _ = query.shape
 
         # Placement:
-        # - the Linears and the weights' reshapes run in L1 when they fit, the weights' first, then
-        #   the offsets': at most the query and two weight-sized tensors (as many values as one
-        #   offset-sized tensor) live at once, the budget below;
+        # - the Linears, and the weights' softmax but for "padded", run in L1 when they fit, the
+        #   weights' first, then the offsets'. Besides the query, the weights' Linear and softmax
+        #   hold at most two weight-sized tensors at once ("tile_row"; "padded" keeps only the
+        #   Linear's output in L1) or GROUPED_SOFTMAX_LIVE ("grouped"), and the offsets one
+        #   offset-sized tensor, as many values as two weight-sized: the budget below;
         # - both results land in DRAM, since the fused op stages its value and output in L1;
-        # - they are row-major but for the softmax of a head's samples that do not fill a tile
-        #   row, which the fused wrapper untilizes.
+        # - they are row-major but for "padded", which the fused wrapper untilizes. Its reshape
+        #   is 32x32 / (heads * samples) times the weights, so it goes to DRAM.
         samples = self.num_levels * self.num_points
+        weights_live = GROUPED_SOFTMAX_LIVE if self.attention_softmax == "grouped" else 2
         memory = l1_if_fits(
-            self.device, bs * num_queries * (self.embed_dims + 2 * self.num_heads * samples) * query.element_size()
+            self.device,
+            bs * num_queries * (self.embed_dims + weights_live * self.num_heads * samples) * query.element_size(),
         )
         DRAM = ttnn.DRAM_MEMORY_CONFIG
 
@@ -452,7 +480,7 @@ class TTMSDeformableAttention:
             **self.linear_kwargs,
         )
         heads_shape = (bs, num_queries, self.num_heads, samples)
-        if samples == ttnn.TILE_SIZE:
+        if self.attention_softmax == "tile_row":
             # One head's samples per tile row: the softmax runs on unpadded tiles, and after the
             # untilize the head split keeps the row width, a view.
             attention_weights = ttnn.reshape(attention_weights, (bs, num_queries * self.num_heads, samples))
@@ -460,10 +488,17 @@ class TTMSDeformableAttention:
             attention_weights = ttnn.reshape(
                 ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM), heads_shape
             )
+        elif self.attention_softmax == "grouped":
+            logits = attention_weights
+            attention_weights = grouped_softmax(logits, self.attention_group_sum, self.attention_group_sum_config)
+            ttnn.deallocate(logits)
+            attention_weights = ttnn.reshape(
+                ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM), heads_shape
+            )
         else:
-            attention_weights = ttnn.reshape(attention_weights, heads_shape)
-            # TODO(#62506): drop once softmax zeroes tile padding itself. The reshape leaves stale L1 in the
-            # padding, and softmax's additive -inf pad mask turns NaN or +inf there into NaN rows.
+            attention_weights = ttnn.reshape(attention_weights, heads_shape, memory_config=DRAM)
+            # TODO(#62506): drop once softmax zeroes tile padding itself. The reshape leaves stale memory in
+            # the padding, and softmax's additive -inf pad mask turns NaN or +inf there into NaN rows.
             attention_weights = ttnn.fill_implicit_tile_padding(attention_weights, 0.0)
             attention_weights = ttnn.softmax(attention_weights, dim=-1, memory_config=DRAM)
 
