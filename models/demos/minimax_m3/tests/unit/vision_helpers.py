@@ -62,7 +62,11 @@ MAX_REL_L2 = {
 
 
 def parametrize_vision_grids(ci_grids=CI_GRIDS):
-    """Parametrize grid_thw over ci_grids, or over all of VISION_GRIDS when M3_VISION_ALL_GRIDS=1."""
+    """Parametrize grid_thw over ci_grids, or over all of VISION_GRIDS when M3_VISION_ALL_GRIDS=1. Raises ValueError
+    for an id of ci_grids that VISION_GRIDS lacks, whose tests would otherwise drop out of the leg without a sign."""
+    unknown = sorted(set(ci_grids) - VISION_GRIDS.keys())
+    if unknown:
+        raise ValueError(f"grid ids {unknown} of ci_grids are not in VISION_GRIDS")
     run_all = os.getenv("M3_VISION_ALL_GRIDS") == "1"
     params = [
         pytest.param(grid, id=grid_id) for grid_id, grid in VISION_GRIDS.items() if run_all or grid_id in ci_grids

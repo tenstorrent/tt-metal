@@ -5,11 +5,12 @@ Host-only checks of the vision encoder's SDPA program config (tt/vision/common.p
 M3VLAttention's SDPA call, which runs with it. No device: the configs are built with the real ttnn classes, and the
 attention's forward runs on stand-ins for its device tensors and ops.
 
-- On the 11x10, 12x10 and 13x10 core grids that Blackhole chips have depending on harvesting, h16w16, h32w32, h34w46,
-  h40w54 and h48w48 get the q chunks pinned in Q_CHUNKS, with k chunks of 128 on the whole grid, and a new config at
-  each call.
+- On the 11x10, 12x10 and 13x10 core grids that Blackhole chips have depending on harvesting, the patch counts of
+  every grid of VISION_GRIDS, and 768 and 2268, get the q chunks pinned in Q_CHUNKS, with k chunks of 128 on the whole
+  grid, and a new config at each call.
 - The attention passes SDPA the config of its image's patch count and output_concat_heads=True, and gives SDPA's
-  output, the heads side by side, to the output projection without nlp_concat_heads.
+  output, the heads side by side, to the output projection without nlp_concat_heads. Each RoPE call gets the cos and
+  sin tables, the transformation matrix and the attention's RoPE compute config.
 
 The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
 
@@ -33,29 +34,48 @@ from .vision_helpers import grid_device
 
 CONFIG = MiniMaxM3VisionConfig()
 NUM_HEADS, PADDED_HEAD_DIM = CONFIG.num_attention_heads, nearest_32(CONFIG.head_dim)
-# The q chunk per core grid and patch count (h16w16, h32w32, h34w46, h40w54 and h48w48). In the comments, the query
-# rows of the slowest core for q chunks of 128, 160, 192 and 256: ceil(16 heads x ceil(patches / q) / cores) chunks of
-# q rows each. The fewest rows win, the larger q on a tie.
+# The q chunk per core grid and patch count: those of h4w4, h12w12, h16w16, h18w18, 336x448 (768), h32w32, h36w36,
+# h34w46, h40w54, 588x756 (2268) and h48w48. In the comments, the query rows of the slowest core for q chunks of 128,
+# 160, 192 and 256: ceil(16 heads x ceil(patches / q) / cores) chunks of q rows each. The fewest rows win, the larger q
+# on a tie.
 Q_CHUNKS = {
     (11, 10): {
+        16: 128,  # 128, 160, 192, 256
+        144: 128,  # 128, 160, 192, 256
         256: 128,  # 128, 160, 192, 256
+        324: 128,  # 128, 160, 192, 256
+        768: 128,  # 128, 160, 192, 256
         1024: 192,  # 256, 320, 192, 256
+        1296: 256,  # 256, 320, 384, 256
         1564: 128,  # 256, 320, 384, 512
         2160: 192,  # 384, 480, 384, 512
+        2268: 192,  # 384, 480, 384, 512
         2304: 192,  # 384, 480, 384, 512
     },
     (12, 10): {
+        16: 128,  # 128, 160, 192, 256
+        144: 128,  # 128, 160, 192, 256
         256: 128,  # 128, 160, 192, 256
+        324: 128,  # 128, 160, 192, 256
+        768: 128,  # 128, 160, 192, 256
         1024: 160,  # 256, 160, 192, 256
+        1296: 192,  # 256, 320, 192, 256
         1564: 256,  # 256, 320, 384, 256
         2160: 160,  # 384, 320, 384, 512
+        2268: 160,  # 384, 320, 384, 512
         2304: 160,  # 384, 320, 384, 512
     },
     (13, 10): {
+        16: 128,  # 128, 160, 192, 256
+        144: 128,  # 128, 160, 192, 256
         256: 128,  # 128, 160, 192, 256
+        324: 128,  # 128, 160, 192, 256
+        768: 128,  # 128, 160, 192, 256
         1024: 128,  # 128, 160, 192, 256
+        1296: 192,  # 256, 320, 192, 256
         1564: 256,  # 256, 320, 384, 256
         2160: 160,  # 384, 320, 384, 512
+        2268: 160,  # 384, 320, 384, 512
         2304: 160,  # 384, 320, 384, 512
     },
 }
@@ -123,6 +143,10 @@ def test_vision_attention_sdpa_call(monkeypatch, patches):
 
     ops = [name for name, *_ in events]
     assert ops == ["linear", "heads", "free", "rope", "rope", "sdpa", "free", "free", "free", "linear", "free"], ops
+    q_heads, k_heads, _ = events[1][3]
+    for (_, (x, cos, sin, trans_mat), kwargs, _), heads in zip(events[3:5], (q_heads, k_heads)):
+        assert x is heads and cos is cos_sin and sin is cos_sin and trans_mat is attention.trans_mat
+        assert kwargs == dict(is_decode_mode=False, compute_kernel_config=attention.rope_compute_kernel_config), kwargs
     _, _, kwargs, attn = events[5]
     config = kwargs.pop("program_config")
     grid = config.compute_with_storage_grid_size
