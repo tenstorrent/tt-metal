@@ -1,0 +1,211 @@
+--- a/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py
++++ b/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py
+@@ -44,7 +44,10 @@
+ # k = 8, one wave -> two waves: t3072 (23 rows) DRAM y 160.7-162.1 -> 158.0-159.1 us, DRAM x and y 193.4-193.8 ->
+ # 189.9-190.0 us; t4096 (30 rows) DRAM x and y 246-253 -> 241-243 us. t2048 (15 rows) and below stay one wave.
+ DRAM_Y_ONE_PASS_MAX_ROWS = 16
+-X_DEPTH = 2
++# x slots. The rotating x sender reads its owned step straight into that step's slot (no staging buffer), so the
++# third slot is its read lead. Same L1 as two slots plus a stage. t4096 DRAM x 198.0 -> 183.5 us; L1 x flat
++# (occupied 8x512 layer 0 154.4 -> 157.1, layer 3 151.5 -> 154.5).
++X_DEPTH = 3
+ W_DEPTH = 2
+ OUT_DEPTH = 2
+ # With num_waves >= 2, cb_output_rows holds a whole wave block, so compute untilizes wave p without waiting on the
+@@ -64,8 +67,7 @@
+ CB_OUTPUT_ROWS = 3
+ CB_COUNTS_COMPUTE = 4
+ CB_COUNTS_WRITER = 5
+-# Sender-private staging: a rotating sender prefetches its next owned step here, then multicasts it into the slot.
+-CB_X_STAGE = 6
++# Sender-private w staging: a rotating w sender prefetches its next owned step here, then multicasts it into the slot.
+ CB_W_STAGE = 7
+ # Writer -> reader: the w sender's (first owned step, period), for the reader's share of the w prefetch.
+ CB_W_OWNER = 8
+@@ -252,7 +254,6 @@
+     return [
+         (CB_X_ROUND, X_DEPTH * x_step_tiles, in_tile, ttnn.bfloat8_b),
+         (CB_W_ROUND, W_DEPTH * w_round_tiles, in_tile, ttnn.bfloat8_b),
+-        (CB_X_STAGE, x_step_tiles, in_tile, ttnn.bfloat8_b),
+         (CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b),
+         (CB_PARTIALS, core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32),
+         (CB_OUTPUT_ROWS, out_depth_blocks(core_row_tiles_max, num_waves) * core_n_tiles, out_tile, ttnn.bfloat16),
+@@ -373,7 +374,6 @@
+     plan_ct = [tensor_row_tiles, blocking.num_waves, layout.num_m_groups]
+     reader_ct = [
+         CB_X_ROUND,
+-        CB_X_STAGE,
+         CB_COUNTS_COMPUTE,
+         CB_COUNTS_WRITER,
+         *plan_ct,
+--- a/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp
++++ b/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp
+@@ -5,11 +5,12 @@
+ // The last wave's store is split with the writer RISC either way (moe_store_tail_owner / _helper).
+ // D0: counts page -> cb_counts_compute and cb_counts_writer (parsed from the landing copy for the plan).
+ // deliver_x_round, x step s = (wave s / x_steps_per_wave, x K block s % x_steps_per_wave) over the non-empty waves:
+-//   the step's rotating sender of the m-group multicasts its rows' K block of x from its private staging buffer
+-//   into the round slot along the m-group (xa). In the L layout a fixed forwarder of the rect row (never an x
++//   the step's rotating sender of the m-group reads its rows' K block of x straight into its own round slot and
++//   multicasts that slot into the same slot along the m-group (xa). In the L layout a fixed forwarder of the rect row (never an x
+ //   sender) copies each step to the group's strip core (xb) one step behind, from its own round slot, before it
+-//   acks the next step, so the sender injects each step once. After a send the sender starts the reads of its
+-//   next owned step into staging, a quota per step, so a step's L1 reads overlap the steps in between. Nominal
++//   acks the next step, so the sender injects each step once. A slot frees x_depth steps after its previous use, so
++//   the reads of an owned step are issued a quota per step over the x_depth - 1 steps before it, once its slot is
++//   free. Nominal
+ //   x_step_rounds * core_row_tiles_max * k_block_tiles pages pushed per step; an empty m-group moves no data.
+ // x_step_rounds: one x step carries that many consecutive compute K rounds (x K block = x_step_rounds *
+ //   k_block_tiles), laid out round-major ([round][row][k]) so compute pops them as separate rounds. Fewer, larger x
+@@ -31,37 +32,36 @@
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_x_round = get_compile_time_arg_val(0);
+-    constexpr uint32_t cb_x_stage = get_compile_time_arg_val(1);
+-    constexpr uint32_t cb_counts_compute = get_compile_time_arg_val(2);
+-    constexpr uint32_t cb_counts_writer = get_compile_time_arg_val(3);
+-    constexpr uint32_t tensor_row_tiles = get_compile_time_arg_val(4);
+-    constexpr uint32_t num_waves = get_compile_time_arg_val(5);
+-    constexpr uint32_t num_m_groups = get_compile_time_arg_val(6);
+-    constexpr uint32_t k_block_tiles = get_compile_time_arg_val(7);
+-    constexpr uint32_t num_k_rounds = get_compile_time_arg_val(8);
+-    constexpr uint32_t core_row_tiles_max = get_compile_time_arg_val(9);
+-    constexpr uint32_t tensor_k_tiles = get_compile_time_arg_val(10);
+-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(11);
+-    constexpr uint32_t counts_page_bytes = get_compile_time_arg_val(12);
+-    constexpr uint32_t prefetch_issue_steps = get_compile_time_arg_val(13);
++    constexpr uint32_t cb_counts_compute = get_compile_time_arg_val(1);
++    constexpr uint32_t cb_counts_writer = get_compile_time_arg_val(2);
++    constexpr uint32_t tensor_row_tiles = get_compile_time_arg_val(3);
++    constexpr uint32_t num_waves = get_compile_time_arg_val(4);
++    constexpr uint32_t num_m_groups = get_compile_time_arg_val(5);
++    constexpr uint32_t k_block_tiles = get_compile_time_arg_val(6);
++    constexpr uint32_t num_k_rounds = get_compile_time_arg_val(7);
++    constexpr uint32_t core_row_tiles_max = get_compile_time_arg_val(8);
++    constexpr uint32_t tensor_k_tiles = get_compile_time_arg_val(9);
++    constexpr uint32_t tile_bytes = get_compile_time_arg_val(10);
++    constexpr uint32_t counts_page_bytes = get_compile_time_arg_val(11);
++    constexpr uint32_t prefetch_issue_steps = get_compile_time_arg_val(12);
+     // store_wave runs here (on this RISC's NoC) instead of on the writer RISC.
+-    constexpr bool store_on_reader = get_compile_time_arg_val(14) != 0;
+-    constexpr uint32_t cb_output_rows = get_compile_time_arg_val(15);
+-    constexpr uint32_t core_n_tiles = get_compile_time_arg_val(16);
+-    constexpr uint32_t out_page_bytes = get_compile_time_arg_val(17);
+-    constexpr uint32_t x_depth = get_compile_time_arg_val(18);
+-    constexpr uint32_t store_blocks_per_round = get_compile_time_arg_val(19);
+-    constexpr uint32_t w_reader_share = get_compile_time_arg_val(20);
++    constexpr bool store_on_reader = get_compile_time_arg_val(13) != 0;
++    constexpr uint32_t cb_output_rows = get_compile_time_arg_val(14);
++    constexpr uint32_t core_n_tiles = get_compile_time_arg_val(15);
++    constexpr uint32_t out_page_bytes = get_compile_time_arg_val(16);
++    constexpr uint32_t x_depth = get_compile_time_arg_val(17);
++    constexpr uint32_t store_blocks_per_round = get_compile_time_arg_val(18);
++    constexpr uint32_t w_reader_share = get_compile_time_arg_val(19);
+     constexpr bool w_reads_on_reader = w_reader_share > 0;
+-    constexpr uint32_t w_share_den = get_compile_time_arg_val(21);
+-    constexpr uint32_t cb_w_stage = get_compile_time_arg_val(22);
+-    constexpr uint32_t cb_w_owner = get_compile_time_arg_val(23);
+-    constexpr uint32_t x_step_rounds = get_compile_time_arg_val(24);
+-    constexpr uint32_t cb_tail = get_compile_time_arg_val(25);
++    constexpr uint32_t w_share_den = get_compile_time_arg_val(20);
++    constexpr uint32_t cb_w_stage = get_compile_time_arg_val(21);
++    constexpr uint32_t cb_w_owner = get_compile_time_arg_val(22);
++    constexpr uint32_t x_step_rounds = get_compile_time_arg_val(23);
++    constexpr uint32_t cb_tail = get_compile_time_arg_val(24);
+     static_assert(num_k_rounds % x_step_rounds == 0, "x steps must not straddle a wave");
+     static_assert(x_step_rounds == 1 || !w_reads_on_reader, "the reader's w prefetch steps per w round");
+     constexpr uint32_t x_steps_per_wave = num_k_rounds / x_step_rounds;
+-    constexpr auto x_args = TensorAccessorArgs<26>();
++    constexpr auto x_args = TensorAccessorArgs<25>();
+     constexpr auto counts_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+@@ -115,15 +115,21 @@
+     auto xb_receiver = xb_mcast.optional_receiver(noc);
+     // Rect cores own an xa seat (and send xb in the L layout); L strip cores only receive xb.
+     const bool on_xa = xa_mcast.can_send() || xa_mcast.can_receive();
+-    // Reader-private scratch: no CB credits move.
+-    const uint32_t stage_l1 = get_write_ptr(cb_x_stage);
+-
+-    // Staged prefetch of this core's next owned step. Its reads are issued a quota per step (rather than all at
+-    // once after a send), so the sender keeps serving the channel rounds in between.
+-    constexpr uint32_t issue_quota = (x_step_tiles + prefetch_issue_steps - 1) / prefetch_issue_steps;
++    // Before any push the write pointer is the FIFO start; every step pushes x_step_tiles and the FIFO holds exactly
++    // x_depth steps, so step s lands at slot s % x_depth.
++    const uint32_t x_slot_base = get_write_ptr(cb_x_round);
++    constexpr uint32_t x_step_bytes = x_step_tiles * tile_bytes;
++
++    // Prefetch of this core's next owned step into its slot, a quota per step (rather than all at once), so the
++    // sender keeps serving the channel rounds in between.
++    constexpr uint32_t x_issue_steps = x_depth > 1 ? x_depth - 1 : 1;
++    constexpr uint32_t issue_quota = (x_step_tiles + x_issue_steps - 1) / x_issue_steps;
+     uint32_t pf_first_page = 0;
+     uint32_t pf_next = 0;
+     uint32_t pf_total = 0;
++    uint32_t pf_step = 0;
++    uint32_t pf_dst = 0;
++    bool pf_slot_free = false;
+     auto start_prefetch = [&](uint32_t step) {
+         pf_next = 0;
+         pf_total = 0;
+@@ -136,18 +142,31 @@
+         if (step >= num_steps) {
+             return;
+         }
++        pf_step = step;
++        pf_dst = x_slot_base + (step % x_depth) * x_step_bytes;
++        pf_slot_free = false;
+         const uint32_t wave = step / x_steps_per_wave;
+         pf_first_page = plan.group_first(wave, group) * tensor_k_tiles + (step % x_steps_per_wave) * x_step_k_tiles;
+         pf_total = plan.group_rows(wave, group) * x_step_k_tiles;
+     };
+-    auto issue_prefetch = [&](uint32_t max_tiles) {
++    // cur: the step about to be reserved (steps < cur are pushed). pf_step's slot is free once the FIFO has room
++    // for steps cur..pf_step.
++    auto issue_prefetch = [&](uint32_t cur, uint32_t max_tiles) {
++        if (!pf_slot_free) {
++            invalidate_l1_cache();
++            if (pf_next >= pf_total || pf_step - cur + 1 > x_depth ||
++                !cb_pages_reservable_at_back(cb_x_round, (pf_step - cur + 1) * x_step_tiles)) {
++                return;
++            }
++            pf_slot_free = true;
++        }
+         for (; pf_next < pf_total && max_tiles > 0; ++pf_next, --max_tiles) {
+             const uint32_t row = pf_next / x_step_k_tiles;
+             const uint32_t kk = pf_next % x_step_k_tiles;
+             const uint32_t round = kk / k_block_tiles;
+-            const uint32_t stage_tile = round * x_round_tiles + row * k_block_tiles + kk % k_block_tiles;
++            const uint32_t slot_tile = round * x_round_tiles + row * k_block_tiles + kk % k_block_tiles;
+             noc_async_read_page(
+-                pf_first_page + row * tensor_k_tiles + kk, x_accessor, stage_l1 + stage_tile * tile_bytes);
++                pf_first_page + row * tensor_k_tiles + kk, x_accessor, pf_dst + slot_tile * tile_bytes);
+         }
+     };
+ 
+@@ -240,11 +259,15 @@
+         }
+         const uint32_t group_rows = plan.group_rows(step / x_steps_per_wave, group);
+         const bool owned = on_xa && xa_mcast.should_send(step);
+-        issue_prefetch(owned ? pf_total : issue_quota);
++        issue_prefetch(step, owned ? pf_total : issue_quota);
+         {
+             MaybeDeviceZoneScope("x_reserve");
+             cb_reserve_back(cb_x_round, x_step_tiles);
+         }
++        if (owned) {
++            // The slot may have freed only now.
++            issue_prefetch(step, pf_total);
++        }
+         if (forwarder) {
+             MaybeDeviceZoneScope("x_forward");
+             forward_pending();
+@@ -259,7 +282,7 @@
+                     MaybeDeviceZoneScope("x_send_barrier");
+                     dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
+                 }
+-                xa_sender->send(stage_l1, slot, bytes);
++                xa_sender->send(slot, slot, bytes);
+             } else if (on_xa) {
+                 {
+                     MaybeDeviceZoneScope("x_receive");

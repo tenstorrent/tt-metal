@@ -1,0 +1,14 @@
+======================== 12 passed, 1 warning in 11.34s ========================
+variant=base csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_03_11_40_06/ops_perf_results_2026_11_03_11_40_06.csv
+focus 130722
+t4096_l3_occ 130312
+t4096_l2_occ 131267
+t4096_l0 128580
+t3072 113064
+t2048 92899
+t1024 79283
+t4096_dram_x 174194
+t4096_dram_out 158571
+t1024_dram_both 102721
+t37 72870
+t1 40169

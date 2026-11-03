@@ -45,6 +45,11 @@ MAX_WAVES = 4
 # 189.9-190.0 us; t4096 (30 rows) DRAM x and y 246-253 -> 241-243 us. t2048 (15 rows) and below stay one wave.
 DRAM_Y_ONE_PASS_MAX_ROWS = 16
 X_DEPTH = 2
+# With x in DRAM the rotating x sender reads its owned step straight into that step's slot (no cb_x_stage), and the
+# stage's L1 funds a third slot (its read lead), at the same footprint. t4096 DRAM x 174.2 -> 154.0 us, t1024 DRAM x
+# and y 102.7 -> 98.8. With x in L1 the reads of an owned step then land within the one or two steps before it
+# instead of over PREFETCH_ISSUE_STEPS, which stalls the x chain: occupied 8x512 layer 0 130.7 -> 142.7 us.
+X_DEPTH_STAGE_FREE = 3
 W_DEPTH = 2
 OUT_DEPTH = 2
 # With num_waves >= 2, cb_output_rows holds a whole wave block, so compute untilizes wave p without waiting on the
@@ -244,15 +249,23 @@ def store_blocks_per_round(core_row_tiles_max, num_waves, num_k_rounds, store_st
     return _div_up(core_row_tiles_max, num_k_rounds - store_start_round)
 
 
-def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves, x_step_rounds=1):
-    """(index, pages, page bytes, format) per CB. Single source for both the budget solve and the allocation."""
+def x_depth(x_stage_free):
+    return X_DEPTH_STAGE_FREE if x_stage_free else X_DEPTH
+
+
+def cb_plan(
+    core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves, x_step_rounds=1, x_stage_free=False
+):
+    """(index, pages, page bytes, format) per CB. Single source for both the budget solve and the allocation.
+    x_stage_free trades cb_x_stage for an x slot, so the budget solve need not know it."""
     in_tile, acc_tile, out_tile = _tile_bytes()
     x_step_tiles = x_step_rounds * core_row_tiles_max * k_block_tiles
     w_round_tiles = NUM_EXPERTS * core_n_tiles * k_block_tiles
+    x_stage = [] if x_stage_free else [(CB_X_STAGE, x_step_tiles, in_tile, ttnn.bfloat8_b)]
     return [
-        (CB_X_ROUND, X_DEPTH * x_step_tiles, in_tile, ttnn.bfloat8_b),
+        (CB_X_ROUND, x_depth(x_stage_free) * x_step_tiles, in_tile, ttnn.bfloat8_b),
         (CB_W_ROUND, W_DEPTH * w_round_tiles, in_tile, ttnn.bfloat8_b),
-        (CB_X_STAGE, x_step_tiles, in_tile, ttnn.bfloat8_b),
+        *x_stage,
         (CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b),
         (CB_PARTIALS, core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32),
         (CB_OUTPUT_ROWS, out_depth_blocks(core_row_tiles_max, num_waves) * core_n_tiles, out_tile, ttnn.bfloat16),
@@ -355,6 +368,8 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     counts_page_bytes = expert_counts.buffer_page_size()
     layout = select_layout(grid, tensor_row_tiles, layout_override)
     out_in_dram = output.memory_config().buffer_type == ttnn.BufferType.DRAM
+    # Carve-out: an L1 x keeps the stage (stage-free measured 130.7 -> 142.7 us on occupied 8x512 layer 0).
+    x_stage_free = input_tensor.memory_config().buffer_type != ttnn.BufferType.L1
     budget_bytes = cb_budget_bytes(device)
     blocking = select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, out_in_dram)
     core_n_tiles = layout.core_n_tiles
@@ -368,7 +383,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         blocking.core_row_tiles_max,
         blocking.num_waves,
         blocking.x_steps_per_wave if store_on_reader else blocking.num_k_rounds,
-        X_DEPTH if store_on_reader else W_DEPTH,
+        x_depth(x_stage_free) if store_on_reader else W_DEPTH,
     )
     plan_ct = [tensor_row_tiles, blocking.num_waves, layout.num_m_groups]
     reader_ct = [
@@ -388,7 +403,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         CB_OUTPUT_ROWS,
         core_n_tiles,
         output.buffer_page_size(),
-        X_DEPTH,
+        x_depth(x_stage_free),
         store_quota,
         w_share,
         W_SHARE_DEN,
@@ -396,6 +411,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         CB_W_OWNER,
         blocking.x_step_rounds,
         CB_TAIL,
+        int(x_stage_free),
     ]
     for tensor in (input_tensor, expert_counts, output, weight):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -459,6 +475,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
             counts_page_bytes,
             blocking.num_waves,
             blocking.x_step_rounds,
+            x_stage_free,
         )
     ]
 

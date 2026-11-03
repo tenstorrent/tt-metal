@@ -1,0 +1,310 @@
+diff --git a/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp b/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp
+index a1806f2d335..a8774589c85 100644
+--- a/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp
++++ b/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_reader.cpp
+@@ -58,10 +58,15 @@ void kernel_main() {
+     constexpr uint32_t cb_w_owner = get_compile_time_arg_val(23);
+     constexpr uint32_t x_step_rounds = get_compile_time_arg_val(24);
+     constexpr uint32_t cb_tail = get_compile_time_arg_val(25);
++    // Stage-free x sends: the sender reads its owned step straight into that step's round slot (free once compute
++    // has popped the step x_depth earlier) and multicasts slot -> the same slot on the others; no cb_x_stage.
++    constexpr bool x_stage_free = get_compile_time_arg_val(26) != 0;
++    // Stage-free: the x reads of an owned step are issued over this many steps (the slot's lead is < x_depth steps).
++    constexpr uint32_t x_issue_steps = x_stage_free ? get_compile_time_arg_val(27) : prefetch_issue_steps;
+     static_assert(num_k_rounds % x_step_rounds == 0, "x steps must not straddle a wave");
+     static_assert(x_step_rounds == 1 || !w_reads_on_reader, "the reader's w prefetch steps per w round");
+     constexpr uint32_t x_steps_per_wave = num_k_rounds / x_step_rounds;
+-    constexpr auto x_args = TensorAccessorArgs<26>();
++    constexpr auto x_args = TensorAccessorArgs<28>();
+     constexpr auto counts_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+@@ -116,14 +121,22 @@ void kernel_main() {
+     // Rect cores own an xa seat (and send xb in the L layout); L strip cores only receive xb.
+     const bool on_xa = xa_mcast.can_send() || xa_mcast.can_receive();
+     // Reader-private scratch: no CB credits move.
+-    const uint32_t stage_l1 = get_write_ptr(cb_x_stage);
++    const uint32_t stage_l1 = x_stage_free ? 0 : get_write_ptr(cb_x_stage);
++    // Before any push the write pointer is the FIFO start; every step pushes x_step_tiles and the FIFO holds exactly
++    // x_depth steps, so step s always lands at slot s % x_depth.
++    const uint32_t x_slot_base = get_write_ptr(cb_x_round);
++    constexpr uint32_t x_step_bytes = x_step_tiles * tile_bytes;
++    auto x_slot = [&](uint32_t step) { return x_slot_base + (step % x_depth) * x_step_bytes; };
+ 
+     // Staged prefetch of this core's next owned step. Its reads are issued a quota per step (rather than all at
+     // once after a send), so the sender keeps serving the channel rounds in between.
+-    constexpr uint32_t issue_quota = (x_step_tiles + prefetch_issue_steps - 1) / prefetch_issue_steps;
++    constexpr uint32_t issue_quota = (x_step_tiles + x_issue_steps - 1) / x_issue_steps;
+     uint32_t pf_first_page = 0;
+     uint32_t pf_next = 0;
+     uint32_t pf_total = 0;
++    uint32_t pf_step = 0;
++    uint32_t pf_dst = stage_l1;
++    bool pf_slot_free = !x_stage_free;
+     auto start_prefetch = [&](uint32_t step) {
+         pf_next = 0;
+         pf_total = 0;
+@@ -136,18 +149,35 @@ void kernel_main() {
+         if (step >= num_steps) {
+             return;
+         }
++        pf_step = step;
++        if constexpr (x_stage_free) {
++            pf_dst = x_slot(step);
++            pf_slot_free = false;
++        }
+         const uint32_t wave = step / x_steps_per_wave;
+         pf_first_page = plan.group_first(wave, group) * tensor_k_tiles + (step % x_steps_per_wave) * x_step_k_tiles;
+         pf_total = plan.group_rows(wave, group) * x_step_k_tiles;
+     };
+-    auto issue_prefetch = [&](uint32_t max_tiles) {
++    // cur: the step about to be reserved (steps < cur are pushed). Stage-free: the slot of pf_step is free once the
++    // FIFO has room for steps cur..pf_step.
++    auto issue_prefetch = [&](uint32_t cur, uint32_t max_tiles) {
++        if constexpr (x_stage_free) {
++            if (!pf_slot_free) {
++                invalidate_l1_cache();
++                if (pf_next >= pf_total || pf_step - cur + 1 > x_depth ||
++                    !cb_pages_reservable_at_back(cb_x_round, (pf_step - cur + 1) * x_step_tiles)) {
++                    return;
++                }
++                pf_slot_free = true;
++            }
++        }
+         for (; pf_next < pf_total && max_tiles > 0; ++pf_next, --max_tiles) {
+             const uint32_t row = pf_next / x_step_k_tiles;
+             const uint32_t kk = pf_next % x_step_k_tiles;
+             const uint32_t round = kk / k_block_tiles;
+             const uint32_t stage_tile = round * x_round_tiles + row * k_block_tiles + kk % k_block_tiles;
+             noc_async_read_page(
+-                pf_first_page + row * tensor_k_tiles + kk, x_accessor, stage_l1 + stage_tile * tile_bytes);
++                pf_first_page + row * tensor_k_tiles + kk, x_accessor, pf_dst + stage_tile * tile_bytes);
+         }
+     };
+ 
+@@ -240,11 +270,15 @@ void kernel_main() {
+         }
+         const uint32_t group_rows = plan.group_rows(step / x_steps_per_wave, group);
+         const bool owned = on_xa && xa_mcast.should_send(step);
+-        issue_prefetch(owned ? pf_total : issue_quota);
++        issue_prefetch(step, owned ? pf_total : issue_quota);
+         {
+             MaybeDeviceZoneScope("x_reserve");
+             cb_reserve_back(cb_x_round, x_step_tiles);
+         }
++        if (x_stage_free && owned) {
++            // The slot may have freed only now.
++            issue_prefetch(step, pf_total);
++        }
+         if (forwarder) {
+             MaybeDeviceZoneScope("x_forward");
+             forward_pending();
+@@ -259,7 +293,7 @@ void kernel_main() {
+                     MaybeDeviceZoneScope("x_send_barrier");
+                     dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
+                 }
+-                xa_sender->send(stage_l1, slot, bytes);
++                xa_sender->send(x_stage_free ? slot : stage_l1, slot, bytes);
+             } else if (on_xa) {
+                 {
+                     MaybeDeviceZoneScope("x_receive");
+diff --git a/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_writer.cpp b/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_writer.cpp
+index f281c95eca6..f412b3c2558 100644
+--- a/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_writer.cpp
++++ b/ttnn/ttnn/operations/moe_down_proj/kernels/moe_down_proj_writer.cpp
+@@ -49,7 +49,11 @@ void kernel_main() {
+     constexpr uint32_t cb_w_owner = get_compile_time_arg_val(18);
+     constexpr uint32_t w_share_den = get_compile_time_arg_val(19);
+     constexpr uint32_t cb_tail = get_compile_time_arg_val(20);
+-    constexpr auto out_args = TensorAccessorArgs<21>();
++    // Stage-free w sends: the sender reads its owned step's DRAM chunks straight into that step's round slot (free
++    // once compute has popped the step w_depth earlier) and multicasts slot -> the same slot on the others.
++    constexpr bool w_stage_free = get_compile_time_arg_val(21) != 0;
++    static_assert(!(w_stage_free && w_reads_on_reader), "the reader's w share lands in cb_w_stage");
++    constexpr auto out_args = TensorAccessorArgs<22>();
+     constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+     constexpr auto wa_mcast = dataflow_kernel_lib::
+         McastArgs<get_named_compile_time_arg_val("wa_ct_offset"), get_named_compile_time_arg_val("wa_rt_offset")>();
+@@ -106,7 +110,11 @@ void kernel_main() {
+     }
+     const uint32_t num_steps = num_waves_active * num_k_rounds;
+     // Writer-private scratch unless w_reads_on_reader (then the reader produces it and this RISC consumes it).
+-    const uint32_t stage_l1 = get_write_ptr(cb_w_stage);
++    const uint32_t stage_l1 = w_stage_free ? 0 : get_write_ptr(cb_w_stage);
++    // Before any push the write pointer is the FIFO start; every step pushes w_round_tiles and the FIFO holds exactly
++    // w_depth steps, so step s always lands at slot s % w_depth.
++    const uint32_t w_slot_base = get_write_ptr(cb_w_round);
++    constexpr uint32_t w_round_bytes = w_round_tiles * w_tile_bytes;
+     MoeWPrefetch<
+         k_block_tiles,
+         core_n_tiles,
+@@ -116,6 +124,26 @@ void kernel_main() {
+         w_share_den,
+         decltype(w_accessor)>
+         prefetch(plan, w_accessor, n_first, w_reader_share, w_share_den);
++    bool pf_slot_free = false;
++    // step: the step about to be reserved (steps < step are pushed).
++    auto issue = [&](uint32_t step, uint32_t max_tiles) {
++        if constexpr (w_stage_free) {
++            if (prefetch.step == prefetch.NONE) {
++                return;
++            }
++            if (!pf_slot_free) {
++                invalidate_l1_cache();
++                if (prefetch.step - step + 1 > w_depth ||
++                    !cb_pages_reservable_at_back(cb_w_round, (prefetch.step - step + 1) * w_round_tiles)) {
++                    return;
++                }
++                pf_slot_free = true;
++            }
++            prefetch.issue(w_slot_base + (prefetch.step % w_depth) * w_round_bytes, max_tiles);
++        } else {
++            prefetch.issue(stage_l1, max_tiles);
++        }
++    };
+ 
+     prefetch.start(0, num_steps, owns);
+     for (uint32_t wave = 0; wave < num_waves_active; ++wave) {
+@@ -133,11 +161,15 @@ void kernel_main() {
+             // deliver_w_round
+             const uint32_t step = wave * num_k_rounds + round;
+             const bool owned = owns(step);
+-            prefetch.issue(stage_l1, owned ? prefetch.total : issue_quota);
++            issue(step, owned ? prefetch.total : issue_quota);
+             {
+                 MaybeDeviceZoneScope("w_reserve");
+                 cb_reserve_back(cb_w_round, w_round_tiles);
+             }
++            if (w_stage_free && owned) {
++                // The slot may have freed only now.
++                issue(step, prefetch.total);
++            }
+             const uint32_t slot = get_write_ptr(cb_w_round) + range_offset;
+             if (owned) {
+                 MaybeDeviceZoneScope("w_send");
+@@ -149,15 +181,17 @@ void kernel_main() {
+                     }
+                     noc_async_read_barrier();
+                 }
++                const uint32_t src = w_stage_free ? slot : stage_l1 + range_offset;
+                 if (on_wa) {
+-                    wa_sender->send(stage_l1 + range_offset, slot, range_bytes);
++                    wa_sender->send(src, slot, range_bytes);
+                 } else {
+-                    wb_sender->send(stage_l1 + range_offset, slot, range_bytes);
++                    wb_sender->send(src, slot, range_bytes);
+                 }
+                 if constexpr (w_reads_on_reader) {
+                     cb_pop_front(cb_w_stage, w_round_tiles);
+                 }
+                 prefetch.start(step + 1, num_steps, owns);
++                pf_slot_free = false;
+             } else if (on_wa) {
+                 MaybeDeviceZoneScope("w_receive");
+                 wa_receiver->receive(step);
+diff --git a/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py b/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py
+index f0d17021781..faca90bedfc 100644
+--- a/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py
++++ b/ttnn/ttnn/operations/moe_down_proj/moe_down_proj_program_descriptor.py
+@@ -18,7 +18,14 @@ import ttnn
+ 
+ from ttnn.operations._op_contract import UnsupportedAxisValue
+ 
+-KERNEL_DIR = Path(__file__).parent / "kernels"
++import os
++
++KERNEL_DIR = Path(__file__).parent / "kernels_sf"
++# Experiment knobs (stage_free_sends).
++SF_X = os.environ.get("SF_X", "1") == "1"
++SF_W = os.environ.get("SF_W", "1") == "1"
++SF_X_ISSUE_STEPS = int(os.environ.get("SF_X_ISSUE_STEPS", "0"))  # 0: x_depth - 1
++SF_W_ISSUE_STEPS = int(os.environ.get("SF_W_ISSUE_STEPS", "0"))  # 0: w_depth - 1
+ 
+ TILE = 32
+ NUM_EXPERTS = 8
+@@ -28,7 +35,7 @@ TENSOR_K_TILES = FFN // TILE
+ TENSOR_N_TILES = HIDDEN // TILE
+ 
+ # Largest K block per round. Round 0 must land before compute starts, so a larger block lengthens the fill.
+-K_BLOCK_MAX = 8
++K_BLOCK_MAX = int(os.environ.get("SF_KMAX", "8"))
+ # select_blocking takes the fewest waves among K blocks >= K_BLOCK_ONE_PASS_MIN while a wave's per-core rows stay
+ # <= ONE_PASS_MAX_ROWS, then the largest K block. Fewer waves skip re-reading the straddling expert's w; a smaller K
+ # block costs more per-round sync, and more rows per step lengthen the x chain. t3072 (8x384, 23 rows at 1 wave):
+@@ -44,8 +51,8 @@ MAX_WAVES = 4
+ # k = 8, one wave -> two waves: t3072 (23 rows) DRAM y 160.7-162.1 -> 158.0-159.1 us, DRAM x and y 193.4-193.8 ->
+ # 189.9-190.0 us; t4096 (30 rows) DRAM x and y 246-253 -> 241-243 us. t2048 (15 rows) and below stay one wave.
+ DRAM_Y_ONE_PASS_MAX_ROWS = 16
+-X_DEPTH = 2
+-W_DEPTH = 2
++X_DEPTH = int(os.environ.get("SF_XD", "2"))
++W_DEPTH = int(os.environ.get("SF_WD", "2"))
+ OUT_DEPTH = 2
+ # With num_waves >= 2, cb_output_rows holds a whole wave block, so compute untilizes wave p without waiting on the
+ # store, and the store drains over wave p + 1's rounds a quota per round instead of one burst that stalls compute and
+@@ -244,16 +251,25 @@ def store_blocks_per_round(core_row_tiles_max, num_waves, num_k_rounds, store_st
+     return _div_up(core_row_tiles_max, num_k_rounds - store_start_round)
+ 
+ 
++def w_stage_free(blocking):
++    return SF_W and w_reader_share(blocking) == 0
++
++
+ def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves, x_step_rounds=1):
+     """(index, pages, page bytes, format) per CB. Single source for both the budget solve and the allocation."""
+     in_tile, acc_tile, out_tile = _tile_bytes()
+     x_step_tiles = x_step_rounds * core_row_tiles_max * k_block_tiles
+     w_round_tiles = NUM_EXPERTS * core_n_tiles * k_block_tiles
++    blocking = Blocking(0, num_waves, k_block_tiles, core_row_tiles_max, x_step_rounds)
++    stages = []
++    if not SF_X:
++        stages.append((CB_X_STAGE, x_step_tiles, in_tile, ttnn.bfloat8_b))
++    if not w_stage_free(blocking):
++        stages.append((CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b))
+     return [
+         (CB_X_ROUND, X_DEPTH * x_step_tiles, in_tile, ttnn.bfloat8_b),
+         (CB_W_ROUND, W_DEPTH * w_round_tiles, in_tile, ttnn.bfloat8_b),
+-        (CB_X_STAGE, x_step_tiles, in_tile, ttnn.bfloat8_b),
+-        (CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b),
++        *stages,
+         (CB_PARTIALS, core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32),
+         (CB_OUTPUT_ROWS, out_depth_blocks(core_row_tiles_max, num_waves) * core_n_tiles, out_tile, ttnn.bfloat16),
+         (CB_COUNTS_COMPUTE, 1, counts_page_bytes, ttnn.uint32),
+@@ -357,6 +373,11 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
+     out_in_dram = output.memory_config().buffer_type == ttnn.BufferType.DRAM
+     budget_bytes = cb_budget_bytes(device)
+     blocking = select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes, out_in_dram)
++    print(
++        f"SF blocking waves={blocking.num_waves} k={blocking.k_block_tiles} rows={blocking.core_row_tiles_max} "
++        f"xd={X_DEPTH} wd={W_DEPTH} sf_x={SF_X} sf_w={w_stage_free(blocking)} share={w_reader_share(blocking)} "
++        f"budget={budget_bytes} fp={footprint_bytes(blocking.core_row_tiles_max, blocking.k_block_tiles, layout.core_n_tiles, counts_page_bytes, blocking.num_waves, blocking.x_step_rounds)}"
++    )
+     core_n_tiles = layout.core_n_tiles
+     in_tile = ttnn.tile_size(ttnn.bfloat8_b)
+     cores = layout.cores
+@@ -396,6 +417,8 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
+         CB_W_OWNER,
+         blocking.x_step_rounds,
+         CB_TAIL,
++        int(SF_X),
++        SF_X_ISSUE_STEPS or max(1, X_DEPTH - 1),
+     ]
+     for tensor in (input_tensor, expert_counts, output, weight):
+         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+@@ -413,12 +436,15 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
+         output.buffer_page_size(),
+         W_DEPTH,
+         CB_W_STAGE,
+-        w_issue_quota(blocking, core_n_tiles),
++        _div_up(NUM_EXPERTS * core_n_tiles * blocking.k_block_tiles, SF_W_ISSUE_STEPS or max(1, W_DEPTH - 1))
++        if w_stage_free(blocking)
++        else w_issue_quota(blocking, core_n_tiles),
+         int(store_on_reader),
+         store_quota,
+         CB_W_OWNER,
+         W_SHARE_DEN,
+         CB_TAIL,
++        int(w_stage_free(blocking)),
+     ]
+     for tensor in (output, weight):
+         writer_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())

@@ -1,0 +1,8 @@
+gated focus 131280
+gated t4096_dram_x 153350
+base focus 130585
+base t4096_dram_x 171120
+base focus 131187
+base t4096_dram_x 169826
+gated focus 131175
+gated t4096_dram_x 153085
