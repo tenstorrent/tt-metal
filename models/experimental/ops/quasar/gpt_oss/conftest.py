@@ -84,6 +84,7 @@ def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16, quasa
         ("from_torch", 1),
         ("as_tensor", 1),
         ("typecast", 1),
+        ("embedding", None),
         ("matmul", None),
         ("linear", None),
         ("sparse_matmul", None),

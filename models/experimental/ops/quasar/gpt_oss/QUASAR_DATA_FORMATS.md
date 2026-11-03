@@ -1,10 +1,12 @@
 # gpt-oss on Quasar: unsupported data formats
 
-Quasar is a new Tenstorrent chip. For now it runs in a simulator. This note explains why the gpt-oss demo stops on Quasar with the error below, which errors will most likely come next, how two other models dealt with the same problem on Quasar, and which approach to use for gpt-oss. DFB and `rm_in` are explained in section 1.3.
+Quasar is a new Tenstorrent chip. For now it runs in a simulator. This note explains why the gpt-oss demo stopped on Quasar with the error below until 2026-11-03, which errors came next, how two other models dealt with the same problem on Quasar, and which approach gpt-oss uses. DFB and `rm_in` are explained in section 1.3.
 
 ```
 TT_FATAL: DFB 'rm_in' has data format 'UInt32' which is not supported on architecture quasar
 ```
+
+On Quasar, `ttnn.slice` avoids this error with a raw data format (section 2.2), so gpt-oss runs its token embedding on the device (section 6.2).
 
 The model code is in `models/experimental/ops/quasar/gpt_oss/`. It is a copy of `models/demos/gpt_oss/`, kept separate so that it can be changed for Quasar.
 
@@ -38,17 +40,17 @@ A tensor in tile layout is stored in tiles of 32 x 32 = 1024 values. (A tensor i
 
 A kernel does not work on a tensor in DRAM directly. It moves data into small buffers in the SRAM of its core, works on it there, and moves the results out. On Wormhole and Blackhole these buffers are called circular buffers. On Quasar they are called *dataflow buffers* (DFBs). Each DFB has a name, chosen by the op (for example `rm_in`, the row-major input of a slice op), and a data format.
 
-Each op runs as a *program*: its kernels plus their DFBs. Before a program runs on Quasar, the tt-metal runtime checks every DFB of the program. If a DFB has a data format that Quasar does not support, the check stops the run with the error above ([dfb.cpp:103-111](../../../../../tt_metal/impl/metal2_host_api/program_spec/validation/resource/dfb.cpp#L103-L111)).
+Each op runs as a *program*: its kernels plus their DFBs. Before a program runs on Quasar, the tt-metal runtime checks every DFB of the program. If a DFB has a data format that Quasar does not support, the check stops the run with the error above ([dfb.cpp:111-119](../../../../../tt_metal/impl/metal2_host_api/program_spec/validation/resource/dfb.cpp#L111-L119)).
 
 So an op fails on Quasar as soon as it sets up a DFB in an unsupported format. In practice this happens when the op reads or writes a tensor in that format. An upload writes data from the host into DRAM without running a kernel, so the model can upload `Bfp4_b` weights without an error. The first op that reads those weights fails.
 
-## 2. The current error: token IDs in UInt32
+## 2. The first error: token IDs in UInt32
 
 ### 2.1 Where it happens
 
-The demo uses the `Generator` class from `tt_transformers`, a shared library of model code in this repository. The model runs in two phases. *Prefill* processes the whole prompt in one pass. *Decode* then produces one new token per user in each step. Before prefill, the generator runs one decode step with dummy inputs, so that the decode programs are compiled in advance ([generator.py:646-668](../../../../tt_transformers/tt/generator.py#L646-L668), called from [generator.py:1237](../../../../tt_transformers/tt/generator.py#L1237-L1237)).
+The demo uses the `Generator` class from `models/ttt_compat`, shared model code in this repository. The model runs in two phases. *Prefill* processes the whole prompt in one pass. *Decode* then produces one new token per user in each step. When device traces are on, the generator runs one decode step with mock inputs before the first prefill, so that the decode programs are compiled in advance ([generator.py:1300-1310](../../../../ttt_compat/tt/generator.py#L1300-L1310)). Without traces (section 6.3), the first decode step comes after the prefill.
 
-That decode step runs `ttnn_decode_forward` in the gpt-oss model. On Wormhole and Blackhole, `ttnn_decode_forward` does this (on Quasar it uses the host embedding described in section 6.2) ([model.py:536-547](tt/model.py#L536-L547)):
+Each decode step runs `ttnn_decode_forward` in the gpt-oss model, which does this ([model.py:521-529](tt/model.py#L521-L529)):
 
 ```python
 actual_batch = current_pos.shape[-1]
@@ -63,11 +65,13 @@ input_embeds = ttnn.embedding(
 
 `tokens` holds the token IDs of the batch, in `ttnn.uint32`. Its shape is `[1, 1, 1, 32]`, because the batch is padded to 32 users. `current_pos` has one entry per real user, so `actual_batch` is 1 in the demo. The `if` branch is taken, and the code cuts `tokens` down to `[1, 1, 1, 1]`.
 
-### 2.2 Why it fails
+### 2.2 Why it failed
 
-Indexing a `ttnn` tensor with `[...]` runs the device op `ttnn.slice` ([core.py:43-148](../../../../../ttnn/ttnn/operations/core.py#L43-L148)). The slice program has a DFB named `rm_in` for its input. The input is `UInt32`, so `rm_in` is `UInt32`, and the check in section 1.3 stops the run.
+Indexing a `ttnn` tensor with `[...]` runs the device op `ttnn.slice` ([core.py:44-168](../../../../../ttnn/ttnn/operations/core.py#L44-L168)). The slice program has a DFB named `rm_in` for its input. Until 2026-11-03, `rm_in` had the format of the input, `UInt32`, so the check in section 1.3 stopped the run.
 
 The model code has no bug: the same slice works on Wormhole and Blackhole, where `UInt32` is supported.
+
+On Quasar, the slice declares a `UInt16` or `UInt32` DFB as `RawUInt16` or `RawUInt32`, raw formats of the same element size that Quasar supports ([slice_device_operation.cpp:95-107](../../../../../ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_device_operation.cpp#L95-L107)). The slice only copies bytes, so the result is the same, and the error above does not occur.
 
 ### 2.3 Why changing the dtype is not a fix
 
@@ -75,12 +79,12 @@ Quasar supports `Int32`, and token IDs (below 201088, the gpt-oss vocabulary siz
 
 ## 3. The next errors: block float formats
 
-The embedding in section 2.1 asks for its output in `ttnn.bfloat8_b`. My guess is that its output DFB uses that format, `Bfp8_b`. If it does, the check in section 1.3 stops the embedding. The same holds for every op that sets up a DFB in `Bfp8_b` or `Bfp4_b`.
+The embedding in section 2.1 asks for its output in `ttnn.bfloat8_b`. Without the patches of section 6.1, its output DFB `out` has the format `Bfp8_b`, and the check in section 1.3 stops the embedding (tested on 2026-11-03 with the two `test_embedding` cases of `models/experimental/ops/quasar/tests/gpt_oss_ops/` that ask for a `bfloat8_b` output). The same holds for every op that sets up a DFB in `Bfp8_b` or `Bfp4_b`.
 
-The model uses block float formats in many places, for example:
+The model code asks for block float formats in many places, for example:
 
 - The expert weights, in `ttnn.bfloat4_b` ([experts/weights.py:35](tt/experts/weights.py#L35-L35)). gpt-oss has 32 small feed-forward networks per layer, called *experts*, and uses 4 of them for each token.
-- The `lm_head` weight, in `ttnn.bfloat8_b` ([model.py:234-242](tt/model.py#L234-L242)). `lm_head` is the last layer. It turns the model output into a score for each entry of the vocabulary.
+- The `lm_head` weight, in `ttnn.bfloat8_b` ([model.py:220-228](tt/model.py#L220-L228)). `lm_head` is the last layer. It turns the model output into a score for each entry of the vocabulary.
 - The attention weights and the KV cache, in `ttnn.bfloat8_b` ([attention/weights.py:33](tt/attention/weights.py#L33-L33), [attention/kv_cache.py:19](tt/attention/kv_cache.py#L19-L19)). The KV cache keeps the attention keys and values of earlier tokens.
 - Ops that convert their result to `ttnn.bfloat8_b`, for example [attention/operations.py:113](tt/attention/operations.py#L113-L113).
 
@@ -90,7 +94,7 @@ Issue [#60132](https://github.com/tenstorrent/tt-metal/issues/60132), which trac
 
 bf16 needs much more DRAM (section 1.2). The simulated device has 2 DRAM banks of 3 GiB each, 6 GiB in total. The demo setting `QSR_N_LAYERS=2` builds only 2 of the 24 layers of gpt-oss-20b, to keep the simulation short. The weights then need:
 
-| Part | Current dtype | In bf16 |
+| Part | Dtype in the model code | In bf16 |
 |---|---|---|
 | Expert weights, per layer | 0.42 GiB (`Bfp4_b`) | 1.48 GiB |
 | Expert weights, 2 layers | 0.83 GiB | 2.97 GiB |
@@ -102,6 +106,8 @@ The `lm_head` has 262144 columns, not 201088: the code rounds the vocabulary siz
 
 The table does not include the attention weights (about 0.05 GiB per layer), the KV cache, or the activations (the temporary results that pass between layers). In bf16 the weights alone use 5.45 GiB of 6 GiB, so with the rest added the model may not fit. Without the embedding table on the device, the weights need 4.37 GiB.
 
+A demo run on craq-sim on 2026-11-03, with `QSR_N_LAYERS=2` and the embedding table on the device, finished the model setup without an allocation error, so the weights, the table and the KV cache fit. The run stopped in the first layer on the multicast NoC check of the mainline `ttnn.matmul` (issue #63758), so whether the activations also fit was not tested.
+
 ## 4. Two ways to change the model for Quasar
 
 **Direct edit.** Change the model code. The Quasar copy still runs on Wormhole and Blackhole, so Quasar-only behavior goes in an `if is_quasar():` branch. A reader of the model code sees the Quasar behavior where it applies.
@@ -112,17 +118,17 @@ The table does not include the attention weights (about 0.05 GiB per layer), the
 
 ### 5.1 llama32_1b_quasar: patches
 
-The llama end-to-end test installs many patches when it runs on Quasar ([test_llama_e2e.py:1373-1480](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L1373-L1480)). Two are relevant here.
+The llama end-to-end test installs many patches when it runs on Quasar ([test_llama_e2e.py:1262-1348](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L1262-L1348)). Two are relevant here.
 
-**Block float to bf16.** The patch of `ttnn.from_torch` uploads `ttnn.bfloat8_b` and `ttnn.bfloat4_b` weights as bf16 ([test_llama_e2e.py:144-153](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L144-L153)). Other patches change ops that ask for a block float result so that they produce bf16 ([test_llama_e2e.py:1334-1340](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L1334-L1340)). The KV cache is also made bf16 ([test_llama_e2e.py:396-423](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L396-L423)).
+**Block float to bf16.** The patch of `ttnn.from_torch` uploads `ttnn.bfloat8_b` and `ttnn.bfloat4_b` weights as bf16 ([test_llama_e2e.py:142-153](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L142-L153)). Other patches change ops that ask for a block float result so that they produce bf16, for example the eltwise ops ([test_llama_e2e.py:1205-1210](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L1205-L1210)). The KV cache is also made bf16 ([test_llama_e2e.py:271-300](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L271-L300)).
 
-**Embedding on the host.** A patch replaces the forward function of the llama embedding class ([test_llama_e2e.py:496-540](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L496-L540)). It copies the token IDs to the host, looks them up in a host copy of the embedding table with torch, and uploads only the result as bf16. The embedding table never goes to the device. The comment of the patch gives the reason: uploading the table took most of the setup time in the simulator. As a result, no device op reads the `UInt32` token IDs, so llama never needed a patch for `ttnn.slice`.
+**Embedding on the host.** A patch replaces the forward function of the llama embedding class ([test_llama_e2e.py:367-411](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L367-L411)). It copies the token IDs to the host, looks them up in a host copy of the embedding table with torch, and uploads only the result as bf16. The embedding table never goes to the device. The comments give the reason: uploading the table took most of the setup time in the simulator, and the device embedding would work ("device-viable, host is a perf choice", [test_llama_e2e.py:1309-1310](../../../llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py#L1309-L1310)). As a result, no device op reads the `UInt32` token IDs, so llama never needed a patch for `ttnn.slice`.
 
 ### 5.2 resnet50/quasar: direct edits
 
 The resnet Quasar copy (`models/demos/vision/classification/resnet50/quasar/`) changes the code of its model and its end-to-end test in `if is_quasar():` branches. For example, on Quasar it uploads the input image in a different layout ([resnet50_test_infra.py:294-310](../../../../demos/vision/classification/resnet50/quasar/tests/common/resnet50_test_infra.py#L294-L310)). Only some of its single-op tests use patches.
 
-For data formats, resnet needed no code change. The resnet model takes the dtypes of activations and weights as arguments, and the Quasar end-to-end test passes bf16 for both ([test_resnet50_e2e.py:69-76](../../../../demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py#L69-L76)).
+For data formats, resnet needed no code change. The resnet model takes the dtypes of activations and weights as arguments, and the Quasar end-to-end test passes bf16 for both ([test_resnet50_e2e.py:73-78](../../../../demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py#L73-L78)).
 
 Resnet has no token IDs, so it never had the `UInt32` problem.
 
@@ -130,40 +136,38 @@ Resnet has no token IDs, so it never had the `UInt32` problem.
 
 ### 6.1 Block float formats: patches, as in llama
 
-Resnet did not need to change each call site, because its dtypes are arguments. In gpt-oss, `ttnn.bfloat8_b` and `ttnn.bfloat4_b` appear 41 times in 18 files under `tt/`. `Attention` and `Experts` take a `weight_dtype` argument ([attention/\_\_init\_\_.py:36](tt/attention/__init__.py#L36-L36), [experts/\_\_init\_\_.py:57](tt/experts/__init__.py#L57-L57)), so their weights could be set to bf16 the way resnet does it. But the dtypes of the activations, the `ttnn.typecast` calls and the `lm_head` are fixed in the code, and they are most of the 41. Changing each one would touch many files. So a set of patches in `conftest.py` covers all of them, in the same way as in llama, and the two `weight_dtype` arguments are left unchanged. On Quasar:
+Resnet did not need to change each call site, because its dtypes are arguments. In gpt-oss, `ttnn.bfloat8_b` and `ttnn.bfloat4_b` appear 34 times in 18 files under `tt/`. `Attention` and `Experts` take a `weight_dtype` argument ([attention/\_\_init\_\_.py:36](tt/attention/__init__.py#L36-L36), [experts/\_\_init\_\_.py:57](tt/experts/__init__.py#L57-L57)), so their weights could be set to bf16 the way resnet does it. But the dtypes of the activations, the `ttnn.typecast` calls and the `lm_head` are fixed in the code, and they are most of the 34. Changing each one would touch many files. So a set of patches in `conftest.py` covers all of them, in the same way as in llama, and the two `weight_dtype` arguments are left unchanged. On Quasar:
 
 - `ttnn.from_torch` and `ttnn.as_tensor` are wrapped, so that a request for `ttnn.bfloat8_b` or `ttnn.bfloat4_b` gives `ttnn.bfloat16`.
-- The ops that the model calls with a block float result dtype (`ttnn.typecast`, `ttnn.matmul`, `ttnn.linear` and `ttnn.sparse_matmul`) are wrapped in the same way.
+- The ops that the model calls with a block float result dtype (`ttnn.typecast`, `ttnn.embedding`, `ttnn.matmul`, `ttnn.linear` and `ttnn.sparse_matmul`) are wrapped in the same way.
 
 An op that is not in this list, and that sets up a block float DFB, still fails. The fix is to add it to the list. The cost of the patches is the extra DRAM in section 3.1.
 
-The model also keeps a cache of its converted weights on disk, one file per weight, in one directory. The file name contains the dtype, so a bf16 weight never loads a block float file ([core.py:925-933](../../../../../ttnn/ttnn/operations/core.py#L925-L933)). But when the model has written every weight to the cache, it also marks the whole directory as complete ([model_config.py:315-356](tt/model_config.py#L315-L356)). On the next run, a complete directory makes the model skip loading the original weights ([common.py:69-72](tt/common.py#L69-L72)). A directory completed with block float weights has no bf16 files, so with the patches active every weight would be missing. So on Quasar the patches point the cache to a separate directory.
+The model also keeps a cache of its converted weights on disk, one file per weight, in one directory. The file name contains the dtype, so a bf16 weight never loads a block float file ([core.py:972](../../../../../ttnn/ttnn/operations/core.py#L972-L972)). But when the model has written every weight to the cache, it also marks the whole directory as complete ([model_config.py:315-356](tt/model_config.py#L315-L356)). On the next run, a complete directory makes the model skip loading the original weights ([common.py:69-72](tt/common.py#L69-L72)). A directory completed with block float weights has no bf16 files, so with the patches active every weight would be missing. So on Quasar the patches point the cache to a separate directory.
 
-### 6.2 Token IDs: an embedding on the host, as a direct edit
+### 6.2 Token IDs: the embedding on the device
 
-The slice and the embedding are next to each other in `ttnn_decode_forward`, so one edit there removes both. Prefill calls `ttnn.embedding` in two more functions: `transform_and_embed_prefill_inputs_device` ([model.py:1087-1098](tt/model.py#L1087-L1098)) and `prepare_inputs_prefill` ([model.py:1147-1154](tt/model.py#L1147-L1154)). In llama the embedding is a separate class, so one patch could replace it. gpt-oss has no such class. Two smaller patches could still work: one that replaces `ttnn.slice` with a host slice for `UInt32` inputs, and one that replaces `ttnn.embedding` with a host lookup. But `ttnn.embedding` receives the table as a device tensor, so with these patches the table stays on the device, and the DRAM saving below is lost. Only a direct edit in the Quasar copy, as in resnet, keeps the table off the device. On Quasar:
+gpt-oss runs its token embedding on the device on Quasar, with the same model code as on Wormhole and Blackhole: the slice of the token IDs in `ttnn_decode_forward` (section 2.1), and `ttnn.embedding` there and in the two prefill functions `transform_and_embed_prefill_inputs_device` ([model.py:1056](tt/model.py#L1056-L1056)) and `prepare_inputs_prefill` ([model.py:1106](tt/model.py#L1106-L1106)). Four things make this work on Quasar:
 
-- The model keeps the embedding table on the host and does not upload it.
-- At each embedding call site, the model copies the token IDs to the host. This copy runs no kernel, so no DFB is set up. In decode, the model keeps only the first `actual_batch` token IDs. It looks the IDs up in the table with torch, and uploads the result as bf16.
+1. The slice declares its `UInt32` DFBs as `RawUInt32` (section 2.2).
+2. `ttnn.embedding` accepts `UInt32` token IDs. It keeps them in a scratchpad (SRAM that only one kernel uses), not in a DFB, so the check in section 1.3 does not apply to them. This holds for both of its factories that the model uses: the row-major factory, for a number of IDs that is not a multiple of 32 ([embeddings_rm_program_factory.cpp:181-183](../../../../../ttnn/cpp/ttnn/operations/embedding/device/embeddings_rm_program_factory.cpp#L181-L183)), and the fused factory, which also tilizes the output ([embeddings_fused_program_factory.cpp:211-213](../../../../../ttnn/cpp/ttnn/operations/embedding/device/embeddings_fused_program_factory.cpp#L211-L213)).
+3. The patches of section 6.1 change the `bfloat8_b` output of `ttnn.embedding` to bf16.
+4. The bf16 table fits in DRAM next to the weights of 2 layers (section 3.1).
 
-This one change removes three problems:
+On 2026-11-03, a test on craq-sim ran these steps with a table of the real size (201088 x 2880): the decode steps (the slice of 32 token IDs to 1, then `ttnn.embedding`), the embedding of all 32 decode IDs, and the embedding of 128 prefill IDs. All outputs were bit-exact with a torch lookup.
 
-1. No device op reads `UInt32` token IDs, so the slice error in section 2 does not occur.
-2. The embedding output is no longer `Bfp8_b` (section 3).
-3. The device needs 1.08 GiB less DRAM (section 3.1).
+Llama runs its embedding on the host instead (section 5.1). gpt-oss does not do this: an op that runs on the host only hides a problem, and the model run would not show whether the op works on Quasar.
 
-### 6.3 Device traces must be off
+### 6.3 Device traces must be off in slow dispatch
 
-A *trace* records the device commands of a step and later replays them without the host. Host work inside the recorded step is not replayed. The Quasar run uses the demo configuration `prefill_128`, which turns on both the decode trace and the prefill trace ([text_demo.py:210-211](demo/text_demo.py#L210-L211)). The decode trace records a call of `ttnn_decode_forward` ([generator.py:2391-2415](../../../../tt_transformers/tt/generator.py#L2391-L2415)). The prefill trace records a call of `transform_and_embed_prefill_inputs_device` ([generator.py:824-827](../../../../tt_transformers/tt/generator.py#L824-L827), [generator.py:709-715](../../../../tt_transformers/tt/generator.py#L709-L715)). Both functions contain the host embedding, so a replay of either trace would skip the embedding.
+A *trace* records the device commands of a step and later replays them without the host. The craq-sim runs of gpt-oss use slow dispatch mode (`TT_METAL_SLOW_DISPATCH_MODE=1`): the host sends each program to the device one at a time. In slow dispatch, the command queue rejects trace capture and replay ([sd_mesh_command_queue.cpp:487-493](../../../../../tt_metal/distributed/sd_mesh_command_queue.cpp#L487-L493)). The Quasar run uses the demo configuration `prefill_128`, which turns on both the decode trace and the prefill trace ([text_demo.py:210-211](demo/text_demo.py#L210-L211)).
 
-So on Quasar the demo must run without traces. The demo already turns both traces off when ttnn logging is on ([text_demo.py:497-501](demo/text_demo.py#L497-L501)). The Quasar copy adds an `if is_quasar():` condition just before it, which turns both traces off on Quasar.
-
-My guess, not checked, is that the simulator needs traces off in any case: it runs in slow dispatch mode (the host sends each program to the device one at a time), and traces need fast dispatch mode (the device fetches the programs itself).
+So the demo turns both traces off when `TT_METAL_SLOW_DISPATCH_MODE` is set ([text_demo.py:486-490](demo/text_demo.py#L486-L490)), just before it does the same when ttnn logging is on.
 
 ### 6.4 Summary
 
 | Problem | Approach | Same as | Code |
 |---|---|---|---|
-| `Bfp8_b` and `Bfp4_b` in many places | Patches in `conftest.py` that map them to bf16 | llama | [conftest.py:44-103](conftest.py#L44-L103) |
-| `UInt32` token IDs, embedding output, DRAM used by the embedding table | Direct `if is_quasar():` edit: embedding on the host | llama's host embedding, done as a direct edit like resnet | [model.py:166-187](tt/model.py#L166-L187), [model.py:1066-1085](tt/model.py#L1066-L1085) |
-| Host embedding inside traced steps | Direct `if is_quasar():` edit in the demo: traces off | the demo's own logging case | [text_demo.py:486-491](demo/text_demo.py#L486-L491) |
+| `Bfp8_b` and `Bfp4_b` in many places, including the embedding output | Patches in `conftest.py` that map them to bf16 | llama | [conftest.py:44-104](conftest.py#L44-L104) |
+| `UInt32` token IDs in the decode slice | None in the model: the slice declares `RawUInt32` DFBs on Quasar | | [slice_device_operation.cpp:95-107](../../../../../ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_device_operation.cpp#L95-L107) |
+| Traces in slow dispatch | Traces off when `TT_METAL_SLOW_DISPATCH_MODE` is set | the demo's own logging case | [text_demo.py:486-490](demo/text_demo.py#L486-L490) |
