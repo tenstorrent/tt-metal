@@ -2171,9 +2171,16 @@ class ParallelQSA(OptimizedQSA):
         """Vectorized projections/selection with bounded selected-KV attention."""
         batch, seq = (self.batch_size, hidden_states.shape[-2])
         x = self._reshape_logical(hidden_states, (batch, 1, seq, 2560))
-        positions_packed = self._packed_position(current_pos)
-        start = ttnn.permute(self._position_float(self._canonical_position(current_pos)), (1, 0, 2, 3))
-        positions = ttnn.add(start, self.chunk_offsets[:, :, :seq, :])
+        step = None
+        if seq == 1 and getattr(self, "_decode_step", None) is not None:
+            from .qsa_decode import step_positions
+
+            step = step_positions(self, current_pos)
+            positions_packed = step["packed"]
+        else:
+            positions_packed = self._packed_position(current_pos)
+            start = ttnn.permute(self._position_float(self._canonical_position(current_pos)), (1, 0, 2, 3))
+            positions = ttnn.add(start, self.chunk_offsets[:, :, :seq, :])
 
         def heads(value, count, width):
             value = self._reshape_logical(value, (batch, seq, count, width))
@@ -2184,7 +2191,7 @@ class ParallelQSA(OptimizedQSA):
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv, num_heads=6, num_kv_heads=1, transpose_key=False
         )
-        rope_cos, rope_sin = _shared_rope_tables(self, positions, batch, seq)
+        rope_cos, rope_sin = step["rope"] if step else _shared_rope_tables(self, positions, batch, seq)
         q = _shared_apply_rope(self, self._norm(q, self.nq), rope_cos, rope_sin)
         k = _shared_apply_rope(self, self._norm(k, self.nk), rope_cos, rope_sin)
         gate = projections[..., 2048:3584]
@@ -2204,8 +2211,11 @@ class ParallelQSA(OptimizedQSA):
         )
         pooled = ttnn.typecast(ttnn.mean(ttnn.typecast(groups, ttnn.float32), dim=2, keepdim=True), ttnn.bfloat16)
         pooled = self._reshape_logical(pooled, (batch, 1, seq, 128))
-        block_start = ttnn.multiply(ttnn.floor(ttnn.multiply(positions, 0.25)), 4.0)
-        pooled = self._chunk_rope(self._norm(pooled, self.nik), block_start)
+        if step:
+            pooled = _shared_apply_rope(self, self._norm(pooled, self.nik), *step["block_rope"])
+        else:
+            block_start = ttnn.multiply(ttnn.floor(ttnn.multiply(positions, 0.25)), 4.0)
+            pooled = self._chunk_rope(self._norm(pooled, self.nik), block_start)
         selected = self._select_groups(pooled, iq, positions_packed, page_table, seq)
         out = self._sparse_attention(q, selected, positions_packed, page_table)
         out = self.output_projection(

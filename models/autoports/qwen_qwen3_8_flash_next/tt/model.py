@@ -378,6 +378,13 @@ class QwenFlashNextModel:
         )
         if stream_major:
             x = _to_sm(_to_flat(x))
+        from .qsa_decode import enabled as qsa_step_share
+
+        # One position-state dict per decode step for all QSA layers (qsa_decode.py).
+        step = {} if decode and qsa_step_share() else None
+        for layer in self.layers:
+            if layer.kind != "linear_attention":
+                layer.attention._decode_step = step
         for layer in self.layers:
             fn = layer.decode_forward_sm if stream_major else layer.decode_forward if decode else layer.prefill_forward
             x = fn(x, current_positions=positions, slots=slots, tokens=tokens, page_table=page_table)
