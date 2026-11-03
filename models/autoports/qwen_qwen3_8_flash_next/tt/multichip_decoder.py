@@ -655,6 +655,10 @@ class ParallelMoE:
 
     def forward_flat(self, x):
         """Decode rows already packed as [1,1,B,2560]; returns the [1,1,B,640] hidden shard."""
+        if getattr(self, "single_token", None) is not None and x.shape[-2] <= self.single_token.max_rows:
+            from .moe_decode import group_single
+
+            return self.ops.scatter_reduce(group_single(self, x))
         return self.ops.scatter_reduce(self.group_packed(x))
 
     def __call__(self, x):
