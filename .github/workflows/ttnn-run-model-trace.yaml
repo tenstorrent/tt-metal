@@ -326,14 +326,17 @@ jobs:
           else
             EXPECTED="$HF_HUB_CACHE/models--${INPUT_HF_MODEL//\//--}"
           fi
-          if [[ -d "$EXPECTED" ]]; then
+          if [[ "$HF_HUB_OFFLINE" == "0" && "$INPUT_HF_MODEL" != /* ]]; then
+            # Model code passes local_files_only=True whenever CI=true, so it never downloads
+            # by itself; fill the per-runner cache before the test runs.
+            echo "Syncing $INPUT_HF_MODEL into the per-runner cache ($HF_HUB_CACHE)"
+            python3 -c 'import os, huggingface_hub as h; print(h.snapshot_download(os.environ["INPUT_HF_MODEL"]))'
+          elif [[ -d "$EXPECTED" ]]; then
             echo "Found weights for $INPUT_HF_MODEL at $EXPECTED"
-          elif [[ "$HF_HUB_OFFLINE" == "1" ]]; then
+          else
             echo "::error::$INPUT_HF_MODEL is not in the $SKU weights cache ($EXPECTED) and this cache is offline."
             echo "::error::Pick a SKU whose CI tests use this model, or one whose weights cache downloads from HF."
             exit 1
-          else
-            echo "::notice::$INPUT_HF_MODEL not cached at $EXPECTED; HF will download it into the per-runner cache."
           fi
 
       - name: Run model trace
