@@ -129,7 +129,9 @@ class DevH:
 
 class Skipped:
     """DEEP_LAYERS=tail (FIX.17): what the last full layer (20) returns on a normal chunk, and what the skipped deep
-    layers hand on: no tensors (its output went to DS41DeviceState.deep_in; ``free`` of it is a no-op)."""
+    layers hand on: no tensors (its output went to DS41DeviceState.deep_in; ``free`` of it is a no-op). DECODER_SKIP=
+    exact (P.30): what layer 20's KV projection and the skipped layers 21-39 return on a chunk that is not the last
+    (``final_norm`` hands it on)."""
 
     __slots__ = ()
 
@@ -715,6 +717,43 @@ class TtDS41Block:
         assert not missing, f"layer {i}: no device step for {missing}"
         return {s.name: table[s.name] for s in self.steps}
 
+    KV_STEPS = ("attn_hc", "attn_collapse", "attn_norm", "compressor")
+
+    def kv_only(self, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> Skipped:
+        """DECODER_SKIP=exact (P.30), a chunk that is not the request's last: only the layer's KV projection, the
+        steps its compressor needs (attn_hc, attn_collapse, attn_norm, compressor: the compressed KV and index keys
+        the later layers read, written into the served caches as in the full block), the same modules and the same
+        ctx; nothing else of the layer runs (no window KV, indexer, attention, MoE). Does not consume ``h``."""
+        assert self.compressor is not None and not self.cfg.is_engram(self.layer), self.layer
+        rows = h.streams.shape[-2] * self.mesh.shape[SP_AXIS] * (self.mesh.shape[TP_AXIS] if self.own else 1)
+        assert rows == self.model.chunk, f"chunk of {rows} rows; the model was built for {self.model.chunk}"
+        end = start + rows if end is None else int(end)
+        ctx = Ctx(self.layer, start, rows, state, extra={"end": end})
+        held = h.tensors()  # (as __call__: the wrappers alive until the call returns, FIX.5)
+        protect = {id(t) for t in held}
+        steps = [s for s in self.steps if s.name in self.KV_STEPS]
+        assert [s.name for s in steps] == list(self.KV_STEPS), [s.name for s in steps]
+        last = {}
+        for s in steps:
+            for n in s.inputs:
+                last[n] = s.name
+        from models.demos.common.bringup.testing import profiler
+
+        env = {"in": h}
+        for s in steps:
+            profiler.signpost(s.name)  # (run_block's sections)
+            env[s.output] = self.fns[s.name](ctx, *[env[n] for n in s.inputs])
+            keep = protect | {id(t) for t in _tensors(env[s.output])}
+            for n in dict.fromkeys(s.inputs):
+                if last[n] == s.name and n != "in":
+                    _free(env.pop(n), keep)
+        for n, v in env.items():  # outputs no kept step reads (attn_hc's mixes): freed here
+            if n != "in":
+                _free(v, protect)
+        ctx.extra.clear()  # (MHC_FUSED: attn_hc's mixes, freed above with its output)
+        del held
+        return SKIPPED
+
     def __call__(self, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
         rows = h.streams.shape[-2] * self.mesh.shape[SP_AXIS] * (self.mesh.shape[TP_AXIS] if self.own else 1)
         assert rows == self.model.chunk, f"chunk of {rows} rows; the model was built for {self.model.chunk}"
@@ -865,6 +904,20 @@ class TtDS41Model:
                 self.deep_src = first - 1
                 self.tail_rows = (len(self.deep) + 1) * (cfg.window - 1) + 1
         self._deep_set = frozenset(self.deep)
+        # DECODER_SKIP=exact (P.30): the decoder = the loaded layers from the candidate source (20) on; on a chunk the
+        # caller marks not the last (begin_chunk(.., last=False)) its KV sources (20) run only their KV projection
+        # (TtDS41Block.kv_only) and the rest is skipped; every decoder layer's window cache notes the skipped positions
+        self.decoder, self.kv_only = [], frozenset()
+        self._skip = False  # this chunk skips the decoder (set per chunk by begin_chunk)
+        if settings.get("DECODER_SKIP") == "exact":
+            assert not self.deep, "DECODER_SKIP=exact and DEEP_LAYERS=tail are two different skips: one at a time"
+            self.decoder = [i for i in self.layers if cfg.cand_source >= 0 and i >= cfg.cand_source]
+            self.kv_only = frozenset(i for i in self.decoder if cfg.is_kv_source(i))
+            bad = [i for i in self.decoder if cfg.is_engram(i) or (cfg.is_kv_source(i) and i != cfg.cand_source)]
+            assert not bad, f"DECODER_SKIP=exact: decoder layers {bad} are engram / extra KV-source layers"
+            enc = [i for i in self.layers if i not in self.decoder]
+            assert all(j < cfg.cand_source or j in self.kv_only for i in enc for j in cfg.sources(i)), enc
+        self._decoder_set = frozenset(self.decoder)
         # INDEXER_GLUE=on (P.16): the shared tensors of a chunk (tt/sparse_attention.ChunkMemo) and the last loaded
         # layer that reads each: {layer: [slots dropped after it]}; None = off
         self.memo_last = None
@@ -918,12 +971,16 @@ class TtDS41Model:
     def new_state(self, max_seq: int, slabs: dict | None = None, keep_history: bool = True) -> DS41DeviceState:
         return DS41DeviceState(self, max_seq, slabs=slabs, keep_history=keep_history)
 
-    def begin_chunk(self, tokens: torch.Tensor, start: int) -> None:
+    def begin_chunk(self, tokens: torch.Tensor, start: int, last: bool = True) -> None:
         """The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the
         active slot's tail, look the rows up (memory-mapped) and send them to the device once. Also empties the
         active slot's ChunkMemo (INDEXER_GLUE=on, P.16; FIX.5): every run of a chunk builds its shared tensors
         itself, even when a slot's last reader layer is not loaded or not run (a re-run of the same start would hit
-        it otherwise, and the unread slot would hold its device memory)."""
+        it otherwise, and the unread slot would hold its device memory).
+        ``last`` (P.30): whether this chunk is the request's last (the caller knows; the model never infers it).
+        True (the default) runs every layer; False under DECODER_SKIP=exact skips the decoder (``layer``); ignored
+        when DECODER_SKIP=off."""
+        self._skip = bool(self.decoder) and not last
         st = self.state
         if st is not None and st.memo is not None:
             st.memo.clear()
@@ -1020,6 +1077,16 @@ class TtDS41Model:
         return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
 
     def layer(self, i: int, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
+        if i in self._decoder_set:  # DECODER_SKIP=exact (P.30)
+            if self._skip:  # not the request's last chunk: layer 20's KV projection only, the rest skipped
+                state.window[i].skip(start, start + self.chunk)
+                if i in self.kv_only:
+                    return self.blocks[i].kv_only(h, start, state, end)
+                assert isinstance(h, Skipped), f"layer {i}: DECODER_SKIP=exact skips it on this chunk"
+                return h
+            out = self.blocks[i](h, start, state, end)
+            state.window[i].computed(start, start + self.chunk)
+            return out
         if i in self._deep_set:  # DEEP_LAYERS=tail: not on a normal chunk (tail_pass runs it)
             assert isinstance(h, Skipped), f"layer {i}: DEEP_LAYERS=tail runs it only in tail_pass"
             return h
@@ -1069,7 +1136,10 @@ class TtDS41Model:
 
     def final_norm(self, h: DevH) -> ttnn.Tensor:
         """rms(sum_n pre_n stream_n) w -> [1, 1, S/SP, H/TP] (hidden split; bf16 under BF16_ACTIVATIONS=on; OWN_ROWS:
-        [1, 1, S/(SP TP), H], the chip's own rows)."""
+        [1, 1, S/(SP TP), H], the chip's own rows). DECODER_SKIP=exact (P.30): a skipped chunk's Skipped marker is
+        handed on (no final norm: no layer computed the chunk's last rows)."""
+        if isinstance(h, Skipped):
+            return h
         x = self.final_collapse(h.streams, h.pre)
         out = self.final_norm_mod(x)
         dealloc(x)

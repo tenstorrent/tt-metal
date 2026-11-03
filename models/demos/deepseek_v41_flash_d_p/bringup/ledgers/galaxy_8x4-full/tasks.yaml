@@ -2555,7 +2555,7 @@ tasks:
   step: perf
   role: perf
   device: true
-  hold: 'owner 2026-11-03: queued after P.29; before it starts the overseer adapts the frozen ladder / contract checks to compare layers 20-39 only on the rows the model computes (framework, selftest), and the run script moves to --until P.30'
+  hold: 'owner 2026-11-03: queued after P.29; released 2026-11-03 21:00 (--until P.30). The gate rung last loads the golden prefix into every layer and runs only the last chunk, so its checks compare computed rows as they are; the skip itself is checked by test_decoder_skip.py below.'
   deps:
   - P.29
   paths:
@@ -2564,7 +2564,7 @@ tasks:
   - ttnn/ttnn/bringup
   - models/demos/moe_block
   brief:
-    details: 'OWNER 2026-11-03: the decoder skip of DeepSeek-V4.1-Flash''s Causal Encoder-Decoder (arXiv 2609.19969), EXACT version first. A new switch DECODER_SKIP (off | exact; default off until the owner decides). exact: on every chunk except the request''s last, run layers 0-19 in full and only layer 20''s KV projection (its compressor rows, index keys and candidate pool inputs: what layers 21-39 read), skipping layer 20''s attention / MoE and layers 21-39. On the last chunk run all 40 layers; the decoder layers'' window rows before that chunk do not exist, so mask them (never read stale rows): the last token''s logits and the final 128 window rows of every layer depend on at most ~(20 x 127 + 128) earlier positions, which lie inside the last chunk when it is at least ~2.7k tokens long. When the last chunk is shorter (or a follow-up request appends to a cached prefix), pull its start back so it covers >= 2688 tokens (the contract''s pulled-back last chunk; the encoder layers recompute those positions exactly from their complete caches). The served window caches of layers 21-39 then hold only the last chunk''s rows: decode reads only the last 128. Measure: chunk device / wall time at 51200 and 512000 (a non-last chunk), and the last chunk; accuracy on the computed rows equal to the off path within the limits. Model-level checks only; no fork regression suites on the 8x4. Every Python-built op stays prepared (prepare_program / run_prepared). Later (not this pick): an approximate value (DeepSeek''s 128-token Bounded Replay) behind the same switch. INTERFACE (overseer 2026-11-03): tt-d-gen''s chunk header is {slot_id, actual_start, actual_end} only; nothing says a chunk is the request''s last (a prompt that is a multiple of the chunk ends on a full chunk), and the server chooses where a chunk starts (prefill has no token ids before actual_start). So the model takes an explicit per-chunk argument (last: bool, default True = run every layer, today''s behaviour) that the bring-up harness and runner pass; it does not infer it and does not pull back on its own: the caller starts a short last chunk >= 2688 tokens before its end. The serving side (a last-chunk flag in the header, the writer''s pull-back generalised to >= 2688 tokens, the KV manager not shipping or validating decoder-layer window rows outside the tail) is a tt-d-gen change the overseer requests; the runner contract test is not in this gate.'
+    details: 'OWNER 2026-11-03: the decoder skip of DeepSeek-V4.1-Flash''s Causal Encoder-Decoder (arXiv 2609.19969), EXACT version first. A new switch DECODER_SKIP (off | exact; default off until the owner decides). exact: on every chunk except the request''s last, run layers 0-19 in full and only layer 20''s KV projection (its compressor rows, index keys and candidate pool inputs: what layers 21-39 read), skipping layer 20''s attention / MoE and layers 21-39. On the last chunk run all 40 layers; the decoder layers'' window rows before that chunk do not exist, so mask them (never read stale rows): the last token''s logits and the final 128 window rows of every layer depend on at most ~(20 x 127 + 128) earlier positions, which lie inside the last chunk when it is at least ~2.7k tokens long. When the last chunk is shorter (or a follow-up request appends to a cached prefix), pull its start back so it covers >= 2688 tokens (the contract''s pulled-back last chunk; the encoder layers recompute those positions exactly from their complete caches). The served window caches of layers 21-39 then hold only the last chunk''s rows: decode reads only the last 128. Measure: chunk device / wall time at 51200 and 512000 (a non-last chunk), and the last chunk; accuracy on the computed rows equal to the off path within the limits. Model-level checks only; no fork regression suites on the 8x4. Every Python-built op stays prepared (prepare_program / run_prepared). Later (not this pick): an approximate value (DeepSeek''s 128-token Bounded Replay) behind the same switch. INTERFACE (overseer 2026-11-03): tt-d-gen''s chunk header is {slot_id, actual_start, actual_end} only; nothing says a chunk is the request''s last (a prompt that is a multiple of the chunk ends on a full chunk), and the server chooses where a chunk starts (prefill has no token ids before actual_start). So the model takes an explicit per-chunk argument (last: bool, default True = run every layer, today''s behaviour) that the bring-up harness and runner pass; it does not infer it and does not pull back on its own: the caller starts a short last chunk >= 2688 tokens before its end. The serving side (a last-chunk flag in the header, the writer''s pull-back generalised to >= 2688 tokens, the KV manager not shipping or validating decoder-layer window rows outside the tail) is a tt-d-gen change the overseer requests; the runner contract test is not in this gate. TEST (overseer): add tests/bringup/test_decoder_skip.py, a two-chunk run (rung s10240: chunk 1 not last, so layers 20-39 are skipped, chunk 2 last) checking what the skip must keep exact: the final hidden and top-5 of the last positions and every layer''s final 128 window KV rows of chunk 2 against the golden, each with its limit from the framework''s end-to-end limits (testing/e2e_limits.py, the rung''s drift), recorded as skip_err_final_hidden / skip_err_window_kv_L* / skip_top5_overlap with their _limit; the same values on the off path are recorded beside them (diagnostic). Run it with DS41_DECODER_SKIP=exact explicitly.'
   ab:
     keep_default: true
     env:
@@ -2581,18 +2581,22 @@ tasks:
   - 512000
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=exact
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_decoder_skip.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
       err_final_hidden: <= limit
       top5_overlap: '>= limit'
+      skip_err_final_hidden: <= limit
+      skip_err_window_kv_L*: <= limit
+      skip_top5_overlap: '>= limit'
 - id: P.31
   title: 'DECODER_SKIP=replay128: DeepSeek''s Bounded Replay (128-token tail, truncated windows) behind the same switch; short-turn time to first token'
   step: perf
   role: perf
   device: true
-  hold: 'owner 2026-11-03: after P.30; released with --until P.31'
+  hold: 'owner 2026-11-03: after P.30; released 2026-11-04 00:05 (--until P.31)'
   deps:
   - P.30
   paths:

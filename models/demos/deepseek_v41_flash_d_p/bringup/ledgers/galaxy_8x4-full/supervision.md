@@ -1431,3 +1431,22 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   digits; selftest); `gate P.29 --commit-only` -> 75bf294c1bc, nothing re-run; state.json 430 KB. Run stopped at
   --until P.29. Waiting for the owner: the experts' default from P.27 / P.28 / P.29; P.30 needs the overseer's
   ladder change first.
+- 20:55 Released P.30 (owner queued it after P.29; the box had idled since 19:40 on the experts' default, which is the
+  owner's and does not block P.30: both A/B sides run the shipped bfp4). Correction of my earlier plan: no framework
+  change is needed first: the gate's rung last loads the golden prefix into every layer and runs only the last chunk,
+  which the skip runs in full. Added to P.30: test_decoder_skip.py (two chunks, rung s10240: the final hidden, top-5
+  and every layer's final 128 window rows of the last chunk vs the golden, e2e limits; off path beside it), gated as
+  skip_* <= limit. run_ds41_8x4.sh --until P.30. Box free (no UMD locks, no other users' jobs).
+- 23:05 P.30 attempt 1 ended FAILED only on the knowledge-format check (DS41-201 lacks 'Found:', its detail section
+  heading missing); a whole new agent attempt (2) started for two lines of markdown. FRAMEWORK F247 (to fix at the
+  next pause, not while the agent runs): a knowledge-file format problem must be a problem for review (as at FIX.21),
+  not a failed attempt. Attempt 2 left to run (its brief names the two lines; attempt 1's code is in the tree).
+- 00:00 P.30 A/B table: both sides equal (169.0 / 170.1 ms device at 51200, 207.8 / 208.6 at 512000) BY DESIGN: the
+  framework's ladder and profile pass no `last`, so both run the full chunk (FRAMEWORK F248, to fix: an A/B position
+  mode for a non-last chunk). The agent's own timing (tests/perf/test_decoder_skip_time.py, warm median + rt
+  profiler): non-last chunk wall / device 108.3 / 83.6 ms at 51200 (full 194.5 / 167.9), 112.7 / 91.8 at 512000
+  (full 229.8 / 206.0): device -50 % / -55 %, wall -44 % / -51 %; the masked last chunk = the full one. Accuracy
+  (test_decoder_skip.py, s10240, 2 chunks): skip = off to every printed digit (final hidden 0.19732 / limit 0.256,
+  window KV worst L27 0.171 / 0.215, top-5 1.0). Diff reviewed: switch DECODER_SKIP off | exact (default off), the
+  runner passes last=True (tt-d-gen has no flag), carry masked by class-0 index lists (DS41-201). ACCEPTED as a
+  switch (owner's order). Released P.31 (--until P.31).

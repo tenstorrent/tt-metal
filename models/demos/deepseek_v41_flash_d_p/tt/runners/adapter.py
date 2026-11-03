@@ -198,7 +198,7 @@ class DS41PrefillRuntime:
         nat[end - start :] = PAD_ID
         return nat
 
-    def _run(self, inp, kv, slot, start, end, acks: bool, d2h_service=None, metadata_msg=None):
+    def _run(self, inp, kv, slot, start, end, acks: bool, d2h_service=None, metadata_msg=None, last: bool = True):
         ttnn = self._ttnn
         model = self.model
         sink = self._sink if acks else None
@@ -208,7 +208,7 @@ class DS41PrefillRuntime:
         model.state = st  # begin_chunk reads (and advances) the active slot's engram tail
         ids = self._host_ids(inp, start, end)
         st.note_tokens(ids, start, end)
-        model.begin_chunk(ids, start)
+        model.begin_chunk(ids, start, last=last)  # (P.30: last=False skips the decoder under DECODER_SKIP=exact)
         h = None
         for k, i in enumerate(self.layer_ids):
             if k == 0 or (self.gap_feed is not None and i in self.gap_feed.starts):
@@ -250,8 +250,13 @@ class DS41PrefillRuntime:
         request_id=0,
         d2h_service=None,
         metadata_msg=None,
+        last=True,
         **_unused,
     ):
+        """``last`` (P.30): whether the chunk is the request's last. tt-d-gen's chunk header has no such flag yet, so
+        the engine never passes it: True (every layer, today's behaviour). Under DECODER_SKIP=exact a caller passing
+        False gets the decoder skipped (layers 20-39 write no window rows for the chunk); the caller then starts the
+        last chunk >= 2688 tokens before its end (the model never pulls back)."""
         c, m = self.config.chunk_size, self.config.max_seq_len
         start, end = int(actual_start), int(actual_end)
         assert start % 32 == 0, f"actual_start {start} must be tile (32) aligned"
@@ -268,6 +273,7 @@ class DS41PrefillRuntime:
             acks=True,
             d2h_service=d2h_service,
             metadata_msg=metadata_msg,
+            last=bool(last),
         )
         return None  # last / single rank: the populated cache is the output
 
