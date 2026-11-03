@@ -262,6 +262,29 @@ truncated the running sum by ~1 ulp per add, max abs error 0.019 / 0.042 / 0.067
 A bf16 DST (no fp32 accumulation) failed `R_t = 1, Wt = 64, k = 1` at PCC 0.9966: the row-sum across 64 tiles
 loses the small per-tile increments.
 
+### Few wide rows (`R_t = 4`) — this board, 2026-11-03
+
+Commit `97e28f787db` (same `width_split` sources as above), Release build, same method (mean of 20 launches,
+correctness asserted). `python -m ttnn.operations.examples.width_split --reduce --rows 4 --wts 128,256 --ks 8,16,32`:
+
+| R_t | Wt | variant | k | Tensix cores | tiles per slice | ns/op | DRAM GB/s | vs k = 1 |
+|--:|--:|---|--:|--:|--:|--:|--:|--:|
+| 4 | 128 | row_split_reduce | 1 | 4 | 128 | 30 700.3 | 68.3 | (base) |
+| 4 | 128 | width_split_reduce | 8 | 32 | 16 | 9 009.5 | 232.8 | **3.41×** |
+| 4 | 128 | width_split_reduce | 16 | 64 | 8 | 10 517.5 | 199.4 | **2.92×** |
+| 4 | 128 | width_split_reduce | 32 | 128 | 4 | 14 576.0 | 143.9 | **2.11×** |
+| 4 | 256 | row_split_reduce | 1 | 4 | 256 | 60 149.3 | 69.7 | (base) |
+| 4 | 256 | width_split_reduce | 8 | 32 | 32 | 15 236.0 | 275.3 | **3.95×** |
+| 4 | 256 | width_split_reduce | 16 | 64 | 16 | 16 661.2 | 251.7 | **3.61×** |
+| 4 | 256 | width_split_reduce | 32 | 128 | 8 | 21 967.8 | 190.9 | **2.74×** |
+
+With this example's all-gather combine, k = 8 stays best even when a row is 128–256 tiles wide and k = 16 or 32
+would still leave 4–16 tiles per slice: the all-gather's k-fold ingest outgrows the per-core work saved. The
+`k ≤ 8` bound is a property of the all-gather, not of the split: `tensix_all_reduce` (report, BH) measures a
+root reduce + one multicast return 1.4–1.7× cheaper than the all-gather at K = 8 (1×8: 6 179 vs 8 938 ns;
+2×8: 12 325 vs 20 548 ns) and reduce-scatter + multicast 2.5× cheaper (1×8: 3 647 ns), so with those combines the best k is
+larger. Not measured here: the `R_t = 4` sweep with a root + multicast combine.
+
 ### Reading it
 - **Grid nearly empty (`R_t = 1`): the split pays from Wt = 8** (k = 2, 4 tiles per slice, 1.17×) and grows
   with Wt: 1.71× at Wt = 16 (k = 4), 2.40× at Wt = 32 (k = 8), 3.45× at Wt = 64 (k = 8). Best slice is 4–8 tiles.
