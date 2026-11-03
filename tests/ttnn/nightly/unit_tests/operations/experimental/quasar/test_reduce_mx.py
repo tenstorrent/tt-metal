@@ -8,14 +8,14 @@ The tiled H / W reduce kernels unpack MX to Float16_b, reduce on the FPU and pac
 MX format (the reductions have no output dtype argument). Not wired for MX: implicit tile padding and the N / C
 axes (transpose / permute of MX tiles), both rejected by the op.
 
-MXFP4 column (H) sums: on main the LLK moves an MxFp4 data operand to the 2x-packed src format while the bf16
-scaler stays plain, a pairing the FPU refuses; #59597 keeps the plain path unless the scaler is MXFP4 too. Those
-cases are skipped until it lands.
+MXFP4 column (H) sums: the LLK moves an MxFp4 data operand to the 2x-packed src format only when the scaler is
+MXFP4 too (#59597); these factories keep a Float16_b scaler, so MXFP4 column sums take the plain path like every
+other MX format.
 
-Known gaps (skipped below, see issue #62742): ttnn.min (the fused -MAX(-x) kernels copy a tile back out of a
-scratch ring, and that copy returns zeros with an MX input even when the scratch ring is bf16); reductions over
-both H and W in one call (wrong on Quasar for bf16 too); std / var (the welford op rejects Quasar for every dtype);
-keepdim=False (the squeezing reshape is not wired for MX tiles, rejected by the op).
+Known gaps (see issue #62742): ttnn.min is rejected by the op (the fused -MAX(-x) kernels copy a tile back out of
+a scratch ring, and that copy returns zeros with an MX input even when the scratch ring is bf16); reductions over
+both H and W in one call (wrong on Quasar for bf16 too, skipped below); std / var (the welford op rejects Quasar
+for every dtype); keepdim=False (the squeezing reshape is not wired for MX tiles, rejected by the op).
 """
 
 import pytest
@@ -51,8 +51,6 @@ def _quasar_only(device):
 @pytest.mark.parametrize("dim", [-1, -2], ids=["W", "H"])
 @pytest.mark.parametrize("op", list(_OPS))
 def test_reduce_mx(device, dtype, dim, op):
-    if dtype == ttnn.mxfp4 and dim == -2 and op in ("sum", "mean"):
-        pytest.skip("MXFP4 column SUM/AVG needs the plain-path fallback of #59597 (bf16 scaler with 2x data)")
     torch.manual_seed(0)
     x = torch.randn(SHAPE)
     tt_op, torch_op = _OPS[op]
@@ -110,13 +108,13 @@ def test_reduce_mx_tall_h(device, dtype, op):
     check(golden, ttnn.to_torch(out), pcc_floor(dtype))
 
 
-@pytest.mark.parametrize("dtype", ttnn.MX_DTYPES)
 @pytest.mark.parametrize("dim", [-1, -2], ids=["W", "H"])
-def test_min_mx(device, dtype, dim):
-    pytest.skip(
-        "ttnn.min on an MX input returns zeros: the fused -MAX(-x) kernels (reduce_w_neg / reduce_h_neg) copy a "
-        "tile out of a scratch ring and that copy_tile is broken for MX inputs on Quasar (issue #62742)"
-    )
+def test_min_mx_rejected(device, expect_error, dim):
+    # ttnn.min lowers to -MAX(-x) through the fused-negate kernels (reduce_w_neg / reduce_h_neg), whose copy out of
+    # the scratch ring packs zeros for an MX input on Quasar (issue #62742). The op rejects it rather than return zeros.
+    x = to_device(device, torch.randn(SHAPE), ttnn.mxint8)
+    with expect_error(RuntimeError, "not supported for MX"):
+        ttnn.min(x, dim=dim, keepdim=True)
 
 
 def test_reduce_mx_hw_skipped(device):

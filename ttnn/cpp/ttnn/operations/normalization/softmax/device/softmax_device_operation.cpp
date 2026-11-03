@@ -186,6 +186,16 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             tensors_args.input_tensor.dtype() == DataType::BFLOAT8_B || is_mx(tensors_args.input_tensor.dtype()),
         "Input tensor must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
         tensors_args.input_tensor.dtype());
+    if (is_mx(tensors_args.input_tensor.dtype())) {
+        // Only the W / H general factories keep Float16_b intermediates for MX. The C-axis factory repacks the
+        // running sum in the input format after every channel, which an MX format cannot hold.
+        const auto rank = tensors_args.input_tensor.padded_shape().size();
+        TT_FATAL(
+            attributes.dim == rank - 1 || attributes.dim == rank - 2,
+            "Softmax on an MX input supports the H and W axes only, got dim {} for rank {}",
+            attributes.dim,
+            rank);
+    }
 
     // subblock_w == 0 reaches `block_w % subblock_w` in the mask branch below, a modulo by zero on
     // the host that kills the process with SIGFPE, so the zero check runs here, ahead of both branches.

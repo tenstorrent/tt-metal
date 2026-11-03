@@ -107,13 +107,13 @@ def test_layer_norm_mx_fp32_dest_acc(device, dtype):
     check(mx_round_trip(golden, dtype), ttnn.to_torch(out), pcc_floor(dtype))
 
 
+# Single-device pipeline of the distributed norm: pre_all_gather computes the bf16 stats from the MX input,
+# post_all_gather normalizes the same MX input with them. The host side accepts MX; the op itself is not on Quasar
+# yet (layernorm_distributed_metal2_helpers.hpp builds Gen1 compute configs only and FATALs on Quasar).
+@pytest.mark.skip(reason="layernorm_distributed is Wormhole / Blackhole only (Gen1 compute config FATAL on Quasar)")
 @pytest.mark.parametrize("dtype", [ttnn.mxfp8_e4m3, ttnn.mxint8, ttnn.mxfp4])
 @pytest.mark.parametrize("is_rms", [False, True], ids=["layer_norm", "rms_norm"])
 def test_distributed_norm_mx(device, dtype, is_rms):
-    # Single-device pipeline of the distributed norm: pre_all_gather computes the bf16 stats from the MX input,
-    # post_all_gather normalizes the same MX input with them. The host side accepts MX; the op itself is not on
-    # Quasar yet (layernorm_distributed_metal2_helpers.hpp builds Gen1 compute configs only and FATALs on Quasar).
-    pytest.skip("layernorm_distributed is Wormhole / Blackhole only (Gen1 compute config FATAL on Quasar)")
     torch.manual_seed(0)
     x = torch.randn(SHAPE)
     gamma = torch.randn(SHAPE[-1]).bfloat16()
@@ -167,3 +167,11 @@ def test_layer_norm_mx_sharded(device, dtype):
     assert out.dtype == dtype
     golden = torch.nn.functional.layer_norm(mx_round_trip(x, dtype), (shape[-1],), gamma.float(), beta.float(), EPS)
     check(mx_round_trip(golden, dtype), ttnn.to_torch(out), pcc_floor(dtype))
+
+
+def test_softmax_mx_rejects_nc_axis(device, expect_error):
+    # Only the W / H general softmax factories keep Float16_b intermediates for MX; the C-axis factory repacks the
+    # running sum in the input format after every channel.
+    x = to_device(device, torch.randn(1, 2, 32, 32), ttnn.mxint8)
+    with expect_error(RuntimeError, "H and W axes only"):
+        ttnn.softmax(x, dim=1)

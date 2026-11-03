@@ -144,6 +144,10 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "Only FLOAT32, BFLOAT16, BFLOAT8_B and the MX formats are supported for generic reduction "
             "(INT32 is supported for MAX/MIN/SUM; ttnn.sum/max/min route UINT32 through INT32) - got {}.",
             tensor_args.dtype());
+        TT_FATAL(
+            !(is_mx(tensor_args.dtype()) && operation_attributes.negate),
+            "MIN reduce (-MAX(-x)) is not supported for MX inputs: the fused-negate kernels copy tiles back out of a "
+            "bf16 scratch ring, which packs zeros for MX on Quasar (issue #62742)");
     }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
     const auto device_grid_size = tensor_args.device()->compute_with_storage_grid_size();

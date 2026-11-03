@@ -194,12 +194,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     // in1/bias are DRAM sharded with one tile per page; the allocator pads each page to the DRAM
     // alignment (e.g. bfp8 32x16 tile = 544B padded to 576B on Blackhole's 64B alignment). The
     // reader copies blocks contiguously from DRAM, so the CB must hold tiles at the padded stride.
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
-    const uint32_t bias_aligned_tile_size = bias_single_tile_size;
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;

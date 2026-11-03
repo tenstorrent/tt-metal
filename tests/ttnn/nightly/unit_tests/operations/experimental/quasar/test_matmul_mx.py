@@ -94,7 +94,8 @@ def test_partials_reload(device, dtype):
     check(_golden(a, b, dtype, dtype, dtype), out, pcc_floor(dtype))
 
 
-@pytest.mark.parametrize("dtype", [ttnn.mxfp8_e4m3, ttnn.mxint8])
+# mxfp4: the bias broadcast is the first unpack after mm_uninit restored the 2x-packed src format.
+@pytest.mark.parametrize("dtype", [ttnn.mxfp8_e4m3, ttnn.mxint8, ttnn.mxfp4])
 def test_fused_bias(device, dtype):
     a, b = _inputs(2 * TILE, 2 * TILE, 2 * TILE)
     bias = torch.randn(1, 1, 1, 2 * TILE)
@@ -283,8 +284,9 @@ def test_legacy_mxfp4_pair(device, family):
 
 
 @pytest.mark.parametrize("family", [f for f in LEGACY_FAMILIES if f != "reuse"])  # reuse (bmm) has no bias
-def test_legacy_fused_bias(device, family):
-    _run_legacy(device, family, ttnn.mxint8, ttnn.mxint8, ttnn.bfloat16, bias=True)
+@pytest.mark.parametrize("dtype", [ttnn.mxint8, ttnn.mxfp4])  # mxfp4: bias add follows mm_uninit in the legacy kernels
+def test_legacy_fused_bias(device, family, dtype):
+    _run_legacy(device, family, dtype, dtype, ttnn.bfloat16, bias=True)
 
 
 @pytest.mark.parametrize("family", LEGACY_FAMILIES)
