@@ -891,12 +891,9 @@ uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit) {
 }
 
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves) {
-    // The rule: where an input moves, a reader thread per compute thread; where the output moves, a writer
-    // thread per compute thread, within the 6 user DM cores that the readers leave. A borrowed operand moves
-    // nothing, so its reader or writer runs one thread. The batch size is the max batch size, the tiles that a DST
-    // section holds: 8 on the FPU kernel, and 4 on the SFPU kernel in a 16-bit DST and 2 in a 32-bit DST. The DM
-    // kernels move one batch per barrier, and the compute runs batches of that size wherever each compute thread owns
-    // one counter of each ring. Every batch is exact, because llk_unpack_AB steps a batch by the ring stride.
+    // The rule: a reader thread per compute thread where an input moves, a writer thread per compute thread where the
+    // output moves, within the 6 user DM cores that the readers leave; a role that moves nothing runs one thread. The
+    // batch size is one DST section's tiles; the compute batches only where a compute thread owns one counter per ring.
     const uint32_t max_batch = native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit);
     NativeConfig config;
     config.compute_threads = native_compute_threads(tuning);

@@ -14,42 +14,6 @@
 // Reachable only via matches_quasar_native_slice (on Quasar unless TTNN_QSR_NATIVE=0). kernels_qsr/ holds one reader,
 // one writer and one compute kernel per engine, FPU and SFPU, for every operand mode (kernels_qsr/common/
 // operand_walk.hpp). The Metal 2.0 factory's kernels per broadcast type have no copy here.
-//
-// --- inherited description of the original follows ---
-//
-// Metal 2.0 / DataflowBuffer (DFB) program factory for binary_ng's no-broadcast (SubtileBroadcastType::
-// NONE), tiled path.
-//
-// This is a generic, faithful port of the descriptor factory's NONE-tiled path
-// (binary_ng_program_factory.cpp::create_descriptor). It inherits that factory's logic — per-operand
-// layout, FPU/SFPU OpConfig, the full lhs/rhs/post activation machinery, fp32_dest_acc_en,
-// unpack_modes, num_tiles_per_cycle, and the per-core arg derivation — and differs from it ONLY
-// in the CB->DFB translation:
-//   - CBDescriptor -> DataflowBufferSpec (one per CB index the NONE path allocates: c_0->in0/pre_lhs,
-//     c_1->in1/pre_rhs, c_2->out, c_3->post_lhs, c_4->post_rhs).
-//   - The decisive property is BORROWED vs NoC-READ, per operand. The anchor (select_borrow_anchor) is an L1
-//     shard config or the L1 banks, on at least as many clusters as the legacy binary_ng uses, and it borrows
-//     every operand that sits in it: the operands with exactly that shard config, or the L1-interleaved ones. An
-//     operand that is not borrowed moves over the NoC in the anchor's tile order. A borrowed CB
-//     `.buffer = tensor.buffer()` -> DataflowBufferSpec::borrowed_from, and the reader and writer move only a
-//     shard's tail tiles. Every other operand's CB -> a real ring + a KernelSpec TensorBinding
-//     (TensorAccessor(tensor::name), sharding-aware), and the buffer-address runtime arg the descriptor passed is
-//     dropped (the binding injects the address). Placement follows the anchor. The descriptor borrows shards per
-//     operand and never borrows an interleaved operand.
-//   - Positional get_arg_val<>(idx) / get_compile_time_arg_val(idx) -> named get_arg(args::name). The
-//     reader's 19 named args / writer's 9 named args are the descriptor's 21 / 11 arg vectors minus
-//     the buffer-address args (reader src0@0 / src1@15, writer dst@0, writer trailing pad).
-//   - KernelDescriptor::core_ranges + per-core dummy args on unused cores -> WorkUnitSpec::target_nodes
-//     scoped to exactly the active cores (DFB places only on target_nodes, so no dummy args needed).
-//   - The descriptor's `has_sharding` TensorAccessor CTA -> a HAS_SHARDING #define, set for a borrowed
-//     shard; kernels_qsr/ does not read it.
-//
-// Not supported (rejected by matches_quasar_native_slice, which is narrower than matches_metal_v2_slice
-// in op and dtype but also admits a subtile broadcast in fp32 and DRAM shards): row-major (non-tile)
-// layout, where-op, quantization, and mixed lhs/rhs dtype. Every mix of
-// interleaved, L1-sharded and DRAM-sharded operands IS handled: each operand is borrowed where the anchor
-// holds it, and moves over the NoC through its sharding-aware TensorAccessor otherwise. A borrowed operand is
-// tiled: L1-sharded (height/block/width) or L1-interleaved.
 
 #include "binary_ng_device_operation.hpp"
 #include "binary_ng_utils.hpp"
@@ -152,8 +116,7 @@ DfbKernelSources select_dfb_kernel_sources(bool is_sfpu) {
     };
 }
 
-// The mode of a and of b (kernels_qsr/common/operand_walk.hpp) for the op's subtile broadcast type.
-// matches_quasar_native_slice admits only the types that have a mode here; any other is a broken precondition.
+// The mode of a and of b (kernels_qsr/common/operand_walk.hpp) for the op's subtile broadcast type. Every type has one.
 // A SCALAR operand whose every dim is 1, `a_one_value` or `b_one_value`, is one value for the whole op: VALUE. So is
 // the scalar argument of tensor-scalar, which takes b's place.
 std::array<OperandMode, 2> operand_modes(
@@ -381,11 +344,8 @@ std::optional<BorrowAnchor> slice_anchor(
 }
 
 // The borrow decision of the legacy binary_ng in eltwise/binary_ng (its is_native_L1_sharding and get_shard_specs, not
-// the copies in this op). For two inputs of one shape: a sharded output, one memory config for a and b, no DRAM
-// operand, every sharded input on the output's grid, and one shard spec on all three where a shard is uneven. Beside a
-// broadcast: only an even L1 height shard of a, with the output's shape and shard spec, beside an unsharded COL or
-// SCALAR b. Beside a scalar (b is nullptr): an even L1 shard of a with the output's shard spec. The legacy binary_ng
-// then runs on the output's shard grid.
+// the copies in this op): the three cases that the design doc lists in its comparison with production. Where it
+// borrows, the legacy binary_ng runs on the output's shard grid. A scalar b is nullptr.
 bool legacy_borrows_output_shard(const Tensor& a, const Tensor* b, const Tensor& c) {
     const MemoryConfig& a_config = a.memory_config();
     const MemoryConfig& c_config = c.memory_config();
@@ -440,14 +400,9 @@ uint32_t legacy_cluster_count(const Tensor& a, const Tensor* b, const Tensor& c,
     return std::min(tiles, static_cast<uint32_t>(worker_grid.num_cores()));
 }
 
-// The anchor that borrows the most operands, among the anchors on at least as many clusters as the legacy binary_ng
-// uses (legacy_cluster_count). On a tie, the one that borrows the output, then the one on more clusters, then the
-// earlier candidate: the output's shard config, a's, b's, the banks. A borrowed ring must divide by its max(producers,
-// consumers); with all three borrowed, a shard's tail tiles go through the tail rings instead where `tail_rings`
-// allows them, and a slice has no tail rings. A pad slot is computed and never read back; an operand that moves skips
-// it. Only an operand whose Map is the identity is borrowed, as `borrowable` marks. A program-cache hit keeps this
-// decision. It reads only the hashed specs, activations and worker grid, the tuning, and the bank layout of the device,
-// which never changes after the device opens.
+// The anchor that borrows the most operands, among those on at least as many clusters as legacy_cluster_count. A tie
+// goes to the anchor that borrows the output, then to the one on more clusters, then to the earlier candidate (the
+// output's shard config, a's, b's, the banks). A borrowed ring must divide by its max(producers, consumers).
 BorrowAnchor select_borrow_anchor(
     const Tensor& a,
     const Tensor* b,
@@ -547,8 +502,7 @@ ProgramArtifacts create_native_artifacts(
     // is_scalar: b_dtype is derived, and b has no tensor binding.
     const bool is_scalar = !tensor_args.input_tensor_b.has_value();
     TT_FATAL(
-        !is_scalar || op.scalar.has_value(),
-        "binary_ng Quasar-native no-bcast factory tensor-scalar path requires a scalar value");
+        !is_scalar || op.scalar.has_value(), "binary_ng Quasar-native: a tensor-scalar op requires a scalar value");
     // Fires before any JIT work on a type that matches_quasar_native_slice, the only admitting caller, refuses.
     const std::array<OperandMode, 2> modes = operand_modes(
         op.subtile_broadcast_type,
@@ -579,7 +533,7 @@ ProgramArtifacts create_native_artifacts(
     Buffer* c_buffer = c.buffer();
     TT_FATAL(
         a_buffer != nullptr && (is_scalar || b_buffer != nullptr) && c_buffer != nullptr,
-        "binary_ng Quasar-native no-bcast factory requires allocated device buffers");
+        "binary_ng Quasar-native requires allocated device buffers");
 
     // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). For a scalar there is no
     // `b`, so b_dtype is derived as follows: the
@@ -658,10 +612,9 @@ ProgramArtifacts create_native_artifacts(
         add_activation_defines(compute_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_defines, rhs_activations, "RHS", b_dtype);
 
-        // The descriptor disables the PACK_RELU fast path under subtile broadcast: a broadcast compute
-        // kernel does a per-iteration intermediate pack + pack_reconfig that clears the packer's ZERO_RELU
-        // state, silently dropping the RELU clip on the final pack. The native expansions pack into their own
-        // rings in the same way, so this factory keeps the guard: there, RELU runs in the SFPU post chain.
+        // PACK_RELU stays off beside a subtile broadcast: an expansion that packs into its own ring (the FPU kernel's
+        // staging ring, a held ring) reconfigures the packer and clears its ZERO_RELU state, which drops the RELU clip
+        // on the final pack. The SFPU kernel's ROW expansion packs nothing, but the guard holds there too.
         const bool is_subtile_broadcast = op.subtile_broadcast_type != SubtileBroadcastType::NONE;
 
         // PACK_RELU fast path (no-broadcast only). Other single post-acts expand to the SFPU post chain
@@ -894,11 +847,12 @@ ProgramArtifacts create_native_artifacts(
     const uint32_t reader_num_tcs = compute_threads >= reader_threads ? compute_threads / reader_threads : 1u;
     const uint32_t writer_num_tcs = compute_threads >= writer_threads ? compute_threads / writer_threads : 1u;
 
+    // A VALUE operand's ring holds one full tile per compute thread, as a tail ring does; its reader threads fill one
+    // entry per tile counter. Never borrowed.
+
     // A borrowed ring is the first tiles of the anchor's shard or slice, which divide by the ring's
     // max(producers, consumers) as the DFB host asserts, so the reader's publish fills each counter exactly.
     // Every borrowed operand holds the anchor's tile count.
-    // A VALUE operand's ring holds one full tile per compute thread, as a tail ring does; its reader threads fill one
-    // entry per tile counter. Never borrowed.
     const uint32_t a_entries = value_a ? compute_threads : (a_borrowed ? c_main_tiles : in_entries);
     const uint32_t b_entries = value_b ? compute_threads : (b_borrowed ? c_main_tiles : in_entries);
     const uint32_t c_entries = c_borrowed ? c_main_tiles : out_entries;
@@ -1312,7 +1266,7 @@ ProgramArtifacts create_native_artifacts(
             num_tiles_per_core_group_2) = tt::tt_metal::split_work_to_cores(op.worker_grid, c_num_tiles, true);
         cores = corerange_to_cores(all_cores, std::nullopt, true);
     }
-    TT_FATAL(!cores.empty(), "binary_ng Quasar-native no-bcast factory: empty core set");
+    TT_FATAL(!cores.empty(), "binary_ng Quasar-native: empty core set");
 
     m2::KernelRunArgs::RuntimeArgValues reader_args, writer_args, compute_args;
 

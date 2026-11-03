@@ -7,9 +7,9 @@
 // DataflowBuffer (DFB) port of kernels/compute/eltwise_utils.hpp. Both native compute kernels use it: in the DFB
 // tree the FPU and the SFPU kernel restore the same physical-LHS SrcA format.
 //
-// Mechanically identical to the CircularBuffer helper, with the CB->DFB swap: the helper takes the kernel's
-// DataflowBuffer objects, reads each operand id with get_id(), and syncs through them. See the CB original for
-// the rationale on the pre -> activation -> post reconfigure dance.
+// preprocess_impl_dfb follows the CircularBuffer helper (preprocess_fpu_impl) with the CB->DFB swap, plus a pack_init
+// that retargets the packer on Quasar. See the CB original for the rationale on the pre -> activation -> post
+// reconfigure dance. The expansion helpers below have no original.
 
 #include "api/compute/common.h"
 #include "api/compute/pack.h"
@@ -151,11 +151,10 @@ ALWI void expand_dfb(DFBSrc& dfb_src, DFBDst& dfb_dst, uint32_t dfb_out_id, uint
 #endif
 
 #if A_HELD || B_HELD
-// One compute batch of a held operand (COL, SCALAR). Its input ring holds n entries for the batch: the first holds the
-// operand's new page where `changed`, and the others are credits only. On a change, the page expands into the held
-// ring, with the operand's activation chain, and the old held entry is popped. All n input entries are popped, and
-// the held entry is left at the front for the binary op. `holding` is the thread's own flag: false before its
-// first expansion.
+// One compute batch of a held operand (COL, SCALAR). Its input ring holds n entries: the first carries the new page
+// where `changed`, and the others are credits only. On a change the page expands into the held ring, with the operand's
+// activation chain, and the old held entry is popped. All n input entries are popped, and the held entry stays at the
+// front for the binary op. `holding` is the thread's own flag, false before its first expansion.
 template <BroadcastType bt, bool kActivations, typename DFBIn, typename DFBHeld, typename ActivationFn>
 ALWI void hold_dfb(
     DFBIn& dfb_in,

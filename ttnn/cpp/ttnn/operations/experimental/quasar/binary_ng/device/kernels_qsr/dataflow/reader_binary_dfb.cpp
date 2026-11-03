@@ -165,10 +165,9 @@ void kernel_main() {
 
 #if A_VALUE || B_VALUE
     // A VALUE operand is one value for the whole op, in a ring of one full tile per compute thread. This thread fills
-    // the entry of each tile counter it round-robins, once: from the packed scalar of tensor-scalar, or with page 0 of
-    // a tensor whose every dim is 1. The first element of that page then fills the tile. The fill is a CPU store to L1,
-    // so it runs inside scoped_write_lock, whose release fences and flushes the stores before push_back credits the
-    // entry. A thread with no tiles fills its entries too: each compute thread waits for one.
+    // one entry per tile counter it round-robins, from the packed scalar (tensor-scalar) or the first element of page 0
+    // of a tensor whose every dim is 1. The fill is a CPU store, so it runs inside scoped_write_lock, whose release
+    // fences and flushes it before push_back. A thread with no tiles fills too, as each compute thread waits for one.
     {
         constexpr uint32_t num_tcs = get_arg(args::num_tcs);
 #if B_VALUE_FROM_SCALAR
@@ -370,25 +369,17 @@ void kernel_main() {
 
     // The same visit order as the identity path below: push_back rotates the tile counter, so tile j of this thread
     // goes to counter j % num_tcs, and a batch fills one counter.
-    if constexpr (dm_batch == 1) {
-        uint32_t c = 0;
-        for (uint32_t k = thread_id; k < dst_num_tiles; k += num_threads) {
-            read_mapped(cursors[c], k, 1);
-            c = c + 1 == num_tcs ? 0 : c + 1;
-        }
-    } else {
-        const uint32_t round_span = dm_batch * tile_step;
-        const uint32_t batch_span = (dm_batch - 1) * tile_step;
-        const uint32_t full_limit = dst_num_tiles > batch_span ? dst_num_tiles - batch_span : 0;
-        for (uint32_t round_base = thread_id; round_base < dst_num_tiles; round_base += round_span) {
-            uint32_t first = round_base;
-            for (uint32_t c = 0; c < num_tcs && first < dst_num_tiles; ++c, first += num_threads) {
-                uint32_t n = dm_batch;
-                if (first >= full_limit) {
-                    n = (dst_num_tiles - first + tile_step - 1) / tile_step;
-                }
-                read_mapped(cursors[c], first, n);
+    const uint32_t round_span = dm_batch * tile_step;
+    const uint32_t batch_span = (dm_batch - 1) * tile_step;
+    const uint32_t full_limit = dst_num_tiles > batch_span ? dst_num_tiles - batch_span : 0;
+    for (uint32_t round_base = thread_id; round_base < dst_num_tiles; round_base += round_span) {
+        uint32_t first = round_base;
+        for (uint32_t c = 0; c < num_tcs && first < dst_num_tiles; ++c, first += num_threads) {
+            uint32_t n = dm_batch;
+            if (first >= full_limit) {
+                n = (dst_num_tiles - first + tile_step - 1) / tile_step;
             }
+            read_mapped(cursors[c], first, n);
         }
     }
 #else
@@ -496,10 +487,9 @@ void kernel_main() {
 #endif
     };
 
-    // This thread owns tiles {thread_id, thread_id + num_threads, ...} and round-robins num_tcs tile
-    // counters, one rotation per push_back. Counter c therefore holds the tiles starting at
-    // thread_id + c*num_threads and spaced num_tcs*num_threads apart -- so a batch drawn from ONE
-    // counter strides by that product, not by num_threads.
+    // This thread owns tiles {thread_id, thread_id + num_threads, ...} and round-robins num_tcs tile counters, one
+    // rotation per push_back. Counter c therefore holds the tiles starting at thread_id + c*num_threads and spaced
+    // num_tcs*num_threads apart -- so a batch drawn from ONE counter strides by that product, not by num_threads.
     if constexpr (dm_batch == 1) {
         // One tile per push rotates the counter every tile, so the counter-major order and the plain
         // per-tile order coincide for every num_tcs. Keep the plain loop: the nested walk below is

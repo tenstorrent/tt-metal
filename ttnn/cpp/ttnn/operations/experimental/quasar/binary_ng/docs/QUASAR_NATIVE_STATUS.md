@@ -37,7 +37,10 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
   above ring stride 1 too, because #62954's `llk_unpack_AB` fix makes every batch exact. dchen kept this rule in place
   of #62954's share rule beside DRAM. With the batches pinned to the same values, a dense program compiles to the
   same instructions as on main (30 disassemblies).
-- **Verified** on craq-sim `67b8926b`, after the rebase onto main: the native module 206 passed, 1 skipped. Five of
+- **The final review found no wrong output.** Its follow-ups are in: six cache-hit repeats of broadcast cases, R2C4W2
+  for the held, mixed and filled tests, ROW, COL and outer-dim cases on a shape that is not a multiple of 32, and a COL
+  b in a DRAM shard. The comments and the design doc now follow the code.
+- **Verified** on craq-sim `67b8926b`, after the rebase onto main: the native module 210 passed, 1 skipped. Five of
   the six other suite files pass, native on and off. The activation-format file has the same 10 BFP8 and BFP4 failures
   as at the base. A craq-sim older than `b05091aa` now fails the FPU add and subtract cases, because the oracle keeps
   only the two-rounding add. Slide 3 gives each run, and slide 4 the planted defects.
@@ -82,7 +85,8 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 - **Gate** (`matches_quasar_native_slice`): no full-rank shape equality. Subtile broadcast needs bf16 or fp32.
   Tensor-scalar needs subtile type NONE, bf16 or fp32, and a scalar that packs in a's format. R must not exceed C
   beside a COL, SCALAR, VALUE or scalar operand. The error that `select_program_factory` raises names the subtile
-  broadcasts that stay unsupported: a dtype other than bf16 or fp32, and fp32 with `TTNN_QSR_NATIVE=0`.
+  broadcasts that stay unsupported: a dtype other than bf16 or fp32, and fp32 with `TTNN_QSR_NATIVE=0` or with more
+  reader than compute threads beside a COL or SCALAR operand.
 - **Tests and docs**: each broadcast case declares its walk: the operands that it borrows, and whether its reader skips
   pad slots. The arm reads them from the generated headers, and the table test makes every case declare one (the
   commit "binary_ng tests: check each broadcast case's borrowing; uneven shards and fast multiply beside ROW").
@@ -99,6 +103,16 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
   defect-model loop and takes the name `test_native_broadcast_tables_name_their_modes_and_walks`: the model predicts no
   wrong tile, and the oracle tests catch any wrong tile. The design doc's lines about the removed descriptor factory,
   and the comments on how the native gate compares with the Metal 2.0 gate, now match the code.
+- **After the final review**: six broadcast cases repeat their spec while the first tensors are alive (the cases named
+  `_again`), so each is a program-cache hit that must rebind its borrowed shards, held operand or fill. The shard arm
+  keeps the first run's tensors only until the last repeat has run, so large repeats fit in L1. The table test checks
+  that a repeat follows the case it names and has its spec. The held, mixed and filled tests also run R2C4W2, where each
+  reader thread owns two tile counters of the input rings, and a new test runs a COL operand with more reader than
+  compute threads, which falls back to the Metal 2.0 factory, beside a dense add at the same knobs, which stays native.
+  ROW, COL and outer-dim broadcast run on a shape that is not a multiple of 32, and a COL b runs from a DRAM height
+  shard. The two table tests run off Quasar too. The mapped reader has no `dm_batch == 1` arm of its own: the general
+  arm visits the same tiles in the same order. The error for an unsupported op names the R > C case. The factory lost
+  its inherited header, and the longest comments moved their facts into the design doc.
 
 ---
 
@@ -107,6 +121,35 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 The numbers below are lines of the untracked run log. `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory as the reference
 arm.
 
+**On the final tree**, after the final review's follow-ups. Every run used craq-sim `67b8926b`, the default.
+
+- **The new and changed tests** (`t7_green2`): 34 passed. They are the seven broadcast oracle tests (4 or 5
+  configurations each), the two table tests and the R > C test. The last edits touched the two table tests and the R > C
+  test, and they pass again (`t7f1_tables`: 2 passed; `t7f1_rgtc`: 1 passed). The R > C test also runs a dense add of
+  the same shape at the same knobs, which stays native, so only the COL operand's program leaves the native factory.
+- **The whole module**, native on (`t7_module`): 210 passed, 1 skipped. That is `t6r1_module`'s 206 plus 4 ids: R2C4W2
+  for the held, mixed and filled tests, and the R > C test. With `TTNN_QSR_NATIVE=0` (`t7_module_off`): 3 passed, 208
+  skipped. The 3 are the native-off control and the two table tests, which no longer skip off Quasar.
+- **The six suite files**, one process each, native on (`t7_<suite>`) and with `TTNN_QSR_NATIVE=0` (`t7_<suite>_off`):
+  no_bcast 105 passed and 2 expected failures, resnet_add 10, descriptor_cache_hit 4, bcast 134, scalar 27, all the same
+  on and off. The activation-format file: 112 passed and 10 failed on and off, the same 10 BFP8 and BFP4 cases. Each
+  count equals the one before the follow-ups (`t6_<suite>`; `t6r1_bcast` for bcast).
+- **Dense programs.** With the batches pinned to 8, 2 and 16 (DM batch, compute batch and ring depth), the 30 listings
+  of the dense programs on the final tree (`ab/t7`) and on the rebased tip (`ab/tip1031`) are identical (`t7_ab_diff`):
+  5 programs and 15 kernels, with every kernel recompiled in this capture (`t7_dense_ab`). The comparison failed on a
+  planted change of one mnemonic (`t7_ab_control`).
+- **The mapped reader at DM batch 1.** The reader lost its `dm_batch == 1` arm, which no test had compiled. All seven
+  broadcast tables ran at DM batch 1 on R1C1W1 and on R1C4W1, where one reader thread feeds four tile counters, and
+  every case was exact (`t7_dm1_per_tile`, `t7_dm1_R1C4W1`).
+- **The repeat check and the R > C arm.** A planted repeat with equal values and another key order fails the table test,
+  which compares the arm's own key, `json.dumps` of the spec (`t7f1_guard_plant`: 1 failed), and the revert passes
+  (`t7f1_tables`). The two table tests pass with an arch name other than Quasar and no simulator, where the device tests
+  skip (`t7f1_offquasar`, `t7f1_offquasar_skip`). The same COL entry as the R > C test runs native at R=2, so the test's
+  fallback expectation fails there (`t7_rgtc_control`).
+- **clang-tidy**: 0 findings in the factory, the gate and `binary_ng_utils.cpp` (`tidy t7`). On scratch copies with a
+  planted brace-less `if`, it finds 1 in each, and it finds 0 in the clean copies (`tidy t7 scratch`, the six lines with
+  exit 0), so the instrument works.
+
 **With the fp32 reader fill**, on the rebased tip. Every run used craq-sim `67b8926b`, the default.
 
 - **Red, then green.** Before the code, the native gate refuses every fp32 ROW, COL, SCALAR and mixed case, and the op
@@ -114,17 +157,6 @@ arm.
   table test passes (`t6_red`: 4 failed, 1 passed). With the code, all five pass (`t6r1_green`: 5 passed). The test
   checks each case's compute modes and the reader's walk against its declaration, and the output against the oracle's
   bits.
-- **The whole module**, native on (`t6r1_module`): 206 passed, 1 skipped. That is `fix1_module`'s 202 plus the four
-  configurations of the new test, with the same skip. With `TTNN_QSR_NATIVE=0` (`t6_module_off`): 1 passed, 206 skipped.
-- **The six suite files**, one process each, native on (`t6_<suite>`; `t6r1_bcast` for bcast, which replaces `t6_bcast`)
-  and with `TTNN_QSR_NATIVE=0` (`t6_<suite>_off`): no_bcast 105 passed and 2 expected failures, resnet_add 10,
-  descriptor_cache_hit 4, bcast 134, scalar 27, all the same on and off. The activation-format file: 112 passed and 10
-  failed on and off, the same 10 BFP8 and BFP4 cases. Each count equals the one before this change (`t_<suite>`). No
-  suite case has an fp32 subtile broadcast, so no count moves.
-- **Dense programs.** The 30 listings of the dense programs before the code (`ab/t6_base`) and after the last edit
-  (`ab/t6r1`) are identical (`t6r1_ab_diff`): 5 programs and 15 kernels, with every kernel recompiled in both captures
-  (`t6_base_dense_ab`, `t6r1_dense_ab`). A dense program defines no mode, so `A_FILLED` and `B_FILLED` stay 0 and its
-  kernels compile as before. The comparison failed on a planted change of one mnemonic (`t6r1_ab_control`).
 - **Planted defects**, at `[rule]`: six plants in the reader's fill (slide 4). One skips the b fill and failed the 11
   cases that have a filled b (`t6_plant7`). One skips the a fill and failed the 6 cases that have a filled a
   (`t6r1_plant7_a`). Two change only the b entries after entry 0. Each failed `col_b_split/fp32`,
@@ -133,8 +165,6 @@ arm.
   no other case (`t6r1_plant_first_a`, `t6r1_plant_entry_a`). Each revert passed (`t6_plant7_revert`,
   `t6_plant_first_revert`, `t6_plant_entry_revert`, `t6r1_plant7_a_revert`, `t6r1_plant_first_a_revert`,
   `t6r1_plant_entry_a_revert`: 1 passed each).
-- **clang-tidy**: 0 findings in the factory and the gate (`tidy t6`). On scratch copies with a planted brace-less `if`,
-  it finds 1 in each, and it finds 0 in the clean copies (`tidy t6 scratch`), so the instrument works.
 - **Not run**: a Quasar device. craq-sim has no store reordering, so these tests cannot show a missing fence between
   the fill and `push_back`; `scoped_write_lock` supplies it, as it does for the VALUE fill.
 
@@ -183,12 +213,12 @@ arm.
 - **Not run**: any performance measurement (the native path is the best-performance option by rule, with no
   measurement); a Wormhole or Blackhole device; tensor-scalar with an RHS or post activation, which neither the
   module's table nor the scalar suite covers (both cover an activation on a only).
-- **A risk on ttsim, not run.** A batched sharded operand that moves over the NoC aborted on ttsim, so #62954 kept it at
-  batch 1 for H.I.I and W.I.I. These are the test module's names for a height- or width-sharded a in L1, beside a b and
-  an output that are interleaved in DRAM. ijankowskiTT reports in #63305 that the abort is the host profiler's marker
-  check, that only functional ttsim hits it (ttsim-perf and craq-sim profile these programs), and that the output is
-  exact. The rule now batches those programs by default, and this branch has not run them on ttsim. The tests that read the device profiler pin batch 1. A program off the profiler should not be
-  affected.
+- **A risk on ttsim, not run.** A batched sharded operand that moves over the NoC aborted on ttsim (issue #63492), so
+  #62954 kept it at batch 1 for H.I.I and W.I.I. These are the test module's names for a height- or width-sharded a in
+  L1, beside a b and an output that are interleaved in DRAM. ijankowskiTT reports in #63305 that the abort is the host
+  profiler's marker check, that only functional ttsim hits it (ttsim-perf and craq-sim profile these programs), and that
+  the output is exact. The rule now batches those programs by default, and this branch has not run them on ttsim. The
+  tests that read the device profiler pin batch 1. A program off the profiler should not be affected.
 
 **Before the rebase**, on craq-sim `b9d8e2f4` unless a bullet names `67b8926b`:
 
@@ -2425,8 +2455,8 @@ columns stay. (`F#` in the review-findings doc is an unrelated namespace.)
 | 1.5 | F5 | fp32 + SFPU (divide) | **bit-exact oracle expires here** |
 | 1.6 | F7 | activations (lhs/rhs/post) | re-measure cyc/tile; `binary_tiles_init` added cost since our branch point |
 | **2.0** | — | **milestone 2 — once F7 lands** | dtype/layout/memory/activation-complete for whole-tile operands |
-| 2.1 | F13 | **outer-dim broadcast — done** | each operand is read through its Map, a cursor per tile counter, in bf16 and fp32; a dense program keeps its kernels byte for byte |
-| 2.2 | F8 | subtile broadcast ROW/COL/SCALAR — done | bf16 by `unary_bcast`, fp32 by a reader fill; COL and SCALAR held, read and expanded once per page change; a tensor of all ones is one value, in bf16 and fp32 |
+| 2.1 | F13 | **outer-dim broadcast — done** | each operand is read through its Map, a cursor per tile counter, in bf16 and fp32; a dense program compiles to the same instructions |
+| 2.2 | F8 | subtile broadcast ROW/COL/SCALAR — done | bf16 by `unary_bcast`, fp32 by a reader fill; COL and SCALAR held, read and expanded once per page change; a tensor whose every dim is 1 is one value, in bf16 and fp32 |
 | 2.3 | F9 | mixed broadcast — done | bf16 and fp32; the ROW operand as ROW, the COL operand held; in fp32 the reader fills both |
 | 2.4 | F10 | tensor-scalar — done | bf16 and fp32; the reader fills one full tile per Neo from the packed scalar; the writer stays output-only |
 | 2.5 | F14 | **per-operand reader allocation** | **emulator-only** — no roofline gain (per-core reads are `T/2` either way); the case is DRAM/NoC locality, which craq-sim cannot price. Hypothesis: tile-split pairs `in0[k]`/`in1[k]` on the **same bank**. Proportional allocation matters from F4 (mixed layouts) onward, not just broadcast. STRIDED rule limits splits to `p in {1,2,4}` at `C=4` |

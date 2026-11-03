@@ -174,12 +174,9 @@ struct NativeConfig {
 // The compute count of every program: the knob, else the rule's 4.
 uint32_t native_compute_threads(const NativeTuning& tuning);
 
-// Each set knob, else the rule's value for what the program moves. The rule takes the most threads and the largest
-// batches: C = 4; R = C when an input moves, else 1; W = min(C, 6 - R) when the output moves, else 1, so R + W fits
-// the 6 user DM cores; DM batch native_max_tiles_per_cycle, the max batch size; compute batch the same where R <= C
-// and W <= C, so that each compute thread owns one tile counter of each ring, else 1; ring depth two batches per
-// thread, a multiple of each. One rule holds beside every placement, DRAM included. A borrowed input runs R = 1 and a
-// borrowed output W = 1, whatever is set. Every compute batch is exact: llk_unpack_AB steps a batch by the ring stride.
+// Each set knob, else the rule's value: C = 4; R = C where an input moves, else 1; W = min(C, 6 - R) where the output
+// moves, else 1, whatever is set. The DM batch is native_max_tiles_per_cycle, and so is the compute batch where R <= C
+// and W <= C, else 1; ring depth is two batches per thread.
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves);
 
 // "8 (rule)" or "8 (TTNN_QSR_DM_BATCH)": a value the knob or the rule gave, with its source, for messages.

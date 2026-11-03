@@ -127,8 +127,8 @@ struct BinaryNgDeviceOperation {
 
     // Quasar-native DFB factory. Starts as a mechanical copy of ProgramFactoryMetalV2 so later commits
     // read as a diff of what "native" means (>2 of 6 DM cores, >1 of 4 Tensix). The default on Quasar;
-    // TTNN_QSR_NATIVE=0 runs the metal_v2 path instead, as the A/B reference arm, except for DRAM shards,
-    // which only this factory runs on Quasar.
+    // TTNN_QSR_NATIVE=0 runs the metal_v2 path instead, as the A/B reference arm, except for DRAM shards and an
+    // fp32 subtile broadcast, which only this factory runs on Quasar.
     // Must stay a stateless literal type -- the framework default-constructs it into static storage.
     struct ProgramFactoryQuasarNative {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(

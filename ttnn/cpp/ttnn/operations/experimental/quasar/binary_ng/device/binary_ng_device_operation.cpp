@@ -666,6 +666,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Narrower than matches_metal_v2_slice in op and dtype, but it also admits DRAM shards and a subtile broadcast in
     // fp32, which that slice refuses. Its refusals by broadcast type are also preconditions of
     // create_native_artifacts, which asserts them. The others keep the slice to what has been validated on Quasar.
+
     // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
     // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
     const auto& a = tensor_args.input_tensor_a;
@@ -752,11 +753,8 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     }
 
     // NONE covers H and W only, so it also holds an outer-dim broadcast, which the kernels read through each operand's
-    // Map. Every dim through -6 is a digit of the walk, and the op's validation makes the dims past it equal.
-    // Each operand on its own is interleaved (L1 or DRAM), an L1 shard or a DRAM shard with a 2D spec, in any
-    // mix. The factory borrows each operand that sits in its anchor, an L1 shard config or the L1 banks, and
-    // moves the rest over the NoC through each operand's sharding-aware TensorAccessor. out_spec is the supplied
-    // output tensor's spec when one is given.
+    // Map. Each operand is interleaved (L1 or DRAM), an L1 shard or a DRAM shard with a 2D spec, in any mix. The
+    // factory borrows what sits in its anchor and moves the rest over the NoC. A supplied output sets out_spec.
     const auto placement_ok = [](const tt::tt_metal::MemoryConfig& mc) {
         return CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(mc) || CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(mc);
     };
@@ -803,8 +801,9 @@ BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_progr
     TT_THROW(
         "ttnn.experimental.quasar binary op {} is not supported for a {} {}, b {}, broadcast {}. Unsupported cases "
         "include mixed a and b dtypes, int32, row-major layout, where, quantization, zero volume, a subtile broadcast "
-        "in a dtype other than bfloat16 or float32, and a float32 subtile broadcast with TTNN_QSR_NATIVE=0. On "
-        "Wormhole or Blackhole, use the production ttnn op.",
+        "in a dtype other than bfloat16 or float32, and a float32 subtile broadcast off the native factory: with "
+        "TTNN_QSR_NATIVE=0, or with more reader than compute threads beside a COL or SCALAR operand. On Wormhole or "
+        "Blackhole, use the production ttnn op.",
         enchantum::to_string(attributes.binary_op_type),
         a.dtype(),
         attributes.input_layout_a,

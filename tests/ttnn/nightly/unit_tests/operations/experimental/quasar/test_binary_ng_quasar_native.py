@@ -867,11 +867,11 @@ def _config_params(configs, cases):
 # order. For a broadcast, "a_shape" and "b_shape" give a or b its own shape, and the entry's shape is the output's;
 # "modes" lists the [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] that the op's compute kernel must be built with,
 # all 0 for a dense program, read from the kernel's JIT defines. "scalar" runs tensor-scalar: b is that Python float,
-# which reaches the kernel in the operands' format. An entry's tensors stay alive to the end when a later entry repeats
-# its spec, so the repeat lands at new addresses and must hit the program cache; the other entries' tensors are freed,
-# so that many cases fit in L1 one after another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the device profiler on),
-# every core must show that many Neos running the compute, or DM cores running a reader or writer thread;
-# ARM_EXPECT_CORES names how many cores must report.
+# which reaches the kernel in the operands' format. An entry's tensors stay alive until the last later entry that
+# repeats its spec has run, so the repeat lands at new addresses and must hit the program cache; the other entries'
+# tensors are freed, so that many cases fit in L1 one after another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the
+# device profiler on), every cluster must show that many Neos running the compute, or DM cores running a reader or
+# writer thread; ARM_EXPECT_CORES names how many clusters must report.
 _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
@@ -1025,7 +1025,7 @@ def memory_config(strategy, shard_shape, rng, orientation="row"):
 
 mismatches, failures = [], []
 add_wrong = False  # a bf16 add or subtract is among the mismatches
-keep, seen = [], set()
+keep, seen = {}, set()
 specs = [json.dumps(entry[1:]) for entry in SHARDS]
 device = ttnn.open_device(device_id=0)
 try:
@@ -1093,7 +1093,9 @@ try:
                 failures.append("{}: the reader walked {}, the case expects {}".format(name, walk, opts["walk"]))
         seen.add(spec)
         if spec in specs[i + 1:]:
-            keep.extend([ta, tb, out])
+            keep.setdefault(spec, []).extend([ta, tb, out])
+        else:
+            keep.pop(spec, None)
         got = ttnn.to_torch(out)
         # Integer ULP distance per element, as production measures it: the sign of a zero does not count. A bf16
         # golden is the kernel's exact rounding; fp32 allows the op's measured bound.
@@ -2055,6 +2057,9 @@ def test_native_fp32_activations_match_the_prediction(name, knobs):
 # ring's entries must survive.
 _MODE = {"FULL": 0, "ROW": 1, "COL": 2, "SCALAR": 3, "VALUE": 4}
 _BCAST_CONFIGS = {"rule": {}, "rule-n1": _COMPUTE_BATCH_1, "R1C1W1": _threads(1, 1, 1), "R1C4W1": _threads(1, 4, 1)}
+# The held, mixed and filled tests also run R2C4W2: each of two reader threads owns two tile counters of the input
+# rings. At R = C and at R = 1, which the four configurations above hold, every pairing of a counter agrees.
+_PAIRING_CONFIGS = {**_BCAST_CONFIGS, "R2C4W2": _threads(2, 4, 2)}
 
 
 def _modes(a="FULL", b="FULL", a_outer=False, b_outer=False):
@@ -2119,12 +2124,16 @@ def _bcast(name, a_shape, b_shape, modes, a=_IDRAM, b=_IDRAM, out=_IDRAM, **opts
 # that moves. Together, outer_b_uneven_shard and row_b_uneven_shard prove that the mapped pad path compiles and runs
 # and skips no valid tile. Beside a broadcast b, a read of a pad slot stays in range, so a missing skip would not show.
 _OUTER_SHAPE = [2, 3, 64, 160]
+# H = 50 and W = 70 are not multiples of 32: the last tile row and tile column of each (N, C) slab are partial. A ROW
+# operand reads row 0 of its tile and a COL operand column 0, and the output keeps the rows and columns in the tensor.
+_PARTIAL_SHAPE = [2, 3, 50, 70]
 _B32_WALK = ("block", [4 * 32, 4 * 32], (0, 0, 7, 3))  # on [2, 1, 256, 1024]: 32 shards of 4x4 tiles
 _H32_4 = ("height", [4 * 32, 32], (0, 0, 7, 3))  # on [2, 1, 2048, 32]: 32 shards of 4 tiles; b's 16 shards
 _BLOCK_WIDE = ("block", [3 * 32, 4 * 32], (0, 0, 0, 3))  # on [2, 3, 64, 32]: 4 shards of 3x4 tiles, 1 tile wide
 _B32_W8 = ("block", [4 * 32, 8 * 32], (0, 0, 7, 3))  # on [2, 1, 224, 1920]: 32 shards, pad rows and columns
 _OUTER = [
     _bcast("outer_b", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), walk=_NOC_WALK),
+    _bcast("outer_b_partial", _PARTIAL_SHAPE, [1, 3, 50, 70], _modes(b_outer=True), walk=_NOC_WALK),
     _bcast("outer_a", [1, 3, 64, 160], _OUTER_SHAPE, _modes(a_outer=True), op="subtract", walk=_NOC_WALK),
     _bcast(
         "outer_both",
@@ -2244,6 +2253,7 @@ _H2_14 = ("height", [16 * 32, 14 * 32], (0, 0, 1, 0))  # on [1, 1, 1024, 448]: 2
 # row_b_full_batches/multiply_fast, in batches of 8 at R1C1W1 through the staging ring.
 _ROW = [
     _bcast("row_b", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), walk=_NOC_WALK),
+    _bcast("row_b_partial", _PARTIAL_SHAPE, [1, 3, 1, 70], _modes(b="ROW", b_outer=True), walk=_NOC_WALK),
     _bcast("row_a", [1, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW", a_outer=True), op="subtract", walk=_NOC_WALK),
     _bcast(
         "row_a_act",
@@ -2269,6 +2279,16 @@ _ROW = [
     ),
     _bcast(
         "row_b_shard_walk",
+        [2, 1, 256, 1024],
+        [1, 1, 1, 1024],
+        _modes(b="ROW", b_outer=True),
+        a=_B32_WALK,
+        out=_B32_WALK,
+        walk=_ANCHORED_WALK,
+    ),
+    # Repeats row_b_shard_walk's spec while its tensors are alive: a cache hit that must rebind the borrowed shards.
+    _bcast(
+        "row_b_shard_walk_again",
         [2, 1, 256, 1024],
         [1, 1, 1, 1024],
         _modes(b="ROW", b_outer=True),
@@ -2384,8 +2404,12 @@ def test_native_row_broadcast_matches_the_oracle(name, knobs):
 # beside a held operand takes no anchor: everything moves over the NoC. With one output tile per cluster, three Neos
 # per cluster hold nothing. These cases run in bf16; the fp32 twins are in _FILLED.
 _H8 = ("height", [4 * 32, 4 * 32], (0, 0, 7, 0))  # on [2, 1, 512, 128]: 8 shards of 4x4 tiles, Wt = 4
+_DH_COL = ("dram_height", [3 * 64, 32], None)  # on [2, 3, 64, 1]: 2 shards of 6 tiles, one per DRAM bank
 _HELD = [
     _bcast("col_b", _OUTER_SHAPE, [1, 3, 64, 1], _modes(b="COL", b_outer=True), walk=_NOC_WALK),
+    _bcast("col_b_partial", _PARTIAL_SHAPE, [1, 3, 50, 1], _modes(b="COL", b_outer=True), walk=_NOC_WALK),
+    # b is a DRAM height shard beside an interleaved a: the held operand's pages come through the sharded accessor.
+    _bcast("col_b_dram_height", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), b=_DH_COL, walk=_NOC_WALK),
     _bcast("col_a", [1, 3, 64, 1], _OUTER_SHAPE, _modes(a="COL", a_outer=True), op="subtract", walk=_NOC_WALK),
     _bcast("col_b_L1", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), a=_IL1, b=_IL1, out=_IL1, walk=_NOC_WALK),
     _bcast(
@@ -2458,6 +2482,17 @@ _HELD = [
     _bcast("col_b_idle_neos", [1, 1, 32, 64], [1, 1, 32, 1], _modes(b="COL"), walk=_NOC_WALK),
     _bcast(
         "col_b_split",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        walk=_ANCHORED_WALK,
+    ),
+    # Repeats col_b_split's spec while its tensors are alive: a cache hit that must rebind the shards and b.
+    _bcast(
+        "col_b_split_again",
         [1, 1, 1024, 448],
         [1, 1, 1024, 1],
         _modes(b="COL"),
@@ -2550,6 +2585,16 @@ _VALUE = [
         out=_H32_4,
         walk=_ANCHORED_WALK,
     ),
+    # Repeats value_b_borrowed_a's spec while its tensors are alive: a cache hit that must rebind the shards and page 0.
+    _bcast(
+        "value_b_borrowed_a_again",
+        [2, 1, 2048, 32],
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        a=_H32_4,
+        out=_H32_4,
+        walk=_ANCHORED_WALK,
+    ),
     _bcast("value_b_one_tile", [1, 1, 32, 32], [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
     _bcast("value_b/multiply_fast", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), op="multiply_fast", walk=_NOC_WALK),
 ]
@@ -2574,7 +2619,7 @@ _VALUE_FP32 = [
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+@pytest.mark.parametrize("name, knobs", list(_PAIRING_CONFIGS.items()), ids=list(_PAIRING_CONFIGS))
 def test_native_held_broadcast_matches_the_oracle(name, knobs):
     """A COL or SCALAR operand must run native on both kernels and give the oracle's bits.
 
@@ -2650,6 +2695,17 @@ _MIXED_BCAST = [
         out=_H2_6,
         walk=_NOC_WALK,
     ),
+    # Repeats row_a_col_b_split's spec while its tensors are alive: a cache hit that must rebind the sharded output.
+    _bcast(
+        "row_a_col_b_split_again",
+        [1, 1, 1, 192],
+        [1, 1, 2560, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_H2_6,
+        walk=_NOC_WALK,
+    ),
     _bcast(
         "row_a_col_b_split/multiply_fast",
         [1, 1, 1, 192],
@@ -2676,7 +2732,7 @@ _MIXED_BCAST = [
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+@pytest.mark.parametrize("name, knobs", list(_PAIRING_CONFIGS.items()), ids=list(_PAIRING_CONFIGS))
 def test_native_mixed_broadcast_matches_the_oracle(name, knobs):
     """Both mixes must run native on both kernels, with a ROW operand beside a held one, and give the oracle's bits."""
     p = _run_shard_arm(_MIXED_BCAST, expect="qsr", timeout=1800, knobs=knobs)
@@ -2707,6 +2763,15 @@ _SCALAR_OP = (
     + [
         _scalar("scalar/multiply_fast", _OUTER_SHAPE, -1.5, op="multiply_fast", walk=_SCALAR_NOC_WALK),
         _scalar("scalar_borrowed_a_2_shards", [1, 1, 1024, 448], 2.5, a=_H2_14, out=_H2_14, walk=_SCALAR_ANCHORED_WALK),
+        # Repeats scalar_borrowed_a_2_shards' spec while its tensors are alive: a cache hit that must rebind the shards.
+        _scalar(
+            "scalar_borrowed_a_2_shards_again",
+            [1, 1, 1024, 448],
+            2.5,
+            a=_H2_14,
+            out=_H2_14,
+            walk=_SCALAR_ANCHORED_WALK,
+        ),
     ]
 )
 
@@ -2761,6 +2826,18 @@ _FILLED = [
     # Its batches end early at row changes.
     _bcast(
         "col_b_split/fp32",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        dtype="float32",
+        walk=_ANCHORED_WALK,
+    ),
+    # Repeats col_b_split/fp32's spec while its tensors are alive: a cache hit that must rebind the shards and b.
+    _bcast(
+        "col_b_split/fp32_again",
         [1, 1, 1024, 448],
         [1, 1, 1024, 1],
         _modes(b="COL"),
@@ -2834,7 +2911,7 @@ _FILLED = [
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+@pytest.mark.parametrize("name, knobs", list(_PAIRING_CONFIGS.items()), ids=list(_PAIRING_CONFIGS))
 def test_native_filled_broadcast_matches_the_oracle(name, knobs):
     """An fp32 ROW, COL or SCALAR operand must run native, expanded by the reader, and give the oracle's bits.
 
@@ -3078,6 +3155,25 @@ def test_native_illegal_thread_knobs_fall_back():
     _check_arm(p, "R=3 beside C=4")
 
 
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+def test_native_col_operand_with_more_readers_than_computes_falls_back():
+    """A COL operand beside more reader than compute threads must send the op to the fallback factory.
+
+    A held operand needs each compute thread to own one tile counter of its input ring, so R = 4 beside C = 2 fails the
+    gate's R <= C check, and the bf16 op runs on the Metal 2.0 factory, and runs right. The same shape with a full b
+    stays native at those knobs, so only the COL operand's program leaves the native factory. The COL entry drops its
+    modes and its walk, which the fallback's kernels do not define.
+    """
+    col_b = next(entry for entry in _HELD if entry[0] == "col_b")
+    col = (*col_b[:5], {key: value for key, value in col_b[5].items() if key not in ("modes", "walk")})
+    dense = ("col_b_dense", *col_b[1:5])
+    knobs = _threads(4, 2, 2)
+    p = _run_shard_arm([col], expect="dfb", timeout=900, knobs=knobs)
+    _check_arm(p, "a COL operand at R=4 beside C=2")
+    p = _run_shard_arm([dense], expect="qsr", timeout=900, knobs=knobs)
+    _check_arm(p, "a full b at R=4 beside C=2")
+
+
 # Every broadcast table, for the no-device checks below.
 _BCAST_TABLES = {
     "outer": _OUTER + _OUTER_FP32,
@@ -3090,13 +3186,12 @@ _BCAST_TABLES = {
 }
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_broadcast_tables_name_their_modes_and_walks():
     """No device. Each broadcast case must name its modes and its walk, and no case name may repeat.
 
     The broadcast oracle tests pass no expectation, so they catch any wrong tile, and this test makes no prediction.
     A case declares its walk or is named in _BCAST_WALK_BY_CONFIG, never both, and a walk has exactly the keys of
-    _NOC_WALK.
+    _NOC_WALK. A case named X_again comes after X and repeats its spec, so that the arm sees a program-cache hit.
     """
     named = set()
     for table, entries in _BCAST_TABLES.items():
@@ -3115,11 +3210,16 @@ def test_native_broadcast_tables_name_their_modes_and_walks():
             assert (
                 walk.keys() == _NOC_WALK.keys()
             ), f"{table}/{entry[0]}: the walk has the keys {sorted(walk)}, a walk has exactly {sorted(_NOC_WALK)}"
+            if entry[0].endswith("_again"):
+                first = entry[0].removesuffix("_again")
+                assert first in names[: names.index(entry[0])], f"{table}/{entry[0]}: a repeat must come after {first}"
+                # The arm keys a spec by json.dumps, so a repeat must match that string, key order included.
+                first_spec = json.dumps(entries[names.index(first)][1:])
+                assert first_spec == json.dumps(entry[1:]), f"{table}/{entry[0]}: the spec differs from {first}'s"
     stale = _BCAST_WALK_BY_CONFIG - named
     assert not stale, f"these cases are named in _BCAST_WALK_BY_CONFIG but are in no broadcast table: {sorted(stale)}"
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_prediction_tables_cover_their_cases():
     """Each prediction must describe its whole case, and every case must have one. No device.
 
