@@ -114,8 +114,10 @@ int main(void)
 
     llk_perf::read_last_zone();
 
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+#if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !(defined(TT_METAL_TTSIM) && defined(COVERAGE))
     ckernel::store_blocking(mailbox, ckernel::KERNEL_COMPLETE); // landed before BRISC can reset this core (_start)
+#elif defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+    // ttsim BRISC resets this core once the mailbox reads complete: _start publishes it after the coverage dump
 #else
     *mailbox = ckernel::KERNEL_COMPLETE;
     asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
@@ -131,6 +133,10 @@ extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrume
 
 #ifdef COVERAGE
     gcov_dump();
+#endif
+
+#if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && defined(TT_METAL_TTSIM) && defined(COVERAGE)
+    ckernel::store_blocking(reinterpret_cast<mailbox_t>(mailboxes_start + mailbox_offset), ckernel::KERNEL_COMPLETE);
 #endif
 
 #if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !defined(TT_METAL_TTSIM) // BRISC waits on L1 on ttsim
