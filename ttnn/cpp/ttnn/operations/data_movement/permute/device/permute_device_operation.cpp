@@ -220,12 +220,27 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
                                                 : as_8bit;
     }
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .dims = dims,
-            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-            .pad_value = pad_value},
-        OperationType::tensor_args_t{
-            .input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)});
+    const MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
+    const auto attributes = [&](const MemoryConfig& mem_config) {
+        return OperationType::operation_attributes_t{
+            .dims = dims, .output_mem_config = mem_config, .pad_value = pad_value};
+    };
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input_tensor,
+        output_mem_config,
+        optional_output_tensor,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(output_mem_config),
+                OperationType::tensor_args_t{
+                    .input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
+        },
+        [&](const Tensor& input, const std::optional<MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                attributes(explicit_mem_config.value_or(output_mem_config)),
+                OperationType::tensor_args_t{
+                    .input_tensor = input,
+                    .optional_output_tensor = explicit_mem_config.has_value() ? std::nullopt : optional_output_tensor});
+        });
 }
 }  // namespace ttnn::prim
