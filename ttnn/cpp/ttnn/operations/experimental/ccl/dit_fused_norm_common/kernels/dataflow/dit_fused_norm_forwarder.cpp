@@ -39,6 +39,11 @@
  * num_tile_rows / partition), so the per-round present set + inc counts match
  * on both ends — no deadlock, no orphaned waits. Remote packets land in DRAM
  * (workers read them), so the forwarder holds only its outbound packet_buf.
+ *
+ * DIT_NORM_RUNTIME_ROWS (RMSNorm caller): the live tile-row count is common runtime arg 0 and
+ * the round count, pages per device and per-round present counts are derived from it on device
+ * (runtime_length.hpp) with two trailing compile-time args, num_workers and workers_per_forwarder.
+ * Without the define the host supplies max_rounds / num_chunks_per_device and present_count[r].
  */
 
 #include <cstdint>
@@ -53,6 +58,9 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "api/debug/kernel_profiler.hpp"
+#ifdef DIT_NORM_RUNTIME_ROWS
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#endif
 
 // ---------- compile-time args ----------
 constexpr uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)
@@ -63,11 +71,15 @@ constexpr uint32_t num_targets_forward = get_compile_time_arg_val(4);
 constexpr uint32_t num_targets_backward = get_compile_time_arg_val(5);
 constexpr uint32_t forwarder_index = get_compile_time_arg_val(6);  // which link/group on this chip
 constexpr uint32_t num_forwarders = get_compile_time_arg_val(7);
-constexpr uint32_t group_size = get_compile_time_arg_val(8);    // workers in this forwarder's group
-constexpr uint32_t max_rounds = get_compile_time_arg_val(9);    // ceil(num_tile_rows / num_workers)
+constexpr uint32_t group_size = get_compile_time_arg_val(8);  // workers in this forwarder's group
+#ifndef DIT_NORM_RUNTIME_ROWS
+constexpr uint32_t max_rounds = get_compile_time_arg_val(9);  // ceil(num_tile_rows / num_workers)
+#endif
 constexpr uint32_t stick_bytes = get_compile_time_arg_val(10);  // 128 (32 fp32)
+#ifndef DIT_NORM_RUNTIME_ROWS
 constexpr uint32_t num_chunks_per_device =
     get_compile_time_arg_val(11);  // = num_forwarders * max_rounds (pages/device)
+#endif
 // Grid-uniform semaphore ids (created on the whole core grid -> same L1 addr on
 // every worker + forwarder core, so no cross-core address args are needed).
 constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);  // workers inc; forwarder waits
@@ -77,6 +89,12 @@ constexpr auto forward_route =
     ccl_routing_utils::get_line_multicast_route_info_from_args<stats_dram_args.next_compile_time_args_offset()>();
 constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<
     stats_dram_args.next_compile_time_args_offset() + ccl_routing_utils::num_line_multicast_args>();
+#ifdef DIT_NORM_RUNTIME_ROWS
+constexpr uint32_t rows_args_offset =
+    stats_dram_args.next_compile_time_args_offset() + 2 * ccl_routing_utils::num_line_multicast_args;
+constexpr uint32_t num_workers = get_compile_time_arg_val(rows_args_offset);
+constexpr uint32_t workers_per_forwarder = get_compile_time_arg_val(rows_args_offset + 1);
+#endif
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -94,10 +112,30 @@ void kernel_main() {
         worker_x[i] = get_arg_val<uint32_t>(arg_idx++);
         worker_y[i] = get_arg_val<uint32_t>(arg_idx++);
     }
-    uint32_t present_count[max_rounds];
+#ifdef DIT_NORM_RUNTIME_ROWS
+    const uint32_t num_tile_rows = get_common_arg_val<uint32_t>(0);
+    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(num_tile_rows, num_workers);
+    const uint32_t max_rounds = rows_per_worker;
+    const uint32_t num_chunks_per_device = num_forwarders * max_rounds;
+    // Group workers that still own a tile row in round r: a prefix of the group, since the
+    // contiguous split gives earlier workers at least as many rows as later ones.
+    auto present_count = [&](uint32_t r) {
+        uint32_t pc = 0;
+        for (uint32_t i = 0; i < group_size; i++) {
+            const uint32_t w = forwarder_index * workers_per_forwarder + i;
+            const uint32_t rows = ttnn::runtime_length::core_end(w, rows_per_worker, num_tile_rows) -
+                                  ttnn::runtime_length::core_start(w, rows_per_worker, num_tile_rows);
+            pc += (rows > r) ? 1u : 0u;
+        }
+        return pc;
+    };
+#else
+    uint32_t present_count_args[max_rounds];
     for (uint32_t r = 0; r < max_rounds; r++) {
-        present_count[r] = get_arg_val<uint32_t>(arg_idx++);
+        present_count_args[r] = get_arg_val<uint32_t>(arg_idx++);
     }
+    auto present_count = [&](uint32_t r) { return present_count_args[r]; };
+#endif
     Noc noc;
     CircularBuffer cb_pkt_hdr(reserved_packet_header_cb);
     CircularBuffer cb_packet(packet_cb);
@@ -138,7 +176,7 @@ void kernel_main() {
     uint32_t cumulative_arrivals = 0;
     uint32_t cumulative_incs = 0;
     for (uint32_t r = 0; r < max_rounds; r++) {
-        const uint32_t pc = present_count[r];
+        const uint32_t pc = present_count(r);
         // Zero-present round (uneven num_tile_rows / num_workers split, e.g. 38
         // tile-rows over 32 workers -> later forwarders have no worker on the
         // remainder round). Symmetric across devices, so every peer forwarder_index
