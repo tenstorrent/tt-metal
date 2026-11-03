@@ -20,6 +20,8 @@ these helpers so a run cannot end up half-sharded.
 
 import os
 
+import ttnn
+
 # Default ON: measured better on device time and op launches than the replicated layout (KV PCC
 # bit-identical), and it is the layout the sibling models use. M3_SHARDED_RESIDUAL=0 restores the
 # replicated layout, kept for bisecting against baselines measured on it.
@@ -59,3 +61,12 @@ def use_distributed_norm() -> bool:
 def gather_before_norm() -> bool:
     """True -> the layer's per-norm all-gather runs BEFORE the norm (gather_first); False -> after it."""
     return use_sharded_residual() and norm_mode() == "gather_first"
+
+
+def activation_mapper(mesh_device, *, mesh_shape, sp_axis: int, tp_axis: int, emb_tp_sharded: bool):
+    """Shards a host [1, 1, seq, hidden] tensor in the residual layout: seq over SP, hidden over TP or replicated."""
+    dims = [None, None]
+    dims[sp_axis] = 2
+    if emb_tp_sharded:
+        dims[tp_axis] = 3
+    return ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(dims), mesh_shape=mesh_shape)

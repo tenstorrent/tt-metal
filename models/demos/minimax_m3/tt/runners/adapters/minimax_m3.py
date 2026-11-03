@@ -240,9 +240,19 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             use_trace=params.use_trace,
             overlap_shared_expert=params.overlap_shared_expert_with_dispatch,
         )
-        return TtPrefillRuntime(
+        runtime = TtPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,
             state_dict=state_dict,
             config=runtime_config,
         )
+        if params.is_first_rank and int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0)):
+            if os.environ.get("PREFILL_MEDIA_STUB_EMBEDDINGS") != "1":
+                raise NotImplementedError(
+                    "PREFILL_MEDIA_MAX_REFS > 0 needs an embedding reader; until the store reader exists, "
+                    "set PREFILL_MEDIA_STUB_EMBEDDINGS=1"
+                )
+            from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+
+            runtime.media_reader = StubEmbeddingReader(hf_config.hidden_size)
+        return runtime

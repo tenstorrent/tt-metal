@@ -40,8 +40,12 @@ from loguru import logger
 import ttnn
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
+from models.demos.common.prefill.media import build_injection
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
+from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
+from models.demos.minimax_m3.tt.residual import activation_mapper, use_sharded_residual
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
+from models.demos.minimax_m3.vision import format as media_format
 
 
 @dataclass
@@ -103,6 +107,10 @@ class TtPrefillRuntime:
     """Single-rank prefill execution lifecycle: build model -> compile(kv_cache) ->
     prefill_chunk(chunk, kv_cache). Owns the SP=8 × TP=4 ``Model``; the KV cache is engine-owned and
     passed into every call."""
+
+    supports_media = True
+    media_reader = None
+    """The first rank's EmbeddingReader (models/common/media_store/reader.py), set by the adapter."""
 
     def __init__(self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig):
         self.mesh_device = mesh_device
@@ -264,10 +272,6 @@ class TtPrefillRuntime:
         stand-in for a non-first pipeline rank, which receives the real activation over the D2D socket at
         run time."""
         cfg = self.config
-        dims = [None, None]
-        dims[cfg.sp_axis] = 2  # seq across SP rows
-        if cfg.pipeline_activation_emb_tp_sharded:
-            dims[cfg.tp_axis] = 3  # emb across TP cols (else replicated on tp -> left None)
         zeros = torch.zeros(1, 1, cfg.forward_tokens_budget, self.hf_config.hidden_size, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
@@ -275,7 +279,13 @@ class TtPrefillRuntime:
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=tuple(dims), mesh_shape=cfg.mesh_shape),
+            mesh_mapper=activation_mapper(
+                self.mesh_device,
+                mesh_shape=cfg.mesh_shape,
+                sp_axis=cfg.sp_axis,
+                tp_axis=cfg.tp_axis,
+                emb_tp_sharded=cfg.pipeline_activation_emb_tp_sharded,
+            ),
         )
 
     def make_chunk_input(self, token_ids: list, actual_start: int = 0) -> ttnn.Tensor:
@@ -328,6 +338,33 @@ class TtPrefillRuntime:
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
         return x
+
+    def _splice_media(self, x_embd: ttnn.Tensor, chunks: list, media_refs: list) -> ttnn.Tensor:
+        """x_embd with each ref's image positions overwritten by its stored embeddings. Consumes x_embd."""
+        cfg = self.config
+        hidden = self.hf_config.hidden_size
+        values = {}
+
+        def rows_of(ref):
+            if ref.media_key not in values:
+                buf = self.media_reader.fetch(ref.media_key)
+                h = media_format.read_header(buf)
+                if (h.n_tokens, h.hidden) != (ref.num_tokens, hidden):
+                    raise ValueError(f"{ref}: stored value has {h.n_tokens} tokens of width {h.hidden}")
+                values[ref.media_key] = media_format.embeddings(buf, h)
+            return values[ref.media_key]
+
+        rows, mask = build_injection(media_refs, chunks, rows_of, cfg.sp_factor, cfg.chunk_size // cfg.sp_factor)
+        return inject_media_embeddings(
+            self.mesh_device,
+            x_embd,
+            rows,
+            mask,
+            mesh_shape=cfg.mesh_shape,
+            sp_axis=cfg.sp_axis,
+            tp_axis=cfg.tp_axis,
+            emb_tp_sharded=use_sharded_residual(),
+        )
 
     def compile(self, kv_cache) -> None:
         """Warm the program cache so no served forward pays a first-run JIT.
@@ -387,6 +424,7 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         metadata_msg=None,
+        media_refs=(),
     ):
         """Prefill ONE chunk ``[actual_start, actual_end)`` into slot ``slot_id``: ``prefill_forward`` with a
         single chunk (forward_tokens_budget == chunk_size). See prefill_forward for the arguments."""
@@ -401,6 +439,7 @@ class TtPrefillRuntime:
             skip_lm_head=skip_lm_head,
             get_last_token=get_last_token,
             metadata_msg=metadata_msg,
+            media_refs=media_refs,
         )
 
     def prefill_forward(
@@ -415,6 +454,7 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         metadata_msg=None,
+        media_refs=(),
     ):
         """Prefill ONE forward of ``forward_tokens_budget // chunk_size`` ``chunks`` (common/prefill/prefill_chunk.py) into the
         engine-owned ``kv_cache``. Norms, projections and the MoE run once on all rows; the attention core
@@ -448,6 +488,8 @@ class TtPrefillRuntime:
                 (set_layer_completion_sink).
             record_dev: the forward's metadata tensor, unused here.
             metadata_msg: the forward's raw socket metadata tensor, sent as the D2H ack record.
+            media_refs: first rank only, the forward's MediaRefs (common/prefill/prefill_chunk.py); their image
+                positions take the stored embeddings media_reader returns instead of the token embeddings.
         """
         assert d2h_service is None or (
             metadata_msg is not None and len(chunks) == 1
@@ -472,7 +514,10 @@ class TtPrefillRuntime:
         if cfg.is_first_rank:
             x_embd = self._embed_tokens(input_tensor)
             ttnn.deallocate(input_tensor)
+            if media_refs:
+                x_embd = self._splice_media(x_embd, chunks, media_refs)
         else:
+            assert not media_refs, "media is spliced on the first rank only"
             x_embd = input_tensor
 
         # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks each chunk's rows

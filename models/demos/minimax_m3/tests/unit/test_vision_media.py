@@ -9,8 +9,11 @@ import numpy as np
 import pytest
 import torch
 
+from models.common.media_store.reader import Missing
+from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.minimax_m3.vision import format
 from models.demos.minimax_m3.vision.media import IMAGE_END, IMAGE_START, MiniMaxM3Media
+from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
 
 CONFIG = {"image_token_index": 200025, "text_config": {"hidden_size": 64}, "vision_config": {"patch_size": 14}}
 
@@ -87,3 +90,13 @@ def test_image_pickles_out_of_band():
     back = pickle.loads(stream, buffers=buffers)
     assert (back.grid_h, back.grid_w) == (item.grid_h, item.grid_w)
     assert np.array_equal(back.pixels, item.pixels)
+
+
+def test_stub_reader_serves_stub_keys(expect_error):
+    reader = StubEmbeddingReader(64)
+    key = stub_media_key(6, 0)
+    value = reader.fetch(key)
+    assert format.read_header(value) == format.Header(1, 6, 6, 64)
+    assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1)))
+    with expect_error(Missing, "00"):
+        reader.fetch(bytes(32))
