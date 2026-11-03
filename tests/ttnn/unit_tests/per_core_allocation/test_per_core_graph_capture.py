@@ -68,7 +68,8 @@ def test_graph_capture_links_per_core_tensor_to_its_allocation(per_core_mesh_dev
 @requires_hybrid_allocator
 def test_graph_capture_reports_each_device_of_per_core_tensor(mesh_device):
     """Each device places a per-core allocation itself, so graph capture must report every device's tensor under its
-    own device ID, and give the tensor no single address."""
+    own device ID, and give the tensor no single address. The devices' allocations share the MeshBuffer's ID, so they
+    must be recorded under one buffer node linked to the tensor."""
     if mesh_device.get_num_devices() < 2:
         pytest.skip("Requires at least 2 devices")
     core = ttnn.CoreCoord(0, 0)
@@ -90,6 +91,13 @@ def test_graph_capture_reports_each_device_of_per_core_tensor(mesh_device):
     )
     ttnn.from_device(tensor)
     graph = ttnn.graph.end_graph_capture()
+
+    # Every device records its own allocation event, and all of them connect to the one buffer node of the MeshBuffer.
+    allocations = [node for node in graph if node["node_type"] == "buffer_allocate"]
+    assert len(allocations) == mesh_device.get_num_devices()
+    allocated_buffers = {connection for node in allocations for connection in node["connections"]}
+    assert len(allocated_buffers) == 1, "the devices' allocations were recorded under separate buffer nodes"
+    assert_tensor_linked_to_its_allocation(graph)
 
     tensor_nodes = [
         node
