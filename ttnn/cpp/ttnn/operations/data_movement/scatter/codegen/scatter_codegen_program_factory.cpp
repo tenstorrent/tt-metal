@@ -215,14 +215,12 @@ ScatterPageMap compute_scatter_page_map(const ttnn::Shape& input_shape, const tt
     return page_map;
 }
 
-ScatterTileGeometry compute_scatter_tile_geometry(
-    const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& src_tensor) {
+ScatterTileGeometry compute_scatter_tile_geometry(const Tensor& input_tensor, const Tensor& index_tensor) {
     const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
 
     const auto& padded_input = input_tensor.padded_shape();
     const auto& padded_index = index_tensor.padded_shape();
-    const auto& padded_src = src_tensor.padded_shape();
     const auto& logical_index = index_tensor.logical_shape();
 
     const uint32_t Ht =
@@ -236,7 +234,7 @@ ScatterTileGeometry compute_scatter_tile_geometry(
     const uint32_t idx_w_mod = logical_index[-1] % tile_w;
     const uint32_t idx_valid_w_last = idx_w_mod != 0 ? idx_w_mod : tile_w;
 
-    const uint32_t Ht_per_batch_index = padded_src[-2] / tile_h;
+    const uint32_t Ht_per_batch_index = padded_index[-2] / tile_h;
 
     return ScatterTileGeometry{
         Ht,
@@ -335,14 +333,14 @@ uint32_t scatter_rm_chunk_elems(
         const uint64_t budget = usable_l1 > fixed_bytes ? usable_l1 - fixed_bytes : 0;
         const uint64_t affordable = budget / per_elem_bytes;
         chunk = static_cast<uint32_t>(std::min<uint64_t>(affordable, chunk));
-        // Chunking is now actually in play (chunk < index_stick_elems): preserve the 32-byte NOC
-        // alignment every chunk-boundary offset needs.
+        // Chunking is now actually in play (chunk < index_stick_elems): preserve the NOC alignment
+        // (kRmChunkAlign) every chunk-boundary offset needs.
         chunk = (chunk / kRmChunkAlign) * kRmChunkAlign;
-        // The forced entry and direct prim callers are gated on the static bank only, and even a routed
-        // call's own L1 output seats between routing and this factory, so the frontier read here can
-        // be tighter than what was planned against. Rounding an under-budget affordance down to zero
-        // would hand the reader kernels a chunk_elems that never advances their `base += chunk_elems`
-        // loop, hanging the device instead of failing. Clamp to the smallest NOC-alignment-safe chunk
+        // The forced entry and direct prim callers are gated on the static bank only, so the frontier
+        // read here can be tighter than what they planned against. Rounding an under-budget
+        // affordance down to zero would hand the reader kernels a chunk_elems that never advances
+        // their `base += chunk_elems` loop, hanging the device instead of failing. Clamp to the
+        // smallest NOC-alignment-safe chunk
         // and let Program::validate_circular_buffer_region raise a real allocation error if even that
         // does not fit.
         chunk = std::max(chunk, kRmMinChunkElems);

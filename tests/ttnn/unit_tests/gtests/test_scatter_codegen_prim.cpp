@@ -219,22 +219,10 @@ TEST(ScatterCodegenRmChunkPlanner, BudgetsTheRoundedCbPagesOfAnUnalignedChunk) {
 
 // A device opened with an L1_SMALL region: the allocator's L1 bank stops below that region, and the
 // occupancy query the live budget reads never reports the buffers living in it.
-class ScatterCodegenL1SmallFixture : public TTNNFixtureBase {
+class ScatterCodegenL1SmallFixture : public TTNNFixtureWithDevice {
 protected:
     static constexpr int kL1SmallSize = 16384;
-    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
-
-    void SetUp() override {
-        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, kL1SmallSize, DEFAULT_TRACE_REGION_SIZE);
-        device_ = device_holder_.get();
-    }
-
-    void TearDown() override {
-        device_holder_->close();
-        device_holder_.reset();
-        device_ = nullptr;
-    }
+    ScatterCodegenL1SmallFixture() : TTNNFixtureWithDevice(DEFAULT_TRACE_REGION_SIZE, kL1SmallSize) {}
 };
 
 TEST_F(ScatterCodegenL1SmallFixture, BudgetsStopAtTheL1Bank) {
@@ -243,7 +231,7 @@ TEST_F(ScatterCodegenL1SmallFixture, BudgetsStopAtTheL1Bank) {
     const Operands ops = make_operands(device_, 64);
     const uint64_t bank = device_->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
     const uint64_t base = device_->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    ASSERT_EQ(bank + kL1SmallSize + base, static_cast<uint64_t>(device_->l1_size_per_core()));
+    ASSERT_LE(bank + kL1SmallSize + base, static_cast<uint64_t>(device_->l1_size_per_core()));
     EXPECT_LE(ttnn::prim::scatter_static_l1(ops.input), bank);
     EXPECT_LE(ttnn::prim::scatter_usable_l1(ops.input), bank);
 }

@@ -403,7 +403,14 @@ Tensor scatter_codegen_dispatch(
     const auto input_tensor_rank = input_tensor.logical_shape().rank();
 
     const int32_t normalized_dim = dim < 0 ? dim + input_tensor_rank : dim;
+    TT_FATAL(
+        normalized_dim >= 0 && normalized_dim < static_cast<int32_t>(input_tensor_rank),
+        "scatter: dim {} is out of range for tensor rank {}",
+        dim,
+        input_tensor_rank);
 
+    // Native's entry contract, applied unchanged: both legs accept the same calls, so a forced-leg
+    // comparison always has a native golden; widening this leg's scope is a separate decision.
     check_support(input_tensor, index_tensor, source_tensor, normalized_dim);
     validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
@@ -434,7 +441,8 @@ Tensor scatter_codegen_dispatch(
         transformed_source_tensor,
         transformed_input_tensor.logical_shape(),
         transformed_index_tensor.logical_shape(),
-        final_memory_config);
+        final_memory_config,
+        /*pending_tile_bytes=*/0);
     if (rerouted_to_row_major) {
         // ttnn::untilize, not to_layout: to_layout sends a padded operand (the transposed index and
         // source, whose width is no longer tile-aligned) straight to the native untilize-with-unpadding
@@ -525,11 +533,14 @@ Tensor scatter(
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
     // Where a call lands, first match wins:
     //   - not Wormhole/Blackhole, outside the codegen scope (dtype, layout, tile, padding, sharding,
-    //     reduce, page rank, host operand), or an output placement its factories cannot write
+    //     reduce, page rank, empty operand, dim range, host operand, ROW_MAJOR sticks past the
+    //     static L1 bank), or an output placement its factories cannot write
     //                                                                      -> native
     //   - TILE with a unit pre-last working dim that the row-major detour declines
     //                                                                      -> native (demoted)
-    //   - ROW_MAJOR whose resident input/output sticks do not fit the L1 free right now
+    //   - ROW_MAJOR whose resident input/output sticks (and FP32 accumulator for a reduce) plus the
+    //     smallest index/src chunk do not fit the L1 free right now once this call's own copies and
+    //     output are deducted
     //                                                                      -> native
     //   - TILE whose streaming tile pages do not fit the L1 free right now once this call's own
     //     copies and output are deducted, and that the detour below declines

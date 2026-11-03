@@ -92,13 +92,14 @@ def test_scatter_codegen_row_axis_small_shapes_route_to_codegen(device, shape, i
 def test_scatter_codegen_tile_dram_input_l1_output_runs_tile_factory(device):
     # Ht == 1 qualifies for the row-major detour on shape alone, but the detour's ROW_MAJOR factories
     # cannot write an output whose buffer type differs from the input's; the call must take the TILE
-    # factory instead of being rerouted into a validate failure.
+    # factory instead of being rerouted into a validate failure. The TILE factory is one program
+    # beyond native's; the detour would add its untilize programs and the ROW_MAJOR factory.
     xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.TILE_LAYOUT, device)
     assert xt.memory_config().buffer_type == ttnn.BufferType.DRAM
     out, added = _run_auto_against_native(device, xt, it, st, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
     assert out.memory_config().buffer_type == ttnn.BufferType.L1
     assert out.layout == ttnn.TILE_LAYOUT
-    assert added > 0, "auto fell back to native; expected the codegen TILE factory to serve this call"
+    assert added == 1, "expected the codegen TILE factory's one program beyond native's"
 
 
 @pytest.mark.parametrize(
@@ -111,12 +112,13 @@ def test_scatter_codegen_unit_row_tile_demotion_follows_detour(device, output_me
     # the input's own placement the detour runs; with a different placement the detour is unavailable
     # and the case is demoted to native rather than paying the TILE factories' padded-row cost.
     # is_demoted() normalizes the caller's raw dim before its unit-row check, so the last axis demotes
-    # the same whether spelled 3 or -1.
+    # the same whether spelled 3 or -1. The detour adds the untilize of each operand and the
+    # ROW_MAJOR factory beyond native's programs; the TILE factory alone would add one.
     xt, it, st = _make_case([1, 1, 1, 64], [1, 1, 1, 32], dim, ttnn.TILE_LAYOUT, device)
     kwargs = {} if output_memory_config is None else {"memory_config": output_memory_config}
     _, added = _run_auto_against_native(device, xt, it, st, dim, **kwargs)
     if expect_codegen:
-        assert added > 0, "auto fell back to native; expected the codegen row-major detour to serve this call"
+        assert added > 1, "expected the row-major detour's untilizes and ROW_MAJOR factory beyond native's"
     else:
         assert added == 0, "auto routed a unit TILE row the detour cannot serve to codegen; expected native"
 
@@ -204,7 +206,7 @@ def test_scatter_codegen_row_major_under_l1_pressure_stays_native(device):
     _, added = _run_auto_against_native(device, xt, it, st, -1)
     assert added > 0, "auto fell back to native on a free L1; expected the codegen ROW_MAJOR factory"
     blocker = ttnn.from_torch(
-        torch.zeros([1, 262144], dtype=torch.bfloat16),
+        torch.zeros([1, 512 * 1024 // 2], dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -396,7 +398,7 @@ def test_scatter_codegen_program_cache_key_follows_the_l1_frontier(device):
     assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st)))
     assert device.num_program_cache_entries() == entries_before + 1
     blocker = ttnn.from_torch(
-        torch.zeros([1, 24576], dtype=torch.bfloat16),
+        torch.zeros([1, 48 * 1024 // 2], dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
