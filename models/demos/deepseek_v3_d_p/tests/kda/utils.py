@@ -60,6 +60,29 @@ def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     return profile(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, **overrides)
 
 
+@dataclass(frozen=True)
+class AffineTransform:
+    """State-space affine map ``state -> a @ state + b``."""
+
+    a: ttnn.Tensor
+    b: ttnn.Tensor
+
+
+def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
+    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the relay carries."""
+    batch_heads, key_dim = tuple(transform.a.shape)[0], tuple(transform.a.shape)[1]
+    value_dim = transform.b.shape[-1]
+    packed = ttnn.concat(
+        [
+            ttnn.reshape(transform.a, (1, batch_heads, key_dim, key_dim)),
+            ttnn.reshape(transform.b, (1, batch_heads, key_dim, value_dim)),
+        ],
+        dim=3,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    return ttnn.typecast(packed, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 def distributed_prefix(
     packed: ttnn.Tensor,
     initial_state: ttnn.Tensor,

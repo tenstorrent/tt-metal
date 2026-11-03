@@ -5,12 +5,17 @@
 (ttnn.experimental.kda.entry_correction): every chunk's output from its entry state, all chunks in parallel.
 
 Each head's chunks are spread over `cores_per_head` cores; the summary writes its emitted terms sharded so each core's
-chunk rows, F(0) then F(I), are in its own L1 (terms_memory_config).
+chunk rows, F(0) then F(I), are in its own L1 (terms_memory_config). When a core's share is over
+KDA_ENTRY_CORRECTION_TERMS_L1_BYTES_PER_CORE the terms stay in DRAM and each core streams its chunk rows.
 """
 
 from __future__ import annotations
 
 import ttnn
+
+# A core's share of the emitted FP32 terms (F(0) and F(I) of its chunks) that stays in its L1; beyond it they stream
+# from DRAM (Kimi-K3: 320 KiB per core at 1280 rows per chip).
+KDA_ENTRY_CORRECTION_TERMS_L1_BYTES_PER_CORE = 320 * 1024
 
 
 class EntryCorrection:
@@ -42,10 +47,15 @@ class EntryCorrection:
         # The emitted terms land in the L1 of the core that consumes them: each core takes whole chunks (cores_per_head
         # divides them), so a core's shard is its chunk rows of F(0) and F(I), and the correction reads nothing over the
         # NoC for them.
-        self.terms_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(core_set, (2 * per_core * ttnn.TILE_SIZE, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
+        streamed = 2 * per_core * ttnn.TILE_SIZE * key_dim * 4 > KDA_ENTRY_CORRECTION_TERMS_L1_BYTES_PER_CORE
+        self.terms_memory_config = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if streamed
+            else ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(core_set, (2 * per_core * ttnn.TILE_SIZE, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            )
         )
         # The products accumulate in an FP32 DST at the scan's fidelity.
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -53,7 +63,7 @@ class EntryCorrection:
         )
         # Where the summary writes the emitted terms, and where the chunk outputs go.
         self.memory_config = ttnn.L1_MEMORY_CONFIG
-        self.output_memory_config = ttnn.L1_MEMORY_CONFIG
+        self.output_memory_config = ttnn.DRAM_MEMORY_CONFIG if streamed else ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, terms, final_a, final_b, entry, tail_entry, actual_start, actual_end):
         """Return (output [BH, NC, 32, V] BF16, final state [BH, K, V] FP32)."""

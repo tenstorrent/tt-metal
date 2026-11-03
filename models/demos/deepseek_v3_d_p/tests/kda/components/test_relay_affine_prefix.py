@@ -15,8 +15,13 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.utils import distributed_prefix, kda_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import AffineTransform, _RelayFinalCarry, _sp_links, pack_transform
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    AffineTransform,
+    distributed_prefix,
+    kda_device_params,
+    pack_transform,
+)
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start

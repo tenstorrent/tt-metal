@@ -13,10 +13,12 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    AffineTransform,
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
     distributed_prefix,
     kda_device_params,
+    pack_transform,
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
@@ -421,9 +423,8 @@ _STRADDLE_RANKS, _STRADDLE_LOCAL_ROWS = 4, 128
         pytest.param(1, 128 + 64, 160, id="g1-empty-ranks"),
         pytest.param(1, 128 + 64, 480, id="g1-end-inside-tail"),
         pytest.param(1, 4 * 128 + 128 + 32, None, id="g1-start-beyond-span"),
-        # Several groups per head: reduced head slots and per-group head/tail slots. A three-chunk head splits
-        # group 1 of two (it straddles: both of its slots are live) or ends exactly at group 2 of four (a
-        # group-aligned reset at a nonzero group); a two-chunk head ends group 0 of two.
+        # A sequence-parallel head is one group whatever summary_group_chunks asks: these splits (a three- or
+        # two-chunk head, a reset at a chunk boundary) must match the one-group path too.
         pytest.param(2, 128 + 32, None, id="g2-split-mid-group1"),
         pytest.param(4, 128 + 32, None, id="g4-split-late-reset"),
         pytest.param(2, 128 + 64, None, id="g2-split-group-boundary"),
@@ -537,7 +538,7 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         return ttnn.reshape(tensor, (1, 32, 32))
 
     entry, final = distributed_prefix(
-        recurrence.pack_transform(recurrence.AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1)))),
+        pack_transform(AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1)))),
         to_mesh(initial, (None, 1)),
         sequence_parallel_axis=0,
         compute_config=ttnn.init_device_compute_kernel_config(
