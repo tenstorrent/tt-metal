@@ -137,7 +137,8 @@ def _run_sfpu_ema(
     With ``is_perf=True``, ``perf_report`` is required, ``run_types`` selects the
     measured paths, ``loop_factor`` amortizes their tile loops, and the runner returns
     ``None`` without generating host stimuli or a golden. ``binary_init_before_ema``
-    is functional-only; it runs an eltwise binary init between datacopy and ``ema_tile``.
+    runs an eltwise binary init between datacopy and ``ema_tile``. Perf always
+    emits it as false, so the shared kernel has the constexpr on every build.
     """
     if is_perf and binary_init_before_ema:
         raise ValueError("binary_init_before_ema is not supported when is_perf=True")
@@ -188,6 +189,7 @@ def _run_sfpu_ema(
             NUM_FACES(num_faces=faces_to_generate),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema),
         ],
         "runtimes": [],
         "variant_stimuli": StimuliConfig(
@@ -205,9 +207,6 @@ def _run_sfpu_ema(
         "compile_time_formats": True,
     }
     if not is_perf:
-        test_config_kwargs["templates"].append(
-            EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema)
-        )
         test_config_kwargs["disable_format_inference"] = True
 
     configuration = create_test_or_perf_config(
