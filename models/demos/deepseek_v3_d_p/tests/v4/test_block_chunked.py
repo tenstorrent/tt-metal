@@ -14,7 +14,7 @@ cross-layer error arrives. Along the sequence the block runs free: chunk c+1 att
 that chunk c wrote, and nothing golden is injected between them, because that accumulation is the
 subject.
 
-Nothing is seeded. The attention owns its state and allocates it zeroed (``TtHCA.alloc_state``), so
+Nothing is seeded. The attention owns its state and allocates it zeroed (``TtHCA.new_state``), so
 the run starts at token 0 with an empty cache and builds it as it goes; the golden's cache is a
 comparison target, never an input.
 """
@@ -158,7 +158,7 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, variant, layer_i
     rate = config.compress_rates[attn_kind]
     entries = -(-total_len // rate)
     device_cache = ttnn.to_torch(
-        block.attn_state.compressed_kv, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        block.attn_states[0].compressed_kv, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     ).float()[0, 0, :entries]
     golden_cache = trace.compressed_entries(layer_idx, entries)
     nope = config.head_dim - config.qk_rope_head_dim  # 448, the golden's kv_nope_dim
