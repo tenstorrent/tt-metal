@@ -33,7 +33,6 @@ Tensor select_final_carry(
     uint32_t local_rows,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    bool prefix_on_last_rank = false,
     const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores = std::nullopt,
     const std::optional<std::array<uint32_t, 2>>& semaphore_addresses = std::nullopt);
 

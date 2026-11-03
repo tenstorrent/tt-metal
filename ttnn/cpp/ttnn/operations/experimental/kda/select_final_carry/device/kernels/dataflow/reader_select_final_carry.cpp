@@ -46,7 +46,7 @@ void stream_tiles(const Accessor& source, uint32_t tile, uint32_t end_tile) {
     }
 }
 
-// Derive the chronology, publish this rank's mode to the writer, and stream the tiles it sends or copies.
+// Derive the chronology, publish this rank's mode to the writer, and stream the tiles it sends.
 void kernel_main() {
     using namespace kda_select_final_carry;
     const uint32_t tail_address = get_common_arg_val<uint32_t>(0);
@@ -54,8 +54,6 @@ void kernel_main() {
     const uint32_t start_address = get_common_arg_val<uint32_t>(2);
     const uint32_t end_address = get_common_arg_val<uint32_t>(3);
     size_t arg = 0;
-    const uint32_t copy_begin = get_arg_val<uint32_t>(arg++);
-    const uint32_t copy_end = get_arg_val<uint32_t>(arg++);
     const uint32_t send_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t send_end = get_arg_val<uint32_t>(arg++);
 
@@ -74,20 +72,13 @@ void kernel_main() {
     } else {
         topology = kda_chronology::derive(actual_start, sp_rank, sp_size, local_rows);
     }
-#ifdef PREFIX_ON_LAST_RANK
-    // The prefix's final state is not replicated: without a split tail, the last chronological rank multicasts it.
-    const uint32_t last_rank = (topology.first_rank + sp_size - 1) % sp_size;
-    const Mode mode = !topology.split ? (last_rank == sp_rank ? broadcast : receive)
-                                      : (topology.final_owner == sp_rank ? broadcast : receive);
-#else
-    const Mode mode = !topology.split ? copy_prefix : (topology.final_owner == sp_rank ? broadcast : receive);
-#endif
+    // The final state is the split tail's, else the prefix's, which only the last chronological rank holds.
+    const uint32_t holder = topology.split ? topology.final_owner : (topology.first_rank + sp_size - 1) % sp_size;
+    const Mode mode = holder == sp_rank ? broadcast : receive;
     words[0] = mode;
     cb_push_back(mode_cb, 1);
 
-    if (mode == copy_prefix) {
-        stream_tiles<false>(TensorAccessor(prefix_args, prefix_address), copy_begin, copy_end);
-    } else if (mode == broadcast) {
+    if (mode == broadcast) {
         if (topology.split) {
             stream_tiles<true>(TensorAccessor(tail_args, tail_address), send_begin, send_end);
         } else {

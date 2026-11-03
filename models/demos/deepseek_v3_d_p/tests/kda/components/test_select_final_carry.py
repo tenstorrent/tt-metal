@@ -196,8 +196,8 @@ def test_select_final_carry_rejects_contract_violations(mesh_device, case, error
     indirect=True,
 )
 def test_select_final_carry_from_the_last_rank(mesh_device):
-    """prefix_on_last_rank: only the last chronological rank holds the prefix's final state and multicasts it, on the
-    caller's cores and semaphores."""
+    """Only the last chronological rank holds the prefix's final state and multicasts it, on the caller's cores and
+    semaphores."""
     torch.manual_seed(0)
     sp_size, tp_size = tuple(mesh_device.shape)
     width = tp_size * _VALUE
@@ -227,7 +227,6 @@ def test_select_final_carry_from_the_last_rank(mesh_device):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 sequence_parallel_axis=0,
                 cores=cores,
-                prefix_on_last_rank=True,
                 semaphores=semaphores,
             )
             carry = ttnn.experimental.kda.select_final_carry(rank_final_tt, prefix_tt, **kwargs)

@@ -37,7 +37,6 @@ ttnn::Tensor select_final_carry(
     uint32_t sequence_parallel_axis,
     std::optional<uint32_t> num_links,
     const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores,
-    bool prefix_on_last_rank,
     const std::optional<std::vector<tt::tt_metal::GlobalSemaphore>>& semaphores) {
     // Validation runs on cache misses only; the device must be known before then to pick the links.
     TT_FATAL(
@@ -65,7 +64,6 @@ ttnn::Tensor select_final_carry(
         local_rows,
         links,
         topology,
-        prefix_on_last_rank,
         cores,
         semaphore_addresses(semaphores));
 }

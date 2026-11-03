@@ -27,40 +27,19 @@ constexpr uint32_t range_hops_backward = get_compile_time_arg_val(8);
 constexpr bool unicast_peers = get_compile_time_arg_val(9);
 constexpr auto output_args = TensorAccessorArgs<10>();
 
-// Write the final carry: copy the prefix locally when unsplit; when split, the owner writes its tail's final
-// state locally and multicasts it along the sequence-parallel line, and the other ranks wait for its arrival.
+// Write the final carry: the rank holding it writes it locally and multicasts it along the sequence-parallel line,
+// and the other ranks wait for its arrival.
 void kernel_main() {
     using namespace kda_select_final_carry;
     const uint32_t output_address = get_common_arg_val<uint32_t>(0);
     size_t arg = 0;
-    const uint32_t copy_begin = get_arg_val<uint32_t>(arg++);
-    const uint32_t copy_end = get_arg_val<uint32_t>(arg++);
     const uint32_t send_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t send_end = get_arg_val<uint32_t>(arg++);
-    const bool fabric_worker = get_arg_val<uint32_t>(arg++);
     const auto output = TensorAccessor(output_args, output_address);
 
     cb_wait_front(mode_cb, 1);
     const Mode mode = static_cast<Mode>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(mode_cb))[0]);
     cb_pop_front(mode_cb, 1);
-
-    if (mode == copy_prefix) {
-        for (uint32_t tile = copy_begin; tile < copy_end;) {
-            cb_wait_front(tiles_cb, packet_pages);
-            uint32_t l1_address = get_read_ptr(tiles_cb);
-            const uint32_t packet_end = tile + packet_pages < copy_end ? tile + packet_pages : copy_end;
-            for (; tile < packet_end; ++tile, l1_address += page_size) {
-                noc_async_write_page(tile, output, l1_address);
-            }
-            noc_async_writes_flushed();
-            cb_pop_front(tiles_cb, packet_pages);
-        }
-        noc_async_write_barrier();
-        return;
-    }
-    if (!fabric_worker) {
-        return;
-    }
 
     const size_t arrival_semaphore = get_arg_val<uint32_t>(arg++);
     const uint8_t drain_x = get_arg_val<uint32_t>(arg++);

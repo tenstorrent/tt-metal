@@ -24,7 +24,6 @@ ttnn::Tensor select_final_carry(
     uint32_t sequence_parallel_axis = 0,
     std::optional<uint32_t> num_links = std::nullopt,
     const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores = std::nullopt,
-    bool prefix_on_last_rank = false,
     const std::optional<std::vector<tt::tt_metal::GlobalSemaphore>>& semaphores = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

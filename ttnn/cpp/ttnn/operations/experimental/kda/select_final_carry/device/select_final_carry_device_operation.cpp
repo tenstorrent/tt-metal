@@ -74,8 +74,8 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
         attrs.num_links,
         available_links);
     TT_FATAL(
-        !attrs.prefix_on_last_rank || mesh->shape()[attrs.sequence_parallel_axis] > 1,
-        "{}: prefix_on_last_rank needs more than one sequence-parallel rank",
+        mesh->shape()[attrs.sequence_parallel_axis] > 1,
+        "{}: needs more than one sequence-parallel rank",
         operation_name);
     TT_FATAL(
         !attrs.cores || attrs.cores->size() >= attrs.num_links, "{}: needs a core per fabric link", operation_name);
@@ -106,7 +106,6 @@ Tensor select_final_carry(
     uint32_t local_rows,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    bool prefix_on_last_rank,
     const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores,
     const std::optional<std::array<uint32_t, 2>>& semaphore_addresses) {
     return ttnn::device_operation::launch<SelectFinalCarryOperation>(
@@ -116,7 +115,6 @@ Tensor select_final_carry(
             .num_links = num_links,
             .topology = topology,
             .output_mem_config = memory_config,
-            .prefix_on_last_rank = prefix_on_last_rank,
             .cores = cores,
             .semaphore_addresses = semaphore_addresses},
         SelectFinalCarryInputs{
