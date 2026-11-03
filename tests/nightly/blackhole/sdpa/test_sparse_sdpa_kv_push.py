@@ -210,12 +210,12 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     grid = mesh_device.compute_with_storage_grid_size()
     if (grid.x, grid.y) != (12, 10):
         pytest.skip(f"needs the 12x10 Galaxy grid, got {grid}")
-    kv_fmt, chunk_global, links = "fp8", 5120, 2
+    kv_fmt, chunk_global, links = "bf16", 5120, 2  # SCRATCH: bf16 probe
     sdpa_grid, push_grid = _cols(0, 7), _cols(8, 11)
     n_dev = mesh_device.get_num_devices()
     stripe_chunk = s_local = chunk_global // n_dev
     cache_tokens = _TRACE_1M_START + chunk_global
-    page_bytes = 704  # 656 B scaled FP8 rows, DRAM aligned
+    page_bytes = {"fp8": 704, "bf16": 1152}[kv_fmt]  # SCRATCH: bf16 probe
     pages_per_packet, banks = packet_shape(mesh_device, page_bytes)
     # Capped at the chip's query rows x top-k, as the model sizes it, not at the cache.
     buffer_rows = min(cache_tokens, s_local * TOPK) + n_dev * pages_per_packet * banks
@@ -343,11 +343,11 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
 
     f = _trace_1m_topk(layer)
-    kv_fmt, chunk_global, links = "fp8", 5120, 2
+    kv_fmt, chunk_global, links = "bf16", 5120, 2  # SCRATCH: bf16 probe
     num_devices = mesh_device.get_num_devices()
     stripe_chunk = query_rows = chunk_global // num_devices
     cache_tokens = _TRACE_1M_START + chunk_global
-    page_bytes = 704  # 656 B scaled FP8 rows, DRAM aligned
+    page_bytes = {"fp8": 704, "bf16": 1152}[kv_fmt]  # SCRATCH: bf16 probe
     planner = SparseKvPushPlanner(mesh_device, links)
     attention_grid, push_grid = planner.grids(query_rows)
     manager = planner.prefetch_manager(query_rows)
