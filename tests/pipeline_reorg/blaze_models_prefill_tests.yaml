@@ -2190,6 +2190,8 @@
   # Split-KV ring MLA gathers KV over the full-mesh snake, so only its perf check gets the
   # TorusXY descriptor (see fabric_profile); it holds split KV within 2.5% of the classic SP
   # ring measured back to back. Its accuracy cases run on QB2 (blackhole_multi_card_sanity_tests).
+  # The Gemma4 check runs only its global cases here: Gemma4's sliding layers use the Gemma4 fork,
+  # so its sliding cases run in the "(Gemma4-31B-it) sliding ring SDPA perf" leg.
   cmd: |
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export LOGURU_LEVEL=ERROR
@@ -2199,7 +2201,6 @@
       export OMP_NUM_THREADS=$(nproc)
       rc=0
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
-      # Gemma4's sliding cases run in the Gemma4 sliding ring SDPA perf leg: its sliding layers use the Gemma4 fork.
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -k gemma4_global -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy -k "kimi_k3" -svv || rc=1
