@@ -162,8 +162,8 @@ class _Value:
 
 
 def _view_at(address: int, nbytes: int) -> memoryview:
-    """A memoryview of nbytes at address in this process, with no copy."""
-    return memoryview((ctypes.c_uint8 * nbytes).from_address(address)).cast("B")
+    """A read-only memoryview of nbytes at address in this process, with no copy."""
+    return memoryview((ctypes.c_uint8 * nbytes).from_address(address)).cast("B").toreadonly()
 
 
 class MooncakeEmbeddingStore:
@@ -233,17 +233,21 @@ class MooncakeEmbeddingStore:
 
     def size(self, media_key: bytes) -> int:
         """Bytes stored under media_key. Raises Missing or StoreUnavailable."""
+        if self._closed:
+            raise StoreUnavailable(f"the store on segment {self.segment} is closed")
         return self._locate(store_key(media_key)).size
 
     def fetch_ranges(self, media_key: bytes, ranges: Sequence[tuple[int, int]]) -> list[memoryview]:
         """The (offset, length) byte ranges of the value under media_key, one memoryview each; length -1 runs to the
         end of the value. Raises Missing, StoreUnavailable, or ValueError for a range outside the value.
 
-        A value in this host's segment comes back in place. The lookup gives this client a lease on the object: for
+        A value in this host's segment comes back in place, read-only. The lookup gives this client a lease on the object: for
         the master's --default_kv_lease_ttl (10 s by default) after the call, the master refuses to remove or evict
         it. After the lease it stays only while the writer's soft pin holds it (with allow_evict_soft_pinned_objects
         =false, the master does not evict it) and nothing removes it, so copy what you need before the lease ends. A
         value in another host's segment comes back as a copy that the caller owns."""
+        if self._closed:
+            raise StoreUnavailable(f"the store on segment {self.segment} is closed")
         t0 = time.perf_counter()
         key = store_key(media_key)
         try:
@@ -299,8 +303,6 @@ class MooncakeEmbeddingStore:
     def _read_remote(self, key: str, size: int, spans: list[tuple[int, int]]) -> list[memoryview]:
         """The spans of a value in another host's segment, copied out of the read buffer. A whole-value read costs
         one more lookup at the master; a partial one costs two, but moves only the requested bytes."""
-        if not spans:
-            return []
         total = sum(length for _, length in spans)
         if total > self._read_buffer.nbytes:
             raise StoreUnavailable(
@@ -308,20 +310,26 @@ class MooncakeEmbeddingStore:
                 f"({_ENV_PREFIX}READ_BUFFER)"
             )
         dst = np.cumsum([0] + [length for _, length in spans[:-1]]).tolist()
+        # Mooncake rejects empty ranges, so only the non-empty ones are read; empty ones come back empty.
+        reads = [(d, o, n) for d, (o, n) in zip(dst, spans) if n]
         with self._read_lock:
             ptr = self._read_buffer.ctypes.data
             if spans == [(0, size)]:
                 rc = self._client.get_into(key, ptr, size)
                 if rc != size:
                     self._raise_for(key, rc, size)
-            else:
+            elif reads:
                 got = self._client.get_into_ranges(
-                    [ptr], [[key]], [[dst]], [[[o for o, _ in spans]]], [[[n for _, n in spans]]]
+                    [ptr],
+                    [[key]],
+                    [[[d for d, _, _ in reads]]],
+                    [[[o for _, o, _ in reads]]],
+                    [[[n for _, _, n in reads]]],
                 )[0][0]
-                for rc, (_, length) in zip(got, spans):
+                for rc, (_, _, length) in zip(got, reads):
                     if rc != length:
                         self._raise_for(key, rc, length)
-            return [memoryview(self._read_buffer[o : o + n].copy()) for o, (_, n) in zip(dst, spans)]
+            return [memoryview(self._read_buffer[d : d + n].copy()) for d, (_, n) in zip(dst, spans)]
 
 
 def open_media_store_from_env(environ: Mapping[str, str] = os.environ) -> Optional[MooncakeEmbeddingStore]:

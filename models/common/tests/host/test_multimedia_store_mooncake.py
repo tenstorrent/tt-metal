@@ -77,6 +77,7 @@ def _wait_until_healthy(master: subprocess.Popen, metrics_port: int, log) -> Non
 def cluster(tmp_path_factory):
     rpc, http, metrics = _free_port(), _free_port(), _free_port()
     log = tmp_path_factory.mktemp("mooncake") / "master.log"
+    log_file = open(log, "w")
     master = subprocess.Popen(
         [
             _master_binary(),
@@ -86,7 +87,7 @@ def cluster(tmp_path_factory):
             "--allow_evict_soft_pinned_objects=false",
             f"--metrics_port={metrics}",
         ],
-        stdout=open(log, "w"),
+        stdout=log_file,
         stderr=subprocess.STDOUT,
     )
     _wait_until_healthy(master, metrics, log)
@@ -114,6 +115,7 @@ def cluster(tmp_path_factory):
         store.close()
         master.terminate()
         master.wait(timeout=30)
+        log_file.close()
 
 
 class SimpleCluster:
@@ -178,9 +180,11 @@ def test_range_read(cluster, where):
     segment = cluster.store.segment if where == "this_host" else cluster.other.segment
     media_key, value = cluster.put(segment)
     row = 6144 * 2
-    ranges = [(0, 64), (64 + 100 * row, 37 * row), (IMAGE_BYTES - row, row)]  # header, rows 100-136, the last row
+    # The header, rows 100-136, an empty range, and the last two rows given as "to the end".
+    ranges = [(0, 64), (64 + 100 * row, 37 * row), (64, 0), (IMAGE_BYTES - 2 * row, -1)]
+    want = [value[:64], value[64 + 100 * row : 64 + 137 * row], value[64:64], value[IMAGE_BYTES - 2 * row :]]
     got = cluster.store.fetch_ranges(media_key, ranges)
-    assert [bytes(v) for v in got] == [value[o : o + n].tobytes() for o, n in ranges]
+    assert [bytes(v) for v in got] == [w.tobytes() for w in want]
 
 
 def test_missing_key(cluster):

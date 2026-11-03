@@ -134,6 +134,7 @@ def test_local_value_is_read_in_place_with_one_lookup(setup):
     assert bytes(view) == local.tobytes()
     local[0] ^= 0xFF  # the view aliases the segment
     assert view[0] == local[0]
+    assert view.readonly
     assert client.lookups == 1
     assert store.size(_key(1)) == local.nbytes
     s = store.stats.snapshot()
@@ -158,6 +159,14 @@ def test_ranges(setup, key):
     got = store.fetch_ranges(_key(key), ranges)
     assert [bytes(v) for v in got] == [w.tobytes() for w in want]
     assert store.stats.snapshot()["bytes_read"] == sum(w.nbytes for w in want)
+
+
+def test_closed_store_is_unavailable(setup):
+    _, store, _, _ = setup
+    store.close()
+    for read in (store.fetch, store.size):
+        with pytest.raises(StoreUnavailable, match="closed"):
+            read(_key(1))
 
 
 def test_range_outside_value(setup):
