@@ -19,7 +19,7 @@ Description:
     asserts on, each list starts with a count word, which is skipped.
 
     Each value carries the name metal gives it: Metal 2.0 arg names, tensor::<accessor> and
-    scratch::<accessor> slots, and tt-blaze's named args. Other values are known by position only.
+    scratch::<accessor> slots. Other values are known by position only.
     A RISC not enabled by the launch, or running a kernel Inspector does not know, has no args (None).
 
 Owner:
