@@ -543,7 +543,7 @@ class Attention(Module):
         )
 
         # Combined RoPE: concat spatial and prompt tensors along the seq dim (dim=2).
-        sequence_1_cos, sequence_1_sin = sequence_1_rope
+        sequence_1_cos, sequence_1_sin = sequence_1_rope if sequence_1_rope is not None else (None, None)
         trans_mat = self.trans_mat if sequence_1_rope is not None else None
 
         # Single norm_q/norm_k/v on the full combined [spatial+prompt] shard.
@@ -646,7 +646,7 @@ class Attention(Module):
             )
         else:
             assert (
-                sequence_1_length == spatial.shape[1]
+                sequence_1_length == sequence_1.shape[1]
             ), "spatial sequence must not be padded without sequence parallelism"
 
             spatial, sequence_2 = ttnn.transformer.joint_scaled_dot_product_attention(
