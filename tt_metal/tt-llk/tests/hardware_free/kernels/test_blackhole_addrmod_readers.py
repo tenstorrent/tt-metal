@@ -11,9 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3] / "tt_llk_blackhole"
 PINNED = {
-    "common/inc/sfpu/ckernel_sfpu_mul_int.h",
-    "common/inc/sfpu/ckernel_sfpu_topk.h",
-    "common/inc/sfpu/ckernel_sfpu_where.h",
     "common/inc/sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h",
     "common/inc/sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h",
     "llk_lib/llk_math_eltwise_ternary_sfpu.h",
