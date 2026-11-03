@@ -2677,8 +2677,9 @@ TEST_F(UnitMeshFixture, DfbConfigDmCachedLinesDisjoint) {
 }
 
 // The serializer places every region of the DFB config on a 64B line counted from the config's start, so the DMs
-// only get line-aligned reads if that start address is itself a multiple of 64. Checks the address each DM read,
-// for four programs launched back to back.
+// only get line-aligned reads if that start address is itself a multiple of 64. Fast dispatch packs kernel config
+// ring entries back to back, so this relies on every Tensix config size being rounded up to 64. Checks the address
+// each DM read, for four programs of different raw sizes launched back to back.
 TEST_F(UnitMeshAnyDispatchFixture, DfbConfigBaseIsCacheLineAlignedOnDevice) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar-only DFB config layout";
@@ -2768,10 +2769,10 @@ TEST_F(UnitMeshAnyDispatchFixture, DfbConfigBaseIsCacheLineAlignedOnDevice) {
     ASSERT_EQ(bases.size(), num_programs);
     const uint32_t tensix_index =
         MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    std::set<uint32_t> size_phases;
     for (uint32_t i = 0; i < num_programs; ++i) {
         auto& impl = workloads[i].get_programs().at(device_range).impl();
-        size_phases.insert(impl.get_program_config_sizes()[tensix_index] % kLineBytes);
+        EXPECT_EQ(impl.get_program_config_sizes()[tensix_index] % kLineBytes, 0u)
+            << "program " << i << " Tensix kernel config size is not a whole number of cache lines";
         const ProgramConfig& config = impl.get_program_config(tensix_index);
         log_info(
             tt::LogTest,
@@ -2785,8 +2786,12 @@ TEST_F(UnitMeshAnyDispatchFixture, DfbConfigBaseIsCacheLineAlignedOnDevice) {
             config.dfb_offset,
             config.kernel_text_offset);
     }
-    // Otherwise every fast-dispatch launch would land on the same 64B phase and the check below proves nothing.
-    EXPECT_GT(size_phases.size(), 1u) << "every program's kernel config is the same size modulo 64";
+    // Slow dispatch always writes at the ring base. Under fast dispatch the programs must occupy distinct ring
+    // slots, or the alignment check below only ever sees the ring base.
+    if (!this->IsSlowDispatch()) {
+        EXPECT_EQ(std::set<uint32_t>(bases.begin(), bases.end()).size(), num_programs)
+            << "fast-dispatch programs did not land in distinct kernel config ring slots";
+    }
     for (uint32_t i = 0; i < num_programs; ++i) {
         EXPECT_NE(bases[i], 0u) << "program " << i << " never recorded its DFB config base";
         EXPECT_EQ(bases[i] % kLineBytes, 0u) << "program " << i << " DFB config base 0x" << std::hex << bases[i];
