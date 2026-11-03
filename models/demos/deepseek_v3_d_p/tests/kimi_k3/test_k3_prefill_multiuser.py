@@ -24,9 +24,12 @@ tests pin that down device against device, so they need the TTNN weight cache bu
 
 Depth: 4 layers hold every Kimi-K3 layer kind: 0 KDA + dense FFN, 1-2 KDA + MoE, 3 MLA + MoE.
 
-What packing may change: a token's MoE output depends on which tokens share the call (#63555, rounding-sized),
-so everything computed before the first MoE output is asserted bit-exact -- the KDA carries of layers 0 and 1,
-whose inputs are the embedding and the dense layer's output -- and everything after it gets a PCC bar.
+What packing may change: only rounding in AttnRes. With the plain residual stream (PlainResidualStream, the
+bisection arm) a packed forward is bit-exact against one chunk per forward at every layer, KDA carry and KV slab,
+MoE layers included (no #63555 effect here). TtAttnRes rounds a row differently depending on where the row sits in
+the call: a chunk at position 1 of a forward differs from the same chunk at position 0 by ~1e-3 in ~1% of rows
+after layer 0 (job 169400), which then compounds. So the packed test runs both: plain asserts bit-exact everywhere,
+AttnRes asserts PCC bars.
 """
 
 import copy
@@ -45,6 +48,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import PlainResidualStream
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
@@ -69,7 +73,8 @@ GATE_MODE = GateComputeMode.DEVICE_FP32
 
 # Interleaving changes only the order of whole forward() calls: bit-exact up to a reduction-order tie.
 INTERLEAVED_PCC = 0.9999
-# After the first MoE output (see module docstring). Bars with margin, tight enough to catch a packing error.
+# The AttnRes packed case (module docstring): bars with margin over the measured output PCC >= 0.99705 and KDA carry /
+# KV PCC >= 0.99985 (job 168987), tight enough to catch a packing error. The plain-residual case is asserted bit-exact.
 PACKED_STATE_PCC = 0.998
 PACKED_OUTPUT_PCC = 0.995
 # Two different users must NOT agree; catches a comparison that reads the same slot twice.
@@ -120,9 +125,15 @@ def _cache_path(mesh_device, weight_cache_path):
     return path
 
 
-def _build(mesh_device, config, device_params, num_links, weight_cache_path, num_slots, forward_chunks=1):
-    """The 4-layer model from the TTNN cache, its KV cache and KDA slabs with ``num_slots`` user slots."""
+def _build(
+    mesh_device, config, device_params, num_links, weight_cache_path, num_slots, forward_chunks=1, residual="attnres"
+):
+    """The 4-layer model from the TTNN cache, its KV cache and KDA slabs with ``num_slots`` user slots. ``residual``:
+    "attnres" (the model) or "plain" (PlainResidualStream, the bisection arm)."""
     seq_cache = N_CHUNKS * CHUNK
+    extra = {}
+    if residual == "plain":
+        extra["residual_factory"] = lambda hidden, block_residual=None: PlainResidualStream(hidden)
     model = TtKimiK3Transformer(
         mesh_device,
         config,
@@ -145,6 +156,7 @@ def _build(mesh_device, config, device_params, num_links, weight_cache_path, num
         # No final norm: the comparisons read the residual stream's model-level AttnRes read.
         build_tail=False,
         forward_chunks=forward_chunks,
+        **extra,
     )
     kvpe = allocate_mla_kvpe_cache(
         mesh_device=mesh_device,
@@ -361,15 +373,18 @@ def test_k3_multiuser_interleaved_matches_sequential(
         model.release_sub_device_managers()
 
 
+@pytest.mark.parametrize("residual", ["attnres", "plain"])
 @_common
 def test_k3_packed_forward_matches_one_chunk_forwards(
-    variant, config_only, mesh_device, device_params, num_links, weight_cache_path
+    variant, config_only, mesh_device, device_params, num_links, weight_cache_path, residual
 ):
     """Packed forwards (slots 0..3) must reproduce every chunk run alone in its own forward (slots 4..7).
 
     Both sides use the same packed model; the reference forward is the chunk followed by empty chunks, so the
-    comparison isolates what sharing a forward with other chunks does to a chunk.
+    comparison isolates what sharing a forward with other chunks does to a chunk. Plain residual: bit-exact
+    everywhere. AttnRes: PCC bars, since it rounds a row by its position in the call (module docstring).
     """
+    exact = residual == "plain"
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
     sp = mesh_device.shape[SP_AXIS]
     lengths, forwards = _packed_schedule()
@@ -378,7 +393,14 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
     mesh_device.enable_program_cache()
     config = _config(config_only)
     model, kvpe = _build(
-        mesh_device, config, device_params, num_links, weight_cache_path, num_slots, forward_chunks=FORWARD_CHUNKS
+        mesh_device,
+        config,
+        device_params,
+        num_links,
+        weight_cache_path,
+        num_slots,
+        forward_chunks=FORWARD_CHUNKS,
+        residual=residual,
     )
     try:
         for chunks in forwards:
@@ -413,19 +435,20 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
                 ref = _chunk_real_rows(hidden, 0, FORWARD_CHUNKS, ref_chunk, sp)
                 got = packed[(c.slot_id, c.actual_start)]
                 pcc = _pcc(ref, got)
-                logger.info(f"[packed] {c} output PCC {pcc:.6f} max|diff| {(ref - got).abs().max().item():.3e}")
-                if pcc < PACKED_OUTPUT_PCC:
+                diff = (ref - got).abs().max().item()
+                logger.info(f"[packed] {residual} {c} output PCC {pcc:.6f} max|diff| {diff:.3e}")
+                if exact and diff != 0:
+                    failures.append(f"{c} output not bit-exact (max|diff| {diff:.3e})")
+                elif pcc < PACKED_OUTPUT_PCC:
                     failures.append(f"{c} output PCC {pcc:.6f} < {PACKED_OUTPUT_PCC}")
 
-        # Layer 0 reads the embedding and layer 1 the dense layer's output, so their carries are exact; layer 2 onward
-        # reads a MoE output.
         failures += _compare_state(
-            "packed",
+            f"packed-{residual}",
             mesh_device,
             model,
             kvpe,
             [(u + num_users, u) for u in range(num_users)],
-            exact_layers=tuple(range(KimiK3Config.NUM_DENSE_LAYERS + 1)),
+            exact_layers=tuple(range(NUM_LAYERS)) if exact else (),
             threshold=PACKED_STATE_PCC,
         )
         cross = _pcc(packed[(0, 0)], packed[(3, 0)])
