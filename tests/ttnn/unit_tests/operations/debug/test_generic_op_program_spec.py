@@ -598,6 +598,45 @@ def tile_order(tensor):
     return tensor.reshape(height // 32, 32, width // 32, 32).permute(0, 2, 1, 3).flatten()
 
 
+def num_tiles_as_a_common_runtime_arg(spec, run_args, value):
+    """Makes num_tiles, in each kernel of a mul_program spec, a common runtime argument with this value on every core."""
+    kernels = spec.kernels
+    for kernel in kernels:
+        schema = kernel.runtime_arg_schema
+        schema.runtime_arg_names = [name for name in schema.runtime_arg_names if name != "num_tiles"]
+        schema.common_runtime_arg_names = ["num_tiles"]
+    spec.kernels = kernels
+    kernel_run_args = run_args.kernel_run_args
+    for args in kernel_run_args:
+        values = args.runtime_arg_values
+        del values["num_tiles"]
+        args.runtime_arg_values = values
+        args.common_runtime_arg_values = {"num_tiles": value}
+    run_args.kernel_run_args = kernel_run_args
+
+
+def test_later_calls_write_new_common_runtime_args(device):
+    # num_tiles as a common runtime argument, one value for every core. The 4 tiles split evenly over the cores (one
+    # or two each, by the grid), so one value fits them all.
+    expected, a, b, out = inputs(device, seed=16)
+    spec, run_args = mul_program(a, b, out)
+    counts = set(kernel_run_args(run_args, "compute").runtime_arg_values["num_tiles"].values())
+    assert len(counts) == 1
+    num_tiles_as_a_common_runtime_arg(spec, run_args, counts.pop())
+    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    entries = device.num_program_cache_entries()
+
+    # A cache hit with no tiles for any core: the output keeps its starting value only if the new value reached the
+    # cores.
+    initial = torch.full((1, 1, 64, 64), 7.0, dtype=torch.bfloat16)
+    out2 = ttnn.from_torch(initial, layout=ttnn.TILE_LAYOUT, device=device)
+    spec2, run_args2 = mul_program(a, b, out2)
+    num_tiles_as_a_common_runtime_arg(spec2, run_args2, 0)
+    result = ttnn.to_torch(E.generic_op([a, b, out2], spec2, run_args2))
+    assert device.num_program_cache_entries() == entries
+    assert torch.equal(result, initial)
+
+
 def test_custom_program_hash_replaces_the_spec_hash(device):
     expected, a, b, out = inputs(device, seed=3)
     spec, run_args = mul_program(a, b, out)
