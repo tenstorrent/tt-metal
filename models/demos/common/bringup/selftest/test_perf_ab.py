@@ -551,6 +551,32 @@ def test_the_accept_reuses_the_on_side_when_the_code_is_unchanged(mk, sandbox):
     assert sandbox.git("show", "HEAD:src/impl.txt") == "hifi2"
 
 
+def test_a_switch_only_accept_keeps_the_shipped_default(mk, sandbox, monkeypatch):
+    """F241: ab.keep_default: true accepts the pick as a switch (its value committed and measured) without making it
+    the default (DeepSeek-V4.1 P.27: the accept set EXPERTS_IMPL bfp4 -> bfp8 while the owner's order kept bfp4 until
+    P.28 / P.29's tables were in). Without the flag the accept ships ab.change as before (F104)."""
+    from models.demos.common.bringup import orchestrator as orch_mod
+    from models.demos.common.bringup.testing import model_precision
+
+    assert orch_mod.accept_defaults({"ab": {"change": {"X": "1"}}}) == {"X": "1"}
+    assert orch_mod.accept_defaults({"ab": {"change": {"X": "1"}, "keep_default": True}}) == {}
+    seen = []
+    monkeypatch.setattr(model_precision, "set_defaults", lambda spec, change: seen.append(dict(change)) or [])
+    gate = (
+        f"BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER} && TT_METAL_DEVICE_PROFILER=1 "
+        f"scripts/run_safe_pytest.sh --run-all --no-precompile {PROFILE}"
+    )
+    t = pick(gate={"cmd": gate, "metrics": {"device_ms_experts": "< 10"}})
+    t["ab"] = dict(t["ab"], keep_default=True)
+    o = mk([t], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    assert decide(o, "P.1", "accept") == 0
+    assert o.run() == DONE, " | ".join(mk.lines[-8:])
+    assert seen == [{}], seen  # nothing shipped as a default
+    assert any("accepted as a switch" in ln for ln in mk.lines), mk.lines
+    assert o.led.status("P.1") == "PASS"
+
+
 def test_the_accept_runs_the_gate_when_the_code_changed_since_the_ab(mk, sandbox):
     gate = f"BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER}"
     o = mk([pick(gate={"cmd": gate, "metrics": {"device_ms_experts": "< 10"}})], CHANGE)

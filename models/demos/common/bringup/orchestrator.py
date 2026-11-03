@@ -394,6 +394,15 @@ def command_violations(commands: list[str], repo: Path) -> list[str]:
     return sorted(set(out))
 
 
+def accept_defaults(task: dict) -> dict:
+    """The settings an accept ships as defaults (F104: a pick's ab.change). F241: none for a switch-only pick
+    (ab.keep_default: true), e.g. an ablation whose value the owner picks later from several tables: the accept
+    commits the switch value and keeps the shipped default (DeepSeek-V4.1 P.27: the accept made bfp8 the experts'
+    default against the owner's order, before P.28 / P.29 measured the other values)."""
+    ab = task.get("ab") or {}
+    return {} if ab.get("keep_default") else (ab.get("change") or {})
+
+
 def ab_switch_text(task: dict) -> str:
     """A perf pick's switch as the brief names it: tasks.yaml ab.change (the change) and ab.env (the old path)."""
     ab = task.get("ab") or {}
@@ -1958,9 +1967,11 @@ class Orchestrator:
         """
         tid = task["id"]
         reuse = self.ab_on_reuse(task, rec)  # F105: before set_defaults (it changes the tree the key covers)
-        shipped = model_precision.set_defaults(self.spec, (task.get("ab") or {}).get("change") or {})
+        shipped = model_precision.set_defaults(self.spec, accept_defaults(task))
         if shipped:
             self.echo(f"  [{tid}] accepted: default {'; '.join(shipped)} (tt/settings.py)")
+        elif (task.get("ab") or {}).get("keep_default"):
+            self.echo(f"  [{tid}] accepted as a switch: the shipped defaults stay (ab.keep_default, F241)")
         if reuse is not None:
             self.echo(f"  [{tid}] accept gate: the A/B 'on' side's measurement, not run again ({reuse['source']})")
         res = self.gate(tid, reuse=reuse)
