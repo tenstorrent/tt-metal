@@ -185,6 +185,8 @@ FLAT_LAYOUT_FIELDS = (
     "drisc_probe",
     "gu_source",
     "gu_read_depth",
+    "gu_place",
+    "gu_read_pieces",
 )
 
 

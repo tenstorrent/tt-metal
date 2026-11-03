@@ -328,6 +328,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     if (lo.gu_read_depth > 0) {
         p.gu_depth = lo.gu_read_depth;
     }
+    TT_FATAL(
+        lo.gu_read_pieces < 0 || lo.gu_read_pieces == 1 || lo.gu_read_pieces == 2 || lo.gu_read_pieces == 4,
+        "flat layout gu_read_pieces {}: 1, 2 or 4",
+        lo.gu_read_pieces);
+    if (lo.gu_read_pieces > 0) {
+        p.gu_pieces = lo.gu_read_pieces;
+    }
     // layout.rows_hint (expected rows per expert, <= 320): 64-row sub-blocks for the plans with 128-row ones and
     // gate/up row passes - one pass a sub-block, so the next sub-block's x streams in during the whole pass and the
     // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us)
@@ -527,6 +534,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     // hops). Galaxy loads GLM-5.3 / GLM-Flash / K3 / K2.7 525 / 382 / 1232 / 808 -> 522 / 381 / 1216 / 808 us.
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
     std::vector<bool> placed(gu_all.size(), false);
+    // per gate/up cell: who delivers its share (0 DRISC, FlatGuPlace::tensix_noc0 / tensix_noc1)
+    std::vector<uint32_t> how_of(gu_all.size(), 0);
+    p.slot_drisc.assign(n_rd, p.gu_source == FlatGuSource::drisc);
     {
         std::vector<std::tuple<int, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
         std::vector<Core> worker_noc0;
@@ -540,7 +550,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
                 const auto [sp, snoc] = drisc.sender(r);
                 return {Core(sp), snoc};
             }
-            const uint32_t nsel = p.gu_source == FlatGuSource::tensix_split && r < p.banks ? 1u : 0u;
+            const uint32_t nsel =
+                p.gu_source == FlatGuSource::tensix_noc1 || (p.gu_source == FlatGuSource::tensix_split && r < p.banks)
+                    ? 1u
+                    : 0u;
             for (const auto& c : drisc.cores.at(r % p.banks)) {
                 if (c.endpoint_noc_mask & (1u << nsel)) {
                     return {Core(c.noc0_core), nsel};
@@ -555,6 +568,55 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             }
         }
         std::sort(pairs.begin(), pairs.end());
+        if (p.gu_source == FlatGuSource::placed) {
+            pairs.clear();  // (the caller's placement)
+            std::map<std::pair<uint32_t, uint32_t>, uint32_t> cell;
+            for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
+                cell[{gu_all[ci].x, gu_all[ci].y}] = ci;
+            }
+            TT_FATAL(
+                lo.gu_place.size() == gu_all.size(),
+                "flat layout gu_place: {} words for {} gate/up cells (one per cell)",
+                lo.gu_place.size(),
+                gu_all.size());
+            // per bank: its slot b and slot b + banks; DRISC words pin their slot, Tensix words fill the rest
+            std::vector<std::vector<std::pair<uint32_t, uint32_t>>> tw(p.banks);  // (ci, how) Tensix
+            for (const uint32_t w : lo.gu_place) {
+                const uint32_t x = w >> 24, y = (w >> 16) & 0xFF, b = (w >> 8) & 0xFF, how = w & 0xFF;
+                TT_FATAL(cell.contains({x, y}), "flat layout gu_place: ({}, {}) is no gate/up cell", x, y);
+                TT_FATAL(b < p.banks && how >= 1 && how <= 4, "flat layout gu_place word {:#x}", w);
+                const uint32_t ci = cell.at({x, y});
+                TT_FATAL(!placed[ci], "flat layout gu_place: ({}, {}) twice", x, y);
+                placed[ci] = true;
+                if (how >= FlatGuPlace::drisc_noc1) {
+                    TT_FATAL(
+                        lo.drisc_tiles == FlatDriscTiles::free_only,
+                        "flat layout gu_place: DRISC words need drisc_tiles free_only");
+                    const uint32_t r = b + (how == FlatGuPlace::drisc_noc0 ? p.banks : 0);
+                    per_reader[r].push_back(ci);
+                    p.slot_drisc[r] = true;
+                } else {
+                    tw[b].emplace_back(ci, how);
+                }
+            }
+            for (uint32_t b = 0; b < p.banks; ++b) {
+                for (const auto& [ci, how] : tw[b]) {
+                    const uint32_t r = !p.slot_drisc[b] && per_reader[b].size() < p.r_ ? b : b + p.banks;
+                    TT_FATAL(!p.slot_drisc[r], "flat layout gu_place: bank {} mixes DRISC and Tensix cores in a slot", b);
+                    per_reader[r].push_back(ci);
+                    how_of[ci] = how;
+                }
+            }
+            for (uint32_t r = 0; r < n_rd; ++r) {
+                TT_FATAL(
+                    per_reader[r].size() == p.r_,
+                    "flat layout gu_place: slot {} (bank {}) has {} cores; each bank's two slots take {} each",
+                    r,
+                    r % p.banks,
+                    per_reader[r].size(),
+                    p.r_);
+            }
+        }
         for (const auto& [h, r, ci] : pairs) {
             if (!placed[ci] && per_reader[r].size() < p.r_) {
                 per_reader[r].push_back(ci);
@@ -565,6 +627,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     for (uint32_t r = 0; r < n_rd; ++r) {
         for (uint32_t ci : per_reader[r]) {
             p.gu.push_back(gu_all[ci]);
+            uint32_t how = how_of[ci];
+            if (p.gu_source != FlatGuSource::placed && p.gu_source != FlatGuSource::drisc) {
+                const bool n1 = p.gu_source == FlatGuSource::tensix_noc1 ||
+                                (p.gu_source == FlatGuSource::tensix_split && r < p.banks);
+                how = n1 ? FlatGuPlace::tensix_noc1 : FlatGuPlace::tensix_noc0;
+            }
+            p.gu_how.push_back(how);
         }
     }
     for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {

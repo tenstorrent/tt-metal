@@ -315,7 +315,9 @@ FlatProgramHandles add_flat_routed_expert_program(
     // the DRAM cores' persistent senders read and forward the gate/up weights (flat_drisc.hpp); the launcher only posts
     // each call's jobs (se_drisc_go.cpp). gu_source tensix*: the gate/up cores read their own blocks (se_gu_read.hpp)
     // from the same bank layout; the senders stay up (idle) and the launcher posts nothing
-    const bool gu_tensix = p.gu_source != FlatGuSource::drisc;
+    const bool gu_tensix = std::any_of(p.gu_how.begin(), p.gu_how.end(), [](uint32_t h) { return h != 0; });
+    // (hybrid plans: some slots DRISC, the others read by their cores; a slot with no DRISC gets a skip each call)
+    const bool any_drisc = std::any_of(p.slot_drisc.begin(), p.slot_drisc.end(), [](bool d) { return d; });
     const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device, p.drisc_tiles);
     const uint32_t drisc_base = drisc.base;
     auto drisc_xy = [&](uint32_t r) { return drisc.virtual_xy(drisc.logical(r)); };
@@ -355,7 +357,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                 .lit(aj == ~0u ? 0 : aj)
                 .lit(p.rg * p.slot * w_tile)
                 .lit(p.rg)
-                .lit(p.r_);
+                .lit(p.slot_drisc[r] ? p.r_ : 0u);  // (0 receivers: the slot's cores read it; a skip)
         }
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
             for (uint32_t j = 0; j < p.r_; ++j) {
@@ -369,7 +371,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                DataMovementProcessor::RISCV_0,
                NOC::NOC_0,
                {E},
-               gu_tensix ? with(dyn_def, {{"SE_GU_TENSIX", "1"}}) : dyn_def);
+               !any_drisc ? with(dyn_def, {{"SE_GU_TENSIX", "1"}}) : dyn_def);
         Args a;
         a.cat(post).cat(dyn);
         add_rt(k, p.launcher, a);
@@ -517,6 +519,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                 {"SE_GU_BLK", std::to_string(p.slot * w_tile)},
                 {"SE_GU_PER_E", std::to_string(p.nk_gu)},
                 {"SE_GU_DEPTH", std::to_string(p.gu_depth)},
+                {"SE_GU_PIECES", std::to_string(p.gu_pieces)},
                 {"SE_GU_MBOX_SEM", "0"},
                 {"SE_GU_GRANT_SEM", std::to_string(GRANT)},
                 {"SE_GU_DATA_SEM", std::to_string(DATA)},
@@ -600,8 +603,8 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .cat(dyn);
                 // the gate/up weight reads (se_gu_read.hpp): mode (1 NCRISC, 2 BRISC), weights, bank, this core's
                 // first block (slot region + block j / G), chunk bytes, landing ring (the arena's start)
-                const uint32_t gmode =
-                    !gu_tensix ? 0u : (p.gu_source == FlatGuSource::tensix_split && r < banks ? 2u : 1u);
+                const uint32_t how = p.gu_how.at(ci);
+                const uint32_t gmode = how == FlatGuPlace::tensix_noc0 ? 1u : (how == FlatGuPlace::tensix_noc1 ? 2u : 0u);
                 Args gw;
                 gw.lit(gmode)
                     .a(FlatAddr::GateUp)

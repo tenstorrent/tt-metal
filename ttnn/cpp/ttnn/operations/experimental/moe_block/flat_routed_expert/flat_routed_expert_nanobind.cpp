@@ -122,7 +122,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
     )doc")
         .value("drisc", FlatGuSource::drisc)
         .value("tensix", FlatGuSource::tensix)
-        .value("tensix_split", FlatGuSource::tensix_split);
+        .value("tensix_split", FlatGuSource::tensix_split)
+        .value("tensix_noc1", FlatGuSource::tensix_noc1)
+        .value("placed", FlatGuSource::placed);
 
     nb::class_<FlatLayoutOptions>(mod, "FlatLayoutOptions", R"doc(
         The flat routed expert's layout / program choices (part of the plan key and of the program hash). Unset
@@ -143,6 +145,10 @@ void bind_flat_routed_expert(nb::module_& mod) {
             drisc_probe (FlatDriscProbe): a DRISC sender measurement probe (none).
             gu_source (FlatGuSource): who reads the gate/up weights (drisc).
             gu_read_depth (int): gu_source tensix*: weight reads in flight a gate/up core, 1..6 (-1: 2).
+            gu_read_pieces (int): each gate/up weight block read as 1 / 2 / 4 pieces (-1: 1).
+            gu_place (list[int]): gu_source placed: per gate/up core (x << 24 | y << 16 | bank << 8 | how), how 1
+                Tensix NOC0, 2 Tensix NOC1, 3 DRISC free tile NOC1 (the bank's slot b), 4 DRISC free tile NOC0
+                (slot b + banks); DRISC ones need drisc_tiles free_only.
     )doc")
         .def(
             "__init__",
@@ -158,7 +164,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
                int32_t drisc_early_free,
                FlatDriscProbe drisc_probe,
                FlatGuSource gu_source,
-               int32_t gu_read_depth) {
+               int32_t gu_read_depth,
+               int32_t gu_read_pieces,
+               std::vector<uint32_t> gu_place) {
                 new (self) FlatLayoutOptions{
                     .x_helpers = x_helpers,
                     .pin_ratio = pin_ratio,
@@ -171,7 +179,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
                     .drisc_early_free = drisc_early_free,
                     .drisc_probe = drisc_probe,
                     .gu_source = gu_source,
-                    .gu_read_depth = gu_read_depth};
+                    .gu_read_depth = gu_read_depth,
+                    .gu_read_pieces = gu_read_pieces,
+                    .gu_place = std::move(gu_place)};
             },
             nb::kw_only(),
             nb::arg("x_helpers") = -1,
@@ -185,7 +195,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
             nb::arg("drisc_early_free") = -1,
             nb::arg("drisc_probe") = FlatDriscProbe::none,
             nb::arg("gu_source") = FlatGuSource::drisc,
-            nb::arg("gu_read_depth") = -1)
+            nb::arg("gu_read_depth") = -1,
+            nb::arg("gu_read_pieces") = -1,
+            nb::arg("gu_place") = std::vector<uint32_t>{})
         .def_rw("x_helpers", &FlatLayoutOptions::x_helpers)
         .def_rw("pin_ratio", &FlatLayoutOptions::pin_ratio)
         .def_rw("rows_hint", &FlatLayoutOptions::rows_hint)
@@ -198,6 +210,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .def_rw("drisc_probe", &FlatLayoutOptions::drisc_probe)
         .def_rw("gu_source", &FlatLayoutOptions::gu_source)
         .def_rw("gu_read_depth", &FlatLayoutOptions::gu_read_depth)
+        .def_rw("gu_place", &FlatLayoutOptions::gu_place)
+        .def_rw("gu_read_pieces", &FlatLayoutOptions::gu_read_pieces)
         .def("key", &FlatLayoutOptions::key)
         .def("__repr__", [](const FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })
         .def("__eq__", [](const FlatLayoutOptions& a, const FlatLayoutOptions& b) { return a == b; });
@@ -286,6 +300,29 @@ void bind_flat_routed_expert(nb::module_& mod) {
                 slots.append(s);
             }
             d["slots"] = slots;
+            nb::list banks;  // every DRAM_TILE of each bank: NOC0 grid position, NoC address, endpoint mask
+            for (uint32_t b = 0; b < t.banks; ++b) {
+                nb::list tl;
+                for (const auto& c : t.cores.at(b)) {
+                    nb::dict cd;
+                    cd["noc0"] = nb::make_tuple(c.noc0_core.x, c.noc0_core.y);
+                    cd["xy"] = static_cast<uint32_t>((c.virtual_core.x << 16) | c.virtual_core.y);
+                    cd["endpoint_mask"] = static_cast<uint32_t>(c.endpoint_noc_mask);
+                    cd["usable"] = c.usable;
+                    tl.append(cd);
+                }
+                banks.append(tl);
+            }
+            d["banks"] = banks;
+            const auto g = mesh_device.compute_with_storage_grid_size();
+            nb::dict wk;  // logical worker (x, y) -> NOC0 grid position
+            for (uint32_t y = 0; y < g.y; ++y) {
+                for (uint32_t x = 0; x < g.x; ++x) {
+                    const auto n0 = flat_worker_noc0(mesh_device, CoreCoord(x, y));
+                    wk[nb::make_tuple(x, y)] = nb::make_tuple(n0.x, n0.y);
+                }
+            }
+            d["workers_noc0"] = wk;
             return d;
         },
         nb::arg("mesh_device"),

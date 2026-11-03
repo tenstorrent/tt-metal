@@ -79,6 +79,11 @@ struct FlatRoutedExpertPlan {
     // who reads the gate/up weights (layout.gu_source) and, for the gate/up cores' own reads, how many in flight
     FlatGuSource gu_source = FlatGuSource::drisc;
     uint32_t gu_depth = 2;
+    uint32_t gu_pieces = 1;
+    // per gate/up core (p.gu order): who delivers its weights (0 its slot's DRISC, FlatGuPlace::tensix_noc0 /
+    // tensix_noc1 its own reads); per weight slot: served by a DRISC
+    std::vector<uint32_t> gu_how;
+    std::vector<bool> slot_drisc;
     // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
     uint32_t ti_off = 0;
     // down

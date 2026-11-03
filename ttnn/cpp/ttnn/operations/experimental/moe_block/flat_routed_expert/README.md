@@ -73,6 +73,8 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 | `drisc_probe` | `none` | measurement probes of the DRISC senders (`timing`, `call_time`, `dma_only`, `write_only`, `loop_only`; garbage y except `timing` / `call_time`); counters via `FlatDriscSenders.read_prof()` |
 | `gu_source` | `drisc` | who reads the gate/up weights: `drisc` (the DRISC senders), `tensix` (each gate/up core's NCRISC reads its own blocks on NOC0, `se_gu_read.hpp`), `tensix_split` (a bank's first slot's cores read on NOC1 from the receiver BRISC, the second slot's on NOC0); same layout, schedule and bit-identical y. Tensix-read plans place each slot's gate/up cores by hops from the bank's NoC endpoint the reads go through. Galaxy per-chip loads, best Tensix vs `drisc`: flat alone +4% (K3) to +13% (GLM-5.3-Flash), experts + combine in the MoE block +4% (GLM-5.3-Flash) / +7% (K3) |
 | `gu_read_depth` | -1 (2) | `gu_source` tensix*: weight reads in flight a gate/up core, 1..6 |
+| `gu_read_pieces` | -1 (1) | `gu_source` tensix* / placed: each weight block read as 1 / 2 / 4 reads (more, smaller reads are slower in the op) |
+| `gu_place` | [] | `gu_source` `placed` (also `tensix_noc1`: all reads on NOC1): per gate/up cell `x << 24 \| y << 16 \| bank << 8 \| how` (1 Tensix NOC0, 2 Tensix NOC1, 3 / 4 the bank's free DRAM_TILE DRISC on NOC1 / NOC0, `drisc_tiles` free_only: hybrid); 2 x RG cores a bank, a slot all DRISC or all Tensix. A NoC-link-load placement (K3 Galaxy 4x4 load): experts + combine 2254 us vs 2279 with `drisc` |
 
 ## Tests
 

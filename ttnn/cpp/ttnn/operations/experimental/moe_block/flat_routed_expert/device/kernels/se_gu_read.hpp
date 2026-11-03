@@ -23,6 +23,9 @@ constexpr uint32_t SE_GU_TRID0 = 8;  // (x forwarding writes use ids 1..; the h 
 struct SeGuRead {
     uint32_t base = 0, bank = 0, chunk = 0, blk = 0, per_e = 0, land = 0, depth = 1;
     uint32_t total = 0, iss = 0, done = 0, ri = 0, rd = 0, l = 0, ce = 0;
+    // a block read as PIECES reads of blk / PIECES (DEPTH counts pieces in flight); iss / done count pieces, pc the
+    // next piece of the block being issued
+    uint32_t pieces = 1, pbytes = 0, pc = 0;
     volatile tt_l1_ptr uint32_t* grant = nullptr;
     volatile tt_l1_ptr uint32_t* data = nullptr;
     const volatile tt_l1_ptr uint32_t* loads = nullptr;  // expert | region << 8 a load
@@ -43,7 +46,11 @@ struct SeGuRead {
         blk = blk_bytes;
         per_e = per_e_;
         depth = depth_;
-        total = n_load * per_e;
+#ifdef SE_GU_PIECES
+        pieces = SE_GU_PIECES;
+#endif
+        pbytes = blk / pieces;
+        total = n_load * per_e * pieces;
         loads = loads_;
         grant = grant_;
         data = data_;
@@ -52,17 +59,20 @@ struct SeGuRead {
     // Issues the granted reads, publishes the landed ones; true once every chunk has landed (call with the L1 cache
     // invalidated: the grant counter is the receiver's)
     bool step() {
-        while (iss < total && iss - done < depth && *grant >= iss + 1) {
+        while (iss < total && iss - done < depth && *grant >= iss / pieces + 1) {
             const uint32_t v = loads[l];
-            const uint32_t src = base + ((v & 0xFF) * per_e + ce) * chunk;
-            const uint32_t dst = land + (((v >> 8) & 0xFF) * per_e + ce) * blk;
+            const uint32_t src = base + ((v & 0xFF) * per_e + ce) * chunk + pc * pbytes;
+            const uint32_t dst = land + (((v >> 8) & 0xFF) * per_e + ce) * blk + pc * pbytes;
             noc_async_read_set_trid(SE_GU_TRID0 + ri);
-            noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, blk);
+            noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, pbytes);
             ++iss;
             ri = ri + 1 == depth ? 0 : ri + 1;
-            if (++ce == per_e) {
-                ce = 0;
-                ++l;
+            if (++pc == pieces) {
+                pc = 0;
+                if (++ce == per_e) {
+                    ce = 0;
+                    ++l;
+                }
             }
         }
         // (the read command buffer drained first: an id's outstanding count covers only requests the NIU has taken)
@@ -75,7 +85,7 @@ struct SeGuRead {
             moved = true;
         }
         if (moved) {
-            *data = done;
+            *data = done / pieces;
         }
         return done == total;
     }

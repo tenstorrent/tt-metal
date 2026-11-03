@@ -47,6 +47,13 @@ inline void se_drisc_post(const SeDyn& dyn, uint32_t a0, uint32_t scratch, uint3
         const uint32_t sa = 13 + SE_DRISC_SLOT_ARGS * s;
         uint32_t dxy = arg(sa), job = arg(sa + 1);
         const uint32_t axy = arg(sa + 3), ajob = arg(sa + 4), r_s = arg(sa + 7);
+        if (r_s == 0) {  // no receivers: the slot's gate/up cores read it themselves (hybrid plans); a skip
+            se_drisc_inc(dxy, base + se_drisc_skips(job), 1);
+            if (ack_after) {
+                post_xy[s] = 0;
+            }
+            continue;
+        }
         if (axy) {  // the alternate serves: the first DRISC's job a skip
             se_drisc_inc(dxy, base + se_drisc_skips(job), 1);
             dxy = axy;
@@ -93,7 +100,9 @@ inline void se_drisc_post(const SeDyn& dyn, uint32_t a0, uint32_t scratch, uint3
     if (ack_after) {  // every descriptor landed (acked), then the job counts
         noc_async_write_barrier();
         for (uint32_t s = 0; s < ns; ++s) {
-            se_drisc_inc(post_xy[s], base + se_drisc_jobs(post_job[s]), 1);
+            if (post_xy[s]) {
+                se_drisc_inc(post_xy[s], base + se_drisc_jobs(post_job[s]), 1);
+            }
         }
     }
     noc_async_write_barrier();

@@ -45,8 +45,23 @@ enum class FlatGuSource : uint32_t {
     // as tensix, but the bank's first slot's receivers (slot r < banks) read on NOC1 from their BRISC (the receiver
     // loop), the second slot's on NOC0 from their NCRISC: the DRISC "both" NoC split
     tensix_split = 2,
+    // as tensix, every gate/up core reading on NOC1 from its BRISC (the receiver loop)
+    tensix_noc1 = 3,
+    // layout.gu_place says, per gate/up core, which bank holds its share and who delivers it: a Tensix read on NOC0
+    // (NCRISC) / NOC1 (BRISC), or a DRISC (the bank's free DRAM_TILE, drisc_tiles free_only: hybrid plans)
+    placed = 4,
 };
 const char* to_string(FlatGuSource source);
+
+// FlatLayoutOptions.gu_place words: logical core (x, y), bank, how its share arrives. A bank's first slot (slot b) is
+// sent by its free DRAM_TILE on NOC1 (how drisc_noc1), its second (slot b + banks) on NOC0 (drisc_noc0); a slot is all
+// DRISC or all Tensix.
+struct FlatGuPlace {
+    enum How : uint32_t { tensix_noc0 = 1, tensix_noc1 = 2, drisc_noc1 = 3, drisc_noc0 = 4 };
+    static uint32_t word(uint32_t x, uint32_t y, uint32_t bank, How how) {
+        return (x << 24) | (y << 16) | (bank << 8) | how;
+    }
+};
 
 // DRISC sender probes (measurement only: the probes' y is garbage). Every probe also counts the sender's loop cycles
 // and events into its L1 (FlatDriscSenders::read_prof).
@@ -92,6 +107,12 @@ struct FlatLayoutOptions {
     FlatGuSource gu_source = FlatGuSource::drisc;
     // gu_source tensix*: weight reads in flight a gate/up core, 1..6 (-1: 2)
     int32_t gu_read_depth = -1;
+    // gu_source tensix* / placed: each weight block read as this many pieces, 1 / 2 / 4 (gu_read_depth then counts
+    // pieces in flight; -1: 1)
+    int32_t gu_read_pieces = -1;
+    // gu_source placed: one word per gate/up core (every cell of both rectangles), FlatGuPlace::word(x, y, bank, how):
+    // its share in `bank` (each bank takes 2 x RG cores: its two weight slots), delivered `how`
+    std::vector<uint32_t> gu_place;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;
