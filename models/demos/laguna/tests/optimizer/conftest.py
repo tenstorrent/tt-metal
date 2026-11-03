@@ -22,11 +22,13 @@ def pytest_sessionfinish(session, exitstatus):
 
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config):
-    if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+    session = _SESSION["value"]
+    # under the device profiler, or when pytest stopped before a session (a usage or collection-setup error), leave
+    # the exit to pytest so its status stands
+    if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1" or session is None:
         return
     sys.stdout.flush()
     sys.stderr.flush()
     # read the status now, after every session-finish hook ran (models/conftest.py's perf-target validation can turn
     # a passing session into a failure there)
-    session = _SESSION["value"]
-    os._exit(int(session.exitstatus) if session is not None else 0)
+    os._exit(int(session.exitstatus))
