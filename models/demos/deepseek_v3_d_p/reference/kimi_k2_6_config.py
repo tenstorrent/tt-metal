@@ -22,7 +22,10 @@ class KimiK26Config:
     # 7168x2048 routed-expert shape, between 320 and 384: the composite's cost is flat inside an M
     # chunk while the fused op's rises with the count. 320 is a 2.9% tie, 384 goes to the composite
     # by 8.0%, and the composite holds the band outright from there -- 11% at 640, 22% at 768.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Not enabled: on the multi-expert-per-chip load the composite alone beats the hybrid at every chunk
+    # (single-chip sweep, 1k-5k uniform + skewed). The measured crossover is kept under _MEASURED so it is
+    # not re-derived; rename it back to ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 320
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration
