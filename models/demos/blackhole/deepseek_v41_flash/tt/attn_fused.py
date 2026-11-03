@@ -76,13 +76,21 @@ def rope_inplace(x, c, s, users, rows_layout=False):
     return x
 
 
+_MR_LOGGED = False
+
+
 def _crs(cores):
     if (
         os.environ.get("DSV41_ROPE_MERGED_RANGES", "1") == "1"
     ):  # overlap2: one CoreRange per row span instead of per core (the dispatcher writes the program config once per range)
         from models.demos.blackhole.deepseek_v41_flash.tt.mhc_pre import _merged_set
 
-        return _merged_set(cores)
+        r = _merged_set(cores)
+        global _MR_LOGGED
+        if not _MR_LOGGED:
+            _MR_LOGGED = True
+            print(f"OVERLAP2 rope_concat merged ranges: {len(cores)} cores", flush=True)
+        return r
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores])
 
 
