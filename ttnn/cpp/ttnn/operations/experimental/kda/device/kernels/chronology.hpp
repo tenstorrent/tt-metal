@@ -62,6 +62,13 @@ struct Topology {
     uint32_t carried_rows_begin() const { return valid_rows - carried_rows(); }
     bool carry_continues_layer_history() const { return rank == first_rank && !has_valid_tail(); }
 };
+// The head reduction's publish schedule, which its compute and dataflow kernels must follow identically. The last
+// active group composes the whole head and publishes it once: unchanged when it is the only active group, otherwise in
+// its last composition stage, the one at which every later distance exceeds its index.
+inline bool publishes_unchanged(uint32_t group, uint32_t active) { return group + 1 == active && active == 1; }
+inline bool publishes_at_stage(uint32_t group, uint32_t active, uint32_t distance) {
+    return group + 1 == active && 2 * distance >= active;
+}
 inline Topology load(const volatile uint32_t* words) {
     return {words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]};
 }

@@ -89,13 +89,14 @@ def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torc
 
 
 def pack_summary(affine_a: torch.Tensor, affine_b: torch.Tensor) -> torch.Tensor:
-    """Rows of [A | B], the layout of one summary slot."""
-    return torch.cat([affine_a, affine_b], dim=-1)
+    """Rows of the complement form [E | B], E = A - I, the layout of one summary slot."""
+    return torch.cat([affine_a - torch.eye(affine_a.shape[-1]), affine_b], dim=-1)
 
 
 def unpack_summary(packed: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """The transform (A, B) of complement-form [E | B] rows; A = E + I is exact in FP32 for BF16 E."""
     key_dim = packed.shape[-2]
-    return packed[..., :key_dim], packed[..., key_dim:]
+    return packed[..., :key_dim].float() + torch.eye(key_dim), packed[..., key_dim:]
 
 
 def segmented_summary_oracle(

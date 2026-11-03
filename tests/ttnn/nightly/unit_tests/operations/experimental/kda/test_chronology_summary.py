@@ -3,7 +3,7 @@
 """Mesh chronology summary slots under trace replay; separate from module-scoped device tests.
 
 Every head and tail slot is checked: a slot with a valid segment against the segment oracle, every other slot as the
-exact identity (I, 0) written with init.
+exact identity, (0, 0) in complement form [E | B], written with init.
 """
 
 import pytest
