@@ -654,6 +654,8 @@ def _matmul_pack_form_value(
         return 0
     if rt_dim * ct_dim < 2:
         return 0
+    if dest_sync == DestSync.Half and _two_tile_per_tile(formats, math_fidelity, rt_dim, ct_dim, kt_dim):
+        return 0
     # LoFi and HiFi2 blocks of three or more K tiles take the closed block, which reads faster than the per-tile pack, except in the cells of _PACK_PER_TILE_ROWS
     if (
         math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)

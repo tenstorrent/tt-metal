@@ -1344,6 +1344,11 @@ constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool ha
     {
         return 0;
     }
+    // small tiles too: the 2 tile closed block of the math only sweep reads 26 cycles behind main's per-tile pack at LoFi and HiFi2
+    if (half_sync && matmul_pack_two_tile_per_tile(fidelity, out, rt, ct, kt))
+    {
+        return 0;
+    }
     // LoFi and HiFi2 blocks of three or more K tiles take the closed block, which reads faster than the per-tile pack, except in the cells of matmul_pack_per_tile_cells
     if ((fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2) && half_sync && throttle == 0 && kt >= 3 && !small && matmul_pack_grid_format(in_a) && matmul_pack_grid_format(in_b) &&
         matmul_pack_grid_format(out) && !matmul_pack_per_tile_block(fidelity, out, in_a, in_b, rt, ct))
