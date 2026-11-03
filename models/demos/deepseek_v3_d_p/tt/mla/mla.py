@@ -32,6 +32,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 )
 from ttnn.core import divup
 
+# Shared layers take sparse KV push dense mode for chunks starting below this many slabs (one slab = one chunk).
+_SPARSE_KV_PUSH_DENSE_SLABS = 6
+
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
 
@@ -713,13 +716,19 @@ class ttMLA:
             self._push_buffer_parity = {layer: self._push_parity(layer) for layer in (layer_idx, layer_idx + 1)}
             # Dense mode: a chunk starting below this gathers its whole (short) prefix into the compact buffer
             # instead, cheaper than pushing there. Decided on device from the chunk start, so one trace serves both.
-            self._push_dense_below = int(os.environ.get("SPARSE_KV_PUSH_DENSE_BELOW", "0"))
+            # Default: the first 6 chunks (L78 sweep: 4 -> 6 slabs saves ~5 ms on chunks 4-5, 8 adds nothing), fewer
+            # when the buffers can't hold that prefix. SPARSE_KV_PUSH_DENSE_BELOW overrides (0 turns it off).
             slab = self.active_seq_len_local * self.sp_factor
+            buffer_rows = min(self._push_rows, dense.shape[2])
+            # A chunk starting below k slabs gathers up to (k + 1) slabs (see largest_extent).
+            default_dense_slabs = max(0, min(_SPARSE_KV_PUSH_DENSE_SLABS, buffer_rows // slab - 1))
+            env_dense_below = os.environ.get("SPARSE_KV_PUSH_DENSE_BELOW")
+            self._push_dense_below = int(env_dense_below) if env_dense_below is not None else default_dense_slabs * slab
             largest_extent = divup(self._push_dense_below - 1 + slab, slab) * slab
-            if self._push_dense_below > 0 and largest_extent > min(self._push_rows, dense.shape[2]):
+            if self._push_dense_below > 0 and largest_extent > buffer_rows:
                 raise ValueError(
                     f"dense mode below {self._push_dense_below} gathers up to {largest_extent} rows, more than the "
-                    f"{self._push_rows}-row push buffer"
+                    f"{buffer_rows}-row push buffer"
                 )
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
