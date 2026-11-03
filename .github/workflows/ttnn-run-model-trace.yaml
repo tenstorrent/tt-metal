@@ -13,17 +13,12 @@ on:
         required: true
         type: string
       runner-label:
-        description: "CI runner / hardware target (shared by every model in the batch)"
+        description: >-
+          Hardware to trace on, shared by every model in the batch: a SKU from .github/sku_config.yaml
+          (e.g. wh_n150, wh_llmbox_perf, bh_p150, bh_p150_perf, bh_quietbox_2) or one of the aliases
+          N150, N300, n300-llmbox, topology-6u, P100a, P150b, BH-LoudBox.
         required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - P100a
-          - P150b
-          - n300-llmbox
-          - topology-6u
-          - BH-LoudBox
+        type: string
         default: "N150"
       load-to-db:
         description: "Homogenize, load into DB, and open a single manifest PR"
@@ -198,65 +193,8 @@ jobs:
         id: derive
         env:
           RUNNER_LABEL: ${{ inputs.runner-label }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          import yaml
-
-          # Run on the same pools (and weights mounts) as the model e2e pipeline, so any model
-          # that has CI coverage on a SKU finds its weights. The viommu CIv2 pools only see the
-          # large file cache, which lacks most HF checkpoints.
-          label_to_sku = {
-              "N150": "wh_n150",
-              "N300": "wh_n300",
-              "n300-llmbox": "wh_llmbox",
-              "P100a": "bh_p100",
-              "P150b": "bh_p150",
-              "BH-LoudBox": "bh_loudbox",
-          }
-          label = os.environ["RUNNER_LABEL"]
-          if label == "topology-6u":
-              sku = "topology-6u"
-              runs_on = ["topology-6u", "in-service", "bare-metal"]
-              mode = ""
-          else:
-              sku = label_to_sku[label]
-              with open(".github/sku_config.yaml") as f:
-                  entry = yaml.safe_load(f)["skus"].get(sku)
-              if not entry:
-                  print(f"::error::SKU {sku} (runner-label {label}) is missing from .github/sku_config.yaml")
-                  sys.exit(1)
-              runs_on = entry["runs_on"]
-              mode = entry.get("weights-cache-mode", "")
-
-          # Same host -> container mapping as models-e2e-tests-impl.yaml; HF lands at /mnt/MLPerf/huggingface.
-          if mode == "cloud-mlperf":
-              hf_mount, hf_offline = "/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro", "1"
-          elif mode == "yyz4-mnt-models":
-              hf_mount, hf_offline = "/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro", "1"
-          elif mode in ("local-disk", "lfc"):
-              hf_mount, hf_offline = "/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw", "0"
-          else:
-              hf_mount, hf_offline = "/mnt/MLPerf:/mnt/MLPerf:ro", "1"
-
-          arch = "blackhole" if label in ("P100a", "P150b", "BH-LoudBox") else "wormhole_b0"
-          outputs = {
-              "arch": arch,
-              "platform": "Ubuntu 22.04",
-              "sku": sku,
-              "runs_on": json.dumps(runs_on),
-              "weights_cache_mode": mode or "mlperf",
-              "hf_mount": hf_mount,
-              "hf_offline": hf_offline,
-          }
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              for k, v in outputs.items():
-                  f.write(f"{k}={v}\n")
-          print(json.dumps(outputs, indent=2))
-          PY
+          MATRIX: ${{ steps.parse.outputs.matrix }}
+        run: python3 model_tracer/resolve_trace_runner.py --runner-label "$RUNNER_LABEL" --matrix "$MATRIX"
 
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
@@ -374,7 +312,7 @@ jobs:
             echo "Found weights for $INPUT_HF_MODEL at $EXPECTED"
           elif [[ "$HF_HUB_OFFLINE" == "1" ]]; then
             echo "::error::$INPUT_HF_MODEL is not in the $SKU weights cache ($EXPECTED) and this cache is offline."
-            echo "::error::Pick a model that has CI coverage on this SKU, or a runner-label whose cache holds it."
+            echo "::error::Pick a SKU whose CI tests use this model, or one whose weights cache downloads from HF."
             exit 1
           else
             echo "::notice::$INPUT_HF_MODEL not cached at $EXPECTED; HF will download it into the per-runner cache."
