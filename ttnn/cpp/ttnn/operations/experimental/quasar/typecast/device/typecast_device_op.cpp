@@ -8,6 +8,8 @@
 
 #include <tt-metalium/hal.hpp>
 
+#include <algorithm>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
@@ -131,6 +133,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
             input_tensor.layout(),
             preallocated_output_tensor.value().layout());
+        TT_FATAL(
+            preallocated_output_tensor.value().device() == input_tensor.device(),
+            "Typecast operation requires the preallocated output to be on the same device as the input.");
     }
 }
 
@@ -152,6 +157,21 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
         return *tensor_args.preallocated_output;
     }
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
+    const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
+    // As ttnn::prim::typecast: a fresh output and a preallocated one overwritten on every device take the input's
+    // label; one spanning other mesh coordinates is left to the framework default.
+    const Tensor& src = tensor_args.input;
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& src_coords = src.tensor_topology().mesh_coords();
+        const auto& dst_coords = tensor_args.preallocated_output->tensor_topology().mesh_coords();
+        if (!std::is_permutation(src_coords.begin(), src_coords.end(), dst_coords.begin(), dst_coords.end())) {
+            return {};
+        }
+    }
+    return {src.tensor_topology()};
 }
 
 bool TypecastDeviceOperation::skip_launch(
