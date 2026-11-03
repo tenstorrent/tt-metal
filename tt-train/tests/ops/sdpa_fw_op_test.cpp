@@ -813,8 +813,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
     run_sdpa_test(config);
 }
 
-// Was disabled for non-deterministic accuracy failures on the old softmax path
-// (https://github.com/tenstorrent/tt-metal/issues/46121); passes on the chunked kernel.
+// Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
+// accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Multi-head attention with equal query and KV heads (standard MHA)
@@ -831,8 +831,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     run_sdpa_test(config);
 }
 
-// Was disabled for non-deterministic accuracy failures on the old softmax path
-// (https://github.com/tenstorrent/tt-metal/issues/46121); passes on the chunked kernel.
+// Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
+// accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Grouped Query Attention with different query and KV heads
@@ -892,8 +892,8 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 // VALIDATION TESTS - Testing Error Conditions and Edge Cases
 // =============================================================================
 
-// Was disabled for non-deterministic accuracy failures on the old softmax path
-// (https://github.com/tenstorrent/tt-metal/issues/46121); passes on the chunked kernel.
+// Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
+// accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
 TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
     using namespace ttml;
 
@@ -1116,8 +1116,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_SingleTile) {
     run_sdpa_test(config);
 }
 
-// Was disabled for non-deterministic accuracy failures on the old softmax path
-// (https://github.com/tenstorrent/tt-metal/issues/46121); passes on the chunked kernel.
+// Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
+// accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
 TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_MultiBatch) {
     // Multi-batch with different V dim
     SDPATestConfig config{
