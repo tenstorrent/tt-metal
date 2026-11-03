@@ -31,6 +31,7 @@
 #include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "test_utils/random_data.hpp"
+#include "test_utils/relative_l2.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -708,6 +709,23 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
     float mse_composite_vs_float = compute_mse(composite_result_xtensor, float_result);
     float mse_kernel_vs_composite_interm =
         return_intermediates ? compute_mse(interm_xtensor, composite_interm_xtensor) : 0.0F;
+
+    // Scale checks against the float reference. The elementwise tolerances cannot see a uniform few-percent
+    // error (a 4% scale error on |O| <= 1 passes atol + rtol 2e-2; a 10% error in the softmax sum moves the
+    // LSE by 0.1, inside its bound at |LSE| ~ 4), and the cross-chunking check only catches chunking-dependent
+    // bugs. relative_l2 of O is sensitive to a uniform scale error, and the LSE (which the backward consumes
+    // directly) gets an absolute bound. Both bounds are measured: the suite's largest values on p150b are
+    // 0.0049 for relative_l2 (median 0.002) and 0.0146 for the LSE, with a margin for other inputs.
+    {
+        constexpr float kRelativeL2Bound = 1e-2F;
+        constexpr float kLseAbsBound = 3e-2F;
+        const float rel_l2 = ttml::test_utils::relative_l2(result_xtensor, float_result);
+        EXPECT_LT(rel_l2, kRelativeL2Bound) << "relative L2 against the float reference in " << config.test_name;
+        if (return_intermediates) {
+            const float lse_abs = xt::amax(xt::abs(interm_xtensor - float_intermediates))();
+            EXPECT_LT(lse_abs, kLseAbsBound) << "LSE against the float reference in " << config.test_name;
+        }
+    }
 
     // Primary validation: Kernel vs Composite (most reliable - both use same implementation approach)
     EXPECT_TRUE(xt::allclose(result_xtensor, composite_result_xtensor, config.result_atol, config.result_rtol))
