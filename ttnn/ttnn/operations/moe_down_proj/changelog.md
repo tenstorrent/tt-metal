@@ -257,3 +257,90 @@
 
 The strip forwarder and the subblock change use only the existing helpers (`ttnn.Mcast` fixed and rotating
 senders, `matmul_block`). The NULL early-ack variant's helper gaps are listed with its verdict above.
+
+## Perf 2
+- Date: 2026-11-03
+- Focus: `t4096_layer0` LOOSE case (attention-flagged primary), same exact config as Perf 1: x and y in L1, model
+  L1 occupancy (853,568 B free), bfloat8_b, op default config (LoFi, fp32_dest_acc_en=True, math_approx_mode=False).
+  Every axis is in SUPPORTED. Blocking: 2 waves, k_block 6, 15 rows x 2 n tiles per core, 32 x + 32 w steps.
+  Stock 179.0 us, target 90.8 us.
+- Instrumentation: new permanent zone `compute_wait_x` nested in `compute_wait_inputs` (wait_w = the difference),
+  on both accumulate paths. Max 198 markers per RISC (cap 250). Numbers below are instrumented vs instrumented.
+- Measured breakdown on Perf 1 HEAD (`perf_experiments/breakdown_r2/BREAKDOWN.md`, ablation kernels rebuilt from
+  HEAD): focus 154.0 us. Cumulative ablation: full 154.0, no compute 145.3, + no w 136.9, + no x 89.8, + no store
+  83.4. Solo: no x 137.6, no strip forward 151.5, no w 145.0, no store 141.2; no x + no w 106.3; compute alone (no x,
+  w, store) 100.5. Zones: compute starved 49.7 us p50 (x 35.5, w ~14); with compute stubbed it still waits 120 us,
+  so the data-movement chain alone is ~137-145 us. Ranking: (1) the x step chain (x bytes add 1.47 us per step
+  serially; the strip forward is off the path: no compute + no w + no strip 136.8 = 136.9); (2) x and w balanced
+  (either alone holds the wall); (3) compute payload ~86 us vs 68 us ideal; (4) the y store, 12.8 us solo.
+- Portfolio and verdicts (focus ns, baseline -> candidate, one run unless noted; all checked for correctness):
+  - x_step_pipeline (more than one x step in flight; w twin): WIN, though not from concurrency. A per-step timeline
+    showed the 4.2 us step went to NoC work done before the ack: the forwarder issued its 98 KB strip forward before
+    acking, and the sender issued ~36 tiles of leftover owned-step reads before its send. Split ack/wait on the xa
+    receivers, with the forward and staged reads issued between them, and the next owned step's remainder issued one
+    step early: 154.9k -> 140.1k; plus the same on the w receivers (w DRAM reads between ack and wait): 137.1k.
+    Nulls and regressions: forwarder ack-before-forward alone 152.0k; ack/wait split with nothing moved 155.1k;
+    early ack of s + 1 (two data-ready cells) 141.3k on top of the split (flat; at depth 2 slot s + 1 is almost never
+    free before data s); early send never triggered at depth 2, flat at depth 3; two concurrent senders per step
+    (rows halved) 159.4k REGRESSION (a 49 KB half-send costs the same ~2.1 us as a full step); X/W depth 3 BLOCKED at
+    the occupied budget (61.8 KB free), flat where it fits (t4096_l0 134.0k -> 133.7k).
+  - store_issue (cheaper y store issue): WIN. Issue-bound, not address-math-bound. Stepping (bank, page) across the
+    block's 32 consecutive y pages, NOC_CTRL and length programmed once per block (`noc_write_init_state`), each
+    128 B row issued with `noc_write_with_state`, counters bumped once per block: median 154.2k -> 150.4k; zones
+    y_store 15.1 -> 9.6, y_store_tail 14.9 -> 11.9, tail helper 11.8 -> 8.6 us. Nulls: one-flush-per-call (154.4k),
+    alternating write command buffers (worse), skipping unchanged dst writes, unroll 4 (flat). Uneven last wave not
+    built (Perf 1 estimate < 1 us).
+  - compute_floor (matmul payload at the fixed precision): payload WIN, whole op flat on Perf 1 HEAD (154.6k ->
+    152.5k), small WIN on top of the two DM graduations (below). What binds in compute alone is the unpack/math issue
+    chain per k step, not the FPU, unpacker or packer (UNPACR -> NOP flat; 8 nops per k step +29 us on unpack,
+    +15.7 on math). Menu (compute-alone whole op): helper 100.6k; round-1 raw 96.2k; direct LLK calls 95.4k; + unpack
+    replay (one config context per tile row, CFGSHIFTMASK address steps) 91.9k; + DEST carriage return (ADDR_MOD_3
+    instead of a SETC16 per tile) 88.1k; + DEST_AUTO_LIMIT / core_n_tiles rows per acquire 86.0k. All bit-exact
+    against HEAD (LoFi, HiFi2, HiFi4). No variant trades precision.
+  - stage_free_sends (senders read into their own round slot; spend the stage L1 on depth or k_block 8): against
+    Perf 1 HEAD the w half and every combination regress (w only W_DEPTH 3 177.6k, x + w depth 3 173.8k, k_block 8
+    depth 2 212.5k); x only with X_DEPTH 3 flat on focus (157.1k median), WIN on t4096 DRAM x (198.0 -> 183.5k).
+    Re-ported onto the split-receiver HEAD (stage_free_x_v2): stage-free with x in L1 is a REGRESSION (focus 130.7k ->
+    142.7k median of 3, t4096_l2/l3 occupied +9%, t3072 +3.6%, t2048 +4.1%, t4096 DRAM y +5.2%): without the stage an
+    owned step's reads land in the 1-2 steps before it instead of over 16. With x in DRAM it wins (t4096 DRAM x
+    171.1k -> 153.2k, t1024 DRAM x and y 102.7k -> 99.0k).
+- Graduated:
+  1. Split receiver ack/wait on xa, wa and wb (`kernels/moe_split_recv.h`, raw on the receiving side, same wire as
+     `ReceiverPipe::receive`); the forward and staged reads moved between ack and wait. Single path, the fused
+     receives are deleted. Domain: every layout and placement.
+  2. Stateful one-packet y store (`moe_store_block`). Single path for L1 and DRAM y on both RISCs, the per-row
+     `get_noc_addr` + `noc_async_write` loop deleted. Domain: interleaved y (the only supported y); static_asserts
+     dedicated NoC mode.
+  3. Raw-LLK accumulate (`kernels/moe_down_proj_accumulate.h`). The `matmul_block` path remains only for
+     core_n_tiles > 4 (inexpressible there: the unpack replay must fit half the replay buffer and one tile row a
+     DEST half); unreachable on p100a (core_n_tiles 2 or 3). Focus 3 A/B pairs: 133.0-133.6k -> 131.0-131.9k;
+     t4096_l3 occupied 132.8-133.9k -> 129.9-130.9k.
+  4. Stage-free x sender with X_DEPTH 3 (descriptor `x_stage_free`, `X_DEPTH_STAGE_FREE`). Carve-out: x in L1 keeps
+     the stage, earned by the measured +7-9% focus regression above; written as `buffer_type != L1`, so any other x
+     placement takes the stage-free path.
+- Whole op, focus: 153.8 -> 130.9 us (-14.9%, instrumented); stock 179.0, target 90.8 (not reached).
+- Guard set (instrumented, one fresh-cache run each, all correctness-checked), Perf 1 HEAD -> Perf 2:
+  focus 153.8 -> 130.9 | t4096 layer 3 occupied 150.7 -> 129.8 | t4096 layer 2 occupied 151.1 -> 130.6 |
+  t4096 layer 0 unoccupied 155.1 -> 128.1 | t3072 125.4 -> 111.9 | t2048 108.2 -> 91.5 | t1024 86.0 -> 79.5 |
+  t4096 DRAM x 199.1 -> 154.0 | t4096 DRAM y 180.8 -> 159.3 | t1024 DRAM x and y 112.7 -> 100.1 |
+  t37 83.1 -> 73.6 | t1 41.4 -> 39.6. No regression.
+- Accuracy: the summation order is unchanged and the compute path is bit-exact. Precision baseline: PCC 0.99991,
+  rel_rms 1.90e-2 (LoFi); HiFi2 PCC 0.999999, rel_rms 1.68e-3.
+- Golden: 93/93 after every graduation. Unit (`test_moe_down_proj.py`, `_layouts.py`, `_precision_baseline.py`):
+  57/57.
+- Bottleneck now (focus zones): still the channels. Compute waits 46.5 us p50 (x 33.1, w 13.4) of its 114.3 us
+  accumulate; x_receive 94 us p50, x_forward 65.6 us on the 9 forwarders, w_receive 68.5 us p50. Each x / w step is
+  ~2.8-3.3 us of transfer; a send costs ~2 us regardless of size (49 KB measured the same as 98 KB), so the next
+  lever is fewer, larger steps (k_block 8 needs L1 the occupied budget does not have) or a cheaper per-send
+  protocol, not more concurrency at depth 2.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `dataflow_kernel_lib` mcast `ReceiverPipe::receive(round)` | capability | `receive` fuses the consumer-ready ack and the data-ready wait, so a receiver cannot do its own NoC work (strip forward, staged reads) while the step it acked is in flight. Needs public `ack(round)` / `wait(round)` entry points on `ReceiverPipe` (same semaphores and wire; the sender is unchanged). | 154943 (x + w fused receive) | 137101 | moe_split_recv.h:48 |
+| `TensorAccessor::get_noc_addr` + `noc_async_write` | capability | No API walks consecutive interleaved pages (bank step + page-in-bank) for a run of small fixed-size writes, and the public stateful write `noc_async_write_one_packet_with_state` fixes the destination coordinate, while each 128 B row of a block goes to a different bank. Needs a stateful write with per-issue destination coordinate plus an interleaved page iterator, and a batched counter update. | 154200 (median) | 150400 (median) | moe_down_proj_store.h:26 |
+| `compute_kernel_lib::matmul_block` (and `ckernel::matmul_block`) | capability | Cannot unpack several k steps under one unpack config context with Tensix-side address increments (it rewrites base addresses and stalls per k step), and cannot advance DEST between the tiles of a k step without a SETC16 per tile. | 100644 (compute alone) / 133300 (focus) | 86030 (compute alone) / 131250 (focus) | moe_down_proj_accumulate.h:131 |
+| `compute_kernel_lib::matmul_block` | ergonomics | Several separately accumulated 1 x core_n_tiles rows per DEST acquire (one pack handoff per DEST_AUTO_LIMIT / core_n_tiles rows) is only reachable through the helper's sb_h > 1 subblock shape, which changes the unpack pattern (2x2 measured slower in Perf 1). A "rows per acquire" knob independent of the subblock shape would cover it. | 88139 (1 row per acquire, compute alone) | 86030 (2 rows) | moe_down_proj_accumulate.h:131 |
+
+The stage-free x sender uses only the helper (`send(slot, slot, bytes)`, source guard default) plus
+`cb_pages_reservable_at_back`.
