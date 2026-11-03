@@ -4,7 +4,7 @@
 
 A full 48-layer Laguna process spends minutes in interpreter garbage collection at exit (the same reason
 tests/full_model_checks.py and tests/perf_full_model.py end with os._exit). The optimizer runs these gates many
-times per candidate, so skip that cleanup: record pytest's exit status and leave with os._exit once pytest is
+times per candidate, so skip that cleanup: leave with os._exit and pytest's final exit status once pytest is
 done. Under the device profiler the normal exit stays intact so the tracy client and profiler can flush.
 """
 
@@ -13,11 +13,11 @@ import sys
 
 import pytest
 
-_EXIT_STATUS = {"value": 0}
+_SESSION = {"value": None}
 
 
 def pytest_sessionfinish(session, exitstatus):
-    _EXIT_STATUS["value"] = int(exitstatus)
+    _SESSION["value"] = session
 
 
 @pytest.hookimpl(trylast=True)
@@ -26,4 +26,7 @@ def pytest_unconfigure(config):
         return
     sys.stdout.flush()
     sys.stderr.flush()
-    os._exit(_EXIT_STATUS["value"])
+    # read the status now, after every session-finish hook ran (models/conftest.py's perf-target validation can turn
+    # a passing session into a failure there)
+    session = _SESSION["value"]
+    os._exit(int(session.exitstatus) if session is not None else 0)
