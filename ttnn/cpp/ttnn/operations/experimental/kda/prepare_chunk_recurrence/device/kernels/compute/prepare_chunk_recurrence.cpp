@@ -541,8 +541,8 @@ void prepare_gate_factors(
     reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
     centered_inverse_decay.wait_front(chunk_key_tiles);
 
-    // exp(G_last/2) is row-replicated and the broadcasts read only row 0.
-    exponential_of_mask_products<Ct, Kt, MaskProductEpilogue::Exp, VectorMode::R, 2>(half_mask, g, anchor_decay);
+    // INVESTIGATION B: exp(G) itself, in DST; half_mask is gate_tril here and anchor_decay holds exp(G).
+    exponential_of_mask_products<Ct, Kt>(half_mask, g, anchor_decay);
     anchor_decay.wait_front(chunk_key_tiles);
 }
 
@@ -569,39 +569,44 @@ void prepare_scan_and_pairwise_inputs(
     DFB7& k_beta_pairwise,
     DFB8& q_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    auto& gate_decay = anchor_decay;  // INVESTIGATION B: exp(G)
 
+    pack_reconfig_data_format(k_beta_pairwise.get_id(), q_decay.get_id());
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, gate_decay, q_decay, chunk_key_tiles);
+    pack_reconfig_data_format(q_decay.get_id(), k_beta_pairwise.get_id());
     {
         auto& beta_k = q_pairwise;
         multiply_by_column(normalized_k, beta, beta_k, Ct, Kt);
         beta_k.wait_front(chunk_key_tiles);
         elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, centered_decay, k_beta_pairwise, chunk_key_tiles);
         k_beta_pairwise.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
+        pack_reconfig_data_format(k_beta_pairwise.get_id(), kd.get_id());
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, gate_decay, kd, chunk_key_tiles);
+        pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
         beta_k.pop_front(chunk_key_tiles);
     }
     beta.pop_front(Ct);
+    gate_decay.pop_front(chunk_key_tiles);
     elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, chunk_key_tiles);
     q_pairwise.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
     normalized_q.pop_front(chunk_key_tiles);
     centered_decay.pop_front(chunk_key_tiles);
-
-    // The scan-facing factors exp(G) = exp(G-anchor) * exp(anchor) reuse the anchored products.
-    pack_reconfig_data_format(q_pairwise.get_id(), q_decay.get_id());
-    multiply_by_row(q_pairwise, anchor_decay, q_decay, chunk_key_tiles);
-    pack_reconfig_data_format(q_decay.get_id(), kd.get_id());
-    multiply_by_row(k_beta_pairwise, anchor_decay, kd, chunk_key_tiles);
-    pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
 }
 
 // Complement-form decay: dl carries expm1(G_last) = exp(G_last) - 1. For long-memory channels exp(G_last) lies so
 // close to 1 that BF16 keeps almost none of the forgotten fraction 1 - exp(G_last) (exactly none within 2^-9); the
 // complement keeps its relative precision. recurrent_chunk_scan applies S + (dl * S + update). The rows of
 // expm1(gate_ones @ g) are replicated and the transpose to dl reads row 0. g's last consumer.
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
-void prepare_final_decay_rows(DFB0& g, DFB1& sum_broadcast_matrix, DFB2& final_decay_rows) {
+template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4>
+void prepare_final_decay_rows(
+    DFB0& g, DFB1& sum_broadcast_matrix, DFB2& final_decay_rows, DFB3& suffix_mask, DFB4& suffix_decay) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     exponential_of_mask_products<Ct, Kt, MaskProductEpilogue::Expm1, VectorMode::R, 2>(
         sum_broadcast_matrix, g, final_decay_rows);
     final_decay_rows.wait_front(chunk_key_tiles);
+    // INVESTIGATION B: exp(G_last - G) in DST.
+    exponential_of_mask_products<Ct, Kt>(suffix_mask, g, suffix_decay);
+    suffix_decay.wait_front(chunk_key_tiles);
     g.pop_front(chunk_key_tiles);
 }
 
@@ -611,8 +616,7 @@ void prepare_k_pairwise(DFB0& normalized_k, DFB1& centered_inverse_decay, DFB2& 
 
     elementwise_binary<ElementwiseBinaryOp::Multiply>(
         normalized_k, centered_inverse_decay, k_pairwise, chunk_key_tiles);
-    k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
-    normalized_k.pop_front(chunk_key_tiles);
+    k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G); INVESTIGATION B: normalized_k stays for k_dec
     centered_inverse_decay.pop_front(chunk_key_tiles);
 }
 
@@ -710,8 +714,10 @@ void prepare_decay_outputs(
         auto& k_dec = final_decay_rows;
 
         // k_dec_t = (k * exp(G_last - G))^T = (k * exp(anchor - G) * exp(anchor))^T.
+        // INVESTIGATION B: k_dec = k * exp(G_last - G) (anchor_decay holds exp(G_last - G); k_pairwise is the
+        // normalized_k it was given).
         pack_reconfig_data_format(final_decay.get_id(), k_dec.get_id());
-        multiply_by_row(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
         k_dec.wait_front(chunk_key_tiles);
         k_pairwise.pop_front(chunk_key_tiles);
         anchor_decay.pop_front(chunk_key_tiles);
@@ -788,6 +794,11 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     gate_half.wait_front(chunk_matrix_tiles);
     elementwise_binary<ElementwiseBinaryOp::Subtract>(gate_tril, gate_half, gate_centered, chunk_matrix_tiles);
     gate_centered.wait_front(chunk_matrix_tiles);
+    // INVESTIGATION B: gate_half's storage now holds the suffix mask gate_ones - gate_tril (forms G_last - G).
+    gate_half.pop_front(chunk_matrix_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Subtract>(gate_ones, gate_tril, gate_half, chunk_matrix_tiles);
+    gate_half.wait_front(chunk_matrix_tiles);
+    auto& gate_suffix = gate_half;
 
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
@@ -823,7 +834,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         pack_reconfig_data_format(v_beta.get_id(), workspace_0.get_id());
 
         auto& centered_decay = workspace_0;
-        prepare_gate_factors<Ct, Kt>(g, gate_centered, gate_half, centered_decay, centered_inverse_decay, anchor_decay);
+        prepare_gate_factors<Ct, Kt>(g, gate_centered, gate_tril, centered_decay, centered_inverse_decay, anchor_decay);
 
         auto& k_beta_pairwise = workspace_1;
         auto& q_pairwise = workspace_2;
@@ -831,7 +842,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             normalized_q, normalized_k, beta, anchor_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
 
         auto& final_decay_rows = workspace_0;
-        prepare_final_decay_rows<Ct, Kt>(g, gate_ones, final_decay_rows);
+        prepare_final_decay_rows<Ct, Kt>(g, gate_ones, final_decay_rows, gate_suffix, /*suffix_decay=*/anchor_decay);
 
         auto& k_pairwise = workspace_3;
         prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
@@ -852,7 +863,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             /*product=*/tile_workspace_2);
 
         pack_reconfig_data_format(t_inv.get_id(), final_decay.get_id());
-        prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
+        k_pairwise.pop_front(chunk_key_tiles);
+        prepare_decay_outputs<Ct, Kt>(normalized_k, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
         pack_reconfig_data_format(k_decay_transposed.get_id(), workspace_3.get_id());
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }
