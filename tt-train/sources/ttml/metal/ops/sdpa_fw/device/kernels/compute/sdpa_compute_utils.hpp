@@ -78,9 +78,10 @@ void sdpa_fw_recip_tile_first_column(uint32_t idst) {
 //
 // DST[i] = max(DST[i], cb_max[idx0 + i]) for i < n, column vectors, DST[n + i] as scratch: a running max
 // folded with new maxes (the K/V loop's step max, a merger's partial). Inside the caller's DST pass. Not
-// inlined, like the other helpers the merge shares with the loop: their inits are text the kernel, close to
-// its size cap, would otherwise carry once per call site.
-__attribute__((noinline)) void fold_max_in_dst(uint32_t cb_max, uint32_t idx0, uint32_t n) {
+// inlined and not cloned, like the other helpers the merge shares with the loop: their inits are text the
+// kernel, close to its size cap, would otherwise carry once per call site (the compiler's constant-argument
+// clones did the same).
+__attribute__((noinline, noclone)) void fold_max_in_dst(uint32_t cb_max, uint32_t idx0, uint32_t n) {
     reconfig_data_format_srca(cb_max);
     copy_init(cb_max);
     for (uint32_t i = 0; i < n; ++i) {
@@ -201,9 +202,9 @@ void init_unary_bcast_col(uint32_t cb_col_vec) {
 // DST[i * block_w + j] = cb_in[(row0 + i) * Wt + col0 + j] * alpha[row0 + i] for a block_h x block_w block
 // of tiles, at full fp32: cb_in unpacks straight to DST (UnpackToDestFp32) and the SFPU multiplies by the
 // row's alpha, broadcast into the spare DST slot block_h * block_w. Shared by the in-loop rescale and the
-// merge of split units; not inlined, since the unpacker inits it carries are most of its text and the
-// compute kernel is close to its size cap.
-__attribute__((noinline)) void scale_block_in_dst(
+// merge of split units; not inlined or cloned, since the unpacker inits it carries are most of its text and
+// the compute kernel is close to its size cap.
+__attribute__((noinline, noclone)) void scale_block_in_dst(
     uint32_t cb_in, uint32_t Wt, uint32_t row0, uint32_t col0, uint32_t block_h, uint32_t block_w, uint32_t cb_alpha) {
     const uint32_t alpha_dst = block_h * block_w;
     reconfig_data_format(cb_in, cb_in);
@@ -328,9 +329,10 @@ void matmul_qk_by_v(
 
 // cb_exp_max_diff[out0 + i] = exp(scale * (prev_max[prev0 + i] - cur_max[cur0 + i])) for i < n, n <= 4 (one
 // DST slot per row). The K/V loop passes the row for all three; a merger reads the partial's max from its
-// slot in the partial row and packs one alpha at a time.
+// slot in the partial row and packs one alpha at a time. One copy for all three call sites (see
+// fold_max_in_dst).
 template <uint32_t scaler_fp32, uint32_t scaler_bf16>
-__attribute__((noinline)) void update_exp_max_diffs(
+__attribute__((noinline, noclone)) void update_exp_max_diffs(
     uint32_t cb_prev_max_value,
     uint32_t prev0,
     uint32_t cb_cur_max_value,
