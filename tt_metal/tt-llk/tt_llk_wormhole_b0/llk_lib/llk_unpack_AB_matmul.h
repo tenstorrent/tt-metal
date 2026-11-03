@@ -392,7 +392,7 @@ inline void _llk_unpack_AB_matmul_(
                 TTI_DMANOP;
                 if (unpB_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);
                     // Do face by face unpacking
                     TTI_UNPACR(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
@@ -440,7 +440,7 @@ inline void _llk_unpack_AB_matmul_(
                 if (unpA_partial_face)
                 {
                     // Do face by face unpacking
-                    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);
                     TTI_UNPACR(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
