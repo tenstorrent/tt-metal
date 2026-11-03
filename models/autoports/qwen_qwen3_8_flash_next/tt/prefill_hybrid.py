@@ -10,6 +10,7 @@ import math
 import ttnn
 
 from .multichip_decoder import _EXPERT_COMPACT_PACKED, _EXPERT_DISPATCH_PACKED, _expert_capacity_source, _expert_kernel
+from .prefill_moe_compact import COMPACT1024_PIPE, EXTRA_CB_BYTES, compact_pipe_enabled
 
 DISPATCH1024 = _expert_capacity_source(_EXPERT_DISPATCH_PACKED, "e*128+count", "e*1024+count")
 COMPACT1024 = _expert_capacity_source(_EXPERT_COMPACT_PACKED, "ASSERT(packed<128)", "ASSERT(packed<1024)")
@@ -68,10 +69,10 @@ def group1024(self, x):
     _expert_kernel(
         self.ops.mesh,
         [down, ids, scores, self.rank, mapping, compact],
-        COMPACT1024,
+        COMPACT1024_PIPE if compact_pipe_enabled() else COMPACT1024,
         [n],
         workers=80,
-        cb_size=2176 + n * 320 + 64,
+        cb_size=2176 + n * 320 + 64 + (EXTRA_CB_BYTES if compact_pipe_enabled() else 0),
     )
     scores = (
         ttnn.pad(selected[..., :10], [(0, 0), (0, 0), (0, padded - n), (0, 0)], 0) if n < padded else selected[..., :10]
