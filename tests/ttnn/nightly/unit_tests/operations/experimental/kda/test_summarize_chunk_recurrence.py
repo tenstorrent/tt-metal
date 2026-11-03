@@ -61,7 +61,8 @@ _REGRESSION_CASE = _PerformanceCase(
     batch_heads=8,
     num_chunks=4,
     dim=32,
-    expected_duration_ns={True: 15_585, False: 14_440},
+    # Complement-form [E | B] summary: measured on a P150b (12x10 grid) 2026-11-02.
+    expected_duration_ns={True: 15_900, False: 15_200},
 )
 # Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
 _PRODUCTION_CASE = _PerformanceCase(
@@ -354,7 +355,9 @@ def test_summarize_chunk_recurrence_tail_and_init_select_distinct_programs(
             nrmse_threshold=0.005,
         )
         if tail and init:
-            assert_bit_identical(identity.bfloat16(), host[1].bfloat16(), name="unsplit tail slots hold (I, 0)")
+            assert_bit_identical(
+                identity.bfloat16(), host[1].bfloat16(), name="unsplit tail slots hold the identity (0, 0)"
+            )
         ttnn.deallocate(summaries)
 
 
