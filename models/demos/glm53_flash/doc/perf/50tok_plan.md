@@ -218,3 +218,13 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   (the composite: 113 us); reduce exact to one bf16 ulp, **42 us** (74 us). About -105 us per MoE layer, -4.4 ms
   per step expected; chain gate running (`gate84_B4_fabgather`: the gather alone must reproduce the dst run's ids;
   `gate84_B4_fabric`: both knobs, judged by the chain pcc against 0.9547).
+* 23:40 **lever 3, second program: the TP all-reduce** (`custom_ops/row_exchange` mode `allreduce`, commit
+  86d57a1dd6d, device test queued): the attention and MoE all-reduces over a row's 4 columns (RS + AG composites, 50
+  + 39 us per layer) as one two-phase fabric program each: every column owns a quarter of the hidden columns (2 of the
+  8 chunks), receives the 3 peers' T-row pieces of its chunks (phase 1, one 8 KB packet per peer), sums them with
+  the selector matmul in fp32 DST, writes its output chunks and fans the sums out (phase 2, one packet per peer).
+  Plugged into `GLMMesh.all_reduce_cols` behind `GLM53_TP_ALLREDUCE=fabric` for decode shapes (`[1, 1, T, W]` bf16,
+  `cols * T <= 32`), one op instance per call site (`tag` = attn / moe / mlp: a peer's next call of one site lands
+  only after this chip's intervening call of the other site, so the persistent staging is reused safely). Expected
+  ~30 us per call: about -2.2 ms per step. Lesson booked: a chain run JIT-compiles kernels minutes after it imported
+  op.py, so kernel edits wait for the running job (`gate84_B4_fabgather` died on that; rerun queued).
