@@ -235,7 +235,7 @@ def score_blocks_rows_composed(score_rows, mask, *, cluster_axis: int, topology=
     return masked
 
 
-def selection_rows(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill):
+def selection_rows(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill, live_rows=None):
     """Program 3: the verify tile's sparse-attention rows of token ids [1, 1, 32, 2080] uint32 from the top-k block ids
     [1, 1, 32, 512] and the pass's keep / fill rows -- the decode ``qsa_selection_row`` program on the 32 rows (its
     per-row integer chain: shift, repeat, offset add, sentinel concat, keep and, fill or, exact), with the module's
@@ -246,7 +246,9 @@ def selection_rows(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, r
         raise ValueError(
             f"the verify selection takes the 32-row block ids [1, 1, 32, {qsa_block.BLOCK_IDS}], got {shape}"
         )
-    return qsa_block.selection_row(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill)
+    return qsa_block.selection_row(
+        block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill, live_rows=live_rows
+    )
 
 
 def selection_rows_composed(block_ids, sentinel_pad_rows, block_offsets_rows, row_keep_bits, row_fill):

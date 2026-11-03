@@ -83,6 +83,17 @@ MATMUL_MODES = ("chain", "exact")
 DOWN_SPILL, UP_SPILL = 8, 6
 
 
+ROWS_FAST_ENV = "QWEN38_GR_ROWS_FAST"
+
+
+def rows_fast() -> bool:
+    """Unless ``QWEN38_GR_ROWS_FAST=0`` (default on): the rows 2..8 forms of the gate (gate3: 8 x 32 tiles, live-row chunked reads and writes) and the front
+    (front3: the u row multicast straight into the workers' tile layout); off = the one-row programs."""
+    import os
+
+    return os.environ.get(ROWS_FAST_ENV, "1") != "0"
+
+
 def matmul_mode(environ=None) -> str:
     import os
 

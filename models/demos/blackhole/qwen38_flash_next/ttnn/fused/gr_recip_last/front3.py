@@ -75,11 +75,26 @@ def rowtrim_defines(rows: int) -> list[tuple[str, str]]:
 UNPACK_ENV = "QWEN38_FRONT_UNPACK_SPLIT"  # default "1"; "0" off; rows >= 2: the u row's unpack on the down workers runs on NCRISC and BRISC
 UNPACK_DONE_SEM = 8  # program-local, on the down workers: BRISC -> NCRISC "my half of the u tiles is unpacked"
 UNPACK_MIN_ROWS = 2
+U_DIRECT_MIN_ROWS = 5  # below it the packed multicast + unpack is faster (3 rows: 18.8 us packed, 20.5 whole tiles)
+
+
+def u_direct(rows: int) -> bool:
+    """``QWEN38_GR_ROWS_FAST=1``, rows >= U_DIRECT_MIN_ROWS: the norm cores multicast their whole u tiles straight into the workers' u CB (CB_IN0),
+    one multicast per core; no packed buffer (CB_UPACK, CB_UPACK_IN), no pack loop, no unpack on the workers.  Valid rows of CB_IN0 as before.
+    """
+
+    return gr_read.rows_fast() and rows >= U_DIRECT_MIN_ROWS
+
+
+def direct_defines(rows: int) -> list[tuple[str, str]]:
+    return [("QWEN38_FRONT_U_DIRECT", "1")] if u_direct(rows) else []
 
 
 def unpack_split(rows: int, tiles: int) -> int:
-    """Tiles of the u row the worker's reader unpacks itself (the writer unpacks the rest); 0 = no split (rows == 1 or flag off)."""
+    """Tiles of the u row the worker's reader unpacks itself (the writer unpacks the rest); 0 = no split (rows == 1, flag off, or the direct u write)."""
 
+    if u_direct(rows):
+        return 0
     return tiles // 2 if os.environ.get(UNPACK_ENV, "1") == "1" and rows >= UNPACK_MIN_ROWS else 0
 
 
@@ -369,6 +384,7 @@ def stats_recip_down_gather(
         gr_read.PARTIAL_TILES,
     )
     B = gr_read.BRANCHES
+    direct = u_direct(rows)
     cbs = [
         fp.cb_descriptor(0, gr_read.BF16, T_BF16, HT, p_set),
         fp.cb_descriptor(1, gr_read.BF16, T_BF16, ST, p_set),
@@ -393,9 +409,13 @@ def stats_recip_down_gather(
         fp.cb_descriptor(CB_ZERO, gr_read.FP32, T_FP32, 1, w_set),
         fp.cb_descriptor(CB_OUT, gr_read.FP32, T_FP32, 1, w_set),
         fp.cb_descriptor(gr_fold.PARTIALS_SCRATCH_CB, gr_read.FP32, T_FP32, PT, wt_set),
-        fp.cb_descriptor(CB_UPACK, gr_read.BF16, HT * 2 * rows * 32, 1, p_set),
-        fp.cb_descriptor(CB_UPACK_IN, gr_read.BF16, B * HT * 2 * rows * 32, 1, pw_set),
     ]
+    if not direct:
+        cbs += [
+            fp.cb_descriptor(CB_UPACK, gr_read.BF16, HT * 2 * rows * 32, 1, p_set),
+            fp.cb_descriptor(CB_UPACK_IN, gr_read.BF16, B * HT * 2 * rows * 32, 1, pw_set),
+        ]
+    u_land = CB_IN0 if direct else CB_UPACK_IN  # the CB the u chunks land in
     # the norm core's reader: the residual once (the stats and u phases share it), gamma, then the gathered stats once
     # the stats transport and the core's own writer signalled (gr_fold's gate: links + 1)
     # the norm core's reader: the residual once (the stats and u phases share it), gamma, then, once the stats transport signalled
@@ -449,8 +469,8 @@ def stats_recip_down_gather(
         recv=(CB_IN0, FT, B, 0),
         recv2=(CB_RECIP_W, B, B, RECIP_READY),
         zero_cb=CB_ZERO,
-        extra=[CB_UPACK_IN, rows * 32, 512],
-        defines=unpack_defines(rows, FT),
+        extra=[u_land, rows * 32, 512],
+        defines=unpack_defines(rows, FT) + direct_defines(rows),
     )
     down = fp.compute_kernel(
         DOWN_STREAMS,
@@ -485,13 +505,13 @@ def stats_recip_down_gather(
             MCAST_WRITER4,
             p_set,
             [CB_SOUT, CB_PACK_STATS, 1, 0, gr_read.NONE_CB, s_scratch]
-            + [CB_U, CB_UPACK_IN, HT, CB_UPACK, gr_read.NONE_CB, 0]
+            + [CB_U, u_land, HT, CB_UPACK, gr_read.NONE_CB, 0]
             + [CB_RECIP_OUT, CB_RECIP_W, 1, 0, CB_NOUT, RECIP_READY]
             + [gr_fold.FRONT_STATS_READY]
             + accessors
             + [rows_mode_slot, chunk_a, 512, TP_SIZE],
             runtime,
-            defines=recip_chunk_defines(rows),
+            defines=recip_chunk_defines(rows) + direct_defines(rows),
         )
         # the workers' writer: the partial tile's two row chunks into the transport core's staging buffer (the scratch CB), the
         # scratch semaphore, then the device's own page PARTIAL_TILES * rank + w

@@ -62,6 +62,24 @@ MCAST_READER_T = fp.kernel_source(NAME, "mcast_reader_t.cpp")
 MCAST_WRITER_T = fp.kernel_source(NAME, "mcast_writer_t.cpp")
 WRITER_T = fp.kernel_source(NAME, "writer_t.cpp")
 
+# QWEN38_GR_ROWS_FAST (default on), rows 2..8: the tiny-tile scheme for more than one row.  Every CB of the program except the up weight's holds
+# 8 x 32 tiles (two 8-row faces: BF16 512 B, FP32 1024 B); the readers and writers move only the live rows (rows 0..rows-1 of face 0 and
+# of face 1, rows * 32 B BF16 / rows * 64 B FP32) of a DRAM page (reader_r / mcast_reader_r / writer_r / mcast_writer_r).  In the live-row
+# form (out_rows = 32 > rows) the writers also zero the dead rows of the L1 tile and write the rest of the 32-row page from a zero tile in
+# one barrier (gr_rows_out.h), so the pages equal the one-row program's.  Valid rows of the block and the injection are bit for bit the one-row program's.
+ROWS_FAST_MIN, ROWS_FAST_MAX = 2, 8
+READER_R = fp.kernel_source(NAME, "reader_r.cpp")
+MCAST_READER_R = fp.kernel_source(NAME, "mcast_reader_r.cpp")
+MCAST_WRITER_R = fp.kernel_source(NAME, "mcast_writer_r.cpp")
+WRITER_R = fp.kernel_source(NAME, "writer_r.cpp")
+ROWS_BF16, ROWS_FP32 = 8 * 32 * 2, 8 * 32 * 4
+
+
+def rows_fast_enabled(rows: int) -> bool:
+    from . import rows_fast
+
+    return rows_fast() and ROWS_FAST_MIN <= rows <= ROWS_FAST_MAX
+
 
 ROWTRIM_ENV = "QWEN38_GR_GATE_ROWTRIM"
 ROWTRIM_MAX_ROWS = 8
@@ -139,8 +157,11 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain", 
     w_set, p_set, all_set = _core_set(workers), _core_set(producers), _core_set(workers + producers)
     plain_set, inject_set = _core_set(plain), _core_set(inject)
     tiny = tiny_enabled(rows)
-    bf16_page, fp32_page = (TINY_BF16, TINY_FP32) if tiny else (TILE_BF16, TILE_FP32)
-    shape_rows = 1 if tiny else None  # the 1 x 32 tile
+    fast = rows_fast_enabled(rows)
+    bf16_page, fp32_page = (
+        (TINY_BF16, TINY_FP32) if tiny else (ROWS_BF16, ROWS_FP32) if fast else (TILE_BF16, TILE_FP32)
+    )
+    shape_rows = 1 if tiny else 8 if fast else None  # the 1 x 32 or 8 x 32 tile
     cbs = [
         fp.cb_descriptor(0, FP32, fp32_page, t * TP_SIZE, p_set, shape_rows),
         fp.cb_descriptor(1, FP32, fp32_page, 1, p_set, shape_rows),
@@ -174,7 +195,19 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain", 
         else {}
     )
     writer_kw = {"source": WRITER_T, "defines": [("GT_DST_FACE", str(FACE_BF16_BYTES))]} if tiny else {}
-    if (
+    if fast:
+        common = [("GT_ROWS", str(rows)), ("GT_DST_FACE", str(FACE_BF16_BYTES))]
+        reader_kw = {
+            "source": READER_R,
+            "defines": [("GT_CHUNK", str(rows * 64)), ("GT_SRC_FACE", str(FACE_FP32_BYTES))],
+        }
+        mcast_reader_kw = {
+            "source": MCAST_READER_R,
+            "defines": [("GT_CHUNK", str(rows * 32)), ("GT_SRC_FACE", str(FACE_BF16_BYTES))],
+        }
+        writer_kw = {"source": WRITER_R, "defines": common + ([("GT_ZERO_CB", "11")] if live else [])}
+        mcast_writer_kw = {"source": MCAST_WRITER_R, "defines": common + ([("GT_ZERO_CB", "1")] if live else [])}
+    elif (
         live
     ):  # not tiny (rows >= 2): the stock writer and mcast writer with the dead-row zero fill (kernels/writer.cpp, mcast_phase.h)
         writer_kw = {"defines": [("GR_LIVE_ROWS", str(rows)), ("GR_LIVE_ZERO_CB", "11")]}

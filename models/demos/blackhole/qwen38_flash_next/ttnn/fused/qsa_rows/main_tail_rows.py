@@ -24,6 +24,8 @@ carry no exact zeros).  Rows past R are the tile's stale rows and are never read
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 
 from .. import program as fp
@@ -33,6 +35,16 @@ from ..qsa_block import BF16, HEAD_DIM, KV_WIDTH, LOCAL_HEADS, ROPE_DIM, SPARSE_
 NAME = "qsa_rows"
 ROWS_KV_READER = fp.kernel_source(NAME, "rows_kv_reader.cpp")
 ROWS_KV_WRITER = fp.kernel_source(NAME, "rows_kv_writer.cpp")
+ROWS_KV_FAST_ENV = "QWEN38_QSA_ROWS_KV_FAST"
+
+
+def rows_kv_fast_enabled(environ=None) -> bool:
+    """True when ``QWEN38_QSA_ROWS_KV_FAST`` is not "0" (default on): the KV core writes only the rows this pass places
+    (no block read-back, no zero tail, the next block only when rows cross the block edge) with 32-bit copies.  The
+    cache rows past P + R - 1 then keep their earlier content instead of 0."""
+    return (os.environ if environ is None else environ).get(ROWS_KV_FAST_ENV, "1") != "0"
+
+
 CB_BLOCK, CB_NEXT, CB_KV_POS = 29, 30, 31
 ROW_BYTES = KV_WIDTH * 2  # one row-major cache row, 512 bf16
 POS_PAGE = (
@@ -83,6 +95,8 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
             fp.cb_descriptor(CB_KV_POS, ttnn.uint32, POS_PAGE, 1, all_set),
         ]
 
+    fast_defines = [("QWEN38_ROWS_KV_FAST", "1")] if rows_kv_fast_enabled() else ()
+
     def kernels(ctx):
         core_set = ctx["staging_set"]
         return [
@@ -103,9 +117,14 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
                         ],
                     )
                 ],
+                defines=fast_defines,
             ),
             fp.writer_kernel(
-                ROWS_KV_WRITER, core_set, acc(kv_cache), [(core, [kv_cache.buffer_address(), int(single_row)])]
+                ROWS_KV_WRITER,
+                core_set,
+                acc(kv_cache),
+                [(core, [kv_cache.buffer_address(), int(single_row)])],
+                defines=fast_defines,
             ),
         ]
 
@@ -140,6 +159,7 @@ def main_tail_rows(
     qg_first: int = 0,
     k_first: int = 0,
     v_first: int = 0,
+    live_rows: int | None = None,
 ):
     """The verify tile's main tail: ``qg_ws`` / ``k_ws`` / ``v_ws`` the projections as 32-row TILE row tiles (rows
     past R stale), ``position`` / ``rows`` uint32 ROW_MAJOR [1, 1, 1, 1] = P / R (device scalars), the norm weights [1, 1, 1, 256], the RoPE tables
@@ -169,6 +189,8 @@ def main_tail_rows(
         k_first=k_first,
         v_first=v_first,
         kv_stage=stage,
+        # QWEN38_QSA_ROWS_KV_FAST also makes the query writers handle the live lanes only (the dead lanes are zero pages)
+        live_lanes=live_rows if rows_kv_fast_enabled() else None,
     )
 
 

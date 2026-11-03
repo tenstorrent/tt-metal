@@ -83,7 +83,7 @@ def _spec(x, out, links: int):
     return spec, transports, rows, mode, slot
 
 
-def admits(hidden, *, cluster_axis=1, memory_config=None) -> bool:
+def admits(hidden, *, cluster_axis=1, memory_config=None, live_rows=None) -> bool:
     """The contract: ``[1, 1, rows, W]`` bf16 TILE on the TP line, rows in 1..16 whose packed rows fit one packet
     per link (a full tile row takes the all-gather: nothing to trim)."""
 
@@ -92,7 +92,9 @@ def admits(hidden, *, cluster_axis=1, memory_config=None) -> bool:
     if _mode() == "1":
         from .. import row_gather2
 
-        return row_gather2.admits(hidden, cluster_axis=cluster_axis, memory_config=memory_config)
+        return row_gather2.admits(hidden, cluster_axis=cluster_axis, memory_config=memory_config, live_rows=live_rows)
+    if live_rows is not None and int(live_rows) != int(hidden.shape[2]):
+        return False  # v1 gathers the tile's logical rows; the live-row form is row_gather2's
     try:
         shape = tuple(int(v) for v in hidden.shape)
         padded = tuple(int(v) for v in hidden.padded_shape)
@@ -120,18 +122,20 @@ def admits(hidden, *, cluster_axis=1, memory_config=None) -> bool:
         return False
 
 
-def composed(hidden, *, cluster_axis=1, memory_config=None):
+def composed(hidden, *, cluster_axis=1, memory_config=None, live_rows=None):
     return ttnn.all_gather(hidden, dim=3, cluster_axis=cluster_axis, memory_config=memory_config)
 
 
-def row_gather(hidden, *, cluster_axis=1, memory_config=None):
+def row_gather(hidden, *, cluster_axis=1, memory_config=None, live_rows=None):
     shape = tuple(int(v) for v in hidden.shape)
-    if not admits(hidden, cluster_axis=cluster_axis, memory_config=memory_config):
+    if not admits(hidden, cluster_axis=cluster_axis, memory_config=memory_config, live_rows=live_rows):
         raise ValueError(f"row_gather does not admit {shape} {hidden.dtype} {hidden.layout}")
     if _mode() == "1":
         from .. import row_gather2
 
-        return row_gather2.row_gather(hidden, cluster_axis=cluster_axis, memory_config=memory_config)
+        return row_gather2.row_gather(
+            hidden, cluster_axis=cluster_axis, memory_config=memory_config, live_rows=live_rows
+        )
     mesh = hidden.device()
     links = min(LINKS, gr_fold.line(mesh).links)
     out = fp.allocate(
@@ -186,11 +190,11 @@ def row_gather(hidden, *, cluster_axis=1, memory_config=None):
     return fp.stamp_topology(out, hidden)
 
 
-def row_gather_or_all_gather(hidden, *, cluster_axis=1, memory_config=None):
+def row_gather_or_all_gather(hidden, *, cluster_axis=1, memory_config=None, live_rows=None):
     """The call sites' entry: the packed program within its contract, ``ttnn.all_gather`` otherwise."""
 
-    if admits(hidden, cluster_axis=cluster_axis, memory_config=memory_config):
-        return row_gather(hidden, cluster_axis=cluster_axis, memory_config=memory_config)
+    if admits(hidden, cluster_axis=cluster_axis, memory_config=memory_config, live_rows=live_rows):
+        return row_gather(hidden, cluster_axis=cluster_axis, memory_config=memory_config, live_rows=live_rows)
     return composed(hidden, cluster_axis=cluster_axis, memory_config=memory_config)
 
 

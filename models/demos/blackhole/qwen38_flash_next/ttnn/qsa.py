@@ -5758,18 +5758,26 @@ class Qwen38TTNNQSA:
                 raise RuntimeError(f"{label} {name} must be BF16 TILE, got {tensor_metadata(tensor)}")
             self.mesh_contract.validate_tensor(tensor, placement=TensorPlacement.REPLICATED)
 
-    def _all_gather_hidden_rows(self, hidden_rows, constants: Qwen38TTNNQSAChunkConstants):
+    def _all_gather_hidden_rows(
+        self, hidden_rows, constants: Qwen38TTNNQSAChunkConstants, live_rows: int | None = None
+    ):
+        """``live_rows`` (the verify pass: R real rows on the 32-row tile whose other rows are zero): 3..8 rows go through the
+        fused row gather, which moves only the live rows and zeroes the rest of every gathered page."""
+
         rows = constants.rows
         # One tile lands in the decode linears' activation shard; the long chunk's four tiles are gathered
         # interleaved and moved into that shard one tile at a time by every DRAM-sharded linear.
         _require_shape(hidden_rows, (1, 1, rows, HIDDEN_SIZE // TP_SIZE), "QSA hidden rows")
         self.mesh_contract.validate_tensor(hidden_rows, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
-        full_hidden = ttnn.all_gather(
-            hidden_rows,
-            dim=3,
-            cluster_axis=TP_AXIS,
-            memory_config=self.hidden_act_memory_config if rows == CHUNK_ROWS else ttnn.DRAM_MEMORY_CONFIG,
-        )
+        gather_memory = self.hidden_act_memory_config if rows == CHUNK_ROWS else ttnn.DRAM_MEMORY_CONFIG
+        if live_rows is not None and rows == CHUNK_ROWS and 2 < live_rows < CHUNK_ROWS:
+            from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
+
+            full_hidden = fused_kernels.resolve_admitted("row_gather")(
+                hidden_rows, cluster_axis=TP_AXIS, memory_config=gather_memory, live_rows=live_rows
+            )
+        else:
+            full_hidden = ttnn.all_gather(hidden_rows, dim=3, cluster_axis=TP_AXIS, memory_config=gather_memory)
         _require_shape(full_hidden, (1, 1, rows, HIDDEN_SIZE), "QSA hidden rows all-gather")
         self.mesh_contract.validate_tensor(full_hidden, placement=TensorPlacement.REPLICATED)
         return full_hidden
@@ -6255,7 +6263,12 @@ class Qwen38TTNNQSA:
         if self._rows_fused is not None and rows == CHUNK_ROWS:
             # program 3 of the verify rows family: the integer chain below as the decode selection program on the tile
             sparse_indices = self._rows_fused.selection_rows(
-                block_ids, self.sentinel_pad, constants.block_offsets_rows, chunk.row_keep_bits, chunk.row_fill
+                block_ids,
+                self.sentinel_pad,
+                constants.block_offsets_rows,
+                chunk.row_keep_bits,
+                chunk.row_fill,
+                live_rows=live_rows,
             )
             _deallocate(block_ids)
             _require_shape(sparse_indices, (1, 1, rows, SPARSE_INDEX_CAPACITY), "fused QSA verify sparse indices")
@@ -7258,7 +7271,15 @@ class Qwen38TTNNQSA:
         )
 
     def _main_tail_rows_step(
-        self, full_hidden, cos, sin, state, verify: Qwen38TTNNQSAVerifyInputs, constants, merged=None
+        self,
+        full_hidden,
+        cos,
+        sin,
+        state,
+        verify: Qwen38TTNNQSAVerifyInputs,
+        constants,
+        merged=None,
+        live_rows: int | None = None,
     ):
         """The three main linears on the gathered tile (L1 width-sharded, as the decode step's), then the fused main
         tail of the verify rows (ttnn/fused/qsa_rows main_tail_rows) in place of the chain after them in
@@ -7316,6 +7337,7 @@ class Qwen38TTNNQSA:
             qg_first=qg_first,
             k_first=k_first,
             v_first=v_first,
+            live_rows=live_rows,
         )
         if merged is None:
             _deallocate(k_ws, v_ws)
@@ -7466,7 +7488,7 @@ class Qwen38TTNNQSA:
                 f"the layer has {self.allocated_compressed_blocks}"
             )
 
-        full_hidden = self._all_gather_hidden_rows(hidden_rows, constants)
+        full_hidden = self._all_gather_hidden_rows(hidden_rows, constants, live_rows=live_rows)
         # The verify rows are one 32-row tile: the gathered shard is every linear's input (no row tiles).
         merged = None
         if (
@@ -7486,7 +7508,7 @@ class Qwen38TTNNQSA:
 
         if self._rows_fused is not None and verify.position is not None:
             sparse_query, gate, qg_ws, qg_first = self._main_tail_rows_step(
-                full_hidden, cos, sin, state, verify, constants, merged
+                full_hidden, cos, sin, state, verify, constants, merged, live_rows=live_rows
             )
             local_attention = self._sparse_value_attention_rows(
                 None, gate, sparse_indices, state, constants, sparse_query=sparse_query, qg_ws=qg_ws, qg_first=qg_first

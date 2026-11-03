@@ -1513,6 +1513,9 @@ class Qwen38ChatSession:
                 yield from finish_on_one_row_loop()
                 return
             uniforms_before = 0 if sampling is None else len(sampling.uniforms)
+            seglog = mtp_v2.seglog()
+            if seglog is not None and entered:
+                seglog.step_starting()
             if entered:
                 with self.chain.loop_guard():
                     record = self.chain.mtp_step()
@@ -1553,6 +1556,8 @@ class Qwen38ChatSession:
             run = Qwen38MTPPassRun(position, [pending, *emitted[:accepted]], emitted, 0)
             self._mtp_run = run
             budget_hit = False
+            seglog = mtp_v2.seglog()
+            t_loop = time.monotonic_ns()
             for index, token_id in enumerate(emitted):
                 run.yielded = index + 1
                 produced += 1
@@ -1568,8 +1573,13 @@ class Qwen38ChatSession:
                     self.row_token = token_id  # _mtp_settle leaves it in the row, as _generate does
                     yield token_id, "length"
                     return
+                t_yield = time.monotonic_ns()
                 yield token_id, None
+                t_stop = time.monotonic_ns()
                 reason = None if should_stop is None else should_stop()
+                if seglog is not None:
+                    seglog.add("emit_yield_suspended", t_stop - t_yield)
+                    seglog.add("emit_should_stop", time.monotonic_ns() - t_stop)
                 if reason is not None:
                     yield None, reason
                     return
@@ -1592,6 +1602,9 @@ class Qwen38ChatSession:
             run.host_committed = True
             pending = emitted[accepted]
             pending_yielded = True
+            if seglog is not None:
+                seglog.add("emit_loop_total", time.monotonic_ns() - t_loop)
+                seglog.pass_end()
 
     def _mtp_settle(self, finish: str) -> None:
         """Leave the pass loop after its last pass (``self._mtp_run``): commit the rows the request consumed and
@@ -1604,6 +1617,13 @@ class Qwen38ChatSession:
         device already ran) are rolled back by committing fewer rows.
         """
 
+        seglog = mtp_v2.seglog()
+        if seglog is not None:
+            seglog.flush()
+        if mtp_v2.ple_module.ple_fast():  # QWEN38_PLE_FAST: the table files' identity proof at the request end
+            mtp_model = getattr(self.chain.mtp.chain, "model", None)
+            if mtp_model is not None:
+                mtp_v2.ple_request_proof(mtp_model, "at the request end")
         run = self._mtp_run
         if run is None:
             return
@@ -3022,7 +3042,17 @@ class Qwen38TracedChain:
     def mtp_step(self) -> mtp_v2.Qwen38TTNNMTPPassRecord:
         if self.mtp.chain is None:
             raise Qwen38ChatChainError("the MTP pass loop is not active")
-        return self.mtp.record(self.mtp.chain.step())
+        seglog = mtp_v2.seglog()
+        if seglog is None:
+            return self.mtp.record(self.mtp.chain.step())
+        started = time.monotonic_ns()
+        record = self.mtp.chain.step()
+        chain_ns = time.monotonic_ns() - started
+        started = time.monotonic_ns()
+        self.mtp.record(record)
+        seglog.pass_recorded(record, time.monotonic_ns() - started)
+        seglog.add("chain_step", chain_ns)
+        return record
 
     def mtp_step_forced(self, tokens: Sequence[int]) -> mtp_v2.Qwen38TTNNMTPPassRecord:
         if self.mtp.chain is None:

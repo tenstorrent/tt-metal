@@ -108,6 +108,8 @@ void kernel_main() {
 #else
         constexpr uint32_t UNPACK_TILES = RECV_TILES;
 #endif
+#ifndef QWEN38_FRONT_U_DIRECT  // QWEN38_GR_ROWS_FAST=1: the senders wrote the chunks into the u CB's tiles, nothing to
+                               // unpack
         for (uint32_t t = 0; t < UNPACK_TILES; ++t) {
             for (uint32_t c = 0; c < 2; ++c) {
                 volatile tt_l1_ptr uint32_t* from =
@@ -129,6 +131,7 @@ void kernel_main() {
                 }
             }
         }
+#endif
 #ifdef QWEN38_FRONT_UNPACK_SPLIT
         Semaphore<> unpacked(QWEN38_FRONT_UNPACK_SEM);
         unpacked.wait(1);

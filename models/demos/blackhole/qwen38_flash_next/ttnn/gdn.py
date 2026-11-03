@@ -2769,12 +2769,15 @@ class Qwen38TTNNGDN:
         _require_shape(padded, (1, 1, tile_rows, HIDDEN_SIZE_PER_DEVICE), label="GDN rows padded input")
         # One tile lands in the in-proj activation shard; the long chunk's four tiles are gathered
         # interleaved and moved into that shard one tile at a time by the projection.
-        full_hidden = ttnn.all_gather(
-            padded,
-            dim=3,
-            cluster_axis=TP_AXIS,
-            memory_config=self.in_proj_act_memory_config if tile_rows == CHUNK_SIZE else ttnn.DRAM_MEMORY_CONFIG,
-        )
+        gather_memory = self.in_proj_act_memory_config if tile_rows == CHUNK_SIZE else ttnn.DRAM_MEMORY_CONFIG
+        if tile_rows == CHUNK_SIZE and 2 < rows < CHUNK_SIZE:
+            # the verify rows (3..8 live rows of the zero-padded tile): the fused row gather moves only the live rows and
+            # writes zeros into the rest of every gathered tile page; the stock gather otherwise (outside its contract)
+            full_hidden = fused.resolve_admitted("row_gather")(
+                padded, cluster_axis=TP_AXIS, memory_config=gather_memory, live_rows=rows
+            )
+        else:
+            full_hidden = ttnn.all_gather(padded, dim=3, cluster_axis=TP_AXIS, memory_config=gather_memory)
         self.mesh_contract.validate_tensor(full_hidden, placement=TensorPlacement.REPLICATED)
         _require_shape(full_hidden, (1, 1, tile_rows, HIDDEN_SIZE), label="GDN rows gathered hidden")
         return full_hidden

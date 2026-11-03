@@ -27,6 +27,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import moe_post
 BF16, U16, DRAM = ttnn.bfloat16, ttnn.uint16, ttnn.DRAM_MEMORY_CONFIG
 HIDDEN, TOP_K, EXPERTS, PER = 2560, 10, 512, 64
 LAYERS = [int(v) for v in os.environ.get("X37_LAYERS", "0,11,30").split(",")]
+ROWS_LOOP = (1, 2) + tuple(r for r in (3, 4, 5, 8) if r <= me.max_rows())
 PARAMS = {**DEVICE_PARAMS, "trace_region_size": 64 * 1024 * 1024}
 
 
@@ -40,7 +41,7 @@ def routing_case(gen, rows, busy_die, n_busy):
     first = []
     for r in range(rows):
         lo = busy_die * PER
-        pick = (first[:1] if r == 1 and first and n_busy else []) + []
+        pick = (first[:1] if r >= 1 and first and n_busy else []) + []
         pool = [e for e in range(lo, lo + PER) if e not in pick]
         pick += [pool[i] for i in torch.randperm(len(pool), generator=gen)[: n_busy - len(pick)].tolist()]
         rest_pool = [e for e in range(EXPERTS) if not lo <= e < lo + PER]
@@ -79,7 +80,7 @@ def test_tp8_bitwise_and_timing(mesh_device):
         root = cache_dir() / "backbone" / f"layer-{layer:02d}"
         w01 = ttnn.load_tensor(root / "w0_w1_dtype_BFLOAT4_B_layout_TILE.tensorbin", device=mesh)
         w2 = ttnn.load_tensor(root / "w2_dtype_BFLOAT4_B_layout_TILE.tensorbin", device=mesh)
-        for rows in (1, 2):
+        for rows in ROWS_LOOP:
             routing_cfg = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
@@ -106,7 +107,10 @@ def test_tp8_bitwise_and_timing(mesh_device):
                 mesh_mapper=rep(mesh),
             )
             gen = torch.Generator().manual_seed(100 * layer + rows)
-            for busy_die, n_busy in [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 2), (6, 4), (7, 1), (3, 0), (5, 4)]:
+            cases = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 2), (6, 4), (7, 1), (3, 0), (5, 4)]
+            if rows > 2:  # up to 8 x 10 slots on one die: more than 20 active experts, the whole die
+                cases += [(2, 8), (4, 10), (6, 10), (1, 6)]
+            for busy_die, n_busy in cases:
                 idx, sc = routing_case(gen, rows, busy_die, n_busy)
                 hidden = (torch.randn(rows, HIDDEN, generator=gen) * 2.0).to(torch.bfloat16)
                 h_tile = ttnn.from_torch(

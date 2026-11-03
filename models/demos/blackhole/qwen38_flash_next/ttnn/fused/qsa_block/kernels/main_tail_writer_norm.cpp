@@ -46,8 +46,21 @@ void kernel_main() {
         FUSED_ZONE("fz_qs_mt_wn_query");
         cb_wait_front(CB_ZERO, 1);
         const uint32_t zero = get_read_ptr(CB_ZERO);
+#ifdef QSA_LIVE
+        const uint32_t live_lanes =
+            get_arg_val<uint32_t>(6);  // lanes >= live_lanes: one zero page per head (the rope core skips them)
+#endif
         for (uint32_t lane = 0; lane < rows; ++lane) {
             const uint32_t page = head * rows + lane;
+#ifdef QSA_LIVE
+            if (lane >= live_lanes) {
+                noc_async_write(zero, query.get_noc_addr(page, 0), QUERY_ROW_BYTES);
+                for (uint32_t zero_head = head + LOCAL_HEADS; zero_head < QUERY_HEADS; zero_head += LOCAL_HEADS) {
+                    noc_async_write(zero, query.get_noc_addr(zero_head * rows + lane, 0), QUERY_ROW_BYTES);
+                }
+                continue;
+            }
+#endif
             noc_async_write(zero, query.get_noc_addr(page, 0), HEAD_ROW_BYTES);
             for (uint32_t c = ROPE_TILES; c < HEAD_TILES; ++c) {
                 for (uint32_t half = 0; half < 2; ++half) {

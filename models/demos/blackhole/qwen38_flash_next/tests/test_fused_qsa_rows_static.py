@@ -105,7 +105,7 @@ def test_selection_rows_is_the_decode_selection_program_on_the_tile(expect_error
     verify path takes it after topk_large_indices when the family is on; the chain stays as the fallback."""
 
     source = inspect.getsource(qsa_rows.selection_rows)
-    assert "qsa_block.selection_row(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill)" in source
+    assert "block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill, live_rows=live_rows" in source
     composed = inspect.getsource(qsa_rows.selection_rows_composed)
     for op in ("bitwise_left_shift", "repeat_interleave", "ttnn.add(", "ttnn.concat(", "bitwise_and", "bitwise_or"):
         assert op in composed, op

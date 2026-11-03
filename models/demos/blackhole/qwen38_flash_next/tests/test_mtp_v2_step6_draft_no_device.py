@@ -68,6 +68,8 @@ WIDTH = 640
 
 @pytest.fixture
 def fake(monkeypatch):
+    # The fake tensors have no host_buffer, which the QWEN38_PLE_FAST host stage needs; the stage has no fake form.
+    monkeypatch.setenv("QWEN38_PLE_FAST", "0")
     chunk = FakeChunk()
     install_source_chunk_fake(monkeypatch, chunk)
     fake_ttnn = make_verify_fake(chunk)

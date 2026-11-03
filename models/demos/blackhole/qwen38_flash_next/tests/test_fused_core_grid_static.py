@@ -110,8 +110,8 @@ def test_score_merge_kernels_take_a_chunk_range():
         in source
     )
     assert (
-        "[(w.core,[rows,w.count])forwinwork]" in source
-        and "[(w.core,[out.buffer_address(),rows,w.start,w.count])forwinwork]" in source
+        "[(w.core,[1,w.count]ifliveelse[rows,w.count])forwinwork]" in source
+        and "[(w.core,[out.buffer_address(),rows,w.start,w.count,*([live_rows]ifliveelse[])])forwinwork]" in source
     )
 
 

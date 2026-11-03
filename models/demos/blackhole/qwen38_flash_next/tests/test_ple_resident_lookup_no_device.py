@@ -450,7 +450,7 @@ class _SyscallLog:
 
     def __init__(self, monkeypatch) -> None:
         self.calls: list[tuple[str, int]] = []
-        for name in ("fstat", "posix_fadvise", "pread"):
+        for name in ("fstat", "posix_fadvise", "pread", "preadv"):
             real = getattr(os, name)
 
             def logged(*args, _name=name, _real=real):
@@ -475,12 +475,13 @@ def _hashed_rows(host, tokens, context=None) -> list[int]:
 def test_resident_batch_proves_each_touched_file_once_and_reads_each_distinct_row_once(
     tmp_path, monkeypatch, parts_per_file
 ):
-    """One MTP pass's rows through ``_read_rows``: the file guard's identity is re-proved with one ``fstat`` per touched
+    """QWEN38_PLE_FAST=0.  One MTP pass's rows through ``_read_rows``: the file guard's identity is re-proved with one ``fstat`` per touched
     shard FILE before and after the batch (the identity is the file's; the per-part ``advise`` / ``read_rows`` would
     pay three per touched part), every distinct row gets one WILLNEED before any row is read (the page-ins of cold
     rows overlap: the deterministic form of the cold-rows guarantee, its timing is not) and one ``pread``; the bytes
     are the per-part checked reads' bytes in request order, duplicates included."""
 
+    monkeypatch.setenv("QWEN38_PLE_FAST", "0")
     weight_map = _synthetic_corpus(tmp_path, parts_per_file=parts_per_file)
     checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
     host = _synthetic_host_embedding(checkpoint)
@@ -519,10 +520,13 @@ def test_resident_batch_proves_each_touched_file_once_and_reads_each_distinct_ro
     resident.close()
 
 
-def test_resident_batch_fails_closed_when_a_touched_file_drifts_and_reads_the_others(expect_error, tmp_path) -> None:
-    """The per-file proof keeps the fail-closed contract: a batch touching a rewritten file is refused before any
+def test_resident_batch_fails_closed_when_a_touched_file_drifts_and_reads_the_others(
+    expect_error, tmp_path, monkeypatch
+) -> None:
+    """QWEN38_PLE_FAST=0.  The per-file proof keeps the fail-closed contract: a batch touching a rewritten file is refused before any
     read (and a rewrite between the proofs would be refused after); a batch over the untouched files still reads."""
 
+    monkeypatch.setenv("QWEN38_PLE_FAST", "0")
     weight_map = _synthetic_corpus(tmp_path, parts_per_file=2)
     checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
     host = _synthetic_host_embedding(checkpoint)
@@ -543,6 +547,57 @@ def test_resident_batch_fails_closed_when_a_touched_file_drifts_and_reads_the_ot
     resident.close()
     with expect_error(RuntimeError, match="closed"):
         resident._read_rows(rows_file_1)
+
+
+@pytest.mark.parametrize("parts_per_file", (1, 2))
+def test_fast_batch_reads_one_preadv_per_row_and_proves_each_file_at_its_first_read(
+    tmp_path, monkeypatch, parts_per_file
+):
+    """QWEN38_PLE_FAST (default on): the payload bytes equal the per-part checked reads' bytes in request order (duplicates
+    included); one ``preadv`` per requested row, no WILLNEED, one ``fstat`` per touched file at its first read and none
+    at later lookups; ``prove_touched`` re-proves every touched file once."""
+
+    monkeypatch.delenv("QWEN38_PLE_FAST", raising=False)
+    weight_map = _synthetic_corpus(tmp_path, parts_per_file=parts_per_file)
+    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
+    host = _synthetic_host_embedding(checkpoint)
+    resident = Qwen38ResidentPLELookup(host)
+    tokens = [17, 29, 31, EOS, 43]
+    hashed = _hashed_rows(host, tokens)
+    parts = {index // ROWS_PER_PART for index in hashed}
+    files = {resident.readers[part].shard for part in parts}
+    expected = bytearray()
+    for index in hashed:
+        part, row = divmod(index, ROWS_PER_PART)
+        expected += resident.readers[part].read_rows([row])[0]
+
+    log = _SyscallLog(monkeypatch)
+    payload, _contexts = resident.lookup_tokens(tokens, None)
+    assert bytes(payload) == bytes(expected)
+    assert log.count("preadv") == len(hashed) and log.count("pread") == 0 and log.count("posix_fadvise") == 0
+    assert log.count("fstat") == len(files), log.calls
+    log.calls.clear()
+    payload, _contexts = resident.lookup_tokens(tokens, None)
+    assert bytes(payload) == bytes(expected) and log.count("fstat") == 0
+    resident.prove_touched("test")
+    assert log.count("fstat") == len(files)
+    resident.close()
+
+
+def test_fast_batch_refuses_a_file_that_drifted_before_its_first_read(expect_error, tmp_path, monkeypatch) -> None:
+    """QWEN38_PLE_FAST (default on): the first read of a rewritten file fails closed."""
+
+    monkeypatch.delenv("QWEN38_PLE_FAST", raising=False)
+    weight_map = _synthetic_corpus(tmp_path, parts_per_file=2)
+    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
+    resident = Qwen38ResidentPLELookup(_synthetic_host_embedding(checkpoint))
+    time.sleep(0.05)
+    with open(tmp_path / "part-0.safetensors", "r+b") as stream:
+        stream.seek(8)
+        stream.write(b"!")
+    with expect_error(RuntimeError, match="identity drifted before"):
+        resident._read_rows([1, 5])
+    resident.close()
 
 
 def test_row_reader_proven_forms_are_the_checked_forms_without_the_fstat(expect_error, tmp_path, monkeypatch) -> None:

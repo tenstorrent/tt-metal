@@ -30,6 +30,38 @@ FORCE_INLINE void u_phase(uint32_t rt, uint32_t chunk, uint32_t face) {
     const uint32_t tile_bytes = get_tile_size(SRC_CB);
     Noc noc;
     DataflowBuffer src(SRC_CB);
+#ifdef QWEN38_FRONT_U_DIRECT
+    // QWEN38_GR_ROWS_FAST=1, rows >= 5: no packing and no unpack.  LAND_CB is the workers' u CB itself (one address on
+    // every core that declares it): the NUM_TILES u tiles are multicast whole, in place, to this core's block of the
+    // workers' tiles (rows >= ROWS of the tiles carry this core's values, which no valid row depends on).  Small
+    // per-chunk multicasts were measured at ~2 us each (80 of them: 21.7 -> 62 us).
+    DataflowBuffer land(LAND_CB);
+    Semaphore<> sem(SEM_ID);
+    src.wait_front(NUM_TILES);
+    const uint32_t src_addr = src.get_read_ptr();
+    const uint32_t dst_base = land.get_write_ptr() + block * tile_bytes;
+    MulticastEndpoint mcast;
+    constexpr bool from_far_corner = noc_index != 0;
+    noc.async_write_multicast(
+        CoreLocalMem<uint32_t>(src_addr),
+        mcast,
+        NUM_TILES * tile_bytes,
+        num_dests,
+        {},
+        {.noc_x_start = from_far_corner ? x1 : x0,
+         .noc_y_start = from_far_corner ? y1 : y0,
+         .noc_x_end = from_far_corner ? x0 : x1,
+         .noc_y_end = from_far_corner ? y0 : y1,
+         .addr = dst_base});
+    noc.async_write_barrier();
+    for (uint32_t x = x0; x <= x1; ++x) {
+        for (uint32_t y = y0; y <= y1; ++y) {
+            sem.up(noc, x, y, 1);
+        }
+    }
+    src.pop_front(NUM_TILES);
+    noc.async_atomic_barrier();
+#else
     DataflowBuffer pack(PACK_CB);
     DataflowBuffer land(LAND_CB);
     Semaphore<> sem(SEM_ID);
@@ -80,6 +112,7 @@ FORCE_INLINE void u_phase(uint32_t rt, uint32_t chunk, uint32_t face) {
     }
     src.pop_front(NUM_TILES);
     noc.async_atomic_barrier();
+#endif
 }
 
 // mcast_phase.h's mcast_phase for phase C (recip tile multicast, no tiles write, normalized' as the extra stream) with

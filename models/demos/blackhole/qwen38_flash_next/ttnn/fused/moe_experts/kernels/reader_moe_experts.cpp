@@ -35,11 +35,14 @@ void kernel_main() {
     constexpr uint32_t owner_bytes = get_named_compile_time_arg_val("owner_bytes");
     constexpr uint32_t stage = get_named_compile_time_arg_val("stage");  // 2: gate/up only, 3: the whole program
     constexpr bool x_fragments = get_named_compile_time_arg_val("x_fragments") == 1;
-    constexpr uint32_t x_read_bytes = 576;  // face 0 (512 B) + rows 0 and 1 of face 1 (64 B)
+    constexpr uint32_t x_read_bytes = tile_row_bytes(rows);  // face 0 (512 B) + rows of face 1 (32 B each)
+    constexpr uint32_t frag_bytes = 32 * rows;               // rows of face 0, and of face 1 at +512
+    constexpr uint32_t entry_w = entry_words(rows);
+    constexpr uint32_t max_act = max_active(rows);
     constexpr uint32_t txn_bytes = TXN_TILES * BF4_TILE_BYTES;
     constexpr uint32_t block_bytes = BLOCK_TILES * BF4_TILE_BYTES;
     constexpr uint32_t blocks_in_flight = slots - 1;
-    static_assert(rows >= 1 && rows <= 2, "two row slots in the metadata page");
+    static_assert(rows >= 1 && rows <= WIDE_MAX_ROWS, "row slots in the metadata page");
 
     constexpr auto hidden_args = TensorAccessorArgs<0, 0>();
     constexpr auto indices_args = TensorAccessorArgs<
@@ -81,24 +84,24 @@ void kernel_main() {
     CircularBuffer scratch(cb_scratch);
 
     uint32_t n = 0;
-    uint32_t entry_expert[MAX_ACTIVE];
+    uint32_t entry_expert[max_act];
     {
         FUSED_ZONE("fz_me_r_meta");
         if (g_kind != 0) {
             x.reserve_back(HT);
             const uint32_t x_base = x.get_write_ptr();
             for (uint32_t k = 0; k < HT; ++k) {
-                if constexpr (x_fragments) {  // rows 0 and 1 of both faces: 2 x 64 B
+                if constexpr (x_fragments) {  // rows of both faces: 2 x 32 B x rows
                     noc.async_read(
                         hidden,
                         CoreLocalMem<uint32_t>(x_base + k * TILE_BYTES),
-                        64,
+                        frag_bytes,
                         {.page_id = k, .offset_bytes = 0},
                         {});
                     noc.async_read(
                         hidden,
                         CoreLocalMem<uint32_t>(x_base + k * TILE_BYTES + 512),
-                        64,
+                        frag_bytes,
                         {.page_id = k, .offset_bytes = 512},
                         {});
                 } else {  // bytes [0, 576): face 0 whole and rows 0 and 1 of face 1
@@ -140,18 +143,24 @@ void kernel_main() {
                 }
                 if (j == n) {
                     entry_expert[n] = e;
-                    page[1 + MD_ENTRY_WORDS * j] = e;
-                    page[2 + MD_ENTRY_WORDS * j] = 0;
-                    page[3 + MD_ENTRY_WORDS * j] = 0;
-                    page[4 + MD_ENTRY_WORDS * j] = 0;
+                    page[1 + entry_w * j] = e;
+                    page[2 + entry_w * j] = 0;
+                    page[3 + entry_w * j] = 0;
+                    if constexpr (!wide_rows(rows)) {
+                        page[4 + entry_w * j] = 0;
+                    }
                     ++n;
                 }
-                page[2 + MD_ENTRY_WORDS * j] |= 1u << r;
-                page[3 + MD_ENTRY_WORDS * j + r] = k;
+                page[2 + entry_w * j] |= 1u << r;
+                if constexpr (wide_rows(rows)) {
+                    page[3 + entry_w * j] |= k << (4 * r);
+                } else {
+                    page[3 + entry_w * j + r] = k;
+                }
             }
         }
         page[0] = n;
-        for (uint32_t i = 0; i < 1 + MD_ENTRY_WORDS * n; ++i) {
+        for (uint32_t i = 0; i < 1 + entry_w * n; ++i) {
             pagew[i] = page[i];
         }
         md.push_back(1);

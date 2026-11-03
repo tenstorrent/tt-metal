@@ -646,7 +646,7 @@ class Qwen38TTNNMoE:
             fused_moe_experts.enabled()
             and self.moe_post_fused
             and self.routing_in_l1
-            and self.rows <= 2
+            and self.rows <= fused_moe_experts.max_rows()
             and self.routed_calls == 1
         )
         self._experts_exclude = fused_moe_experts.model_exclude(mesh_device) if self.moe_experts_on else ()
@@ -1517,6 +1517,12 @@ class Qwen38TTNNMoE:
                 compute_kernel_config=self.shared_compute_config,
                 partial_memory_config=self.hidden_act_memory_config,
                 **({} if experts is None else {"experts": experts}),
+                # QWEN38_MOE_EXPERTS_MAX_ROWS > 2: moe_experts reads the hidden itself, so G4's untilized rows are unused
+                **(
+                    {"untilize": False}
+                    if experts is None and self.moe_experts_on and fused_moe_experts.max_rows() > 2
+                    else {}
+                ),
             )
         except BaseException:
             _deallocate(logits, gate_up_scalar_ws, scores_l1, indices_l1)

@@ -34,4 +34,21 @@ constexpr uint32_t MD_WORDS = 1 + MAX_ACTIVE * MD_ENTRY_WORDS;
 constexpr uint32_t MD_PAGE_BYTES = 384;
 static_assert(MD_WORDS * 4 <= MD_PAGE_BYTES, "metadata page");
 
+// More than 2 rows (up to 8): the experts of this die 8 rows can select (at most the 64 of the die), and an entry is
+// {local expert, row mask, k slots packed 4 bits per row} = 3 words.
+constexpr uint32_t WIDE_MAX_ROWS = 8;
+constexpr uint32_t WIDE_MAX_ACTIVE = 64;
+constexpr uint32_t WIDE_ENTRY_WORDS = 3;
+constexpr uint32_t WIDE_MD_WORDS = 1 + WIDE_MAX_ACTIVE * WIDE_ENTRY_WORDS;
+constexpr uint32_t WIDE_MD_PAGE_BYTES = 832;
+static_assert(WIDE_MD_WORDS * 4 <= WIDE_MD_PAGE_BYTES, "wide metadata page");
+
+// rows <= 2 keeps the original layout (4-word entries, 20 experts); more rows use the wide one.
+constexpr bool wide_rows(uint32_t rows) { return rows > 2; }
+constexpr uint32_t max_active(uint32_t rows) { return wide_rows(rows) ? WIDE_MAX_ACTIVE : MAX_ACTIVE; }
+constexpr uint32_t entry_words(uint32_t rows) { return wide_rows(rows) ? WIDE_ENTRY_WORDS : MD_ENTRY_WORDS; }
+
+// Bytes of an hidden / in2 tile that hold rows 0 .. rows - 1: face 0 whole, then 32 B (16 bf16) per row of face 1.
+constexpr uint32_t tile_row_bytes(uint32_t rows) { return 512 + 32 * rows; }
+
 }  // namespace moe_experts

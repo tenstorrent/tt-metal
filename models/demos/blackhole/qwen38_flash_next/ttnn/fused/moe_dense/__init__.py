@@ -279,7 +279,7 @@ def moe_dense_program(
     )
     # G4: the routed dispatch untilize
     untilize_cb = untilize_reader = untilize_writer = None
-    if experts is None:
+    if sparse_rows is not None:
         untilize_cores = plan.untilize_cores()
         untilize_set = ttnn.CoreRangeSet([plan.untilize])
         per_core, extra = divmod(N_TILES, len(untilize_cores))
@@ -311,8 +311,9 @@ def moe_dense_program(
     cbs = [*topk_cbs, *eltwise_cbs, in0_cb, *down_cbs]
     semaphores = [*topk_semaphores, fp.semaphore_descriptor(SEM_DOWN, all_set)]
     if expert_parts is None:
-        kernels += [untilize_reader, untilize_writer]
-        cbs.append(untilize_cb)
+        if sparse_rows is not None:
+            kernels += [untilize_reader, untilize_writer]
+            cbs.append(untilize_cb)
     else:
         kernels += expert_parts[0]
         cbs += expert_parts[1]
@@ -358,6 +359,7 @@ def moe_dense(
     compute_kernel_config,
     partial_memory_config,
     experts=None,
+    untilize: bool = True,
     **_composed_only,
 ):
     """One program: the top-k of ``logits`` (fp32 TILE ``[1, 1, rows, 512]``) into the pre-allocated ROW_MAJOR
@@ -374,9 +376,10 @@ def moe_dense(
     index_template = rt.router_tail_prepare(mesh)
     partial = fp.allocate((1, 1, rows, HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh, partial_memory_config)
     sigmoid = fp.allocate((1, 1, fp.TILE, fp.TILE), BF16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+    # untilize=False (the caller's moe_experts program reads the gathered hidden itself): no G4, no rows out
     sparse_rows = (
         None
-        if experts is not None
+        if experts is not None or not untilize
         else fp.allocate((1, 1, rows, HIDDEN), BF16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
     )
     fidelity = _fidelity_of(compute_kernel_config)
@@ -390,7 +393,13 @@ def moe_dense(
         "composite",
         rows,
         reads=(gate_up_scalar_ws, down, full_hidden),
-        writes=(scores, indices, partial, sigmoid, *((sparse_rows,) if experts is None else (experts["out"],))),
+        writes=(
+            scores,
+            indices,
+            partial,
+            sigmoid,
+            *((sparse_rows,) if experts is None and untilize else (experts["out"],) if experts is not None else ()),
+        ),
         dram_bytes=lanes * (fp.tensor_bytes(index_template) + fp.tensor_bytes(logits)),
         l1_bytes=DOWN_WORKERS * K_TILES * fp.TILE_BYTES[BF16],
         flops=rows * rt.EXPERTS * (5 + 2 * rt.WIDTH_TILES)
@@ -398,17 +407,21 @@ def moe_dense(
         + rows * se.LOCAL_INTERMEDIATE * 3
         + rows * fp.TILE
         + 2 * rows * se.LOCAL_INTERMEDIATE * HIDDEN,
-        cores=lanes + se.STORAGE_CORES + DOWN_WORKERS + len(plan.untilize_cores()),
+        cores=lanes + se.STORAGE_CORES + DOWN_WORKERS + (len(plan.untilize_cores()) if sparse_rows is not None else 0),
         # every output is per device the same shape as the chain's (replicated placements, as the caller stamped them)
         outputs=(
             (scores, None),
             (indices, None),
             (partial, None),
             (sigmoid, None),
-            (sparse_rows if experts is None else experts["out"], None),
+            *(
+                ((sparse_rows if experts is None else experts["out"], None),)
+                if sparse_rows is not None or experts is not None
+                else ()
+            ),
         ),
     )
-    io_tail = [sparse_rows] if experts is None else [experts["out"]]
+    io_tail = [experts["out"]] if experts is not None else [sparse_rows] if sparse_rows is not None else []
     io_head = [] if experts is None else [experts["owner"], experts["w0_w1"], experts["w2"]]
     fp.run_program(
         [

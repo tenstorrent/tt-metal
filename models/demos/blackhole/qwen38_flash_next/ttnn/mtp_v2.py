@@ -42,6 +42,8 @@ The 1-row production paths are untouched: everything here is a new entry point o
 
 from __future__ import annotations
 
+import ctypes
+import json
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -50,6 +52,7 @@ from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import torch
 from loguru import logger
 from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
@@ -57,6 +60,7 @@ from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 import ttnn
 from models.demos.blackhole.qwen38_flash_next import vision_splice
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
+from models.demos.blackhole.qwen38_flash_next.ttnn import ple as ple_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROW_COUNTS,
@@ -101,6 +105,102 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.ple import (
     Qwen38TTNNPLERowsPreparedInput,
     Qwen38TTNNPLERowsState,
 )
+
+SEGMENTS_LOG_ENV = "QWEN38_MTP_SEGMENTS_LOG"
+
+
+class _SegmentsLog:
+    """Per-pass host timing (``QWEN38_MTP_SEGMENTS_LOG=<path>``): one JSON line per pass with the record's
+    ``segments_ns``, the finer sub-segments and the session's host work around the pass (``host_ns``).  A pass's line
+    is written when the next pass starts or the pass loop settles, after the session added its own numbers."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.record: Qwen38TTNNMTPPassRecord | None = None
+        self.extra: dict[str, int] = {}
+        self.carry: dict[str, int] = {}
+        self.last_end: int | None = None
+        self.h2d: dict[str, Any] | None = None
+
+    def add(self, name: str, ns: int) -> None:
+        self.extra[name] = self.extra.get(name, 0) + ns
+
+    def step_starting(self) -> None:
+        now = time.monotonic_ns()
+        self.flush()
+        self.carry = {} if self.last_end is None else {"pre_step": now - self.last_end}
+
+    def pass_recorded(self, record: Qwen38TTNNMTPPassRecord, record_ns: int) -> None:
+        self.flush()
+        self.record, self.extra, self.carry = record, {**self.carry, "mtp_record": record_ns}, {}
+
+    def pass_end(self) -> None:
+        self.last_end = time.monotonic_ns()
+
+    def flush(self) -> None:
+        record, self.record = self.record, None
+        if record is None:
+            return
+        line = {
+            "index": record.index,
+            "position": record.position,
+            "accepted": record.accepted,
+            "segments_ns": dict(record.segments_ns),
+            "host_ns": dict(self.extra),
+            "h2d": self.h2d,
+        }
+        with open(self.path, "a") as handle:
+            handle.write(json.dumps(line) + "\n")
+
+
+_SEGLOG: _SegmentsLog | None = None
+
+
+def seglog() -> _SegmentsLog | None:
+    """The per-pass segments log when ``QWEN38_MTP_SEGMENTS_LOG`` names a path, else None (no change)."""
+
+    global _SEGLOG
+    path = os.environ.get(SEGMENTS_LOG_ENV)
+    if not path:
+        return None
+    if _SEGLOG is None or _SEGLOG.path != path:
+        _SEGLOG = _SegmentsLog(path)
+    return _SEGLOG
+
+
+def _merge_sub(segments: dict[str, int], prefix: str, sub: dict[str, int]) -> None:
+    for name, ns in sub.items():
+        segments[f"{prefix}.{name}"] = ns
+
+
+_SEG_CUR: dict[str, int] | None = None  # the pass's segments dict while the segments log is on, else None
+
+
+def _bind_segments(segments: dict[str, int]) -> dict[str, int] | None:
+    """Direct the sub-segment timers of this pass at ``segments`` (segments log on); None when it is off."""
+
+    global _SEG_CUR
+    _SEG_CUR = segments if seglog() is not None else None
+    return _SEG_CUR
+
+
+def _sub_begin(segments: dict[str, int] | None) -> dict[str, int] | None:
+    """Point the PLE lookup's sub-segment timers at a fresh dict (segments log on), else None."""
+
+    if segments is None:
+        return None
+    lookup: dict[str, int] = {}
+    ple_module.set_subsegments(lookup)
+    return lookup
+
+
+def _sub_end(segments: dict[str, int] | None, lookup: dict[str, int] | None, prefix: str, started_ns: int) -> None:
+    if lookup is None or segments is None:
+        return
+    ple_module.set_subsegments(None)
+    lookup["total"] = time.monotonic_ns() - started_ns
+    _merge_sub(segments, prefix, lookup)
+
 
 # k = 3 and 4 run the 5-row verify MoE form, k = 5 the 32-row form (``moe_rows_for``, which holds every k up to 31);
 # the QSA verify path admits k + 1 <= qsa.VERIFY_MAX_ROWS = 6 rows per pass (two compressed blocks completed, two KV
@@ -1101,8 +1201,88 @@ def lookup_verify_ple_rows_early(
     if ple is None:
         raise RuntimeError("checkpoint layer 1 PLE owner is unavailable")
     tokens = (int(next_token), int(first_draft))
+    sub = _SEG_CUR
+    lookup, started = _sub_begin(sub), time.monotonic_ns()
     rows, early_contexts = ple.host_rows(list(tokens), contexts[accepted + 1])
+    _sub_end(sub, lookup, "early", started)
     return Qwen38TTNNPLEEarlyRows(tokens, rows, early_contexts)
+
+
+class _PLEHostStage:
+    """QWEN38_PLE_FAST: the persistent host tensor of one verify's PLE rows upload.  Built once with the same
+    ``ttnn.from_torch(ShardTensor2dMesh dims=(None,3))`` the per-pass path used; each pass then rewrites the bytes of its
+    per-device host shards in place (``host_buffer().get_shard`` views, ``[rows, 320]`` bf16 = ``[rows, 640]`` bytes per
+    device) and ``ttnn.copy_host_to_device_tensor`` writes the same tensor.  The per-device bytes are the ones
+    ``ShardTensor2dMesh`` would cut from the same rows; :meth:`__init__` proves that on a random tensor and refuses
+    otherwise."""
+
+    def __init__(self, model: Qwen38TTNNTextModel, rows: int) -> None:
+        self.rows = rows
+        width = ple_module.EMBEDDING_WIDTH
+        mapper = ttnn.ShardTensor2dMesh(model.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3))
+
+        def build(source: torch.Tensor):
+            return ttnn.from_torch(source, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper)
+
+        self.host = build(torch.zeros(1, 1, rows, width, dtype=torch.bfloat16))
+        buffer = self.host.host_buffer()
+        self._shards = []  # keep the HostBuffer objects alive beside the views
+        self.views: list[np.ndarray] = []
+        columns = MESH_SHAPE[1]
+        self.per_device = width // columns
+        for coord_row in range(MESH_SHAPE[0]):
+            for coord_col in range(columns):
+                shard = buffer.get_shard(ttnn.MeshCoordinate(coord_row, coord_col))
+                if shard is None:
+                    raise RuntimeError("PLE host stage: a mesh coordinate has no host shard")
+                seen = np.from_dlpack(shard)
+                address = seen.__array_interface__["data"][0]
+                view = np.frombuffer((ctypes.c_uint8 * seen.size).from_address(address), dtype=np.uint8)
+                if view.size != rows * self.per_device * 2:
+                    raise RuntimeError(
+                        f"PLE host stage: shard holds {view.size} bytes, expected {rows * self.per_device * 2}"
+                    )
+                self._shards.append(shard)
+                self.views.append(view.reshape(rows, self.per_device * 2))
+        probe = torch.randn(1, 1, rows, width).to(torch.bfloat16)
+        self.write(0, probe)
+        reference = ttnn.get_device_tensors(build(probe))
+        staged = ttnn.get_device_tensors(self.host)
+        if len(staged) != len(reference) or not all(
+            torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)) for a, b in zip(staged, reference)
+        ):
+            raise RuntimeError("PLE host stage: in-place shard bytes differ from ShardTensor2dMesh")
+
+    def write(self, first_row: int, rows: torch.Tensor) -> None:
+        """Rewrite stage rows ``first_row ..`` from a BF16 ``[1,1,n,2560]`` tensor."""
+
+        count = rows.shape[2]
+        raw = rows.contiguous().view(torch.int16).numpy().view(np.uint8).reshape(count, len(self.views), -1)
+        for index, view in enumerate(self.views):
+            view[first_row : first_row + count] = raw[:, index, :]
+
+
+_PLE_STAGES: dict[int, tuple[Any, _PLEHostStage]] = {}
+_VALIDATED_VERIFY: dict[int, Any] = {}
+
+
+def _ple_stage(model: Qwen38TTNNTextModel, verify: Qwen38TTNNVerifyState) -> _PLEHostStage:
+    tensor = verify.ple_rows.embedding_rows
+    entry = _PLE_STAGES.get(id(tensor))
+    if entry is None or entry[0] is not tensor:
+        entry = _PLE_STAGES[id(tensor)] = (tensor, _PLEHostStage(model, verify.rows))
+    return entry[1]
+
+
+def ple_request_proof(model: Qwen38TTNNTextModel, when: str) -> None:
+    """QWEN38_PLE_FAST: re-prove the identity of every PLE table file the fast reads touched (a request's start and end)."""
+
+    if not ple_module.ple_fast():
+        return
+    ple = model.layers[PLE_CHECKPOINT_LAYER].ple
+    lookup = getattr(ple, "_resident_lookup", None)
+    if lookup is not None:
+        lookup.prove_touched(when)
 
 
 def write_verify_ple_rows(
@@ -1118,7 +1298,13 @@ def write_verify_ple_rows(
     :func:`lookup_verify_ple_rows_early`) only rows 2..k are looked up, from ``early.contexts[2]``: the same rows,
     the same contexts, row for row, as the whole lookup."""
 
-    _validate_verify_state(model, verify)
+    sub = _SEG_CUR
+    t_validate = time.monotonic_ns()
+    fast = ple_module.ple_fast()
+    if not fast or _VALIDATED_VERIFY.get(id(verify)) is not verify:
+        _validate_verify_state(model, verify)
+        if fast:
+            _VALIDATED_VERIFY[id(verify)] = verify
     tokens = [int(token) for token in tokens]
     if len(tokens) != verify.rows:
         raise ValueError(f"a k={verify.drafts} verify pass takes {verify.rows} tokens, got {len(tokens)}")
@@ -1126,8 +1312,13 @@ def write_verify_ple_rows(
     ple_state = verify.layers[PLE_CHECKPOINT_LAYER].ple
     if ple is None or ple_state is None:
         raise RuntimeError("checkpoint layer 1 PLE owner/rows state is unavailable")
+    if sub is not None:
+        sub["pre.validate"] = time.monotonic_ns() - t_validate
+    lookup, started = _sub_begin(sub), time.monotonic_ns()
+    two_blocks = False
     if early is None:
         rows, contexts = ple.host_rows(tokens, ple_state.token_context)
+        _sub_end(sub, lookup, "full", started)
     else:
         if early.tokens != tuple(tokens[:2]) or early.contexts[0] != ple_state.token_context:
             raise RuntimeError(
@@ -1135,16 +1326,36 @@ def write_verify_ple_rows(
                 f"{tuple(tokens[:2])} from {ple_state.token_context}"
             )
         tail_rows, tail_contexts = ple.host_rows(tokens[2:], early.contexts[2])
-        rows, contexts = torch.cat([early.rows, tail_rows], dim=2), early.contexts + tail_contexts[1:]
-    ttnn.copy_host_to_device_tensor(
-        ttnn.from_torch(
+        _sub_end(sub, lookup, "late", started)
+        if fast:
+            two_blocks = True  # the two row blocks go straight into the host shards, no concatenated tensor
+            contexts = early.contexts + tail_contexts[1:]
+        else:
+            t_cat = time.monotonic_ns()
+            rows, contexts = torch.cat([early.rows, tail_rows], dim=2), early.contexts + tail_contexts[1:]
+            if sub is not None:
+                sub["late.cat_rows"] = time.monotonic_ns() - t_cat
+    t_shard = time.monotonic_ns()
+    if fast:
+        stage = _ple_stage(model, verify)
+        if two_blocks:
+            stage.write(0, early.rows)
+            stage.write(early.rows.shape[2], tail_rows)
+        else:
+            stage.write(0, rows)
+        host_tensor = stage.host
+    else:
+        host_tensor = ttnn.from_torch(
             rows.contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(model.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
-        ),
-        verify.ple_rows.embedding_rows,
-    )
+        )
+    t_write = time.monotonic_ns()
+    ttnn.copy_host_to_device_tensor(host_tensor, verify.ple_rows.embedding_rows)
+    if sub is not None:
+        sub["h2d.from_torch_shard"] = t_write - t_shard
+        sub["h2d.copy_host_to_device_tensor"] = time.monotonic_ns() - t_write
     verify.ple_rows.tokens = tuple(tokens)
     verify.ple_rows.contexts = contexts
     return contexts
@@ -2758,7 +2969,11 @@ def read_pass_row(
     coordinate 0: the verify's ``[a, t', d_1', argmaxes]`` and the assembled next verify tokens ``[t', d_1 .. d_k]``
     (whose first two lanes must be the verify's ``t'`` and ``d_1'``: the device token chain starts there)."""
 
+    sub = _SEG_CUR
+    t0 = time.monotonic_ns()
     values = ttnn.to_torch(ttnn.get_device_tensors(draft.pass_row)[0]).reshape(-1)
+    if sub is not None:
+        sub["readback.to_torch_blocking"] = time.monotonic_ns() - t0
     if values.numel() != PASS_ROW_WIDTH:
         raise RuntimeError(f"pass row readback has {values.numel()} lanes, expected {PASS_ROW_WIDTH}")
     readback = _verify_readback(values[:READBACK_WIDTH], rows=verify.rows)
@@ -2932,9 +3147,15 @@ class Qwen38TTNNEarlyRowsReader:
     def read_fixed_lanes(self) -> tuple[int, int, int]:
         if self._event is None:
             raise RuntimeError("the verify must be launched (its event recorded) before the early read")
+        sub = _SEG_CUR
+        t0 = time.monotonic_ns()
         ttnn.wait_for_event(self.cq_id, self._event)
         self._event = None
+        t1 = time.monotonic_ns()
         values = ttnn.to_torch(ttnn.get_device_tensors(self.readback)[0], cq_id=self.cq_id).reshape(-1)
+        if sub is not None:
+            sub["early_readback.wait_for_event"] = t1 - t0
+            sub["early_readback.to_torch_blocking"] = time.monotonic_ns() - t1
         if values.numel() != READBACK_WIDTH:
             raise RuntimeError(f"verify readback has {values.numel()} lanes, expected {READBACK_WIDTH}")
         accepted, next_token, first_draft = (int(values[lane].item()) for lane in range(len(READBACK_FIXED_LANES)))
@@ -3127,6 +3348,7 @@ class Qwen38TTNNMTPChain:
                 self.commit_queue.history_derived()  # the commit of this pass may start here, on its own queue
         self._timed(segments, f"draft_{form}", lambda: launch(self.traces.draft))
         early_rows = lanes = None
+        sub = _bind_segments(segments)
         if early_reader is not None:
             # The verify lanes on the second queue while the draft runs, then the next pass's rows 0-1.
             lanes = self._timed(segments, "early_readback", early_reader.read_fixed_lanes)
@@ -3138,6 +3360,7 @@ class Qwen38TTNNMTPChain:
                 ),
             )
         readback, self.next_tokens = self._timed(segments, "readback", lambda: read_pass_row(self.verify, self.draft))
+        t_post = time.monotonic_ns()
         if lanes is not None and lanes != (
             readback.accepted,
             readback.next_token,
@@ -3164,7 +3387,9 @@ class Qwen38TTNNMTPChain:
                 )
             if self.record_candidate_rows:
                 candidate_rows = self._timed(segments, "candidate_rows", lambda: read_candidate_rows(self.verify))
+        t_commit_host = time.monotonic_ns()
         commit_verify_host(self.verify, readback.accepted)
+        t_record = time.monotonic_ns()
         committed = list(readback.argmaxes[: readback.accepted + 1])
         first_eos = next((i for i, token in enumerate(committed) if token in self.eos_token_ids), None)
         if first_eos is not None:
@@ -3193,6 +3418,11 @@ class Qwen38TTNNMTPChain:
         self.position += readback.accepted + 1
         self.next_token, self.first_draft = readback.next_token, readback.first_draft
         self._early_rows = early_rows  # the next step's rows 0-1 (None: it looks every row up)
+        if sub is not None:
+            t_end = time.monotonic_ns()
+            segments["post.checks"] = t_commit_host - t_post
+            segments["post.commit_verify_host"] = t_record - t_commit_host
+            segments["post.record_build"] = t_end - t_record
         return record
 
     def bootstrap(self, tokens: Sequence[int]) -> Qwen38TTNNMTPPassRecord:
@@ -3201,6 +3431,7 @@ class Qwen38TTNNMTPChain:
 
         if self.records:
             raise RuntimeError("the chain was already bootstrapped")
+        ple_request_proof(self.model, "at the request start")
         self._require_room()
         segments: dict[str, int] = {}
         self._timed(segments, "host_inputs", lambda: write_verify_inputs(self.model, self.verify, tokens))
@@ -3225,6 +3456,7 @@ class Qwen38TTNNMTPChain:
         segments: dict[str, int] = {}
         tokens = self.next_tokens if forced_tokens is None else [int(token) for token in forced_tokens]
         early_rows, self._early_rows = self._early_rows, None
+        _bind_segments(segments)
         if self.traces.commit is not None and self.commit_queue is not None and self.enqueue is not None:
             self._timed(segments, "commit_enqueue", lambda: self.commit_queue.enqueue_commit(self.traces.commit))
         elif self.traces.commit is not None and self.commit_queue is not None:

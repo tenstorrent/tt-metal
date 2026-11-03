@@ -18,6 +18,27 @@ void kernel_main() {
     constexpr uint32_t CB_OUT = 16, CHUNK_BYTES = tile_rows::TILE_BYTES;
     constexpr auto out_args = TensorAccessorArgs<0>();
     const auto out = TensorAccessor(out_args, out_addr);
+#ifdef QSA_LIVE
+    // QSA_LIVE: args 2, 3 = first item and item count (item i = chunk i / live_rows, row i % live_rows), arg 4 live
+    // rows. The core of a chunk's row 0 also writes that chunk's dead rows (live_rows .. rows-1) as zeros from the zero
+    // tile (CB 1, pushed by the reader).
+    const uint32_t live_rows = get_arg_val<uint32_t>(4);
+    for (uint32_t item = first_chunk; item < first_chunk + chunks; ++item) {
+        FUSED_ZONE("fz_qs_sm_w_row");
+        const uint32_t chunk = item / live_rows;
+        const uint32_t r = item - chunk * live_rows;
+        cb_wait_front(CB_OUT, 1);
+        noc_async_write(get_read_ptr(CB_OUT), out.get_noc_addr(r, chunk * CHUNK_BYTES), CHUNK_BYTES);
+        if (r == 0 && live_rows < rows) {
+            cb_wait_front(1, 1);
+            for (uint32_t dead = live_rows; dead < rows; ++dead) {
+                noc_async_write(get_read_ptr(1), out.get_noc_addr(dead, chunk * CHUNK_BYTES), CHUNK_BYTES);
+            }
+        }
+        noc_async_write_barrier();
+        cb_pop_front(CB_OUT, 1);
+    }
+#else
     for (uint32_t chunk = first_chunk; chunk < first_chunk + chunks; ++chunk) {
         for (uint32_t r = 0; r < rows; ++r) {
             FUSED_ZONE("fz_qs_sm_w_row");
@@ -27,4 +48,5 @@ void kernel_main() {
             cb_pop_front(CB_OUT, 1);
         }
     }
+#endif
 }

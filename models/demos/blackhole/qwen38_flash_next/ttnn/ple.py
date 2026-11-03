@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import functools
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -151,6 +152,32 @@ def _prepare_key_weight(source: torch.Tensor) -> torch.Tensor:
     if tuple(result.shape) != (1, 1, EMBEDDING_WIDTH, RESIDUAL_WIDTH):
         raise AssertionError("PLE key packing changed shape")
     return result
+
+
+# Per-pass sub-segment timing (QWEN38_MTP_SEGMENTS_LOG): mtp_v2 points this at a dict while a host lookup runs and
+# the lookup adds ns into it; None (the default) costs one global read.
+_SUB: dict[str, int] | None = None
+
+
+PLE_FAST_ENV = "QWEN38_PLE_FAST"
+
+
+def ple_fast() -> bool:
+    """Unless ``QWEN38_PLE_FAST=0``: the MTP pass's host PLE lookup reads the table with one ``preadv`` per row straight into
+    the payload, the file identity proved at a file's first read and once per request (not around every lookup), no
+    WILLNEED advise, no copy of the payload.  The bytes read are the same.  Default on."""
+
+    return os.environ.get(PLE_FAST_ENV, "1") != "0"
+
+
+def set_subsegments(target: dict[str, int] | None) -> None:
+    global _SUB
+    _SUB = target
+
+
+def _sub_add(name: str, started_ns: int) -> None:
+    if _SUB is not None:
+        _SUB[name] = _SUB.get(name, 0) + time.monotonic_ns() - started_ns
 
 
 @dataclass(frozen=True)
@@ -861,6 +888,7 @@ class Qwen38ResidentPLELookup:
         self._row_bytes = self.readers[0].row_bytes
         if any(reader.row_bytes != self._row_bytes for reader in self.readers):
             raise RuntimeError("PLE table parts disagree on the row size")
+        self._proven: dict[str, Any] = {}  # ple_fast: shard file -> the reader that proved its identity
         self.eos_token_id = int(host_embedding.config.eos_token_id)
         self.vocab_size = int(host_embedding.config.vocab_size)
         self.multipliers = tuple(int(value) for value in spec.layer_multipliers.tolist())
@@ -873,6 +901,46 @@ class Qwen38ResidentPLELookup:
         if (self.vocab_size - 1) * max(self.multipliers) >= 1 << 63:
             raise RuntimeError("PLE hash multipliers would overflow int64 for this vocabulary")
 
+    def prove_touched(self, when: str) -> None:
+        """ple_fast: one identity proof per shard file the fast reads touched (call at a request's start and end;
+        one ``fstat`` per file)."""
+
+        for reader in self._proven.values():
+            reader.prove_identity(when)
+
+    def _read_rows_fast(self, hashed: Sequence[int]) -> bytearray:
+        """:meth:`_read_rows` as one ``preadv`` per row straight into the payload, in request order: no WILLNEED, no
+        per-lookup identity proofs (a file's first touch proves it, :meth:`prove_touched` re-proves per request), no
+        per-row ``bytes``, no dict.  Row ``r`` of part ``p`` is read at ``reader._tensor_base + r * row_bytes``, the
+        offset of the ``pread`` path, so the payload bytes are the same."""
+
+        sub = _SUB is not None
+        t0 = time.monotonic_ns() if sub else 0
+        rows_per_shard = self.host_embedding.rows_per_shard
+        row_bytes = self._row_bytes
+        readers = self.readers
+        proven = self._proven
+        payload = bytearray(row_bytes * len(hashed))
+        view = memoryview(payload)
+        preadv = os.preadv
+        start = 0
+        for index in hashed:
+            part, row = divmod(index, rows_per_shard)
+            reader = readers[part]
+            if reader.shard not in proven:
+                reader.prove_identity("before the first fast read of")
+                proven[reader.shard] = reader
+            descriptor = reader._descriptor
+            if descriptor is None:
+                raise RuntimeError(f"sparse row reader for {reader.name} is closed")
+            end = start + row_bytes
+            if preadv(descriptor, (view[start:end],), reader._tensor_base + row * row_bytes) != row_bytes:
+                raise ValueError(f"truncated sparse row {row} for {reader.name}")
+            start = end
+        if sub:
+            _sub_add("pread_reads", t0)
+        return payload
+
     def _read_rows(self, hashed: Sequence[int]) -> bytearray:
         """The rows ``hashed`` in request order as one contiguous BF16 payload.
 
@@ -882,6 +950,10 @@ class Qwen38ResidentPLELookup:
         per distinct row, the duplicates joined from the first read.  Same bytes in the same order as the per-part
         ``advise`` / ``read_rows`` calls."""
 
+        if ple_fast():
+            return self._read_rows_fast(hashed)
+        sub = _SUB is not None
+        t0 = time.monotonic_ns() if sub else 0
         rows_per_shard = self.host_embedding.rows_per_shard
         readers = self.readers
         rows_by_part: dict[int, list[int]] = {}
@@ -890,16 +962,31 @@ class Qwen38ResidentPLELookup:
         proving = {readers[part].shard: readers[part] for part in rows_by_part}
         for reader in proving.values():
             reader.prove_identity("before")
+        if sub:
+            _sub_add("pread_prove_before", t0)
+            t0 = time.monotonic_ns()
         for part, rows in rows_by_part.items():
             readers[part].advise_proven(rows)
+        if sub:
+            _sub_add("pread_advise", t0)
+            t0 = time.monotonic_ns()
         payload_by_index: dict[int, bytes] = {}
         for part, rows in rows_by_part.items():
             base = part * rows_per_shard
             for row, payload in zip(rows, readers[part].read_rows_proven(rows)):
                 payload_by_index[base + row] = payload
+        if sub:
+            _sub_add("pread_reads", t0)
+            t0 = time.monotonic_ns()
         for reader in proving.values():
             reader.prove_identity("after")
-        return bytearray().join(payload_by_index[index] for index in hashed)
+        if sub:
+            _sub_add("pread_prove_after", t0)
+            t0 = time.monotonic_ns()
+        joined = bytearray().join(payload_by_index[index] for index in hashed)
+        if sub:
+            _sub_add("pread_join", t0)
+        return joined
 
     def lookup(
         self, input_ids: torch.Tensor, previous_context: torch.Tensor | None = None
@@ -987,6 +1074,7 @@ class Qwen38ResidentPLELookup:
         for value in (*tokens, *(() if context is None else context)):
             if isinstance(value, bool) or type(value) is not int or not 0 <= value < self.vocab_size:
                 raise ValueError(f"PLE tokens must be exact integers in [0,{self.vocab_size}), got {value!r}")
+        t_hash = time.monotonic_ns() if _SUB is not None else 0
         hashed: list[int] = []
         contexts: list[tuple[int, int] | None] = [context]
         for token in tokens:
@@ -1000,6 +1088,7 @@ class Qwen38ResidentPLELookup:
             )
             hashed += ids
             contexts.append(context)
+        _sub_add("hash", t_hash)
         return self._read_rows(hashed), tuple(contexts)
 
     def lookup_tokens_lanes(
@@ -1437,7 +1526,10 @@ class Qwen38TTNNPLE:
         if len(tokens) == 0:
             raise ValueError("PLE rows need at least one token")
         payload, contexts = self.resident_lookup.lookup_tokens([int(token) for token in tokens], context)
-        host = torch.frombuffer(bytearray(payload), dtype=torch.bfloat16).reshape(1, 1, len(tokens), EMBEDDING_WIDTH)
+        t_payload = time.monotonic_ns() if _SUB is not None else 0
+        owned = payload if ple_fast() and isinstance(payload, bytearray) else bytearray(payload)
+        host = torch.frombuffer(owned, dtype=torch.bfloat16).reshape(1, 1, len(tokens), EMBEDDING_WIDTH)
+        _sub_add("payload_tensor", t_payload)
         return host, contexts
 
     def host_rows_lanes(

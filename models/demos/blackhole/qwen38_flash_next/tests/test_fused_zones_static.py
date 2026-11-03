@@ -32,8 +32,8 @@ BUILDERS = sorted(FUSED.glob("**/*.py"))
 INCLUDE = '#include "../../kernels/zones.h"'
 ZONE = re.compile(r'FUSED_ZONE\("([^"]+)"\)')
 NAME = re.compile(r"^fz_[a-z0-9_]+$")
-KERNEL_FILES = 203
-ZONES = 479  # zone marks over the kernels; a variant program's copy (gdn_step conv_split, gr_recip_last front2, ...) reuses its original's names
+KERNEL_FILES = 208
+ZONES = 496  # zone marks over the kernels; a variant program's copy (gdn_step conv_split, gr_recip_last front2, ...) reuses its original's names
 # Sources that run no phase of the served decode (microbenchmark / idle / empty stand-ins and the KV page scatter): no zones, no include.
 FUNCTION_SCOPE_ZONE = {  # kernels added after the one-block-per-zone rule: a zone that does not follow a "{" line (the kernel keeps its own scoping)
     "gdn_step/kernels/conv_reader.cpp",

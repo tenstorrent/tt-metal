@@ -38,7 +38,10 @@ def test_only_the_signalled_form_sets_the_define():
 
 def test_moe_dense_unfused_keeps_its_groups():
     text = (ROOT / "moe_dense" / "__init__.py").read_text()
-    assert "if expert_parts is None:\n        kernels += [untilize_reader, untilize_writer]" in text
+    assert (
+        "if expert_parts is None:\n        if sparse_rows is not None:\n            kernels += [untilize_reader, untilize_writer]"
+        in text
+    )
     assert "experts=None" in text
 
 

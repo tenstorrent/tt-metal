@@ -33,9 +33,19 @@ void kernel_main() {
     cb_reserve_back(CB_ZERO, 1);
     tile_rows::fill_words(get_write_ptr(CB_ZERO), CHUNK_BYTES / 4, 0);
     cb_push_back(CB_ZERO, 1);
+#ifdef QSA_LIVE
+    // QSA_LIVE: args 3, 4 = first item and item count; item i = (chunk i / live_rows, row i % live_rows), live rows
+    // only
+    for (uint32_t item = first_chunk; item < first_chunk + chunks; ++item) {
+        {
+            FUSED_ZONE("fz_qs_sm_r_row");
+            const uint32_t chunk = item / live_rows;
+            const uint32_t r = item - chunk * live_rows;
+#else
     for (uint32_t chunk = first_chunk; chunk < first_chunk + chunks; ++chunk) {
         for (uint32_t r = 0; r < rows; ++r) {
             FUSED_ZONE("fz_qs_sm_r_row");
+#endif
             cb_reserve_back(CB_IN, DEVICES);
             cb_reserve_back(CB_MASK, 1);
             const uint32_t in_l1 = get_write_ptr(CB_IN);

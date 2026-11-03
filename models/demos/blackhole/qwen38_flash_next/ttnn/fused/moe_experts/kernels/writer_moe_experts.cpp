@@ -47,7 +47,8 @@ void kernel_main() {
     constexpr uint32_t dump = get_named_compile_time_arg_val("dump");  // also write the in2 tiles to a DRAM tensor
     constexpr uint32_t tile_bytes = TILE_BYTES;
     constexpr uint32_t row_tile_bytes = 64;  // one tile column of a row: 32 bf16
-    constexpr uint32_t sent_bytes = 576;     // face 0 + rows 0 and 1 of face 1 of an in2 tile
+    constexpr uint32_t sent_bytes = tile_row_bytes(rows);  // face 0 + the rows of face 1 of an in2 tile
+    constexpr uint32_t entry_w = entry_words(rows);
 
     constexpr auto out_args = TensorAccessorArgs<0, 0>();
     constexpr auto dump_args =
@@ -141,7 +142,7 @@ void kernel_main() {
 
     auto output = [&](uint32_t i) {
         FUSED_ZONE("fz_me_w_out");
-        const uint32_t mask = page[2 + MD_ENTRY_WORDS * i];
+        const uint32_t mask = page[2 + entry_w * i];
         for (uint32_t u = 0; u < w_units; ++u) {
             const uint32_t out_row_bytes = (w_kind[u] == 1 ? 4 : 2) * row_tile_bytes;  // the valid tiles of a row ...
             constexpr uint32_t out_tiles = 4;                                          // ... in rows of 4 tiles
@@ -156,7 +157,12 @@ void kernel_main() {
             const uint32_t src = outcb.get_read_ptr();
             for (uint32_t r = 0; r < rows; ++r) {
                 if (mask & (1u << r)) {
-                    const uint32_t k_slot = page[3 + MD_ENTRY_WORDS * i + r];
+                    uint32_t k_slot;
+                    if constexpr (wide_rows(rows)) {
+                        k_slot = (page[3 + entry_w * i] >> (4 * r)) & 15u;
+                    } else {
+                        k_slot = page[3 + entry_w * i + r];
+                    }
                     noc1.async_write(
                         CoreLocalMem<uint8_t>(src + r * out_tiles * row_tile_bytes),
                         out_tensor,

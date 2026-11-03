@@ -173,7 +173,7 @@ def make_routing(generator, rows: int, shard: int, n_local, shared_with_row0: in
     for r in range(rows):
         n = n_local[r]
         pick = []
-        if r == 1 and shared_with_row0:
+        if r >= 1 and shared_with_row0:
             pick = prev[:shared_with_row0]
         pool = [e for e in local_ids if e not in pick]
         pick += [pool[i] for i in torch.randperm(len(pool), generator=generator)[: n - len(pick)].tolist()]
@@ -206,6 +206,22 @@ CASES = [  # (rows, n_local per row, rows sharing experts)
     (2, (3, 3), 1),
     (2, (4, 4), 4),
 ]
+
+
+if me.max_rows() > 2:  # QWEN38_MOE_EXPERTS_MAX_ROWS=8: the wide rows too
+    CASES += [
+        (3, (1, 2, 3), 0),
+        (3, (2, 2, 2), 2),
+        (4, (3, 3, 3, 3), 3),
+        (4, (0, 4, 1, 4), 0),
+        (5, (4, 4, 4, 4, 4), 4),
+        (5, (2, 0, 3, 5, 1), 1),
+        (8, (1, 1, 1, 1, 1, 1, 1, 1), 1),
+        (8, (4, 4, 4, 4, 4, 4, 4, 4), 4),
+        (8, (10, 10, 10, 10, 10, 10, 10, 10), 0),  # 64 of the die's experts active
+        (8, (6, 6, 6, 6, 6, 6, 6, 6), 0),
+    ]
+ROWS_LOOP = (1, 2) + tuple(r for r in (3, 4, 5, 8) if r <= me.max_rows())
 
 
 def case_id(case):
@@ -342,10 +358,10 @@ def test_gate_up_stage(mesh_device):
 def random_cases(gen, count: int):
     cases = []
     for _ in range(count):
-        rows = 1 + int(torch.randint(0, 2, (1,), generator=gen))
+        rows = ROWS_LOOP[int(torch.randint(0, len(ROWS_LOOP), (1,), generator=gen))]
         n_local = tuple(int(v) for v in torch.randint(0, 5, (rows,), generator=gen))
         shared = 0
-        if rows == 2 and min(n_local) > 0 and int(torch.randint(0, 2, (1,), generator=gen)):
+        if rows >= 2 and min(n_local) > 0 and int(torch.randint(0, 2, (1,), generator=gen)):
             shared = int(torch.randint(1, min(n_local) + 1, (1,), generator=gen))
         cases.append((rows, n_local, shared))
     return cases
@@ -366,7 +382,7 @@ def check_cases(mesh, cases_per_rows, seed, shard=SHARD, layer=LAYER, repeats=1)
     weights = load_layer_shard(mesh, layer, shard)
     failures = []
     totals = 0
-    for rows in (1, 2):
+    for rows in ROWS_LOOP:
         setup = Setup(mesh, rows, layer=layer, shard=shard, weights=weights)
         mine_combine = ttnn.from_torch(
             torch.zeros(TOP_K, rows, HIDDEN, dtype=torch.bfloat16),

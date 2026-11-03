@@ -75,8 +75,37 @@ void kernel_main() {
     if (slice == LAST_SLICE) {
         noc_async_read(sentinel.get_noc_addr(0, 0), l1 + 256 + 1024, TAIL * 4);
     }
+#ifdef QSA_LIVE
+    // QSA_LIVE (runtime arg 11 = live rows; unpaged): the rows >= live are written as a one-token row (id 0, the other
+    // slots masked), first, from the scratch; then the loop below runs the live rows only.
+    const uint32_t live = get_arg_val<uint32_t>(11);
+    bool any_dead = false;
+    for (uint32_t r = row_first; r < rows; r += row_step) {
+        any_dead |= r >= live;
+    }
+    if (any_dead) {
+        invalidate_l1_cache();
+        for (uint32_t i = 0; i < cols; ++i) {
+            out_l1[i] = 0xFFFFFFFFu;
+        }
+        if (slice == 0) {
+            out_l1[0] = 0;
+        }
+        for (uint32_t r = row_first; r < rows; r += row_step) {
+            if (r >= live) {
+                noc_async_write(l1 + 256 + 1024 + 128 + 2 * 1152, out.get_noc_addr(r, col0 * 4), cols * 4);
+            }
+        }
+        noc_async_write_barrier();
+    }
+#endif
     for (uint32_t r = row_first; r < rows; r += row_step) {
         FUSED_ZONE("fz_qs_sel_row");
+#ifdef QSA_LIVE
+        if (r >= live) {
+            continue;
+        }
+#endif
         if (offset_rows != 1) {
             noc_async_read(off.get_noc_addr(r, col0 * 4), l1 + 256, COLS * 4);  // row r's offsets (the lanes)
         }

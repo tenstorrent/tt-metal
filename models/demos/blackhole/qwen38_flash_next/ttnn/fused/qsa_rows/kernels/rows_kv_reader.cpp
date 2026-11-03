@@ -60,8 +60,59 @@ void kernel_main() {
     const uint32_t rows = rows_read < tile_rows::TILE_ROWS ? rows_read : tile_rows::TILE_ROWS;
     const uint32_t block = P & ~31u;
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1 + 4) = block;  // the writer reads the block start here
+#ifndef QWEN38_ROWS_KV_FAST
     cb_push_back(CB_KV_POS, 1);
+#endif
 
+#ifdef QWEN38_ROWS_KV_FAST
+    // QWEN38_QSA_ROWS_KV_FAST: no read-back, no zero fill.  Only the rows this pass places go to the cache: the current
+    // block's slots P % 32 .. min(P % 32 + R, 32) - 1 and, when rows cross the block edge, the next block's slots
+    // 0 .. P % 32 + R - 33.  The rows below P % 32 keep the value the read-back would copy; the rows past P + R - 1
+    // keep their earlier content instead of 0 (no sparse row names a position at or past its own row's P + j, so the
+    // later passes rewrite them before any read).  The value half of the packed rows needs no key core, so it is
+    // copied while the key cores finish.
+    const uint32_t s0 = P & 31u;
+    const uint32_t room = tile_rows::TILE_ROWS - s0;
+    const uint32_t n0 = rows < room ? rows : room;
+    const uint32_t n1 = single_row ? 0u : rows - n0;
+    volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1);
+    meta[2] = s0;
+    meta[3] = n0;
+    meta[4] = n1;
+    cb_push_back(CB_KV_POS, 1);
+    cb_reserve_back(CB_BLOCK, BLOCK_PAGES);
+    cb_reserve_back(CB_NEXT, BLOCK_PAGES);
+    const uint32_t block_l1 = get_write_ptr(CB_BLOCK), next_l1 = get_write_ptr(CB_NEXT);
+    {
+        FUSED_ZONE("fz_qr_kv_vpack");
+        for (uint32_t j = 0; j < n0; ++j) {
+            pack_row_to_rm_words(pack_l1, j, block_l1 + (s0 + j) * QUERY_ROW_BYTES, 0, HEAD_TILES);
+        }
+        for (uint32_t j = 0; j < n1; ++j) {
+            pack_row_to_rm_words(pack_l1, n0 + j, next_l1 + j * QUERY_ROW_BYTES, 0, HEAD_TILES);
+        }
+    }
+    {
+        FUSED_ZONE("fz_qr_kv_key_wait");
+        sem_krot.wait_min(1);
+        sem_knorm.wait_min(1);
+        invalidate_l1_cache();
+    }
+    {
+        FUSED_ZONE("fz_qr_kv_scatter");
+        for (uint32_t j = 0; j < n0; ++j) {
+            pack_row_to_rm_words(pack_l1, j, block_l1 + (s0 + j) * QUERY_ROW_BYTES, HEAD_TILES, main_tail::PACK_TILES);
+        }
+        for (uint32_t j = 0; j < n1; ++j) {
+            pack_row_to_rm_words(pack_l1, n0 + j, next_l1 + j * QUERY_ROW_BYTES, HEAD_TILES, main_tail::PACK_TILES);
+        }
+    }
+    cb_push_back(CB_BLOCK, BLOCK_PAGES);
+    cb_push_back(CB_NEXT, BLOCK_PAGES);
+    sem_krot.set(0);
+    sem_knorm.set(0);
+}
+#else
     // the current block, read back as the chain's kv row lookup does
     cb_reserve_back(CB_BLOCK, BLOCK_PAGES);
     const uint32_t block_l1 = get_write_ptr(CB_BLOCK);
@@ -107,3 +158,4 @@ void kernel_main() {
     sem_krot.set(0);
     sem_knorm.set(0);
 }
+#endif

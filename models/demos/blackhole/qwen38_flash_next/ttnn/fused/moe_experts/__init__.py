@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``moe_experts``: the routed experts of one MoE layer at TP=8 (64 local experts per die), rows <= 2, as one
+"""``moe_experts``: the routed experts of one MoE layer at TP=8 (64 local experts per die), rows <= 8 (2 by default), as one
 generic-op program on 24 cores (3 per DRAM bank), bit-identical to ``ttnn.experimental.moe_compute``'s local-output
 path, on today's cached BF4 layout (no re-cache).  See x35_moe_kernel/DESIGN.md (Design A) and x37_moe_experts/REPORT.md.
 
 Per call: every core reads the die's owner row and the drain core's top-10 indices and builds the same list of active
-experts (rows <= 2 share one chunk per expert; no tilize cores, no mapping scan, no e_t page); the 12 gate/up cores
+experts (rows <= 8 share one chunk per expert; no tilize cores, no mapping scan, no e_t page); the 12 gate/up cores
 (8 pair units, 4 half units: x natural K order, one DEST, SiLU * up on the pack thread, Float16_b: moe_compute's compute.cpp
 call for call) read the 80 hidden tiles' rows 0-1 from the gathered hidden's L1 shard and send their in2 tiles to the
 16 down cores (24 down units: K in the cached W2's ring order, one DEST, pack_untilize_dest) which write the rows of
@@ -38,6 +38,14 @@ def enabled() -> bool:
     """QWEN38_MOE_EXPERTS (default on, "0" off): the model's decode MoE (rows <= 2, fused post form) runs this program
     (x37 A/B at TP=8 B=1: -1.22 ms per token, tokens unchanged)."""
     return os.environ.get(FLAG, "1") == "1"
+
+
+def max_rows() -> int:
+    """QWEN38_MOE_EXPERTS_MAX_ROWS (default 8, at most 8): the most rows the model's MoE hands to this program."""
+    cap = int(os.environ.get(MAX_ROWS_FLAG, "8"))
+    if not 1 <= cap <= MAX_ROWS_LIMIT:
+        raise ValueError(f"{MAX_ROWS_FLAG} must be in 1..{MAX_ROWS_LIMIT}, got {cap}")
+    return cap
 
 
 def _report_calls() -> None:
@@ -169,7 +177,10 @@ def reader_vcs(placed: list[tuple[ttnn.CoreCoord, int, int]]) -> list[int]:
 BF16, U16, U32 = ttnn.bfloat16, ttnn.uint16, ttnn.uint32
 CB_X, CB_OUT, CB_W, CB_GOUT, CB_TOK, CB_IN2, CB_MD, CB_SCRATCH, CB_MDW = 0, 1, 3, 4, 5, 6, 7, 8, 9
 SEM_IN2, SEM_ACK = (0, 1), (2, 3)  # per-parity counters of the in2 arrivals / acknowledgements
-MD_PAGE_BYTES = 384
+MD_PAGE_BYTES = 384  # rows <= 2
+MD_PAGE_BYTES_WIDE = 832  # rows 3 .. 8: 1 + 64 entries x 3 words, in 32 B steps
+MAX_ROWS_FLAG = "QWEN38_MOE_EXPERTS_MAX_ROWS"
+MAX_ROWS_LIMIT = 8
 KERNELS = {name: fp.kernel_source(NAME, f"{name}_moe_experts.cpp") for name in ("reader", "compute", "writer")}
 KERNELS["reader_fused"] = fp.kernel_source(NAME, "reader_moe_experts_fused.cpp")  # QWEN38_MOE_FUSE=1 only
 UNITS_PER_BANK = 3
@@ -341,8 +352,8 @@ def _plan(mesh, w0_w1, exclude=(), where="bank"):
 
 def _check_inputs(hidden, indices, owner, w0_w1, w2, out) -> int:
     rows = fp.rows_of(hidden)
-    if rows > 2:
-        raise ValueError(f"moe_experts serves 1 or 2 rows, got {rows}")
+    if rows > MAX_ROWS_LIMIT:
+        raise ValueError(f"moe_experts serves 1 to {MAX_ROWS_LIMIT} rows, got {rows}")
     if not fp.is_tile_width(hidden, HIDDEN) or hidden.dtype != BF16 or not fp.in_l1(hidden):
         raise ValueError("moe_experts hidden must be a TILE bf16 [1, 1, rows, 2560] tensor in L1")
     if indices.dtype != U16 or tuple(indices.shape)[-2:] != (rows, TOP_K) or not fp.in_l1(indices):
@@ -466,6 +477,7 @@ def program_parts(
                 ],
             )
         )
+    md_page_bytes = MD_PAGE_BYTES_WIDE if rows > 2 else MD_PAGE_BYTES
     cbs = [
         fp.cb_descriptor(CB_X, BF16, fp.TILE_BYTES[BF16], HT, cores),
         fp.cb_descriptor(CB_OUT, BF16, fp.TILE_BYTES[BF16], 8, cores),
@@ -473,9 +485,9 @@ def program_parts(
         fp.cb_descriptor(CB_GOUT, BF16, fp.TILE_BYTES[BF16], 4, cores),
         fp.cb_descriptor(CB_TOK, U32, 16, 2, cores),
         fp.cb_descriptor(CB_IN2, BF16, fp.TILE_BYTES[BF16], 2 * NT, cores),
-        fp.cb_descriptor(CB_MD, U32, MD_PAGE_BYTES, 1, cores),
-        fp.cb_descriptor(CB_MDW, U32, MD_PAGE_BYTES, 1, cores),
-        fp.cb_descriptor(CB_SCRATCH, U32, 2 * 512 + 128, 1, cores),
+        fp.cb_descriptor(CB_MD, U32, md_page_bytes, 1, cores),
+        fp.cb_descriptor(CB_MDW, U32, md_page_bytes, 1, cores),
+        fp.cb_descriptor(CB_SCRATCH, U32, 2 * 512 + max(rows, 2) * 64, 1, cores),
     ]
     sems = [fp.semaphore_descriptor(sem_base + i, cores, 0) for i in range(4)]
     if wait_sem is not None:

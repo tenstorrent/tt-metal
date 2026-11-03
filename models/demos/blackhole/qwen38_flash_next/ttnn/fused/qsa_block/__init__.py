@@ -67,6 +67,18 @@ MT_ROW_ENV = "QWEN38_QSA_MT_ROW"
 MAIN_TAIL_ROW = {role: fp.kernel_source(NAME, f"main_tail_{role}_staging_row.cpp") for role in ("reader", "writer")}
 
 
+QSA_VERIFY_LIVE_ENV = "QWEN38_QSA_VERIFY_LIVE"
+QSA_LIVE_DEFINE = ("QSA_LIVE", "1")
+SCORE_MERGE_LIVE_CORES = 40  # the live-rows merge's core target: one (chunk, row) item per core at 8 chunks x 5 rows
+
+
+def qsa_verify_live_enabled(environ=None) -> bool:
+    """True when ``QWEN38_QSA_VERIFY_LIVE`` is not "0" (default on): the verify tile's score merge, selection and query writers
+    work on the live rows only; the rows past them are rewritten as constants (finite, row-local consumers only)."""
+
+    return (os.environ if environ is None else environ).get(QSA_VERIFY_LIVE_ENV, "1") != "0"
+
+
 def mt_row_enabled(environ=None) -> bool:
     """True unless ``QWEN38_QSA_MT_ROW`` is set to something other than "1" in ``environ`` (default ``os.environ``)."""
 
@@ -788,6 +800,7 @@ def main_tail(
     kv_stage: KVStage | None = None,
     page_table=None,
     page_size: int = 0,
+    live_lanes: int | None = None,
 ):
     """The fused main tail on ``rows`` lanes; returns the sparse query [1, 32, rows, 512] bf16 ROW_MAJOR and updates
     ``staging`` [1, rows, 32, 512] (TILE) and ``kv_cache`` [1, 1, C, 512] (ROW_MAJOR, lane r's block at
@@ -870,6 +883,11 @@ def main_tail(
         cbs.append(fp.cb_descriptor(CB_MT_ROW, BF16, HEAD_DIM * 2, 2, all_set))
     if paged:  # the writer's page-table window: 64 bytes, aligned to 64 in the kernel
         cbs.append(fp.cb_descriptor(CB_MT_PT, ttnn.uint32, 2 * PT_WINDOW_BYTES, 1, all_set))
+    # live_lanes (main_tail_rows under QWEN38_QSA_ROWS_KV_FAST): the query writers write lanes >= live_lanes as one zero 1 KB page
+    # per (head, lane) instead of the 12 + 1 pieces of a live lane; the rope writers skip them.  Only the KV stage form takes it.
+    live = kv_stage is not None and live_lanes is not None and live_lanes < rows
+    live_args = [live_lanes] if live else []
+    live_defines = [QSA_LIVE_DEFINE] if live else []
     eps_bits = _bits(eps)
     acc = fp.accessor_args
     norm_set, rope_set = _rect(0, 0, LOCAL_HEADS, 0), _rect(0, 1, LOCAL_HEADS, 1)
@@ -899,8 +917,11 @@ def main_tail(
             MAIN_TAIL["writer_norm"],
             q_norm_set,
             [0, *acc(query)],
-            [(c, [query.buffer_address(), rows, h, *xy(q_rope_cores[h]), 0]) for h, c in enumerate(q_norm_cores)],
-            defines=[LOCAL_HEADS_DEFINE],
+            [
+                (c, [query.buffer_address(), rows, h, *xy(q_rope_cores[h]), 0, *live_args])
+                for h, c in enumerate(q_norm_cores)
+            ],
+            defines=[LOCAL_HEADS_DEFINE, *live_defines],
         ),
         fp.writer_kernel(
             MAIN_TAIL["writer_norm"],
@@ -922,7 +943,8 @@ def main_tail(
             MAIN_TAIL["writer_rope"],
             q_rope_set,
             [0, *acc(query)],
-            [(c, [query.buffer_address(), rows, h, 0]) for h, c in enumerate(q_rope_cores)],
+            [(c, [query.buffer_address(), rows, h, 0, *live_args]) for h, c in enumerate(q_rope_cores)],
+            defines=live_defines,
         ),
         fp.writer_kernel(
             MAIN_TAIL["writer_rope"],
@@ -1402,7 +1424,9 @@ def page_table_blocks(page_table, page_size: int, rows: int = 1) -> int:
     return shape[3]
 
 
-def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill, page_table=None, page_size=0):
+def selection_row(
+    block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill, page_table=None, page_size=0, live_rows=None
+):
     """The sparse-attention row of token ids [1, 1, rows, 2080] uint32 ROW_MAJOR from the top-k block ids
     [1, 1, rows, 512] and the position-derived keep / fill rows (rows 0 .. rows-1 of [1, 1, >= rows, 2080] tensors)
     with the module's constant rows ``sentinel_pad`` [1, 1, 1, 32] and ``block_offsets``: one row [1, 1, 1, 2048]
@@ -1447,6 +1471,12 @@ def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fil
         defines = [PAGED_DEFINE]
         cb_bytes = max(cb_bytes, 256 + 1024 + 128 + 3 * 1152 + PT_ALIGN_SLACK + max_blocks * 4)
     spread = rows == 1 and page_table is None and sel_spread_enabled()
+    # QWEN38_QSA_VERIFY_LIVE: rows >= live_rows are written as a one-token row (id 0, then masked slots), not computed
+    live = (
+        qsa_verify_live_enabled() and live_rows is not None and live_rows < rows and page_table is None and not spread
+    )
+    if live:
+        defines = [QSA_LIVE_DEFINE]
     if spread:
         n_cores = sel_spread_cores()
         segments = sel_spread_segments(n_cores)
@@ -1471,7 +1501,10 @@ def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fil
                 cores,
                 compile_args,
                 [
-                    (ttnn.CoreCoord(i, g), [*addresses, rows, i, offset_rows, g, row_groups, *paged_args])
+                    (
+                        ttnn.CoreCoord(i, g),
+                        [*addresses, rows, i, offset_rows, g, row_groups, *paged_args, *([live_rows] if live else [])],
+                    )
                     for g in range(row_groups)
                     for i in range(SELECTION_SLICES)
                 ],
@@ -1773,12 +1806,22 @@ def score_merge(gathered, mask, *, out_rows=None):
         )
     mesh = gathered.device()
     out = fp.allocate((1, 1, rows, width), BF16, ttnn.ROW_MAJOR_LAYOUT, mesh)
-    work = score_merge_work(width, mesh.compute_with_storage_grid_size())
+    # QWEN38_QSA_VERIFY_LIVE: the (chunk, row) items of the live rows over up to SCORE_MERGE_LIVE_CORES cores; the dead rows
+    # (live_rows .. rows-1) are written as zeros by the core of each chunk's row 0.  Per element the arithmetic is unchanged.
+    live = qsa_verify_live_enabled() and live_rows < rows
+    if live:
+        items = chunks * live_rows
+        work = fp.split_work(items, _Grid(mesh.compute_with_storage_grid_size()), min(items, SCORE_MERGE_LIVE_CORES))
+    else:
+        work = score_merge_work(width, mesh.compute_with_storage_grid_size())
+    live_defines = [QSA_LIVE_DEFINE] if live else []
     cores = fp.core_rectangle(work, mesh)
     cbs = [
-        fp.cb_descriptor(cb, BF16, TILE_BF16, pages, cores)
+        fp.cb_descriptor(cb, BF16, TILE_BF16, pages * (2 if live else 1), cores)
         for cb, pages in ((0, DEVICES), (1, 1), (2, 1), (3, 1), (16, 1))
     ]
+    if live:  # the zero tile (CB 1) is a single page
+        cbs[1] = fp.cb_descriptor(1, BF16, TILE_BF16, 1, cores)
     reader = fp.reader_kernel(
         SCORE_MERGE["reader"],
         cores,
@@ -1787,13 +1830,13 @@ def score_merge(gathered, mask, *, out_rows=None):
             (w.core, [gathered.buffer_address(), mask.buffer_address(), rows, w.start, w.count, chunks, live_rows])
             for w in work
         ],
-        defines=[DEVICES_DEFINE],
+        defines=[DEVICES_DEFINE, *live_defines],
     )
     compute = fp.compute_kernel(
         SCORE_MERGE["compute"],
         cores,
         [],
-        [(w.core, [rows, w.count]) for w in work],
+        [(w.core, [1, w.count] if live else [rows, w.count]) for w in work],
         defines=[DEVICES_DEFINE],
         fp32_dest=False,
     )
@@ -1801,7 +1844,8 @@ def score_merge(gathered, mask, *, out_rows=None):
         SCORE_MERGE["writer"],
         cores,
         fp.accessor_args(out),
-        [(w.core, [out.buffer_address(), rows, w.start, w.count]) for w in work],
+        [(w.core, [out.buffer_address(), rows, w.start, w.count, *([live_rows] if live else [])]) for w in work],
+        defines=live_defines,
     )
     meta = fp.program_meta(  # the four devices' score pages and the rows' mask in, the merged rows out; 3 adds + mask
         "qsa_score_merge",

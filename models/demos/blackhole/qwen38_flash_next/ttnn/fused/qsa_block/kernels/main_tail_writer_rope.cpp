@@ -31,7 +31,13 @@ void kernel_main() {
     const uint32_t l1 = get_read_ptr(CB_OUT);
     if constexpr (ROLE == 0) {
         FUSED_ZONE("fz_qs_mt_wr_query");
-        for (uint32_t lane = 0; lane < rows; ++lane) {
+#ifdef QSA_LIVE
+        const uint32_t live_lanes = get_arg_val<uint32_t>(4);  // the norm writer zeroes the pages of the lanes past it
+        const uint32_t lane_end = live_lanes < rows ? live_lanes : rows;
+#else
+        const uint32_t lane_end = rows;
+#endif
+        for (uint32_t lane = 0; lane < lane_end; ++lane) {
             const uint32_t page = head * rows + lane;
             for (uint32_t t = 0; t < ROPE_TILES; ++t) {
                 for (uint32_t half = 0; half < 2; ++half) {
