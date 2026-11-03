@@ -1,0 +1,45 @@
+# Compute payload gen/verify over payload sizes in 16 B steps (not only whole 256 B SFPU blocks), up to the default
+# 4352 B max packet (past one 4 KB tile), with enough packets to wrap the receive rings. Run with
+# TT_FABRIC_TEST_SFPU_PAYLOAD=1 TT_FABRIC_TEST_SFPU_VERIFY=1; every test must pass.
+Tests:
+  - name: "SfpuSizesLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+      size: [16, 32, 48, 64, 80, 112, 128, 144, 208, 240, 256, 272, 496, 1008, 1040, 2064, 4080, 4096, 4112, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 10000
+    patterns:
+      - type: all_to_all
+
+  - name: "SfpuSizesScatterLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype:
+        - {type: unicast_scatter_write, chunks: [2, 3, 4]}
+        - {type: unicast_scatter_write, chunk_weights: [1, 3]}
+        - {type: unicast_scatter_write, atomic_inc: true, chunks: 2}
+      size: [64, 80, 144, 272, 1040, 4080, 4336]
+    defaults:
+      ftype: unicast
+      num_packets: 10000
+    patterns:
+      - type: all_to_all
+
+  - name: "SfpuSizesMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, fused_atomic_inc]
+      size: [16, 48, 272, 4080, 4352]
+    defaults:
+      num_packets: 10000
+    patterns:
+      - type: all_to_all

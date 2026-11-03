@@ -1,0 +1,45 @@
+# test_fabric_stability.yaml *_long at 100k packets with top_level_iterations 1 (x10 = real suite).
+# Fabric stability suite (system-agnostic).
+#
+# Each logical test has a `_short` and a `_mid` variant. `_short` vs `_mid` is a CI
+# time-budget choice only, not an arch/platform split -- any system can run either (or both):
+#   - short time budget:  --filter 'name.*_short'
+#   - long time budget:   run the whole file with no filter (short + long)
+Tests:
+  - name: "FlowControlLinear_mid"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+
+    top_level_iterations: 1
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: all
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlMesh_mid"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    top_level_iterations: 1
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: all
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
