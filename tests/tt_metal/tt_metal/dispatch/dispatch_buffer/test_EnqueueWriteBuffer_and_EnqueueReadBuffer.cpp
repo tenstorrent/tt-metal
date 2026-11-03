@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <enchantum/enchantum.hpp>
 #include <cstdlib>
 #include <sys/types.h>
@@ -631,8 +632,23 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
             } else {
                 distributed::ReadShard(cqs[i], result, buffers[i], distributed::MeshCoordinate(0, 0), true);
             }
-            bool local_pass = (srcs[i] == result);
-            pass &= local_pass;
+            const auto tag = fmt::format(
+                "multi-queue dev={} cq={} void_star_api={}",
+                mesh_device->get_device_ids()[0],
+                cqs[i].get().id(),
+                use_void_star_api);
+            if (!check_readback(srcs[i], result, tag)) {
+                pass = false;
+                // A clean re-read after Finish means DRAM is correct and only the first read was wrong.
+                for (auto& cq : cqs) {
+                    distributed::Finish(cq);
+                }
+                std::vector<uint32_t> reread;
+                distributed::ReadShard(cqs[i], reread, buffers[i], distributed::MeshCoordinate(0, 0), true);
+                if (check_readback(srcs[i], reread, tag + " reread_after_finish")) {
+                    log_warning(tt::LogTest, "[READBACK-MISMATCH] {} reread_after_finish: OK", tag);
+                }
+            }
         }
     }
 
@@ -693,7 +709,42 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue_single_sub_buffer
 
         vector<uint32_t> result(region.size / sizeof(uint32_t));
         EnqueueReadMeshSubBuffer(cq, result, buffer, region, true);
-        pass &= (src == result);
+        const auto tag = fmt::format(
+            "single-sub-buffer dev={} cq={} region_start_page={} region_pages={}",
+            mesh_device->get_device_ids()[0],
+            cq.get().id(),
+            region_start_page,
+            region_num_pages);
+        if (!check_readback(src, result, tag)) {
+            pass = false;
+            distributed::Finish(cq);
+            vector<uint32_t> reread(region.size / sizeof(uint32_t));
+            EnqueueReadMeshSubBuffer(cq, reread, buffer, region, true);
+            if (check_readback(src, reread, tag + " reread_after_finish")) {
+                log_warning(tt::LogTest, "[READBACK-MISMATCH] {} reread_after_finish: OK", tag);
+            }
+            // Read the whole buffer to see where the region's data actually landed. Pages outside the region should
+            // still be zero, and page p inside it should start with (p - region_start_page) * words_per_page.
+            vector<uint32_t> full;
+            distributed::ReadShard(cq, full, buffer, distributed::MeshCoordinate(0, 0), true);
+            const size_t words_per_page = page_size / sizeof(uint32_t);
+            for (size_t page = 0; page < buffer_num_pages; page++) {
+                const bool in_region = page >= region_start_page && page < region_start_page + region_num_pages;
+                const uint32_t expected_first =
+                    in_region ? static_cast<uint32_t>((page - region_start_page) * words_per_page) : 0;
+                if (full[page * words_per_page] == expected_first) {
+                    continue;
+                }
+                log_warning(
+                    tt::LogTest,
+                    "[READBACK-MISMATCH] {} full_buffer page={} in_region={} expected_first=0x{:x} first_word=0x{:x}",
+                    tag,
+                    page,
+                    in_region,
+                    expected_first,
+                    full[page * words_per_page]);
+            }
+        }
     }
 
     return pass;

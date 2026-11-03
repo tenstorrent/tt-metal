@@ -5,7 +5,12 @@
 #pragma once
 #include <gtest/gtest.h>
 #include <tt-umd/types/core_coordinates.hpp>
+#include <algorithm>
+#include <bit>
 #include <cstdint>
+#include <map>
+#include <string>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "hal_types.hpp"
@@ -41,6 +46,69 @@ inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_
         src.at(i) = start + i;
     }
     return src;
+}
+
+// Compares a read-back with what was written and logs a summary on mismatch. For arange data, got[i] - i is the
+// start value of the write the word came from, so a single "base" points at stale or misrouted data while
+// scattered single-bit flips point at hardware.
+inline bool check_readback(
+    const std::vector<uint32_t>& expected, const std::vector<uint32_t>& got, const std::string& tag) {
+    if (expected == got) {
+        return true;
+    }
+    const size_t n = std::min(expected.size(), got.size());
+    size_t num_bad = 0, num_zero = 0, num_one_bit = 0, first_bad = n, last_bad = 0;
+    std::map<uint32_t, size_t> base_counts;
+    for (size_t i = 0; i < n; i++) {
+        if (expected[i] == got[i]) {
+            continue;
+        }
+        num_bad++;
+        first_bad = std::min(first_bad, i);
+        last_bad = i;
+        num_zero += got[i] == 0;
+        num_one_bit += std::popcount(expected[i] ^ got[i]) == 1;
+        base_counts[got[i] - static_cast<uint32_t>(i)]++;
+    }
+    std::vector<std::pair<size_t, uint32_t>> top_bases;
+    for (const auto& [base, count] : base_counts) {
+        top_bases.emplace_back(count, base);
+    }
+    std::sort(top_bases.rbegin(), top_bases.rend());
+    top_bases.resize(std::min<size_t>(top_bases.size(), 4));
+
+    log_warning(
+        tt::LogTest,
+        "[READBACK-MISMATCH] {}: expected_words={} got_words={} bad={} first_bad={} last_bad={} got_zero={} "
+        "one_bit_flips={} expected_base=0x{:x} distinct_got_bases={}",
+        tag,
+        expected.size(),
+        got.size(),
+        num_bad,
+        first_bad,
+        last_bad,
+        num_zero,
+        num_one_bit,
+        expected.empty() ? 0u : expected[0],
+        base_counts.size());
+    for (const auto& [count, base] : top_bases) {
+        log_warning(tt::LogTest, "[READBACK-MISMATCH] {}:   got_base=0x{:x} words={}", tag, base, count);
+    }
+    size_t printed = 0;
+    for (size_t i = first_bad; i < n && printed < 8; i++) {
+        if (expected[i] != got[i]) {
+            log_warning(
+                tt::LogTest,
+                "[READBACK-MISMATCH] {}:   [{}] expected=0x{:08x} got=0x{:08x} xor=0x{:08x}",
+                tag,
+                i,
+                expected[i],
+                got[i],
+                expected[i] ^ got[i]);
+            printed++;
+        }
+    }
+    return false;
 }
 
 inline bool does_device_have_active_eth_cores(const IDevice* device) {

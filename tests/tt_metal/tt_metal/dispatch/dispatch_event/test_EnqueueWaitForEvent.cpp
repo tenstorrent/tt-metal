@@ -5,6 +5,7 @@
 #include <tt_stl/reflection.hpp>
 #include <chrono>
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/distributed.hpp>
@@ -37,6 +38,23 @@ namespace local_test_functions {
 void FinishAllCqs(vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs) {
     for (auto& cq : cqs) {
         distributed::Finish(cq);
+    }
+}
+
+// Reads the buffer again once every CQ is idle. A clean re-read means DRAM held the right data and the first read
+// ran early or was corrupted in flight; a bad re-read means the write itself landed wrong.
+void RereadAfterFinish(
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs,
+    distributed::MeshCommandQueue& cq_read,
+    const std::shared_ptr<distributed::MeshBuffer>& buffer,
+    const distributed::MeshCoordinate& coord,
+    const vector<uint32_t>& expected,
+    const std::string& tag) {
+    FinishAllCqs(cqs);
+    vector<uint32_t> reread;
+    distributed::ReadShard(cq_read, reread, buffer, coord, true);
+    if (check_readback(expected, reread, tag + " reread_after_finish")) {
+        log_warning(tt::LogTest, "[READBACK-MISMATCH] {} reread_after_finish: OK", tag);
     }
 }
 
@@ -79,7 +97,17 @@ bool RunCrossCqReadWriteWithWaitForEvent(
                 notify_host ? cq_write.get().enqueue_record_event_to_host() : cq_write.get().enqueue_record_event();
             cq_read.get().enqueue_wait_for_event(event);
             distributed::ReadShard(cq_read, result, buffers[i], zero_coord, true);
-            pass &= (srcs[i] == result);
+            const auto tag = fmt::format(
+                "cross-cq dev={} buf={} write_cq={} read_cq={} notify_host={}",
+                mesh_device->get_device_ids()[0],
+                buf_idx,
+                cq_write.get().id(),
+                cq_read.get().id(),
+                notify_host);
+            if (!check_readback(srcs[i], result, tag)) {
+                pass = false;
+                RereadAfterFinish(cqs, cq_read, buffers[i], zero_coord, srcs[i], tag);
+            }
         }
     }
 
@@ -120,7 +148,11 @@ bool RunBurstWritesThenSingleCrossCqEvent(
     for (size_t buf_idx = 0; buf_idx < num_buffers; buf_idx++) {
         vector<uint32_t> result;
         distributed::ReadShard(cq_read, result, buffers[buf_idx], zero_coord, true);
-        pass &= (srcs[buf_idx] == result);
+        const auto tag = fmt::format("burst dev={} buf={}", mesh_device->get_device_ids()[0], buf_idx);
+        if (!check_readback(srcs[buf_idx], result, tag)) {
+            pass = false;
+            RereadAfterFinish(cqs, cq_read, buffers[buf_idx], zero_coord, srcs[buf_idx], tag);
+        }
     }
 
     FinishAllCqs(cqs);
@@ -153,16 +185,16 @@ bool RunDeviceOnlyEventChainWithPerIterationValidation(
 
         vector<uint32_t> result;
         distributed::ReadShard(cq_read, result, buffer, zero_coord, true);
-        bool iter_pass = (src == result);
-        if (!iter_pass) {
-            log_warning(
-                tt::LogTest,
-                "Device-only event chain iteration {} FAILED (write CQ={}, read CQ={})",
-                iter,
-                cq_write.get().id(),
-                cq_read.get().id());
+        const auto tag = fmt::format(
+            "event-chain dev={} iter={} write_cq={} read_cq={}",
+            mesh_device->get_device_ids()[0],
+            iter,
+            cq_write.get().id(),
+            cq_read.get().id());
+        if (!check_readback(src, result, tag)) {
+            pass = false;
+            RereadAfterFinish(cqs, cq_read, buffer, zero_coord, src, tag);
         }
-        pass &= iter_pass;
     }
 
     FinishAllCqs(cqs);
@@ -204,11 +236,11 @@ bool RunHeavyBurstWritesThenDeviceOnlyEvent(
     for (size_t buf_idx = 0; buf_idx < num_buffers; buf_idx++) {
         vector<uint32_t> result;
         distributed::ReadShard(cq_read, result, buffers[buf_idx], zero_coord, true);
-        bool buf_pass = (srcs[buf_idx] == result);
-        if (!buf_pass) {
-            log_warning(tt::LogTest, "Heavy burst buffer {} mismatch after device-only event", buf_idx);
+        const auto tag = fmt::format("heavy-burst dev={} buf={}", mesh_device->get_device_ids()[0], buf_idx);
+        if (!check_readback(srcs[buf_idx], result, tag)) {
+            pass = false;
+            RereadAfterFinish(cqs, cq_read, buffers[buf_idx], zero_coord, srcs[buf_idx], tag);
         }
-        pass &= buf_pass;
     }
 
     FinishAllCqs(cqs);
@@ -417,7 +449,12 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                 cqs[i].get().enqueue_wait_for_event(event);
                 vector<uint32_t> result;
                 distributed::ReadShard(cqs[i], result, buffers[i], zero_coord_, true);  // Blocking.
-                bool local_pass = (srcs[i] == result);
+                const auto tag = fmt::format(
+                    "same-cq dev={} buf={} cq={}", mesh_device->get_device_ids()[0], buf_idx, cqs[i].get().id());
+                bool local_pass = check_readback(srcs[i], result, tag);
+                if (!local_pass) {
+                    local_test_functions::RereadAfterFinish(cqs, cqs[i], buffers[i], zero_coord_, srcs[i], tag);
+                }
                 log_debug(
                     tt::LogTest,
                     "Checking buf_idx: {} cq_idx: {} local_pass: {} write_data: {} read_results: {}",
