@@ -10,8 +10,8 @@ KV chunk address table that carries the MLA kvpe cache, as two extra configs:
 | 2 | `"02"` | KDA convolution tail | synthetic, `chunk_n_tokens = 64` | `[3, 64]` BF16 rectangle, 384 B |
 
 Every config is published on the model's layer axis (rows 3, 7, 11, ... for kvpe; every other row
-for KDA). A KDA config has no token axis, so it uses the synthetic axis of the K3 disaggregation
-contract (`k3_disagg_contract.md`, tt-blaze #3634): both states span one window of
+for KDA). A KDA config has no token axis, so it uses the synthetic axis it shares with decode
+(tt-blaze `blaze/models/kimi_k3/cache_migration.py`, tt-blaze #6203): both states span one window of
 `W = lcm(384, 576) * 32 = 36864` positions, global segment `i` sits at `i * 96` (recurrent) or `i * 64`
 (convolution) inside it, and `max_sequence_length = W` (`kda_position` in `utils/kv_cache_utils.py`).
 Both configs are tagged `Snapshot`: the KV Manager moves a layer's whole window whatever range

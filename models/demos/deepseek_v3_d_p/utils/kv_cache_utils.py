@@ -896,8 +896,8 @@ def kda_segments_per_layer(geometry, kind: str) -> int:
     raise ValueError(f"unknown KDA state kind {kind!r}")
 
 
-# The contract's KDA position axis (k3_disagg_contract.md, tt-blaze #3634). A KDA config has no token
-# axis, so its positions are synthetic: BOTH states span one window of kda_window() positions,
+# The KDA position axis shared with decode (tt-blaze #6203, blaze/models/kimi_k3/cache_migration.py). A KDA
+# config has no token axis, so its positions are synthetic: BOTH states span one window of kda_window() positions,
 # recurrent segment i at i * 96 and convolution segment i at i * 64 (at 96 heads). The configs are
 # tagged Snapshot, so the KV Manager moves a layer's whole window whatever range /migrate names, and
 # refuses the migration unless both sides tag Snapshot with the same extent and chunk_n_tokens:

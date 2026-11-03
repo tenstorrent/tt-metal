@@ -91,7 +91,7 @@ def _config(geometry, kind, num_layers, num_users):
 
 
 def test_contract_axis_constants():
-    """The numbers k3_disagg_contract.md fixes at 96 heads: one 36864-position window, strides 96 / 64."""
+    """The numbers decode shares at 96 heads (tt-blaze cache_migration.py): one window of 36864, strides 96 / 64."""
     geometry = KdaContractGeometry.from_kda_config(kimi_k3_kda_config(), mesh_shape=(SP, TP), sp_axis=0, tp_axis=1)
     assert kda_window(geometry) == 36_864
     assert kda_chunk_n_tokens(geometry, "kda_recurrent") == 96
