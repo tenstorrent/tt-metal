@@ -442,8 +442,14 @@ static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
     const auto default_fp32_acc = fp32_dest_acc_default(program_config, is_fp32_input);
     // hw bug (#38306): on Wormhole B0, HiFi4 with fp32 accumulation can produce less accurate
     // results than HiFi3 for some inputs. Use HiFi3 as the safe default when fp32 acc is enabled.
-    const auto default_fidelity =
-        (is_wormhole && default_fp32_acc) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    // Quasar with a non-fp32 input: LoFi for now. Quasar's compute API programs the math source formats once, at
+    // startup, so the fp32 intermediates run under the input's bf16 format, and the simulator refuses the extra
+    // phases there. LoFi drops the low mantissa bits of those intermediates (on the yolo DFL softmax about half the
+    // outputs change and the mean error grows ~20%, within the tests' bounds). Back to HiFi4 once the math formats
+    // are programmed per op.
+    const auto default_fidelity = (arch == tt::ARCH::QUASAR && !is_fp32_input) ? tt::tt_metal::MathFidelity::LoFi
+                                  : (is_wormhole && default_fp32_acc)          ? tt::tt_metal::MathFidelity::HiFi3
+                                                                               : tt::tt_metal::MathFidelity::HiFi4;
     verify_numerical_configuration(arch, compute_kernel_config);
     // Float32 inputs default the exp approximation off, matching ttnn.exp's own default
     // (fast_and_approximate_mode=False). Other dtypes keep the approximate default so existing model perf is
