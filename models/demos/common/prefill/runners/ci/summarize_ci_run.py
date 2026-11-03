@@ -103,8 +103,8 @@ def _publish_json(rec, name):
     if not root:
         print("perf metrics not persisted (PREFILL_SUMMARIES unset)")
         return
-    # The config is the scale-out suffix plus any layout (sc1, sc4, sc4_4x4), so "kimi_k3_sc4_4x4" is kimi_k3 at
-    # sc4_4x4; splitting at the last underscore made it kimi_k3_sc4 at 4x4, which no baseline or summary row names.
+    # The config is the scale-out suffix plus any layout (sc1, sc4, sc4_8x4), so "kimi_k3_sc4_8x4" is kimi_k3 at
+    # sc4_8x4; splitting at the last underscore made it kimi_k3_sc4 at 8x4, which no baseline or summary row names.
     m = re.fullmatch(r"(.+)_(sc\d+(?:_[0-9a-z]+)?)", name)
     model, config = m.groups() if m else (name.rpartition("_")[0], name.rpartition("_")[2])
     rec = {"name": name, "model": model or name, "config": config or "unknown", **rec}

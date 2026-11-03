@@ -121,7 +121,7 @@ def main():
     ap.add_argument(
         "--ref",
         default=_REF,
-        help=f"the config to report (default {_REF}); e.g. sc4_4x4 for Kimi-K3's 8 stages of 4x4",
+        help=f"the config to report (default {_REF}); e.g. sc4_8x4 for Kimi-K3 as 4 stages of 8x4",
     )
     args = ap.parse_args()
     ref_cfg = args.ref
