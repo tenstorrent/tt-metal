@@ -47,15 +47,22 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
 
 
 def reduce_scatter_tp_partials(
-    partials: ttnn.Tensor, tt_ccl: TT_CCL, cluster_axis: int | None, topology: ttnn.Topology
+    partials: ttnn.Tensor,
+    tt_ccl: TT_CCL,
+    cluster_axis: int | None,
+    topology: ttnn.Topology,
+    num_links: int | None = None,
 ) -> ttnn.Tensor:
-    """Reduce-scatter the output projection's TP partial sums over the hidden dimension into DRAM."""
+    """Reduce-scatter the output projection's TP partial sums over the hidden dimension into DRAM.
+
+    ``num_links`` defaults to the mesh's link count on ``cluster_axis``.
+    """
     return ttnn.experimental.reduce_scatter_minimal_async(
         partials,
         dim=-1,
         multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-        num_links=tt_ccl.get_num_links(cluster_axis),
+        num_links=tt_ccl.get_num_links(cluster_axis) if num_links is None else num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=topology,
         cluster_axis=cluster_axis,
@@ -213,6 +220,11 @@ class ttKDA:
         self.weights = weights
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
+        # Shapes are compared whole: iterating a ttnn.Shape ends in a C++ exception inside nanobind.
+        self._recurrent_state_shape = ttnn.Shape(
+            [1, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim]
+        )
+        self._convolution_state_shape = ttnn.Shape([1, self.config.conv_kernel_size - 1, self._convolution_width])
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
             self._convolution_width, program_config.qkv_channel_chunk_size
         )
@@ -242,6 +254,7 @@ class ttKDA:
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
+        self._tp_num_links = tt_ccl.get_num_links(self._tp_cluster_axis) if self.tensor_parallel_size > 1 else None
         # Ordinary matmuls (input and decay projections) keep packer L1 accumulation; the input
         # projection takes its fidelity from the program config.
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -336,11 +349,7 @@ class ttKDA:
     def _validate_runtime_bound(bound: ttnn.Tensor, name: str) -> None:
         if not isinstance(bound, ttnn.Tensor):
             raise TypeError(f"{name} must be a device UINT32 scalar")
-        if (
-            bound.dtype != ttnn.uint32
-            or bound.layout != ttnn.ROW_MAJOR_LAYOUT
-            or any(dimension != 1 for dimension in bound.shape)
-        ):
+        if bound.dtype != ttnn.uint32 or bound.layout != ttnn.ROW_MAJOR_LAYOUT or bound.logical_volume() != 1:
             raise ValueError(f"device {name} must be a UINT32 row-major scalar")
 
     def _validate_forward(
@@ -367,12 +376,10 @@ class ttKDA:
             raise ValueError(
                 f"hidden_states local T={sequence} does not match constructed T={self.active_seq_len_local}"
             )
-        expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
-        expected_convolution = (batch, self.config.conv_kernel_size - 1, self._convolution_width)
-        if tuple(state.recurrent.shape) != expected_recurrent:
-            raise ValueError(f"recurrent state shape {tuple(state.recurrent.shape)} != {expected_recurrent}")
-        if tuple(state.convolution.shape) != expected_convolution:
-            raise ValueError(f"convolution state shape {tuple(state.convolution.shape)} != {expected_convolution}")
+        if state.recurrent.shape != self._recurrent_state_shape:
+            raise ValueError(f"recurrent state shape {state.recurrent.shape} != {self._recurrent_state_shape}")
+        if state.convolution.shape != self._convolution_state_shape:
+            raise ValueError(f"convolution state shape {state.convolution.shape} != {self._convolution_state_shape}")
         if state.recurrent.dtype != KDA_RECURRENT_STATE_DTYPE:
             raise ValueError(f"recurrent state dtype {state.recurrent.dtype} != {KDA_RECURRENT_STATE_DTYPE}")
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -467,7 +474,9 @@ class ttKDA:
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
-            output = reduce_scatter_tp_partials(output, self.tt_ccl, self._tp_cluster_axis, self.tp_ccl_topology)
+            output = reduce_scatter_tp_partials(
+                output, self.tt_ccl, self._tp_cluster_axis, self.tp_ccl_topology, self._tp_num_links
+            )
         return output
 
     def forward(

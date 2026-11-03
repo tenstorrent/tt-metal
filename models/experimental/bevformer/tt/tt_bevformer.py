@@ -8,7 +8,21 @@ A frame's host-derived inputs (CAN bus, ego shift, previous-BEV rotation, the ca
 prepared by :meth:`TTBEVFormer.prepare_frame`. The caller carries the previous BEV between frames,
 as upstream's ``forward_test`` does. Preparing a frame also projects its cameras and queues the
 readback of the counts that size the spatial cross-attention's plan, which follow what the cameras
-see, so the detector runs live, not under a trace.
+see.
+
+Through :meth:`TTBEVFormer.prepare_frame` and :meth:`TTBEVFormer.__call__` the detector runs live.
+``tt_bevformer_trace.TTBEVFormerTrace`` replays it from three traces around that readback, each
+recording steps of this class that are device work only:
+
+================  =====================================================================
+Trace             Steps
+================  =====================================================================
+``cameras``       :meth:`TTBEVFormer.project_cameras`
+``features``      :meth:`TTBEVFormer.features`
+``bev``           :meth:`TTBEVFormer.build_plan`, :meth:`TTBEVFormer.bev`, :meth:`TTBEVFormer.detect`
+outside, on host  :meth:`TTBEVFormer.host_frame`, :meth:`TTBEVFormer.refill_frame`, the planner's
+                  ``read_counts`` and ``size``, :meth:`TTBEVFormer.get_bboxes`
+================  =====================================================================
 
 :meth:`TTBEVFormer.detect` runs upstream's ``get_bboxes`` on device: the coder's top-k, the box
 decoding, the range test as a validity mask and z moved to the box's bottom face, all fixed
@@ -60,11 +74,16 @@ class TTBEVFormer:
         self.bev_pos = bev_pos
         self.coder = TTNMSFreeCoder(device, **vars(params.coder))
 
+    @property
+    def planner(self):
+        """The encoder's ``SCARebatchPlanner``, which sizes every frame's spatial cross-attention plan."""
+        return self.transformer.encoder.rebatch_planner
+
+    # The live frame: the steps below, chained, with the host waiting on the counts mid-frame.
+
     def prepare_frame(self, img_metas, frame=None):
         """See ``TTPerceptionTransformer.prepare_frame``."""
-        assert (
-            len(img_metas) == self.batch_size
-        ), f"{len(img_metas)} samples, the detector is built for {self.batch_size}"
+        self._check_batch(img_metas)
         return self.transformer.prepare_frame(img_metas, frame)
 
     def __call__(self, img, frame, prev_bev=None):
@@ -75,20 +94,20 @@ class TTBEVFormer:
         ``TTBEVFormerHead``'s channel order, and this frame's BEV ``(bs, bev_h * bev_w, C)``. L is
         the number of decoder layers with ``all_layers``, else 1, the last layer. The FPN frees
         the backbone's features, not ``img``."""
-        levels = self.neck(list(self.backbone(img)))
-        bev_embed = self.transformer(levels, self.params.bev_queries, self.bev_pos, frame, prev_bev=prev_bev)
-        cls_scores, bbox_preds = self.head(bev_embed)
-        return _to_dram(cls_scores, bbox_preds) + (bev_embed,)
+        return self.bev(self.features(img), frame, prev_bev=prev_bev)
 
-    def detect(self, cls_scores, bbox_preds):
-        """The last decoder layer's detections, on device: ``TTNMSFreeCoder.topk``'s scores, labels
-        and query indexes, and ``TTNMSFreeCoder.finalize``'s boxes and validity mask."""
-        signpost(header="TTNN Detect Start")
-        scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
-        boxes, valid = self.coder.finalize(scores, boxes)
-        outputs = _to_dram(scores, labels, query_index, boxes, valid)
-        signpost(header="TTNN Detect End")
-        return outputs
+    # Host steps: they compute on the host, write device buffers or read results back, so they stay
+    # outside traces.
+
+    def host_frame(self, img_metas):
+        """See ``TTPerceptionTransformer.host_frame``."""
+        self._check_batch(img_metas)
+        return self.transformer.host_frame(img_metas)
+
+    def refill_frame(self, img_metas, frame=None, host_frame=None):
+        """See ``TTPerceptionTransformer.refill_frame``."""
+        self._check_batch(img_metas)
+        return self.transformer.refill_frame(img_metas, frame, host_frame)
 
     @staticmethod
     def get_bboxes(scores, labels, boxes, valid):
@@ -98,3 +117,53 @@ class TTBEVFormer:
             (sample["bboxes"], sample["scores"], sample["labels"])
             for sample in TTNMSFreeCoder.compact(scores, labels, boxes, valid)
         ]
+
+    # Device steps: they only queue device work, with no readback, upload or wait, which is what
+    # lets a trace record them.
+
+    def project_cameras(self, frame):
+        """``frame.cameras``: the cameras projected through ``frame``'s buffers; ``planner.read_counts``
+        queues the counts' readback. The ``cameras`` trace records it."""
+        frame.cameras = self.transformer.encoder.project_cameras_on_device(frame.projection)
+        return frame.cameras
+
+    def features(self, img):
+        """The FPN levels of :meth:`__call__`'s ``img``. The ``features`` trace records it."""
+        return self.neck(list(self.backbone(img)))
+
+    def build_plan(self, frame):
+        """``frame.cameras`` with the spatial cross-attention plan built on it; the planner must have
+        sized this frame (``planner.size``). The ``bev`` trace records it."""
+        cameras = frame.cameras
+        frame.cameras = cameras._replace(
+            rebatch_plan=self.planner.build(cameras.reference_points_cam, cameras.visibility)
+        )
+        return frame.cameras
+
+    def bev(self, levels, frame, prev_bev=None):
+        """:meth:`__call__` from the FPN ``levels``. Device work only when :meth:`build_plan` has put
+        the plan on ``frame.cameras``, as in the ``bev`` trace; without one it builds the plan here,
+        waiting for the counts."""
+        bev_embed = self.transformer(levels, self.params.bev_queries, self.bev_pos, frame, prev_bev=prev_bev)
+        cls_scores, bbox_preds = self.head(bev_embed)
+        return _to_dram(cls_scores, bbox_preds) + (bev_embed,)
+
+    def detect(self, cls_scores, bbox_preds, score_threshold=None):
+        """The last decoder layer's detections, on device: ``TTNMSFreeCoder.topk``'s scores, labels
+        and query indexes, and ``TTNMSFreeCoder.finalize``'s boxes and validity mask, which also
+        drops scores below ``score_threshold`` when given. The ``bev`` trace records it."""
+        signpost(header="TTNN Detect Start")
+        scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
+        boxes, valid = self.coder.finalize(scores, boxes)
+        if score_threshold is not None:
+            # topk's scores are ROW_MAJOR; valid is tiled.
+            above = ttnn.ge(ttnn.to_layout(scores, ttnn.TILE_LAYOUT), score_threshold)
+            valid = ttnn.logical_and(valid, above)
+        outputs = _to_dram(scores, labels, query_index, boxes, valid)
+        signpost(header="TTNN Detect End")
+        return outputs
+
+    def _check_batch(self, img_metas):
+        assert (
+            len(img_metas) == self.batch_size
+        ), f"{len(img_metas)} samples, the detector is built for {self.batch_size}"

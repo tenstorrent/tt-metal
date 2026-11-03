@@ -25,6 +25,7 @@ from models.demos.common.prefill.prefill_chunk import (
     decode_forward_metadata,
     forward_metadata_words,
     metadata_size_bytes,
+    packed_forward_capabilities,
     sentinel_words,
     validate_chunks,
 )
@@ -188,11 +189,11 @@ assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DF
 
 check_packed_forward_support(
     FORWARD_CHUNKS,
-    supports_packed_forward=ADAPTER.supports_packed_forward,
     mtp_levels=MTP_LEVELS,
     dflash=DFLASH_ENABLED,
     use_trace=USE_TRACE,
     d2h_acks=os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1",
+    **packed_forward_capabilities(ADAPTER),
 )
 
 # DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
@@ -207,6 +208,7 @@ assert not (DFLASH_ENABLED and not USE_TRACE), (
 )
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
+os.environ.setdefault("TT_METAL_SHM_TRACKING_DISABLED", "1")
 
 _shutdown = False
 
@@ -290,11 +292,33 @@ def _make_socket_metadata_buffer(mesh_device, metadata_size_bytes: int) -> ttnn.
 
 
 def _layer_ack_record_bytes(rank: int) -> int:
-    """The D2H layer-ack record: each chunk's own record when a forward runs chunk by chunk, else the
-    metadata this rank received."""
-    if PER_CHUNK_FORWARDS:
+    """The D2H layer-ack record: with more than one chunk per forward, each chunk's own 12 B record (whether
+    the runner runs the chunks one by one or the adapter's prefill_forward runs them), else the metadata this
+    rank received."""
+    if FORWARD_CHUNKS > 1:
         return CHUNK_BYTES
     return CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES
+
+
+def _next_power_of_two(n: int) -> int:
+    return 1 << (n - 1).bit_length()
+
+
+def _layer_ack_fifo_bytes(rank_record_count: int, use_trace: bool) -> int:
+    """Size of the D2H layer-ack FIFO.
+
+    Without trace, the default size. With trace, the capture's warm pass sends its layer acks before any host
+    reader exists, so the FIFO must hold all of them at once: an ack that arrives while the FIFO is full breaks the
+    reader kernel's exact-count wait for good. The warm pass acks every chunk of a packed forward, or one chunk
+    without packed forwards. (runtime.warmup_ack_count() can't size this: runtimes report it only once the D2H
+    service exists.)
+    """
+    if not use_trace:
+        return LAYER_ACK_FIFO_SIZE_BYTES
+    warm_pass_chunks = FORWARD_CHUNKS if ADAPTER.supports_packed_forward else 1
+    warm_pass_ack_bytes = warm_pass_chunks * rank_record_count * LAYER_ACK_RECORD_BYTES
+    # A power of two keeps the FIFO PCIe-aligned whatever the record count.
+    return max(LAYER_ACK_FIFO_SIZE_BYTES, _next_power_of_two(warm_pass_ack_bytes))
 
 
 def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
@@ -1133,8 +1157,8 @@ def main() -> None:
     _assert_ranks_agree_on_config(rank, num_ranks)
     check_packed_forward_support(
         FORWARD_CHUNKS,
-        supports_packed_forward=ADAPTER.supports_packed_forward,
         indexer_indices=num_ranks > 1 and ADAPTER.passes_indexer_indices,
+        **packed_forward_capabilities(ADAPTER),
     )
 
     layer_split = compute_layer_split(
@@ -1258,8 +1282,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
         check_packed_forward_support(
             FORWARD_CHUNKS,
-            supports_packed_forward=ADAPTER.supports_packed_forward,
             indexer_indices=idx_inbound or idx_outbound,
+            **packed_forward_capabilities(ADAPTER),
         )
         mesh_device.clear_loaded_sub_device_manager()
         inbound.activation, outbound.activation = build_d2d_pipeline_endpoints(
@@ -1328,13 +1352,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         teardown_timeout_ms=30000,
     )
     if use_d2h:
-        fifo_size_bytes = LAYER_ACK_FIFO_SIZE_BYTES
-        if runtime.config.use_trace:
-            # The capture's warm pass fires a whole chunk's acks before any host reader exists. Acks
-            # that arrive while the FIFO is full overrun the reader kernel's exact-count write-ack
-            # wait, which then never matches again, so the FIFO must hold all of them.
-            ack_fifo_bytes = layout.rank_record_count * LAYER_ACK_RECORD_BYTES
-            fifo_size_bytes = max(fifo_size_bytes, 1 << (ack_fifo_bytes - 1).bit_length())
+        fifo_size_bytes = _layer_ack_fifo_bytes(layout.rank_record_count, runtime.config.use_trace)
         d2h_service = ttnn.D2HStreamService(
             mesh_device,
             global_spec=None,
