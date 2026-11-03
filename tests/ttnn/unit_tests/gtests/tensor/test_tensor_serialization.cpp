@@ -1093,7 +1093,7 @@ TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasBeyondTheInPlaceWalkA
         "bfloat4_b 30x30",
         TensorSpec(ttnn::Shape{1, 1, 30, 30}, TensorLayout(DataType::BFLOAT4_B, Layout::TILE, MemoryConfig{})),
         rng);
-    // FP8_E4M3, which is row-major only, under an alignment that pads the leading dimension from 3 to 4.
+    // FP8_E4M3 (row-major here) under an alignment that pads the leading dimension from 3 to 4.
     check_encoded_padded_replicas(
         "fp8_e4m3 3x2x30 aligned to 4x1x32",
         TensorSpec(

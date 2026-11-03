@@ -328,14 +328,6 @@ HostTensor pad_impl<tensor_impl::bfloat4_b>(
     return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
-template <>
-HostTensor pad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&, float) {
-    // FP8_E4M3 host-side pad is not wired up; no current op needs it. The generic body
-    // would actually compile (float8_e4m3 is a 1-byte trivially-copyable type with a float
-    // constructor), but leaving this as an explicit throw documents the intentional scope.
-    TT_THROW("pad: FP8_E4M3 is not supported");
-}
-
 template <typename T>
 HostTensor unpad_impl(
     const HostTensor& tensor,
@@ -408,12 +400,6 @@ HostTensor unpad_impl<tensor_impl::bfloat4_b>(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
-}
-
-template <>
-HostTensor unpad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
-    // See pad_impl<float8_e4m3>: not wired up, no current op needs it.
-    TT_THROW("unpad: FP8_E4M3 is not supported");
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE

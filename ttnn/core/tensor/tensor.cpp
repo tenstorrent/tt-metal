@@ -340,6 +340,7 @@ template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<QueueId> 
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<QueueId> cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<QueueId> cq_id) const;
 template std::vector<int8_t> Tensor::to_vector<int8_t>(std::optional<QueueId> cq_id) const;
+template std::vector<float8_e4m3> Tensor::to_vector<float8_e4m3>(std::optional<QueueId> cq_id) const;
 
 Tensor Tensor::to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,

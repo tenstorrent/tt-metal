@@ -289,6 +289,8 @@ template std::vector<uint16_t> encode_tensor_data<uint16_t>(
     ttsl::Span<const uint16_t> logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
+template std::vector<float8_e4m3> encode_tensor_data<float8_e4m3>(
+    ttsl::Span<const float8_e4m3> logical_data, const TensorSpec& tensor_spec, float8_e4m3 pad_value);
 
 // Referenced from tensor_apis.cpp; explicit instantiations ensure symbols survive Release --gc-sections linking.
 template std::vector<bfloat16> to_tile_major_layout<bfloat16>(
@@ -305,6 +307,8 @@ template std::vector<uint16_t> to_tile_major_layout<uint16_t>(
     const Shape2D& shape, const Tile& tile, ttsl::Span<const uint16_t> data_to_convert);
 template std::vector<uint8_t> to_tile_major_layout<uint8_t>(
     const Shape2D& shape, const Tile& tile, ttsl::Span<const uint8_t> data_to_convert);
+template std::vector<float8_e4m3> to_tile_major_layout<float8_e4m3>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const float8_e4m3> data_to_convert);
 
 template <typename T>
 std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const TensorSpec& tensor_spec) {
@@ -372,5 +376,7 @@ template std::vector<uint16_t> decode_tensor_data<uint16_t>(
     ttsl::Span<const uint16_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> decode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> physical_data, const TensorSpec& tensor_spec);
+template std::vector<float8_e4m3> decode_tensor_data<float8_e4m3>(
+    ttsl::Span<const float8_e4m3> physical_data, const TensorSpec& tensor_spec);
 
 }  // namespace tt::tt_metal::tensor_impl

@@ -77,8 +77,10 @@ Tensor untilize_with_unpadding(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // FP8_E4M3 (an "A" exponent-family format on Blackhole) requires 32-bit DEST; see the Fp8_e4m3 check in
+    // program.cpp.
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
-                            input_tensor.dtype() == DataType::FLOAT32;
+                            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::FP8_E4M3;
 
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;

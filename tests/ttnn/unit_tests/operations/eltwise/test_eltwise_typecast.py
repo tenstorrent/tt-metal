@@ -988,3 +988,204 @@ def test_unary_chain_typecast_int8(tt_output_dtype, device):
 
     expected = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
     assert_equal(expected, ttnn.to_torch(chained))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# FP8_E4M3 typecast in TILE layout (Blackhole only).
+#
+# Device semantics measured on Blackhole p150b (identical for TILE and ROW_MAJOR, and for interleaved DRAM and L1):
+#   * fp8 -> bf16 is exact for every normal fp8 value and for +-0.
+#   * bf16 -> fp8 rounds toward zero (truncates the mantissa), unlike torch's round-to-nearest-even cast. Overflow
+#     matches torch: [448, 480) -> 448, >= 480 and +-inf -> NaN (0x7F / 0xFF), NaN -> NaN.
+#   * Deviations from torch, pinned as strict xfails below: -0 -> +0 (both directions), fp8 NaN widens to 512, fp8 subnormals are not
+#     produced or consumed correctly.
+# ---------------------------------------------------------------------------------------------------------------------
+fp8_tile_shapes = [(1, 1, 32, 32), (1, 1, 64, 128), (2, 3, 64, 96), (1, 1, 45, 70)]
+
+
+def _skip_unless_blackhole():
+    from tt_py_test_utils_common.utility_functions import is_blackhole
+
+    if not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
+
+def _all_fp8_e4m3_values():
+    """All 256 fp8_e4m3fn bit patterns, as an fp8 torch tensor."""
+    return torch.arange(256, dtype=torch.int32).to(torch.uint8).view(torch.float8_e4m3fn)
+
+
+def _fp8_is_normal_or_zero(fp8):
+    bits = fp8.view(torch.uint8)
+    exponent = (bits >> 3) & 0xF
+    mantissa = bits & 0x7
+    return ((exponent != 0) | (mantissa == 0)) & ~fp8.float().isnan()
+
+
+def _tile_into(values, cols=64):
+    """Repeat `values` to fill a (1, 1, rows, cols) tensor with rows a multiple of 32."""
+    n = values.numel()
+    rows = max(32, ((n + cols - 1) // cols + 31) // 32 * 32)
+    reps = (rows * cols + n - 1) // n
+    return values.repeat(reps)[: rows * cols].reshape(1, 1, rows, cols)
+
+
+def _fp8_bits(t):
+    return t.contiguous().view(torch.uint8).to(torch.int32)
+
+
+def _bf16_bits(t):
+    return t.contiguous().view(torch.int16).to(torch.int32)
+
+
+def _bf16_to_fp8_round_toward_zero(x):
+    """Reference for the device cast: truncate to a 3-bit mantissa, then encode (exact, so torch's rounding is moot)."""
+    truncated = (x.float().view(torch.int32) & ~0xFFFFF).view(torch.float32)
+    return truncated.to(torch.float8_e4m3fn)
+
+
+def _random_fp8_normal_range_bf16(shape, seed):
+    generator = torch.Generator().manual_seed(seed)
+    magnitude = torch.exp2(torch.empty(shape).uniform_(-6.0, 8.8, generator=generator))  # [2^-6, ~445]
+    sign = torch.where(torch.rand(shape, generator=generator) < 0.5, -1.0, 1.0)
+    torch_input = (sign * magnitude).to(torch.bfloat16)
+    # bf16 midpoints between adjacent fp8 values.
+    ties = torch.tensor([1.0625, 1.1875, 2.125, 2.375, -1.0625, -1.1875, 0.0166015625, 68.0], dtype=torch.bfloat16)
+    torch_input.view(-1)[: ties.numel()] = ties
+    return torch_input
+
+
+@pytest.mark.parametrize("memory_config", mem_configs, ids=["dram", "l1"])
+def test_typecast_fp8_e4m3_to_bf16_tile_exhaustive(device, memory_config):
+    """Every normal fp8 value and +0 widens to bf16 exactly on device (fp8 TILE input built on host)."""
+    _skip_unless_blackhole()
+    all_fp8 = _all_fp8_e4m3_values()
+    keep = _fp8_is_normal_or_zero(all_fp8) & (all_fp8.view(torch.uint8) != 0x80)  # -0 -> +0, see xfail below
+    golden_fp8 = _tile_into(all_fp8[keep])
+
+    tt_fp8 = ttnn.from_torch(
+        golden_fp8.float(), dtype=ttnn.fp8_e4m3, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert torch.equal(_fp8_bits(ttnn.to_torch(tt_fp8)), _fp8_bits(golden_fp8))
+
+    tt_bf16 = ttnn.typecast(tt_fp8, ttnn.bfloat16, memory_config=memory_config)
+    assert tt_bf16.layout == ttnn.TILE_LAYOUT and tt_bf16.dtype == ttnn.bfloat16
+    mismatches = (_bf16_bits(ttnn.to_torch(tt_bf16)) != _bf16_bits(golden_fp8.to(torch.bfloat16))).sum().item()
+    assert mismatches == 0, f"fp8 -> bf16: {mismatches} bit mismatches"
+
+    tt_fp32 = ttnn.typecast(tt_fp8, ttnn.float32, memory_config=memory_config)
+    assert torch.equal(ttnn.to_torch(tt_fp32), golden_fp8.float())
+
+
+@pytest.mark.parametrize("memory_config", mem_configs, ids=["dram", "l1"])
+@pytest.mark.parametrize("shape", fp8_tile_shapes)
+def test_typecast_bf16_to_fp8_e4m3_tile(device, shape, memory_config):
+    """bf16 -> fp8 in TILE layout: round toward zero, identical to the ROW_MAJOR path, and widening back is exact."""
+    _skip_unless_blackhole()
+    torch_input = _random_fp8_normal_range_bf16(shape, seed=1234)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_fp8 = ttnn.typecast(tt_input, ttnn.fp8_e4m3, memory_config=memory_config)
+    assert tt_fp8.layout == ttnn.TILE_LAYOUT and tt_fp8.dtype == ttnn.fp8_e4m3
+    actual = ttnn.to_torch(tt_fp8)
+    assert actual.shape == torch_input.shape
+
+    expected = _bf16_to_fp8_round_toward_zero(torch_input)
+    mismatches = (_fp8_bits(actual) != _fp8_bits(expected)).sum().item()
+    rne_mismatches = (_fp8_bits(actual) != _fp8_bits(torch_input.to(torch.float8_e4m3fn))).sum().item()
+    print(f"\nbf16 -> fp8 {shape}: {mismatches} mismatches vs round-toward-zero, {rne_mismatches} vs torch RNE")
+    assert mismatches == 0, f"bf16 -> fp8: {mismatches} mismatches vs round-toward-zero of {actual.numel()}"
+
+    # Same bytes as the ROW_MAJOR (chunked) typecast path.
+    tt_input_rm = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    actual_rm = ttnn.to_torch(ttnn.typecast(tt_input_rm, ttnn.fp8_e4m3, memory_config=memory_config))
+    assert torch.equal(_fp8_bits(actual_rm), _fp8_bits(actual))
+
+    # And back: the fp8 bytes the device produced widen exactly.
+    tt_back = ttnn.typecast(tt_fp8, ttnn.bfloat16, memory_config=memory_config)
+    assert torch.equal(_bf16_bits(ttnn.to_torch(tt_back)), _bf16_bits(actual.to(torch.bfloat16)))
+
+
+@pytest.mark.xfail(strict=True, reason="Blackhole bf16 -> fp8 typecast rounds toward zero, not to nearest even")
+def test_typecast_bf16_to_fp8_e4m3_tile_matches_torch_rne(device):
+    _skip_unless_blackhole()
+    torch_input = _random_fp8_normal_range_bf16((1, 1, 64, 128), seed=1234)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.typecast(tt_input, ttnn.fp8_e4m3))
+    assert torch.equal(_fp8_bits(actual), _fp8_bits(torch_input.to(torch.float8_e4m3fn)))
+
+
+def test_typecast_bf16_fp8_e4m3_tile_all_normal_values_round_trip(device):
+    """Every normal fp8 value (and +0) given as bf16 survives bf16 -> fp8 -> bf16 on device bit-exactly."""
+    _skip_unless_blackhole()
+    all_fp8 = _all_fp8_e4m3_values()
+    keep = _fp8_is_normal_or_zero(all_fp8) & (all_fp8.view(torch.uint8) != 0x80)  # -0 -> +0, see xfail below
+    golden_fp8 = _tile_into(all_fp8[keep])
+    torch_input = golden_fp8.to(torch.bfloat16)  # exact: every fp8 value is representable in bf16
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_fp8 = ttnn.typecast(tt_input, ttnn.fp8_e4m3)
+    assert torch.equal(_fp8_bits(ttnn.to_torch(tt_fp8)), _fp8_bits(golden_fp8))
+    tt_back = ttnn.to_torch(ttnn.typecast(tt_fp8, ttnn.bfloat16))
+    assert torch.equal(_bf16_bits(tt_back), _bf16_bits(torch_input))
+
+
+def test_typecast_bf16_to_fp8_e4m3_tile_overflow_and_nan(device):
+    """Overflow / inf / NaN inputs map like torch's cast: [448, 480) -> +-448, larger and +-inf -> NaN."""
+    _skip_unless_blackhole()
+    values = torch.tensor([448.0, 449.0, 464.0, 479.0, 480.0, 1000.0, 65280.0, float("inf")], dtype=torch.bfloat16)
+    values = torch.cat([values, -values, torch.tensor([float("nan")], dtype=torch.bfloat16)])
+    torch_input = _tile_into(values, cols=32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.typecast(tt_input, ttnn.fp8_e4m3)).reshape(-1)[: values.numel()]
+    expected = values.to(torch.float8_e4m3fn)
+    assert torch.equal(_fp8_bits(actual), _fp8_bits(expected)), list(zip(values.tolist(), actual.float().tolist()))
+
+
+@pytest.mark.xfail(strict=True, reason="Blackhole bf16 -> fp8 typecast with fp32 DEST turns -0 into +0")
+def test_typecast_bf16_to_fp8_e4m3_tile_negative_zero(device):
+    _skip_unless_blackhole()
+    torch_input = torch.full((1, 1, 32, 32), -0.0, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.typecast(tt_input, ttnn.fp8_e4m3))
+    assert torch.all(_fp8_bits(actual) == 0x80)
+
+
+@pytest.mark.xfail(strict=True, reason="Blackhole fp8 -> bf16 typecast with fp32 DEST turns -0 into +0")
+def test_typecast_fp8_e4m3_to_bf16_tile_negative_zero(device):
+    _skip_unless_blackhole()
+    tt_fp8 = ttnn.from_torch(
+        torch.full((1, 1, 32, 32), -0.0), dtype=ttnn.fp8_e4m3, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    assert torch.all(_fp8_bits(ttnn.to_torch(tt_fp8)) == 0x80)
+    assert torch.all(
+        _bf16_bits(ttnn.to_torch(ttnn.typecast(tt_fp8, ttnn.bfloat16)))
+        == _bf16_bits(torch.tensor(-0.0, dtype=torch.bfloat16))
+    )
+
+
+@pytest.mark.xfail(strict=True, reason="Blackhole fp8 -> bf16 typecast widens fp8 NaN (0x7F) to 512, not NaN")
+def test_typecast_fp8_e4m3_to_bf16_tile_nan(device):
+    _skip_unless_blackhole()
+    tt_fp8 = ttnn.from_torch(
+        torch.full((1, 1, 32, 32), float("nan")), dtype=ttnn.fp8_e4m3, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    assert torch.all(_fp8_bits(ttnn.to_torch(tt_fp8)) == 0x7F)
+    assert torch.all(ttnn.to_torch(ttnn.typecast(tt_fp8, ttnn.bfloat16)).isnan())
+
+
+@pytest.mark.xfail(strict=True, reason="Blackhole fp8 typecast does not produce fp8 subnormals (2^-9 .. 7 * 2^-9)")
+def test_typecast_bf16_to_fp8_e4m3_tile_subnormals(device):
+    _skip_unless_blackhole()
+    all_fp8 = _all_fp8_e4m3_values()
+    subnormals = all_fp8[~_fp8_is_normal_or_zero(all_fp8) & ~all_fp8.float().isnan()]
+    golden_fp8 = _tile_into(subnormals, cols=32)
+    tt_input = ttnn.from_torch(
+        golden_fp8.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    actual = ttnn.to_torch(ttnn.typecast(tt_input, ttnn.fp8_e4m3))
+    assert torch.equal(_fp8_bits(actual), _fp8_bits(golden_fp8))

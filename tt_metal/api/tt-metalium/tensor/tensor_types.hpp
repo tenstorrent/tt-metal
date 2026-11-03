@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/shape.hpp>
@@ -51,6 +52,8 @@ consteval DataType convert_to_data_type() {
         return DataType::FLOAT32;
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         return DataType::BFLOAT16;
+    } else if constexpr (std::is_same_v<T, ::float8_e4m3>) {
+        return DataType::FP8_E4M3;
     } else {
         static_assert(sizeof(T) == 0, "Unsupported DataType!");
     }

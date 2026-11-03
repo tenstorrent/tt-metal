@@ -94,14 +94,14 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or
             input_tensor.dtype() == DataType::UINT16 or input_tensor.dtype() == DataType::FP8_E4M3,
         "Can only tilize bfloat16/float32 or int32/uint32/uint16 or fp8_e4m3 tensors");
-    // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
-    // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
+    // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format (including FP8_E4M3 itself).
+    // Reject non-float outputs: integer outputs are meaningless for a float input.
     if (input_tensor.dtype() == DataType::FP8_E4M3) {
-        // Valid TILE float output = a float dtype other than FP8_E4M3 (which is itself ROW_MAJOR-only).
         const DataType out_dt = operation_attributes.output_dtype;
         TT_FATAL(
-            is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3,
-            "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+            is_floating_point(out_dt),
+            "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B or "
+            "FP8_E4M3)");
         // The Blackhole 8-bit unpack-tilize path corrupts odd rows when the output block is a single
         // column tile (ct_dim == 1, i.e. one tile per row); wider outputs are correct. Reject the broken
         // narrow case for fp8 to avoid silently-wrong data (tt-llk narrow 8-bit tilize bug).
@@ -235,9 +235,9 @@ Tensor tilize_with_val_padding(
             .output_padded_shape = output_padded_shape,
             .pad_value = pad_value,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
-            // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller
-            // doesn't request a specific output dtype, default an FP8 input to FLOAT32 (the format it
-            // unpacks to in DEST) instead of echoing the illegal FP8 dtype.
+            // When the caller doesn't request a specific output dtype, an FP8 input defaults to FLOAT32
+            // (the format it unpacks to in DEST). This predates FP8_E4M3 TILE support and is kept for
+            // backward compatibility; pass dtype=FP8_E4M3 explicitly to keep the tilized output in fp8.
             .output_dtype = output_dtype.value_or(
                 input_tensor.dtype() == DataType::FP8_E4M3 ? DataType::FLOAT32 : input_tensor.dtype()),
             .use_multicore = use_multicore,

@@ -264,19 +264,12 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
     }
 
     auto get_row_major_tensor = [&](const ttnn::Tensor& tensor) -> ttnn::Tensor {
-        if (tensor.dtype() == tt::tt_metal::DataType::FP8_E4M3) {
-            // FP8 is element-encoded and is already ROW_MAJOR (constrained in tensor_spec.cpp),
-            // but the downstream detail::to_string uses view_as<float> which would misinterpret
-            // FP8 bytes as floats. Pivot through FLOAT32 via host-side conversion
-            // (float8_e4m3::operator float) so print sees real float values. Checked before the
-            // ROW_MAJOR early return below because an FP8 tensor satisfies that early-return
-            // condition but still needs the dtype pivot.
-            return ttnn::to_dtype(tensor, tt::tt_metal::DataType::FLOAT32);
-        }
-        if (tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        if (tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && tensor.dtype() != tt::tt_metal::DataType::FP8_E4M3) {
             return tensor;
         }
-        if (tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+        // The downstream detail::to_string uses view_as<float> for FP8 / BFP dtypes, so pivot them through
+        // FLOAT32 on host (float8_e4m3::operator float for FP8). to_layout is a no-op for ROW_MAJOR input.
+        if (tensor.dtype() == tt::tt_metal::DataType::FP8_E4M3 || tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT4_B) {
             return tt::tt_metal::to_layout(
                 ttnn::to_dtype(tensor, tt::tt_metal::DataType::FLOAT32), tt::tt_metal::Layout::ROW_MAJOR);

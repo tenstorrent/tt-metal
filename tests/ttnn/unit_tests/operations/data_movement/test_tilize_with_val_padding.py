@@ -805,7 +805,7 @@ def test_tilize_with_val_padding_fp8_unaligned_row_width(device):
     torch_output = ttnn.to_torch(tt_untiled).float()
 
     # Real data region: use the exact device-quantised FP8 values as golden (converted to
-    # float32 host-side via to_dtype, since single-device FP8→torch is unsupported). This
+    # float32 host-side via to_dtype). This
     # avoids the lossy float32→FP8→float32 round-trip that weakens detection of the
     # misaligned-store bug (which clobbers the last real byte of each row).
     torch_golden = ttnn.to_torch(ttnn.to_dtype(tt_input.cpu(), ttnn.float32)).float()

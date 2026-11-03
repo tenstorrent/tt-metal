@@ -1759,8 +1759,8 @@ def test_to_layout_nd_sharded_tile_to_rm_untilize_with_unpadding(
     )
 
 
-# to_layout must tilize a ROW_MAJOR-only fp8 input to any float TILE output. golden is the host-quantized
-# fp8 source (fp8 can't go to host). "ragged" (height not tile-aligned) exercises the pad + tilize_with_val_padding path.
+# to_layout must tilize a ROW_MAJOR fp8 input to any float TILE output. golden is the host-quantized
+# fp8 source. "ragged" (height not tile-aligned) exercises the pad + tilize_with_val_padding path.
 @run_for_blackhole()
 @pytest.mark.parametrize(
     "out_dtype,min_pcc",
@@ -1782,3 +1782,91 @@ def test_to_layout_fp8_input_to_tile(device, shape, out_dtype, min_pcc):
     tt_out = ttnn.to_layout(tt_in, ttnn.TILE_LAYOUT, dtype=out_dtype)
     assert tt_out.layout == ttnn.TILE_LAYOUT and tt_out.dtype == out_dtype
     assert_with_pcc(golden, ttnn.to_torch(tt_out).float(), min_pcc)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# FP8_E4M3 in TILE layout.
+# Inputs stay in the normal fp8 range [2^-6, 448]: the host float32 -> fp8 conversion flushes fp8 subnormals to zero and
+# saturates overflow (float8.cpp), whereas torch keeps subnormals and maps overflow to NaN. In the normal range both are
+# round-to-nearest-even, so the comparisons below are bit-exact.
+# ---------------------------------------------------------------------------------------------------------------------
+FP8_E4M3_TILE_SHAPES = [(32, 32), (1, 1, 64, 128), (2, 3, 45, 70), (17,), (1, 1, 1, 1)]
+
+
+def _fp8_normal_range_input(shape, seed=0):
+    generator = torch.Generator().manual_seed(seed)
+    magnitude = torch.exp2(torch.empty(shape).uniform_(-5.5, 8.6, generator=generator))  # ~[0.022, 388]
+    sign = torch.where(torch.rand(shape, generator=generator) < 0.5, -1.0, 1.0)
+    return (sign * magnitude).to(torch.float32)
+
+
+def _assert_fp8_bits_equal(expected_fp8, actual_fp8):
+    assert actual_fp8.dtype == torch.float8_e4m3fn, actual_fp8.dtype
+    assert actual_fp8.shape == expected_fp8.shape, (actual_fp8.shape, expected_fp8.shape)
+    expected_bits = expected_fp8.view(torch.uint8)
+    actual_bits = actual_fp8.view(torch.uint8)
+    mismatches = (expected_bits != actual_bits).sum().item()
+    assert mismatches == 0, f"{mismatches} fp8 bit mismatches out of {expected_bits.numel()}"
+
+
+@pytest.mark.parametrize("shape", FP8_E4M3_TILE_SHAPES)
+def test_fp8_e4m3_from_torch_tile_host_round_trip(shape):
+    torch_input = _fp8_normal_range_input(shape)
+    tt_tensor = ttnn.from_torch(torch_input, dtype=ttnn.fp8_e4m3, layout=ttnn.TILE_LAYOUT)
+    assert tt_tensor.layout == ttnn.TILE_LAYOUT and tt_tensor.dtype == ttnn.fp8_e4m3
+    _assert_fp8_bits_equal(torch_input.to(torch.float8_e4m3fn), ttnn.to_torch(tt_tensor))
+
+
+@pytest.mark.parametrize("shape", FP8_E4M3_TILE_SHAPES)
+def test_fp8_e4m3_host_to_layout_round_trip(shape):
+    torch_input = _fp8_normal_range_input(shape, seed=1)
+    golden = torch_input.to(torch.float8_e4m3fn)
+    rm = ttnn.from_torch(torch_input, dtype=ttnn.fp8_e4m3, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _assert_fp8_bits_equal(golden, ttnn.to_torch(rm))
+
+    tiled = ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+    assert tiled.layout == ttnn.TILE_LAYOUT and tiled.dtype == ttnn.fp8_e4m3
+    _assert_fp8_bits_equal(golden, ttnn.to_torch(tiled))
+    # The FLOAT32 host bridge must see the same values through the tiled layout.
+    assert torch.equal(ttnn.to_torch(ttnn.to_dtype(tiled, ttnn.float32)), golden.to(torch.float32))
+
+    back = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
+    assert back.layout == ttnn.ROW_MAJOR_LAYOUT and back.dtype == ttnn.fp8_e4m3
+    _assert_fp8_bits_equal(golden, ttnn.to_torch(back))
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("shape", FP8_E4M3_TILE_SHAPES)
+def test_fp8_e4m3_tile_device_round_trip(device, shape, memory_config):
+    torch_input = _fp8_normal_range_input(shape, seed=2)
+    tt_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.fp8_e4m3, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert ttnn.is_tensor_storage_on_device(tt_tensor)
+    assert tt_tensor.layout == ttnn.TILE_LAYOUT and tt_tensor.dtype == ttnn.fp8_e4m3
+    _assert_fp8_bits_equal(torch_input.to(torch.float8_e4m3fn), ttnn.to_torch(tt_tensor))
+
+
+# Device tilize / untilize keeping FP8_E4M3. Widths stay above one tile: the single-tile-per-row 8-bit unpack-tilize path
+# is rejected by the tilize op (tt-llk narrow 8-bit tilize bug). "ragged" is not tile aligned in height.
+@run_for_blackhole()
+@pytest.mark.parametrize("shape", [(1, 1, 64, 128), (1, 2, 32, 64), (1, 1, 65, 128)], ids=["small", "batch", "ragged"])
+def test_fp8_e4m3_device_to_layout_round_trip(device, shape):
+    torch_input = _fp8_normal_range_input(shape, seed=3)
+    golden = torch_input.to(torch.float8_e4m3fn)
+    rm = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.fp8_e4m3,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tiled = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, dtype=ttnn.fp8_e4m3)
+    assert tiled.layout == ttnn.TILE_LAYOUT and tiled.dtype == ttnn.fp8_e4m3
+    _assert_fp8_bits_equal(golden, ttnn.to_torch(tiled))
+
+    back = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
+    assert back.layout == ttnn.ROW_MAJOR_LAYOUT and back.dtype == ttnn.fp8_e4m3
+    _assert_fp8_bits_equal(golden, ttnn.to_torch(back))

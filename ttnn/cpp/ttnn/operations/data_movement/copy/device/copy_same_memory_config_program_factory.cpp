@@ -75,6 +75,8 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     }
 
     const bool convert_dtype = input_cb_data_format != output_cb_data_format;
+    // Blackhole FP8 formats require 32-bit DEST in any compute kernel that touches them (see program.cpp).
+    const bool fp8_involved = tt::is_fp8_format(input_cb_data_format) || tt::is_fp8_format(output_cb_data_format);
 
     const uint32_t num_units =
         tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
@@ -207,7 +209,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         compute_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_g1.core_ranges = core_group_1;
         compute_g1.compile_time_args = {num_units_per_core_group_1};
-        compute_g1.config = ComputeConfigDescriptor{};
+        compute_g1.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp8_involved};
         desc.kernels.push_back(std::move(compute_g1));
 
         if (!core_group_2.ranges().empty()) {
@@ -216,7 +218,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
             compute_g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
             compute_g2.core_ranges = core_group_2;
             compute_g2.compile_time_args = {num_units_per_core_group_2};
-            compute_g2.config = ComputeConfigDescriptor{};
+            compute_g2.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp8_involved};
             desc.kernels.push_back(std::move(compute_g2));
         }
     }

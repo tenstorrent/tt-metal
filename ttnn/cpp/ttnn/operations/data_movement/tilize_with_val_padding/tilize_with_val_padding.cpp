@@ -73,9 +73,9 @@ ttnn::Tensor tilize_with_val_padding(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller doesn't
-    // request a specific output dtype, default an FP8 input to FLOAT32 (the format it unpacks to in
-    // DEST) so every downstream value_or() below resolves to a legal TILE dtype.
+    // When the caller doesn't request a specific output dtype, an FP8 input defaults to FLOAT32 (the
+    // format it unpacks to in DEST). This predates FP8_E4M3 TILE support and is kept for backward
+    // compatibility; pass dtype=FP8_E4M3 explicitly to keep the tilized output in fp8.
     if (!output_dtype.has_value() && input_tensor.dtype() == DataType::FP8_E4M3) {
         output_dtype = DataType::FLOAT32;
     }

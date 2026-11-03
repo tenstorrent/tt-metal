@@ -92,6 +92,66 @@ def test_copy_fp8_e4m3_row_major_sharded_to_interleaved(device):
     assert_equal(expected, actual)
 
 
+@pytest.mark.parametrize(
+    "src_memory_config, dst_memory_config",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    ],
+    ids=["dram_to_dram", "dram_to_l1", "l1_to_dram"],
+)
+@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [2, 64, 96], [1, 1, 45, 70]])
+def test_copy_fp8_e4m3_tile(shape, src_memory_config, dst_memory_config, device):
+    """FP8 TILE copy is an opaque 1024 B tile-page move: the destination bytes must equal the source bytes."""
+    if not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
+    torch.manual_seed(2005)
+    source = (torch.randn(shape) * 8).to(torch.float32)
+    source_fp8 = ttnn.from_torch(
+        source, dtype=ttnn.fp8_e4m3, layout=ttnn.TILE_LAYOUT, device=device, memory_config=src_memory_config
+    )
+    destination_fp8 = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32),
+        dtype=ttnn.fp8_e4m3,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=dst_memory_config,
+    )
+
+    ttnn.copy(source_fp8, destination_fp8)
+
+    assert destination_fp8.layout == ttnn.TILE_LAYOUT and destination_fp8.dtype == ttnn.fp8_e4m3
+    expected = ttnn.to_torch(source_fp8).view(torch.uint8)
+    actual = ttnn.to_torch(destination_fp8).view(torch.uint8)
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [2, 64, 96]])
+def test_copy_bf16_to_fp8_e4m3_tile_converts(shape, device):
+    """A converting TILE copy bf16 -> fp8 must match ttnn.typecast (Blackhole rounds toward zero, not RNE)."""
+    if not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
+    torch.manual_seed(2005)
+    source = (torch.randn(shape) * 8).to(torch.bfloat16)
+    source_bf16 = ttnn.from_torch(source, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    destination_fp8 = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32), dtype=ttnn.fp8_e4m3, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    ttnn.copy(source_bf16, destination_fp8)
+
+    actual = ttnn.to_torch(destination_fp8).view(torch.uint8)
+    assert_equal(ttnn.to_torch(ttnn.typecast(source_bf16, ttnn.fp8_e4m3)).view(torch.uint8), actual)
+    # Away from the fp8 subnormal range (|x| < 2^-6, not handled by the device cast) the result is round-toward-zero.
+    round_toward_zero = (source.float().view(torch.int32) & ~0xFFFFF).view(torch.float32).to(torch.float8_e4m3fn)
+    normal = source.float().abs() >= 2.0**-6
+    assert normal.sum() > 0.99 * normal.numel()
+    assert_equal(round_toward_zero.view(torch.uint8)[normal], actual[normal])
+
+
 # Test for block sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])

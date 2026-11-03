@@ -623,7 +623,7 @@ def test_tilize_dram_backed_sharded_input(device, shard_type, shard_shape):
     assert torch.equal(torch_tensor, torch_out), "tilize round-trip mismatch on DRAM-backed sharded input"
 
 
-# fp8 is a valid tile INPUT (it tilizes to any float TILE output) though ROW_MAJOR-only as a dtype. Even
+# fp8 is a valid tile INPUT (it tilizes to any float TILE output, including fp8 itself). Even
 # tile-widths only (odd fp8 widths hit a separate reader NoC bug); golden is the host-quantized fp8 source.
 @run_for_blackhole()
 @pytest.mark.parametrize(

@@ -56,7 +56,8 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::INT8:
             // https://github.com/tenstorrent/tt-metal/issues/50401 (tilize/untilize doesn't support int8)
         case DataType::FP8_E4M3:
-            // https://github.com/tenstorrent/tt-metal/issues/43909 (typecast uses TILE, but FP8_E4M3 is RM-only)
+            // https://github.com/tenstorrent/tt-metal/issues/43909 (FP8_E4M3 is converted on host: the device
+            // bf16 -> fp8 typecast rounds toward zero, while the host encoder rounds to nearest even)
             return false;
         default: return true;
     }

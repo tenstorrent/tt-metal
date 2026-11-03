@@ -10,7 +10,7 @@
 // what a freshly constructed tensor would hold.
 //
 // Plus dedicated tests for the special dtypes whose to_layout behavior is not a generic conversion:
-// BFLOAT8_B / BFLOAT4_B are no-ops, and FP8_E4M3 is ROW_MAJOR-only (throws when asked to tilize).
+// BFLOAT8_B / BFLOAT4_B are no-ops.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -81,6 +81,7 @@ std::string dtype_to_str(DataType dtype) {
         case DataType::UINT16: return "UINT16";
         case DataType::UINT8: return "UINT8";
         case DataType::INT8: return "INT8";
+        case DataType::FP8_E4M3: return "FP8_E4M3";
         default: return "UNKNOWN";
     }
 }
@@ -128,6 +129,8 @@ TEST_P(HostTensorToLayoutMatrix, MatchesFreshConstruction) {
         case DataType::UINT16: check_matches_fresh_construction.operator()<uint16_t>(); break;
         case DataType::UINT8: check_matches_fresh_construction.operator()<uint8_t>(); break;
         case DataType::INT8: check_matches_fresh_construction.operator()<int8_t>(); break;
+        // FP8_E4M3 has no host-side typed constructor; it is built from float data (host fp32 -> fp8 encode).
+        case DataType::FP8_E4M3: check_matches_fresh_construction.operator()<float>(); break;
         default: FAIL() << "Unhandled dtype in matrix: " << dtype_to_str(dtype);
     }
 }
@@ -137,9 +140,9 @@ INSTANTIATE_TEST_SUITE_P(
     HostTensorToLayoutMatrix,
     ::testing::Combine(
         ::testing::Values(std::pair{Layout::ROW_MAJOR, Layout::TILE}, std::pair{Layout::TILE, Layout::ROW_MAJOR}),
-        // Block-float formats (BFLOAT8_B / BFLOAT4_B) and FP8_E4M3 are intentionally excluded from
-        // this matrix: their to_layout is a no-op / throws rather than a real conversion. They are
-        // covered by the dedicated special-dtype tests below.
+        // Block-float formats (BFLOAT8_B / BFLOAT4_B) are intentionally excluded from this matrix:
+        // their to_layout is a no-op rather than a real conversion. They are covered by the
+        // dedicated special-dtype tests below.
         ::testing::Values(
             DataType::FLOAT32,
             DataType::BFLOAT16,
@@ -147,7 +150,8 @@ INSTANTIATE_TEST_SUITE_P(
             DataType::INT8,
             DataType::UINT32,
             DataType::UINT16,
-            DataType::UINT8)),
+            DataType::UINT8,
+            DataType::FP8_E4M3)),
     to_layout_param_name);
 
 // ----------------------------------------------------------------------------------------------------
@@ -252,14 +256,22 @@ TEST(HostTensorToLayout, Bfloat4BToRowMajorDoesNotThrow) {
     EXPECT_NO_THROW(std::ignore = to_layout(source, Layout::ROW_MAJOR));
 }
 
-// G3: dtypes that cannot be converted to TILE. FP8_E4M3 is constrained to ROW_MAJOR, so tilizing it
-// is a caller error. (Block-float formats are TILE-native, so they have no "cannot tilize" case.)
-TEST(HostTensorToLayout, Fp8E4m3CannotConvertToTile) {
-    const Shape shape{32, 32};
+// G3: FP8_E4M3 (1 byte per datum) tilizes and untilizes like any other element-encoded dtype, and the
+// FLOAT32 bridge reads the same values back from either layout.
+TEST(HostTensorToLayout, Fp8E4m3RoundTripsThroughTile) {
+    const Shape shape{64, 96};
     const auto data = make_ramp<float>(shape.volume());
     const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::FP8_E4M3, Layout::ROW_MAJOR));
 
-    EXPECT_ANY_THROW(std::ignore = to_layout(source, Layout::TILE));
+    const auto tiled = to_layout(source, Layout::TILE);
+    EXPECT_EQ(tiled.layout(), Layout::TILE);
+    EXPECT_EQ(tiled.dtype(), DataType::FP8_E4M3);
+    const HostBuffer tiled_buffer = host_buffer::get_host_buffer(tiled);
+    EXPECT_EQ(tiled_buffer.view_bytes().size(), shape.volume());  // 1 byte per datum
+
+    const auto back = to_layout(tiled, Layout::ROW_MAJOR);
+    expect_equal_shard_data(back, source);
+    EXPECT_EQ(source.to_vector<float>(), tiled.to_vector<float>());
 }
 
 }  // namespace

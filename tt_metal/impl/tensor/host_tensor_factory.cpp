@@ -5,6 +5,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
@@ -161,6 +162,11 @@ std::vector<float> to_vector_float(const HostTensor& tensor) {
             auto buffer = host_buffer::get_as<float>(tensor);
             return tensor_impl::decode_tensor_data(buffer, tensor.tensor_spec());
         }
+        case DataType::FP8_E4M3: {
+            auto buffer = host_buffer::get_as<float8_e4m3>(tensor);
+            std::vector<float> physical_data(buffer.begin(), buffer.end());
+            return tensor_impl::decode_tensor_data(ttsl::make_const_span(physical_data), tensor.tensor_spec());
+        }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             const auto& tile = tensor.tensor_spec().tile();
@@ -258,5 +264,6 @@ template std::vector<uint32_t> HostTensor::to_vector() const;
 template std::vector<uint16_t> HostTensor::to_vector() const;
 template std::vector<uint8_t> HostTensor::to_vector() const;
 template std::vector<int8_t> HostTensor::to_vector() const;
+template std::vector<float8_e4m3> HostTensor::to_vector() const;
 
 }  // namespace tt::tt_metal

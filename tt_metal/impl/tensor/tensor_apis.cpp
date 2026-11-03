@@ -278,43 +278,38 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
         return tensor;
     }
 
-    if constexpr (std::is_same_v<T, float8_e4m3>) {
-        // FP8_E4M3 is constrained to ROW_MAJOR, so tilizing it is a caller error.
-        TT_THROW("to_layout: FP8_E4M3 only supports ROW_MAJOR layout (got target {})", Layout::TILE);
-    } else {
-        TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Converting from {} to Tile is unsupported.", tensor.layout());
+    TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Converting from {} to Tile is unsupported.", tensor.layout());
 
-        auto output_spec = TensorSpec(
-            tensor.logical_shape(),
-            TensorLayout(
-                tensor.dtype(),
-                PageConfig(Layout::TILE, tile),
-                tensor.memory_config(),
-                tensor.tensor_spec().tensor_layout().get_alignment()));
+    auto output_spec = TensorSpec(
+        tensor.logical_shape(),
+        TensorLayout(
+            tensor.dtype(),
+            PageConfig(Layout::TILE, tile),
+            tensor.memory_config(),
+            tensor.tensor_spec().tensor_layout().get_alignment()));
 
-        TT_FATAL(
-            output_spec.physical_shape() == tensor.tensor_spec().physical_shape(),
-            "to_layout: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
-            "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
-            Layout::TILE,
-            tensor.tensor_spec().physical_shape(),
-            output_spec.physical_shape());
+    TT_FATAL(
+        output_spec.physical_shape() == tensor.tensor_spec().physical_shape(),
+        "to_layout: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
+        "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
+        Layout::TILE,
+        tensor.tensor_spec().physical_shape(),
+        output_spec.physical_shape());
 
-        auto physical_shape = tensor.tensor_spec().physical_shape();
+    auto physical_shape = tensor.tensor_spec().physical_shape();
 
-        auto transformed_buffer = tensor.buffer().transform(
-            [&](const HostBuffer& buffer) {
-                auto input_data = buffer.view_as<T>();
-                auto tilized_data = tensor_impl::to_tile_major_layout(physical_shape, tile, input_data);
-                return HostBuffer(std::move(tilized_data));
-            },
-            DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    auto transformed_buffer = tensor.buffer().transform(
+        [&](const HostBuffer& buffer) {
+            auto input_data = buffer.view_as<T>();
+            auto tilized_data = tensor_impl::to_tile_major_layout(physical_shape, tile, input_data);
+            return HostBuffer(std::move(tilized_data));
+        },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-        assert_host_shards_match_packed_size(transformed_buffer, output_spec, "to_tile_layout");
+    assert_host_shards_match_packed_size(transformed_buffer, output_spec, "to_tile_layout");
 
-        return host_tensor_from_buffer_with_topology(
-            std::move(transformed_buffer), output_spec, get_tensor_topology(tensor));
-    }
+    return host_tensor_from_buffer_with_topology(
+        std::move(transformed_buffer), output_spec, get_tensor_topology(tensor));
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -322,17 +317,13 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
 
 HostTensor to_row_major_layout(const HostTensor& tensor) {
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
-        if constexpr (
-            std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
-            std::is_same_v<T, float8_e4m3>) {
+        if constexpr (std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b>) {
             // bfloat4_b / bfloat8_b: TODO(#43763):
             // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
             // This silent fail has a high impact area and should be studied and addressed asap.
             //
             // Original comment:
             // TODO: Flip to assert when we remove use cases in python and c++
-            //
-            // FP8_E4M3 is constrained to ROW_MAJOR at construction, so it is already row-major.
             return tensor;
         } else {
             return CMAKE_UNIQUE_NAMESPACE::to_row_major_layout_impl<T>(tensor);
@@ -601,6 +592,8 @@ void validate_datatype(DataType dtype) {
         TT_FATAL(dtype == DataType::UINT16, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
         TT_FATAL(dtype == DataType::UINT8, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, float8_e4m3>) {
+        TT_FATAL(dtype == DataType::FP8_E4M3, "Incorrect data type {}", dtype);
     } else {
         static_assert(sizeof(BaseType) == 0, "Unsupported DataType");
     }
@@ -661,6 +654,7 @@ INSTANTIATE_HOST_BUFFER_FUNCTIONS(bfloat16)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint16_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(int8_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(float8_e4m3)
 
 #undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
 

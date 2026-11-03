@@ -133,7 +133,7 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
 TEST_F(MeshDeviceSingleCardFixture, AllocateFp8E4m3OnDevice) {
     auto& mesh_device = *devices_[0];
     const auto arch = mesh_device.arch();
-    // FP8_E4M3 requires ROW_MAJOR layout (enforced by TensorSpec).
+    // FP8_E4M3 allocation is arch-gated (Blackhole / Quasar only).
     auto tensor_layout = TensorLayout(
         DataType::FP8_E4M3,
         PageConfig(Layout::ROW_MAJOR),

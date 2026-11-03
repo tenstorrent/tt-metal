@@ -4,6 +4,7 @@
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
 #include <functional>
@@ -552,6 +553,7 @@ template std::vector<uint8_t> convert_layout<uint8_t>(ttsl::Span<const uint8_t>,
 template std::vector<uint16_t> convert_layout<uint16_t>(ttsl::Span<const uint16_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint32_t> convert_layout<uint32_t>(ttsl::Span<const uint32_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout<bfloat16>(ttsl::Span<const bfloat16>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float8_e4m3> convert_layout<float8_e4m3>(ttsl::Span<const float8_e4m3>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<float> convert_layout<float>(ttsl::Span<const float>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<int> convert_layout<int>(ttsl::Span<const int>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
@@ -560,6 +562,7 @@ template std::vector<uint8_t> convert_layout<uint8_t>(ttsl::Span<const uint8_t>,
 template std::vector<uint16_t> convert_layout<uint16_t>(ttsl::Span<const uint16_t>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint32_t> convert_layout<uint32_t>(ttsl::Span<const uint32_t>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout<bfloat16>(ttsl::Span<const bfloat16>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float8_e4m3> convert_layout<float8_e4m3>(ttsl::Span<const float8_e4m3>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<uint16_t> tilize_swizzled<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
 template std::vector<uint32_t> tilize_swizzled<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);

@@ -63,8 +63,10 @@ ttnn::Tensor untilize_native(
         return ttnn::untilize_with_unpadding(
             input_tensor, output_tensor_end, memory_config, use_multicore, sub_core_grids);
     }
+    // FP8_E4M3 (an "A" exponent-family format on Blackhole) requires 32-bit DEST; see the Fp8_e4m3 check in
+    // program.cpp.
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
-                            input_tensor.dtype() == DataType::FLOAT32;
+                            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::FP8_E4M3;
     // The native prim emits BFLOAT16 for a BFLOAT8_B input (UntilizeDeviceOperation::compute_output_specs),
     // so size the output CB estimate and the pending output buffer by the output dtype: sizing them by the
     // input's 1088 B tile under-reserves a 2048 B/tile output and can keep enough_space_height true for a row

@@ -54,6 +54,11 @@ GOLDEN_TENSOR_STRINGS = {
     ): "ttnn.Tensor([[[[ 0.5000,  0.7500,  ...,  0.3125,  0.9375],\n               [ 0.1719,  0.2812,  ...,  0.2031,  0.6250],\n               ...,\n               [ 0.7500,  0.4375,  ...,  0.8750,  0.5625],\n               [ 0.4375,  0.8125,  ...,  0.8125,  0.2812]],\n\n              [[ 0.2344,  0.3438,  ...,  0.6250,  0.2812],\n               [ 0.3125,  0.1719,  ...,  0.5625,  0.3750],\n               ...,\n               [ 0.2344,  0.0430,  ...,  0.8125,  0.8125],\n               [ 0.4062,  0.7500,  ...,  0.6250,  0.0625]],\n\n              ...,\n\n              [[ 0.8125,  0.2500,  ...,  0.5625,  0.5625],\n               [ 0.3750,  0.8125,  ...,  0.5625,  0.0312],\n               ...,\n               [ 0.2031,  0.2812,  ...,  0.5625,  0.8125],\n               [ 0.6250,  0.6250,  ...,  0.6250,  0.7500]],\n\n              [[ 0.1406,  0.6875,  ...,  0.2344,  0.6875],\n               [ 0.8125,  0.1875,  ...,  0.8125,  0.1016],\n               ...,\n               [ 0.3438,  0.8125,  ...,  0.5000,  0.6875],\n               [ 0.5625,  0.5000,  ...,  0.2500,  0.2500]]],\n\n             [[[ 0.6875,  0.2344,  ...,  0.7500,  0.6875],\n               [ 0.6250,  0.3750,  ...,  0.8750,  0.5625],\n               ...,\n               [ 0.4688,  0.9375,  ...,  0.0312,  0.8750],\n               [ 0.2031,  0.8125,  ...,  0.1719,  0.6250]],\n\n              [[ 0.8750,  0.2031,  ...,  0.1094,  0.2500],\n               [ 0.8125,  0.2812,  ...,  0.4375,  0.8750],\n               ...,\n               [ 0.1562,  0.3125,  ...,  0.5625,  0.1250],\n               [ 0.1250,  0.0195,  ...,  0.8125,  0.1250]],\n\n              ...,\n\n              [[ 0.3125,  0.6875,  ...,  0.7500,  0.3125],\n               [ 0.1719,  0.4688,  ...,  0.9375,  0.3750],\n               ...,\n               [ 0.9375,  0.9375,  ...,  0.9375,  0.0938],\n               [ 0.5625,  0.5000,  ...,  0.6875,  0.7500]],\n\n              [[ 0.0469,  0.3438,  ...,  0.8750,  0.4688],\n               [ 0.0938,  0.6250,  ...,  1.0000,  0.1719],\n               ...,\n               [ 0.2812,  0.0293,  ...,  0.0938,  0.2344],\n               [ 0.2812,  0.0859,  ...,  0.4375,  0.6875]]]], shape=Shape([2, 16, 64, 32]), dtype=DataType::FP8_E4M3, layout=Layout::ROW_MAJOR)",
 }
 
+# FP8_E4M3 prints the same values in either layout.
+GOLDEN_TENSOR_STRINGS[(ttnn.fp8_e4m3, ttnn.TILE_LAYOUT)] = GOLDEN_TENSOR_STRINGS[
+    (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT)
+].replace("layout=Layout::ROW_MAJOR", "layout=Layout::TILE")
+
 
 @pytest.mark.parametrize(
     "dtype",
@@ -72,10 +77,7 @@ GOLDEN_TENSOR_STRINGS = {
 def test_print(device, dtype, layout, profile, deallocate):
     if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat8_b:
         pytest.skip("This combination is not valid")
-    # FP8_E4M3 is constrained to ROW_MAJOR layout (see tensor_spec.cpp) and is
-    # only supported on Blackhole hardware (no FP8 packer/converter on WH/GS).
-    if dtype == ttnn.fp8_e4m3 and layout == ttnn.TILE_LAYOUT:
-        pytest.skip("FP8_E4M3 only supports ROW_MAJOR layout")
+    # FP8_E4M3 is only supported on Blackhole hardware (no FP8 packer/converter on WH/GS).
     if dtype == ttnn.fp8_e4m3 and not is_blackhole():
         pytest.skip("FP8_E4M3 requires Blackhole hardware")
 

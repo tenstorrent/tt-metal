@@ -79,6 +79,8 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const bool convert_df = input_data_format != output_data_format;
+    // Blackhole FP8 formats require 32-bit DEST in any compute kernel that touches them (see program.cpp).
+    const bool fp8_involved = tt::is_fp8_format(input_data_format) || tt::is_fp8_format(output_data_format);
 
     // Dataflow buffer identities and tensor parameters.
     const m2::DFBSpecName IN{"in"};    // legacy c_0 — input pages (double buffered)
@@ -180,7 +182,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"per_core_tile_cnt"},
             },
-        .hw_config = m2::ComputeHardwareConfig{},
+        .hw_config = m2::ComputeHardwareConfig{.enable_32_bit_dest = fp8_involved},
     };
 
     // Runtime args: each core owns a contiguous span of tiles.
