@@ -134,7 +134,7 @@ def test_dspark_taps_match_golden(mesh_device, device_params, sp_axis, tp_axis, 
     def tap(layer, hidden):
         if layer in targets:
             logger.info(f"tap {layer}: per-device {tuple(hidden.shape)} {hidden.dtype} {hidden.layout}")
-            got[layer] = _compose(mesh_device, hidden)
+            got[layer] = _compose(mesh_device, hidden, sp_axis, tp_axis)
 
     try:
         model.forward(tokens_tt, kvpe_cache=kvpe, on_layer_hidden=tap)
