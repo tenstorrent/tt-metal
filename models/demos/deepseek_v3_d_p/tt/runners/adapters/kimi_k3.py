@@ -55,6 +55,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
     supports_tp_shard_kv = True
     tp_shard_kv_default = True
 
+    # D2D relay with inter-mesh fabric traffic on VC0, as GLM-5.3. TT_METAL_FABRIC_DISABLE_INTERMESH_VC=0 rolls back.
+    d2d_relay_default = True
+
     # RadixArk's Kimi-K3-DSpark: a DFlash-style drafter (num_target_layers=93) tapping 7/23/51/67/83.
     # Its golden is keyed to prefill_trace_default's prompt, so the two move together.
     supports_dflash = True
