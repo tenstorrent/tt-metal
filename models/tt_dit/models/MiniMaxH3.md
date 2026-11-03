@@ -373,15 +373,16 @@ alignment (256 rows), and the DiT ops that used to key a program on the padded l
 (`all_gather_minimal_matmul_async`, the fused ff2 MM+reduce-scatter, the ring SDPA, the standalone
 `minimal_matmul` heads, the fused distributed RMS/LayerNorm, `nlp_create_qkv_heads`, `nlp_concat_heads`,
 `all_gather_async`, `embedding` and its `untilize`) take the per-device row count as a runtime word
-instead; the norms' worker split (`row_capacity`) and the ring attention's K/V gather pair are sized once
-at `max_sequence_length / 8` rows per device. Eager only: a trace freezes the length, so the quad preset
+instead; the norms' worker split (`row_capacity`) is sized once at `max_sequence_length / 8` rows per device
+and the ring attention's K/V gather pair, which holds the whole gathered sequence on every device, at
+`max_sequence_length` rows. Eager only: a trace freezes the length, so the quad preset
 stays bucketed and traced, and the Wormhole 4x8 preset stays bucketed (dynamic length is unmeasured there).
 No stage of a dynamic-length pipeline is traced: the preset's `trace_audio` is ignored on that path (an
 explicit `trace_audio=True` raises), so the audio decoder runs eagerly too (about 0.3 s per request).
 A dynamic-length `task="ref2va"` pipeline also defaults to `dit_fsdp=True` when its preset has no `dit_fsdp`
-key (the Blackhole 4x8): that gather pair is sized at the ref2va cap (326656 rows against t2va's 120320), and
-beside unsharded resident weights the 880 MB allocation does not fit at construction, while bucketed ref2va and
-dynamic t2va stay unsharded; `dit_fsdp=False` or `MINIMAX_H3_DIT_FSDP=0` turns it off. The measured ref2va
+key (the Blackhole 4x8): that gather pair is sized at the ref2va cap (326656 rows against t2va's 120320), two
+bf16 `[1, 14, 326656, 128]` buffers per device, 2.34 GB together (862 MB at the t2va cap), and beside unsharded
+resident weights it does not fit at construction, while bucketed ref2va and dynamic t2va stay unsharded; `dit_fsdp=False` or `MINIMAX_H3_DIT_FSDP=0` turns it off. The measured ref2va
 numbers were taken with FSDP on (`test_performance_minimax_h3.py` passes `dit_fsdp=True`), and the construction
 log records the choice (`dit_fsdp: on (dynamic ref2va)`).
 
