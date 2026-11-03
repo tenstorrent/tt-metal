@@ -104,3 +104,75 @@ only on the devices of its range; key the per-core peak by (device, core). Harne
 L1 capture on): 391/391 supported pass, 0 regressions, 0 hangs, real per-chip L1 peak 113 KB - 1.27 MB. Also bullet 2:
 the unit-test files each imported the session fabric-mesh fixture, giving one session cache per module and a
 `!devices_still_open` setup error when run together; the fixtures now live in the directory conftest (91/91 pass).
+
+<!-- Restored by the run operator: the Refinement 1 agent's commit bb7819f002d deleted the verifier's
+     pending Refinements 2-6 from this queue, which made the orchestrator treat the queue as drained. -->
+
+### [ ] Refinement 2 — Causal prefill family: causal + zig-zag balanced, GQA / MQA / MLA heads
+
+**Goal**: add `"causal"` to `SUPPORTED["mask_mode"]`, `True` to `SUPPORTED["is_balanced"]`, and `"gqa"`, `"mqa"`, `"mla"` to `SUPPORTED["kv_heads_mode"]`, natively in the kernels:
+- **Causal (design regime R4)**: extend the shared `key_block_plan` (reader and compute use the same function, so push/wait counts stay equal by construction). Each (unit, key block) is classified {skip, full, diagonal-masked} from global positions, contiguous (`p·n + i`) or zig-zag balanced (chunk p then chunk 2G−1−p, `helpers.global_positions`). Skipped blocks are neither read nor computed, so K/V reads scale with keys_seen. Diagonal blocks get a causal mask tile pattern. The first processed block of every unit must still hold ≥ 1 valid key (the online-softmax finite-max cap, `op_design.md` § Mechanism caps). The output stays in the caller's token layout (prompt rule: no cross-device reordering).
+- **Head sharing (design regime R3, a knob-turn of `q_heads_per_unit`)**: Q head h reads K head `h // (hq/hk)` and V head `h // (hq/hv)`; the transport already moves (b, kv head) entries, so the remaining change is the unit's K/V head index plus MLA's `dv ≠ dh` (DHt up to 18 at dh = 576: `choose_block_extents()` must still fit L1 and fall back to a smaller Sq). Units of `hq/hk` heads sharing one key-block stream (K/V DRAM reads ÷ hq/hk) are the intended realization. Expose the factor as a parameter from one source; don't collapse it.
+
+**Verifier notes**:
+- Ordering: the hardest remaining generality work (reshapes the key plan and the unit decode), so it goes before the joint/cross variants (Refinement 4), which extend the same plan.
+- Every causal INPUTS shape is GQA / MQA / MLA, and the ring-mock causal case is GQA 16:1 with `kv_dtype=bfloat8_b`. That is why heads and causal ship together, and why this follows Refinement 1 (bf8b K/V).
+- Causal work is imbalanced across chips in the contiguous layout (p = G−1 sees the most keys): measure the busiest chip.
+- A causal unit's remote segments that are entirely in its future are skipped: no landing wait for them (OVERLAP: fewer waits, not more).
+
+**Done when**: those five axis values are in SUPPORTED, the golden suite (incl. `test_ring_mock.py` causal-balanced cells and `test_regression.py`) shows 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode, and no regression on prior cells.
+
+### [ ] Refinement 3 — Speed up the perf-flagged Wan2.2 case: local compute (attention) — the measured dominant part
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES[0]` (attention: PERF FOCUS) — Wan2.2 A14B 480p, per device (1, 40, 8192, 128), bf16 / bf16, `fp32_dest_acc_en=False`, HiFi2, 1×4 `FABRIC_2D_TORUS_XY`, Ring, `cluster_axis=1`, 2 links, `logical_n=32760`; `roofline_us = 18076.5`, `target_us = 24101.9`, soft gate (0.995 / 0.05 on 256 sampled rows). The measured breakdown above puts ≈ 98 % of the call in local compute at ≈ 7× its roofline (per unit ≈ 15 ms vs ≈ 2.3 ms of FPU work at the fp32 proxy). Speed up the per-key-block compute chain on exactly this config. Levers to weigh from `ttnn/ttnn/operations/examples/master.md`:
+- the unmodelled SFPU work, chiefly the full-tile exact `exp` over Sq·Sk score tiles per block (design lamps "exp approximation" and "scale placement", gated on the soft precision gate);
+- `compute_block_size` (≈ 10 helper phases per key block, each with an init and data-format reconfig; reconfig ablation where formats are constant at bf16 DEST);
+- `sfpu_tile_scope` (column-0 stats ops: α exp, recip, max on Sq tiles);
+- `compute_fusion` / `row_reduce_accumulate` (row sum of P: second L1-acc pack vs `reduce<SUM>`);
+- `matmul_output_subblock` (score / PV subblocks are height 1 today);
+- the block co-tune Sq × Sk with the "single O accumulator" lamp, which frees `Sq·DVt·T_acc` of L1 (ledger fold-in);
+- the partial last wave (640 units / 106 cores = 6.04 waves at Sq = 16).
+No SUPPORTED change.
+
+**Done when**: measured device time (eval `ccl_perf` protocol: fastest chip, slowest chip guarded) improves on the perf-flagged case toward `target_us` with its soft precision gate still holding, the golden suite is green, and there is no regression across the config-spanning guard set (one representative per distinct kernel path × placement: no-joint / replicated-joint, Linear G=2 / Ring G=4, fp32 / bf16 DEST).
+
+### [ ] Refinement 4 — DiT joint / cross variants: sharded joint, non-aligned replicated joint, cross-attention
+
+**Goal**: add `"sharded"` to `SUPPORTED["joint_mode"]`, `"non_aligned"` to `SUPPORTED["joint_len"]` and `"cross"` to `SUPPORTED["attention_kind"]`, natively:
+- **Sharded joint (design regime R5)**: each device holds an L_dev = roundup32(ceil(L/G)) slice and `logical_l = L`. The joint K/V slices travel the ring as extra transport entries into joint landing slots, `key_block_plan` gains remote joint segments (rows ≥ `logical_l` masked), and joint Q stays local, so `joint_out` is the device's own slice. **TRANSPORT** (new entry kind on the existing relay) + **OVERLAP** (joint remote segments gated like the main ones).
+- **Non-aligned replicated joint**: L not a multiple of 32 (SD3.5 333, Motif 334, Mochi 118). Second key-tail mask tile (`MASK_TILES` → 2, ledger symbol `mask_tiles ≤ 2`), the joint q-block tail, and `joint_out` rows ≥ L unspecified. Inputs arrive tile-padded; mask in-kernel, never through a host pad / `ttnn.fill_implicit_tile_padding` wrapper.
+- **Cross-attention**: `n_q ≠ n_kv` (short Q, LTX-2 video→audio). Decouple the Q tile count from the K/V tile count in the unit decode and the key plan; non-causal; `logical_n` bounds the keys only; every query row is valid.
+
+**Verifier notes**:
+- Ordering: after Refinement 2 (it extends the same `key_block_plan` and unit decode) and Refinement 3 (the joint-heavy short-sequence Flux cases sit near the link bound, so build on the faster compute path).
+- Sharded joint is the only item here that changes the transport. Reuse the existing entry / slot / arrival-count protocol: one more entry kind, the count stays an entry index (`blackhole-fabric.md` rule 5).
+
+**Done when**: those three axis values are in SUPPORTED, the golden suite (incl. `test_ring_mock.py` sharded-joint cells and `test_fabric_configs.py`) shows 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode, and no regression on prior cells.
+
+### [ ] Refinement 5 — Perf-flagged case: K/V reuse multicast across a grid row (design regime R2) — scheme-change
+
+**Type**: perf
+
+**Goal**: on the perf-flagged Wan2.2 case (same full config contract as Refinement 3), remove the K/V DRAM re-read. R1 streams each head's K/V from DRAM once per Q block: Uq = 16 times at Sq = 16, ≈ 10.7 GB/call ≈ 24 ms at the measured 447 GB/s, which is the target itself. Once Refinement 3 brings compute near its 18 ms roofline, DRAM is the binding resource. Implement the deferred R2 `qstationary_kv_row_mcast`: the cores of one grid row hold consecutive Q blocks of the same (b, head) per wave (already true of the head-major round-robin order). One injector per row (or `injectors_per_row`, each owning every k-th key block) reads each K/V block once and multicasts it along the row (`mcast_pipe` `SenderPipe` / `ReceiverPipe`); `await_landing` moves to the injector only. This is a new dataflow topology, so it stands alone. Patterns: `shared_input_reuse` (1.71×) and `mcast_topology` in `ttnn/ttnn/operations/examples/master.md`. No SUPPORTED change.
+
+**Verifier notes**: validate by building the variant and measuring device time, not by a remove-a-stage ablation (a broadcast's benefit is under-shown by one). Re-measure the per-chip breakdown first. If, after Refinement 3, the case is still compute-bound with DRAM well below its bound, record that and keep the scheme for when it binds. The row group is the compute grid minus the port cores (the port cores sit in logical grid row 0 next to the Ethernet links — measured placement on the 1×4 ring — so derive the row groups on the grid that is left).
+
+**Done when**: measured device time (fastest chip; slowest chip guarded) improves on the perf-flagged case with its soft precision gate holding, the golden suite is green, and there is no regression across the config-spanning guard set (as in Refinement 3, plus a GQA / causal representative from Refinement 2).
+
+### [ ] Refinement 6 — Perf-flagged case: OVERLAP — exposed transport per chip (first-wave landing, landing notification, tail chain)
+
+**Type**: perf
+
+**Goal**: **OVERLAP**, measured in the op on the perf-flagged Wan2.2 case (same full config contract), after Refinements 3 and 5 have shrunk the local work: measure the transport time the op leaves exposed per chip, then remove it. Exposed transport = remote-segment landing waits of the first wave(s) plus the chain from the last landing to the output write. Phase 0 already processes local blocks before any remote one, but a faster unit leaves less local work to hide the first landings behind (heads arrive head-major at ≈ 9 heads/ms against a 3.46 ms link roofline). Levers from `op_design.md` § Perf lamps / Stall-shadow:
+- unit / wave ordering that front-loads heads whose remote entries land first;
+- landing notification: compute readers poll the port counter by NoC read today (no back-off), against the port reader multicasting landed counts;
+- the landing increment interval (`inc_every` within an entry, TRANSPORT-side knob, from `fabric_all_gather`);
+- launch-skew tolerance between chips (`ccl_perf` spread metric).
+
+No SUPPORTED change.
+
+**Verifier notes**: measured today (fp32 proxy) the transport is done by 2.3–4.5 ms of a 198 ms call, so exposure is unobservable until the local work shrinks. Measure first, with a per-chip breakdown via device-profiler zones around the landing waits. If the measured exposure is within noise of zero, record the measurement and close with no change. TRANSPORT itself (link rate, ring balance split, packet size) is not queued: the port readers already finish at the 3.46 ms link roofline (`fabric_all_gather` measured 35.9 GB/s busiest link at 2 links).
+
+**Done when**: the exposed transport per chip on the perf-flagged case is measured and reported; any change lands only with a measured device-time win (fastest chip; slowest chip and spread guarded), the golden suite green, and no regression across the guard set.
