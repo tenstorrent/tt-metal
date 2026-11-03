@@ -1763,8 +1763,10 @@ inline std::string typecast_device_format_name(tt::DataFormat fmt) {
     }
 }
 
-// Sign-magnitude has no negative power of two. Int8 is [-127, 127].
+// -128 is the value Int8 cannot hold.
 constexpr int32_t kInt8SmagMax = 127;
+constexpr unsigned kInt8Bits = 8;
+constexpr unsigned kInt16Bits = 16;
 
 // Sign-magnitude pack/decode for a Bits-wide lane (8 or 16). Sign in the top bit, magnitude
 // in the rest, lanes packed into a 32-bit word.
@@ -1829,11 +1831,11 @@ inline std::vector<uint32_t> typecast_pack(tt::DataFormat fmt, const std::vector
         }
         case tt::DataFormat::Int16:
             // Quasar Int16 in L1 is sign-magnitude 16-bit (SMAG16).
-            return pack_sign_mag<16>(vals);
+            return pack_sign_mag<kInt16Bits>(vals);
         case tt::DataFormat::Int8:
             // Quasar Int8 in L1 is sign-magnitude 8-bit (SMAG8), range [-kInt8SmagMax, kInt8SmagMax].
             // Wormhole/Blackhole store two's complement and declare the buffer UInt8.
-            return pack_sign_mag<8>(vals);
+            return pack_sign_mag<kInt8Bits>(vals);
         case tt::DataFormat::UInt8: {
             // UInt8 in L1 is raw unsigned bytes (four per 32-bit word).
             std::vector<uint32_t> out((vals.size() + 3) / 4, 0);
@@ -1876,8 +1878,8 @@ inline std::vector<float> typecast_decode(tt::DataFormat fmt, const std::vector<
             }
             return out;
         }
-        case tt::DataFormat::Int16: return decode_sign_mag<16>(bytes);
-        case tt::DataFormat::Int8: return decode_sign_mag<8>(bytes);
+        case tt::DataFormat::Int16: return decode_sign_mag<kInt16Bits>(bytes);
+        case tt::DataFormat::Int8: return decode_sign_mag<kInt8Bits>(bytes);
         case tt::DataFormat::UInt8: {
             std::vector<float> out(bytes.size() * 4);
             for (size_t i = 0; i < out.size(); ++i) {
@@ -3228,29 +3230,22 @@ bool run_sfpu_typecast(
     const bool in_is_32bit = in_fmt == tt::DataFormat::Float32 || in_fmt == tt::DataFormat::Int32;
     const bool out_is_32bit = out_fmt == tt::DataFormat::Float32 || out_fmt == tt::DataFormat::Int32;
 
-    // A narrow integer source (Int8 / Int16 / UInt8) is routed the way the tt-llk typecast variant
-    // resolver routes every typecast: through Unpack-to-Dest, so the datum reaches Dest still in its
-    // narrow L1 representation, and with Dest sized purely on whether either endpoint is 32-bit. The
-    // SFPU load decodes the source in place as SM8 / SM16 / U8, so widening it on the way in (the FPU
-    // A2D datacopy the non-narrow routes take) makes that load read the wrong bits.
+    // Narrow integer sources (Int8 / Int16 / UInt8) unpack to Dest.
     // See param_config.py:_resolve_quasar_typecast_variant.
     const bool narrow_int_source = sfpu_util::typecast_is_int(in_fmt) && !in_is_32bit;
 
     // preserve_fp32_precision: a Float32 input, or an 8-bit output promoted from a bf16/MX source.
-    // An 8-bit input is a narrow_int_source, and that branch ignores preserve_fp32.
+    // An 8-bit input is neither, so it does not set this flag.
     const bool preserve_fp32 = in_fmt == tt::DataFormat::Float32 ||
                                (sfpu_util::typecast_is_8bit_int(out_fmt) &&
                                 (in_fmt == tt::DataFormat::Float16_b || sfpu_util::typecast_is_mx(in_fmt)));
 
-    // dest_acc (fp32_dest_acc_en): a 32-bit endpoint or preserve_fp32. A narrow integer source uses a
-    // 32-bit Dest only when the output is 32-bit, and a 16-bit Dest otherwise. Production ttnn uses
+    // dest_acc (fp32_dest_acc_en): a 32-bit endpoint or preserve_fp32. A narrow integer source is
+    // neither Float32 nor 32-bit, so this is out_is_32bit for that case. Production ttnn uses
     // 32-bit Dest plus Unpack-to-Dest for an 8-bit input; this follows the LLK typecast resolver.
-    const bool fp32_dest_acc = narrow_int_source ? out_is_32bit : (preserve_fp32 || in_is_32bit || out_is_32bit);
+    const bool fp32_dest_acc = preserve_fp32 || in_is_32bit || out_is_32bit;
 
-    // Unpack-to-Dest for genuine 32-bit inputs and for narrow integer sources (above). The older note
-    // here claimed the flag was inert for a narrow input; that applies to the fp32 flavour of
-    // unpack-to-dest, not to this one -- run_quasar_sfpu_unpack_to_dest_16b drives a 16-bit operand
-    // through UnpackToDest with en_32bit_dest false.
+    // 32-bit inputs and narrow integer sources unpack to Dest so the SFPU load sees the L1 bits.
     const bool unpack_to_dest = in_is_32bit || narrow_int_source;
 
     // typecast_tile_init<IN, OUT>() + typecast_tile<IN, OUT>(0), with the format pair baked into the

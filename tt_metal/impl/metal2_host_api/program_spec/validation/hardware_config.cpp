@@ -57,7 +57,8 @@ void ValidateGen1DataMovementConfig(const KernelSpec& kernel, tt::ARCH arch) {
 // bypassing SrcA/B. Its legality depends on the Dest width (enable_32_bit_dest), the DFB's
 // element width, the binding role, and the generation:
 //
-//   UnpackToSrc                          → always accepted (the default path).
+//   UnpackToSrc                          → accepted, except a consumed Int16 DFB on Quasar with
+//                                          enable_32_bit_dest (see below).
 //   UnpackToDest, producer-only binding  → inert (the DFB is never unpacked): tolerated.
 //   UnpackToDest, consumer, enable=true  → accepted (Dest is 32-bit; the choice is coherent).
 //   UnpackToDest, consumer, enable=false, 32-bit format (Float32/Int32/UInt32/RawUInt32)
@@ -71,6 +72,9 @@ void ValidateGen1DataMovementConfig(const KernelSpec& kernel, tt::ARCH arch) {
 //
 // Separately, where the Src-vs-Dest choice is REAL an explicit entry is REQUIRED rather than
 // silently defaulting to UnpackToSrc: a consumed Float32 DFB with enable_32_bit_dest=true.
+// On Quasar, a consumed Int16 DFB with enable_32_bit_dest=true requires UnpackToDest. The FPU
+// cannot datacopy Int16 into a 32-bit Dest. UnpackToDest is the SFPU typecast path, which
+// overwrites Dest; an FPU datacopy of that DFB is not supported.
 //
 // INTENTIONAL INTERMEDIATE GAP — do not "fix" without the follow-up. The require-an-explicit-
 // entry rule is Float32-only. The choice is just as real for a consumed Int32/UInt32 DFB with
@@ -192,8 +196,9 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
 
     // Quasar Int16 is MOV-only on the FPU and is not a 32-bit Dest source (llk_math_common.h).
     // get_single_pack_src_format accepts Int16 under fp32 dest so an Int16 output can pack, and
-    // that function cannot tell an input from an output. A consumed Int16 DFB has to unpack to
-    // Dest; the default UnpackToSrc path datacopies it as ELWADD and produces bad data.
+    // that function cannot tell an input from an output. UnpackToSrc datacopies the input as
+    // ELWADD. UnpackToDest is the SFPU typecast path: the SFPU overwrites Dest, so the narrow
+    // bits never have to survive as a 32-bit FPU datum.
     if (enable_32_bit_dest && arch == tt::ARCH::QUASAR) {
         for (const auto& binding : kernel.dfb_bindings) {
             if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
@@ -208,7 +213,8 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
             TT_FATAL(
                 mode != unpack_modes.end() && mode->second == UnpackMode::UnpackToDest,
                 "Compute kernel '{}' consumes Int16 DFB '{}' with enable_32_bit_dest=true. On Quasar the FPU "
-                "cannot datacopy Int16 in a 32-bit Dest; set unpack_modes to UnpackToDest for this DFB.",
+                "cannot datacopy Int16 in a 32-bit Dest. Set unpack_modes to UnpackToDest for SFPU typecast, "
+                "which overwrites Dest. An FPU datacopy of this DFB is not supported.",
                 kernel.unique_id,
                 binding.dfb_spec_name);
         }

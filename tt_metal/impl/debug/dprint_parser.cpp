@@ -593,7 +593,7 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                         continue;
                     }
                     case DPrintErrorUnsupportedFormat: {
-                        tt::DataFormat data_format = static_cast<tt::DataFormat>(tile_slice.header.data_format);
+                        const tt::DataFormat data_format = hw_data_format_to_host(tile_slice.header.data_format);
                         fmt::format_to(
                             std::back_inserter(buffer.buffer),
                             "Tried printing {}: Unsupported data format ({})\n",
@@ -619,14 +619,9 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                         continue;
                 }
 
-                // No error codes, print the TileSlice.
-                // The device copies the hardware format code. Quasar UInt8 collides with host MxInt2,
-                // which is not a case below, so the slice used to print blank. That code is not a
-                // Wormhole or Blackhole circular-buffer format.
+                // The device copies a hardware code; hw_data_format_to_host maps the Quasar UInt8 and Fp8P collisions.
                 const uint8_t raw_format = tile_slice.header.data_format;
-                const tt::DataFormat data_format = raw_format == host_data_format_to_hw(tt::DataFormat::UInt8)
-                                                       ? tt::DataFormat::UInt8
-                                                       : static_cast<tt::DataFormat>(raw_format);
+                const tt::DataFormat data_format = hw_data_format_to_host(raw_format);
                 const uint8_t* data = tile_slice.data.data();
                 uint32_t i = 0;
                 bool count_exceeded = false;

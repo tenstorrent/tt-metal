@@ -20,4 +20,9 @@ hw_format_t host_data_format_to_hw(DataFormat f);
 // Arch seam for the table above. Quasar gets the remapped code; every other arch gets the host value.
 hw_format_t host_data_format_to_hw(DataFormat f, tt::ARCH arch);
 
+// Host DataFormat for a code copied out of a device format field. Rewrites the Quasar codes that
+// collide with a different host enumerator. Those codes are not Wormhole or Blackhole circular-buffer
+// formats, so this is safe on every arch. Every other code is already the host value.
+DataFormat hw_data_format_to_host(hw_format_t code);
+
 }  // namespace tt::tt_metal

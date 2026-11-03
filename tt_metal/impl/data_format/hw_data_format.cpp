@@ -23,6 +23,18 @@ constexpr hw_format_t kHwFp8P = 16;        // host Fp8_e4m3 is 26 (Quasar Int8_2
 
 }  // namespace
 
+DataFormat hw_data_format_to_host(hw_format_t code) {
+    // Quasar UInt8 is 17 (host MxInt2) and Quasar Fp8P is 16 (host MxInt4). Neither code is a
+    // Wormhole or Blackhole circular-buffer format.
+    if (code == host_data_format_to_hw(DataFormat::UInt8)) {
+        return DataFormat::UInt8;
+    }
+    if (code == host_data_format_to_hw(DataFormat::Fp8_e4m3)) {
+        return DataFormat::Fp8_e4m3;
+    }
+    return static_cast<DataFormat>(code);
+}
+
 hw_format_t host_data_format_to_hw(DataFormat f, tt::ARCH arch) {
     return arch == tt::ARCH::QUASAR ? host_data_format_to_hw(f) : static_cast<hw_format_t>(f);
 }
