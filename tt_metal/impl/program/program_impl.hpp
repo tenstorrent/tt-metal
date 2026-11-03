@@ -905,6 +905,9 @@ private:
         std::vector<std::pair<Kernel*, ScratchpadBindingHandle*>> bindings;
     };
     // Reconstructed from binding metadata; used consistently for registration and allocation.
+    //
+    // Function does not mutate *this, but is non-const as it needs to return constructs containing mutable pointers
+    // to subobjects of *this.
     std::vector<ScratchpadAllocationGroup> scratchpad_allocation_groups();
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
