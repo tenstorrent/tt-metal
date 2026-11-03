@@ -47,10 +47,10 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 
     // unpA -> srcA
     // unpB -> srcB
-    const std::uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
-    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
-    const std::uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
-    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+    [[maybe_unused]] const std::uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
+    [[maybe_unused]] const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
+    [[maybe_unused]] const std::uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
+    [[maybe_unused]] const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
     const ckernel::TensorShape unpA_tensor_shape = get_operand_tensor_shape(unpA_operand_id);
     const ckernel::TensorShape unpB_tensor_shape = get_operand_tensor_shape(unpB_operand_id);
 
@@ -178,8 +178,10 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
         StateDiscard<std::uint32_t>(tile_size),
         StateDiscard<std::uint32_t>(face_r_dim),
         StateDiscard<std::uint32_t>(num_faces)));
-    // Old-argument call on purpose: the experimental hybrid_llk_shims.hpp (deepseek_prefill) renames this LLK by
-    // macro to a shim that takes face_r_dim/num_faces. Move it to TensorShape together with that shim.
+    // Old-argument call on purpose, kept so the src{a,b} reconfig pair moves to TensorShape together
+    // (tt-llk#1033): srca is renamed by macro to a face_r_dim/num_faces shim in the experimental
+    // hybrid_llk_shims.hpp. The impl programs only face_r_dim and the total face count, so the 1x2 grid picked
+    // for num_faces == 2 gives the same registers as the real CB shape.
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
 }
