@@ -189,7 +189,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
     # Fixed production/proxy geometries; native worker capacity is validated by
     # the recurrence constructor for the actual TP-local head count and device.
-    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
+    # Up to 1280 rows one group per head takes the SP relay's entry correction instead of a second chunk scan; beyond
+    # that its emitted terms outgrow L1.
+    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 40, 2560: 20, 5120: 20}
     if active_seq_len_local not in group_chunks:
         raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
     return KDAProgramConfig(

@@ -616,9 +616,9 @@ class KDARecurrence:
             )
         # With sequence parallelism the SP prefix is a relay along the SP axis: each rank forwards its successor the
         # entry state (the last rank hands the final state to the first), and the final carry runs as its own program.
-        # With one group per head (Kimi-K3's T=5120 on SP8) an entry correction forms the chunk outputs; with several a
-        # scan over the groups and the second chunk scan do. The correction itself works per group, but its emitted
-        # F(0)/F(I) terms are height-sharded in L1 with no DRAM path, and they grow with the groups.
+        # With one group per head (Kimi-K3 up to 1280 rows per chip) an entry correction forms the chunk outputs; with
+        # several a scan over the groups and the second chunk scan do. The correction itself works per group, but its
+        # emitted F(0)/F(I) terms are height-sharded in L1 with no DRAM path, so longer local sequences keep groups.
         self._affine_relay = None
         self._relay_final_carry = None
         self._entry_correction = None
@@ -816,9 +816,9 @@ class KDARecurrence:
         )
 
     @property
-    def uses_entry_correction(self) -> bool:
-        """Whether the chunk outputs come from the entry correction, whose emitted terms live in L1."""
-        return self._entry_correction is not None
+    def relays_prefix(self) -> bool:
+        """Whether the SP prefix is relayed (every sequence-parallel run)."""
+        return self._affine_relay is not None
 
     def reserve_affine_relay(self) -> None:
         """Allocate the SP relay's L1 landing buffer for the next call (RelayAffinePrefix.reserve): a layer calls it
