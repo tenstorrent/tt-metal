@@ -7,7 +7,10 @@ real device-kernel ns for both, on **both** Wormhole B0 and Blackhole where meas
 **How to use this catalog.** Read this index (it ends at `END OF INDEX`). Find your board below and
 note how it differs from the other. Measure your op first: stage breakdown (stub reads / writes /
 compute and time what is left), achieved GB/s vs the DRAM/NoC ceiling, active Tensix cores vs the
-grid. Find your row below, then search the rest: `grep -n "^## " master.md` lists every entry with its
+grid. The row depends on the cell, not only on the op: a cell of a few µs sits near the ~1.0 µs (BH) /
+~1.8 µs (WH B0) launch floor and a large cell is bound by bytes, so the two usually land in different
+rows. Run the breakdown on your largest **and** your smallest typical cell, not on one shape. Find your
+row below, then search the rest: `grep -n "^## " master.md` lists every entry with its
 problem type; `grep -n -A12 "<example>"` returns one whole entry; its **Code** line names the file and
 functions where the lever lives. Details, the full regime × board table and CLI:
 `examples/<example>/README.md`.
@@ -45,7 +48,14 @@ and for a few levers the verdict **flips**.
 | DRAM alignment (NoC DRAM read alignment) | 32 B | **64 B** — row-major pages pad to 64 B |
 | DST capacity | 16 tiles full, 8 half-sync bf16, 4 half-sync fp32 | same |
 | Kernel launch floor (1-tile relu, 1 Tensix core) | ~1.8 µs | ~1.0 µs |
-| Achieved DRAM read + write, full grid | ~190 GB/s | ~415–430 GB/s |
+| Achieved DRAM read + write, full grid (what the examples' copies reached — **not** a hardware limit, see below) | ~190 GB/s | ~415–430 GB/s |
+
+**"The DRAM ceiling" in every entry below means this row**: the read + write rate the examples'
+full-grid copies reached on that board, not the most the hardware can do. Entries that quote a single
+stream "at the ceiling" (~388–408 GB/s, BH) mean that stream's measured limit. Full-grid ops have measured
+above this row on BH p150b: ~444 GB/s read + write, and ~515 GB/s for the reads alone. So an op
+at or near this rate on one shape is DRAM-bound **on that shape** only; it is not evidence that the op
+has no headroom left on its other cells.
 
 Where the boundary or verdict moves on BH p150b (everything else: same verdict, numbers in each entry):
 
@@ -121,7 +131,7 @@ move.
 **Situation:** a whole-tile relocation whose writer sends each 2 KB tile as 4 × 512 B face writes with a barrier after each face.
 **How to recognize it:** the writer RISC-V (BRISC) is on the critical path and its time scales with the write-barrier count, not with bytes; the gap persists with an L1 output, so it is not DRAM bandwidth.
 **Helps when:** destination pages are remote to the writer and the op is not DRAM-bound. L1-interleaved output: WH B0 `(2048,1024)` 43 773 → 31 317 ns = **1.40×** · BH `(3840,1024)` 38 446 → 25 612 ns = **1.50×**. DRAM output on WH B0 `(2048,1024)` 71 855 → 45 513 ns = **1.58×**. Small moves gain too (2 tiles 2.24×, WH B0).
-**Does not help when:** every output page is in the writer's own L1 (L1 `HEIGHT_SHARDED`, one tile-row per Tensix core): WH B0 `(2048,1024)` 23 666 → 23 515 ns = **1.01×** · BH `(3840,1024)` 25 645 → 25 448 ns = **1.01×**. On BH, also DRAM output: `(2048,1024)` 21 180 → 21 387 ns = **0.99×** — DRAM read + write at 120 Tensix cores is ~400 GB/s, the BH DRAM ceiling, so the writer's barriers are hidden (`(3840,1024)` 1.10×).
+**Does not help when:** every output page is in the writer's own L1 (L1 `HEIGHT_SHARDED`, one tile-row per Tensix core): WH B0 `(2048,1024)` 23 666 → 23 515 ns = **1.01×** · BH `(3840,1024)` 25 645 → 25 448 ns = **1.01×**. On BH, also DRAM output: `(2048,1024)` 21 180 → 21 387 ns = **0.99×** — DRAM read + write at 120 Tensix cores is ~400 GB/s, at the BH DRAM ceiling (board table: what the examples' copies reach), so the writer's barriers are hidden (`(3840,1024)` 1.10×).
 **Gist:** write whole pages with one barrier per page or batch whenever the target is remote — the win is fewer barrier round trips; on BH it shows only for L1 destinations or when DRAM is not saturated. Size shapes to the grid: a 64-tile-row shape is one tile-row per Tensix core on 8×8 but not on 12×10.
 **Code:** `examples/tile_reorder/` — `_WRITER_SOURCE` picks `kernels/tile_reorder_writer_relocate.cpp` vs `tile_reorder_writer_scatter.cpp` (writer only; reader, CBs and work split shared).
 **See also:** `noc_placement`, `split_reader`, `double_buffer` (BH DRAM ceiling).
@@ -139,7 +149,7 @@ move.
 **Situation:** a line or grid of Tensix cores streams interleaved-DRAM pages, laid out as a column (`split_work_to_cores(..., row_wise=False)`, the default), with reads on NoC1, or with every Tensix core on the same NoC pairing.
 **How to recognize it:** same bytes and kernel, but time changes a lot when the line moves to a row or the NoC flips; per-Tensix-core time grows with outstanding reads on the line; a full-grid read+write copy runs below the DRAM ceiling (read+write bytes ÷ device kernel duration < ~400 GB/s on BH p150b).
 **Helps when:** ≥ 16 outstanding 2 KB reads on the line (8 Tensix cores × 16 per barrier): column → row WH B0 246 765 → 84 917 ns = **2.91×** · BH 97 835 → 43 723 ns = **2.24×**; reads NoC1 → NoC0 WH B0 278 002 → 85 066 ns = **3.27×** · BH 107 508 → 43 806 ns = **2.45×**; whole grid (130 Tensix cores), 32 MB copy: 208 978 → 173 195 ns = **1.21×** (BH). A quarter of one stream's writes on the read NoC (`write_split=4`) only where the full-grid DRAM write stream sits below the ceiling: 16 MB L1→DRAM 60 141 → 53 772 ns = **1.12×** (BH). Reversed pairing (reads NoC1 / writes NoC0) on only the 3 worker columns nearest DRAM (`swap_columns=3`) while a full-grid copy is below the DRAM ceiling and bandwidth-bound: 8 MB read+write 24 675 → 21 474 ns = **1.15×**, 65 Tensix cores 67 MB **1.10×**, 34 MB at 64 pages per barrier 84 134 → 78 665 ns = **1.07×**, DRAM→L1 1.09× (BH).
-**Does not help when:** latency-bound line (2 Tensix cores × 1 read per barrier): column → row WH B0 **1.03×** · BH **1.01×**. On a single Tensix core the default NoC pairing is WH B0 **0.94×** · BH **1.02–1.06×**. Payload size is not the boundary (16 tiles still 1.51×, WH B0); reads in flight are. Write split at the DRAM ceiling (whole grid, 32 MB, 388 GB/s): **1.02×**; where the NoC is the bound it loses (DRAM→L1 **0.88×**, 8-core row **0.79×**); `NOC_MODE::DM_DYNAMIC_NOC` alone costs 9–27% on 1–2 Tensix cores. Column swap on a long full-grid stream at the ceiling (176 MB, 408 GB/s): 432 281 → 429 853 ns = **1.01×**; at 1 page per barrier **1.00×**; 34 MB at 16 pages per barrier 1.03×; 6 of 13 columns swapped on that stream 0.97×; every column 0.62–0.86× (BH).
+**Does not help when:** latency-bound line (2 Tensix cores × 1 read per barrier): column → row WH B0 **1.03×** · BH **1.01×**. On a single Tensix core the default NoC pairing is WH B0 **0.94×** · BH **1.02–1.06×**. Payload size is not the boundary (16 tiles still 1.51×, WH B0); reads in flight are. Write split on a stream already at its measured limit (whole grid, 32 MB, 388 GB/s): **1.02×**; where the NoC is the bound it loses (DRAM→L1 **0.88×**, 8-core row **0.79×**); `NOC_MODE::DM_DYNAMIC_NOC` alone costs 9–27% on 1–2 Tensix cores. Column swap on a long full-grid stream at its measured limit (176 MB, 408 GB/s): 432 281 → 429 853 ns = **1.01×**; at 1 page per barrier **1.00×**; 34 MB at 16 pages per barrier 1.03×; 6 of 13 columns swapped on that stream 0.97×; every column 0.62–0.86× (BH).
 **Gist:** with ≥ ~16 pages in flight, use `row_wise=True` (row/diagonal) and keep reads on NoC0 / writes on NoC1 on most of the grid. Measured exception: on a full-grid copy below the DRAM ceiling, give the 2–4 worker columns nearest a DRAM column (ask the device: `get_optimal_dram_bank_to_logical_worker_assignment`) the reversed pairing; never more than ~a third of the grid. With 1 read per barrier fix latency first. Split writes across NoCs only for a full-grid write stream below the DRAM ceiling, a quarter at most.
 **Code:** `examples/noc_placement/noc_placement.py` — `_ordered_cores()` (incl. `grid`), `_dm_config()` (NoC + `NOC_MODE`), `dram_adjacent_columns()` + the two kernel groups in `_copy()` (`swap_columns`); `kernels/copy_writer.cpp` `write_split` (every k-th page on the read NoC, two-NoC barrier).
 **See also:** `split_reader`, `mcast_topology`, `tile_reorder`.
@@ -158,7 +168,7 @@ move.
 **How to recognize it:** map each Tensix core's first page to its DRAM bank (shard → bank for width-sharded; row `r` → bank `r % num_banks` for interleaved): every Tensix core starts on the same bank and steps through the banks in lockstep. Same transactions and bytes; only the order differs.
 **Helps when:** width-sharded source, few blocks per Tensix core, 8 blocks per core, 256 B reads: BH p300c (110 Tensix cores) `3520×1024` 101 361 → 77 087 ns = **1.32×** · BH p150b (120 Tensix cores) `3840×1024` 111 677 → 84 255 ns = **1.33×**; 1024 B reads 1.16× (p300c) / 1.19× (p150b).
 **Does not help when:** interleaved source with several blocks per Tensix core: `stagger_rows`, `128×56320`, 4 blocks per core 66 462 → 66 040 ns = **1.01×** (BH p300c); at 1 block per core it is only 1.04–1.07× (~0.3–1.3 µs saved; p150b 1.04–1.06×). On the width-sharded source the gain shrinks as blocks per core grow: 16 blocks 1.19× / 1.12–1.13× (256 B / 1024 B) — do not extrapolate the 8-block numbers. WH B0 (12 DRAM banks): not measured.
-**Gist:** start Tensix core k at block `k % n_w` (or row `k % 32`) and wrap; both are compile-time switches, so flip them per call and keep them where they pay — mostly width-sharded sources with few blocks per core. Writes into width-sharded or bank-aligned outputs are the same pattern (README).
+**Gist:** pick the variant by what sets the bank, then start each Tensix core at a different point and wrap. Width-sharded or bank-aligned source — the column block sets the bank: rotate blocks (`stagger_blocks`, Tensix core k starts at block `k % n_w`); rotating rows there leaves every Tensix core on the same bank (`rows` on the width-sharded shapes: **0.99–1.01×**, BH p150b). Interleaved source split by height or width — the row sets the bank: rotate rows (`stagger_rows`, row `k % 32`); rotating blocks there does nothing (**0.99–1.00×**, BH p150b). Both are compile-time switches, so flip them per call and keep them where they pay — mostly width-sharded sources with few blocks per core. Writes into width-sharded or bank-aligned outputs are the same pattern (README).
 **Code:** `examples/bank_stagger/kernels/bs_reader.cpp` — `if constexpr (stagger_blocks)` / `if constexpr (stagger_rows)` (and `stagger_blocks` in `bs_writer.cpp`); `bank_stagger.py` `create_program_descriptor()` sets `blk_rot` / `row_rot` per Tensix core (compute kernel unchanged).
 **See also:** `noc_placement`.
 
