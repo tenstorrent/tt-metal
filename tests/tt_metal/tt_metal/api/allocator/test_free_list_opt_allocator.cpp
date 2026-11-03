@@ -510,3 +510,65 @@ TEST(FreeListOptTest, CPU_AddressesAPIWithNonzeroOffset) {
     ASSERT_EQ(available_addresses[0].first, 3_KiB + offset);
     ASSERT_EQ(available_addresses[0].second, alloc_size - 2_KiB + offset);
 }
+
+TEST(FreeListOptTest, CPU_PreserveAddressAlignmentAfterExplicitReservation) {
+    using tt::tt_metal::DeviceAddr;
+    using tt::tt_metal::allocator::FreeListOpt;
+    for (const DeviceAddr alignment : {32u, 64u}) {
+        for (const DeviceAddr base : {DeviceAddr{0}, 4 * alignment}) {
+            for (const auto policy : {FreeListOpt::SearchPolicy::FIRST, FreeListOpt::SearchPolicy::BEST}) {
+                for (const bool bottom_up : {false, true}) {
+                    SCOPED_TRACE(::testing::Message() << alignment << ", " << base << ", " << int(policy) << ", "
+                                                     << bottom_up);
+                    FreeListOpt allocator(3 * alignment, base, alignment, alignment, policy);
+                    const DeviceAddr fixed_address = base + (bottom_up ? 16 : alignment + 16);
+                    ASSERT_EQ(allocator.allocate_at_address(fixed_address, alignment), fixed_address);
+                    const DeviceAddr expected = base + (bottom_up ? 2 * alignment : 0);
+                    const auto automatic = allocator.allocate(alignment, bottom_up);
+                    ASSERT_EQ(automatic, expected);
+                    EXPECT_EQ(automatic.value() % alignment, 0u);
+                    EXPECT_EQ(allocator.get_allocation_size(automatic.value()), alignment);
+                    // Alignment padding remains free on both sides of the explicit reservation.
+                    EXPECT_EQ(allocator.get_statistics().total_free_bytes, alignment);
+                    allocator.deallocate(fixed_address);
+                    allocator.deallocate(automatic.value());
+                    EXPECT_THAT(
+                        allocator.available_addresses(3 * alignment),
+                        ::testing::ElementsAre(std::make_pair(base, base + 3 * alignment)));
+                }
+            }
+        }
+    }
+}
+
+TEST(FreeListOptTest, CPU_SkipFreeBlockWithoutAlignedPlacement) {
+    using tt::tt_metal::DeviceAddr;
+    using tt::tt_metal::allocator::FreeListOpt;
+    for (const DeviceAddr alignment : {32u, 64u}) {
+        for (const auto policy : {FreeListOpt::SearchPolicy::FIRST, FreeListOpt::SearchPolicy::BEST}) {
+            for (const bool bottom_up : {false, true}) {
+                for (const bool has_larger_window : {false, true}) {
+                    SCOPED_TRACE(::testing::Message() << alignment << ", " << int(policy) << ", " << bottom_up << ", "
+                                                     << has_larger_window);
+                    const DeviceAddr pool_size = (has_larger_window ? 5 : 3) * alignment + 16;
+                    FreeListOpt allocator(pool_size, 0, alignment, alignment, policy);
+                    ASSERT_EQ(allocator.allocate_at_address(16, alignment), 16u);
+                    ASSERT_EQ(allocator.allocate_at_address(2 * alignment + 16, alignment), 2 * alignment + 16);
+                    // [alignment + 16, 2 * alignment + 16) is large enough before address alignment.
+                    const auto automatic = allocator.allocate(alignment, bottom_up);
+                    if (has_larger_window) {
+                        ASSERT_EQ(automatic, 4 * alignment);
+                        allocator.deallocate(automatic.value());
+                    } else {
+                        EXPECT_FALSE(automatic.has_value());
+                    }
+                    allocator.deallocate(16);
+                    allocator.deallocate(2 * alignment + 16);
+                    EXPECT_THAT(
+                        allocator.available_addresses(1),
+                        ::testing::ElementsAre(std::make_pair(DeviceAddr{0}, pool_size)));
+                }
+            }
+        }
+    }
+}

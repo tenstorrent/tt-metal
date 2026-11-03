@@ -481,8 +481,9 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
-    DeviceAddr size_per_bank =
-        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
+    // Placement and tracking must use the size the free list will reserve, including its minimum.
+    DeviceAddr size_per_bank = alloc->allocation_size(
+        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_));
     DeviceAddr address_limit = 0;
     if (!is_sharded and buffer_type_ == BufferType::L1) {
         address_limit = interleaved_address_limit_;
@@ -533,27 +534,14 @@ uint64_t BankManager::allocate_buffer(
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges = this->compute_available_addresses(
         allocator_id, size_per_bank, address_limit, additional_occupied_ranges, scoped_dependent_allocators);
 
-    // Choose an address from the allowed ranges respecting alignment and direction
-    // Addresses should already be aligned to alignment_bytes_
+    // Dependency boundaries and address_limit may only satisfy L1 alignment. Use the free list's
+    // default address alignment, which can be larger than alignment_bytes_.
     std::optional<DeviceAddr> chosen;
-    if (bottom_up) {
-        for (const auto& r : available_ranges) {
-            DeviceAddr s = r.first;
-            if (s + size_per_bank <= r.second) {
-                chosen = s;
-                break;
-            }
-        }
-    } else {
-        for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
-            const auto& r = available_ranges[static_cast<size_t>(i)];
-            // Test the window's width rather than forming r.second - size_per_bank first: DeviceAddr
-            // is unsigned, so a request wider than r.second wraps to a huge value that compares
-            // >= r.first, and the allocation "succeeds" at a nonsense address instead of reporting.
-            if (r.second - r.first >= size_per_bank) {
-                chosen = r.second - size_per_bank;
-                break;
-            }
+    for (size_t n = 0; n < available_ranges.size(); ++n) {
+        const auto& range = available_ranges[bottom_up ? n : available_ranges.size() - 1 - n];
+        chosen = alloc->find_allocation_address(range.first, range.second, size_per_bank, bottom_up);
+        if (chosen.has_value()) {
+            break;
         }
     }
 
@@ -592,10 +580,9 @@ uint64_t BankManager::allocate_buffer(
             l1_small_hint(buffer_type_, bank_size()));
     }
     TT_FATAL(
-        chosen.value() % alignment_bytes_ == 0,
-        "Chosen address {} is not aligned to {} B",
-        chosen.value(),
-        alignment_bytes_);
+        chosen.value() == alloc->align(chosen.value()),
+        "Chosen address {} does not satisfy the allocator's default alignment",
+        chosen.value());
 
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
