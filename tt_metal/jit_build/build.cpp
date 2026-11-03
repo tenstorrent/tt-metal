@@ -315,9 +315,13 @@ void JitBuildEnv::init(
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
     }
 
-    if (rtoptions.get_riscv_debug_info_enabled()) {
-        common_flags += "-g ";
-    }
+    // Firmware gets -g (JitBuildState). Kernels get -g1 (function names, line tables, unwind info) unless
+    // TT_METAL_RISCV_DEBUG_INFO asks for -g on every kernel, or a kernel debug feature is on: DPRINT reads enum
+    // types, and tt-triage reads the arguments and locals of a kernel stopped on an assert.
+    const bool full_debug_info =
+        rtoptions.get_riscv_full_debug_info() || rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) ||
+        rtoptions.get_watcher_enabled() || rtoptions.get_lightweight_kernel_asserts() || rtoptions.get_llk_asserts();
+    this->kernel_debug_flag_ = !rtoptions.get_riscv_debug_info_enabled() ? "" : full_debug_info ? " -g " : " -g1 ";
 
     this->cflags_ = common_flags;
     this->cflags_ +=
@@ -547,6 +551,8 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
+    // Kernels add their debug flag per kernel (kernel_debug_flag), outside cflags_ and lflags_.
+    hasher.update(kernel_debug_flag_);
 
     if (get_rtoptions().get_build_map_enabled()) {
         // Do not hash compiler version when generating compiler logs
@@ -635,6 +641,11 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Flags
     {
         auto common_flags = jit_build_query.common_flags(params);
+        // Firmware keeps full debug info: tt-triage reads its constants and types. Kernels add their
+        // debug flag per kernel (kernel_debug_flag).
+        if (this->is_fw_ && env_.get_rtoptions().get_riscv_debug_info_enabled()) {
+            common_flags += "-g ";
+        }
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
     }
@@ -818,6 +829,14 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
     write_build_state_hash(out_dir);
 }
 
+// A kernel tt-triage reads constants and typed globals from gets -g whenever kernels get debug info.
+static std::string_view kernel_debug_flag(std::string_view env_flag, const JitBuildSettings* settings) {
+    if (!env_flag.empty() && settings != nullptr && settings->needs_full_debug_info()) {
+        return " -g ";
+    }
+    return env_flag;
+}
+
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     TTZoneScopedD(JIT);
 
@@ -943,6 +962,9 @@ bool JitBuildState::need_link(const string& out_dir) const {
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
+    if (!this->is_fw_) {
+        lflags += kernel_debug_flag(env_.kernel_debug_flag_, settings);
+    }
     if (env_.get_rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
         lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
@@ -1195,6 +1217,10 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         target.cflags += " -mno-tt-tensix-optimize-replay ";
     }
     target.lflags = lflags_;
+    if (!this->is_fw_) {
+        target.cflags += kernel_debug_flag(env_.kernel_debug_flag_, settings);
+        target.lflags += kernel_debug_flag(env_.kernel_debug_flag_, settings);
+    }
     target.linker_script = linker_script_;
     target.extra_link_objs = extra_link_objs_;
     target.firmware_is_kernel_object = firmware_is_kernel_object_;

@@ -22,7 +22,13 @@ Configure the Inspector by setting the following environment variables:
    export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=localhost:50051 # optional: set the address of the Inspector RPC server. Default is `localhost:50051`.
    export TT_METAL_INSPECTOR_RPC=1                              # optional: enable/disable the Inspector RPC server. Default is `1` (enabled).
 
-Enabling the Inspector will override `TT_METAL_RISCV_DEBUG_INFO` and debugging info will be generated for riscv elfs.
+Enabling the Inspector turns on debug info for RISC-V ELFs unless `TT_METAL_RISCV_DEBUG_INFO` is set. Firmware, the
+dispatch kernels and ethernet kernels get full debug info (`-g`), which tt-triage reads. Other kernels get minimal debug info
+(`-g1`: function names, line tables and unwind info, enough for callstacks). With DPRINT, the watcher, lightweight kernel
+asserts or LLK asserts on, every kernel gets `-g`, so DPRINT can name enum values and tt-triage can show the arguments and
+locals of a kernel stopped on an assert. Set `TT_METAL_RISCV_DEBUG_INFO=1` for full debug info on every kernel in any
+run: it is needed for local variables in a debugger, the Locals column of `tt-triage --full-callstack`, the kernel-frame
+columns of `dump_mesh_sockets.py`, and `tt_metal/tools/dump-consts.py`.
 You can also use unix sockets for the RPC server by setting `TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS` to a unix socket path,
 e.g. `unix:/tmp/inspector_socket`.
 
