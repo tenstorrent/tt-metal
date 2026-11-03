@@ -133,9 +133,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
-    auto [qB, qNH, qS, qEmbd] = query.padded_shape().to_array_4D();
-    auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
-    auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
     TT_FATAL(
         query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
             key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
@@ -144,12 +141,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         query.physical_volume(),
         key.physical_volume(),
         value.physical_volume());
-
-    const uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
-
-    const uint32_t heads_per_group = qNH / kNH;  // we read heads_per_group heads from Q for one group of K and V
-    const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
-    const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -164,9 +155,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t Sq_chunk_t = chunks.Sq_chunk_t;
     const uint32_t Sk_chunk_t = chunks.Sk_chunk_t;
     const uint32_t heads_per_item = chunks.heads_per_item;
-    const uint32_t rows = chunks.rows();  // tile-rows of one item
+    const uint32_t rows = chunks.rows();                              // tile-rows of one item
+    const uint32_t heads_per_group = shape.q_heads / shape.kv_heads;  // Q heads that share one K/V head
 
-    const float scale = 1.0F / std::sqrt(static_cast<float>(qEmbd));
+    const float scale = 1.0F / std::sqrt(static_cast<float>(shape.qWt * tt::constants::TILE_WIDTH));
     const uint32_t scaler = std::bit_cast<uint32_t>(scale);
     // BF16 copy of the scale for the WH fused scale+exp path (SFPU multiplies P by a BF16
     // immediate there, while the LSE and the backward pass use the full FP32 scale). RNE
@@ -192,12 +184,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     //   sm_block_size  score tiles per pass of the exp step
     constexpr bool fp32_dest_acc_en = true;
     const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
-    const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
+    const uint32_t block_size = get_block_size(shape.vWt, dst_size - 1U);
     // The matmul rectangles come from ttnn's SDPA subblock search: the biggest h x w that fits DST and
     // tiles the rows x cols output.
     using ttnn::prim::detail::determine_largest_subblock_size;
     const auto [qk_block_h, qk_block_w] = determine_largest_subblock_size(rows, Sk_chunk_t, dst_size);
-    const auto [pv_block_h, pv_block_w] = determine_largest_subblock_size(rows, vWt, dst_size - 1U);
+    const auto [pv_block_h, pv_block_w] = determine_largest_subblock_size(rows, shape.vWt, dst_size - 1U);
     const uint32_t sm_block_size = dst_size;
 
     const auto data_format = input_data_format;
@@ -372,10 +364,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,              // num tile in inner dim in query/key (d_qk/TILE_W)
-        vWt,              // num tile in inner dim in value (d_v/TILE_W)
-        St,               // num tile in seq len dim (S/TILE_H)
-        qNH,              // number of heads in query
+        shape.qWt,        // num tile in inner dim in query/key (d_qk/TILE_W)
+        shape.vWt,        // num tile in inner dim in value (d_v/TILE_W)
+        shape.St,         // num tile in seq len dim (S/TILE_H)
+        shape.q_heads,    // number of heads in query
         heads_per_group,  // number of heads per group
         Sk_chunk_t,       // K/V tiles per inner-loop step
         Sq_chunk_t,       // query tile-rows per Q chunk
@@ -395,9 +387,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        vWt,             // num tile in inner dim in output/value (d_v/TILE_W)
-        St,              // num tile in seq len dim (S/TILE_H)
-        qNH,             // number of heads in query
+        shape.vWt,       // num tile in inner dim in output/value (d_v/TILE_W)
+        shape.St,        // num tile in seq len dim (S/TILE_H)
+        shape.q_heads,   // number of heads in query
         Sq_chunk_t,      // query tile-rows per Q chunk
         heads_per_item,  // Q heads stacked in one item
     };
@@ -422,9 +414,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     const std::vector<uint32_t> compute_compile_args = {
         block_size,      // output tiles per DST pass in the element-wise loops
-        qWt,             // num tile in inner dim in query/key (d_qk/TILE_W)
-        vWt,             // num tile in inner dim in value (d_v/TILE_W)
-        St,              // num_seq_len / TILE_H
+        shape.qWt,       // num tile in inner dim in query/key (d_qk/TILE_W)
+        shape.vWt,       // num tile in inner dim in value (d_v/TILE_W)
+        shape.St,        // num_seq_len / TILE_H
         scaler,          // 1/sqrt(d) softmax scale, fp32 bits
         scaler_bf16,     // BF16 (RNE) scale for the WH fused scale+exp path
         minus_one,       // used to transform mask from 1/0 to 0/-1
