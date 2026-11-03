@@ -379,7 +379,7 @@ public:
         const experimental::GlobalCircularBuffer& global_circular_buffer);
 
     // Register a DFB, defaulting its allocation placement to its configuration nodes.
-    // side-effect: Invalidates program allocation and kernel grouping.
+    // side-effect: Invalidates program allocation.
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set,
         const experimental::dfb::DataflowBufferConfig& config,

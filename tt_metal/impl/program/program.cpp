@@ -3811,11 +3811,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
         // Only now that the CB and DFB config regions are placed may local_cb_mask describe the DFBs.
-        if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-            for (ProgramImpl* program : programs) {
-                program_dispatch::finalize_dfb_masks(
-                    metal_ctx, program->get_kernel_groups(index), program->dataflow_buffers());
-            }
+        if (!dataflow_buffers.empty()) {
+            program_dispatch::finalize_dfb_masks(metal_ctx, kernel_groups_getter(index), dataflow_buffers);
         }
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));

@@ -2129,7 +2129,7 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
 }
 
 uint32_t finalize_dfbs(
-    uint32_t programmable_core_type_index,
+    uint32_t /*programmable_core_type_index*/,
     std::vector<std::shared_ptr<tt::tt_metal::KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dataflow_buffers,
     uint32_t base_offset,
@@ -2141,11 +2141,6 @@ uint32_t finalize_dfbs(
 
     const ContextId context_id = dataflow_buffers.front()->get_context_id();
     const auto& hal = MetalContext::instance(context_id).hal();
-    if (hal.get_programmable_core_type(programmable_core_type_index) != HalProgrammableCoreType::TENSIX) {
-        dfb_offset = base_offset;
-        dfb_size = 0;
-        return base_offset;
-    }
 
     // WH/BH addresses a DFB's config by its device slot (slot N starts at N * serialized_size), so the
     // region has to span the highest slot in use on the kernel group, not just hold one entry per DFB.
@@ -2318,11 +2313,6 @@ uint32_t ProgramImpl::add_dataflow_buffer(
 
     this->dataflow_buffers_.push_back(dfb);
     this->dataflow_buffer_by_id_.insert({dfb->id, dfb});
-
-    const auto tensix_index =
-        MetalContext::instance(context_id_).hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    kernel_groups_[tensix_index].clear();
-    core_to_kernel_group_index_table_[tensix_index].clear();
 
     for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
