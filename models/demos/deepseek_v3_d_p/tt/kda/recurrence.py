@@ -16,7 +16,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
-    KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
@@ -255,48 +254,6 @@ def _sp_links(device: ttnn.MeshDevice, sequence_parallel_axis: int) -> int:
         return get_num_links(device, sequence_parallel_axis)
     except (KeyError, ValueError):
         return 0
-
-
-def distributed_prefix(
-    packed: ttnn.Tensor,
-    initial_state: ttnn.Tensor,
-    *,
-    sequence_parallel_axis: int,
-    compute_config: ttnn.DeviceComputeKernelConfig,
-    actual_start: ttnn.Tensor,
-    local_rows: int,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Compose one affine transform per chip in chronological order.
-
-    ``packed`` is this chip's BF16 [1, BH, K, K+V] transform of [A | B] rows. The transforms are
-    gathered as BF16; ``chain_affine_transforms`` derives the order from ``actual_start`` and
-    applies them with FP32 accumulation. Return the local entry state and the replicated final
-    carry on each independent TP line.
-    """
-    device = packed.device()
-    packed_shape = packed.shape
-    batch_heads, key_dim, row_width = packed_shape[1], packed_shape[2], packed_shape[3]
-    # The chain's entry state and final carry share initial_state's FP32 [B*H, K, V] shape.
-    chain_output_bytes = 2 * batch_heads * key_dim * (row_width - key_dim) * initial_state.element_size()
-    gathered_bytes = tuple(device.shape)[sequence_parallel_axis] * packed.logical_volume() * packed.element_size()
-    output_memory = l1_when_it_fits(
-        device, gathered_bytes + chain_output_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE
-    )
-    gathered = ttnn.all_gather(
-        packed,
-        dim=0,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=output_memory,
-    )
-    return ttnn.experimental.kda.chain_affine_transforms(
-        gathered,
-        initial_state,
-        actual_start=actual_start,
-        local_rows=local_rows,
-        memory_config=output_memory,
-        compute_kernel_config=compute_config,
-        sequence_parallel_axis=sequence_parallel_axis,
-    )
 
 
 def _last_group_state(

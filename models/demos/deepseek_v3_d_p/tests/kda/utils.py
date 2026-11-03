@@ -60,6 +60,31 @@ def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     return profile(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, **overrides)
 
 
+def distributed_prefix(
+    packed: ttnn.Tensor,
+    initial_state: ttnn.Tensor,
+    *,
+    sequence_parallel_axis: int,
+    compute_config: ttnn.DeviceComputeKernelConfig,
+    actual_start: ttnn.Tensor,
+    local_rows: int,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """The gathered SP prefix the relay replaces, as a reference: all-gather every rank's BF16 [1, BH, K, K+V]
+    transform and chain them in chronological order. Return the local entry state and the replicated final state."""
+    gathered = ttnn.all_gather(
+        packed, dim=0, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    return ttnn.experimental.kda.chain_affine_transforms(
+        gathered,
+        initial_state,
+        actual_start=actual_start,
+        local_rows=local_rows,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=compute_config,
+        sequence_parallel_axis=sequence_parallel_axis,
+    )
+
+
 @dataclass(frozen=True)
 class KimiK3TestCase:
     config: KDAConfig
