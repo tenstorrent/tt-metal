@@ -99,7 +99,7 @@ public:
     // Element access (unchecked, like std::vector::operator[])
     const ArgValue& operator[](std::size_t index) const { return values_[index]; }
 
-    // Equality comparison (there is deliberately no ordering)
+    // Equality comparison
     friend bool operator==(const ArrayArgValue&, const ArrayArgValue&) = default;
 
     friend std::ostream& operator<<(std::ostream& os, const ArrayArgValue& value) {

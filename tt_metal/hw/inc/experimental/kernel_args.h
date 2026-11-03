@@ -141,13 +141,6 @@ private:
     const tt_l1_ptr T* base_;
 };
 
-// Called when a CTA array index is out of range. ASSERT may expand to inline asm, which a C++17
-// constexpr function cannot contain, so CtaArrayView calls it through this function instead.
-// A side effect: an out-of-range index in a constant expression is a compile error.
-inline void cta_array_index_out_of_range() {
-    ASSERT(false);  // Attempt to access a CTA array element out of range.
-}
-
 // A read-only view of a CTA array. The elements are compile-time constants, and so is the view:
 //   constexpr uint32_t p = get_arg(args::page_sizes)[2];
 template <typename T, uint32_t N>
@@ -155,10 +148,9 @@ class CtaArrayView {
 public:
     constexpr explicit CtaArrayView(const std::array<T, N>& values) : values_(&values) {}
 
+    // An out-of-range index in a constant expression is a compile error.
     FORCE_INLINE constexpr T operator[](uint32_t index) const {
-        if (index >= N) {
-            cta_array_index_out_of_range();
-        }
+        ASSERT(index < N);
         return (*values_)[index];
     }
     static constexpr uint32_t size() { return N; }
