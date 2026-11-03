@@ -11,6 +11,7 @@
 #include <cstring>
 #include <type_traits>
 
+#include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -457,6 +458,9 @@ FORCE_INLINE void noc_async_write_sharded(
             l1_addr += write_size;
             remaining -= write_size;
         }
+        // The loop also stops at the last page of the tensor; a request for more bytes than remain would leave the
+        // destination part-written, so surface that rather than silently returning stale data.
+        ASSERT(remaining == 0);
     }
 }
 
@@ -520,6 +524,9 @@ FORCE_INLINE void noc_async_read_sharded(
             l1_addr += read_size;
             remaining -= read_size;
         }
+        // The loop also stops at the last page of the tensor; a request for more bytes than remain would leave the
+        // destination part-filled, so surface that rather than silently returning stale data.
+        ASSERT(remaining == 0);
     }
 }
 
