@@ -31,7 +31,6 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.demos.laguna.tt.generator import LagunaGenerator
 from models.demos.laguna.tests.laguna_test_utils import (
     add_profile_args,
     assert_memory_margin,
@@ -42,6 +41,7 @@ from models.demos.laguna.tests.laguna_test_utils import (
     profile_from_args,
     profile_summary,
 )
+from models.demos.laguna.tt.generator import LagunaGenerator
 
 
 def _capture(mesh, body):
@@ -190,7 +190,9 @@ def main():
                 dec = gen.decode_forward(
                     torch.tensor([[prompt[0]], [prompt[1]]]), torch.tensor([64, 64]), page_table=pt2, kv_cache=kv2
                 )
-                batch_ok = bool(torch.as_tensor(dec).numel() == B and torch.isfinite(torch.as_tensor(dec).float()).all())
+                batch_ok = bool(
+                    torch.as_tensor(dec).numel() == B and torch.isfinite(torch.as_tensor(dec).float()).all()
+                )
             except Exception as e:
                 batch_ok = f"FAILED: {repr(e)[:160]}"
 

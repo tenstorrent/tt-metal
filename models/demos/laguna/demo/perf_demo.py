@@ -191,7 +191,9 @@ def summarize(result: dict) -> dict:
 
 def table(rows: dict, modes: list[str], input_lens: list[int], batch: int = 1) -> str:
     def cell(mean, low, high, fmt):
-        return fmt.format(mean) if abs(high - low) < 1e-9 else f"{fmt.format(mean)} ({fmt.format(low)}-{fmt.format(high)})"
+        return (
+            fmt.format(mean) if abs(high - low) < 1e-9 else f"{fmt.format(mean)} ({fmt.format(low)}-{fmt.format(high)})"
+        )
 
     header = ["Input tokens (requested)", "Input tokens (actual)"]
     for mode in modes:
@@ -229,11 +231,16 @@ def table(rows: dict, modes: list[str], input_lens: list[int], batch: int = 1) -
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--modes", default="normal,dflash", help="comma-separated: normal, dflash (default: both)")
-    parser.add_argument("--input-lens", default=None, help="comma-separated input lengths (default: 128,1024,2048,4096,8192)")
+    parser.add_argument(
+        "--input-lens", default=None, help="comma-separated input lengths (default: 128,1024,2048,4096,8192)"
+    )
     parser.add_argument("--prompts", type=int, default=None, help="random prompts per input length (default: 1)")
     parser.add_argument("--output-tokens", type=int, default=512, help="tokens generated per request (default: 512)")
     parser.add_argument(
-        "--batch", type=int, default=1, help="concurrent users (server LAGUNA_MAX_NUM_SEQS, up to 32; normal decode only)"
+        "--batch",
+        type=int,
+        default=1,
+        help="concurrent users (server LAGUNA_MAX_NUM_SEQS, up to 32; normal decode only)",
     )
     parser.add_argument("--model", default=os.environ.get("HF_MODEL", "poolside/Laguna-S-2.1"))
     parser.add_argument("--output-dir", default=None)
@@ -243,7 +250,9 @@ def main() -> int:
         help="measure the server already running on port 8000 instead of starting one per mode (one mode only)",
     )
     parser.add_argument("--startup-timeout", type=int, default=2400, help="seconds to wait for each server")
-    parser.add_argument("--example-tokens", type=int, default=200, help="max tokens per example answer (0: no examples)")
+    parser.add_argument(
+        "--example-tokens", type=int, default=200, help="max tokens per example answer (0: no examples)"
+    )
     args = parser.parse_args()
 
     if args.batch > 1 and args.modes == "normal,dflash":
@@ -258,14 +267,12 @@ def main() -> int:
         parser.error(f"unknown mode(s) {unknown}; choose from {sorted(MODES)}")
     if args.use_running_server and len(modes) != 1:
         parser.error("--use-running-server measures one server: pass exactly one --modes value")
-    input_lens = (
-        [int(value) for value in args.input_lens.split(",")]
-        if args.input_lens
-        else DEFAULT_INPUT_LENS
-    )
+    input_lens = [int(value) for value in args.input_lens.split(",")] if args.input_lens else DEFAULT_INPUT_LENS
     prompts = args.prompts or 1
-    out = Path(args.output_dir) if args.output_dir else REPO_ROOT / "generated" / "laguna_perf_demo" / time.strftime(
-        "%Y%m%dT%H%M%SZ", time.gmtime()
+    out = (
+        Path(args.output_dir)
+        if args.output_dir
+        else REPO_ROOT / "generated" / "laguna_perf_demo" / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     )
     out.mkdir(parents=True, exist_ok=True)
 
@@ -300,7 +307,9 @@ def main() -> int:
                 # on the exact prompt length (DFlash compiles one per new length) are built before the measured run.
                 n = prompts * args.batch
                 # batch > 1 (normal decode only) needs no per-prompt program builds: one short request warms the length
-                warm = bench(args.model, input_len, 16, prompts if args.batch == 1 else 1, mode_dir, f"warmup_isl_{input_len}")
+                warm = bench(
+                    args.model, input_len, 16, prompts if args.batch == 1 else 1, mode_dir, f"warmup_isl_{input_len}"
+                )
                 result = bench(args.model, input_len, args.output_tokens, n, mode_dir, f"isl_{input_len}", args.batch)
                 if args.batch == 1 and (warm.get("input_lens") or []) != (result.get("input_lens") or []):
                     print(f"[perf demo] warning: warm-up prompt lengths {warm.get('input_lens')} differ from the "
@@ -337,8 +346,13 @@ def main() -> int:
     (out / "results.md").write_text(notes + "\n\n" + report + "\n")
     (out / "results.json").write_text(
         json.dumps(
-            {"model": args.model, "batch": args.batch, "prompts": prompts * args.batch,
-             "output_tokens": args.output_tokens, "summary": rows},
+            {
+                "model": args.model,
+                "batch": args.batch,
+                "prompts": prompts * args.batch,
+                "output_tokens": args.output_tokens,
+                "summary": rows,
+            },
             indent=1,
         )
     )

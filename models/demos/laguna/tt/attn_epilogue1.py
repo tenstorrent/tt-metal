@@ -30,8 +30,9 @@ def _cb(grid, i, pages):
     )
 
 
-def attn_epilogue1(attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.0, rows=1, row_in=0, out=None,
-                   row_out=0):
+def attn_epilogue1(
+    attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.0, rows=1, row_in=0, out=None, row_out=0
+):
     """attn: SDPA output [1, rows, H, 128] bf16 TILE; qkv: the fused qkv(+gate) output [.., R, W] bf16 TILE whose rows
     row_in .. row_in + rows - 1 hold the gate logits at columns g_col .. g_col + H - 1 (g_col a multiple of 32).
     Returns [1, 1, rows, H * 128] bf16 TILE in out_mem: row b = concat over heads of attn[b, h] * softplus(g[b, h]);
@@ -61,7 +62,9 @@ def attn_epilogue1(attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.
         kernel_source=str(_KDIR / "ae1_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[H, g_col // 32, tj] + pos + [len(attns)]
+        compile_time_args=[H, g_col // 32, tj]
+        + pos
+        + [len(attns)]
         + list(ttnn.TensorAccessorArgs(attn).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(qkv).get_compile_time_args()),
         common_runtime_args=[attn.buffer_address(), qkv.buffer_address()]

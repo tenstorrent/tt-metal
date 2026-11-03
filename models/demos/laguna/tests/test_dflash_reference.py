@@ -507,10 +507,7 @@ def test_draft_proposals_track_real_target_greedy(model_id):
       layer 39 in every slice 0.101 / 0.10.
     """
 
-    from models.demos.laguna.tests.dflash_acceptance import (
-        load_target_embedding_and_lm_head,
-        teacher_forced_acceptance,
-    )
+    from models.demos.laguna.tests.dflash_acceptance import load_target_embedding_and_lm_head, teacher_forced_acceptance
 
     capture = torch.load(_capture_path(model_id))
     assert capture["model"] == model_id

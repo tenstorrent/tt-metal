@@ -117,7 +117,9 @@ def test_laguna_s_accuracy():
     rank = [int(found[0, 0]) if found.numel() else 100 for found in ranks]  # 0 = Laguna's top token
     pccs = [pcc(row, reference[i]) for i, row in enumerate(logits)]
     top_ids = [reference[i].float().topk(100).indices for i in range(positions)]
-    pccs_top = [pcc(row.reshape(-1)[ids], reference[i].reshape(-1)[ids]) for i, (row, ids) in enumerate(zip(logits, top_ids))]
+    pccs_top = [
+        pcc(row.reshape(-1)[ids], reference[i].reshape(-1)[ids]) for i, (row, ids) in enumerate(zip(logits, top_ids))
+    ]
     result = {
         "top1": sum(r == 0 for r in rank) / positions,
         "top5": sum(r < 5 for r in rank) / positions,

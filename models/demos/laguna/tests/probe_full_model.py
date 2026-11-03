@@ -13,6 +13,7 @@ import argparse
 import json
 
 import torch
+from tt_transformers.modules.sampling.sampling_1d import Sampling1D
 
 import ttnn
 from models.demos.laguna.tests.laguna_test_utils import (
@@ -23,7 +24,6 @@ from models.demos.laguna.tests.laguna_test_utils import (
     profile_summary,
 )
 from models.demos.laguna.tt.model import LagunaModel
-from tt_transformers.modules.sampling.sampling_1d import Sampling1D
 
 
 def main():

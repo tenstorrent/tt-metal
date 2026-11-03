@@ -20,12 +20,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.laguna.tests.laguna_test_utils import (
-    close_mesh,
-    compose_replicated,
-    open_mesh,
-    resolve_profile,
-)
+from models.demos.laguna.tests.laguna_test_utils import close_mesh, compose_replicated, open_mesh, resolve_profile
 from models.demos.laguna.tt.dflash_reference import (
     DEFAULT_DFLASH_SNAPSHOT,
     DFlashTargetAuxCapture,
@@ -466,7 +461,9 @@ def test_fixed_context_append_matches_rolling_window(monkeypatch):
     monkeypatch.setattr(ttnn, "add", lambda a, b: a + b)
     monkeypatch.setattr(ttnn, "copy", lambda src, dst: dst.copy_(src))
     monkeypatch.setattr(ttnn, "deallocate", lambda value: None)
-    monkeypatch.setattr(ttnn, "slice", lambda value, starts, ends: value[starts[0] : ends[0], starts[1] : ends[1], starts[2] : ends[2]])
+    monkeypatch.setattr(
+        ttnn, "slice", lambda value, starts, ends: value[starts[0] : ends[0], starts[1] : ends[1], starts[2] : ends[2]]
+    )
 
     cache = object.__new__(DFlashTTProposalCache)
     cache.core = core
@@ -490,7 +487,9 @@ def test_fixed_context_append_matches_rolling_window(monkeypatch):
     generator = torch.Generator().manual_seed(0)
     while position < 900:
         count = int(torch.randint(1, 17, (1,), generator=generator))
-        cache._update_fixed(DFlashTargetAuxCapture(rows_of(position, count), start_position=position, row_count=count), False)
+        cache._update_fixed(
+            DFlashTargetAuxCapture(rows_of(position, count), start_position=position, row_count=count), False
+        )
         position += count
         start, held = cache.context_bounds()
         assert held == min(position, 511) and start == position - held
@@ -836,7 +835,9 @@ def _full_draft_one_round_gate():
             e, g = int(expected_top1[row]), int(got_top1[row])
             ref, dev = expected_logits[row].float(), got_logits[row].float()
             ref_vals, ref_ids = ref.sort(descending=True)
-            bf16_step = float(torch.finfo(torch.bfloat16).eps) * 2.0 ** torch.floor(torch.log2(ref_vals[0].abs())).item()
+            bf16_step = (
+                float(torch.finfo(torch.bfloat16).eps) * 2.0 ** torch.floor(torch.log2(ref_vals[0].abs())).item()
+            )
             is_near_tie = float(ref[e] - ref[g]) <= bf16_step  # g is within one bf16 step of the reference max
             print(
                 f"DFLASH_TT_FULL{_LAYERS}_MISMATCH row={row} expected={e} got={g} "
@@ -852,9 +853,9 @@ def _full_draft_one_round_gate():
         assert not draft_accuracy.tied_rows, "deterministic exact gate unexpectedly contains a reference tie"
         # draft_accuracy.passed requires every non-tied row exact; the near-tie rule below is the only exception.
         assert len(near_tie_rows) <= 1, f"more than one bf16 near-tie row: {near_tie_rows}"
-        assert top1_matches + len(near_tie_rows) == 15, (
-            f"full-draft DFlash target top-1 matches {top1_matches}/15 with near-tie rows {near_tie_rows}"
-        )
+        assert (
+            top1_matches + len(near_tie_rows) == 15
+        ), f"full-draft DFlash target top-1 matches {top1_matches}/15 with near-tie rows {near_tie_rows}"
     finally:
         if proposal_cache is not None:
             proposal_cache.close()

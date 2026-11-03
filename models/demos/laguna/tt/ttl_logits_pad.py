@@ -12,6 +12,7 @@ columns, either all copied (x has them) or all filled, so each kernel's trip cou
 """
 
 import ttl
+
 import ttnn
 
 TILE = 32

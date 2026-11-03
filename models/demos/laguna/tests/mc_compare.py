@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Compare a production MultichipDecoder on P150 D=1/2/4 with HF.
 
 The default ``both`` mode retains the direct optimized-vs-multichip comparison only on D1,

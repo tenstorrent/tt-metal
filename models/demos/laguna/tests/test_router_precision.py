@@ -131,6 +131,6 @@ def test_router_matches_hf_on_real_hidden_states(device, dump_path):
         f"precise slot_agree={results['precise'][0]:.4f} max_w_err={results['precise'][1]:.4f}"
     )
     assert results["precise"][0] >= results["bf16"][0], "precise router agrees less with HF than the bf16 router"
-    assert results["precise"][0] >= MIN_SLOT_AGREEMENT, (
-        f"layer {dump['layer']} precise router slot agreement {results['precise'][0]:.4f} < {MIN_SLOT_AGREEMENT}"
-    )
+    assert (
+        results["precise"][0] >= MIN_SLOT_AGREEMENT
+    ), f"layer {dump['layer']} precise router slot agreement {results['precise'][0]:.4f} < {MIN_SLOT_AGREEMENT}"

@@ -680,7 +680,9 @@ class OptimizedDecoder(LightweightModule):
         # cut-off-shifted bf16 top-k; "bf16": the original single-pass bf16 router (A/B only).
         self.router_precision = os.environ.get(ROUTER_PRECISION_ENV, "precise").strip().lower()
         if self.router_precision not in ROUTER_PRECISIONS:
-            raise ValueError(f"{ROUTER_PRECISION_ENV} must be one of {ROUTER_PRECISIONS}; got {self.router_precision!r}")
+            raise ValueError(
+                f"{ROUTER_PRECISION_ENV} must be one of {ROUTER_PRECISIONS}; got {self.router_precision!r}"
+            )
         # The precise router's logits matmul: HiFi4 keeps every mantissa bit of the bf16 operands and
         # fp32 accumulation/output keeps the near-tie ordering (S layer 1: K-th vs (K+1)-th median gap 1.7e-4).
         self._ck_router_precise = self._ck_hifi4

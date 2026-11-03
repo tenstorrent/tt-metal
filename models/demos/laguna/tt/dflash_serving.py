@@ -157,13 +157,11 @@ class DFlashServedController:
         replace = int(capture.row_count) == self.cache.max_context_rows
         if replace and int(capture.end_position) <= current_end:
             raise ValueError(
-                f"full DFlash prefill tail ends at {capture.end_position}, "
-                f"not after retained end {current_end}"
+                f"full DFlash prefill tail ends at {capture.end_position}, " f"not after retained end {current_end}"
             )
         if not replace and int(capture.start_position) != current_end + 1:
             raise ValueError(
-                f"short DFlash prefill capture starts at {capture.start_position}, "
-                f"expected {current_end + 1}"
+                f"short DFlash prefill capture starts at {capture.start_position}, " f"expected {current_end + 1}"
             )
         self.cache.update_target_capture(capture, replace=replace)
         self._expected_input_position = self._context_end() + 1

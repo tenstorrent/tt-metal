@@ -33,13 +33,9 @@ def single_shot_fill_page_table(
         raise ValueError(f"fill page-table sequence length must be positive, got {seq_len}")
     relative_start = start_pos - base_pos
     if relative_start < 0:
-        raise ValueError(
-            f"fill start_pos {start_pos} precedes page-table base position {base_pos}"
-        )
+        raise ValueError(f"fill start_pos {start_pos} precedes page-table base position {base_pos}")
     if relative_start % block_size:
-        raise ValueError(
-            f"fill relative start {relative_start} is not aligned to block size {block_size}"
-        )
+        raise ValueError(f"fill relative start {relative_start} is not aligned to block size {block_size}")
     if relative_start == 0:
         return fill_page_table
 

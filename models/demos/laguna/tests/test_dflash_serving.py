@@ -12,11 +12,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.laguna.tt.dflash_reference import (
-    DFlashTargetAuxCapture,
-    LagunaDFlashConfig,
-    published_dflash_config,
-)
+from models.demos.laguna.tt.dflash_reference import DFlashTargetAuxCapture, LagunaDFlashConfig, published_dflash_config
 from models.demos.laguna.tt.dflash_serving import DFlashServedController, DFlashServingEnvelope
 from models.demos.laguna.tt.generator_vllm import LagunaForCausalLM
 from models.demos.laguna.tt.model import LagunaModel
@@ -442,10 +438,7 @@ def test_vllm_dflash_verify_is_contiguous_uniform_and_returns_aux_capture(expect
 
     # Hybrid KV: one block table per group (full + three sliding), each repeated to the verify rows, and
     # every logical layer receives its own group's table.
-    from models.demos.laguna.tt.kv_grouping import (
-        build_hybrid_kv_layout,
-        laguna_hybrid_layer_kinds,
-    )
+    from models.demos.laguna.tt.kv_grouping import build_hybrid_kv_layout, laguna_hybrid_layer_kinds
 
     layout = build_hybrid_kv_layout(laguna_hybrid_layer_kinds(8))
     bridge._hybrid_kv_layout = lambda: layout
@@ -664,7 +657,9 @@ def test_eager_fallback_decode_samples_on_host_into_the_warm_token_buffer(monkey
     ]
     # Penalized greedy request: sampled on the host (argmax here) and written to the warm token buffer.
     params = SimpleNamespace(temperature=torch.tensor([0.0]), repetition_penalty=torch.tensor([1.0]))
-    assert bridge._eager_decode_fallback(tokens, pos, [[0]], [], None, False, params, {}, False, buffer, True) == [buffer]
+    assert bridge._eager_decode_fallback(tokens, pos, [[0]], [], None, False, params, {}, False, buffer, True) == [
+        buffer
+    ]
     assert int(copied[-1][0].reshape(-1)[0]) == 5 and copied[-1][1] is buffer
     # A steady (overlapped) step continues from the token it sampled, not the plugin's possibly stale input.
     seen = []
@@ -675,6 +670,8 @@ def test_eager_fallback_decode_samples_on_host_into_the_warm_token_buffer(monkey
     bridge._eager_decode_fallback(stale_tokens, stale_pos, [[0]], [], None, False, params, {}, False, buffer, False)
     assert seen[-1] == (5, 21)
     # A batch reset (new request) takes the plugin's input; synchronous readback returns the sampled ids directly.
-    assert bridge._eager_decode_fallback(tokens, pos, [[0]], [], None, False, params, {}, True, buffer, True).tolist() == [5]
+    assert bridge._eager_decode_fallback(
+        tokens, pos, [[0]], [], None, False, params, {}, True, buffer, True
+    ).tolist() == [5]
     assert seen[-1] == (7, 20)
     assert bridge.gen.counters["spec_mode_fallback_decode"] == 3

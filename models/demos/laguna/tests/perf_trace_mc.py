@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Warmed prefill + traced decode perf for one production Laguna layer on P150 D=1/2/4.
 
 Mirrors tests/perf_trace_opt.py but drives packed ``MultichipDecoder`` on the selected profile.
@@ -14,8 +16,8 @@ Signposts: PERF_PREFILL/_END, PERF_DECODE/_END. Wall-clock -> perf_walltime_mc_l
 """
 import argparse
 import json
-from pathlib import Path
 import time
+from pathlib import Path
 
 import torch
 
@@ -147,9 +149,7 @@ def main():
         "prefill_len": prefill_len,
         "decode_iters": decode_iters,
     }
-    mc_p, mc_d, memory = measure(
-        MultichipDecoder, profile, layer, prefill_len, decode_iters, do_signpost=True
-    )
+    mc_p, mc_d, memory = measure(MultichipDecoder, profile, layer, prefill_len, decode_iters, do_signpost=True)
     res["multichip_prefill_ms"] = round(mc_p, 3)
     res["multichip_decode_ms_per_token"] = round(mc_d, 4)
     res["memory"] = memory

@@ -21,7 +21,6 @@ layer (slot of position p: (p - base_u) % 544), exactly as the batch-1 ring (dfl
 
 from __future__ import annotations
 
-import math
 import os
 import time
 
@@ -62,7 +61,9 @@ class BatchedDFlash:
         # 1..K: each user runs only its first Q = K + 1 rows (rounded up to a power of two), G = 32 / Q users per tile
         self.Q = 1 << (self.K).bit_length()
         if self.Q > self.block or self.U % (TILE // self.Q):
-            raise ValueError(f"batched draft: K={self.K} needs {self.Q} rows per user; U must be a multiple of {TILE // self.Q}")
+            raise ValueError(
+                f"batched draft: K={self.K} needs {self.Q} rows per user; U must be a multiple of {TILE // self.Q}"
+            )
         self.G = TILE // self.Q
         self.P = self.U // self.G  # user groups: group c holds users c * G .. in rows of Q each
         # per-user context rings [U, nkv, RING, hd] (the draft's attention runs per user: dflash_query_forward_users)
@@ -79,7 +80,9 @@ class BatchedDFlash:
         self._rp = -(-self._gqa * self.Q // TILE) * TILE  # per-user query block rows (dflash_q_users.to_users)
         # the draft's U * 16-row norms width-sharded over the grid (the interleaved norm used 16 cores)
         for layer in core.layers.values():
-            layer._norm_max_rows = int(os.environ.get("TT_LAGUNA_DFLASH_DRAFT_NORM_ROWS", str(max(TILE, self.U * self.Q))))
+            layer._norm_max_rows = int(
+                os.environ.get("TT_LAGUNA_DFLASH_DRAFT_NORM_ROWS", str(max(TILE, self.U * self.Q)))
+            )
             layer._dflash_rows_per_user = self.Q
             layer._glu_fused_silu = os.environ.get("TT_LAGUNA_DFLASH_DRAFT_GLU_FUSED", "1") == "1"
 
@@ -293,7 +296,9 @@ class BatchedDFlash:
         cur_tt = ttnn.typecast(ttnn.reshape(ridx_tt, (T,)), ttnn.int32)
         rope_rows = self._rope_gather(ridx_tt, T)
         h = m.embed_decode(tok_tt)
-        h, aux = m.verify_layers_batched(h, m.verify_inputs_batched(cur_tt, ridx_tt, pt_tt), gen._kv_cache, capture=True)
+        h, aux = m.verify_layers_batched(
+            h, m.verify_inputs_batched(cur_tt, ridx_tt, pt_tt), gen._kv_cache, capture=True
+        )
         self._greedy_into(m.lm_head_shards_decode(h), bufs)
         x = self.core.combine_aux_hidden_states(aux)  # [1, T, H]
         rings, srcs = [], []

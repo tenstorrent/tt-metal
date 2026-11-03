@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 from types import SimpleNamespace
 
 from models.common.readiness_check.run_vllm_server import _stream_choice_is_token_event

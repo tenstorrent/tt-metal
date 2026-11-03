@@ -26,7 +26,7 @@ def test_s_regression_request_no_longer_ends_mid_chunk():
     assert kv_cache_seq_len(336, 131072) == 384
 
 
-def test_capped_at_max_and_rejects_unaligned_max():
+def test_capped_at_max_and_rejects_unaligned_max(expect_error):
     assert kv_cache_seq_len(200000, 131072) == 131072
-    with pytest.raises(ValueError, match="multiple of 128"):
+    with expect_error(ValueError, "multiple of 128"):
         kv_cache_seq_len(10, 131072 - 32)

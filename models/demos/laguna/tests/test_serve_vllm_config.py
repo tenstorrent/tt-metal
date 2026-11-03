@@ -642,8 +642,9 @@ def test_s_is_the_default_model_and_selects_p150x4(tmp_path):
 
 
 def test_s_uniform_kv_rollback_needs_no_ack_and_keeps_its_measured_limit(tmp_path):
-    rollback = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                       TT_LAGUNA_HYBRID_KV="0")
+    rollback = _config(
+        tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3", TT_LAGUNA_HYBRID_KV="0"
+    )
     assert rollback.returncode == 0, rollback.stderr
     assert "hybrid_kv=0\n" in rollback.stdout
     assert "hybrid_kv_status=operator_rollback_uniform\n" in rollback.stdout
@@ -651,15 +652,22 @@ def test_s_uniform_kv_rollback_needs_no_ack_and_keeps_its_measured_limit(tmp_pat
     assert "max_model_len=131072\n" in rollback.stdout
     assert "experimental_overrides=<none>\n" in rollback.stdout
 
-    too_long = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                       TT_LAGUNA_HYBRID_KV="0", LAGUNA_MAX_MODEL_LEN="262144")
+    too_long = _config(
+        tmp_path,
+        HF_MODEL=S,
+        LAGUNA_PROFILE="p150x4",
+        TT_VISIBLE_DEVICES="0,1,2,3",
+        TT_LAGUNA_HYBRID_KV="0",
+        LAGUNA_MAX_MODEL_LEN="262144",
+    )
     assert too_long.returncode == 2
     assert "exceeds the verified p150x4 limit 131072" in too_long.stderr
 
 
 def test_s_hybrid_rejects_context_beyond_its_declared_1048576(tmp_path):
-    result = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                     LAGUNA_MAX_MODEL_LEN="2097152")
+    result = _config(
+        tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3", LAGUNA_MAX_MODEL_LEN="2097152"
+    )
     assert result.returncode == 2
     assert "exceeds the verified p150x4 limit 1048576" in result.stderr
 
@@ -687,14 +695,26 @@ def test_xs_p150x4_is_unchanged_by_s_policies(tmp_path):
 
 @pytest.mark.parametrize("hybrid", ("1", "0"))
 def test_s_p150x4_accepts_up_to_32_sequences_on_request(tmp_path, hybrid):
-    accepted = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                       TT_LAGUNA_HYBRID_KV=hybrid, LAGUNA_MAX_NUM_SEQS="32")
+    accepted = _config(
+        tmp_path,
+        HF_MODEL=S,
+        LAGUNA_PROFILE="p150x4",
+        TT_VISIBLE_DEVICES="0,1,2,3",
+        TT_LAGUNA_HYBRID_KV=hybrid,
+        LAGUNA_MAX_NUM_SEQS="32",
+    )
     assert accepted.returncode == 0, accepted.stderr
     assert "max_num_seqs=32\n" in accepted.stdout
     assert f"hybrid_kv={hybrid}\n" in accepted.stdout
 
-    rejected = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                       TT_LAGUNA_HYBRID_KV=hybrid, LAGUNA_MAX_NUM_SEQS="33")
+    rejected = _config(
+        tmp_path,
+        HF_MODEL=S,
+        LAGUNA_PROFILE="p150x4",
+        TT_VISIBLE_DEVICES="0,1,2,3",
+        TT_LAGUNA_HYBRID_KV=hybrid,
+        LAGUNA_MAX_NUM_SEQS="33",
+    )
     assert rejected.returncode == 2
     assert "exceeds the p150x4 limit 32" in rejected.stderr
 
@@ -722,12 +742,18 @@ def test_unknown_model_is_rejected(tmp_path):
 
 
 def test_chat_template_kwargs_override(tmp_path):
-    off = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                  LAGUNA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}')
+    off = _config(
+        tmp_path,
+        HF_MODEL=S,
+        LAGUNA_PROFILE="p150x4",
+        TT_VISIBLE_DEVICES="0,1,2,3",
+        LAGUNA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}',
+    )
     assert off.returncode == 0, off.stderr
     assert 'chat_template_kwargs={"enable_thinking": false}\n' in off.stdout
-    none = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                   LAGUNA_CHAT_TEMPLATE_KWARGS="")
+    none = _config(
+        tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3", LAGUNA_CHAT_TEMPLATE_KWARGS=""
+    )
     assert none.returncode == 0, none.stderr
     assert "chat_template_kwargs=<none>\n" in none.stdout
 

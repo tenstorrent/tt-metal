@@ -33,10 +33,10 @@ from pathlib import Path
 
 import torch
 
+from models.common.readiness_check.schema import Reference, ReferenceEntry, load_reference, save_reference
 from models.demos.laguna.tests import laguna_reference as R
 from models.demos.laguna.tests import laguna_weights as W
 from models.demos.laguna.tt.model_spec import MODEL_ID
-from models.common.readiness_check.schema import Reference, ReferenceEntry, load_reference, save_reference
 
 TESTS_DIR = Path(__file__).resolve().parent
 XS_REFERENCE = TESTS_DIR / "reference_outputs" / "readiness_aime24_chat.refpt"
@@ -45,7 +45,9 @@ DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 
 
 def chat_template_tokens(tokenizer, prompt_text):
-    out = tokenizer.apply_chat_template([{"role": "user", "content": prompt_text}], add_generation_prompt=True, tokenize=True)
+    out = tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt_text}], add_generation_prompt=True, tokenize=True
+    )
     if isinstance(out, dict) or hasattr(out, "get"):
         out = out["input_ids"]
     if len(out) and isinstance(out[0], (list, tuple)):
@@ -113,8 +115,12 @@ def main():
     ap.add_argument("--source-reference", type=Path, default=XS_REFERENCE)
     ap.add_argument("--router-dump", type=Path, default=None, help="directory for per-MoE-layer router inputs")
     ap.add_argument("--threads", type=int, default=0, help="torch CPU threads (0 = torch default)")
-    ap.add_argument("--save-logits", type=Path, default=None, help="also save the [G, vocab] fp32 logits (accuracy gates)")
-    ap.add_argument("--prompt-len", type=int, default=None, help="shorten the question to an exactly N-token chat prompt")
+    ap.add_argument(
+        "--save-logits", type=Path, default=None, help="also save the [G, vocab] fp32 logits (accuracy gates)"
+    )
+    ap.add_argument(
+        "--prompt-len", type=int, default=None, help="shorten the question to an exactly N-token chat prompt"
+    )
     args = ap.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -185,8 +191,16 @@ def main():
     topk = torch.topk(logits, args.top_k, dim=-1).indices.to(torch.int32)
     if args.save_logits is not None:
         args.save_logits.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({"logits": logits.to(torch.float32).contiguous(), "prompt_len": P, "gen_len": G,
-                    "model": MODEL_ID, "dtype": args.dtype}, args.save_logits)
+        torch.save(
+            {
+                "logits": logits.to(torch.float32).contiguous(),
+                "prompt_len": P,
+                "gen_len": G,
+                "model": MODEL_ID,
+                "dtype": args.dtype,
+            },
+            args.save_logits,
+        )
         print(f"Logits saved to: {args.save_logits} {tuple(logits.shape)}", flush=True)
     agree = (topk[:, 0] == torch.tensor(cont_ids, dtype=torch.int32)).float().mean().item()
     print(f"HF top-1 equals the forced continuation token at {agree:.3f} of positions", flush=True)

@@ -33,7 +33,6 @@ from models.demos.laguna.tests.laguna_test_utils import (
     profile_from_args,
     profile_summary,
 )
-
 from models.demos.laguna.tt.model_spec import MODEL_ID  # noqa: E402
 
 # Teacher-forced HF top-K reference for the selected checkpoint. XS's came from the shared full-model

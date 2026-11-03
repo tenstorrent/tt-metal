@@ -43,7 +43,9 @@ def test_penalties_match_vllm_reference():
 
 
 def test_penalties_active_detection():
-    neutral = SimpleNamespace(repetition_penalty=torch.ones(4), presence_penalty=torch.zeros(4), frequency_penalty=torch.zeros(4))
+    neutral = SimpleNamespace(
+        repetition_penalty=torch.ones(4), presence_penalty=torch.zeros(4), frequency_penalty=torch.zeros(4)
+    )
     assert not H.penalties_active(neutral)
     assert not H.penalties_active(None)
     for name, value in (("repetition_penalty", 1.2), ("presence_penalty", 0.5), ("frequency_penalty", -0.5)):
@@ -87,8 +89,13 @@ def test_unseeded_rows_vary():
 def test_repetition_penalty_changes_greedy_choice():
     logits = torch.tensor([[1.0, 0.95, 0.1]])
     sp = SimpleNamespace(
-        temperature=torch.tensor([0.0]), top_k=torch.tensor([0]), top_p=torch.tensor([1.0]), seed=torch.tensor([-1]),
-        presence_penalty=torch.zeros(1), frequency_penalty=torch.zeros(1), repetition_penalty=torch.tensor([1.5]),
+        temperature=torch.tensor([0.0]),
+        top_k=torch.tensor([0]),
+        top_p=torch.tensor([1.0]),
+        seed=torch.tensor([-1]),
+        presence_penalty=torch.zeros(1),
+        frequency_penalty=torch.zeros(1),
+        repetition_penalty=torch.tensor([1.5]),
     )
     out = H.sample_penalized(logits, sp, torch.tensor([[-1]]), torch.tensor([[0, 0]]), torch.tensor([3]))
     assert out[0] == 1  # token 0 was generated before; 1.0/1.5 < 0.95
@@ -99,8 +106,9 @@ def test_device_sampler_treats_plugin_seed_sentinel_as_unseeded():
     # deterministic and the plugin's no-seed variety test failed.
     from models.demos.laguna.tt.generator_vllm import LagunaForCausalLM
 
-    sp = SimpleNamespace(temperature=torch.tensor([1.0]), top_k=torch.tensor([0]), top_p=torch.tensor([1.0]),
-                         seed=torch.tensor([-1]))
+    sp = SimpleNamespace(
+        temperature=torch.tensor([1.0]), top_k=torch.tensor([0]), top_p=torch.tensor([1.0]), seed=torch.tensor([-1])
+    )
     seeds = {LagunaForCausalLM._sampling_row_params(sp, 0)[3] for _ in range(10)}
     assert len(seeds) > 1 and all(s >= 0 for s in seeds)
     sp.seed = torch.tensor([77])
@@ -113,11 +121,16 @@ def test_device_sampler_receives_inverse_temperature():
     from models.demos.laguna.tt.generator_vllm import LagunaForCausalLM
 
     for temperature, expected in ((2.0, 0.5), (0.5, 2.0), (1.0, 1.0)):
-        sp = SimpleNamespace(temperature=torch.tensor([temperature]), top_k=torch.tensor([10]),
-                             top_p=torch.tensor([1.0]), seed=torch.tensor([3]))
+        sp = SimpleNamespace(
+            temperature=torch.tensor([temperature]),
+            top_k=torch.tensor([10]),
+            top_p=torch.tensor([1.0]),
+            seed=torch.tensor([3]),
+        )
         k, p, inv_t, s = LagunaForCausalLM._sampling_row_params(sp, 0)
         assert (k, p, s) == (10, 1.0, 3)
         assert inv_t == pytest.approx(expected)
-    greedy = SimpleNamespace(temperature=torch.tensor([0.0]), top_k=torch.tensor([0]), top_p=torch.tensor([1.0]),
-                             seed=torch.tensor([-1]))
+    greedy = SimpleNamespace(
+        temperature=torch.tensor([0.0]), top_k=torch.tensor([0]), top_p=torch.tensor([1.0]), seed=torch.tensor([-1])
+    )
     assert LagunaForCausalLM._sampling_row_params(greedy, 0) == (1, 1.0, 1.0, 0)

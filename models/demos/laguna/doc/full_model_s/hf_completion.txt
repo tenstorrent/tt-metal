@@ -1,4 +1,4 @@
-To solve the problem, we start by setting up equations based on the given information. Let \( t \) be the time in minutes spent in the coffee shop. 
+To solve the problem, we start by setting up equations based on the given information. Let \( t \) be the time in minutes spent in the coffee shop.
 
 First scenario:
 - Walking speed \( s \) km/h, total time 4 hours (240 minutes).

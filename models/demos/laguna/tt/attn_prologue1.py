@@ -13,6 +13,7 @@ import struct
 from pathlib import Path
 
 import torch
+
 import ttnn
 
 _KDIR = Path(__file__).resolve().parent / "kernels"
@@ -44,7 +45,10 @@ def _core_ranges(gx, start, count):
 def reduce_scaler(device, head_dim, mesh_mapper=None):
     """bf16 tile of 1 / head_dim (the row-reduce scaler: the reduced sum is the mean)."""
     return ttnn.from_torch(
-        torch.full((1, 1, 32, 32), 1.0 / head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        torch.full((1, 1, 32, 32), 1.0 / head_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         mesh_mapper=mesh_mapper,
     )
 
@@ -96,39 +100,67 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
         acc = []
         for t in (qkv, w, cos, sin, scaler):
             acc.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-        kernels.append(ttnn.KernelDescriptor(
-            kernel_source=str(_KDIR / "ap1_reader.cpp"),
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=grid,
-            compile_time_args=[role, per_part, off, (nq + nkv) * 4, rd_tiles, w_page, cs_page, nq, gs.x, base, parts,
-                               row0, wt_qkv, rpc]
-            + acc,
-            common_runtime_args=[qkv.buffer_address(), cos.buffer_address(), sin.buffer_address(),
-                                 scaler.buffer_address(), w.buffer_address()],
-            config=ttnn.ReaderConfigDescriptor(),
-        ))
-        kernels.append(ttnn.KernelDescriptor(
-            kernel_source=str(_KDIR / "ap1_writer.cpp"),
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=grid,
-            compile_time_args=[role, hp, nq, qp if role == 0 else 1, gs.x, base, rpc]
-            + list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
-            + list(ttnn.TensorAccessorArgs(v).get_compile_time_args()),
-            # per chunk: its output (q or k), then its v
-            common_runtime_args=[a for c in range(n_chunks)
-                                 for a in ((qs if role == 0 else ks)[c].buffer_address(), vs[c].buffer_address())],  # fmt: skip
-            config=ttnn.WriterConfigDescriptor(),
-        ))
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(_KDIR / "ap1_reader.cpp"),
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=grid,
+                compile_time_args=[
+                    role,
+                    per_part,
+                    off,
+                    (nq + nkv) * 4,
+                    rd_tiles,
+                    w_page,
+                    cs_page,
+                    nq,
+                    gs.x,
+                    base,
+                    parts,
+                    row0,
+                    wt_qkv,
+                    rpc,
+                ]
+                + acc,
+                common_runtime_args=[
+                    qkv.buffer_address(),
+                    cos.buffer_address(),
+                    sin.buffer_address(),
+                    scaler.buffer_address(),
+                    w.buffer_address(),
+                ],
+                config=ttnn.ReaderConfigDescriptor(),
+            )
+        )
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(_KDIR / "ap1_writer.cpp"),
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=grid,
+                compile_time_args=[role, hp, nq, qp if role == 0 else 1, gs.x, base, rpc]
+                + list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+                + list(ttnn.TensorAccessorArgs(v).get_compile_time_args()),
+                # per chunk: its output (q or k), then its v
+                common_runtime_args=[
+                    a
+                    for c in range(n_chunks)
+                    for a in ((qs if role == 0 else ks)[c].buffer_address(), vs[c].buffer_address())
+                ],  # fmt: skip
+                config=ttnn.WriterConfigDescriptor(),
+            )
+        )
         cfg = ttnn.ComputeConfigDescriptor()
         cfg.fp32_dest_acc_en = True
         cfg.math_fidelity = ttnn.MathFidelity.HiFi4
-        kernels.append(ttnn.KernelDescriptor(
-            kernel_source=str(_KDIR / "ap1_compute.cpp"),
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=grid,
-            compile_time_args=[rd_tiles, eps_bits, rpc],
-            config=cfg,
-        ))
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(_KDIR / "ap1_compute.cpp"),
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=grid,
+                compile_time_args=[rd_tiles, eps_bits, rpc],
+                config=cfg,
+            )
+        )
         db = 2 if rpc > 1 else 1  # several rows per core: double-buffer the per-row inputs / outputs
         cbs += [
             _cb(grid, 0, ttnn.bfloat16, 2048, 4 * db),

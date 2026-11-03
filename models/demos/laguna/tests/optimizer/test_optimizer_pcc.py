@@ -57,9 +57,9 @@ import pytest  # noqa: E402
 import torch  # noqa: E402
 
 import ttnn  # noqa: E402
+from models.common.readiness_check.schema import load_reference  # noqa: E402
 from models.demos.laguna.tests.laguna_test_utils import close_mesh, open_mesh, resolve_profile  # noqa: E402
 from models.demos.laguna.tt.generator import LagunaGenerator  # noqa: E402
-from models.common.readiness_check.schema import load_reference  # noqa: E402
 
 # The checkpoint this gate runs; stated as a literal so the optimizer's roofline can resolve the model.
 HF_MODEL_ID = os.environ.get("HF_MODEL_ID") or "poolside/Laguna-S-2.1"
@@ -128,9 +128,7 @@ HISTORY_PATH = Path(
 
 def _tree_diff_hash() -> str:
     try:
-        diff = subprocess.run(
-            ["git", "diff", "HEAD"], cwd=str(MODEL_DIR), capture_output=True, timeout=60
-        ).stdout
+        diff = subprocess.run(["git", "diff", "HEAD"], cwd=str(MODEL_DIR), capture_output=True, timeout=60).stdout
     except Exception:  # noqa: BLE001
         return ""
     if not diff:
@@ -164,9 +162,9 @@ def test_optimizer_full_model_pcc():
     # Under `pytest -s` the first print lands on the node-id line, which contains "pcc"; the optimizer's
     # parser reads any "pcc ... <float>" on a line as a measurement. End that line first.
     print("", flush=True)
-    assert REFERENCE_LOGITS.is_file(), (
-        f"missing {REFERENCE_LOGITS}; produce it with tests/gen_streamed_reference.py --dtype fp32 --save-logits"
-    )
+    assert (
+        REFERENCE_LOGITS.is_file()
+    ), f"missing {REFERENCE_LOGITS}; produce it with tests/gen_streamed_reference.py --dtype fp32 --save-logits"
     entry = load_reference(REFERENCE).entries[0]
     prompt = entry.prompt_tokens[0].tolist()
     cont = entry.generated_tokens[0].tolist()
@@ -191,7 +189,9 @@ def test_optimizer_full_model_pcc():
         hits = [_agreement(tt_prefill, hf[0])]
         eager_argmax = [int(tt_prefill.argmax())]
         for i in range(G - 1):
-            logits = gen.decode_forward(torch.tensor([[cont[i]]]), torch.tensor([P + i]), return_logits=True).reshape(-1)
+            logits = gen.decode_forward(torch.tensor([[cont[i]]]), torch.tensor([P + i]), return_logits=True).reshape(
+                -1
+            )
             pccs.append(_pcc(logits, hf[i + 1]))
             top_pccs.append(_pcc_top(logits, hf[i + 1]))
             hits.append(_agreement(logits, hf[i + 1]))
@@ -266,7 +266,9 @@ def test_optimizer_full_model_pcc():
                     f"top-100 mean correlation {top100_mean:.6f} < baseline {baseline['top100_mean_corr']:.6f} - {TOP100_MEAN_PCC_DROP}"
                 )
             if mean_corr < baseline["mean_corr"] - MEAN_PCC_DROP:
-                failures.append(f"mean logits correlation {mean_corr:.6f} < baseline {baseline['mean_corr']:.6f} - {MEAN_PCC_DROP}")
+                failures.append(
+                    f"mean logits correlation {mean_corr:.6f} < baseline {baseline['mean_corr']:.6f} - {MEAN_PCC_DROP}"
+                )
             print(
                 f"ACCURACY_VS_BASELINE tree={baseline.get('tree') or '?'} "
                 f"top1_delta_pts={top1_pct - baseline['top1_pct']:+.2f} "

@@ -218,7 +218,9 @@ def main() -> None:
           "Decode uses the step at a context of the input length; batch-32 TTFT prefills all 32 prompts in one pass "
           "(every user's first token then arrives together). Target = 50% of speed of light (MoE): half the decode "
           "speed, twice the TTFT.\n")  # fmt: skip
-    print("| Input tokens | Batch | Decode SoL tok/s/user | Decode target | Decode SoL tok/s total | TTFT SoL | TTFT target |")
+    print(
+        "| Input tokens | Batch | Decode SoL tok/s/user | Decode target | Decode SoL tok/s total | TTFT SoL | TTFT target |"
+    )
     print("|---:|---:|---:|---:|---:|---:|---:|")
     for batch in (1, 32):
         for tokens in (128, 1024, 2048, 4096, 8192):
@@ -253,8 +255,10 @@ def main() -> None:
     print(f"- Expert placement: each chip holds {per_chip} of the {E} experts; the busiest chip holds {busiest:.2f} of a "
           f"token's {m['top_k']} on average and sets the pace: {chip_bytes / 1e9:.2f} GB / {W1 / 1e9:.0f} GB/s = "
           f"{chip_bytes / W1 * 1e3:.2f} ms -> {W1 / chip_bytes:.0f} tok/s at short context (batch 1).")  # fmt: skip
-    print("- Per-transfer latency: tech_reports/EthernetMultichip/BasicEthernetGuide.md measures about 1 us per ring "
-          "hop for a 1 KB packet on Wormhole; Blackhole on the QuietBox 2 is not documented there. Not included above.")
+    print(
+        "- Per-transfer latency: tech_reports/EthernetMultichip/BasicEthernetGuide.md measures about 1 us per ring "
+        "hop for a 1 KB packet on Wormhole; Blackhole on the QuietBox 2 is not documented there. Not included above."
+    )
 
 
 if __name__ == "__main__":

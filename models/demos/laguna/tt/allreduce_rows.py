@@ -40,8 +40,9 @@ def pack_row0(x, rows=1):
     device = x.device()
     H = x.shape[-1]
     assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT and H % 32 == 0, (x.dtype, x.layout, H)
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, rows, H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device,
-                                         ttnn.L1_MEMORY_CONFIG)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, rows, H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+    )
     per, cores, gs, grid = _grid(device, H, rows)
     acc = list(ttnn.TensorAccessorArgs(x).get_compile_time_args()) + list(
         ttnn.TensorAccessorArgs(out).get_compile_time_args()
@@ -55,7 +56,14 @@ def pack_row0(x, rows=1):
         config=ttnn.ReaderConfigDescriptor(),
     )
     assert rows * per * 32 <= 1024, (rows, per)  # the summed rows of one core fit one tile-sized slot
-    ttnn.generic_op([x, out], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cb(grid, 0, ttnn.bfloat16, per * 64 * rows, 1), _cb(grid, 1, ttnn.bfloat16, per * 128 * rows, 1)]))
+    ttnn.generic_op(
+        [x, out],
+        ttnn.ProgramDescriptor(
+            kernels=[k],
+            semaphores=[],
+            cbs=[_cb(grid, 0, ttnn.bfloat16, per * 64 * rows, 1), _cb(grid, 1, ttnn.bfloat16, per * 128 * rows, 1)],
+        ),
+    )
     return out
 
 

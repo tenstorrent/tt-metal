@@ -34,10 +34,9 @@ import torch
 import ttnn
 
 from .dflash_reference import DFLASH_TARGET_LAYER_IDS, DFlashTargetAuxCapture
+from .model_spec import DFLASH_SPEC, MODEL_ID  # noqa: E402  (TT_LAGUNA_MODEL; default Laguna-S-2.1)
 from .multichip_decoder import MultichipDecoder
 from .optimized_decoder import PrecisionPolicy, _cached_device_tensor, weight_cache_key
-
-from .model_spec import DFLASH_SPEC, MODEL_ID  # noqa: E402  (TT_LAGUNA_MODEL; default Laguna-S-2.1)
 
 # Canonical datatype-sweep-selected precision policy. When present, this is the required
 # config artifact that the default construction path (``from_pretrained`` -> generator ->
@@ -601,7 +600,9 @@ class LagunaModel:
                 sequential_kv_write=sequential_kv_write,
                 rope_mats=(rope_ctx[dec.cfg.attention_type] if rope_ctx is not None else None),
                 # the next layer's input-norm grid: the layer output may be written in that layout directly
-                next_norm_cores=(nxt.input_norm_cores() if nxt is not None and hasattr(nxt, "input_norm_cores") else None),
+                next_norm_cores=(
+                    nxt.input_norm_cores() if nxt is not None and hasattr(nxt, "input_norm_cores") else None
+                ),
             )
         return h
 

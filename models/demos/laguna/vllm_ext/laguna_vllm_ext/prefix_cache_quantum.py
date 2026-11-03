@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Canonical-prefix admission for Laguna's shape-sensitive prefill kernels.
 
@@ -85,24 +86,18 @@ def validate_prefix_cache_vllm_config(vllm_config: Any) -> None:
     if not bool(cache_config.enable_prefix_caching):
         errors.append("vLLM prefix caching is not enabled")
     if int(cache_config.block_size) != QUALIFIED_KV_BLOCK_SIZE:
-        errors.append(
-            f"KV block size is {cache_config.block_size}, expected {QUALIFIED_KV_BLOCK_SIZE}"
-        )
+        errors.append(f"KV block size is {cache_config.block_size}, expected {QUALIFIED_KV_BLOCK_SIZE}")
     if hybrid_kv_enabled():
         # Hybrid KV prefills in 8192-token scheduler chunks; chunks starting at a canonical boundary keep the
         # canonical partition, so a cache hit truncated to the quantum resumes on the same chunk grid.
         if not bool(scheduler_config.enable_chunked_prefill):
             errors.append("hybrid KV requires scheduler chunked prefill")
         elif int(scheduler_config.max_num_batched_tokens) != quantum:
-            errors.append(
-                f"hybrid KV scheduler chunk is {scheduler_config.max_num_batched_tokens}, expected {quantum}"
-            )
+            errors.append(f"hybrid KV scheduler chunk is {scheduler_config.max_num_batched_tokens}, expected {quantum}")
     elif bool(scheduler_config.enable_chunked_prefill):
         errors.append("scheduler chunked prefill is enabled")
     if int(scheduler_config.max_num_seqs) != QUALIFIED_MAX_NUM_SEQS:
-        errors.append(
-            f"max_num_seqs is {scheduler_config.max_num_seqs}, expected {QUALIFIED_MAX_NUM_SEQS}"
-        )
+        errors.append(f"max_num_seqs is {scheduler_config.max_num_seqs}, expected {QUALIFIED_MAX_NUM_SEQS}")
     if vllm_config.speculative_config is not None:
         errors.append("vLLM speculative decoding is configured")
     if getattr(vllm_config, "kv_transfer_config", None) is not None:
@@ -115,8 +110,7 @@ def validate_prefix_cache_vllm_config(vllm_config: Any) -> None:
         errors.append(f"TT_LAGUNA_PREFILL_SDPA_CHUNK is not {quantum}")
     if errors:
         raise RuntimeError(
-            f"Laguna canonical prefix-cache policy (quantum={quantum}) rejected the vLLM config: "
-            + "; ".join(errors)
+            f"Laguna canonical prefix-cache policy (quantum={quantum}) rejected the vLLM config: " + "; ".join(errors)
         )
 
 
@@ -147,9 +141,7 @@ def _canonical_cache_limit(request: Any, quantum: int) -> int:
 
 def _validate_manager_geometry(manager: Any, quantum: int) -> None:
     if quantum != DEFAULT_PREFIX_QUANTUM:
-        raise RuntimeError(
-            f"Laguna prefix-cache quantum must be {DEFAULT_PREFIX_QUANTUM}, got {quantum}"
-        )
+        raise RuntimeError(f"Laguna prefix-cache quantum must be {DEFAULT_PREFIX_QUANTUM}, got {quantum}")
     if not bool(manager.enable_caching):
         raise RuntimeError("Laguna canonical prefix caching requires KV caching to be enabled")
     if bool(getattr(manager, "use_eagle", False)):
@@ -166,8 +158,11 @@ def _validate_manager_geometry(manager: Any, quantum: int) -> None:
     if hybrid_kv_enabled():
         sliding_spec = _sliding_window_spec_type()
         kinds = [type(group.kv_cache_spec) for group in groups]
-        full_count = sum(1 for group in groups if isinstance(group.kv_cache_spec, full_spec)
-                         and not isinstance(group.kv_cache_spec, sliding_spec))
+        full_count = sum(
+            1
+            for group in groups
+            if isinstance(group.kv_cache_spec, full_spec) and not isinstance(group.kv_cache_spec, sliding_spec)
+        )
         sliding_count = sum(1 for group in groups if isinstance(group.kv_cache_spec, sliding_spec))
         if full_count != 1 or sliding_count != len(groups) - 1 or len(groups) < 2:
             raise RuntimeError(
@@ -177,8 +172,7 @@ def _validate_manager_geometry(manager: Any, quantum: int) -> None:
     else:
         if len(groups) != 1:
             raise RuntimeError(
-                "Laguna canonical prefix caching requires exactly one uniform KV cache group, "
-                f"got {len(groups)}"
+                "Laguna canonical prefix caching requires exactly one uniform KV cache group, " f"got {len(groups)}"
             )
         if not isinstance(groups[0].kv_cache_spec, full_spec):
             raise RuntimeError(
@@ -195,9 +189,7 @@ def _validate_manager_geometry(manager: Any, quantum: int) -> None:
                 f"got {block_size}"
             )
         if quantum % block_size:
-            raise RuntimeError(
-                f"Laguna prefix-cache quantum {quantum} is not divisible by KV block size {block_size}"
-            )
+            raise RuntimeError(f"Laguna prefix-cache quantum {quantum} is not divisible by KV block size {block_size}")
 
 
 def _canonical_hybrid_lookup(manager: Any, request: Any, quantum: int):
@@ -238,9 +230,7 @@ def _adjust_recorded_hits(manager: Any, request: Any, dropped_tokens: int) -> No
     field = "preempted_hits" if int(getattr(request, "num_preemptions", 0)) > 0 else "hits"
     value = int(getattr(stats, field))
     if value < dropped_tokens:
-        raise RuntimeError(
-            f"Laguna cannot adjust prefix-cache metric {field}: value={value}, dropped={dropped_tokens}"
-        )
+        raise RuntimeError(f"Laguna cannot adjust prefix-cache metric {field}: value={value}, dropped={dropped_tokens}")
     setattr(stats, field, value - dropped_tokens)
 
 
@@ -260,17 +250,13 @@ def _truncate_computed_blocks(manager: Any, request: Any, blocks: Any, raw_token
         raise RuntimeError(f"vLLM returned {raw_tokens} cached tokens without KV blocks")
     expected_group_count = len(manager.kv_cache_config.kv_cache_groups)
     if len(groups) != expected_group_count:
-        raise RuntimeError(
-            f"vLLM returned {len(groups)} cached KV groups, expected {expected_group_count}"
-        )
+        raise RuntimeError(f"vLLM returned {len(groups)} cached KV groups, expected {expected_group_count}")
 
     kept_groups = []
     for index, (group_blocks, group) in enumerate(zip(groups, manager.kv_cache_config.kv_cache_groups)):
         block_size = int(group.kv_cache_spec.block_size)
         if raw_tokens % block_size:
-            raise RuntimeError(
-                f"raw cache hit {raw_tokens} is not aligned to KV group {index} block size {block_size}"
-            )
+            raise RuntimeError(f"raw cache hit {raw_tokens} is not aligned to KV group {index} block size {block_size}")
         raw_block_count = raw_tokens // block_size
         if len(group_blocks) != raw_block_count:
             raise RuntimeError(

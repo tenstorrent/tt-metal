@@ -31,7 +31,6 @@ from models.demos.laguna.tests import laguna_weights as W
 from models.demos.laguna.tests.laguna_test_utils import close_mesh, open_mesh, resolve_profile
 from models.demos.laguna.tt.multichip_decoder import MultichipDecoder
 
-
 # The qualification path must match production: packed gate/up is the default. The unpacked path is
 # retained only for explicit A/B runs with LAGUNA_PACK_GATE_UP=0 (LAGUNA_MC_CLASS=baseline remains a
 # compatibility alias for old runbooks).
@@ -105,7 +104,9 @@ def _decode_sdpa_supported(hf_config, layer):
 
 def _decoder(hf_config, layer, device):
     if not _decode_sdpa_supported(hf_config, layer):
-        pytest.skip(f"layer {layer} is unsupported on {PROFILE.name} (decode SDPA head tiles); see test_unsupported_layout_is_rejected")
+        pytest.skip(
+            f"layer {layer} is unsupported on {PROFILE.name} (decode SDPA head tiles); see test_unsupported_layout_is_rejected"
+        )
     if layer not in _DEC:
         _, raw = _ctx(hf_config, layer)
         _DEC[layer] = _DECODER_CLS.from_state_dict(
@@ -156,12 +157,12 @@ def test_multichip_path_active(device, hf_config, layer):
     assert kv["k"].shape[1] == hf_config.num_key_value_heads // D, "cache holds local KV heads"
 
 
-def test_unsupported_layout_is_rejected(device, hf_config):
+def test_unsupported_layout_is_rejected(device, hf_config, expect_error):
     bad = [layer for layer in ALL_LAYERS if not _decode_sdpa_supported(hf_config, layer)]
     if not bad:
         pytest.skip(f"every tested layer is supported on {PROFILE.name}")
     _, raw = _ctx(hf_config, bad[0])
-    with pytest.raises(ValueError, match="decode SDPA needs a power of two"):
+    with expect_error(ValueError, "decode SDPA needs a power of two"):
         _DECODER_CLS.from_state_dict(
             raw, hf_config=hf_config, layer_idx=bad[0], mesh_device=device, max_seq_len=PROFILE.max_context
         )
@@ -486,9 +487,7 @@ def test_d2_decode_sdpa_pc_direct_traced_boundaries(device, hf_config):
     assert len(positions) <= cfg.head_dim
     g = torch.Generator().manual_seed(20260821)
     k = torch.zeros((1, cfg.num_kv_heads, max_seq, cfg.head_dim), dtype=torch.bfloat16)
-    v = torch.randn(
-        (1, cfg.num_kv_heads, max_seq, cfg.head_dim), dtype=torch.bfloat16, generator=g
-    )
+    v = torch.randn((1, cfg.num_kv_heads, max_seq, cfg.head_dim), dtype=torch.bfloat16, generator=g)
     v.mul_(0.25)
 
     # Each query uses its own coordinate.  Its in-range key has score ~=16; the immediately
@@ -519,9 +518,7 @@ def test_d2_decode_sdpa_pc_direct_traced_boundaries(device, hf_config):
             device=device,
             mesh_mapper=_mm(device),
         )
-        ttnn.experimental.paged_fill_cache(
-            kv[cache_name], dec._cast_fill(source_tt, kv["dtype"]), pt, batch_idx=0
-        )
+        ttnn.experimental.paged_fill_cache(kv[cache_name], dec._cast_fill(source_tt, kv["dtype"]), pt, batch_idx=0)
 
     # Prefix sums make the exact sparse-key reference cheap even at 131K.  For a query coordinate,
     # every unmarked key scores zero, the current-position attractor scores ~=16, and the score-32
@@ -550,9 +547,7 @@ def test_d2_decode_sdpa_pc_direct_traced_boundaries(device, hf_config):
         numerator = prefix_v[pos] + (attractor_weight - 1.0) * anchor_v
         denominator = float(pos) + attractor_weight
         per_kv_head = numerator / denominator
-        return per_kv_head.repeat_interleave(cfg.num_kv_groups, dim=0).reshape(
-            1, 1, cfg.num_heads, cfg.head_dim
-        )
+        return per_kv_head.repeat_interleave(cfg.num_kv_groups, dim=0).reshape(1, 1, cfg.num_heads, cfg.head_dim)
 
     q_dev = ttnn.from_torch(
         host_q(0),
@@ -578,9 +573,7 @@ def test_d2_decode_sdpa_pc_direct_traced_boundaries(device, hf_config):
     ttnn.synchronize_device(device)
     try:
         for dim, pos in enumerate(positions):
-            q_host = ttnn.from_torch(
-                host_q(dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_mm(device)
-            )
+            q_host = ttnn.from_torch(host_q(dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_mm(device))
             pos_host = ttnn.from_torch(
                 torch.tensor([pos], dtype=torch.int32),
                 dtype=ttnn.int32,

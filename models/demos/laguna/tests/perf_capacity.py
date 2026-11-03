@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Long-prefill capacity probe: run prefill beyond the single-shot SDPA limit (natural
 Q-chunking) and confirm it completes with finite output. Records the largest length run."""
 import json

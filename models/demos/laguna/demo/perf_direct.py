@@ -236,6 +236,8 @@ def text_prompt(tokenizer, length, offset=0):
         n += length - len(ids)
     ids = build(n)[:length]
     return torch.tensor(ids, dtype=torch.int64)
+
+
 KV_BLOCK = 64
 
 
@@ -377,6 +379,7 @@ def run_dflash32(lens, tokens_out, drafts, rows_checked):
             per_user = [0] * U
             rounds = 0
             start = time.perf_counter()
+
             def room():
                 return max(bd.ctx_start[u] + bd.ctx_rows[u] for u in range(U)) + drafts + 1 < limit
 
@@ -397,9 +400,12 @@ def run_dflash32(lens, tokens_out, drafts, rows_checked):
                 ttnn.deallocate(k)
                 ttnn.deallocate(v)
             out[length] = row
-            print(f"[perf direct] dflash32 input {length:>6,}: decode {row['decode_tok_s']:6.1f} tok/s/user | {rounds} "
-                  f"rounds, {row['ms_per_round']:.1f} ms per round (draft {row['draft_ms_mean']:.1f} + verify "
-                  f"{row['verify_ms_mean']:.1f}), {row['accepted_mean']:.2f} drafts accepted per round", flush=True)
+            print(
+                f"[perf direct] dflash32 input {length:>6,}: decode {row['decode_tok_s']:6.1f} tok/s/user | {rounds} "
+                f"rounds, {row['ms_per_round']:.1f} ms per round (draft {row['draft_ms_mean']:.1f} + verify "
+                f"{row['verify_ms_mean']:.1f}), {row['accepted_mean']:.2f} drafts accepted per round",
+                flush=True,
+            )
     finally:
         if gen is not None:
             gen.teardown()
@@ -417,15 +423,20 @@ def main() -> int:
     parser.add_argument("--dflash-tokens", type=int, default=256, help="tokens decoded per input length with DFlash")
     parser.add_argument("--dflash-drafts", type=int, default=7, help="dflash32: drafts proposed per user per round")
     parser.add_argument("--dflash-rows", type=int, default=96, help="dflash32: rows checked per round (all users)")
-    parser.add_argument("--dflash-prompt", default="text",
-                        help="text: summarize request over tech_reports (each length); aime: the accuracy test prompt; "
-                        "or both, comma-separated")
+    parser.add_argument(
+        "--dflash-prompt",
+        default="text",
+        help="text: summarize request over tech_reports (each length); aime: the accuracy test prompt; "
+        "or both, comma-separated",
+    )
     args = parser.parse_args()
     if args.modes == "dflash32":
         lens = [int(v) for v in args.input_lens.split(",")] if args.input_lens else DEFAULT_INPUT_LENS
         rows = run_dflash32(lens, args.dflash_tokens, args.dflash_drafts, args.dflash_rows)
-        print(f"\nBatch 32, DFlash speculative decoding ({args.dflash_drafts} drafts per user, {args.dflash_rows} rows "
-              f"checked per round; no vLLM):\n")
+        print(
+            f"\nBatch 32, DFlash speculative decoding ({args.dflash_drafts} drafts per user, {args.dflash_rows} rows "
+            f"checked per round; no vLLM):\n"
+        )
         print("| Input tokens | Decode tok/s/user | ms per round (draft + verify) | Drafts accepted per round |")
         print("|---:|---:|---:|---:|")
         for length, r in rows.items():
@@ -438,7 +449,9 @@ def main() -> int:
         lens = [int(v) for v in args.input_lens.split(",")] if args.input_lens else DEFAULT_INPUT_LENS
         rows = run_dflash(lens, args.dflash_tokens, args.dflash_prompt)
         print("\nBatch 1, DFlash speculative decoding (no vLLM):\n")
-        print("| Input tokens | Decode tok/s/user | TTFT | Drafts accepted per round | Draft ms + verify ms per round |")
+        print(
+            "| Input tokens | Decode tok/s/user | TTFT | Drafts accepted per round | Draft ms + verify ms per round |"
+        )
         print("|---:|---:|---:|---:|---:|")
         for length, r in rows.items():
             print(f"| {length} | {r['decode_tok_s']:.1f} | {r['ttft_s'] * 1e3:.0f} ms | {r['accepted_mean']:.2f} | "
@@ -476,8 +489,11 @@ def main() -> int:
                 row.update({"decode_ms_per_step": ms, "decode_tok_s_user": 1e3 / ms, "decode_tok_s_total": batch * 1e3 / ms,
                             "sol_decode_tok_s_user": 1e3 / sol_step, "sol_ttft_s": sol_ttft})  # fmt: skip
                 rows[length] = row
-                print(f"[perf direct] batch {batch:2d} input {length:>6,}: {note} | decode {1e3 / ms:6.1f} tok/s/user "
-                      f"({ms:.2f} ms/step) | SoL decode {1e3 / sol_step:.0f}, TTFT {sol_ttft * 1e3:,.0f} ms", flush=True)
+                print(
+                    f"[perf direct] batch {batch:2d} input {length:>6,}: {note} | decode {1e3 / ms:6.1f} tok/s/user "
+                    f"({ms:.2f} ms/step) | SoL decode {1e3 / sol_step:.0f}, TTFT {sol_ttft * 1e3:,.0f} ms",
+                    flush=True,
+                )
             results[batch] = rows
     finally:
         if gen is not None:
@@ -487,8 +503,10 @@ def main() -> int:
     for batch, rows in results.items():
         print(f"\nBatch {batch} (device only, no vLLM). Targets = 50% of SoL: half the decode speed, twice the TTFT.\n")
         if batch == 1:
-            print("| Input tokens | Decode tok/s/user | Decode SoL | Decode target | TTFT eager | TTFT traced | TTFT SoL | "
-                  "TTFT target |")
+            print(
+                "| Input tokens | Decode tok/s/user | Decode SoL | Decode target | TTFT eager | TTFT traced | TTFT SoL | "
+                "TTFT target |"
+            )
             print("|---:|---:|---:|---:|---:|---:|---:|---:|")
             for length, r in rows.items():
                 traced = f"{r['ttft_s_traced'] * 1e3:.1f} ms" if r["ttft_s_traced"] else "-"
@@ -496,8 +514,10 @@ def main() -> int:
                       f"{r['sol_decode_tok_s_user'] / 2:.0f} | {r['ttft_s'] * 1e3:.1f} ms | {traced} | "
                       f"{r['sol_ttft_s'] * 1e3:.0f} ms | {2 * r['sol_ttft_s'] * 1e3:.0f} ms |")  # fmt: skip
         else:
-            print("| Input tokens | Decode tok/s/user | Decode SoL | Decode target | Decode tok/s total | TTFT last | "
-                  "TTFT mean | TTFT SoL | TTFT target | Users per prefill |")
+            print(
+                "| Input tokens | Decode tok/s/user | Decode SoL | Decode target | Decode tok/s total | TTFT last | "
+                "TTFT mean | TTFT SoL | TTFT target | Users per prefill |"
+            )
             print("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
             for length, r in rows.items():
                 print(f"| {length:,} | {r['decode_tok_s_user']:.1f} | {r['sol_decode_tok_s_user']:.0f} | "

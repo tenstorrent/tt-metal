@@ -47,12 +47,12 @@ import torch
 import ttnn
 
 try:
+    from . import tile_regroup
     from .dflash_reference import DFLASH_TARGET_LAYER_IDS, DFlashTargetAuxCapture
     from .generator import LagunaGenerator, _replicate
-    from . import tile_regroup
     from .host_sampling import penalties_active, sample_penalized
-    from .model_spec import DFLASH_SPEC, MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
     from .kv_grouping import HybridKVLayout, build_laguna_hybrid_kv_layout, validate_per_layer_tensor_aliases
+    from .model_spec import DFLASH_SPEC, MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
     from .prefill_runtime import (
         PrefillRuntimeOffsets,
         PrefillStreamChunk,
@@ -61,24 +61,16 @@ try:
         streaming_prefill_capacity,
     )
 except ImportError:  # loaded as a standalone module by some tooling
-    from models.demos.laguna.tt.dflash_reference import (
-        DFLASH_TARGET_LAYER_IDS,
-        DFlashTargetAuxCapture,
-    )
-    from models.demos.laguna.tt.generator import LagunaGenerator, _replicate
     from models.demos.laguna.tt import tile_regroup
+    from models.demos.laguna.tt.dflash_reference import DFLASH_TARGET_LAYER_IDS, DFlashTargetAuxCapture
+    from models.demos.laguna.tt.generator import LagunaGenerator, _replicate
     from models.demos.laguna.tt.host_sampling import penalties_active, sample_penalized
-    from models.demos.laguna.tt.model_spec import (
-        DFLASH_SPEC,
-        MODEL_ID,
-        MODEL_MAX_CONTEXT,
-        check_hf_config,
-    )
     from models.demos.laguna.tt.kv_grouping import (
         HybridKVLayout,
         build_laguna_hybrid_kv_layout,
         validate_per_layer_tensor_aliases,
     )
+    from models.demos.laguna.tt.model_spec import DFLASH_SPEC, MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
     from models.demos.laguna.tt.prefill_runtime import (
         PrefillRuntimeOffsets,
         PrefillStreamChunk,
@@ -166,9 +158,9 @@ class LagunaForCausalLM:
     # 8192 geometry. A 4138-token prompt then computes 5120 rows instead of 8192; an 8234-token prompt 8192 + 64
     # instead of 2 x 8192. Every bucket is also warmed at a nonzero start (streamed tails). XS keeps the
     # power-of-two ladder and the canonical tail its prefix-cache qualification relies on.
-    _PREFILL_FINE_BUCKETS = os.environ.get(
-        "TT_LAGUNA_PREFILL_FINE_BUCKETS", "1" if MODEL_ID == "poolside/Laguna-S-2.1" else "0"
-    ) == "1"
+    _PREFILL_FINE_BUCKETS = (
+        os.environ.get("TT_LAGUNA_PREFILL_FINE_BUCKETS", "1" if MODEL_ID == "poolside/Laguna-S-2.1" else "0") == "1"
+    )
     # vLLM 0.24 groups Laguna as four 10-layer block-table groups and aliases
     # equal slots onto ten physical K/V tensor pairs.  The feature remains
     # opt-in until its cache-off hardware gate completes.
@@ -494,13 +486,15 @@ class LagunaForCausalLM:
             "cos_q": dev(torch.zeros((1, 1, 32, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "sin_q": dev(torch.zeros((1, 1, 32, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "mask": dev(torch.zeros((1, 1, 32, cache.RING + 32)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
-            "tok32": tok32 if tok32 is not None else dev(torch.zeros((1, 1, 1, 32), dtype=torch.int32), ttnn.uint32,
-                                                         ttnn.ROW_MAJOR_LAYOUT),
+            "tok32": tok32
+            if tok32 is not None
+            else dev(torch.zeros((1, 1, 1, 32), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             "variant": variant,
             # per proposal row and chip: (max logit, sum of exp(logit - max)) over the chip's vocabulary shard at
             # columns 32 c, 32 c + 1 (adaptive verify depth; _dflash_draft_conf)
-            "conf": conf if conf is not None or not self._DFLASH_DEPTH_TAU else dev(
-                torch.zeros((1, 1, 32, 32 * self.mesh_device.get_num_devices())), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "conf": conf
+            if conf is not None or not self._DFLASH_DEPTH_TAU
+            else dev(torch.zeros((1, 1, 32, 32 * self.mesh_device.get_num_devices())), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "tid": None,
         }
 
@@ -522,7 +516,9 @@ class LagunaForCausalLM:
         query_hidden = core.apply_final_norm(query_hidden)
         sampled = ttnn.slice(query_hidden, [0, 1, 0], [1, 1 + n, width])
         shards = self.model.lm_head_shards_dflash(sampled, enable_experimental=True)
-        padded = ttnn.pad(ttnn.reshape(shards, (1, 1, n, int(shards.shape[-1]))), [(0, 0), (0, 0), (0, 32 - n), (0, 0)], 0.0)
+        padded = ttnn.pad(
+            ttnn.reshape(shards, (1, 1, n, int(shards.shape[-1]))), [(0, 0), (0, 0), (0, 32 - n), (0, 0)], 0.0
+        )
         self.gen._greedy_sample(padded, 32, st["tok32"])
         if st.get("conf") is not None:
             V = int(shards.shape[-1])
@@ -561,7 +557,9 @@ class LagunaForCausalLM:
         run = ttnn.cumsum(ttnn.neg(ttnn.log(Z)), dim=2)
         ok = ttnn.multiply(ttnn.ge(run, math.log(self._DFLASH_DEPTH_TAU)), self._dflash_depth_valid)
         active = ttnn.add(ttnn.clamp(ttnn.sum(ok, dim=2, keepdim=True), min=1.0), 1.0)  # [1, 1, 1, 1]
-        arow = ttnn.to_layout(ttnn.typecast(ttnn.add(self._dflash_zero_row, active), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+        arow = ttnn.to_layout(
+            ttnn.typecast(ttnn.add(self._dflash_zero_row, active), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT
+        )
         ttnn.copy(ttnn.reshape(arow, (1, 32)), self._dflash_verify_active)
         ids = ttnn.concat([ttnn.slice(st["tok32"], [0, 0, 0, 0], [1, 1, 1, 31]), ttnn.slice(arow, [0, 0, 0, 0], [1, 1, 1, 1])],
                           dim=-1)  # fmt: skip
@@ -580,7 +578,9 @@ class LagunaForCausalLM:
         tok[0, :q] = block.input_ids.to(torch.int32).reshape(-1)
         ttnn.copy_host_to_device_tensor(self.gen._host(tok, ttnn.uint32), st["tok"])
         for key, t in zip(("cos_q", "sin_q", "mask"), cache.ring_query_inputs(q)):
-            host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+            host = ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+            )
             ttnn.copy_host_to_device_tensor(host, st[key])
 
     def _dflash_draft_body(self, st):
@@ -594,7 +594,12 @@ class LagunaForCausalLM:
             layer_input = ttnn.add(context_hidden, core.exact_matmul(st["place"], query_hidden))
             if self._DFLASH_DRAFT_QUERY:
                 query_hidden = core.layers[index].dflash_query_forward(
-                    layer_input, query_hidden, st["take"], (st["cos"], st["sin"]), (st["cos_q"], st["sin_q"]), st["mask"]
+                    layer_input,
+                    query_hidden,
+                    st["take"],
+                    (st["cos"], st["sin"]),
+                    (st["cos_q"], st["sin_q"]),
+                    st["mask"],
                 )
                 continue
             out = core.layers[index].prefill_forward(
@@ -605,7 +610,9 @@ class LagunaForCausalLM:
         query_hidden = core.apply_final_norm(query_hidden)
         sampled = ttnn.slice(query_hidden, [0, 1, 0], [1, 1 + n, width])
         shards = self.model.lm_head_shards_dflash(sampled, enable_experimental=True)
-        padded = ttnn.pad(ttnn.reshape(shards, (1, 1, n, int(shards.shape[-1]))), [(0, 0), (0, 0), (0, 32 - n), (0, 0)], 0.0)
+        padded = ttnn.pad(
+            ttnn.reshape(shards, (1, 1, n, int(shards.shape[-1]))), [(0, 0), (0, 0), (0, 32 - n), (0, 0)], 0.0
+        )
         self.gen._greedy_sample(padded, 32, st["tok32"])
 
     def _dflash_draft_refresh(self, st, block, start, rows, q):
@@ -625,7 +632,9 @@ class LagunaForCausalLM:
                        ("cos", phase.cos().to(torch.bfloat16).reshape(1, 1, padded, hd)),
                        ("sin", phase.sin().to(torch.bfloat16).reshape(1, 1, padded, hd)),
                        *zip(("cos_q", "sin_q", "mask"), core.query_inputs(start, rows, q, padded))):  # fmt: skip
-            host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+            host = ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+            )
             ttnn.copy_host_to_device_tensor(host, st[key])
 
     def _dflash_draft_prepare(self):
@@ -847,7 +856,9 @@ class LagunaForCausalLM:
         else:
             inputs = (("place", place), ("keep", keep), ("cos", cos), ("sin", sin))
         for key, t in inputs:
-            host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+            host = ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+            )
             ttnn.copy_host_to_device_tensor(host, st[key])
         st["staged"] = (int(position), rows)
 
@@ -878,8 +889,14 @@ class LagunaForCausalLM:
             nxt = start + committed
             proposal_rows = int(self._dflash_core.config.block_size)
             full = not (nxt % 64 > 48 and self._dflash_lookahead_tokens() < proposal_rows)
-            if full and nxt + proposal_rows <= int(self.max_model_len) and os.environ.get("TT_LAGUNA_DFLASH_EARLY_DRAFT", "1") == "1":
-                ttnn.execute_trace(self.mesh_device, self._dflash_draft_variants[committed - 1]["tid"], cq_id=0, blocking=False)
+            if (
+                full
+                and nxt + proposal_rows <= int(self.max_model_len)
+                and os.environ.get("TT_LAGUNA_DFLASH_EARLY_DRAFT", "1") == "1"
+            ):
+                ttnn.execute_trace(
+                    self.mesh_device, self._dflash_draft_variants[committed - 1]["tid"], cq_id=0, blocking=False
+                )
                 self._dflash_draft_launched = key
         return True
 
@@ -899,7 +916,9 @@ class LagunaForCausalLM:
         for c in range(rows):
             sv = variants[c]
             for name, t in zip(("cos_q", "sin_q", "mask"), cache.ring_query_inputs_after(position, c + 1, rows, q)):
-                host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+                host = ttnn.from_torch(
+                    t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+                )
                 ttnn.copy_host_to_device_tensor(host, sv[name])
         self._dflash_variants_for = (position, rows)
 
@@ -1085,8 +1104,7 @@ class LagunaForCausalLM:
         reduced representative target for the minimum-surface bring-up loop."""
         check_hf_config(hf_config)
         assert tt_data_parallel == 1, (
-            f"Laguna uses one 1×D mesh (intra-mesh TP=D/EP=D); tt_data_parallel must be 1, "
-            f"got {tt_data_parallel}"
+            f"Laguna uses one 1×D mesh (intra-mesh TP=D/EP=D); tt_data_parallel must be 1, " f"got {tt_data_parallel}"
         )
         # Minimum-surface bring-up: TT_LAGUNA_VLLM_NUM_LAYERS builds a reduced representative target
         # (e.g. "0,1,4" = dense-full + sliding-MoE + full-MoE). vLLM still sees the full 40-layer HF
@@ -2247,13 +2265,13 @@ class LagunaForCausalLM:
         later requests replay it. Returns the sampled token."""
         t0 = time.perf_counter()
         tokbuf = st["tokbuf"][L]
-        ttnn.copy_host_to_device_tensor(
-            self.gen._host(padded.reshape(1, L).to(torch.int32), ttnn.uint32), tokbuf
-        )
+        ttnn.copy_host_to_device_tensor(self.gen._host(padded.reshape(1, L).to(torch.int32), ttnn.uint32), tokbuf)
         onehot = torch.zeros([1, 1, 1, L], dtype=torch.float32)
         onehot[0, 0, 0, int(real_len) - 1] = 1.0
         ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(onehot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)),
+            ttnn.from_torch(
+                onehot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+            ),
             st["sel"][L],
         )
         self._refresh_prefill_sampling(st, sampling_params, u)
@@ -2261,7 +2279,13 @@ class LagunaForCausalLM:
         def body():
             x = self.model.embed_prefill(tokbuf)
             h = self.model.prefill_layers(
-                x, kv_cache, pt, fill_page_table=fill_pt, fill_page_table_base_pos=0, user_id=0, start_pos=0,
+                x,
+                kv_cache,
+                pt,
+                fill_page_table=fill_pt,
+                fill_page_table_base_pos=0,
+                user_id=0,
+                start_pos=0,
                 runtime_offsets=None,
             )
             ttnn.matmul(st["sel"][L], ttnn.reshape(h, (1, 1, L, self.hidden)), optional_output_tensor=st["last_h"])
@@ -2285,8 +2309,11 @@ class LagunaForCausalLM:
         ttnn.execute_trace(self.mesh_device, tid, cq_id=0, blocking=False)
         tok = self.gen._read_token(st["tok"], 1)[0]
         if self._PREFILL_TIMING:
-            print(f"[laguna] traced prefill L={L}: inputs {(t1 - t0) * 1e3:.1f} ms, replay+read "
-                  f"{(time.perf_counter() - t1) * 1e3:.1f} ms", flush=True)
+            print(
+                f"[laguna] traced prefill L={L}: inputs {(t1 - t0) * 1e3:.1f} ms, replay+read "
+                f"{(time.perf_counter() - t1) * 1e3:.1f} ms",
+                flush=True,
+            )
         return tok
 
     def _select_hidden_row(self, h, row, L, st):
@@ -2480,8 +2507,9 @@ class LagunaForCausalLM:
         st = self._prefill_state() if device_sampling else None
         last_logits = []
         sampled = []
-        packed = self._prefill_packed(tokens, ranges, plans, page_table, page_tables_per_layer, kv_cache,
-                                      sampling_params, st)
+        packed = self._prefill_packed(
+            tokens, ranges, plans, page_table, page_tables_per_layer, kv_cache, sampling_params, st
+        )
         for u, ((request_start, _request_end, _request_len), plan) in enumerate(zip(ranges, plans)):
             if u in packed:
                 (sampled if device_sampling else last_logits).append(packed[u])
@@ -2498,14 +2526,20 @@ class LagunaForCausalLM:
                 # row 0. A [batch, width] table indexed by user_id gave every batch size a new persistent buffer
                 # (allocated under the resident decode trace) and every row index a new slice program, so
                 # several sequences compiled programs mid-request; one-row tables are the shape warmup builds.
-                row_table = None if page_table is None else torch.as_tensor(page_table, dtype=torch.int32).reshape(
-                    -1, torch.as_tensor(page_table).shape[-1]
-                )[u : u + 1]
+                row_table = (
+                    None
+                    if page_table is None
+                    else torch.as_tensor(page_table, dtype=torch.int32).reshape(
+                        -1, torch.as_tensor(page_table).shape[-1]
+                    )[u : u + 1]
+                )
                 row_tables = (
                     None
                     if page_tables_per_layer is None
-                    else [torch.as_tensor(t, dtype=torch.int32).reshape(-1, torch.as_tensor(t).shape[-1])[u : u + 1]
-                          for t in page_tables_per_layer]
+                    else [
+                        torch.as_tensor(t, dtype=torch.int32).reshape(-1, torch.as_tensor(t).shape[-1])[u : u + 1]
+                        for t in page_tables_per_layer
+                    ]
                 )
                 _tp = time.perf_counter()
                 pt, fill_pt = self._prepare_prefill_page_tables(
@@ -2518,8 +2552,11 @@ class LagunaForCausalLM:
                 )
 
                 if self._PREFILL_TIMING:
-                    print(f"[laguna] prefill chunk L={L} start={absolute_start} page tables "
-                          f"{(time.perf_counter() - _tp) * 1e3:.1f} ms", flush=True)
+                    print(
+                        f"[laguna] prefill chunk L={L} start={absolute_start} page tables "
+                        f"{(time.perf_counter() - _tp) * 1e3:.1f} ms",
+                        flush=True,
+                    )
                 runtime_offsets = self._runtime_offsets_for_prefill(L, absolute_start, runtime_bs)
                 padded = torch.zeros(L, dtype=torch.int64)
                 padded[: chunk.real_len] = tokens[u, absolute_start:absolute_end]
@@ -2675,7 +2712,9 @@ class LagunaForCausalLM:
             for j, u in enumerate(users):
                 onehot[0, 0, j, j * L + int(ranges[u][2]) - 1] = 1.0
             ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(onehot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)),
+                ttnn.from_torch(
+                    onehot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+                ),
                 pf["sel32"][T],
             )
             ttnn.matmul(pf["sel32"][T], ttnn.reshape(h, (1, 1, T, self.hidden)), optional_output_tensor=pf["last_h32"])
@@ -2907,7 +2946,11 @@ class LagunaForCausalLM:
             tokens = torch.tensor([[follow[1]]], dtype=tokens.dtype)
         logits = self._decode_host_sampling(tokens, pos, pt, kv_cache, read_from_device=True)
         sampled = sample_penalized(
-            logits.reshape(B, self.vocab), sampling_params, kwargs.get("prompt_tokens"), kwargs.get("output_tokens"), pos
+            logits.reshape(B, self.vocab),
+            sampling_params,
+            kwargs.get("prompt_tokens"),
+            kwargs.get("output_tokens"),
+            pos,
         )
         self.gen.counters["spec_mode_fallback_decode"] = self.gen.counters.get("spec_mode_fallback_decode", 0) + 1
         self._fallback_next = (int(pos.reshape(-1)[0]) + 1, int(sampled.reshape(-1)[0])) if B == 1 else None
@@ -2915,7 +2958,9 @@ class LagunaForCausalLM:
             return sampled
         if token_buffer is None or B != 1:
             raise RuntimeError(f"speculative-mode fallback decode needs a warmed batch-1 token buffer (B={B})")
-        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(sampled.to(torch.int64).reshape(-1, 1), 1), token_buffer)
+        ttnn.copy_host_to_device_tensor(
+            self._host_rank4_tok_batch(sampled.to(torch.int64).reshape(-1, 1), 1), token_buffer
+        )
         return [token_buffer]
 
     def _spec_is_greedy(self, sampling_params):
@@ -3059,8 +3104,8 @@ class LagunaForCausalLM:
         # by one: trusting them re-seeded the history and returned the same position's token twice ("a a",
         # "hashhash"). With --max-num-seqs 1 a new request always changes the batch layout, so the plugin
         # sets reset_batch; a steady step (no reset) continues from the adapter's own position and history.
-        continuing = bool(self._spec_hist) and self._spec_next_pos is not None and (
-            not reset_batch or p0 == self._spec_next_pos
+        continuing = (
+            bool(self._spec_hist) and self._spec_next_pos is not None and (not reset_batch or p0 == self._spec_next_pos)
         )
         if continuing:
             p0, cur = self._spec_next_pos, int(self._spec_hist[-1])
@@ -3261,7 +3306,9 @@ class LagunaForCausalLM:
             last_pt_host_groups={},
         )
         if self._DFLASH_DEVICE_ARGMAX:
-            st["tok32"] = tok32 if tok32 is not None else g._rep(torch.zeros([1, 1, 1, 32], dtype=torch.int32), ttnn.uint32)
+            st["tok32"] = (
+                tok32 if tok32 is not None else g._rep(torch.zeros([1, 1, 1, 32], dtype=torch.int32), ttnn.uint32)
+            )
         # rows the MoE routes (the first value; later rows get no experts): an adaptive-depth round checks fewer drafts
         # and reads fewer expert weights
         st["active"] = active if active is not None else g._rep(torch.full([1, 32], R, dtype=torch.int32), ttnn.uint32)
@@ -3356,6 +3403,7 @@ class LagunaForCausalLM:
             )
             ttnn.deallocate(core.combine_aux_hidden_states(hidden))
             ttnn.deallocate(hidden)
+
         # Steady-state context updates: once the window holds max_context_rows, each round appends the
         # 1..16 committed rows and drops as many old ones; those programs depend only on the row count.
         # Build all of them here (no trace resident yet) instead of mid-request (~60 ms per new count).
@@ -3377,9 +3425,13 @@ class LagunaForCausalLM:
                 DFlashTargetAuxCapture(hidden_states=full, start_position=0, row_count=max_rows), replace=True
             )
             for rows in range(1, query_rows + 1):
-                start, held = cache.context_bounds() if cache.fixed_combined else (
-                    cache.target_capture().start_position,
-                    cache.target_capture().row_count,
+                start, held = (
+                    cache.context_bounds()
+                    if cache.fixed_combined
+                    else (
+                        cache.target_capture().start_position,
+                        cache.target_capture().row_count,
+                    )
                 )
                 verify = DFlashTargetAuxCapture(
                     hidden_states=verify_rows, start_position=int(start) + int(held), row_count=query_rows
@@ -3421,7 +3473,11 @@ class LagunaForCausalLM:
         page-table width), in which case the caller runs the eager verify."""
         B = int(token_ids.shape[0])
         key = "dflash"
-        if self._DFLASH_VERIFY_TRACE and B == self._DFLASH_SMALL_VERIFY_ROWS and "dflash_s" in getattr(self, "_verify_dec", {}):
+        if (
+            self._DFLASH_VERIFY_TRACE
+            and B == self._DFLASH_SMALL_VERIFY_ROWS
+            and "dflash_s" in getattr(self, "_verify_dec", {})
+        ):
             key = "dflash_s"
         st = getattr(self, "_verify_dec", {}).get(key) if self._DFLASH_VERIFY_TRACE else None
         if st is None or st.get("tid") is None or B != st["rows"]:
@@ -3875,8 +3931,17 @@ class LagunaForCausalLM:
         if self._DFLASH_SERVING_ENABLED:
             if not self._spec_serves_exactly(sampling_params):
                 return self._eager_decode_fallback(
-                    tokens, pos, page_table, kv_cache, page_tables_per_layer, hybrid_cache, sampling_params,
-                    kwargs, read_from_device, self._dflash_tok, reset_batch,
+                    tokens,
+                    pos,
+                    page_table,
+                    kv_cache,
+                    page_tables_per_layer,
+                    hybrid_cache,
+                    sampling_params,
+                    kwargs,
+                    read_from_device,
+                    self._dflash_tok,
+                    reset_batch,
                 )
             return self._dflash_serve(
                 tokens,
@@ -3913,8 +3978,17 @@ class LagunaForCausalLM:
             # This mode captures no normal decode trace (only the verify traces), so the traced path below would
             # capture one mid-request; serve the step eagerly instead.
             return self._eager_decode_fallback(
-                tokens, pos, page_table, kv_cache, page_tables_per_layer, hybrid_cache, sampling_params,
-                kwargs, read_from_device, self._spec_tok, reset_batch,
+                tokens,
+                pos,
+                page_table,
+                kv_cache,
+                page_tables_per_layer,
+                hybrid_cache,
+                sampling_params,
+                kwargs,
+                read_from_device,
+                self._spec_tok,
+                reset_batch,
             )
 
         if sampling_params is not None and penalties_active(sampling_params):
@@ -4064,7 +4138,9 @@ class LagunaForCausalLM:
                 f"penalized async decode for batch B={B} needs the warmed decode trace's token buffer; "
                 "warmup_model_decode must capture this B first"
             )
-        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(sampled.to(torch.int64).reshape(-1, 1), B), st["tok"])
+        ttnn.copy_host_to_device_tensor(
+            self._host_rank4_tok_batch(sampled.to(torch.int64).reshape(-1, 1), B), st["tok"]
+        )
         st["staged"] = False
         return [st["tok"]]
 
@@ -4264,7 +4340,9 @@ class LagunaForCausalLM:
                     if greedy is not None:
                         from types import SimpleNamespace
 
-                        greedy_n = SimpleNamespace(temperature=[0.0] * n, top_k=[0] * n, top_p=[1.0] * n, seed=[None] * n)
+                        greedy_n = SimpleNamespace(
+                            temperature=[0.0] * n, top_k=[0] * n, top_p=[1.0] * n, seed=[None] * n
+                        )
                     rows = torch.zeros((n, prefill_w), dtype=torch.int32)
                     for j in range(n):
                         rows[j, :nb] = torch.arange(j * nb, (j + 1) * nb, dtype=torch.int32)
@@ -4273,11 +4351,23 @@ class LagunaForCausalLM:
                         for kv in kv_cache:
                             pool = int(kv["blocks_per_user"])
                             ptl.append(torch.where(rows < pool, rows, torch.zeros_like(rows)))
-                        self.prefill_forward(dummy, page_tables_per_layer=ptl, kv_cache=kv_cache,
-                                             prompt_lens=[L] * n, start_pos=[0] * n, sampling_params=greedy_n)
+                        self.prefill_forward(
+                            dummy,
+                            page_tables_per_layer=ptl,
+                            kv_cache=kv_cache,
+                            prompt_lens=[L] * n,
+                            start_pos=[0] * n,
+                            sampling_params=greedy_n,
+                        )
                     else:
-                        self.prefill_forward(dummy, page_table=rows, kv_cache=kv_cache,
-                                             prompt_lens=[L] * n, start_pos=[0] * n, sampling_params=greedy_n)
+                        self.prefill_forward(
+                            dummy,
+                            page_table=rows,
+                            kv_cache=kv_cache,
+                            prompt_lens=[L] * n,
+                            start_pos=[0] * n,
+                            sampling_params=greedy_n,
+                        )
                     n *= 2
         # W1 fix — warm the serving ROW-COUNT dimension of the prefill page table. Serving batches up to
         # ``max_num_seqs`` new requests into ONE prefill call (page_table ``[num_reqs, prefill_w]``), and

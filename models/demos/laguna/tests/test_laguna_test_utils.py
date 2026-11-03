@@ -11,10 +11,10 @@ from models.demos.laguna.tests.laguna_test_utils import (
     PROFILES,
     add_profile_args,
     assert_memory_margin,
-    profile_from_args,
-    resolve_profile,
     close_mesh,
     open_mesh,
+    profile_from_args,
+    resolve_profile,
 )
 
 
@@ -40,39 +40,37 @@ def test_legacy_mesh_aliases(alias, expected):
     assert resolve_profile(environ={"TT_LAGUNA_MESH": alias}).name == expected
 
 
-def test_explicit_profile_overrides_default_but_not_conflicting_legacy_mesh():
+def test_explicit_profile_overrides_default_but_not_conflicting_legacy_mesh(expect_error):
     assert resolve_profile("p150", environ={}).name == "p150"
-    with pytest.raises(ValueError, match="conflicts"):
+    with expect_error(ValueError, "conflicts"):
         resolve_profile("p150", environ={"TT_LAGUNA_MESH": "1,4"})
 
 
-@pytest.mark.parametrize(
-    ("profile", "visible"), [("p150", "3"), ("p150x2", "0,1"), ("p150x4", "0,1,2,3")]
-)
+@pytest.mark.parametrize(("profile", "visible"), [("p150", "3"), ("p150x2", "0,1"), ("p150x4", "0,1,2,3")])
 def test_visible_device_count_matches_profile(profile, visible):
     assert resolve_profile(profile, environ={"TT_VISIBLE_DEVICES": visible}).name == profile
 
 
-def test_visible_device_mismatch_and_duplicates_fail_fast():
-    with pytest.raises(ValueError, match="requires 2"):
+def test_visible_device_mismatch_and_duplicates_fail_fast(expect_error):
+    with expect_error(ValueError, "requires 2"):
         resolve_profile("p150x2", environ={"TT_VISIBLE_DEVICES": "0"})
-    with pytest.raises(ValueError, match="distinct"):
+    with expect_error(ValueError, "distinct"):
         resolve_profile("p150x2", environ={"TT_VISIBLE_DEVICES": "0,0"})
 
 
-def test_fabric_override_invariants():
+def test_fabric_override_invariants(expect_error):
     assert resolve_profile("p150x2", fabric_config="ring", environ={}).fabric_config == "FABRIC_1D_RING"
-    with pytest.raises(ValueError, match="requires fabric DISABLED"):
+    with expect_error(ValueError, "requires fabric DISABLED"):
         resolve_profile("p150", fabric_config="FABRIC_1D", environ={})
-    with pytest.raises(ValueError, match="requires a 1D fabric"):
+    with expect_error(ValueError, "requires a 1D fabric"):
         resolve_profile("p150x2", fabric_config="DISABLED", environ={})
 
 
-def test_ccl_topology_derives_matching_fabric_and_rejects_conflicts():
+def test_ccl_topology_derives_matching_fabric_and_rejects_conflicts(expect_error):
     linear = resolve_profile("p150x2", environ={"TT_LAGUNA_CCL_TOPOLOGY": "linear"})
     assert linear.fabric_config == "FABRIC_1D"
     assert linear.ccl_topology == "linear"
-    with pytest.raises(ValueError, match="conflicts"):
+    with expect_error(ValueError, "conflicts"):
         resolve_profile(
             "p150x2",
             fabric_config="FABRIC_1D_RING",
@@ -81,8 +79,8 @@ def test_ccl_topology_derives_matching_fabric_and_rejects_conflicts():
 
 
 @pytest.mark.parametrize("links", ["0", "3", "bad"])
-def test_invalid_ccl_link_count_fails_fast(links):
-    with pytest.raises(ValueError, match="must be 1 or 2"):
+def test_invalid_ccl_link_count_fails_fast(links, expect_error):
+    with expect_error(ValueError, "must be 1 or 2"):
         resolve_profile("p150x2", environ={"TT_LAGUNA_CCL_NUM_LINKS": links})
 
 
@@ -95,16 +93,16 @@ def test_cli_values_take_precedence_over_environment():
     assert spec.fabric_config == "FABRIC_1D_RING"
 
 
-def test_memory_margin_contract():
+def test_memory_margin_contract(expect_error):
     passing = {
         "label": "warmup",
         "free_fraction": 0.10,
         "largest_contiguous_bytes_free_per_bank": 128 * 1024 * 1024,
     }
     assert_memory_margin(passing)
-    with pytest.raises(AssertionError, match="DRAM margin failed"):
+    with expect_error(AssertionError, "DRAM margin failed"):
         assert_memory_margin({**passing, "free_fraction": 0.09})
-    with pytest.raises(AssertionError, match="DRAM margin failed"):
+    with expect_error(AssertionError, "DRAM margin failed"):
         assert_memory_margin({**passing, "largest_contiguous_bytes_free_per_bank": 127 * 1024 * 1024})
 
 
@@ -151,9 +149,9 @@ def test_single_device_open_and_close_never_touch_fabric(monkeypatch):
     assert profile.mesh_graph_desc_path
 
 
-def test_singleton_descriptor_is_rejected_for_multidevice_profile():
+def test_singleton_descriptor_is_rejected_for_multidevice_profile(expect_error):
     singleton = resolve_profile("p150", environ={}).mesh_graph_desc_path
-    with pytest.raises(ValueError, match="unset singleton"):
+    with expect_error(ValueError, "unset singleton"):
         resolve_profile("p150x2", environ={"TT_MESH_GRAPH_DESC_PATH": singleton})
 
 

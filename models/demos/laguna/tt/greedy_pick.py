@@ -15,6 +15,7 @@ Bit-exact with argmax over the full vocabulary (first index on ties)."""
 from pathlib import Path
 
 import torch
+
 import ttnn
 
 _KDIR = Path(__file__).resolve().parent / "kernels"
@@ -74,7 +75,8 @@ def _stage1_v2(shards, parts, gs, Vt, Rt, device):
 
 def greedy_pick(shards, out_tok, offsets, rows_out=None, cluster_axis=1, topology=ttnn.Topology.Ring, num_links=2):
     """shards: [1, 1, R, V] bf16 TILE logits shard per chip (R padded to tiles: rows past rows_out are ignored);
-    out_tok: [1, 1, 1, rows_out] uint32 row-major (replicated) receiving the global argmax ids; offsets: chip_offsets."""
+    out_tok: [1, 1, 1, rows_out] uint32 row-major (replicated) receiving the global argmax ids; offsets: chip_offsets.
+    """
     device = shards.device()
     R = -(-int(shards.shape[-2]) // TILE) * TILE
     V = int(shards.shape[-1])
@@ -122,7 +124,8 @@ def greedy_pick(shards, out_tok, offsets, rows_out=None, cluster_axis=1, topolog
         kernel_source=str(_KDIR / "argmax_final.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=rows_grid,
-        compile_time_args=[R, S, W, gs.x, n_final] + list(ttnn.TensorAccessorArgs(parts).get_compile_time_args())
+        compile_time_args=[R, S, W, gs.x, n_final]
+        + list(ttnn.TensorAccessorArgs(parts).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(cand).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(offsets).get_compile_time_args()),
         common_runtime_args=[parts.buffer_address(), cand.buffer_address(), offsets.buffer_address()],
@@ -130,13 +133,19 @@ def greedy_pick(shards, out_tok, offsets, rows_out=None, cluster_axis=1, topolog
     )
     ttnn.generic_op([parts, offsets, cand], ttnn.ProgramDescriptor(kernels=[k2], semaphores=[],
                                                                   cbs=[_cb(rows_grid, 0, S * 128 + 128)]))  # fmt: skip
-    g = cand if D == 1 else ttnn.all_gather(cand, dim=3, cluster_axis=cluster_axis, topology=topology,
-                                            num_links=num_links, memory_config=mem)  # fmt: skip  [R, 8 D]
+    g = (
+        cand
+        if D == 1
+        else ttnn.all_gather(
+            cand, dim=3, cluster_axis=cluster_axis, topology=topology, num_links=num_links, memory_config=mem
+        )
+    )  # fmt: skip  [R, 8 D]
     k3 = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "argmax_pick.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=one,
-        compile_time_args=[R, D, rows_out] + list(ttnn.TensorAccessorArgs(g).get_compile_time_args())
+        compile_time_args=[R, D, rows_out]
+        + list(ttnn.TensorAccessorArgs(g).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(out_tok).get_compile_time_args()),
         common_runtime_args=[g.buffer_address(), out_tok.buffer_address()],
         config=ttnn.ReaderConfigDescriptor(),

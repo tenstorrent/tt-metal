@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Capability-gated TT sliding-window prefix-cache compatibility.
 
@@ -63,9 +64,7 @@ def _patch_platform(platform_class: type) -> bool:
         restored_by_capability = False
         if prefix_cache_was_requested and not cache_config.enable_prefix_caching:
             sliding_window = vllm_config.model_config.get_sliding_window()
-            if sliding_window is not None and _supports_sliding_window_prefix_cache(
-                vllm_config.model_config
-            ):
+            if sliding_window is not None and _supports_sliding_window_prefix_cache(vllm_config.model_config):
                 cache_config.enable_prefix_caching = True
                 restored_by_capability = True
 
@@ -74,9 +73,7 @@ def _patch_platform(platform_class: type) -> bool:
         # or a capability-gated reversal is elevated because either one deserves operator attention.
         final_enabled = bool(cache_config.enable_prefix_caching)
         log_level = (
-            logging.WARNING
-            if restored_by_capability or prefix_cache_was_requested != final_enabled
-            else logging.INFO
+            logging.WARNING if restored_by_capability or prefix_cache_was_requested != final_enabled else logging.INFO
         )
         logger.log(
             log_level,
@@ -96,9 +93,7 @@ def _patch_platform(platform_class: type) -> bool:
 
     check_and_update_config.__name__ = original_function.__name__
     check_and_update_config.__doc__ = original_function.__doc__
-    setattr(
-        platform_class, "check_and_update_config", classmethod(check_and_update_config)
-    )
+    setattr(platform_class, "check_and_update_config", classmethod(check_and_update_config))
     setattr(platform_class, PATCH_MARKER, True)
     return True
 

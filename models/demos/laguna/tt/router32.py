@@ -16,13 +16,17 @@ def route32(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=tt
     device = sel.device()
     T, E = sel.shape[-2], sel.shape[-1]
     assert T <= 32, sel.shape
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, T, E]), ttnn.float32, ttnn.TILE_LAYOUT, device, memory_config)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, T, E]), ttnn.float32, ttnn.TILE_LAYOUT, device, memory_config
+    )
     grid_size = device.compute_with_storage_grid_size()
     grid = ttnn.num_cores_to_corerangeset(T, grid_size, True)
     buf = ttnn.CBDescriptor(
         total_size=4 * E * 4 + 256,
         core_ranges=grid,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)],
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)
+        ],
     )
     args = []
     for t in (sel, scores, out, out):
@@ -32,8 +36,10 @@ def route32(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=tt
         kernel_source=str(_KDIR / "router32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, 0, 0] + args
-        + [0] + list(ttnn.TensorAccessorArgs(out).get_compile_time_args()),
+        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, 0, 0]
+        + args
+        + [0]
+        + list(ttnn.TensorAccessorArgs(out).get_compile_time_args()),
         common_runtime_args=[sel.buffer_address(), scores.buffer_address(), out.buffer_address(), 0, 0],
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -51,8 +57,12 @@ def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_con
     T, E = sel.shape[-2], sel.shape[-1]
     K = int(top_k)
     assert T % 32 == 0 and E % 32 == 0 and K <= 32, (sel.shape, K)
-    idx = ttnn.allocate_tensor_on_device(ttnn.Shape([1, T, K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config)
-    wgt = ttnn.allocate_tensor_on_device(ttnn.Shape([1, T, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config)
+    idx = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, T, K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config
+    )
+    wgt = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, T, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config
+    )
     grid_size = device.compute_with_storage_grid_size()
     max_cores = grid_size.x * grid_size.y
     # rows per work unit: the size that minimises the rows the busiest RISC scans one after another (8-row units
@@ -102,8 +112,9 @@ def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_con
     return wgt, idx
 
 
-def route1_local(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, local_e,
-                 memory_config=ttnn.L1_MEMORY_CONFIG):
+def route1_local(
+    sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, local_e, memory_config=ttnn.L1_MEMORY_CONFIG
+):
     """One decode token: sel, scores [1, 1, 1, E] fp32 TILE; ep_off: mesh-sharded uint32 holding each chip's first
     local expert. Returns this chip's [1, 1, 1, local_e] bf16 row-major routing row (normalized, scaled weights of
     its picked local experts, 0 elsewhere) -- the batch-1 MoE kernels' sparsity input."""
@@ -117,7 +128,9 @@ def route1_local(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, loc
     buf = ttnn.CBDescriptor(
         total_size=4 * E * 4 + 256,
         core_ranges=grid,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)],
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)
+        ],
     )
     args = []
     for t in (sel, scores, out, ep_off):
@@ -127,17 +140,34 @@ def route1_local(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, loc
         kernel_source=str(_KDIR / "router32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, int(local_e), 0] + args
-        + [0] + list(ttnn.TensorAccessorArgs(out).get_compile_time_args()),
-        common_runtime_args=[sel.buffer_address(), scores.buffer_address(), out.buffer_address(), ep_off.buffer_address(), 0],
+        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, int(local_e), 0]
+        + args
+        + [0]
+        + list(ttnn.TensorAccessorArgs(out).get_compile_time_args()),
+        common_runtime_args=[
+            sel.buffer_address(),
+            scores.buffer_address(),
+            out.buffer_address(),
+            ep_off.buffer_address(),
+            0,
+        ],
         config=ttnn.ReaderConfigDescriptor(),
     )
     ttnn.generic_op([sel, scores, ep_off, out], ttnn.ProgramDescriptor(kernels=[reader], semaphores=[], cbs=[buf]))
     return out
 
 
-def route_local_rows(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, local_e,
-                     memory_config=ttnn.L1_MEMORY_CONFIG, active=None):
+def route_local_rows(
+    sel,
+    scores,
+    top_k,
+    routed_scaling,
+    norm_topk_prob,
+    ep_off,
+    local_e,
+    memory_config=ttnn.L1_MEMORY_CONFIG,
+    active=None,
+):
     """2..110 decode tokens (one core per token): sel, scores [1, 1, T, E] fp32 TILE; ep_off as in route1_local. Returns this chip's
     [1, 1, T, local_e] bf16 row-major routing rows (normalized, scaled weights of each token's picked local experts,
     0 elsewhere): moe_decode1.gate_up32 / down32 union them into the active set and gate_up32 builds each expert's
@@ -155,7 +185,9 @@ def route_local_rows(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off,
     buf = ttnn.CBDescriptor(
         total_size=4 * E * 4 + 256,
         core_ranges=grid,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)],
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)
+        ],
     )
     args = []
     for t in (sel, scores, rows, ep_off):
@@ -166,9 +198,16 @@ def route_local_rows(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
         compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, int(local_e), T]
-        + args + [int(active is not None)] + list(ttnn.TensorAccessorArgs(active if active is not None else rows).get_compile_time_args()),
-        common_runtime_args=[sel.buffer_address(), scores.buffer_address(), rows.buffer_address(), ep_off.buffer_address(),
-                             active.buffer_address() if active is not None else 0],
+        + args
+        + [int(active is not None)]
+        + list(ttnn.TensorAccessorArgs(active if active is not None else rows).get_compile_time_args()),
+        common_runtime_args=[
+            sel.buffer_address(),
+            scores.buffer_address(),
+            rows.buffer_address(),
+            ep_off.buffer_address(),
+            active.buffer_address() if active is not None else 0,
+        ],
         config=ttnn.ReaderConfigDescriptor(),
     )
     io = [sel, scores, ep_off] + ([active] if active is not None else []) + [rows]

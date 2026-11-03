@@ -182,8 +182,13 @@ def down_sum(glu, w_down, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG, shared=
         core_ranges=grid,
         compile_time_args=[kt, nt, E, x_page, w_page, sp_page, grid_size.x, MAX_ACTIVE, kt_sh, w_sh_page]
         + _accessor_args(glu, w_down, sparsity, sh_glu, w_sh),
-        common_runtime_args=[glu.buffer_address(), w_down.buffer_address(), sparsity.buffer_address(),
-                             sh_glu.buffer_address(), w_sh.buffer_address()],  # fmt: skip
+        common_runtime_args=[
+            glu.buffer_address(),
+            w_down.buffer_address(),
+            sparsity.buffer_address(),
+            sh_glu.buffer_address(),
+            w_sh.buffer_address(),
+        ],  # fmt: skip
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
@@ -367,8 +372,15 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
         core_ranges=grid,
         compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups, core_base, Mt, skip]
         + _accessor_args(x, gu_cols.buf, sparsity if wv is None else wv, sparsity),
-        common_runtime_args=[x.buffer_address(), gu_cols.buf.buffer_address(), 0 if wv is None else wv.buffer_address(),
-                             sparsity.buffer_address(), sp_rows, len(rects)] + [v for r in rects for v in r],
+        common_runtime_args=[
+            x.buffer_address(),
+            gu_cols.buf.buffer_address(),
+            0 if wv is None else wv.buffer_address(),
+            sparsity.buffer_address(),
+            sp_rows,
+            len(rects),
+        ]
+        + [v for r in rects for v in r],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
@@ -495,13 +507,34 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         kernel_source=str(_KDIR / "dn32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups, kt_sh, w_sh, ks, Mt,
-                           int(os.environ.get("TT_LAGUNA_DN32_SPARSE_X", "1") == "1")]
+        compile_time_args=[
+            Kt,
+            Nh,
+            E,
+            page,
+            wt,
+            sp_page,
+            gs.x,
+            cols_per_core,
+            expert_groups,
+            kt_sh,
+            w_sh,
+            ks,
+            Mt,
+            int(os.environ.get("TT_LAGUNA_DN32_SPARSE_X", "1") == "1"),
+        ]
         + _accessor_args(glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf),
         # up to 8 token rows (DFlash verify): read only those rows of each activation tile; the output rows past them
         # are not used (the packed-rows all-reduce reads rows < T)
-        common_runtime_args=[glu.buffer_address(), d_cols.buf.buffer_address(), sparsity.buffer_address(), sp_rows,
-                             x_rows, sh_glu.buffer_address(), sh_cols.buf.buffer_address()],
+        common_runtime_args=[
+            glu.buffer_address(),
+            d_cols.buf.buffer_address(),
+            sparsity.buffer_address(),
+            sp_rows,
+            x_rows,
+            sh_glu.buffer_address(),
+            sh_cols.buf.buffer_address(),
+        ],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(

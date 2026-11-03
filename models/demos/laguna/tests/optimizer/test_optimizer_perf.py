@@ -58,7 +58,9 @@ DECODE_ONLY = os.environ.get("OPTIMIZER_DECODE_ONLY") == "1"
 PROFILER_BUFFER_AT_IMPORT = os.environ.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") or "default"
 
 
-PERF_HISTORY_PATH = os.environ.get("OPTIMIZER_PERF_HISTORY") or "/home/ttuser/benchmark-results/ashwary-laguna/perf_history.jsonl"
+PERF_HISTORY_PATH = (
+    os.environ.get("OPTIMIZER_PERF_HISTORY") or "/home/ttuser/benchmark-results/ashwary-laguna/perf_history.jsonl"
+)
 
 
 def _append_perf_history(record: dict) -> None:
@@ -179,7 +181,9 @@ def test_optimizer_direct_perf():
         else:
             token = first
             for i in range(decode_tokens):
-                token = int(gen.decode_forward(torch.tensor([[token]]), torch.tensor([P + i]), page_table=pt, kv_cache=kv)[0])
+                token = int(
+                    gen.decode_forward(torch.tensor([[token]]), torch.tensor([P + i]), page_table=pt, kv_cache=kv)[0]
+                )
         ttnn.synchronize_device(mesh)
         end = time.perf_counter()
         signpost("stage:decode:end", profiling)

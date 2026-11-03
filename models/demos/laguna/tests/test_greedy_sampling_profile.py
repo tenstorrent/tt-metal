@@ -12,10 +12,10 @@ hot paths.
 from types import SimpleNamespace
 
 import torch
+from tt_transformers.modules.sampling.sampling_1d import Sampling1DConfig
 
 from models.demos.laguna.tt import generator_vllm as gv
 from models.demos.laguna.tt.generator import LagunaGenerator
-from tt_transformers.modules.sampling.sampling_1d import Sampling1DConfig
 
 
 class _FakeSampler:

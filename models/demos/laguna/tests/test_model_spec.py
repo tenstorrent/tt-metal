@@ -18,8 +18,8 @@ def test_env_selects_xs():
     assert M.resolve_model_id({M.MODEL_ENV: "poolside/Laguna-XS-2.1"}) == "poolside/Laguna-XS-2.1"
 
 
-def test_rejects_unknown_checkpoint():
-    with pytest.raises(ValueError, match="not a supported Laguna checkpoint"):
+def test_rejects_unknown_checkpoint(expect_error):
+    with expect_error(ValueError, "not a supported Laguna checkpoint"):
         M.resolve_model_id({M.MODEL_ENV: "poolside/Laguna-M-2.1"})
 
 
@@ -41,16 +41,16 @@ def test_max_context_matches_downloaded_config(model_id):
     assert M.MAX_POSITION_EMBEDDINGS[model_id] == declared
 
 
-def test_check_hf_config_accepts_the_selected_checkpoint_and_names_the_fix():
+def test_check_hf_config_accepts_the_selected_checkpoint_and_names_the_fix(expect_error):
     from types import SimpleNamespace
 
     s_cfg = SimpleNamespace(num_hidden_layers=48, hidden_size=3072)
     xs_cfg = SimpleNamespace(num_hidden_layers=40, hidden_size=2048)
     M.check_hf_config(s_cfg, "poolside/Laguna-S-2.1")
     M.check_hf_config(xs_cfg, "poolside/Laguna-XS-2.1")
-    with pytest.raises(ValueError, match="TT_LAGUNA_MODEL=poolside/Laguna-XS-2.1"):
+    with expect_error(ValueError, "TT_LAGUNA_MODEL=poolside/Laguna-XS-2.1"):
         M.check_hf_config(xs_cfg, "poolside/Laguna-S-2.1")
-    with pytest.raises(ValueError, match="served config has 7 layers"):
+    with expect_error(ValueError, "served config has 7 layers"):
         M.check_hf_config(SimpleNamespace(num_hidden_layers=7, hidden_size=64), "poolside/Laguna-S-2.1")
 
 

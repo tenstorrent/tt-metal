@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Warmed prefill + traced warmed decode perf for one Laguna layer, OPTIMIZED decoder.
 
 Mirrors tests/perf_trace.py (functional) but drives OptimizedDecoder, so before/after

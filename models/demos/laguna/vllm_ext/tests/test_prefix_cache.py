@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 from types import SimpleNamespace
@@ -72,9 +73,7 @@ def test_only_explicit_dual_capability_restores_prefix_cache(
 ):
     caplog.set_level("INFO", logger=prefix_cache.__name__)
     platform_class = _platform_that_disables_sliding_prefix_cache()
-    monkeypatch.setattr(
-        prefix_cache, "_resolve_model_class", lambda _config: model_class
-    )
+    monkeypatch.setattr(prefix_cache, "_resolve_model_class", lambda _config: model_class)
 
     assert prefix_cache._patch_platform(platform_class)
     config = _config()
@@ -105,8 +104,7 @@ def test_does_not_enable_prefix_cache_that_was_not_requested(caplog, monkeypatch
     assert config.cache_config.enable_prefix_caching is False
     assert platform_class.calls == 1
     assert (
-        "Laguna prefix-cache final state: requested=False enabled=False "
-        "restored_by_capability=False"
+        "Laguna prefix-cache final state: requested=False enabled=False " "restored_by_capability=False"
     ) in caplog.messages
 
 
@@ -126,16 +124,13 @@ def test_non_sliding_model_is_unchanged(caplog, monkeypatch):
     assert config.cache_config.enable_prefix_caching is True
     assert platform_class.calls == 1
     assert (
-        "Laguna prefix-cache final state: requested=True enabled=True "
-        "restored_by_capability=False"
+        "Laguna prefix-cache final state: requested=True enabled=True " "restored_by_capability=False"
     ) in caplog.messages
 
 
 def test_platform_patch_is_idempotent(monkeypatch):
     platform_class = _platform_that_disables_sliding_prefix_cache()
-    monkeypatch.setattr(
-        prefix_cache, "_resolve_model_class", lambda _config: _SlidingPrefixModel
-    )
+    monkeypatch.setattr(prefix_cache, "_resolve_model_class", lambda _config: _SlidingPrefixModel)
 
     assert prefix_cache._patch_platform(platform_class)
     assert not prefix_cache._patch_platform(platform_class)
@@ -150,9 +145,7 @@ def test_enabled_quantum_policy_is_checked_after_capability_restore(monkeypatch)
     monkeypatch.setenv("TT_LAGUNA_PREFIX_CACHE", "1")
     monkeypatch.setenv("TT_LAGUNA_PREFILL_FAST_CHUNK", "8192")
     platform_class = _platform_that_disables_sliding_prefix_cache()
-    monkeypatch.setattr(
-        prefix_cache, "_resolve_model_class", lambda _config: _SlidingPrefixModel
-    )
+    monkeypatch.setattr(prefix_cache, "_resolve_model_class", lambda _config: _SlidingPrefixModel)
     prefix_cache._patch_platform(platform_class)
 
     config = _config()
@@ -161,16 +154,14 @@ def test_enabled_quantum_policy_is_checked_after_capability_restore(monkeypatch)
     assert config.cache_config.enable_prefix_caching is True
 
 
-def test_enabled_quantum_policy_rejects_chunked_scheduler_prefill(monkeypatch):
+def test_enabled_quantum_policy_rejects_chunked_scheduler_prefill(monkeypatch, expect_error):
     monkeypatch.setenv("TT_LAGUNA_PREFIX_CACHE", "1")
     monkeypatch.setenv("TT_LAGUNA_PREFILL_FAST_CHUNK", "8192")
     platform_class = _platform_that_disables_sliding_prefix_cache()
-    monkeypatch.setattr(
-        prefix_cache, "_resolve_model_class", lambda _config: _SlidingPrefixModel
-    )
+    monkeypatch.setattr(prefix_cache, "_resolve_model_class", lambda _config: _SlidingPrefixModel)
     prefix_cache._patch_platform(platform_class)
     config = _config()
     config.scheduler_config.enable_chunked_prefill = True
 
-    with pytest.raises(RuntimeError, match="chunked prefill"):
+    with expect_error(RuntimeError, "chunked prefill"):
         platform_class.check_and_update_config(config)

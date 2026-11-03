@@ -23,7 +23,9 @@ TILE = 32
 
 
 def _ranges(gx, idxs):
-    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(i % gx, i // gx), ttnn.CoreCoord(i % gx, i // gx)) for i in idxs})
+    return ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(i % gx, i // gx), ttnn.CoreCoord(i % gx, i // gx)) for i in idxs}
+    )
 
 
 def router_scores(x, w, KC=12, memory_config=ttnn.L1_MEMORY_CONFIG):
@@ -35,7 +37,9 @@ def router_scores(x, w, KC=12, memory_config=ttnn.L1_MEMORY_CONFIG):
     gs = device.compute_with_storage_grid_size()
     cores = Nt * KC
     assert cores <= gs.x * gs.y, cores
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, T, E]), ttnn.float32, ttnn.TILE_LAYOUT, device, memory_config)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, T, E]), ttnn.float32, ttnn.TILE_LAYOUT, device, memory_config
+    )
     grid = ttnn.num_cores_to_corerangeset(cores, gs, True)
     reducers = [n * KC for n in range(Nt)]
     red_grid = _ranges(gs.x, reducers)

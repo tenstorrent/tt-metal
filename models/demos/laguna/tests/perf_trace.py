@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Warmed prefill + traced warmed decode performance harness for one Laguna layer.
 
 Run under Tracy to emit an ops CSV with signposted measured windows:

@@ -44,9 +44,9 @@ import torch
 
 import ttnn
 
+from . import colpage, moe_decode1, tile_regroup
 from .optimized_decoder import (
     TILE,
-    _kv_heads_geometry,
     LayerConfig,
     OptimizedDecoder,
     PrecisionPolicy,
@@ -55,11 +55,11 @@ from .optimized_decoder import (
     _dram_matmul_pc,
     _dram_weight_memcfg,
     _hf_rope_tables,
+    _kv_heads_geometry,
     _sparse_pc,
     _width_sharded_l1,
     weight_cache_key,
 )
-from . import colpage, moe_decode1, tile_regroup
 from .prefill_page_table import single_shot_fill_page_table
 
 TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
@@ -371,7 +371,9 @@ class MultichipDecoder(OptimizedDecoder):
         self._reshape_to_shard = _parse_binary_env("TT_LAGUNA_RESHAPE_TO_SHARD", True)  # attn flatten -> WO shard
         # 1-token router: eltwise ops read the sharded logits; the EP-select matmul casts the fp32 weights to bf16
         self._router_sharded_logits = _parse_binary_env("TT_LAGUNA_ROUTER_SHARDED_LOGITS", True)
-        self._router_fp32_out = self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
+        self._router_fp32_out = (
+            self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
+        )
         self._token_dispatch_fallback_reason = "feature flag is disabled"
         # routed gate+up sparse matmul skips the output zero-fill (needs ttnn sparse_matmul zero_init_output)
         self._gu_skip_zero_init = _parse_binary_env("TT_LAGUNA_MOE_GU_SKIP_ZERO_INIT", True)
@@ -438,7 +440,8 @@ class MultichipDecoder(OptimizedDecoder):
     def _prefill_chunked_sdpa_kw(self, seq=None):
         """Program config for the streamed (paged) prefill SDPA. TTNN's default (no config) runs 32/32 chunks; 64/64
         measured 160.3 -> 143.4 ms (8192 rows) and 85.0 -> 81.7 ms (4096) for layers 0/1/4 on S p150x4. Chunk starts
-        are block (64) aligned, so q/k chunks must divide 64. TT_LAGUNA_PREFILL_SDPA_QK="q,k" overrides ("0" = default)."""
+        are block (64) aligned, so q/k chunks must divide 64. TT_LAGUNA_PREFILL_SDPA_QK="q,k" overrides ("0" = default).
+        """
         pc = getattr(self, "_prefill_chunked_sdpa_pc", None)  # built in __init__
         if pc is None:
             return {}
@@ -506,12 +509,8 @@ class MultichipDecoder(OptimizedDecoder):
             # padding is unnecessary for a reduction over dim 1 (it never mixes rows), and a preallocated output
             # with the logical row count (an allocation, not an op) replaces the slice back from the padded rows
             rows, width = gathered.shape[-2], gathered.shape[-1]
-            out = ttnn.empty(
-                (1, 1, rows, width), gathered.dtype, ttnn.TILE_LAYOUT, self.device, ttnn.L1_MEMORY_CONFIG
-            )
-            out = ttnn.experimental.fast_reduce_nc(
-                gathered, dims=[1], output=out, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
+            out = ttnn.empty((1, 1, rows, width), gathered.dtype, ttnn.TILE_LAYOUT, self.device, ttnn.L1_MEMORY_CONFIG)
+            out = ttnn.experimental.fast_reduce_nc(gathered, dims=[1], output=out, memory_config=ttnn.L1_MEMORY_CONFIG)
             return ttnn.typecast(out, ttnn.bfloat16) if out.dtype != ttnn.bfloat16 else out
         if ccl == ttnn.bfloat16:
             return ttnn.all_reduce(x, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links)
@@ -541,8 +540,11 @@ class MultichipDecoder(OptimizedDecoder):
 
         if os.environ.get("TT_LAGUNA_AR_ROWS_DEBUG") == "1":
             for nm, t in (("partial", partial), ("residual", residual)):
-                print(f"[ar_rows] {nm} shape={t.shape} padded={t.padded_shape} dtype={t.dtype} tile={t.tile} "
-                      f"mem={t.memory_config()}", flush=True)
+                print(
+                    f"[ar_rows] {nm} shape={t.shape} padded={t.padded_shape} dtype={t.dtype} tile={t.tile} "
+                    f"mem={t.memory_config()}",
+                    flush=True,
+                )
             print(f"[ar_rows] out mem={memory_config}", flush=True)
         row = pack_row0(partial, rows)
         if self._ar_broadcast:
@@ -723,6 +725,7 @@ class MultichipDecoder(OptimizedDecoder):
             qkvg_pad = fused_pad
         else:
             qkvg_pad = None
+
         def norm_w(name):
             v = g(name)
             return (v if rope_perm is None else v[rope_perm]).reshape(1, 1, 1, hd)
@@ -946,7 +949,10 @@ class MultichipDecoder(OptimizedDecoder):
                 row = torch.zeros([1, 1, 1, 32], dtype=torch.float32)
                 row[..., 0] = 1.0
                 w["sh_active"] = ttnn.from_torch(
-                    row, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device,
+                    row,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
                 )
         else:
@@ -1310,7 +1316,11 @@ class MultichipDecoder(OptimizedDecoder):
             and "gate_w_ds" in self.w
         ):
             return self._moe1_local(ln_flat, sharded)
-        many = T > TILE and T % TILE == 0 and T <= self.device.compute_with_storage_grid_size().x * self.device.compute_with_storage_grid_size().y
+        many = (
+            T > TILE
+            and T % TILE == 0
+            and T <= self.device.compute_with_storage_grid_size().x * self.device.compute_with_storage_grid_size().y
+        )
         if (
             (1 < T <= TILE or (many and self._batched_rows_moe))
             and self.D > 1
@@ -1479,7 +1489,13 @@ class MultichipDecoder(OptimizedDecoder):
             bias = cache[T]
         sel = ttnn.add(scores, bias)
         rows = route_local_rows(
-            sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts,
+            sel,
+            scores,
+            cfg.top_k,
+            cfg.routed_scaling,
+            cfg.norm_topk_prob,
+            self.w["ep_off"],
+            self.local_experts,
             active=getattr(self, "_rows_active", None),  # an adaptive-depth DFlash verify (generator_vllm)
         )
         x32 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
@@ -1504,7 +1520,9 @@ class MultichipDecoder(OptimizedDecoder):
         glu = moe_decode1.gate_up32(x32, colpage.column_pages(self.w["exp_gate_up"]), None, rows)
         routed_local = moe_decode1.down32(glu, colpage.column_pages(self.w["exp_down"]), rows)
         keep = sharded and self._glu_out_sharded
-        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep)
+        shared_partial = self._glu_mlp(
+            ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep
+        )
         if keep:
             combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
@@ -1593,12 +1611,15 @@ class MultichipDecoder(OptimizedDecoder):
             # columns instead of a DRAM-sharded matmul, 2 slices, SwiGLU, a reshard and a second matmul (~27 us)
             # one active expert = 8 working cores (one per gate/up column pair): 48-tile reads keep each core's DRAM
             # stream busier than the routed experts' 16 (16.7 -> 14.3 us, outputs identical)
-            sh_glu = moe_decode1.gate_up_swiglu(x1, self.w["sh_gate_up_cp"], self.w["sh_active"],
-                                                chunk=int(os.environ.get("TT_LAGUNA_SH1_CHUNK", "48")))
+            sh_glu = moe_decode1.gate_up_swiglu(
+                x1, self.w["sh_gate_up_cp"], self.w["sh_active"], chunk=int(os.environ.get("TT_LAGUNA_SH1_CHUNK", "48"))
+            )
             shared_local = moe_decode1.down_sum(sh_glu, self.w["sh_down_cp"], self.w["sh_active"])
             return self._reduce(ttnn.add(routed_local, shared_local, memory_config=ttnn.L1_MEMORY_CONFIG))
         keep = sharded and self._glu_out_sharded
-        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep)
+        shared_partial = self._glu_mlp(
+            ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep
+        )
         if keep:
             combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
@@ -1765,8 +1786,16 @@ class MultichipDecoder(OptimizedDecoder):
                         runtime_offsets=runtime_offsets,
                         seq_parallel=True,
                     )
-                return self._prefill_forward_sp(x_BSH, kv_cache, page_table, fill_page_table, fill_page_table_base_pos,
-                                                 user_id, start_pos, rope_mats)
+                return self._prefill_forward_sp(
+                    x_BSH,
+                    kv_cache,
+                    page_table,
+                    fill_page_table,
+                    fill_page_table_base_pos,
+                    user_id,
+                    start_pos,
+                    rope_mats,
+                )
             finally:
                 self._sp_active = False
         if runtime_offsets is not None or seq > self.PIPE_CHUNK:
@@ -1896,7 +1925,8 @@ class MultichipDecoder(OptimizedDecoder):
     def dflash_query_forward_cached(self, x_q, k_ctx, v_ctx, rope_q, mask):
         """dflash_query_forward over cached context keys/values: x_q [1, 32, H] query rows; k_ctx / v_ctx
         [1, nkv, C, hd] (dflash_kv_rows of the context rows); rope_q (cos, sin) [1, 1, 32, hd]; mask [1, 1, 32, C + 32]
-        over the context slots then the 32 query rows. Every op runs on the 32 query rows; attention reads C + 32 keys."""
+        over the context slots then the 32 query rows. Every op runs on the 32 query rows; attention reads C + 32 keys.
+        """
         cfg = self.cfg
         pad = self.meta.get("qkvg_pad")
         if self._dflash_fold_g and self._dflash_regroup and self.use_dram_sharded and pad and "wqkvg_ds" in self.w:
@@ -1919,7 +1949,9 @@ class MultichipDecoder(OptimizedDecoder):
         ln_q = self._rms(x_q, self.w["input_ln"])
         qkv = self._prefill_linear(ln_q, self.w["wqkv"], self._ck_qkv)
         if self._dflash_regroup and qkv.dtype == ttnn.bfloat16:
-            q, k, v = tile_regroup.split_heads(qkv, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, ttnn.DRAM_MEMORY_CONFIG)
+            q, k, v = tile_regroup.split_heads(
+                qkv, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, ttnn.DRAM_MEMORY_CONFIG
+            )
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 ttnn.reshape(qkv, (1, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
@@ -2081,8 +2113,9 @@ class MultichipDecoder(OptimizedDecoder):
             if g is None:
                 g = ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate)
             g = ttnn.softplus(g)
-            attn = ttnn.mul(attn, ttnn.matmul(g, self._gate_expand, compute_kernel_config=self._ck_hifi4,
-                                              dtype=ttnn.bfloat16))
+            attn = ttnn.mul(
+                attn, ttnn.matmul(g, self._gate_expand, compute_kernel_config=self._ck_hifi4, dtype=ttnn.bfloat16)
+            )
         else:
             attn = self._gate(attn, ln_q, g=g)
         R = getattr(self, "_dflash_ar_rows", 0)
@@ -2098,7 +2131,9 @@ class MultichipDecoder(OptimizedDecoder):
                 partial = self._mlp(ln2, TILE, sharded=False)
             finally:
                 self._defer_reduce = False
-            return self._reduce_rows_add(ttnn.reshape(partial, (1, TILE, cfg.hidden)), h, ttnn.DRAM_MEMORY_CONFIG, rows=R)
+            return self._reduce_rows_add(
+                ttnn.reshape(partial, (1, TILE, cfg.hidden)), h, ttnn.DRAM_MEMORY_CONFIG, rows=R
+            )
         h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
         ln2 = self._rms(h, self.w["post_ln"])
         return ttnn.add(h, ttnn.reshape(self._mlp(ln2, TILE, sharded=False), (1, TILE, cfg.hidden)))
@@ -2108,8 +2143,9 @@ class MultichipDecoder(OptimizedDecoder):
             x, len(x.shape) - 2, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links
         )
 
-    def _prefill_forward_sp(self, x_BSH, kv_cache, page_table, fill_page_table, fill_page_table_base_pos, user_id,
-                            start_pos, rope_mats):
+    def _prefill_forward_sp(
+        self, x_BSH, kv_cache, page_table, fill_page_table, fill_page_table_base_pos, user_id, start_pos, rope_mats
+    ):
         """Single-shot cold prefill with the residual split over the mesh by rows (see prefill_forward)."""
         cfg = self.cfg
         residual = x_BSH  # [1, seq / D, H]
@@ -2137,7 +2173,9 @@ class MultichipDecoder(OptimizedDecoder):
         mlp_out = ttnn.reshape(self._mlp(ln2, seq, sharded=False), (1, rows, cfg.hidden))
         return ttnn.add(h, mlp_out)
 
-    def prefill_forward_packed(self, x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats, seq_parallel=False):
+    def prefill_forward_packed(
+        self, x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats, seq_parallel=False
+    ):
         """Cold prefill of ``num_segs`` users packed along the sequence: x is [1, num_segs * seg_len, H], user j in
         rows [j * seg_len, (j + 1) * seg_len). Everything but attention runs once over all rows (one MoE weight
         pass for every user); each user's q/k/v slice fills its own row ``j`` of ``fill_page_table`` and runs its
@@ -2145,8 +2183,9 @@ class MultichipDecoder(OptimizedDecoder):
         if seq_parallel:  # residual rows split over the mesh (see prefill_forward)
             self._sp_active = True
             try:
-                return self._prefill_forward_packed_body(x_BSH, kv_cache, fill_page_table, seg_len, num_segs,
-                                                         rope_mats, True)
+                return self._prefill_forward_packed_body(
+                    x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats, True
+                )
             finally:
                 self._sp_active = False
         return self._prefill_forward_packed_body(x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats, False)
@@ -2419,13 +2458,20 @@ class MultichipDecoder(OptimizedDecoder):
             else:
                 q = self._apply_rope(q, cos, sin)
                 k = self._apply_rope(k, cos, sin)
-            fused_kv = self._fused_kv_update and (self._seq_kv_fused or not (sequential_kv_write and B > 1)) and B <= 4 * 8
+            fused_kv = (
+                self._fused_kv_update and (self._seq_kv_fused or not (sequential_kv_write and B > 1)) and B <= 4 * 8
+            )
             k_sh = self._shard_kv(k, B)
             v_sh = self._shard_kv(v, B, y0=4 if fused_kv else 0)  # B <= 32 -> K on rows 0-3, V on rows 4-7
         if fused_kv:  # one op writes K and V (instead of two paged_update_cache)
             # a multi-row verify (rows of one user): share_cache merges the rows of each cache tile on one core per K / V
             ttnn.experimental.paged_fused_update_cache(
-                kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table,
+                kv_cache["k"],
+                k_sh,
+                kv_cache["v"],
+                v_sh,
+                update_idxs_tensor=cur_pos,
+                page_table=page_table,
                 share_cache=bool(sequential_kv_write and B > 1),
             )
         elif sequential_kv_write and B > 1:
@@ -2603,7 +2649,13 @@ class MultichipDecoder(OptimizedDecoder):
         merged on one core), then the paged SDPA (verify program config). Returns the SDPA output."""
         cfg = self.cfg
         ttnn.experimental.paged_fused_update_cache(
-            kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
+            kv_cache["k"],
+            k_sh,
+            kv_cache["v"],
+            v_sh,
+            update_idxs_tensor=cur_pos,
+            page_table=page_table,
+            share_cache=True,
         )
         kw = {"cur_pos_tensor": cur_pos, "page_table_tensor": page_table, "scale": cfg.scaling,
               "compute_kernel_config": self._sdpa_compute}  # fmt: skip

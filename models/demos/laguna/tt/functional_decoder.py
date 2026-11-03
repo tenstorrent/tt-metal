@@ -525,9 +525,7 @@ class FunctionalDecoder(LightweightModule):
         outs = []
         fill_base = int(fill_page_table_base_pos)
         if int(start_pos) < fill_base or (int(start_pos) - fill_base) % bs:
-            raise ValueError(
-                f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned"
-            )
+            raise ValueError(f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned")
         for c in range(0, seq, CH):
             ch = min(CH, seq - c)
             gpos = start_pos + c

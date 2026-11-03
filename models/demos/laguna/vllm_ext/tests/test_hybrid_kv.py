@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 from types import SimpleNamespace
@@ -169,7 +170,7 @@ def test_laguna_s_48_layer_pattern_is_accepted_with_same_block_floor():
     assert hybrid_kv.exact_hybrid_kv_num_blocks(_config(48)) == 2460
 
 
-def test_hybrid_kv_rejects_unpublished_layer_counts():
+def test_hybrid_kv_rejects_unpublished_layer_counts(expect_error):
     for num_layers in (4, 44, 52):
-        with pytest.raises(RuntimeError, match="40-layer \\(XS\\) or 48-layer \\(S\\)"):
+        with expect_error(RuntimeError, "40-layer \\(XS\\) or 48-layer \\(S\\)"):
             hybrid_kv.validate_hybrid_kv_vllm_config(_config(num_layers))

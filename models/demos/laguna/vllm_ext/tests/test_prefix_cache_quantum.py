@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 from types import SimpleNamespace
@@ -50,9 +51,7 @@ def _manager_class(
             self.coordinator = SimpleNamespace(
                 scheduler_block_size=scheduler_block_size or block_size,
                 cached=[],
-                cache_blocks=lambda request, tokens: self.coordinator.cached.append(
-                    (request.request_id, tokens)
-                ),
+                cache_blocks=lambda request, tokens: self.coordinator.cached.append((request.request_id, tokens)),
             )
             self.enable_caching = enable_caching
             self.max_model_len = 131_072
@@ -167,11 +166,11 @@ def test_preempted_metric_is_adjusted_in_its_own_bucket():
         ({"enable_caching": False}, "requires KV caching"),
     ),
 )
-def test_unqualified_manager_geometry_fails_at_construction(kwargs, message):
+def test_unqualified_manager_geometry_fails_at_construction(kwargs, message, expect_error):
     manager_class = _manager_class(raw_tokens=32_704, **kwargs)
     quantum._patch_kv_cache_manager(manager_class)
 
-    with pytest.raises(RuntimeError, match=message):
+    with expect_error(RuntimeError, message):
         manager_class()
 
 
@@ -244,12 +243,12 @@ def test_short_then_long_then_long_admits_only_the_canonical_checkpoint():
         ({"num_encoder_tokens": 1}, "decoder-only"),
     ),
 )
-def test_unqualified_allocation_paths_fail_closed(argument, message):
+def test_unqualified_allocation_paths_fail_closed(argument, message, expect_error):
     manager_class = _manager_class(raw_tokens=0)
     quantum._patch_kv_cache_manager(manager_class)
     manager = manager_class()
 
-    with pytest.raises(RuntimeError, match=message):
+    with expect_error(RuntimeError, message):
         manager.allocate_slots(_request(), 64, **argument)
 
 
@@ -288,9 +287,9 @@ def test_patch_is_idempotent():
 
 
 @pytest.mark.parametrize("bad", ("0", "-1", "4096", "6000", "16384", "not-an-int"))
-def test_invalid_quantum_fails_closed(monkeypatch, bad):
+def test_invalid_quantum_fails_closed(monkeypatch, bad, expect_error):
     monkeypatch.setenv("TT_LAGUNA_PREFILL_FAST_CHUNK", bad)
-    with pytest.raises(RuntimeError, match="quantum|TT_LAGUNA_PREFILL_FAST_CHUNK"):
+    with expect_error(RuntimeError, "quantum|TT_LAGUNA_PREFILL_FAST_CHUNK"):
         quantum.canonical_prefix_quantum()
 
 
@@ -335,15 +334,15 @@ def test_qualified_vllm_scheduler_config_is_accepted():
         ({"kv_transfer_config": object()}, "KV-transfer"),
     ),
 )
-def test_unqualified_vllm_scheduler_config_fails_closed(overrides, message):
-    with pytest.raises(RuntimeError, match=message):
+def test_unqualified_vllm_scheduler_config_fails_closed(overrides, message, expect_error):
+    with expect_error(RuntimeError, message):
         quantum.validate_prefix_cache_vllm_config(_vllm_config(**overrides))
 
 
-def test_model_internal_spec_decode_fails_closed(monkeypatch):
+def test_model_internal_spec_decode_fails_closed(monkeypatch, expect_error):
     monkeypatch.setenv("TT_LAGUNA_SPEC_DECODE", "1")
 
-    with pytest.raises(RuntimeError, match="TT_LAGUNA_SPEC_DECODE"):
+    with expect_error(RuntimeError, "TT_LAGUNA_SPEC_DECODE"):
         quantum.validate_prefix_cache_vllm_config(_vllm_config())
 
 
@@ -354,23 +353,21 @@ def test_model_internal_spec_decode_fails_closed(monkeypatch):
         ("TT_LAGUNA_PREFILL_SDPA_CHUNK", "4096"),
     ),
 )
-def test_direct_vllm_invocation_rejects_incompatible_model_env(
-    monkeypatch, name, value
-):
+def test_direct_vllm_invocation_rejects_incompatible_model_env(monkeypatch, name, value, expect_error):
     monkeypatch.setenv(name, value)
 
-    with pytest.raises(RuntimeError, match=name):
+    with expect_error(RuntimeError, name):
         quantum.validate_prefix_cache_vllm_config(_vllm_config())
 
 
-def test_hybrid_kv_prefix_caching_requires_8192_token_scheduler_chunks(monkeypatch):
+def test_hybrid_kv_prefix_caching_requires_8192_token_scheduler_chunks(monkeypatch, expect_error):
     monkeypatch.setenv("TT_LAGUNA_HYBRID_KV", "1")
     config = _vllm_config()
-    with pytest.raises(RuntimeError, match="hybrid KV requires scheduler chunked prefill"):
+    with expect_error(RuntimeError, "hybrid KV requires scheduler chunked prefill"):
         quantum.validate_prefix_cache_vllm_config(config)
     config.scheduler_config.enable_chunked_prefill = True
     config.scheduler_config.max_num_batched_tokens = 4096
-    with pytest.raises(RuntimeError, match="hybrid KV scheduler chunk is 4096, expected 8192"):
+    with expect_error(RuntimeError, "hybrid KV scheduler chunk is 4096, expected 8192"):
         quantum.validate_prefix_cache_vllm_config(config)
     config.scheduler_config.max_num_batched_tokens = 8192
     quantum.validate_prefix_cache_vllm_config(config)

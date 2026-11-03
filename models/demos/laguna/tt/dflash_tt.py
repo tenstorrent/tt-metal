@@ -50,8 +50,8 @@ from .dflash_reference import (
 )
 from .model_spec import MODEL_ENV, MODEL_ID, dflash_spec
 from .multichip_decoder import MultichipDecoder, _cache_layer_identity
-from .ring_write import ring_write
 from .optimized_decoder import TILE, PrecisionPolicy, _cached_device_tensor, _dram_weight_memcfg, weight_cache_key
+from .ring_write import ring_write
 
 DFLASH_CACHE_NAMESPACE = "dflash"
 
@@ -929,7 +929,9 @@ def load_dflash_shared_weights(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate if shard_dim is None else ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
             cache_key=weight_cache_key(
-                f"{cache_namespace}_{name}", "shared", f"rep_d{devices}" if shard_dim is None else f"sh{shard_dim}_d{devices}"
+                f"{cache_namespace}_{name}",
+                "shared",
+                f"rep_d{devices}" if shard_dim is None else f"sh{shard_dim}_d{devices}",
             ),
         )
 
@@ -1172,11 +1174,17 @@ class DFlashTTCore:
         # ~65 us each); more rows (a prefill window) keep the interleaved norm
         sharded_rows = max(TILE, int(getattr(layer0, "_norm_max_rows", TILE)))  # batched DFlash: more rows
         if tokens <= sharded_rows and float(layer0.cfg.eps) == float(self.config.rms_norm_eps):
+
             def norm(x, weight):
                 return layer0._rms(x, weight)
+
         else:
+
             def norm(x, weight):
-                return ttnn.rms_norm(x, weight=weight, epsilon=self.config.rms_norm_eps, compute_kernel_config=precision_ck)
+                return ttnn.rms_norm(
+                    x, weight=weight, epsilon=self.config.rms_norm_eps, compute_kernel_config=precision_ck
+                )
+
         normalized = []
         for index, weight in enumerate(self.shared.aux_hidden_norms):
             part = ttnn.slice(flat, [0, 0, 0, index * h], [1, 1, tokens, (index + 1) * h])
@@ -1448,7 +1456,9 @@ class DFlashTTCore:
         hd = int(self.config.head_dim)
         local = rows + torch.arange(32).clamp(max=query_rows - 1)
         keys = torch.arange(padded)
-        allowed = (keys[None, :] <= local[:, None]) & (keys[None, :] >= local[:, None] - (self.config.sliding_window - 1))
+        allowed = (keys[None, :] <= local[:, None]) & (
+            keys[None, :] >= local[:, None] - (self.config.sliding_window - 1)
+        )
         mask = torch.where(allowed, 0.0, -1e9).reshape(1, 1, 32, padded)
         return (
             phase.cos().to(torch.bfloat16).reshape(1, 1, 32, hd),

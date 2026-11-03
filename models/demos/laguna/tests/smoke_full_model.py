@@ -38,9 +38,7 @@ def main():
     profile = profile_from_args(args)
     max_seq_len = args.max_seq_len or profile.max_context
     if args.acceptance and max_seq_len != profile.max_context:
-        raise ValueError(
-            f"acceptance requires exact {profile.name} context {profile.max_context}, got {max_seq_len}"
-        )
+        raise ValueError(f"acceptance requires exact {profile.name} context {profile.max_context}, got {max_seq_len}")
     if max_seq_len < args.prompt + args.gen:
         raise ValueError("max-seq-len must cover prompt + generation")
     print("PROFILE", json.dumps(profile_summary(profile), sort_keys=True))

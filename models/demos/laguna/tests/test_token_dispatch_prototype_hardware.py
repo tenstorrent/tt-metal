@@ -30,15 +30,6 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.laguna.tests import laguna_reference as R
-from models.demos.laguna.tests import laguna_weights as W
-from models.demos.laguna.tests.laguna_test_utils import (
-    close_mesh,
-    memory_snapshot,
-    open_mesh,
-    resolve_profile,
-)
-from models.demos.laguna.tt.multichip_decoder import MultichipDecoder, _sparse_pc
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     get_dispatch_input_mesh_mapper,
@@ -49,6 +40,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.laguna.tests import laguna_reference as R
+from models.demos.laguna.tests import laguna_weights as W
+from models.demos.laguna.tests.laguna_test_utils import close_mesh, memory_snapshot, open_mesh, resolve_profile
+from models.demos.laguna.tt.multichip_decoder import MultichipDecoder, _sparse_pc
 
 RUN_DEVICE_PROBE = os.environ.get("TT_RUN_LAGUNA_TOKEN_DISPATCH_PROBE") == "1"
 RUN_STACKED_PRODUCTION_PROBE = os.environ.get("TT_RUN_LAGUNA_STACKED_TOKEN_DISPATCH_PROBE") == "1"

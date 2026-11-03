@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from models.demos.laguna.tt import prefill_page_table as page_table_module
@@ -70,10 +69,10 @@ def test_rebased_resumed_single_shot_reuses_persistent_full_fill_table(monkeypat
     assert selected is fill_page_table
 
 
-def test_single_shot_fill_table_rejects_invalid_relative_base():
+def test_single_shot_fill_table_rejects_invalid_relative_base(expect_error):
     fill_page_table = torch.zeros((1, 8), dtype=torch.int32)
 
-    with pytest.raises(ValueError, match="precedes"):
+    with expect_error(ValueError, "precedes"):
         single_shot_fill_page_table(
             fill_page_table,
             start_pos=64,
@@ -82,7 +81,7 @@ def test_single_shot_fill_table_rejects_invalid_relative_base():
             fill_page_table_base_pos=128,
         )
 
-    with pytest.raises(ValueError, match="not aligned"):
+    with expect_error(ValueError, "not aligned"):
         single_shot_fill_page_table(
             fill_page_table,
             start_pos=96,
