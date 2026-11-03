@@ -131,8 +131,9 @@ void kernel_main() {
         for (uint32_t i = 0; i < NWORKERS; ++i) {
             noc_semaphore_inc(get_noc_addr(wnoc[i] >> 16, wnoc[i] & 0xffff, go_addr), 1);
         }
-        // phase 2: the summed chunks this chip owns go to every peer
-        noc_semaphore_wait_min(staged, 2 * NWORKERS);
+        // phase 2: the summed chunks this chip owns go to every peer (one more increment per owner worker; a
+        // non-owner never increments twice, so the phase-1 count above was exact)
+        noc_semaphore_wait_min(staged, NWORKERS + owned(my_idx));
         for (uint32_t j = 0; j < n_peers; ++j) {
             for (uint32_t pk = 0; pk < npk(my_idx); ++pk) {
                 const uint32_t left = owned(my_idx) - pk * CPP;

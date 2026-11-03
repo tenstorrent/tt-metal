@@ -155,7 +155,7 @@ void kernel_main() {
             noc_semaphore_wait_min(go, 2);
             noc_semaphore_set(go, 0);
         } else {
-            noc_semaphore_inc(staged_noc, 1);  // nothing to stage for phase 2
+            // nothing to stage for phase 2 (the exchange core counts the owners' second increments only)
             noc_semaphore_wait_min(go, 2);
             noc_semaphore_set(go, 0);
             cb_reserve_back(CB_RM2, CT);
