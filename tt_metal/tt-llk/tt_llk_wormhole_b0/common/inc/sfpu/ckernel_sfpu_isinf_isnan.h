@@ -26,6 +26,8 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(0, 8, 0x8300);
         TTI_SFPCONFIG(0, 4, 0);
         TTI_SFPCONFIG(0x100, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
         TTI_SFPLOADI(0, 0, 0x0000);
         TTI_SFPLOADI(2, 0, 0x7f80);
         TTI_SFPNOP;
@@ -54,6 +56,8 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(0, 8, 0x8300);
         TTI_SFPCONFIG(0, 4, 0);
         TTI_SFPCONFIG(0x100, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
         TTI_SFPLOADI(0, 0, 0x0000);
         TTI_SFPLOADI(2, 0, 0x7f80);
         TTI_SFPNOP;
@@ -81,6 +85,8 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(0, 8, 0x8300);
         TTI_SFPCONFIG(0, 4, 0);
         TTI_SFPCONFIG(0x100, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
         TTI_SFPLOADI(0, 0, 0x0000);
         TTI_SFPLOADI(2, 0, 0xff80);
         TTI_SFPNOP;
@@ -108,6 +114,8 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(0, 8, 0x8300);
         TTI_SFPCONFIG(0, 4, 0);
         TTI_SFPCONFIG(0x100, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
         TTI_SFPLOADI(0, 0, 0x0000);
         TTI_SFPLOADI(2, 0, 0x7f80);
         TTI_SFPNOP;
@@ -135,6 +143,8 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(0, 8, 0x8300);
         TTI_SFPCONFIG(0, 4, 0);
         TTI_SFPCONFIG(0x100, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
         TTI_SFPLOADI(0, 0, 0x0000);
         TTI_SFPLOADI(2, 2, 0xffff);
         TTI_SFPLOADI(2, 8, 0x7f7f);
