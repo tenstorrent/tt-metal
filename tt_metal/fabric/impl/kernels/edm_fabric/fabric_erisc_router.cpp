@@ -88,7 +88,7 @@ void kernel_main() {
     WAYPOINT("FSCD");
     finish_phase<Phase::CONNECTED>();
     if constexpr (is_teardown_master) {
-        // Again, as main does at this point: the router state reads INITIALIZING until the first round starts running.
+        // Again: the router state reads INITIALIZING until the first round starts running.
         router_state()->state = RouterState::INITIALIZING;
     }
 

@@ -71,14 +71,12 @@ constexpr uint32_t stream_count_mask = 0x7FFu;
 static_assert(stream_count_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
 
 // The Ethernet firmware's heartbeat word. While the router runs instead of the base firmware, each loop keeps it moving
-// every HEARTBEAT_INTERVAL rounds, the count in the lower half and UMD's fabric signature in the upper half.
-#if defined(ARCH_BLACKHOLE)
-constexpr uint32_t heartbeat_addr = MEM_SYSENG_ETH_HEARTBEAT;
-#else
-constexpr uint32_t heartbeat_addr = 0x1F80;  // Wormhole's (main's router; the firmware headers do not name it)
-#endif
-constexpr uint32_t HEARTBEAT_INTERVAL = 64;  // rounds
-constexpr uint32_t HEARTBEAT_SIGNATURE = 0xDCBA0000;
+// every HEARTBEAT_INTERVAL rounds, the count in the lower half and UMD's fabric signature in the upper half (the host's
+// contract: hostdevcommon/fabric_common.h).
+constexpr uint32_t heartbeat_addr =
+    is_blackhole_arch ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE;
+constexpr uint32_t HEARTBEAT_INTERVAL = FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS;  // rounds
+constexpr uint32_t HEARTBEAT_SIGNATURE = FABRIC_KERNEL_HEARTBEAT_MAGIC;
 static_assert((HEARTBEAT_INTERVAL & (HEARTBEAT_INTERVAL - 1)) == 0, "the round count is tested with a mask");
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -284,8 +282,8 @@ constexpr bool udm_config_supported = NUM_ACTIVE_ERISCS == 1 && is_2d && !has_vc
 constexpr bool vc2_config_supported = is_2d && ACTUAL_VC2_SENDER_CHANNELS == 1 && is_vc_forwarding_disabled[2] &&
                                       receiver_channel_uses_counter_credits(VC2_RECEIVER_CHANNEL);
 
-// The speedy path as the host selects it (ENABLE_SPEEDY_VC0; main's speedy-path static_asserts): no bubble flow control
-// or first-level acks on VC0, VC0's receiver forwarding off. Its credit amortization args do not apply here (credits
+// The speedy path as the host selects it (ENABLE_SPEEDY_VC0): no bubble flow control or first-level acks on VC0, VC0's
+// receiver forwarding off. Its credit amortization args do not apply here (credits
 // go back per completion group, as everywhere).
 constexpr bool speedy_config_supported =
     !enable_deadlock_avoidance && !ENABLE_FIRST_LEVEL_ACK_VC0 && disable_rx_ch0_forwarding && !udm_mode;

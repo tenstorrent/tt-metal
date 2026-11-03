@@ -278,8 +278,8 @@ struct FullPresetForwards {
 
 private:
     // Whether a forward sets its credit register: where VC1 shares the preset (its credit registers differ), and on
-    // deadlock-avoiding routers, where main re-programs it on every forward (the same address as preset; main gives no
-    // reason).
+    // deadlock-avoiding routers, where every forward re-programs it to the address the preset holds (conservative:
+    // not shown to be needed).
     static constexpr bool credit_register_varies = enable_deadlock_avoidance || vc_forwards_to_routers(1);
 };
 
@@ -355,7 +355,7 @@ using ForwardCommands = std::conditional_t<
 
 // UDM's relay: a ring of LOCAL_RELAY_NUM_BUFFERS slots in the relay's L1 that takes the whole packet, and a free-slots
 // register the relay increments as it frees slots, of which this router keeps a local copy. Its forwards are stateless,
-// as main's, on VC0's forward command buffer (UDM routers have VC0 only).
+// on VC0's forward command buffer (UDM routers have VC0 only).
 struct Relay {
     static constexpr uint32_t num_slots = LOCAL_RELAY_NUM_BUFFERS;
     static constexpr uint32_t last_slot_offset = (num_slots - 1) * channel_buffer_size;
@@ -565,7 +565,7 @@ struct RelayArgs {
     uint32_t free_slots_stream;  // the relay's free-slots register
     // A word on this router the host reserves for the relay connection (its buffer index; unused by a persistent
     // connection). It is the connection's teardown word: the open writes its address to the relay and zeroes it, and
-    // the relay would ack a close there, which never comes (main passes no word, so its open zeroes L1 address 0).
+    // the relay would ack a close there, which never comes.
     uint32_t teardown_word;
 };
 struct NoRelayArgs {};

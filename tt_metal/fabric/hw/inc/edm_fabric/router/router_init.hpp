@@ -77,17 +77,17 @@ FORCE_INLINE volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status() {
     return reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
 }
 
-// Main's init postcodes, with the phase whose end posts each, in main's order: host tools and hang capture read them.
-// Two keep main's names for steps this router orders differently (marked).
+// The init postcodes (EDMStatus), with the phase whose end posts each, in the order host tools and hang capture expect.
+// Two name steps this router orders differently; they are kept for that tooling (marked).
 constexpr std::pair<Phase, tt::tt_fabric::EDMStatus> phase_postcodes[] = {
     {Phase::STREAMS_SET, tt::tt_fabric::EDMStatus::TXQ_INITIALIZED},
     {Phase::STREAMS_SET, tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED},
     {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::STARTED},
     {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED},
-    {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE},  // main's code, kept for tooling
+    {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE},  // kept for tooling
     {Phase::HANDSHAKE_DONE, tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE},
     {Phase::DOWNSTREAMS_OPEN, tt::tt_fabric::EDMStatus::VCS_OPENED},
-    {Phase::CMD_BUFS_SET, tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED},  // main's code, kept for tooling
+    {Phase::CMD_BUFS_SET, tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED},  // kept for tooling
     {Phase::CONNECTED, tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE},
 };
 
@@ -314,7 +314,7 @@ __attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
 
 // The Ethernet handshake with the far router, then (with the host's start signal) the handshake among this chip's
 // routers: the local master collects every router's arrival, releases them, and passes on READY_FOR_TRAFFIC.
-// Compiled for size, as main's init code is: it runs once, and at -O3 it takes 0.6-0.8 KB more code space in every
+// Compiled for size: it runs once, and at -O3 it takes 0.6-0.8 KB more code space in every
 // image that sends the handshake.
 __attribute__((noinline, optimize("Os"))) void run_handshakes() {
     if constexpr (enable_ethernet_handshake) {

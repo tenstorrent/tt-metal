@@ -324,7 +324,7 @@ FORCE_INLINE void note_received(uint32_t size) {
 }
 
 // Channel-trimming capture: the sender channels, on the downstream routers, a packet forwarded on VC's channel went
-// to (`forward_to`: the routing names of its downstreams), as main records them: in 2D each downstream's channel from
+// to (`forward_to`: the routing names of its downstreams): in 2D each downstream's channel from
 // the host's packed table (by the downstream's compact index), in 1D the downstream's forwarding channel, 1.
 template <size_t VC>
 FORCE_INLINE void record_forwarded(uint32_t forward_to) {
@@ -349,7 +349,7 @@ FORCE_INLINE void record_forwarded(uint32_t forward_to) {
 // A 1D sparse multicast that goes on past this chip: this chip writes its own page group (counts[chip_idx] pages from
 // write_idx), write_idx and chip_idx advance so the next chip picks the next group, then the forward carries the
 // advanced header. The write reads the indices before the advance and the forward reads the header after it, so for
-// this send type the local write comes first (as on main). Out of line: rare.
+// this send type the local write comes first. Out of line: rare.
 template <size_t VC>
 __attribute__((noinline)) void sparse_multicast_hop(
     tt_l1_ptr PACKET_HEADER_TYPE* header,
@@ -602,8 +602,8 @@ FORCE_INLINE bool credit_completions(
 // ---------------------------------------------------------------------------------------------------------------------
 
 // One step of VC's receiver channel (`arrived_raw`: its packets-received register, read at the start of the pass): ack
-// what has arrived (a channel with first-level acks), at most one packet (timed for code profiling, as main
-// times every receiver channel), then its completions. `credit_frame_due` is set when the credit counts changed.
+// what has arrived (a channel with first-level acks), at most one packet (timed for code profiling, on every receiver
+// channel), then its completions. `credit_frame_due` is set when the credit counts changed.
 template <size_t VC, typename Connections>
 FORCE_INLINE void step(
     ReceiverChannelProgress& progress,
@@ -806,9 +806,9 @@ FORCE_INLINE void wait_for_downstream_muxes() {
     }
 }
 
-// After the Ethernet handshake: the downstream connections, opened as main opens them, when the host's open gate says
-// so. VC0's when receiver channel 0 is serviced, also where no packet uses them (an intermesh router's VC0 connections
-// with crossover), since the downstream routers wait for them; VC1's when the receiver channel that forwards on them is
+// After the Ethernet handshake: the downstream connections, opened when the host's open gate says so. VC0's when
+// receiver channel 0 is serviced, also where no packet uses them (an intermesh router's VC0 connections with
+// crossover), since the downstream routers wait for them; VC1's when the receiver channel that forwards on them is
 // serviced (channel 0 with crossover, else channel 1; channel trimming may leave a crossover router's channel 1
 // unserviced). In Tensix mux mode the downstreams are the other directions' muxes, opened once they are set up; in UDM
 // the relay is opened after the downstream routers, once it is set up.

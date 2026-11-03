@@ -12,7 +12,7 @@
 //                  cycles per side), the router state and the TX / RX heartbeats, in the FabricTelemetry block
 // Packets and words are counted in the send and receive paths; the rest happens once per round, out of line. The counts
 // live in one global rather than in the loops' locals, so an option adds memory updates per packet without changing a
-// loop's register state. A round is one run of passes between end_round calls (router_round.hpp), as main's.
+// loop's register state. A round is one run of passes between end_round calls (router_round.hpp).
 // The call sites guard each call with `if constexpr` on the option, so a build with both options off carries no call,
 // argument or lambda: dead inline calls alone shifted register allocation in the spill-heavy loops (VC1 senders,
 // VC2 and speedy receivers).
@@ -144,7 +144,7 @@ __attribute__((noinline)) void round_end_impl(
     if constexpr (SENDER && perf_recorder) {
         const uint64_t now = eth_read_wall_clock();
         if (tx_progress || any_held()) {
-            // As main: the busy cycles accumulate in timestamp_start (idle rounds left out); timestamp_end is unused.
+            // The busy cycles accumulate in timestamp_start (idle rounds left out); timestamp_end is unused.
             auto* buffer = perf_buffer();
             buffer->timestamp_start.full = buffer->timestamp_start.full + (now - c.round_wall_clock);
             buffer->num_words_sent = buffer->num_words_sent + c.round_tx_eth_words;

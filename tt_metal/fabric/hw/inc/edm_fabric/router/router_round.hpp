@@ -140,7 +140,7 @@ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_atte
 // Router commands (master only): PAUSE parks the router until RUN, running DRAIN and RETRAIN when asked.
 void run_drain(tt_l1_ptr RouterStateManager* state) {
     state->state = RouterState::DRAINING;
-    ASSERT(false);  // not implemented (as on main)
+    ASSERT(false);  // not implemented
     while (state->command == RouterCommand::DRAIN && !terminating()) {
     }
 }
