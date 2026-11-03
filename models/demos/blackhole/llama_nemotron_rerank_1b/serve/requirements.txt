@@ -1,0 +1,3 @@
+# Server-only packages on top of tt-metal's python env (tested with fastapi 0.162.0).
+fastapi>=0.115
+uvicorn[standard]>=0.30
