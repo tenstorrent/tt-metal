@@ -2515,3 +2515,12 @@ test_timed_runs_take_the_steady_state_path_and_accuracy_runs_the_normal_one. DS4
   task records ab_pending when its agent finished, and a resume measures the rest of the A/B without a new agent
   attempt. Selftest test_perf_ab.py::test_a_pause_stops_the_ab_between_runs_and_resume_measures_without_an_agent.
 Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
+
+## F241: a switch-only perf pick keeps the shipped default (DeepSeek-V4.1, 2026-11-03)
+- Problem: an accept always made ab.change the setting's default (F104). The owner ordered the routed-expert format
+  ablation P.27-P.29 with "default stays bfp4 until I pick from the three tables"; P.27's accept set EXPERTS_IMPL
+  bfp4 -> bfp8 (2853205d022). (P.26 had the same problem on 2026-11-01; FIX.20's agent set the default back by hand.)
+- Fix: tasks.yaml `ab.keep_default: true` -> `accept_defaults(task)` returns {} and perf_accept prints "accepted as a
+  switch". The accept gate still reuses the A/B 'on' side (it measured the switch value). README (perf picks) and the
+  skill say when to use it.
+- Selftest: test_perf_ab.py::test_a_switch_only_accept_keeps_the_shipped_default.

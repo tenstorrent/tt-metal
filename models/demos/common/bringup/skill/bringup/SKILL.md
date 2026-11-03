@@ -155,6 +155,8 @@ stays in results/, the A/B tables and the dashboard. The overseer never merges a
 rebuilds for a change, never runs `core.verify`, a profile script or a measurement of its own to judge a change
 (DeepSeek-V4.1, 2026-10-30: the overseer merged a MoE drop itself, profiled 50k / 500k with scripts outside the tree and
 started a verify; none of it reached the ledger).
+- A switch the owner wants measured but not shipped (an ablation, several values compared before a pick): a perf
+  pick with `ab.keep_default: true` (F241); without it the accept makes ab.change the shipped default (F104).
 - A change without a switch (a branch merge, a code drop): a perf pick with `ab: {before: true}` (F230). The
   orchestrator measures 'before' on the tree as it is, then the agent merges and rebuilds, then it measures 'after'
   and waits for the decision, as for any pick. `ab_positions: [<start>, ...]` adds, on and off, one chunk's device
