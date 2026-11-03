@@ -45,6 +45,7 @@ import torch
 import ttnn
 
 from . import colpage, moe_decode1, tile_regroup
+from .combine_reduce import combine_reduce
 from .l1_budget import lowest_occupied_l1_address
 from .optimized_decoder import (
     TILE,
@@ -1025,7 +1026,8 @@ class MultichipDecoder(OptimizedDecoder):
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
         from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
         from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
-        from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
+
+        from .routing_setup import LagunaRoutingSetup
 
         dispatch_group_size = 1
         num_dispatch_groups = self.D
@@ -1034,11 +1036,8 @@ class MultichipDecoder(OptimizedDecoder):
             dispatch_group_size=dispatch_group_size,
             num_dispatch_groups=num_dispatch_groups,
         )
-        routing_setup = TtMoERoutingSetup(
-            mesh_device=self.device,
-            expert_dispatch_table=dispatch_table_host,
-            num_links=1,
-            experts_per_chip=self.local_experts,
+        routing_setup = LagunaRoutingSetup(
+            self.device, expert_dispatch_table=dispatch_table_host, experts_per_chip=self.local_experts
         )
         dispatch_table = TtDispatchModule.shard_expert_dispatch_table(self.device, dispatch_table_host, dispatch_axis=0)
         global_expert_idx = ttnn.from_torch(
@@ -1092,7 +1091,7 @@ class MultichipDecoder(OptimizedDecoder):
                     num_links=dc_links,
                     topology=ttnn.Topology.Linear,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    # post_combine_reduce reads only local slots (zeros for a token with none), so the [T, K, H]
+                    # combine_reduce reads only local slots (zeros for a token with none), so the [T, K, H]
                     # combine output needs no zero fill (TT_LAGUNA_COMBINE_ZEROS=1 restores it)
                     init_zeros=os.environ.get("TT_LAGUNA_COMBINE_ZEROS", "0") == "1",
                 ),
@@ -1276,17 +1275,16 @@ class MultichipDecoder(OptimizedDecoder):
         ttnn.deallocate(region_offsets)
 
         weights_5d = ttnn.unsqueeze(ttnn.unsqueeze(weights, dim=-1), dim=0)
-        # the shared-expert partial is added inside post_combine_reduce (its tiles summed onto the reduced ones), not
+        # the shared-expert partial is added inside combine_reduce (its tiles summed onto the reduced ones), not
         # by a separate full [T, H] add
         shared_partial = ttnn.reshape(self._token_dispatch_shared(ln_flat, seq_len), (1, 1, seq_len, cfg.hidden))
         fold = shared_partial.dtype == ttnn.bfloat16 and shared_partial.layout == ttnn.TILE_LAYOUT
-        local_output = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+        local_output = combine_reduce(
             combined_slots,
             weights_5d,
             indices,
             state["dispatch_table"],
             expert_dim=3,
-            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             residual=shared_partial if fold else None,
             l1_end=lowest_occupied_l1_address(self.device) or 0,
         )
