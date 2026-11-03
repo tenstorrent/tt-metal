@@ -5,7 +5,8 @@
 and every out_subblock h x w with h*w within the DEST tile capacity of the sync and accumulate mode (half sync 8 tiles, 4 with a 32-bit DEST; full sync 16 and 8), as rt x ct.
 Inner k blocks of 1, 3 and 8 tiles take every shape of that capacity that fits the PERF_RING_TILES unpack window; one long k (32) and the later K block of a spilled output (packer L1 accumulate on)
 take one shape per cell and one k class, and static throttle 1, 4 and 5 (the classes the keys tell apart) one shape and k class per cell, all drawn by a fixed hash of the cell name so the ids stay stable.
-Rows whose key another matmul module already runs are left out (grid_in_sweep.json). SrcA is input_format (unpacker 0, matmul in1), SrcB is input_format_B (unpacker 1, matmul in0)."""
+Rows whose key another matmul module already runs are left out (grid_in_sweep.json). SrcA is input_format (unpacker 0, matmul in1), SrcB is input_format_B (unpacker 1, matmul in0).
+"""
 
 from typing import Callable, List, Union
 
@@ -29,30 +30,47 @@ from helpers.matmul_sweep import (
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
-    input_output_formats,
     parametrize,
 )
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
-    MATMUL_ROW_END_FOLD,
     MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
+    MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
     MATMUL_ROW_MOP,
     MATMUL_STREAM_NARROW,
-    MATMUL_REUSE_DIR,
     MATMUL_STREAM_Z,
     MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+)
+
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Bfp4_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 512]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 320]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 1024], [1024, 192]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 1024], [1024, 256]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 288]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 480]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 352]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 448]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float32], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 416]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.No: 0>)]",
+        "test_perf_matmul_grid[case:(InputOutputFormat[A:Float16_b,B:Float32,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 384]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.No: 0>)]",
+    ]
 )
 
 # Cold start, functional-max inner dim, and reuse/bandwidth.
@@ -118,14 +136,20 @@ def matmul_combos(
     ]
 
 
+import json
+import os
 
-import json, os
 from conftest import skip_for_wormhole
 from helpers.format_config import InputOutputFormat
 from helpers.llk_params import L1Accumulation
 from helpers.test_variant_parameters import MATMUL_L1_ACC, PACK_SRC_FROM_OUTPUT
 
-_F = {"F16b": DataFormat.Float16_b, "B8": DataFormat.Bfp8_b, "B4": DataFormat.Bfp4_b, "F32": DataFormat.Float32}
+_F = {
+    "F16b": DataFormat.Float16_b,
+    "B8": DataFormat.Bfp8_b,
+    "B4": DataFormat.Bfp4_b,
+    "F32": DataFormat.Float32,
+}
 _FMTS = ("F16b", "B8", "B4", "F32")
 _FIDS = ("LoFi", "HiFi2", "HiFi3", "HiFi4")
 # DEST tile capacity of (sync, accumulate): ttnn get_dest_reg_count, 16384 datums over 1024 per tile, halved at half sync and again with a 32-bit DEST
@@ -135,7 +159,12 @@ _KT = (1, 3, 8)
 
 def _shapes(cap, kt):
     """(rt, ct) with rt*ct within cap and the last A tile ((rt-1)*kt) and last B tile (ct-1) inside the perf ring."""
-    return [(h, w) for h in range(1, cap + 1) for w in range(1, cap + 1) if h * w <= cap and (h - 1) * kt < PERF_RING_TILES and w - 1 < PERF_RING_TILES]
+    return [
+        (h, w)
+        for h in range(1, cap + 1)
+        for w in range(1, cap + 1)
+        if h * w <= cap and (h - 1) * kt < PERF_RING_TILES and w - 1 < PERF_RING_TILES
+    ]
 
 
 def _hash(tag):
@@ -143,7 +172,9 @@ def _hash(tag):
 
 
 def _grid():
-    excl = set(json.load(open(os.path.join(os.path.dirname(__file__), "grid_in_sweep.json"))))
+    excl = set(
+        json.load(open(os.path.join(os.path.dirname(__file__), "grid_in_sweep.json")))
+    )
     rows = []
     for a in _FMTS:
         for b in _FMTS:
@@ -155,16 +186,30 @@ def _grid():
                             tag = "".join(cell)
                             cap = _CAP[(sy, acc)]
                             for kt in _KT:
-                                rows += [(*cell, h, w, kt, 0, 0) for h, w in _shapes(cap, kt)]
+                                rows += [
+                                    (*cell, h, w, kt, 0, 0) for h, w in _shapes(cap, kt)
+                                ]
                             kt = 32
-                            rows.append((*cell, 1, 1 + _hash(tag + "L") % cap, kt, 0, 0))
+                            rows.append(
+                                (*cell, 1, 1 + _hash(tag + "L") % cap, kt, 0, 0)
+                            )
                             kt = _KT[_hash(tag + "N") // 3 % 3]
                             sh = _shapes(cap, kt)
-                            rows.append((*cell, *sh[_hash(tag + "n") % len(sh)], kt, 0, 1))
+                            rows.append(
+                                (*cell, *sh[_hash(tag + "n") % len(sh)], kt, 0, 1)
+                            )
                             for thr in (1, 4, 5):
                                 kt = _KT[_hash(tag + "K%d" % thr) % 3]
                                 sh = _shapes(cap, kt)
-                                rows.append((*cell, *sh[_hash(tag + "T%d" % thr) % len(sh)], kt, thr, 0))
+                                rows.append(
+                                    (
+                                        *cell,
+                                        *sh[_hash(tag + "T%d" % thr) % len(sh)],
+                                        kt,
+                                        thr,
+                                        0,
+                                    )
+                                )
     rows = [r for r in rows if ",".join(map(str, r)) not in excl]
     assert len(set(rows)) == len(rows)
     return rows
@@ -197,7 +242,15 @@ def test_perf_matmul_grid(
 ):
 
     case = case[0] if len(case) == 1 else case
-    formats, dest_acc, dest_sync, (matrix_a, matrix_b), math_fidelity, throttle, l1_acc = case
+    (
+        formats,
+        dest_acc,
+        dest_sync,
+        (matrix_a, matrix_b),
+        math_fidelity,
+        throttle,
+        l1_acc,
+    ) = case
 
     run_types = [
         PerfRunType.L1_TO_L1,
@@ -216,18 +269,40 @@ def test_perf_matmul_grid(
     # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
-
     from helpers.matmul_prod_keys import grid_main_cell
 
     main_form = grid_main_cell(
-        math_fidelity, dest_sync == DestSync.Half, dest_acc == DestAccumulation.Yes, formats.input_format, formats.input_format_B, formats.output_format,
-        dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle, l1_acc == L1Accumulation.Yes,
+        math_fidelity,
+        dest_sync == DestSync.Half,
+        dest_acc == DestAccumulation.Yes,
+        formats.input_format,
+        formats.input_format_B,
+        formats.output_format,
+        dims.rt_dim,
+        dims.ct_dim,
+        dims.kt_dim,
+        throttle,
+        l1_acc == L1Accumulation.Yes,
     )
     form_keys = [
-        k.with_block(dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_acc, throttle, l1_acc == L1Accumulation.Yes)
+        k.with_block(
+            dims.ct_dim,
+            dims.rt_dim,
+            dims.kt_dim,
+            dest_acc,
+            throttle,
+            l1_acc == L1Accumulation.Yes,
+        )
         for k in MATMUL_FORM_KEYS.for_block(
-            formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-            math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
+            formats,
+            dims.kt_dim,
+            dims.ct_dim,
+            dims.rt_dim,
+            math_fidelity=math_fidelity,
+            dest_sync=dest_sync,
+            dest_acc=dest_acc,
+            unfuse_one_tile=True,
+            throttle=throttle,
         )
     ]
     if main_form:
@@ -236,56 +311,100 @@ def test_perf_matmul_grid(
             k.unfused_post = False
             k.force_form = ""
     keyed_templates = [
-            PACK_SRC_FROM_OUTPUT(),
-            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, throttle),
-            *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity,
-            ),
-            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync),
-            *MATMUL_STREAM_Z.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity,
-                kt_dim=dims.kt_dim,
+        PACK_SRC_FROM_OUTPUT(),
+        *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, throttle),
+        *MATMUL_STREAM_NARROW.for_block(
+            formats,
+            dest_acc,
+            dest_sync,
+            dims.ct_dim,
+            dims.rt_dim,
+            math_fidelity=math_fidelity,
+        ),
+        *MATMUL_REUSE_DIR.for_block(
+            formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync
+        ),
+        *MATMUL_STREAM_Z.for_block(
+            formats,
+            dest_acc,
+            dest_sync,
+            dims.ct_dim,
+            dims.rt_dim,
+            math_fidelity=math_fidelity,
+            kt_dim=dims.kt_dim,
+            throttle=throttle,
+        ),
+        *MATMUL_UNPACK_TTSYNC.for_block(
+            formats,
+            dest_acc,
+            math_fidelity,
+            dims.ct_dim,
+            dims.rt_dim,
+            dims.kt_dim,
+            dest_sync,
+        ),
+        *MATMUL_K_LOOP.for_block(
+            formats,
+            dest_acc,
+            math_fidelity,
+            dims.ct_dim,
+            dims.rt_dim,
+            dims.kt_dim,
+            throttle=throttle,
+        ),
+        *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
+        *MATMUL_ROW_MOP.for_block(
+            formats,
+            dest_acc,
+            math_fidelity,
+            dest_sync,
+            dims.ct_dim,
+            dims.rt_dim,
+            dims.kt_dim,
+        ),
+        *form_keys,
+        MATMUL_PACK_BLOCK(
+            matmul_pack_form(
+                formats,
+                dest_sync,
+                math_fidelity,
+                dims.rt_dim,
+                dims.ct_dim,
+                dims.kt_dim,
                 throttle=throttle,
-            ),
-            *MATMUL_UNPACK_TTSYNC.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_sync
-            ),
-            *MATMUL_K_LOOP.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, throttle=throttle
-            ),
-            *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
-            *MATMUL_ROW_MOP.for_block(
-                formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim
-            ),
-            *form_keys,
-            MATMUL_PACK_BLOCK(
-                matmul_pack_form(
-                    formats,
-                    dest_sync,
-                    math_fidelity,
-                    dims.rt_dim,
-                    dims.ct_dim,
-                    dims.kt_dim,
-                    throttle=throttle,
-                    l1_acc=l1_acc == L1Accumulation.Yes,
-                )
-            ),
-        ]
+                l1_acc=l1_acc == L1Accumulation.Yes,
+            )
+        ),
+    ]
     # a cell that keeps main's form runs main's unpack and math bodies (llk_matmul_forms.h resolves the form key to 0); the pack form and the harness opt-ins stay
     main_templates = [
         PACK_SRC_FROM_OUTPUT(),
         *form_keys,
-        MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle, l1_acc=l1_acc == L1Accumulation.Yes)),
+        MATMUL_PACK_BLOCK(
+            matmul_pack_form(
+                formats,
+                dest_sync,
+                math_fidelity,
+                dims.rt_dim,
+                dims.ct_dim,
+                dims.kt_dim,
+                throttle=throttle,
+                l1_acc=l1_acc == L1Accumulation.Yes,
+            )
+        ),
     ]
 
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
         run_types,
-        templates=[MATH_FIDELITY(math_fidelity), DEST_SYNC(dest_sync), THROTTLE_LEVEL(throttle), MATMUL_L1_ACC(l1_acc), *(main_templates if main_form else keyed_templates)],
-
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            DEST_SYNC(dest_sync),
+            THROTTLE_LEVEL(throttle),
+            MATMUL_L1_ACC(l1_acc),
+            *(main_templates if main_form else keyed_templates),
+        ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
             NUM_FACES(),

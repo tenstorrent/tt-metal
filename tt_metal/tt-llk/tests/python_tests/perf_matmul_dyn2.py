@@ -2,6 +2,16 @@
 import pytest
 from perf_matmul_dyn_base import CASES, run_dyn
 
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_matmul_dyn2[fmt2-DestSync.Half-dims2-MathFidelity.HiFi4]",
+        "test_perf_matmul_dyn2[fmt36-DestSync.Full-dims36-MathFidelity.LoFi]",
+    ]
+)
+
 
 @pytest.mark.perf
 @pytest.mark.parametrize("fmt,sync,dims,mf", CASES)

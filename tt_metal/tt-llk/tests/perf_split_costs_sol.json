@@ -44,7 +44,17 @@
   "perf_unpack_transpose": 5.4,
   "perf_vif_targets": 6.4,
   "perf_matmul_row_mop": 1.0,
-  "perf_matmul_unpack_ttsync": 1.0
+  "perf_matmul_unpack_ttsync": 1.0,
+  "perf_math_matmul_cov": 1.0,
+  "perf_matmul_dyn0": 1.0,
+  "perf_matmul_dyn1": 1.0,
+  "perf_matmul_dyn2": 1.0,
+  "perf_matmul_dyn3": 1.0,
+  "perf_matmul_dyn4": 1.0,
+  "perf_matmul_dynr3": 1.0,
+  "perf_matmul_dynr4": 1.0,
+  "perf_matmul_forms": 1.0,
+  "perf_matmul_ttsync_excl": 1.0
  },
  "blackhole": {
   "perf_eltwise_bcast_col_custom": 2.5,
@@ -63,9 +73,8 @@
   "perf_matmul_cov2": 400.0,
   "perf_matmul_cov3": 4900.0,
   "perf_matmul_grid": 54000.0,
-  "perf_matmul_grid2": 36000.0,
-  "perf_matmul_grid2_tiny": 8000.0,
   "perf_matmul_grid2": 44000.0,
+  "perf_matmul_grid2_tiny": 8000.0,
   "perf_matmul_llkx": 1500.0,
   "perf_matmul_llkx_sr": 1500.0,
   "perf_matmul_llkx_math": 1500.0,
@@ -92,6 +101,16 @@
   "perf_unpack_transpose": 4.4,
   "perf_vif_targets": 0.0,
   "perf_matmul_row_mop": 1.0,
-  "perf_matmul_unpack_ttsync": 1.0
+  "perf_matmul_unpack_ttsync": 1.0,
+  "perf_math_matmul_cov": 1.0,
+  "perf_matmul_dyn0": 1.0,
+  "perf_matmul_dyn1": 1.0,
+  "perf_matmul_dyn2": 1.0,
+  "perf_matmul_dyn3": 1.0,
+  "perf_matmul_dyn4": 1.0,
+  "perf_matmul_dynr3": 1.0,
+  "perf_matmul_dynr4": 1.0,
+  "perf_matmul_forms": 1.0,
+  "perf_matmul_ttsync_excl": 1.0
  }
 }

@@ -36,18 +36,37 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul import matmul_combos
 
-FIDELITIES = [MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+
+FIDELITIES = [
+    MathFidelity.LoFi,
+    MathFidelity.HiFi2,
+    MathFidelity.HiFi3,
+    MathFidelity.HiFi4,
+]
 FORMS = [(kind, hoist) for kind in (0, 1, 2) for hoist in (False, True)]
 
 
 def _cases():
     combos = matmul_combos(
-        formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b]),
+        formats=input_output_formats(
+            [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b]
+        ),
         dest_acc=lambda formats: (
-            [DestAccumulation.Yes] if is_dest_acc_needed(formats) else [DestAccumulation.No, DestAccumulation.Yes]
+            [DestAccumulation.Yes]
+            if is_dest_acc_needed(formats)
+            else [DestAccumulation.No, DestAccumulation.Yes]
         ),
     )
-    return [(c, f, k, h) for c in combos if c[2] == DestSync.Half for f in FIDELITIES for k, h in FORMS]
+    return [
+        (c, f, k, h)
+        for c in combos
+        if c[2] == DestSync.Half
+        for f in FIDELITIES
+        for k, h in FORMS
+    ]
 
 
 _CASES = _cases()
@@ -58,7 +77,10 @@ _CASES = _cases()
 @pytest.mark.parametrize(
     "combos,math_fidelity,kind,hoist",
     _CASES,
-    ids=[f"{i}-{c[1].name}-{('tile', 'rows', 'row')[c[2]]}-{'h' if c[3] else 'p'}" for i, c in enumerate(_CASES)],
+    ids=[
+        f"{i}-{c[1].name}-{('tile', 'rows', 'row')[c[2]]}-{'h' if c[3] else 'p'}"
+        for i, c in enumerate(_CASES)
+    ],
 )
 def test_perf_matmul_forms(perf_report, combos, math_fidelity, kind, hoist):
     formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
@@ -86,12 +108,21 @@ def test_perf_matmul_forms(perf_report, combos, math_fidelity, kind, hoist):
             MATMUL_FORCE_FORM(kind, hoist),
             *([MATMUL_ROW_MOP()] if kind == 2 else []),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
+                formats,
+                dest_acc,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
                 math_fidelity=math_fidelity,
             ),
             *MATMUL_FORM_KEYS.for_block(
-                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc,
+                formats,
+                dims.kt_dim,
+                dims.ct_dim,
+                dims.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=dest_sync,
+                dest_acc=dest_acc,
             ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(

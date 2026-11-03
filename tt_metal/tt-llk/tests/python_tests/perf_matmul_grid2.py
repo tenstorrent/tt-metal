@@ -6,77 +6,150 @@ Unpack walk: every out_subblock h x w of the DEST capacity at inner k blocks of 
 perf counters (MATMUL_WIDE_WALK reads on past the 16 tile ring; the data does not matter), the shapes the 16 tile ring of perf_matmul_grid cut. Several inner blocks: nb 2 and 4 with packer L1 accumulate
 (MATMUL_NB: block 0 of each nb writes, the rest accumulate), the several-block keys on, one shape and k class per cell and nb. Tiny tiles: in0 height 1 to 16 with in1 width 32, in0 height 1 to 16 and 32
 with in1 width 16, over every SrcA x SrcB x output of Float16_b, Bfp8_b, Bfp4_b and Float32 (Bfp4_b from height 4), one block per cell and tile shape, on the math matmul test with its own operand sizes.
-SrcA is input_format (unpacker 0, matmul in1), SrcB is input_format_B (unpacker 1, matmul in0). Shapes drawn by a fixed hash of the cell name so the ids stay stable."""
+SrcA is input_format (unpacker 0, matmul in1), SrcB is input_format_B (unpacker 1, matmul in0). Shapes drawn by a fixed hash of the cell name so the ids stay stable.
+"""
 
-from typing import Callable, List, Union
 
+import json
+import os
+from dataclasses import replace
+
+import perf_matmul_grid as _g
 import pytest
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from conftest import skip_for_wormhole
+from helpers.format_config import InputOutputFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
+    L1Accumulation,
     MathFidelity,
     PerfRunType,
+    StochasticRounding,
     Transpose,
+    format_tile_sizes,
 )
 from helpers.matmul_sweep import (
-    DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
+    FaceLayoutConfig,
+    MatmulConfig,
     generate_tile_dims,
     matmul_pack_form,
-    mid_fill_rt_ct_pairs,
-    unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
-    input_output_formats,
     parametrize,
 )
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
-    MATMUL_ROW_END_FOLD,
+    MATMUL_L1_ACC,
+    MATMUL_NB,
     MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
+    MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
     MATMUL_ROW_MOP,
     MATMUL_STREAM_NARROW,
-    MATMUL_REUSE_DIR,
     MATMUL_STREAM_Z,
-    MATMUL_NB,
-    MATMUL_OPERAND_SIZES,
-    MATMUL_WIDE_WALK,
-    IN_TILE_DIMS,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    PARTIAL_FACE,
-    DEST_INDEX,
-    UNPACK_TRANS_WITHIN_FACE,
-    MATMUL_IN1_ALT,
     MATMUL_UNPACK_TTSYNC,
+    MATMUL_WIDE_WALK,
     NUM_FACES,
+    PACK_SRC_FROM_OUTPUT,
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from helpers.llk_params import format_tile_sizes
 
-import json, os
-from dataclasses import replace
-
-from conftest import skip_for_wormhole
-from helpers.format_config import InputOutputFormat
-from helpers.llk_params import L1Accumulation
-from helpers.matmul_sweep import FaceLayoutConfig, MatmulConfig
-from helpers.llk_params import StochasticRounding
-from helpers.test_variant_parameters import MATMUL_L1_ACC, PACK_SRC_FROM_OUTPUT
-import perf_matmul_grid as _g
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp4_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 448]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp4_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 288]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp4_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([384, 32], [32, 32]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp4_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([512, 32], [32, 32]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp4_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 256], [256, 352]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 384]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([96, 32], [32, 160]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([160, 96], [96, 96]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 512]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 288]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Float32], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([288, 32], [32, 32]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Float32], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 96], [96, 160]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([192, 96], [96, 64]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 256], [256, 192]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([160, 32], [32, 64]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 256], [256, 416]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Float32,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 96], [96, 192]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Bfp8_b,B:Float32,out:Float32], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([224, 32], [32, 64]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 416]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([256, 32], [32, 64]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([352, 32], [32, 32]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([96, 32], [32, 96]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Bfp8_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([32, 256], [256, 192]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 352]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([64, 32], [32, 128]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 192]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([192, 96], [96, 32]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Bfp4_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 192]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 512]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Bfp8_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 128]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([160, 96], [96, 64]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 256], [256, 288]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 256], [256, 224]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 32], [32, 224]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([64, 96], [96, 96]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([96, 32], [32, 64]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([64, 96], [96, 64]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([96, 32], [32, 32]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 256], [256, 256]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 480]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([96, 96], [96, 160]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([32, 256], [256, 128]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp4_b], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([32, 96], [96, 64]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 256], [256, 160]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 256], [256, 480]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 256], [256, 96]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([160, 96], [96, 32]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 96], [96, 160]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([128, 32], [32, 64]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([256, 32], [32, 32]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([128, 96], [96, 32]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([32, 32], [32, 128]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([128, 96], [96, 96]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 256], [256, 32]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 352]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 416]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([512, 1024], [1024, 32]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.No: 0>, 1)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 256], [256, 160]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 96], [96, 256]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([224, 32], [32, 32]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 32], [32, 32]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 96], [96, 32]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 96], [96, 96]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([128, 96], [96, 64]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([160, 32], [32, 32]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([96, 96], [96, 64]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([128, 32], [32, 32]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([64, 96], [96, 32]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float32], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 480]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float32], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 96], [96, 224]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float32], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 224]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float32], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([32, 96], [96, 224]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float32], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([64, 256], [256, 32]), <MathFidelity.HiFi4: 4>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float32,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([416, 32], [32, 32]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 4)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float32,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([96, 96], [96, 96]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float16_b,B:Float32,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([320, 32], [32, 32]), <MathFidelity.HiFi2: 2>, 0, <L1Accumulation.Yes: 1>, 2)]",
+        "test_perf_matmul_grid2[case:(InputOutputFormat[A:Float32,B:Float32,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([192, 32], [32, 64]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.Yes: 1>, 2)]",
+    ]
+)
 
 _F = _g._F
 _FMTS = _g._FMTS
@@ -88,7 +161,9 @@ _WALK_A = 0x169000 - 0x21000
 _WALK_B = 0x169000 - 0x31000
 _KT_WIDE = (3, 8, 32)
 _NB_KT = (1, 3, 8)
-_TINY_SHAPES = [(r, 32) for r in (1, 2, 4, 8, 16)] + [(r, 16) for r in (1, 2, 4, 8, 16, 32)]
+_TINY_SHAPES = [(r, 32) for r in (1, 2, 4, 8, 16)] + [
+    (r, 16) for r in (1, 2, 4, 8, 16, 32)
+]
 # (rt, ct, kt) of the tiny block; "full" is the one row of ct = the DEST capacity
 _TINY_BLOCKS = ((1, 1, 1), (1, 4, 1), (1, 4, 4), (2, 2, 4), (1, 0, 1))
 
@@ -103,7 +178,12 @@ def _fits_walk(a, b, rt, ct, kt):
 
 
 def _shapes(cap, kt, a, b):
-    return [(h, w) for h in range(1, cap + 1) for w in range(1, cap + 1) if h * w <= cap and _fits_walk(a, b, h, w, kt)]
+    return [
+        (h, w)
+        for h in range(1, cap + 1)
+        for w in range(1, cap + 1)
+        if h * w <= cap and _fits_walk(a, b, h, w, kt)
+    ]
 
 
 def _cells():
@@ -118,7 +198,9 @@ def _cells():
 
 def _grid2():
     """Rows (cell, rt, ct, kt, throttle, l1_acc, nb)."""
-    excl = set(json.load(open(os.path.join(os.path.dirname(__file__), "grid_in_sweep.json"))))
+    excl = set(
+        json.load(open(os.path.join(os.path.dirname(__file__), "grid_in_sweep.json")))
+    )
     have = set(",".join(map(str, r)) for r in _g._grid())
     rows = []
     for cell in _cells():
@@ -131,7 +213,12 @@ def _grid2():
             kt = _NB_KT[_hash(tag + "B%d" % nb) % 3]
             sh = _shapes(cap, kt, a, b)
             rows.append((*cell, *sh[_hash(tag + "b%d" % nb) % len(sh)], kt, 0, 1, nb))
-    rows = [r for r in rows if ",".join(map(str, r[:11])) not in excl and (r[11] > 1 or ",".join(map(str, r[:11])) not in have)]
+    rows = [
+        r
+        for r in rows
+        if ",".join(map(str, r[:11])) not in excl
+        and (r[11] > 1 or ",".join(map(str, r[:11])) not in have)
+    ]
     assert len(set(rows)) == len(rows)
     return rows
 
@@ -165,7 +252,9 @@ def _tiny_rows():
         for r0, c1 in _TINY_SHAPES:
             if "B4" in (a, b, o) and r0 < 4:
                 continue
-            if acc == "N" and is_dest_acc_needed(InputOutputFormat(_F[a], _F[o], input_format_B=_F[b])):
+            if acc == "N" and is_dest_acc_needed(
+                InputOutputFormat(_F[a], _F[o], input_format_B=_F[b])
+            ):
                 continue
             blk = _TINY_BLOCKS[_hash(tag + "t%dx%d" % (r0, c1)) % len(_TINY_BLOCKS)]
             rt, ct, kt = blk[0], blk[1] or cap, blk[2]
@@ -176,7 +265,9 @@ def _tiny_rows():
 def tiny_config(a, b, o, acc, sy, r0, c1, rt, ct, kt):
     """MatmulConfig of a tiny tile block (the tile shapes of perf_math_matmul_cov): in0 r0 x 32 with 2 faces (4 at r0 = 32), in1 32 x c1 with 4 faces (2 at c1 = 16)."""
     fmt = InputOutputFormat(_F[a], _F[o], input_format_B=_F[b])
-    td = _g.generate_tile_dims(([rt * 32, kt * 32], [kt * 32, ct * 32]), in0_tile_r_dim=r0)
+    td = _g.generate_tile_dims(
+        ([rt * 32, kt * 32], [kt * 32, ct * 32]), in0_tile_r_dim=r0
+    )
     td = replace(td, in0_tile_c_dim=32, in1_tile_r_dim=32, in1_tile_c_dim=c1)
     f0 = 4 if r0 == 32 else 2
     f1 = 2 if c1 == 16 else 4
@@ -205,7 +296,10 @@ def tiny_config(a, b, o, acc, sy, r0, c1, rt, ct, kt):
 
 
 def _tiny_cases():
-    return [(a, b, o, acc, sy, getattr(MathFidelity, fi), r0, c1, rt, ct, kt) for a, b, o, acc, sy, fi, r0, c1, rt, ct, kt in _tiny_rows()]
+    return [
+        (a, b, o, acc, sy, getattr(MathFidelity, fi), r0, c1, rt, ct, kt)
+        for a, b, o, acc, sy, fi, r0, c1, rt, ct, kt in _tiny_rows()
+    ]
 
 
 @pytest.mark.perf
@@ -217,7 +311,16 @@ def test_perf_matmul_grid2(
 ):
 
     case = case[0] if len(case) == 1 else case
-    formats, dest_acc, dest_sync, (matrix_a, matrix_b), math_fidelity, throttle, l1_acc, num_blocks = case
+    (
+        formats,
+        dest_acc,
+        dest_sync,
+        (matrix_a, matrix_b),
+        math_fidelity,
+        throttle,
+        l1_acc,
+        num_blocks,
+    ) = case
 
     run_types = [
         PerfRunType.L1_TO_L1,
@@ -232,25 +335,52 @@ def test_perf_matmul_grid2(
 
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
     # the MOP walk over in0 leaves the 16 tile ring: it reads on through the L1 below the perf counters
-    wide_walk = (dims.rt_dim - 1) * dims.kt_dim >= PERF_RING_TILES or dims.ct_dim - 1 >= PERF_RING_TILES
+    wide_walk = (
+        dims.rt_dim - 1
+    ) * dims.kt_dim >= PERF_RING_TILES or dims.ct_dim - 1 >= PERF_RING_TILES
     # PERF_ADDRESS rings are PERF_RING_TILES (tests/helpers/include/perf.h).
     # Cap L1 stimuli so K=32 dest-fill Float32 does not overflow Tensix L1.
     # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
-
     from helpers.matmul_prod_keys import grid_main_cell
 
     main_form = grid_main_cell(
-        math_fidelity, dest_sync == DestSync.Half, dest_acc == DestAccumulation.Yes, formats.input_format, formats.input_format_B, formats.output_format,
-        dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle, l1_acc == L1Accumulation.Yes, num_blocks,
+        math_fidelity,
+        dest_sync == DestSync.Half,
+        dest_acc == DestAccumulation.Yes,
+        formats.input_format,
+        formats.input_format_B,
+        formats.output_format,
+        dims.rt_dim,
+        dims.ct_dim,
+        dims.kt_dim,
+        throttle,
+        l1_acc == L1Accumulation.Yes,
+        num_blocks,
     )
     form_keys = [
-        k.with_block(dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_acc, throttle, l1_acc == L1Accumulation.Yes, num_blocks)
+        k.with_block(
+            dims.ct_dim,
+            dims.rt_dim,
+            dims.kt_dim,
+            dest_acc,
+            throttle,
+            l1_acc == L1Accumulation.Yes,
+            num_blocks,
+        )
         for k in MATMUL_FORM_KEYS.for_block(
-            formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-            math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
-            sections=num_blocks, several_blocks=num_blocks > 1,
+            formats,
+            dims.kt_dim,
+            dims.ct_dim,
+            dims.rt_dim,
+            math_fidelity=math_fidelity,
+            dest_sync=dest_sync,
+            dest_acc=dest_acc,
+            unfuse_one_tile=True,
+            throttle=throttle,
+            sections=num_blocks,
+            several_blocks=num_blocks > 1,
         )
     ]
     if main_form:
@@ -262,7 +392,18 @@ def test_perf_matmul_grid2(
     main_templates = [
         PACK_SRC_FROM_OUTPUT(),
         *form_keys,
-        MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle, l1_acc=l1_acc == L1Accumulation.Yes)),
+        MATMUL_PACK_BLOCK(
+            matmul_pack_form(
+                formats,
+                dest_sync,
+                math_fidelity,
+                dims.rt_dim,
+                dims.ct_dim,
+                dims.kt_dim,
+                throttle=throttle,
+                l1_acc=l1_acc == L1Accumulation.Yes,
+            )
+        ),
         *([MATMUL_WIDE_WALK()] if wide_walk else []),
     ]
 
@@ -270,45 +411,88 @@ def test_perf_matmul_grid2(
         "sources/matmul_test.cpp",
         formats,
         run_types,
-        templates=[MATH_FIDELITY(math_fidelity), DEST_SYNC(dest_sync), THROTTLE_LEVEL(throttle), MATMUL_L1_ACC(l1_acc), MATMUL_NB(num_blocks), *(main_templates if main_form else [
-            PACK_SRC_FROM_OUTPUT(),
-            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, throttle),
-            *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            DEST_SYNC(dest_sync),
+            THROTTLE_LEVEL(throttle),
+            MATMUL_L1_ACC(l1_acc),
+            MATMUL_NB(num_blocks),
+            *(
+                main_templates
+                if main_form
+                else [
+                    PACK_SRC_FROM_OUTPUT(),
+                    *MATMUL_PHASE_ELIDE.for_block(
+                        formats, math_fidelity, dest_acc, throttle
+                    ),
+                    *MATMUL_STREAM_NARROW.for_block(
+                        formats,
+                        dest_acc,
+                        dest_sync,
+                        dims.ct_dim,
+                        dims.rt_dim,
+                        math_fidelity=math_fidelity,
+                    ),
+                    *MATMUL_REUSE_DIR.for_block(
+                        formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync
+                    ),
+                    *MATMUL_STREAM_Z.for_block(
+                        formats,
+                        dest_acc,
+                        dest_sync,
+                        dims.ct_dim,
+                        dims.rt_dim,
+                        math_fidelity=math_fidelity,
+                        kt_dim=dims.kt_dim,
+                        throttle=throttle,
+                    ),
+                    *MATMUL_UNPACK_TTSYNC.for_block(
+                        formats,
+                        dest_acc,
+                        math_fidelity,
+                        dims.ct_dim,
+                        dims.rt_dim,
+                        dims.kt_dim,
+                        dest_sync,
+                    ),
+                    *MATMUL_K_LOOP.for_block(
+                        formats,
+                        dest_acc,
+                        math_fidelity,
+                        dims.ct_dim,
+                        dims.rt_dim,
+                        dims.kt_dim,
+                        throttle=throttle,
+                    ),
+                    *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
+                    *MATMUL_ROW_MOP.for_block(
+                        formats,
+                        dest_acc,
+                        math_fidelity,
+                        dest_sync,
+                        dims.ct_dim,
+                        dims.rt_dim,
+                        dims.kt_dim,
+                        num_blocks,
+                        num_blocks > 1,
+                    ),
+                    *form_keys,
+                    MATMUL_PACK_BLOCK(
+                        matmul_pack_form(
+                            formats,
+                            dest_sync,
+                            math_fidelity,
+                            dims.rt_dim,
+                            dims.ct_dim,
+                            dims.kt_dim,
+                            throttle=throttle,
+                            l1_acc=l1_acc == L1Accumulation.Yes,
+                        )
+                    ),
+                    *([MATMUL_WIDE_WALK()] if wide_walk else []),
+                ]
             ),
-            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync),
-            *MATMUL_STREAM_Z.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity,
-                kt_dim=dims.kt_dim,
-                throttle=throttle,
-            ),
-            *MATMUL_UNPACK_TTSYNC.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_sync
-            ),
-            *MATMUL_K_LOOP.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, throttle=throttle
-            ),
-            *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
-            *MATMUL_ROW_MOP.for_block(
-                formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim, num_blocks, num_blocks > 1
-            ),
-            *form_keys,
-            MATMUL_PACK_BLOCK(
-                matmul_pack_form(
-                    formats,
-                    dest_sync,
-                    math_fidelity,
-                    dims.rt_dim,
-                    dims.ct_dim,
-                    dims.kt_dim,
-                    throttle=throttle,
-                    l1_acc=l1_acc == L1Accumulation.Yes,
-                )
-            ),
-            *([MATMUL_WIDE_WALK()] if wide_walk else []),
-        ])],
+        ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
             NUM_FACES(),

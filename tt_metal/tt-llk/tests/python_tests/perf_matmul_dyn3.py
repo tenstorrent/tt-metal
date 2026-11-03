@@ -2,6 +2,10 @@
 import pytest
 from perf_matmul_dyn_base import CASES, run_dyn
 
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+
 
 @pytest.mark.perf
 @pytest.mark.parametrize("fmt,sync,dims,mf", CASES)
