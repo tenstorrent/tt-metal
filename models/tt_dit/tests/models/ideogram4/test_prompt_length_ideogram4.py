@@ -34,9 +34,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import ttnn
 from loguru import logger
 from PIL import Image
+
+import ttnn
 
 from ....pipelines.events import SectionStart
 from ....pipelines.ideogram4 import pipeline_ideogram4 as pipe_mod
@@ -95,7 +96,7 @@ def _psnr(a: Image.Image, b: Image.Image) -> tuple[float, int]:
 @pytest.mark.parametrize(
     ("mesh_device", "device_params"), [((4, 8), _RING_PIPE)], indirect=True, ids=["bh_galaxy_sp8tp4"]
 )
-def test_prompt_length_logical_n(*, mesh_device) -> None:
+def test_prompt_length_logical_n(*, mesh_device, expect_error) -> None:
     cap_dir = Path(os.environ["IDEOGRAM_PLEN_CAPTIONS"])
     out = Path(os.environ.get("IDEOGRAM_PLEN_OUT", "prompt_length"))
     (out / "images").mkdir(parents=True, exist_ok=True)
@@ -132,7 +133,7 @@ def test_prompt_length_logical_n(*, mesh_device) -> None:
     # Over-length guard: host-only, raises before any device work.
     n_over = pipe.count_text_tokens(over)
     assert n_over > MAX_TEXT_TOKENS, n_over
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "Ideogram 4 supports at most"):
         pipe(prompts=[over], preset=preset, seed=SEED, height=sizes[0][1], width=sizes[0][0], traced=False)
     logger.info(f"PLEN over-length prompt ({n_over} tokens) raised ValueError as expected")
 

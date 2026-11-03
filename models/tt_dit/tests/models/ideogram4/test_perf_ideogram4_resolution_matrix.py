@@ -45,8 +45,9 @@ import time
 from pathlib import Path
 
 import pytest
-import ttnn
 from loguru import logger
+
+import ttnn
 
 from ....pipelines.ideogram4.pipeline_ideogram4 import Ideogram4Pipeline
 from .test_perf_ideogram4_gpu_bench import _RING_PIPE, SectionTimer, _git_rev
@@ -121,7 +122,9 @@ def test_resolution_matrix(*, mesh_device) -> None:
         "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
     (out_dir / "run.json").write_text(json.dumps(run_info, indent=2))
-    logger.info(f"load {load_s:.1f}s | {run_info['mode']} | {len(sizes)} sizes x {presets} | {reps} reps + {discard} discarded")
+    logger.info(
+        f"load {load_s:.1f}s | {run_info['mode']} | {len(sizes)} sizes x {presets} | {reps} reps + {discard} discarded"
+    )
 
     def generate(preset: str, width: int, height: int):
         timer = SectionTimer(dev, sync_steps=False)
@@ -159,12 +162,22 @@ def test_resolution_matrix(*, mesh_device) -> None:
             failures.append(f"{tier} {ratio} warmup")
             for preset in presets:
                 with (out_dir / "results.jsonl").open("a") as f:
-                    f.write(json.dumps({**base, "preset": preset, "error": f"warmup: {type(error).__name__}: {error}"}) + "\n")
+                    f.write(
+                        json.dumps({**base, "preset": preset, "error": f"warmup: {type(error).__name__}: {error}"})
+                        + "\n"
+                    )
             continue
 
         for preset in presets:
-            record = {**base, "preset": preset, "node": run_info["node"], "tdp": run_info["tdp"],
-                      "tt_metal_rev": run_info["tt_metal_rev"], "mode": run_info["mode"], "text_tokens": tokens}
+            record = {
+                **base,
+                "preset": preset,
+                "node": run_info["node"],
+                "tdp": run_info["tdp"],
+                "tt_metal_rev": run_info["tt_metal_rev"],
+                "mode": run_info["mode"],
+                "text_tokens": tokens,
+            }
             try:
                 runs = []
                 for i in range(discard + reps):
@@ -176,8 +189,12 @@ def test_resolution_matrix(*, mesh_device) -> None:
                 image.save(out_dir / "images" / f"{tier}_{ratio.replace(':', 'x')}__{preset}.png")
                 for key in ("wall_s", "text_encoder_ms", "denoising_s", "mean_step_ms", "decoder_ms"):
                     record[key] = round(statistics.median(r[key] for r in runs), 3)
-                record.update(steps=runs[0]["steps"], reps=len(runs),
-                              wall_s_min=min(r["wall_s"] for r in runs), wall_s_max=max(r["wall_s"] for r in runs))
+                record.update(
+                    steps=runs[0]["steps"],
+                    reps=len(runs),
+                    wall_s_min=min(r["wall_s"] for r in runs),
+                    wall_s_max=max(r["wall_s"] for r in runs),
+                )
                 logger.info(
                     f"RESULT {tier} {ratio} {width}x{height} {preset}: wall {record['wall_s']:.2f}s | "
                     f"step {record['mean_step_ms']:.0f}ms | encoder {record['text_encoder_ms']:.0f}ms | "

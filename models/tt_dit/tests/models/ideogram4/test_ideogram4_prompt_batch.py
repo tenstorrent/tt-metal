@@ -44,8 +44,9 @@ from pathlib import Path
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 from ....pipelines.ideogram4.pipeline_ideogram4 import MAX_TEXT_TOKENS, Ideogram4Pipeline
 from .test_perf_ideogram4_gpu_bench import _RING_PIPE, SectionTimer, _git_rev
@@ -111,7 +112,9 @@ def test_prompt_batch(*, mesh_device) -> None:
     latents = blob["latents"]
     height, width = int(blob["height"]), int(blob["width"])
     latents_sha = _sha256(latents_path)
-    logger.info(f"{len(captions)} captions x {presets} at {height}x{width}; latents {list(latents.shape)} {latents_sha[:12]}")
+    logger.info(
+        f"{len(captions)} captions x {presets} at {height}x{width}; latents {list(latents.shape)} {latents_sha[:12]}"
+    )
 
     t0 = time.perf_counter()
     pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width)

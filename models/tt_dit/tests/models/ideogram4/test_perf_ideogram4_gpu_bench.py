@@ -41,8 +41,9 @@ import time
 from pathlib import Path
 
 import pytest
-import ttnn
 from loguru import logger
+
+import ttnn
 
 from ....pipelines.events import SectionEnd, SectionStart
 from ....pipelines.ideogram4.pipeline_ideogram4 import Ideogram4Pipeline
