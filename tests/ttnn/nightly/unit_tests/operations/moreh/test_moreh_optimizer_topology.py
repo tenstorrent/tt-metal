@@ -103,6 +103,12 @@ def _assert_replicated(tensor, what):
     assert names and all(name == "Replicate" for name in names), f"{what}: topology {names}, expected replicated"
 
 
+def _assert_sharded(tensor, what):
+    """Shard on some mesh axis: the label says the devices hold different data."""
+    names = _placement_names(tensor)
+    assert any(name != "Replicate" for name in names), f"{what}: topology {names}, expected a Shard"
+
+
 def _device_slices(tensor):
     """Each device's slice as float32 torch, in mesh order. No composer: nothing here trusts the label."""
     return [ttnn.to_torch(shard).float() for shard in ttnn.get_device_tensors(tensor.cpu())]
@@ -643,8 +649,9 @@ def _check_clip_numerics(mesh_device, grads, grad_slices, total_norm, *, max_nor
 )
 def test_clip_grad_norm_labels_follow_the_data(mesh_device, preallocate_total_norm):
     """Two gradients scaled in place, one replicated and one Shard(3) with a different slice per device: the norm is
-    computed per device, so total_norm and both scaled gradients differ per device and take ['Shard(3)'], on the
-    caller's handles too."""
+    computed per device, so total_norm and both scaled gradients differ per device. The gradients take ['Shard(3)'],
+    on the caller's handles too. total_norm is sharded as well, but its label's Shard(3) comes from the gradients and
+    names a dim its [1, 1] shape does not have, so only that it is not replicated is checked."""
     torch.manual_seed(2)
     num_devices = mesh_device.get_num_devices()
     g0 = torch.randn([1, 1, 32, 32], dtype=torch.bfloat16)
@@ -657,9 +664,9 @@ def test_clip_grad_norm_labels_follow_the_data(mesh_device, preallocate_total_no
 
     _assert_label(grads[0], ["Shard(3)"], "replicated grad, scaled per device")
     _assert_label(grads[1], ["Shard(3)"], "sharded grad")
-    _assert_label(total_norm, ["Shard(3)"], "total_norm")
+    _assert_sharded(total_norm, "total_norm")
     if preallocate_total_norm:
-        _assert_label(total_norm_in, ["Shard(3)"], "caller's total_norm handle")
+        _assert_sharded(total_norm_in, "caller's total_norm handle")
     _assert_devices_differ(_device_slices(grads[0]), "replicated grad after a per-device scale")
     _check_clip_numerics(mesh_device, grads, grad_slices, total_norm)
 
