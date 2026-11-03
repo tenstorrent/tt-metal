@@ -11,6 +11,7 @@ processed as chunks) on one device, and the all-gather is stood in for by reshar
 per-slice statistics onto a single core. No real multi-device execution or collective runs — only the
 on-device pre/post all-gather op path is exercised.
 """
+
 import ttnn
 import torch
 import pytest
@@ -26,8 +27,6 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     make_sharded_norm_mem_config,
     to_poisoned_sharded,
 )
-from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
-
 from tt_py_test_utils_common.utility_functions import tt2torch_tensor
 
 PREFETCHER_NOC1_GRID = [
@@ -317,14 +316,18 @@ def run_pre_allgather_layernorm(
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 
+# seed 0, 4 devices, bf16. is_rmsnorm and fuse_residual stay separate, so both values of each are gated.
+_PRE_ALLGATHER_MERGE_GATE = (0, 4, ttnn.bfloat16)
+
+
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("input_width", [2048])
 @pytest.mark.parametrize(
     "seed, num_devices, input_df",
-    merge_gate_subset(
-        product([0, 1234], [4, 8], [ttnn.bfloat8_b, ttnn.bfloat16]),
-        keep=lambda case: case == (0, 4, ttnn.bfloat16),
-    ),
+    [
+        pytest.param(*values, marks=pytest.mark.merge_gate) if values == _PRE_ALLGATHER_MERGE_GATE else values
+        for values in product([0, 1234], [4, 8], [ttnn.bfloat8_b, ttnn.bfloat16])
+    ],
 )
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((8, 4),))

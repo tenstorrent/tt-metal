@@ -10,7 +10,6 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from tt_py_test_utils_common.utility_functions import torch_random
 
@@ -272,21 +271,24 @@ def run_softmax_sharded_stable(
         )
 
 
+# skip_scale_mask off: bf16 with approx off and fp32 acc on and off, plus bf8 with fp32 acc and approx on.
+_SOFTMAX_SHARDED_STABLE_MERGE_GATE = {
+    (False, False, True, ttnn.bfloat16),
+    (False, False, False, ttnn.bfloat16),
+    (False, True, True, ttnn.bfloat8_b),
+}
+
+
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("num_heads", [4])
 @pytest.mark.parametrize("h", [384])
 @pytest.mark.parametrize("w", [384])
 @pytest.mark.parametrize(
     "skip_scale_mask, math_approx, fp32_acc_en, in_dtype",
-    merge_gate_subset(
-        product([True, False], [True, False], [True, False], [ttnn.bfloat8_b, ttnn.bfloat16]),
-        keep=lambda case: case
-        in [
-            (False, False, True, ttnn.bfloat16),
-            (False, False, False, ttnn.bfloat16),
-            (False, True, True, ttnn.bfloat8_b),
-        ],
-    ),
+    [
+        pytest.param(*values, marks=pytest.mark.merge_gate) if values in _SOFTMAX_SHARDED_STABLE_MERGE_GATE else values
+        for values in product([True, False], [True, False], [True, False], [ttnn.bfloat8_b, ttnn.bfloat16])
+    ],
 )
 def test_softmax_sharded_stable_with_program_cache(
     device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
@@ -915,18 +917,24 @@ SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES = [
 ]
 
 
+# numeric_stable and fp32 acc on every geometry, plus (16, causal, Wt=13) with both off.
+# #58691 counted 9 geometries; this list has 13, so the gate is 14.
+_SCALE_MASK_BOTH_OFF_MERGE_GATE = (16, True, 13, 0, False, False)
+
+
 @pytest.mark.parametrize(
     "batch, causal, Wt, pad, fp32_acc_en, numeric_stable",
-    merge_gate_subset(
-        [
-            (*case, fp32_acc_en, numeric_stable)
-            for numeric_stable, fp32_acc_en, case in product(
-                [True, False], [True, False], SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES
-            )
-        ],
-        # every geometry with numeric_stable and fp32_acc_en, plus one causal case with both off
-        keep=lambda case: case[4:] == (True, True) or case == (16, True, 13, 0, False, False),
-    ),
+    [
+        (
+            pytest.param(*case, fp32_acc_en, numeric_stable, marks=pytest.mark.merge_gate)
+            if (fp32_acc_en, numeric_stable) == (True, True)
+            or (*case, fp32_acc_en, numeric_stable) == _SCALE_MASK_BOTH_OFF_MERGE_GATE
+            else (*case, fp32_acc_en, numeric_stable)
+        )
+        for numeric_stable, fp32_acc_en, case in product(
+            [True, False], [True, False], SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES
+        )
+    ],
 )
 def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, fp32_acc_en, numeric_stable):
     """Issue #39050: the fused scale/mask path streams the attention mask (c_4) in blocks of the

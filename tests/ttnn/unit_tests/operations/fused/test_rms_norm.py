@@ -9,7 +9,6 @@ import torch
 
 import ttnn
 
-from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 import os
@@ -50,15 +49,24 @@ def test_rms_norm(device, batch_size, h, w):
     )
 
 
+# HiFi2, approx off, fp32 dest acc, packer L1 acc. h and w stay separate, so all four pairs are gated.
+_RMS_ROW_MAJOR_MERGE_GATE = (ttnn.MathFidelity.HiFi2, False, True, True)
+
+
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [24, 128])
 @pytest.mark.parametrize("w", [32, 4096])
 @pytest.mark.parametrize(
     "math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc",
-    merge_gate_subset(
-        product([ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2], [True, False], [True, False], [True, False]),
-        keep=lambda case: case == (ttnn.MathFidelity.HiFi2, False, True, True),
-    ),
+    [
+        pytest.param(*values, marks=pytest.mark.merge_gate) if values == _RMS_ROW_MAJOR_MERGE_GATE else values
+        for values in product(
+            [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2],
+            [True, False],
+            [True, False],
+            [True, False],
+        )
+    ],
 )
 def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc):
     torch.manual_seed(0)

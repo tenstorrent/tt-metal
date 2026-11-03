@@ -12,7 +12,6 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 from itertools import product
 from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
-from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -482,20 +481,27 @@ def test_batch_norm_output_Default(input_shapes, device):
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
+# Shape [1, 8, 24, 42], training with weight and bias, bf16/bf16 and fp32/fp32.
+_BATCH_NORM_COMPUTE_MERGE_GATE = {
+    (torch.Size([1, 8, 24, 42]), True, True, True, "bfloat16", "bfloat16"),
+    (torch.Size([1, 8, 24, 42]), True, True, True, "float32", "float32"),
+}
+
+
 @pytest.mark.parametrize(
     "input_shapes, training, weight, bias, input_dtype, param_dtype",
-    merge_gate_subset(
-        [
-            (input_shapes, *affine, *dtypes)
-            for input_shapes, affine, dtypes in product(
-                [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
-                [(True, True, True), (True, False, False), (False, True, True), (False, False, False)],
-                [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
-            )
-        ],
-        keep=lambda case: case[:4] == (torch.Size([1, 8, 24, 42]), True, True, True)
-        and case[4:] in [("bfloat16", "bfloat16"), ("float32", "float32")],
-    ),
+    [
+        (
+            pytest.param(shape, *affine, *dtypes, marks=pytest.mark.merge_gate)
+            if (shape, *affine, *dtypes) in _BATCH_NORM_COMPUTE_MERGE_GATE
+            else (shape, *affine, *dtypes)
+        )
+        for shape, affine, dtypes in product(
+            [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
+            [(True, True, True), (True, False, False), (False, True, True), (False, False, False)],
+            [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
+        )
+    ],
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
     N, H, W, C = input_shapes
@@ -1161,9 +1167,11 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi
-        if not fp32_dest_acc_en
-        else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4),
+        math_fidelity=(
+            ttnn.MathFidelity.LoFi
+            if not fp32_dest_acc_en
+            else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4)
+        ),
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
