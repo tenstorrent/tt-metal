@@ -191,29 +191,6 @@ inline void log_operation(
 
 #endif
 
-// Out of line, so the fingerprint dump (ttnn/program_fingerprint.hpp) adds nothing to the dispatch path but its flag.
-template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
-[[gnu::noinline]] void record_program_fingerprint(
-    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
-    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
-    const typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
-    distributed::MeshDevice* mesh_device,
-    tt::tt_metal::distributed::MeshWorkload& workload,
-    bool program_cache_hit) {
-    std::vector<const Tensor*> args;
-    std::vector<const Tensor*> returns;
-    ttsl::reflection::visit_object_of_type<Tensor>([&](const Tensor& t) { args.push_back(&t); }, tensor_args);
-    ttsl::reflection::visit_object_of_type<Tensor>(
-        [&](const Tensor& t) { returns.push_back(&t); }, tensor_return_value);
-    ttnn::program_fingerprint::record(
-        get_operation_name<mesh_device_operation_t>(operation_attributes),
-        program_cache_hit,
-        *mesh_device,
-        workload,
-        args,
-        returns);
-}
-
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -259,8 +236,7 @@ void enqueue_mesh_workload(
     // After the enqueue, which pads each core's runtime args to its kernel group's longest: a miss and a hit then
     // record the same lists.
     if (ttnn::program_fingerprint::enabled()) [[unlikely]] {
-        record_program_fingerprint<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, program_cache_hit);
+        ttnn::program_fingerprint::record(*mesh_device, workload);
     }
 
     TracyOpMeshWorkload(

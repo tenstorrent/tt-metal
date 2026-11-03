@@ -26,16 +26,6 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-// FNV-1a: a hash of the kernel's text that is the same in every process.
-uint64_t fnv1a(const std::string& text) {
-    uint64_t h = 1469598103934665603ULL;
-    for (unsigned char c : text) {
-        h ^= c;
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
-
 // A core range set as sorted [x0, y0, x1, y1] rectangles.
 nlohmann::json ranges(const CoreRangeSet& set) {
     std::vector<std::vector<uint32_t>> out;
@@ -86,16 +76,7 @@ std::string config_text(const Kernel& kernel) {
 
 nlohmann::json kernel_json(Kernel& kernel) {
     nlohmann::json k;
-    const auto& src = kernel.kernel_source();
     k["name"] = kernel.name();
-    k["source"] = src.source_type_ == KernelSource::FILE_PATH ? src.path_.string() : std::string("inline");
-    std::string text;
-    try {
-        text = src.get_content();
-    } catch (const std::exception&) {
-        text = src.source_;  // the file is gone: hash what the kernel was created from
-    }
-    k["source_hash"] = fmt::format("{:016x}", fnv1a(text));
     k["core_type"] = std::string(enchantum::to_string(kernel.get_kernel_programmable_core_type()));
     k["processor_class"] = std::string(enchantum::to_string(kernel.get_kernel_processor_class()));
     k["config"] = config_text(kernel);
