@@ -19,7 +19,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -28,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_tp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
+from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import with_sp4_depth
 from tests.ttnn.utils_for_testing import comp_pcc
 
 

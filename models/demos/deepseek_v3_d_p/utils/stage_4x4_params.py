@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Per-chip prefill depths for parametrized tests.
+"""Test parametrization for the 4x4 prefill stage (a Galaxy tray half, tests/run_4x4_stage_tests.sh).
 
-A 4x4 stage (SP=4) runs a 5120-token chunk at 1280 rows per chip, against 640 on the 8x4 stage (SP=8).
-Tests keep their 640 rows on every mesh and, through ``with_sp4_depth``, gain a 1280 twin of each row
-that collects only on the 4x4 mesh.
+A 4x4 stage (SP=4) runs a 5120-token chunk at 1280 rows per chip, against 640 on the 8x4 stage (SP=8);
+at the 2560-token chunk GLM-5.3's 4x4 stages run, it is back to 640. Tests keep their 640 rows on every
+mesh and, through ``with_sp4_depth``, gain a 1280 twin of each row that collects only on the 4x4 mesh.
 """
 
 import pytest

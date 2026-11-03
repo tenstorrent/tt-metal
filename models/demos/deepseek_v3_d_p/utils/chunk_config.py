@@ -17,5 +17,5 @@ def prefill_chunk_tokens_per_chip(sp_factor: int = PREFILL_SP_FACTOR, chunk_toke
 
 PREFILL_CHUNK_TOKENS_PER_CHIP = prefill_chunk_tokens_per_chip()  # 640: the 8x4 stage (SP=8)
 # 1280: a 4x4 stage (SP=4) at the same chunk. At SP=4, PREFILL_CHUNK_TOKENS_PER_CHIP is instead the
-# per-chip share of a 2560-token chunk, the other chunk size the 4x4 plan considers.
+# per-chip share of a 2560-token chunk, which GLM-5.3's 4x4 stages run (manifests/glm53.json).
 SP4_CHUNK_TOKENS_PER_CHIP = prefill_chunk_tokens_per_chip(4)
