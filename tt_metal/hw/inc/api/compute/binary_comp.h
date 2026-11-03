@@ -98,13 +98,17 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }  // namespace detail
 #endif
 
-// Quasar: Int32 only (the wrappers static_assert UInt32/UInt16 away). Native Int32 Dest is two's complement
-// (unpack-to-dest copies the L1 bits), so SIGN_MAGNITUDE_FORMAT keeps its default; an Int8 operand the FPU
-// promoted into a 32-bit Dest is sign-magnitude and compares the same only while it is non-negative.
+// Quasar: Int32 only (the wrappers static_assert UInt32/UInt16 away). With the kernel-wide UnpackToDestEn the
+// operands reached DEST by unpack-to-dest (two's complement); without it only FPU-promoted Int8 (sign-magnitude)
+// can be in DEST, so that one route selector picks SIGN_MAGNITUDE_FORMAT.
 template <DataFormat data_format>
 ALWI void eq_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_eq_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_eq_int<
+          APPROX,
+          data_format,
+          8 /*ITERATIONS*/,
+          !UnpackToDestEn /*SIGN_MAGNITUDE_FORMAT*/>(idst0, idst1, odst)));
 #else
     MATH((detail::eq_int_tile_dispatch<SfpuType::eq, data_format>(idst0, idst1, odst)));
 #endif
@@ -113,7 +117,11 @@ ALWI void eq_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 template <DataFormat data_format>
 ALWI void ne_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_ne_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_ne_int<
+          APPROX,
+          data_format,
+          8 /*ITERATIONS*/,
+          !UnpackToDestEn /*SIGN_MAGNITUDE_FORMAT*/>(idst0, idst1, odst)));
 #else
     MATH((detail::eq_int_tile_dispatch<SfpuType::ne, data_format>(idst0, idst1, odst)));
 #endif
@@ -122,7 +130,11 @@ ALWI void ne_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 template <DataFormat data_format>
 ALWI void lt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_lt_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_lt_int<
+          APPROX,
+          data_format,
+          8 /*ITERATIONS*/,
+          !UnpackToDestEn /*SIGN_MAGNITUDE_FORMAT*/>(idst0, idst1, odst)));
 #else
     MATH((detail::rel_int_tile_dispatch<SfpuType::lt, data_format>(idst0, idst1, odst)));
 #endif
@@ -131,7 +143,11 @@ ALWI void lt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 template <DataFormat data_format>
 ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_gt_int<
+          APPROX,
+          data_format,
+          8 /*ITERATIONS*/,
+          !UnpackToDestEn /*SIGN_MAGNITUDE_FORMAT*/>(idst0, idst1, odst)));
 #else
     MATH((detail::rel_int_tile_dispatch<SfpuType::gt, data_format>(idst0, idst1, odst)));
 #endif
@@ -140,7 +156,11 @@ ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 template <DataFormat data_format>
 ALWI void le_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_le_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_le_int<
+          APPROX,
+          data_format,
+          8 /*ITERATIONS*/,
+          !UnpackToDestEn /*SIGN_MAGNITUDE_FORMAT*/>(idst0, idst1, odst)));
 #else
     MATH((detail::rel_int_tile_dispatch<SfpuType::le, data_format>(idst0, idst1, odst)));
 #endif
@@ -149,7 +169,11 @@ ALWI void le_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 template <DataFormat data_format>
 ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_ge_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_ge_int<
+          APPROX,
+          data_format,
+          8 /*ITERATIONS*/,
+          !UnpackToDestEn /*SIGN_MAGNITUDE_FORMAT*/>(idst0, idst1, odst)));
 #else
     MATH((detail::rel_int_tile_dispatch<SfpuType::ge, data_format>(idst0, idst1, odst)));
 #endif
