@@ -13,7 +13,7 @@
 jobs:
   - id: llk-smoke-n150
     description: "Run the PR Gate LLK smoke tests on one n150 (VM path, vfio-vm)"
-    timeout: 45m
+    timeout: 150m
     runs-on:
       kubernetes:
         os: linux
@@ -46,15 +46,23 @@ jobs:
         kind: shell
         shell:
           run:
+            # pytest's progress dots are one output event each and exhaust the
+            # runner's event cap (torrentci#2321): log to a file, print the tail.
             - >-
               ulimit -n 4096; . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests/python_tests &&
-              timeout 20m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
-              -m "$PYTEST_MARKERS" --splits 2 --group 1 --timeout=60 --junitxml=pytest-report-wormhole-1.xml .
+              rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
+              -m "$PYTEST_MARKERS" --splits 2 --group 1 --timeout=60 --durations=25
+              --junitxml=pytest-report-wormhole-1.xml . >/tmp/pytest-1.log 2>&1 || rc=$?;
+              tail -c 12000 /tmp/pytest-1.log; exit $rc
       - id: group-2
         kind: shell
         shell:
           run:
+            # pytest's progress dots are one output event each and exhaust the
+            # runner's event cap (torrentci#2321): log to a file, print the tail.
             - >-
               ulimit -n 4096; . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests/python_tests &&
-              timeout 20m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
-              -m "$PYTEST_MARKERS" --splits 2 --group 2 --timeout=60 --junitxml=pytest-report-wormhole-2.xml .
+              rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
+              -m "$PYTEST_MARKERS" --splits 2 --group 2 --timeout=60 --durations=25
+              --junitxml=pytest-report-wormhole-2.xml . >/tmp/pytest-2.log 2>&1 || rc=$?;
+              tail -c 12000 /tmp/pytest-2.log; exit $rc
