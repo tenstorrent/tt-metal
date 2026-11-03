@@ -70,6 +70,11 @@ CB_W_STAGE = 7
 # Writer -> reader: the w sender's (first owned step, period), for the reader's share of the w prefetch.
 CB_W_OWNER = 8
 W_OWNER_PAGE_BYTES = 16
+# Last-wave store split: the storing RISC hands every odd block to the other dataflow RISC, one
+# {block L1 address, first y row} page each. Exposed tail on two NoCs: occupied t4096 177.0 -> 172.0 us,
+# t4096 DRAM y 208.7 -> 198.2, t3072 137.3 -> 133.7.
+CB_TAIL = 9
+TAIL_PAGE_BYTES = 16
 # A staged prefetch's reads are issued over this many channel steps (a quota per step), so a sender never stalls
 # the steps it receives in between on one long issue burst. 8x512 layer 0 / t = 1024: 1 -> 259 / 120 us,
 # 4 -> 202 / 108, 9 -> 179 / 106, 16 -> 174 / 102, 32 -> 178 / 103, 128 -> 193 / 120.
@@ -254,6 +259,7 @@ def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, 
         (CB_COUNTS_COMPUTE, 1, counts_page_bytes, ttnn.uint32),
         (CB_COUNTS_WRITER, 1, counts_page_bytes, ttnn.uint32),
         (CB_W_OWNER, 1, W_OWNER_PAGE_BYTES, ttnn.uint32),
+        (CB_TAIL, _div_up(core_row_tiles_max, 2), TAIL_PAGE_BYTES, ttnn.uint32),
     ]
 
 
@@ -389,6 +395,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         CB_W_STAGE,
         CB_W_OWNER,
         blocking.x_step_rounds,
+        CB_TAIL,
     ]
     for tensor in (input_tensor, expert_counts, output, weight):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -411,6 +418,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         store_quota,
         CB_W_OWNER,
         W_SHARE_DEN,
+        CB_TAIL,
     ]
     for tensor in (output, weight):
         writer_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())

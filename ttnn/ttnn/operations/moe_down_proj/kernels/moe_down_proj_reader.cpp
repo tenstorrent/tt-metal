@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // moe_down_proj reader (x channel; the w channel runs on the writer RISC), plus store_wave when store_on_reader.
+// The last wave's store is split with the writer RISC either way (moe_store_tail_owner / _helper).
 // D0: counts page -> cb_counts_compute and cb_counts_writer (parsed from the landing copy for the plan).
 // deliver_x_round, x step s = (wave s / x_steps_per_wave, x K block s % x_steps_per_wave) over the non-empty waves:
 //   the step's rotating sender of the m-group multicasts its rows' K block of x from its private staging buffer
@@ -56,10 +57,11 @@ void kernel_main() {
     constexpr uint32_t cb_w_stage = get_compile_time_arg_val(22);
     constexpr uint32_t cb_w_owner = get_compile_time_arg_val(23);
     constexpr uint32_t x_step_rounds = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_tail = get_compile_time_arg_val(25);
     static_assert(num_k_rounds % x_step_rounds == 0, "x steps must not straddle a wave");
     static_assert(x_step_rounds == 1 || !w_reads_on_reader, "the reader's w prefetch steps per w round");
     constexpr uint32_t x_steps_per_wave = num_k_rounds / x_step_rounds;
-    constexpr auto x_args = TensorAccessorArgs<25>();
+    constexpr auto x_args = TensorAccessorArgs<26>();
     constexpr auto counts_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
@@ -285,9 +287,12 @@ void kernel_main() {
         noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
     }
     if (num_steps > 0) {
-        store_wave(num_steps / x_steps_per_wave - 1);
+        const uint32_t last_wave = num_steps / x_steps_per_wave - 1;
+        if constexpr (store_on_reader) {
+            moe_store_tail_owner<cb_output_rows, cb_tail, core_n_tiles>(plan, out_accessor, last_wave, group, line);
+        } else {
+            moe_store_tail_helper<cb_tail, core_n_tiles>(plan, out_accessor, last_wave, group, line);
+        }
     }
-    if constexpr (store_on_reader) {
-        noc_async_write_barrier();
-    }
+    noc_async_write_barrier();
 }

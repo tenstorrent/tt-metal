@@ -11,7 +11,8 @@
 //   NUM_EXPERTS-slot round is pushed at once.
 // Wave p's store starts after wave p + 1's first w_depth w rounds, so compute starts wave p + 1 while the store
 // drains, store_blocks_per_round blocks per round (the host sizes cb_output_rows to the whole wave block when it
-// paces, so compute's untilize never waits on the store; unpaced, the quota covers the whole wave).
+// paces, so compute's untilize never waits on the store; unpaced, the quota covers the whole wave). The last wave's
+// store is split with the reader RISC (moe_store_tail_owner / _helper).
 
 #include <cstdint>
 
@@ -47,7 +48,8 @@ void kernel_main() {
     constexpr uint32_t store_blocks_per_round = get_compile_time_arg_val(17);
     constexpr uint32_t cb_w_owner = get_compile_time_arg_val(18);
     constexpr uint32_t w_share_den = get_compile_time_arg_val(19);
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr uint32_t cb_tail = get_compile_time_arg_val(20);
+    constexpr auto out_args = TensorAccessorArgs<21>();
     constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto wa_mcast = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("wa_ct_offset"), get_named_compile_time_arg_val("wa_rt_offset")>();
@@ -170,7 +172,12 @@ void kernel_main() {
         }
     }
     if (num_waves_active > 0) {
-        store_wave(num_waves_active - 1);
+        if constexpr (store_on_reader) {
+            moe_store_tail_helper<cb_tail, core_n_tiles>(plan, out_accessor, num_waves_active - 1, group, line);
+        } else {
+            moe_store_tail_owner<cb_output_rows, cb_tail, core_n_tiles>(
+                plan, out_accessor, num_waves_active - 1, group, line);
+        }
     }
     noc_async_write_barrier();
     cb_pop_front(cb_counts_writer, 1);
