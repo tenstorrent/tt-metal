@@ -129,6 +129,11 @@ inline void llk_unpack_A_init(
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             if constexpr (unpack_to_dest) {
                 // Sync-free placer on UNP_DEST (transpose forced off inside); math broadcasts the rows in place.
+                // 32-bit operands only: a 16-bit datum takes the 16-bit tile stride, off the placers' DEST addressing.
+                LLK_ASSERT(
+                    static_cast<DataFormat>(unpack_dst_format[operand_id]) == DataFormat::Float32 ||
+                        static_cast<DataFormat>(unpack_dst_format[operand_id]) == DataFormat::Int32,
+                    "Quasar unpack-to-dest broadcast operand must be Float32 or Int32");
                 _llk_unpack_unary_broadcast_operands_to_dest_init_<BType>(bfd_id);
             } else {
                 _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BType, DST_ACCUM_MODE>(bfd_id, 1);
