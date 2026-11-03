@@ -2139,9 +2139,10 @@
 # 4x4 weight cache (kimi_k3_bh_16dev/4x4_sp1) on every host, then tt-run discovery binds the ranks: it
 # finds the ring order from the cabling, so the hosts can come in any order. Chunks are 2560 tokens,
 # half the 8x4 leg's, so each chip still prefills 640 per chunk. KV is deduped over SP*TP and the leg is
-# traced, both from the kimi_k3 manifest like the 8x4 leg. 124 slots at the 1M window: every trunk stage
-# fit 124 traced in the per-stage capacity probe (two stages per Galaxy via PREFILL_PP_LAYER_OFFSET, a
-# full 1M request at each N), and stage 1, the tightest, ran out of memory at 130 (PR #61481).
+# traced, both from the kimi_k3 manifest like the 8x4 leg. 127 slots at the 1M window: the per-stage
+# capacity probe (two stages per Galaxy via PREFILL_PP_LAYER_OFFSET, a full 1M request at each N) fits 129
+# traced on every stage. Stage 1, the tightest, runs out at 130. 127 keeps two slots of margin, as #63502
+# did on 8x4 (PR #61481).
 - name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
@@ -2150,7 +2151,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    export PREFILL_NUM_USERS=124
+    export PREFILL_NUM_USERS=127
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc4_4x4
   test_type: k3_prefill_runner_93l_4x4
   test_tags: [kimi_k3, runner, kv_cache]
