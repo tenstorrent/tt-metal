@@ -357,35 +357,15 @@ def device_scalar(device: ttnn.Device | ttnn.MeshDevice, value: int) -> ttnn.Ten
     )
 
 
-def export_recurrent(
-    slab: ttnn.Tensor, recurrent: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
+def _copy_entry(
+    source: ttnn.Tensor, destination: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
 ) -> None:
-    """Write one layer's native recurrent carry into slab batch ``slot * num_layers + position`` (captured).
+    """Copy one layer's state between a native carry and slab batch ``slot * num_layers + position`` (captured).
 
-    The native tiles land in the ND slab's segments through logical page ids, as ``fill_cache_for_user_`` put them.
+    Native recurrent tiles land in the ND slab's segments through logical page ids, as ``fill_cache_for_user_`` put
+    them; a native convolution page is one slab segment.
     """
-    ttnn.experimental.kda.indexed_entry_copy(recurrent, slab, slot, index_scale=num_layers, index_offset=position)
-
-
-def export_convolution(
-    slab: ttnn.Tensor, convolution: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
-) -> None:
-    """Write one layer's native convolution tail into slab batch ``slot * num_layers + position`` (captured)."""
-    ttnn.experimental.kda.indexed_entry_copy(convolution, slab, slot, index_scale=num_layers, index_offset=position)
-
-
-def import_recurrent(
-    slab: ttnn.Tensor, recurrent: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
-) -> None:
-    """Read slab batch ``slot * num_layers + position`` into a native recurrent carry (captured)."""
-    ttnn.experimental.kda.indexed_entry_copy(slab, recurrent, slot, index_scale=num_layers, index_offset=position)
-
-
-def import_convolution(
-    slab: ttnn.Tensor, convolution: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
-) -> None:
-    """Read slab batch ``slot * num_layers + position`` into a native convolution tail (captured)."""
-    ttnn.experimental.kda.indexed_entry_copy(slab, convolution, slot, index_scale=num_layers, index_offset=position)
+    ttnn.experimental.kda.indexed_entry_copy(source, destination, slot, index_scale=num_layers, index_offset=position)
 
 
 def _zero_fill(tensor: ttnn.Tensor) -> None:
@@ -500,14 +480,14 @@ class KdaStates:
     def export_layer(self, state: KdaState, slot: ttnn.Tensor, layer_idx: int) -> None:
         """Write one layer's native state into its slot's batch; ``slot`` is read on device (see ``device_scalar``)."""
         position = self.layer_position(layer_idx)
-        export_recurrent(self.recurrent, state.recurrent, slot, self.num_layers, position)
-        export_convolution(self.convolution, state.convolution, slot, self.num_layers, position)
+        _copy_entry(state.recurrent, self.recurrent, slot, self.num_layers, position)
+        _copy_entry(state.convolution, self.convolution, slot, self.num_layers, position)
 
     def import_layer(self, destination: KdaState, slot: ttnn.Tensor, layer_idx: int) -> None:
         """Read one layer's state at ``slot`` into a native carry; ``slot`` is read on device (see ``device_scalar``)."""
         position = self.layer_position(layer_idx)
-        import_recurrent(self.recurrent, destination.recurrent, slot, self.num_layers, position)
-        import_convolution(self.convolution, destination.convolution, slot, self.num_layers, position)
+        _copy_entry(self.recurrent, destination.recurrent, slot, self.num_layers, position)
+        _copy_entry(self.convolution, destination.convolution, slot, self.num_layers, position)
 
     def zero_slot(self, slot: int) -> None:
         """Zero every layer's state at a host ``slot``, ending whatever stream was in flight there.
