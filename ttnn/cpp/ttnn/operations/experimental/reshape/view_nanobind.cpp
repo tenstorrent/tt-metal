@@ -54,6 +54,41 @@ void bind_view(nb::module_& mod) {
                 &ttnn::experimental::view),
             nb::arg("input_tensor"),
             nb::arg("shape")));
+
+    const auto* alias_doc = R"doc(
+        Zero-copy TILE view of an interleaved device tensor's buffer with a new shape and dtype.
+
+        The view shares the input's memory and keeps it alive. The bytes are reinterpreted, not converted, so
+        the view's values are meaningful only for data written through the view.
+
+        The intended input is a paged cache of shape [num_blocks, ...]. Interleaved page p lives on bank
+        p % num_banks, so a block holds the same bytes in the input and in the view only when the block's
+        page count is a multiple of the bank count. alias_view therefore requires:
+
+        * the input to have rank 3 or more, TILE layout and interleaved memory;
+        * the page count of one dim-0 slice of the input to be a multiple of the bank count;
+        * the bytes one dim-0 slice holds on each bank to be a whole number of view pages;
+        * the view to have rank 3 or more, and each of its dim-0 slices to lie inside one dim-0 slice of
+          the input or to cover whole dim-0 slices of the input;
+        * the view to fit inside the input's allocation on every bank.
+
+        Then dim-0 slice i of the input and view pages [i * n, (i + 1) * n) cover the same bytes, where
+        n = (pages of one input slice) * (input page size) / (view page size). Example: on 8 DRAM banks a
+        bfloat16 [N, 1, 1024, 256] input (256 tiles per block) can be viewed as float32 [N, 8, 128, 128]
+        (128 tiles per block). On 7 banks the same view raises.
+
+        Args:
+            * input_tensor: device tensor that owns the buffer.
+            * shape: shape of the view.
+            * dtype: dtype of the view.
+        )doc";
+    ttnn::bind_function<"alias_view", "ttnn.experimental.">(
+        mod,
+        alias_doc,
+        &ttnn::experimental::alias_view,
+        nb::arg("input_tensor"),
+        nb::arg("shape"),
+        nb::arg("dtype"));
 }
 
 }  // namespace ttnn::operations::experimental::reshape::detail
