@@ -20,7 +20,7 @@ namespace ttml::metal::ops::ring_sdpa_fw {
 // a tile or two long). With that, the causal pairs land on the cores exactly as on main. The kernels it
 // runs are the shared sdpa_fw ones, so sdpa_fw_op_test drives this config through the ring steps on one
 // device (the Galaxy ring test is the only multi-device coverage). The chunk knobs for ring come with the
-// cost-based scheduler (PR 2) and its own ring CI run.
+// cost-based scheduler (https://github.com/tenstorrent/tt-metal/pull/62646) and its own ring CI run.
 SDPAForwardProgramConfig ring_chunking(uint32_t seq_len) {
     const uint32_t St = seq_len / tt::constants::TILE_HEIGHT;
     uint32_t Sk_chunk_t = 4U;
