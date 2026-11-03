@@ -23,24 +23,41 @@ struct BlockSpan {
     uint32_t width = 0;
 };
 
+namespace stripe_regions {
+constexpr uint32_t hops_after(uint32_t ring_size, uint32_t hops_before) {
+    return ring_size - 1 - hops_before;
+}
+constexpr uint32_t count(uint32_t ring_size, uint32_t hops_before) {
+    return 1 + std::max(hops_before, hops_after(ring_size, hops_before));
+}
+constexpr uint32_t pieces(uint32_t r, uint32_t ring_size, uint32_t hops_before) {
+    return r == 0 ? 1u : (r <= hops_before ? 1u : 0u) + (r <= hops_after(ring_size, hops_before) ? 1u : 0u);
+}
+constexpr uint32_t blocks(
+    uint32_t r, uint32_t ring_size, uint32_t hops_before, uint32_t piece_tiles, uint32_t N_block_tiles) {
+    return ((pieces(r, ring_size, hops_before) * piece_tiles) + N_block_tiles - 1) / N_block_tiles;
+}
+constexpr uint32_t total_blocks(
+    uint32_t ring_size, uint32_t hops_before, uint32_t piece_tiles, uint32_t N_block_tiles) {
+    uint32_t n = 0;
+    for (uint32_t r = 0; r < count(ring_size, hops_before); r++) {
+        n += blocks(r, ring_size, hops_before, piece_tiles, N_block_tiles);
+    }
+    return n;
+}
+}  // namespace stripe_regions
+
 template <uint32_t N_block_tiles, uint32_t piece_tiles, uint32_t ring_size, uint32_t hops_before>
 struct StripeBlocks {
-    static constexpr uint32_t hops_after = ring_size - 1 - hops_before;
-    static constexpr uint32_t num_regions = 1 + std::max(hops_before, hops_after);
+    static constexpr uint32_t num_regions = stripe_regions::count(ring_size, hops_before);
     static constexpr uint32_t region_pieces(uint32_t r) {
-        return r == 0 ? 1u : (r <= hops_before ? 1u : 0u) + (r <= hops_after ? 1u : 0u);
+        return stripe_regions::pieces(r, ring_size, hops_before);
     }
     static constexpr uint32_t region_blocks(uint32_t r) {
-        return ((region_pieces(r) * piece_tiles) + N_block_tiles - 1) / N_block_tiles;
+        return stripe_regions::blocks(r, ring_size, hops_before, piece_tiles, N_block_tiles);
     }
-    static constexpr uint32_t count_blocks() {
-        uint32_t n = 0;
-        for (uint32_t r = 0; r < num_regions; r++) {
-            n += region_blocks(r);
-        }
-        return n;
-    }
-    static constexpr uint32_t num_blocks = count_blocks();
+    static constexpr uint32_t num_blocks =
+        stripe_regions::total_blocks(ring_size, hops_before, piece_tiles, N_block_tiles);
 
     static BlockSpan span(uint32_t n_block_iter) {
         uint32_t first_piece = 0;

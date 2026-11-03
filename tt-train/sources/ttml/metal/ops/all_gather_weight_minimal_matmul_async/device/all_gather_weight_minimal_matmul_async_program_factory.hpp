@@ -18,18 +18,14 @@ struct AllGatherWeightMinimalMatmulAsyncProgramFactory {
         tt::tt_metal::KernelHandle in1_sender_kernels_id{};
         tt::tt_metal::KernelHandle in1_receiver_kernels_id{};
         bool transpose_core_grid{};
-        uint32_t in1_pwb_arg_idx{};
-        std::vector<ttnn::CoreCoord> send_cores;
-        std::vector<tt::tt_metal::KernelHandle> send_reader_kernel_ids;
-        std::vector<tt::tt_metal::KernelHandle> send_writer_kernel_ids;
+        struct Sender {
+            ttnn::CoreCoord core;
+            tt::tt_metal::KernelHandle reader{};
+            tt::tt_metal::KernelHandle writer{};
+        };
+        std::vector<Sender> senders;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
-        ttnn::Tensor& tensor_return_value);
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
         const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,

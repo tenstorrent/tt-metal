@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -24,33 +25,15 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
     const auto& x = tensor_args.input_tensor;
     const auto& w = tensor_args.weight_tensor;
 
-    TT_FATAL(
-        x.storage_type() == ttnn::StorageType::DEVICE && w.storage_type() == ttnn::StorageType::DEVICE,
-        "Input and weight must be device tensors, got storage types {} and {}. Move them to the device first.",
-        x.storage_type(),
-        w.storage_type());
-    TT_FATAL(
-        x.device() == w.device(),
-        "Input and weight must be on the same device: the input is on device {} and the weight on device {}.",
-        x.device()->id(),
-        w.device()->id());
-    TT_FATAL(
-        x.buffer() != nullptr && w.buffer() != nullptr,
-        "Input and weight must be allocated device tensors: the input buffer is {} and the weight buffer is {}.",
-        x.buffer() != nullptr ? "allocated" : "null",
-        w.buffer() != nullptr ? "allocated" : "null");
-    TT_FATAL(
-        x.layout() == Layout::TILE && w.layout() == Layout::TILE,
-        "Input and weight must be in TILE layout, got {} and {}. Convert them with ttnn::to_layout first.",
-        x.layout(),
-        w.layout());
-
-    auto dtype_supported = [](DataType dt) { return dt == DataType::BFLOAT16 || dt == DataType::FLOAT32; };
-    TT_FATAL(
-        dtype_supported(x.dtype()) && dtype_supported(w.dtype()),
-        "Unsupported dtypes: input {} and weight {}. The op supports BFLOAT16 and FLOAT32.",
-        x.dtype(),
-        w.dtype());
+    const auto& pwb = tensor_args.persistent_weight_buffer;
+    constexpr std::string_view kOp = "all_gather_weight_minimal_matmul_async";
+    const DeviceTensorRequirements req{
+        .dtypes = {DataType::BFLOAT16, DataType::FLOAT32}, .memory_layout = std::nullopt};
+    check_device_tensor(x, kOp, "input", req);
+    check_device_tensor(w, kOp, "weight", req);
+    check_device_tensor(pwb, kOp, "persistent_weight_buffer", req);
+    check_same_device(w, x, kOp, "weight", "input");
+    check_same_device(pwb, x, kOp, "persistent_weight_buffer", "input");
 
     const auto& x_shape = x.logical_shape();
     const auto& w_shape = w.logical_shape();
@@ -82,30 +65,17 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
         x_shape[-1],
         w_shape[n_dim]);
 
-    TT_FATAL(attrs.ring_size >= 1, "ring_size must be >= 1, got {}.", attrs.ring_size);
-    TT_FATAL(
-        attrs.ring_index < attrs.ring_size,
-        "ring_index ({}) must be < ring_size ({}).",
-        attrs.ring_index,
-        attrs.ring_size);
     TT_FATAL(
         attrs.topology == ttnn::ccl::Topology::Ring || attrs.topology == ttnn::ccl::Topology::Linear,
         "Unsupported topology {}: the op supports Ring and Linear.",
         attrs.topology);
 
-    const auto& pwb = tensor_args.persistent_weight_buffer;
-    TT_FATAL(pwb.has_value(), "persistent_weight_buffer is required: the op gathers the weight over fabric");
     TT_FATAL(
-        pwb->storage_type() == ttnn::StorageType::DEVICE && pwb->buffer() != nullptr,
-        "persistent_weight_buffer must be an allocated device tensor, got storage type {}.",
-        pwb->storage_type());
-    TT_FATAL(pwb->layout() == Layout::TILE, "persistent_weight_buffer must be in TILE layout, got {}.", pwb->layout());
-    TT_FATAL(
-        pwb->dtype() == w.dtype(),
+        pwb.dtype() == w.dtype(),
         "persistent_weight_buffer dtype ({}) must match the weight dtype ({}).",
-        pwb->dtype(),
+        pwb.dtype(),
         w.dtype());
-    const auto& pwb_shape = pwb->logical_shape();
+    const auto& pwb_shape = pwb.logical_shape();
     TT_FATAL(
         pwb_shape[k_dim] == w_shape[k_dim] && pwb_shape[n_dim] == w_shape[n_dim] * attrs.ring_size,
         "persistent_weight_buffer must be the full weight (N = {}, K = {}) for a weight shard [{}, {}] on a "
@@ -145,19 +115,6 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
         attrs.num_buffers_per_channel >= 1 && attrs.num_buffers_per_channel <= 255,
         "num_buffers_per_channel must be in [1, 255], got {}",
         attrs.num_buffers_per_channel);
-    const auto& mesh_shape = x.device()->shape();
-    TT_FATAL(
-        !attrs.cluster_axis.has_value() || attrs.cluster_axis.value() < mesh_shape.dims(),
-        "cluster_axis ({}) must be < the mesh rank ({})",
-        attrs.cluster_axis.value_or(0),
-        mesh_shape.dims());
-    const uint32_t axis_size = attrs.cluster_axis.has_value() ? mesh_shape[attrs.cluster_axis.value()]
-                                                              : static_cast<uint32_t>(x.device()->num_devices());
-    TT_FATAL(
-        axis_size == attrs.ring_size,
-        "ring_size ({}) must equal the number of devices along cluster_axis ({})",
-        attrs.ring_size,
-        axis_size);
     TT_FATAL(
         attrs.topology != ttnn::ccl::Topology::Ring ||
             (attrs.cluster_axis.has_value() && ttnn::ccl::is_axis_wrap_wired(*x.device(), attrs.cluster_axis.value())),
@@ -191,7 +148,6 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
             "compute_with_storage_grid_size must be at least 2x2, got {}x{}.",
             cfg.compute_with_storage_grid_size.x,
             cfg.compute_with_storage_grid_size.y);
-        const auto device_grid = x.device()->compute_with_storage_grid_size();
         TT_FATAL(
             cfg.compute_with_storage_grid_size.x <= device_grid.x &&
                 cfg.compute_with_storage_grid_size.y <= device_grid.y,
@@ -216,8 +172,7 @@ AllGatherWeightMinimalMatmulAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& x = tensor_args.input_tensor;
     ttnn::Shape output_shape(x.logical_shape());
-    const auto& full_weight = tensor_args.persistent_weight_buffer.value();
-    output_shape[-1] = full_weight.logical_shape()[attrs.transpose_b ? -2 : -1];
+    output_shape[-1] = tensor_args.persistent_weight_buffer.logical_shape()[attrs.transpose_b ? -2 : -1];
     const auto& memory_config = attrs.output_mem_config.value_or(x.memory_config());
     const auto dtype = attrs.output_dtype.value_or(x.dtype());
     return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
@@ -234,22 +189,28 @@ namespace ttnn::prim {
 ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    uint32_t ring_size,
-    uint32_t ring_index,
+    const ttnn::Tensor& persistent_weight_buffer,
+    const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
+    std::optional<uint32_t> cluster_axis,
     ttnn::ccl::Topology topology,
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<ttnn::Tensor>& persistent_weight_buffer,
-    const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
-    std::optional<uint32_t> cluster_axis,
     uint32_t num_links,
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel,
     bool transpose_b) {
     using OperationType =
         ttml::metal::ops::all_gather_weight_minimal_matmul_async::AllGatherWeightMinimalMatmulAsyncDeviceOperation;
+    const auto& mesh_shape = input_tensor.device()->shape();
+    TT_FATAL(
+        !cluster_axis.has_value() || cluster_axis.value() < mesh_shape.dims(),
+        "cluster_axis ({}) must be < the mesh rank ({})",
+        cluster_axis.value_or(0),
+        mesh_shape.dims());
+    const uint32_t ring_size = cluster_axis.has_value() ? mesh_shape[cluster_axis.value()]
+                                                        : static_cast<uint32_t>(input_tensor.device()->num_devices());
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, false, true, true);
@@ -261,7 +222,6 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
             .output_dtype = dtype,
             .compute_kernel_config = kernel_config_val,
             .ring_size = ring_size,
-            .ring_index = ring_index,
             .topology = topology,
             .cluster_axis = cluster_axis,
             .num_links = num_links,

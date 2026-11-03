@@ -22,7 +22,6 @@ struct AllGatherWeightMinimalMatmulAsyncParams {
     std::optional<tt::tt_metal::DataType> output_dtype;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     uint32_t ring_size = 1;
-    uint32_t ring_index = 0;
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     std::optional<uint32_t> cluster_axis;
     uint32_t num_links = 1;
@@ -35,6 +34,6 @@ struct AllGatherWeightMinimalMatmulAsyncParams {
 struct AllGatherWeightMinimalMatmulAsyncInputs {
     ttnn::Tensor input_tensor;
     ttnn::Tensor weight_tensor;
-    std::optional<ttnn::Tensor> persistent_weight_buffer;
+    ttnn::Tensor persistent_weight_buffer;
 };
 }  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async

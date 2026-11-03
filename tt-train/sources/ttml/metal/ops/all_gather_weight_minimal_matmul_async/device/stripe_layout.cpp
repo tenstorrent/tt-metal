@@ -9,7 +9,33 @@
 #include <tt_stl/assert.hpp>
 #include <utility>
 
+#include "kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
+
 namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
+
+namespace {
+
+uint32_t stripe_hops_before(uint32_t ring_size, uint32_t ring_index, bool ring) {
+    if (!ring) {
+        return ring_index;
+    }
+    return ring_size / 2;
+}
+
+uint32_t relay_range(
+    const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring, uint32_t parity_unit) {
+    const uint32_t r = layout.ring_size;
+    if (!ring) {
+        return dir > 0 ? r - 1 - origin : origin;
+    }
+    const uint32_t half = (r - 1) / 2;
+    const bool even = (r % 2) == 0;
+    const bool extended = even && ((dir > 0) == ((c / parity_unit) % 2 == 0));
+    return extended ? half + 1 : half;
+}
+
+}  // namespace
+
 uint32_t StripeLayout::chain_offset(uint32_t c) const {
     const uint32_t base = stripe_tiles / num_chains;
     const uint32_t rem = stripe_tiles % num_chains;
@@ -22,35 +48,8 @@ uint32_t StripeLayout::chain_width(uint32_t c) const {
     return base + (c < rem ? 1u : 0u);
 }
 
-uint32_t StripeLayout::hops_after() const {
-    return ring_size - 1 - hops_before;
-}
-
-uint32_t StripeLayout::num_regions() const {
-    return 1 + std::max(hops_before, hops_after());
-}
-
-uint32_t StripeLayout::region_pieces(uint32_t r) const {
-    return r == 0 ? 1u : (r <= hops_before ? 1u : 0u) + (r <= hops_after() ? 1u : 0u);
-}
-
-uint32_t StripeLayout::region_blocks(uint32_t r) const {
-    return tt::div_up(region_pieces(r) * piece_tiles, N_block_tiles);
-}
-
 uint32_t StripeLayout::n_blocks_per_core() const {
-    uint32_t n = 0;
-    for (uint32_t r = 0; r < num_regions(); ++r) {
-        n += region_blocks(r);
-    }
-    return n;
-}
-
-uint32_t stripe_hops_before(uint32_t ring_size, uint32_t ring_index, bool ring) {
-    if (!ring) {
-        return ring_index;
-    }
-    return ring_size / 2;
+    return stripe_regions::total_blocks(ring_size, hops_before, piece_tiles, N_block_tiles);
 }
 
 StripeLayout make_stripe_layout(
@@ -76,28 +75,16 @@ StripeLayout make_stripe_layout(
     layout.N_block_tiles = N_block_tiles;
     layout.hops_before = stripe_hops_before(ring_size, ring_index, ring);
     layout.stripe_order.push_back(ring_index);
-    for (uint32_t dist = 1; dist < layout.num_regions(); ++dist) {
+    for (uint32_t dist = 1; dist < stripe_regions::count(ring_size, layout.hops_before); ++dist) {
         if (dist <= layout.hops_before) {
             layout.stripe_order.push_back((ring_index + ring_size - dist) % ring_size);
         }
-        if (dist <= layout.hops_after()) {
+        if (dist <= stripe_regions::hops_after(ring_size, layout.hops_before)) {
             layout.stripe_order.push_back((ring_index + dist) % ring_size);
         }
     }
 
     return layout;
-}
-
-uint32_t relay_range(
-    const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring, uint32_t parity_unit) {
-    const uint32_t r = layout.ring_size;
-    if (!ring) {
-        return dir > 0 ? r - 1 - origin : origin;
-    }
-    const uint32_t half = (r - 1) / 2;
-    const bool even = (r % 2) == 0;
-    const bool extended = even && ((dir > 0) == ((c / parity_unit) % 2 == 0));
-    return extended ? half + 1 : half;
 }
 
 RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool ring, uint32_t parity_unit) {

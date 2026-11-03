@@ -19,14 +19,8 @@ struct StripeLayout {
 
     uint32_t chain_offset(uint32_t c) const;
     uint32_t chain_width(uint32_t c) const;
-    uint32_t hops_after() const;
-    uint32_t num_regions() const;
-    uint32_t region_pieces(uint32_t r) const;
-    uint32_t region_blocks(uint32_t r) const;
     uint32_t n_blocks_per_core() const;
 };
-
-uint32_t stripe_hops_before(uint32_t ring_size, uint32_t ring_index, bool ring);
 
 StripeLayout make_stripe_layout(
     uint32_t N_tiles, uint32_t ring_size, uint32_t ring_index, uint32_t num_chains, uint32_t N_block_tiles, bool ring);
@@ -46,9 +40,6 @@ struct RelayPlan {
     std::vector<RelaySegment> forward;
     std::vector<RelaySegment> backward;
 };
-
-uint32_t relay_range(
-    const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring, uint32_t parity_unit);
 
 RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool ring, uint32_t parity_unit);
 }  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
