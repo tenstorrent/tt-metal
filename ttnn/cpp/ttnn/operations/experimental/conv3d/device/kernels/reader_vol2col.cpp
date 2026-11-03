@@ -94,9 +94,7 @@ FORCE_INLINE void read_input_row_staged_from_dram(
     // The factory enables this helper only when DRAM pages are aligned but the split
     // C-in slice is smaller than the DRAM read alignment.  Always stage through an
     // aligned scratch window so every read follows the same alignment-safe path.
-    // Pages are DRAM-read aligned (the factory gates staging on it), so a page base is aligned and
-    // aligning the in-page offset aligns the full source address.  The aligned window ends at or
-    // before the (aligned) page end, so it never crosses into the next page.
+    // Page bases are DRAM-read aligned (factory-gated), so aligning the in-page offset aligns the address.
     const uint32_t src_align_offset = c_in_offset_bytes & alignment_mask;
     const uint32_t aligned_c_in_offset_bytes = c_in_offset_bytes - src_align_offset;
     const uint32_t aligned_read_size = (src_align_offset + size_bytes + alignment_mask) & ~alignment_mask;
