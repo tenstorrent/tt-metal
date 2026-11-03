@@ -112,6 +112,25 @@ def test_in_place_label_follows_the_data(mesh_device, sharded_a):
         assert torch.allclose(got.float(), a_dev.float() + b_dev.float(), rtol=0.02, atol=0.02)
 
 
+def test_output_written_from_its_own_device_tensor_keeps_its_label(mesh_device):
+    """One device tensor of the caller's tensor, added to itself into the caller's tensor: the device tensor shares
+    the caller's buffer under a one-device label of its own, and the caller keeps its label. Only that device is
+    written."""
+    out = _sharded(_wide(mesh_device), mesh_device)
+    label = out.tensor_topology()
+    before = _device_slices(out)
+    shard = ttnn.get_device_tensors(out)[0]
+
+    returned = ttnn.add(shard, shard, output_tensor=out)
+
+    assert returned.tensor_topology() == label
+    assert out.tensor_topology() == label
+    after = _device_slices(out)
+    assert torch.allclose(after[0].float(), 2 * before[0].float(), rtol=0.02, atol=0.02)
+    for got, old in zip(after[1:], before[1:]):
+        assert torch.equal(got, old)
+
+
 def test_label_is_not_part_of_the_program_hash(mesh_device):
     """Outputs that differ only in their labels reuse one cached program and still get their own labels."""
     b = _replicated(_local(), mesh_device)
