@@ -177,6 +177,34 @@ def test_dump_device_shard(tmp_path, mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_op_into_device_shard_keeps_both_labels(tmp_path, mesh_device):
+    """An op that writes into a shard taken out with get_device_tensors keeps the shard's one-device label, and the
+    tensor it was taken from keeps its own and still dumps with both of its shards."""
+    torch_tensor = torch.randint(-8, 8, (2, 32, 32)).to(torch.bfloat16)
+    tensor = ttnn.from_torch(
+        torch_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )
+    label = tensor.tensor_topology()
+    shard = ttnn.get_device_tensors(tensor)[0]
+    shard_label = shard.tensor_topology()
+
+    returned = ttnn.add(shard, shard, output_tensor=shard)
+
+    assert returned.tensor_topology() == shard_label
+    assert shard.tensor_topology() == shard_label
+    assert tensor.tensor_topology() == label
+    file_name = tmp_path / "tensor.tensorbin"
+    ttnn.dump_tensor(file_name, tensor)
+    loaded = _load_shards(file_name)
+    assert len(loaded) == 2
+    torch.testing.assert_close(loaded[0], 2 * torch_tensor[0:1], rtol=0, atol=0)
+    torch.testing.assert_close(loaded[1], torch_tensor[1:2], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
 def test_dump_tensor_allocated_on_host(tmp_path, mesh_device):
     """allocate_tensor_on_host labels its tensor over every device of the mesh, so it dumps as the tensor it holds
     once a replicated device tensor has been read into it."""
