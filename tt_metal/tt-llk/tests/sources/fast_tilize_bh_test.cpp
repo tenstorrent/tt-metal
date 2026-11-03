@@ -92,19 +92,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 formats.unpack_B_dst,
                 ckernel::DEFAULT_TENSOR_SHAPE,
                 ckernel::DEFAULT_TENSOR_SHAPE);
-            _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
+            _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, ckernel::DEFAULT_TENSOR_SHAPE);
         }
         {
             START_PERF_MEASURE("TILE_LOOP")
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_tilize_(
-                    L1_ADDRESS(buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, FACE_R_DIM, 4 /* num_faces */, false /* narrow_tile */);
+                _llk_unpack_tilize_(L1_ADDRESS(buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, ckernel::DEFAULT_TENSOR_SHAPE);
             }
         }
         {
             ZONE_SCOPED("UNINIT")
-            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, 4 /* num_faces */));
+            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, ckernel::DEFAULT_TENSOR_SHAPE);
         }
         return;
     }
