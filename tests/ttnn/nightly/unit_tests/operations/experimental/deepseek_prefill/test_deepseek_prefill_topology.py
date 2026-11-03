@@ -248,13 +248,18 @@ def _meta_sharded_2d(mesh_device, values):
 
 
 def _config_tensor(mesh_device, config_mapper, sp_factor):
-    """Per-device [1, 2] uint32 ROW_MAJOR DRAM config row under a collapsed 1-D label."""
+    """Per-device [1, 2] uint32 ROW_MAJOR DRAM config row under a collapsed 1-D label, or one placement per mesh axis
+    (``shard_2d``)."""
     if config_mapper == "replicate_1d":
         return _replicated(
             mesh_device,
             torch.zeros((1, 2), dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+    if config_mapper == "shard_2d":
+        return _sharded_2d_along_cols(
+            mesh_device, torch.zeros((sp_factor, 2), dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
     assert config_mapper == "shard_1d"
     # One row per chip along the SP axis (the production labelling, collapsed to 1-D on a 1x2 mesh).
@@ -273,12 +278,13 @@ def _read_rows(config):
 
 
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
-@pytest.mark.parametrize("config_mapper", ["replicate_1d", "shard_1d"])
+@pytest.mark.parametrize("config_mapper", ["replicate_1d", "shard_1d", "shard_2d"])
 def test_moe_padding_config_topology(mesh_device, config_mapper):
     """config carries a collapsed 1-D label; the first call uses replicated metadata (production), the second
     2-D-sharded metadata with a different ``actual_end`` per device. ``shard_1d`` (the production labelling): the
     metadata is sharded only where the config already is, so the config keeps its 1-D label although the union
-    would be the 2-D one. ``replicate_1d``: every device computes a different row, so the config takes the
+    would be the 2-D one; ``shard_2d``, the same split with one placement per mesh axis, keeps its label too.
+    ``replicate_1d``: every device computes a different row, so the config takes the
     metadata's 2-D label on both handles. The per-chip rows match the host reference for each device's own
     ``actual_end`` either way, and the second call is a program-cache hit. The SP axis is mesh axis 1.
     """
@@ -291,7 +297,8 @@ def test_moe_padding_config_topology(mesh_device, config_mapper):
     config_ref = _config_tensor(mesh_device, config_mapper, sp_factor)
     topology_before = repr(config.tensor_topology())
     assert config.tensor_topology() == config_ref.tensor_topology()
-    assert list(config.tensor_topology().distribution_shape()) == [mesh_device.get_num_devices()]
+    expected_distribution = list(mesh_device.shape) if config_mapper == "shard_2d" else [mesh_device.get_num_devices()]
+    assert list(config.tensor_topology().distribution_shape()) == expected_distribution
 
     mesh_device.enable_program_cache()
     mesh_device.clear_program_cache()
@@ -341,16 +348,17 @@ def test_moe_padding_config_topology(mesh_device, config_mapper):
         # Topology-blind program cache: same structural hash, so a hit.
         assert mesh_device.num_program_cache_entries() == entries
 
-        if config_mapper == "shard_1d":
-            assert repr(out.tensor_topology()) == topology_before, out.tensor_topology()
-            assert repr(config.tensor_topology()) == topology_before, config.tensor_topology()
-            assert out.tensor_topology() == config_ref.tensor_topology()
-            assert out.tensor_topology() != start_t.tensor_topology()  # not the union
-            assert list(out.tensor_topology().distribution_shape()) == [mesh_device.get_num_devices()]
-        else:
+        if config_mapper == "replicate_1d":
             assert out.tensor_topology() == start_t.tensor_topology(), out.tensor_topology()
             assert config.tensor_topology() == start_t.tensor_topology(), config.tensor_topology()
             assert repr(out.tensor_topology()) != topology_before
+        else:
+            assert repr(out.tensor_topology()) == topology_before, out.tensor_topology()
+            assert repr(config.tensor_topology()) == topology_before, config.tensor_topology()
+            assert out.tensor_topology() == config_ref.tensor_topology()
+        if config_mapper == "shard_1d":
+            assert out.tensor_topology() != start_t.tensor_topology()  # not the union
+            assert list(out.tensor_topology().distribution_shape()) == [mesh_device.get_num_devices()]
 
         counts, sides = _read_rows(out)
         assert counts == expected
