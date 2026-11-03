@@ -90,11 +90,10 @@ def _pack_wqkv_bias(
     head_dim: int,
     padded_head_dim: int,
 ) -> torch.Tensor:
-    q_b, k_b = _rope_head_order(q_b, num_heads, head_dim), _rope_head_order(k_b, num_heads, head_dim)
-    b = torch.stack([q_b, k_b, v_b], dim=0).to(torch.bfloat16)  # (3, num_heads*head_dim)
-    b = b.view(3, num_heads, head_dim)
-    b = F.pad(b, (0, padded_head_dim - head_dim))
-    return b.reshape(3 * num_heads * padded_head_dim).contiguous()
+    """Pack separate q/k/v Linear biases into one bias of the packed wqkv: _pack_wqkv_weight on one-column tensors.
+    Returns [3*num_heads*padded_head_dim]."""
+    packed = _pack_wqkv_weight(q_b[:, None], k_b[:, None], v_b[:, None], num_heads, head_dim, padded_head_dim)
+    return packed.reshape(-1)
 
 
 def _pad_wo_weight(

@@ -16,8 +16,9 @@ from typing import Tuple
 import torch
 
 import ttnn
-from models.demos.minimax_m3.reference.vision import rope_cos_sin
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, rope_cos_sin
 from models.demos.minimax_m3.tt.vision.common import to_device
+from models.tt_transformers.tt.rope import RotaryEmbedding
 
 
 def rope_cos_sin_padded(
@@ -30,23 +31,25 @@ def rope_cos_sin_padded(
     """
     cos, sin = rope_cos_sin(grid_thw, head_dim, theta, spatial_merge_size)  # (L, 78)
     num_patches, rot_dim = cos.shape
-    half = rot_dim // 2
     cos_padded = torch.ones(num_patches, padded_head_dim, dtype=cos.dtype)
     sin_padded = torch.zeros(num_patches, padded_head_dim, dtype=sin.dtype)
-    # Each angle twice in a row, as tt_transformers' RotaryEmbedding.permute_to_meta_format lays them out.
-    # repeat_interleave(2) gives the same tables but takes more host time.
-    cos_padded[:, :rot_dim] = torch.stack((cos[:, :half], cos[:, :half]), dim=-1).flatten(-2)
-    sin_padded[:, :rot_dim] = torch.stack((sin[:, :half], sin[:, :half]), dim=-1).flatten(-2)
+    # Each angle twice in a row, (1, 1, L, 78).
+    cos_pairs, sin_pairs = RotaryEmbedding.permute_to_meta_format(cos, sin)
+    cos_padded[:, :rot_dim] = cos_pairs[0, 0]
+    sin_padded[:, :rot_dim] = sin_pairs[0, 0]
     return cos_padded, sin_padded
 
 
 def rope_tensors(
-    mesh_device, grid_thw: torch.Tensor, head_dim: int, padded_head_dim: int, theta: float, spatial_merge_size: int
+    mesh_device, grid_thw: torch.Tensor, config: MiniMaxM3VisionConfig, padded_head_dim: int
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    """The tables of rope_cos_sin_padded on mesh_device, new tensors that the caller owns.
+    """The tables of rope_cos_sin_padded on mesh_device for the head dim, RoPE theta and merge size of config, new
+    tensors that the caller owns.
 
     Shaped (1, 1, L, padded_head_dim) so the op broadcasts them over the heads, and bfloat16, the only dtype
     rotary_embedding_llama takes.
     """
-    cos, sin = rope_cos_sin_padded(grid_thw, head_dim, padded_head_dim, theta, spatial_merge_size)
+    cos, sin = rope_cos_sin_padded(
+        grid_thw, config.head_dim, padded_head_dim, config.rope_theta, config.spatial_merge_size
+    )
     return tuple(to_device(table.view(1, 1, *table.shape), mesh_device) for table in (cos, sin))

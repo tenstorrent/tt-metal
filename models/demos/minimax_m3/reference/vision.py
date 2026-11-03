@@ -309,14 +309,14 @@ class MiniMaxM3VisionEncoder(nn.Module):
                 module.bias.normal_(0.0, std, generator=g)
         return self
 
-    def load_hf_state_dict(self, state_dict: Dict[str, torch.Tensor], strict: bool = True) -> "MiniMaxM3VisionEncoder":
+    def load_hf_state_dict(self, state_dict: Dict[str, torch.Tensor]) -> "MiniMaxM3VisionEncoder":
         """Load weights in the Hugging Face MiniMaxM3VLModel key layout (vision_tower.*, multi_modal_projector.*).
 
         Other keys (the language model) are skipped, and so are layers past num_hidden_layers, so a shorter
         reference can take the first layers of the checkpoint. A vision_tower.* key outside the patch embed,
         pre_layrnorm and layers, such as a final LayerNorm or a learned position embedding, raises ValueError;
-        with strict, load_state_dict raises for any other weight the reference does not have, such as an unknown
-        multi_modal_projector.* one. A patch embed weight flattened to (hidden, patch_dim) is reshaped back to the
+        load_state_dict, which is strict, raises for any other weight the reference does not have, such as an unknown
+        multi_modal_projector.* one, and for any weight of the reference that is missing. A patch embed weight flattened to (hidden, patch_dim) is reshaped back to the
         Conv3d layout.
         """
         own, unmapped = {}, []
@@ -333,7 +333,7 @@ class MiniMaxM3VisionEncoder(nn.Module):
             own[name] = value
         if unmapped:
             raise ValueError(f"vision tower weights with no place in the reference: {sorted(unmapped)}")
-        self.load_state_dict(own, strict=strict)
+        self.load_state_dict(own, strict=True)
         return self
 
     def hf_state_dict(self) -> Dict[str, torch.Tensor]:

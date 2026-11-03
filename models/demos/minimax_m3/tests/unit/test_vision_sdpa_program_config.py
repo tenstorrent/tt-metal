@@ -29,6 +29,8 @@ from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
 from models.demos.minimax_m3.tt.vision.common import sdpa_program_config
 
+from .vision_helpers import grid_device
+
 CONFIG = MiniMaxM3VisionConfig()
 NUM_HEADS, PADDED_HEAD_DIM = CONFIG.num_attention_heads, nearest_32(CONFIG.head_dim)
 # The q chunk per core grid and patch count (h16w16, h32w32, h34w46, h40w54 and h48w48). In the comments, the query
@@ -59,20 +61,15 @@ Q_CHUNKS = {
 }
 
 
-def _device(x: int, y: int):
-    """Stands in for the mesh device: the program configs only ask it for its compute grid."""
-    return SimpleNamespace(compute_with_storage_grid_size=lambda: ttnn.CoreCoord(x, y))
-
-
 def test_vision_sdpa_program_config_q_chunks():
     """The q chunks of Q_CHUNKS with k chunks of 128 on the whole grid; changing a config leaves the next call's."""
     for (x, y), q_chunks in Q_CHUNKS.items():
         for patches, q_chunk in q_chunks.items():
-            config = sdpa_program_config(_device(x, y), patches, NUM_HEADS)
+            config = sdpa_program_config(grid_device(x, y), patches, NUM_HEADS)
             grid = config.compute_with_storage_grid_size
             assert (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y) == (q_chunk, 128, x, y), (x, y, patches)
             config.q_chunk_size = 32
-            assert sdpa_program_config(_device(x, y), patches, NUM_HEADS).q_chunk_size == q_chunk, (x, y, patches)
+            assert sdpa_program_config(grid_device(x, y), patches, NUM_HEADS).q_chunk_size == q_chunk, (x, y, patches)
 
 
 @pytest.mark.parametrize("patches", [1564, 2304])
@@ -80,7 +77,7 @@ def test_vision_attention_sdpa_call(monkeypatch, patches):
     """On a 12x10 grid the attention's SDPA gets the config of its patch count (q chunks of 256 at 1564 patches, 160
     at 2304) and output_concat_heads=True. Its output goes to the output projection as it is and is freed after it;
     nlp_concat_heads never runs."""
-    device, events = _device(12, 10), []  # events: (op, inputs, keyword arguments, output)
+    device, events = grid_device(12, 10), []  # events: (op, inputs, keyword arguments, output)
 
     def tensor(*shape):
         """A device tensor stand-in: its shape, padded to whole tiles, and its device."""

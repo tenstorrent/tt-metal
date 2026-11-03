@@ -126,14 +126,7 @@ class M3VLVisionModel(LightweightModule):
 
     def _stage_rope(self, image_grid_thw: torch.Tensor):
         """New cos and sin tables of the grid on device (rope_tensors), which the caller owns."""
-        return rope_tensors(
-            self.device,
-            image_grid_thw,
-            head_dim=self.config.head_dim,
-            padded_head_dim=self.padded_head_dim,
-            theta=self.config.rope_theta,
-            spatial_merge_size=self.config.spatial_merge_size,
-        )
+        return rope_tensors(self.device, image_grid_thw, self.config, self.padded_head_dim)
 
     def _cached_rope(self, image_grid_thw: torch.Tensor):
         """The cos and sin tables of the grid, staged with its first image and kept for the next images of that grid.

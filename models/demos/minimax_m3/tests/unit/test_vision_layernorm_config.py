@@ -12,12 +12,12 @@ Run:
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import ttnn
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
+
+from .vision_helpers import grid_device
 
 
 def test_vision_layernorm_compute_config(monkeypatch):
@@ -44,8 +44,7 @@ def test_vision_layernorm_compute_config(monkeypatch):
         projector_hidden_size=32,
         text_hidden_size=32,
     )
-    mesh_device = SimpleNamespace(compute_with_storage_grid_size=lambda: ttnn.CoreCoord(12, 10))
-    model = M3VLVisionModel.from_torch(mesh_device, MiniMaxM3VisionEncoder(config))
+    model = M3VLVisionModel.from_torch(grid_device(12, 10), MiniMaxM3VisionEncoder(config))
 
     norms = [model.pre_layrnorm] + [norm for block in model.blocks for norm in (block.layer_norm1, block.layer_norm2)]
     assert len(built) == len(norms), f"{len(built)} LayerNorms built, {len(norms)} in pre_layrnorm and the blocks"
