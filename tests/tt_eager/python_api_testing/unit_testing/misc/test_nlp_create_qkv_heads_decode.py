@@ -615,10 +615,10 @@ def test_create_heads_width_shard_must_cover_fused_width(
         return
 
     q, k, v = run()
-    q_torch = ttnn.to_torch(q)[:, :batch, :n_local_heads, :]
-    k_torch = ttnn.to_torch(k)[:, :batch, :n_local_kv_heads, :]
-    v_torch = ttnn.to_torch(v)[:, :batch, :n_local_kv_heads, :]
-    ref = proj_output[0, 0].reshape(batch, -1, head_dim)
+    q_torch = ttnn.to_torch(q).float()[:, :batch, :n_local_heads, :]
+    k_torch = ttnn.to_torch(k).float()[:, :batch, :n_local_kv_heads, :]
+    v_torch = ttnn.to_torch(v).float()[:, :batch, :n_local_kv_heads, :]
+    ref = proj_output[0, 0].reshape(batch, -1, head_dim).float()
     assert torch.allclose(q_torch, ref[:, :n_local_heads].unsqueeze(0), atol=1e-2)
     assert torch.allclose(k_torch, ref[:, n_local_heads : n_local_heads + n_local_kv_heads].unsqueeze(0), atol=1e-2)
     assert torch.allclose(v_torch, ref[:, n_local_heads + n_local_kv_heads :].unsqueeze(0), atol=1e-2)
