@@ -409,7 +409,7 @@ class TtRTDetrCSPRepLayer:
         )
         self.bottlenecks = []
         bottleneck_spec = self.conv1.output_spec
-        for ix in range(3):
+        for ix in range(len(parameters.bottlenecks)):
             bottleneck = TtRTDetrRepVggBlock(
                 config=config,
                 parameters=parameters.bottlenecks[ix],
