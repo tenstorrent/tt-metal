@@ -16,13 +16,21 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock
+from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
+
+# Any served per-device row count gives the output heads the same generic blocking (M_tiles >= 8).
+_HEAD_CONFIG_ROWS = 4736
+
+# all_gather_async workers per link on the dynamic-length path: the op's byte-based pick for every served
+# length (the audio gather clears its 256 KB/link threshold by 1.2 %), pinned so the key cannot move.
+_DYNAMIC_AG_WORKERS_PER_LINK = 4
 
 
 class MiniMaxH3TimestepEmbedding(Module):
@@ -76,12 +84,16 @@ class MiniMaxH3AdaLayerNormOut(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         fsdp_mesh_axis: int | None = None,
+        dynamic_length: bool = False,
+        norm_row_capacity: int | None = None,
     ) -> None:
         super().__init__()
 
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
         self.hidden_local = hidden_size // self.tp_factor
+        # Dynamic-length path: ROW_MAJOR gather tables (no untilize per gather) and a capacity-sized norm.
+        self.dynamic_length = dynamic_length
 
         self.norm = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -90,6 +102,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            **({"row_capacity": norm_row_capacity} if dynamic_length else {}),
         )
         self.linear = ColParallelLinear(
             time_embed_dim,
@@ -137,10 +150,13 @@ class MiniMaxH3AdaLayerNormOut(Module):
             table = ttnn.slice(projected, [0, 0, 0, p * self.hidden_local], [1, 1, rows, (p + 1) * self.hidden_local])
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
-            tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
+            tables.append(table if self.dynamic_length else ttnn.to_layout(table, ttnn.TILE_LAYOUT))
 
         def gather(table: ttnn.Tensor) -> ttnn.Tensor:
-            return ttnn.unsqueeze(ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT), 0)
+            return ttnn.unsqueeze(
+                ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length),
+                0,
+            )
 
         shift, scale = gather(tables[0]), gather(tables[1])
         return ttnn.add(ttnn.mul(self.norm(hidden), ttnn.add(scale, 1.0)), shift)
@@ -209,15 +225,22 @@ class MiniMaxH3Transformer3DModel(Module):
         is_fsdp: bool = False,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        dynamic_length: bool = False,
     ) -> None:
+        """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
+        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour."""
         super().__init__()
 
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        self.dynamic_length = dynamic_length
+        # Per-device row capacity of the fused norms on the dynamic-length path (the K/V gather capacity / SP).
+        norm_row_capacity = None
+        if dynamic_length and kv_gather_capacity is not None:
+            norm_row_capacity = kv_gather_capacity // parallel_config.sequence_parallel.factor
         self._temb_state = StateTensor()
-        self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
         # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
@@ -309,6 +332,8 @@ class MiniMaxH3Transformer3DModel(Module):
                     is_fsdp=is_fsdp,
                     kv_gather_capacity=kv_gather_capacity,
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+                    dynamic_length=dynamic_length,
+                    norm_row_capacity=norm_row_capacity,
                 )
                 for _ in range(num_layers)
             ]
@@ -324,9 +349,18 @@ class MiniMaxH3Transformer3DModel(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            dynamic_length=dynamic_length,
+            norm_row_capacity=norm_row_capacity,
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
+        # The heads' generic blocking is the same for every served length; resolve it once so the
+        # dynamic-length path neither scans the tables nor takes the small-M 1D branch per call.
+        self._head_configs: dict[str, ttnn.MinimalMatmulConfig] = {}
+        if dynamic_length:
+            grid = get_matmul_core_grid(mesh_device)
+            for name, width in (("video", video_patch_dim), ("audio", audio_in_channels)):
+                self._head_configs[name] = get_matmul_config(_HEAD_CONFIG_ROWS, hidden_size, width, grid)
 
     def prepare_static_sources(
         self,
@@ -448,6 +482,11 @@ class MiniMaxH3Transformer3DModel(Module):
         alignment = self.sp_factor * tile
         if pad_to % alignment:
             raise ValueError(f"pad_to={pad_to} must be a multiple of sp_factor * TILE = {alignment}")
+        if self.dynamic_length and (traced or ttnn.is_trace_capture_active(self.mesh_device)):
+            raise RuntimeError(
+                "dynamic_length is eager-only: the row count is a runtime argument, so a trace captured now would "
+                "replay this length whatever the buffers hold; use the bucketed preset for a traced denoise"
+            )
         # Indices already sharded on SP only need to gather the local rows, so the full-sequence
         # intermediate doesn't need to be materialised
         local_rows = pad_to // self.sp_factor
@@ -488,7 +527,9 @@ class MiniMaxH3Transformer3DModel(Module):
 
         # `ttnn.embedding` takes the `[1, 1, rows, C]` table as is; indices never reach past
         # `total_rows`, so rows beyond it (a smaller table layout than an earlier request) are inert.
-        hidden = ttnn.embedding(as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT)
+        hidden = ttnn.embedding(
+            as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
+        )
         hidden = ttnn.unsqueeze(hidden, 0)
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
@@ -503,15 +544,18 @@ class MiniMaxH3Transformer3DModel(Module):
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)
-        ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
-        ts_state.update(as_indices(timestep_indices), traced=traced)
-        timestep_idx = ts_state.value
+        # Read eagerly by `norm_out` after the traced block loop, so it needs no per-trace state.
+        timestep_idx = as_indices(timestep_indices)
 
         # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
         # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
         rows = temb.shape[2] * MODALITY_NUM
         eye_state = self._eye_states.setdefault(rows, StateTensor())
-        eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+        if self.dynamic_length:
+            eye_state.update(onehot_identity(rows, self.mesh_device), traced=traced)
+        else:
+            eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+        eye = eye_state.value
 
         hidden = self.run_blocks(
             hidden,
@@ -520,7 +564,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_idx,
             rope_cos,
             rope_sin,
-            eye=eye_state.value,
+            eye=eye,
             adaln_tile_map=adaln_tile_map,
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
@@ -532,22 +576,29 @@ class MiniMaxH3Transformer3DModel(Module):
             temb,
             timestep_idx,
         )
+        ag_kwargs = {"num_workers_per_link": _DYNAMIC_AG_WORKERS_PER_LINK} if self.dynamic_length else {}
         if self.tp_factor > 1:
-            hidden = self.ccl_manager.all_gather(hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
+            hidden = self.ccl_manager.all_gather(
+                hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False, **ag_kwargs
+            )
 
-        video_all = self.proj_out(hidden)
-        audio_all = self.audio_proj_out(hidden)
+        video_all = self.proj_out(hidden, matmul_config=self._head_configs.get("video"))
+        audio_all = self.audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
         if self.sp_factor > 1:
             video_all = self.ccl_manager.all_gather(
-                video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+                video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
             audio_all = self.ccl_manager.all_gather(
-                audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+                audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
 
         def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
-            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
+            # runtime_rows keeps the gather's and the TILE table's untilize's programs free of the request's length.
+            gathered = ttnn.embedding(
+                as_indices(indices), table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
+            )
+            return ttnn.unsqueeze(gathered, 0)
 
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
 
