@@ -828,8 +828,7 @@ uint32_t run_prefetcher_pipe_relay(
         distributed::MeshWorkload workload;
         persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
     } else {
-        // Cross-program shape: bind the consumer first so its receiver kernel arms the pipe's
-        // lanes before the sender's slot payload is built at enqueue.
+        // Cross-program shape: the consumer and the sender bind the pipe from separate Programs.
         m2::ProgramSpec consumer_spec{
             .name = "pipe_relay_consumer",
             .kernels = {consumer.receiver, consumer.compute},
@@ -1663,7 +1662,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDMSender_AllFlows_2P1C) {
 }
 
 // 2 sender DMs is partition-R (needs R>=2). This test is lane credits on 1S×1R: the receiver
-// kernel runs P=2 threads (arming two credit lanes when its Program binds), while a single
+// kernel runs P=2 threads (the pipe is carved with two credit lanes), while a single
 // sender DM stripes pages_sent across lanes. (Sharing one receiver across sender DMs is deferred.)
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P2R_1S1R) {
     if (!is_quasar_arch()) {
@@ -3194,7 +3193,6 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiPipeAccessor_CrossProgram_2S2R
         return args;
     };
 
-    // Receiver Program first: binding its receivers arms the pipes' lanes before any sender runs.
     RelayConsumerSpecs consumer = make_relay_consumer(
         {name_a, name_b},
         RelayConsumerParams{
