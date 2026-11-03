@@ -320,6 +320,11 @@ def test_moe_padding_config_topology(mesh_device, config_mapper):
 
         # The metadata now carries a 2-D shard label, with a different actual_end on every device.
         isl_per_device = [40, 72][:sp_factor]
+        expected = [
+            _sequential_counts(isl, sp_factor, tokens_per_chip)[chip] for chip, isl in enumerate(isl_per_device)
+        ]
+        single_value_rows = [_sequential_counts(isl, sp_factor, tokens_per_chip) for isl in isl_per_device + [isl_1]]
+        assert expected not in single_value_rows, "precondition: no single actual_end gives the per-device rows"
         start_t = _meta_sharded_2d(mesh_device, [0] * sp_factor)
         end_t = _meta_sharded_2d(mesh_device, isl_per_device)
         assert list(start_t.tensor_topology().distribution_shape()) == list(mesh_device.shape)
@@ -348,11 +353,7 @@ def test_moe_padding_config_topology(mesh_device, config_mapper):
             assert repr(out.tensor_topology()) != topology_before
 
         counts, sides = _read_rows(out)
-        expected = [
-            _sequential_counts(isl, sp_factor, tokens_per_chip)[chip] for chip, isl in enumerate(isl_per_device)
-        ]
         assert counts == expected
-        assert len(set(counts)) > 1, "precondition: the per-device metadata must produce different rows"
         assert sides == [pad_side] * sp_factor
     finally:
         mesh_device.disable_and_clear_program_cache()
