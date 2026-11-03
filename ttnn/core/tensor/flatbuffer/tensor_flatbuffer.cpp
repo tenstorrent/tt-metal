@@ -6,7 +6,7 @@
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -65,7 +65,15 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
     switch (spec.data_type()) {
         case tt::tt_metal::DataType::UINT32:
         case tt::tt_metal::DataType::BFLOAT8_B:
-        case tt::tt_metal::DataType::BFLOAT4_B: {
+        case tt::tt_metal::DataType::BFLOAT4_B:
+        case tt::tt_metal::DataType::MXFP8_E4M3:
+        case tt::tt_metal::DataType::MXFP8_E5M2:
+        case tt::tt_metal::DataType::MXFP6_E2M3:
+        case tt::tt_metal::DataType::MXFP6_E3M2:
+        case tt::tt_metal::DataType::MXFP4:
+        case tt::tt_metal::DataType::MXINT8:
+        case tt::tt_metal::DataType::MXINT4:
+        case tt::tt_metal::DataType::MXINT2: {
             ttsl::Span<uint32_t> typed_span(reinterpret_cast<uint32_t*>(data.data()), size_bytes / sizeof(uint32_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
