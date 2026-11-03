@@ -34,6 +34,20 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                                                     tt::llrt::BriscFirmwareVariant::Blaze) {
                                 defines.push_back("BLAZE_RUNTIME_RELOAD");
                             }
+                            // BRISC firmware writes RISC_PREFETCH_CTRL once at boot, before it releases the other
+                            // RISCs on the core.
+                            if (params.is_fw) {
+                                auto risc_prefetch_ctrl = params.rtoptions.get_risc_prefetch_ctrl();
+                                // The pinned ttsim release refuses writes to this register, so the arch default is
+                                // skipped there.
+                                if (not risc_prefetch_ctrl.has_value() and
+                                    not params.rtoptions.get_simulator_enabled()) {
+                                    risc_prefetch_ctrl = default_risc_prefetch_ctrl();
+                                }
+                                if (risc_prefetch_ctrl.has_value()) {
+                                    defines.push_back(fmt::format("RISC_PREFETCH_CTRL_VALUE={}", *risc_prefetch_ctrl));
+                                }
+                            }
                             break;
                         case 1: defines.push_back("COMPILE_FOR_NCRISC"); break;
                         default: TT_THROW("Invalid processor id {}", params.processor_id);
@@ -74,19 +88,6 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                 "Unsupported programmable core type {} to query defines",
                 enchantum::to_string(params.core_type));
             break;
-    }
-
-    // BRISC firmware writes RISC_PREFETCH_CTRL once at boot, before it releases the other RISCs on the core.
-    if (params.is_fw and params.core_type == HalProgrammableCoreType::TENSIX and
-        params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) {
-        auto risc_prefetch_ctrl = params.rtoptions.get_risc_prefetch_ctrl();
-        // The pinned ttsim release refuses writes to this register, so the arch default is skipped there.
-        if (not risc_prefetch_ctrl.has_value() and not params.rtoptions.get_simulator_enabled()) {
-            risc_prefetch_ctrl = default_risc_prefetch_ctrl();
-        }
-        if (risc_prefetch_ctrl.has_value()) {
-            defines.push_back(fmt::format("RISC_PREFETCH_CTRL_VALUE={}", *risc_prefetch_ctrl));
-        }
     }
 
     // Index into kernel_config_base[] / mailboxes for the core type of this build.
