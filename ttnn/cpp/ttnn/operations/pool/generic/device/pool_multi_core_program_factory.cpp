@@ -101,8 +101,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
             if (!scalars.empty()) {
                 scalars.back().end = i;
             }
-            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            scalars.push_back({i, std::bit_cast<uint16_t>(bfloat16::truncate(value)), i});
+            const bfloat16 scalar = config.round_scalar_to_nearest ? bfloat16(value) : bfloat16::truncate(value);
+            scalars.push_back({i, std::bit_cast<uint16_t>(scalar), i});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
@@ -263,6 +263,27 @@ std::vector<uint32_t> generate_core_starting_indices(
     return starting_indices;
 }
 
+static DeviceComputeKernelConfig get_pool_compute_kernel_config(
+    tt::ARCH arch,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const FactoryParameters& params,
+    bool return_indices) {
+    const bool indexes_32_bit = return_indices && params.index_format == tt::DataFormat::UInt32;
+    const bool avg_pool_fp32_dest =
+        params.is_avg_pool && (params.is_large_kernel || params.in_ntiles_c <= 4 || arch != tt::ARCH::WORMHOLE_B0);
+    const bool wormhole_fp32_avg_pool = avg_pool_fp32_dest && arch == tt::ARCH::WORMHOLE_B0;
+    return init_device_compute_kernel_config(
+        arch,
+        compute_kernel_config,
+        wormhole_fp32_avg_pool ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4,
+        false,
+        avg_pool_fp32_dest || indexes_32_bit,
+        false,
+        (avg_pool_fp32_dest && !params.is_large_kernel && params.in_ntiles_c > 4) ||
+            (params.is_large_kernel && return_indices) || indexes_32_bit
+    );
+}
+
 static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_impl_new(
     const Tensor& input,
     tt::tt_metal::Buffer* reader_indices_buffer,
@@ -294,7 +315,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const DeviceComputeKernelConfig& device_compute_kernel_config,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used,
     const Layout& output_layout,
@@ -326,7 +347,6 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         "as uint16_t",
         max_in_nhw_per_core);
 
-    const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
     FactoryParameters params = get_factory_parameters(
         num_shards_c,
@@ -340,6 +360,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         in_h,
         in_w,
         output_layout);
+    const uint32_t bf16_scalar = get_bf16_pool_scalar(
+        pool_type, kernel_h, kernel_w, divisor_override, get_fp32_dest_acc_en(device_compute_kernel_config));
     uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
     uint32_t pad_h = pad_t + pad_b;
@@ -908,20 +930,6 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         fast_tilize_cb_id  // 38 - consumer-view alias of pre_tilize_cb_id (full-tile face_geometry)
     };
 
-    // Get device arch for compute kernel config initialization
-    auto device_arch = input.device()->arch();
-
-    // Initialize device compute kernel config with user-provided config or defaults
-    auto device_compute_kernel_config = init_device_compute_kernel_config(
-        device_arch,
-        compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi4,
-        false,                                                             // math_approx_mode
-        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
-        false,                                                             // packer_l1_acc
-        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
-    );
-
     const auto pool_defines_map = get_defines(pool_type);
     KernelDescriptor::Defines compute_defines(pool_defines_map.begin(), pool_defines_map.end());
 
@@ -1161,6 +1169,23 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
     tt::tt_metal::Buffer* reader_indices_buffer = reader_indices_tensor_owner->buffer();
     workload_descriptor.buffers.push_back({reader_indices_tensor_owner, reader_indices_buffer});
 
+    const auto device_compute_kernel_config = get_pool_compute_kernel_config(
+        input.device()->arch(),
+        op_attr.compute_kernel_config_,
+        get_factory_parameters(
+            setup.num_shards_c,
+            input.dtype(),
+            output_tensors[0].dtype(),
+            setup.kernel_h,
+            setup.kernel_w,
+            setup.in_c,
+            op_attr.pool_type_,
+            op_attr.return_indices_,
+            setup.in_h,
+            setup.in_w,
+            op_attr.output_layout_),
+        op_attr.return_indices_);
+
     // For avg-pool, decide whether a single bf16 scalar per core is sufficient.  When it isn't
     // (ceil_mode w/ ceil_pad, or !count_include_pad with non-zero padding, both with no
     // divisor_override), we materialize the per-output-stick scalar config tensor and upload it.
@@ -1198,7 +1223,8 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
             .pad_l = setup.pad_l,
             .pad_r = setup.pad_r,
             .max_out_nhw_per_core = max_out_nhw_per_core,
-            .divisor_override = op_attr.divisor_override_};
+            .divisor_override = op_attr.divisor_override_,
+            .round_scalar_to_nearest = get_fp32_dest_acc_en(device_compute_kernel_config)};
         Tensor config_tensor = create_scalar_config_tensor(
             avg_pool_config,
             input.memory_config().memory_layout(),
@@ -1229,7 +1255,6 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
     // Build the per-coord ProgramDescriptor ONCE and copy it into each
     // coord-range entry to avoid redundant work on multi-coord workloads.
     const auto& pool_type = op_attr.pool_type_;
-    const auto& compute_kernel_config = op_attr.compute_kernel_config_;
     const auto& output_layout = op_attr.output_layout_;
     bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
@@ -1275,7 +1300,7 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
         setup.dilation_h,
         setup.dilation_w,
         setup.num_shards_c,
-        compute_kernel_config,
+        device_compute_kernel_config,
         divisor_override,
         op_attr.memory_used,
         output_layout,
