@@ -125,7 +125,7 @@ class DeepSeekV4HCACompressor:
     def prefetch_weights(self, *, index_sparse: bool = False):
         """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
 
-        Queued kv before gate, the order :meth:`_project` pops them off their shared GCB;
+        Queued kv before gate, the order :meth:`_project` pops them off their shared ring;
         both stay DRAM ND-sharded ``[D, Dh]``, the prefetcher pushing their pages into the
         matmul's in1 buffer. ``index_sparse`` is the CSA indexer trace flag; HCA has no
         indexer, so it is ignored.

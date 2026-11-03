@@ -71,7 +71,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     load_config,
     pipeline_stage_count,
 )
-from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import ENGRAM_WKV_GCB, O_B_GCB, SHARED_DOWN_GCB
+from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import ENGRAM_WKV_RING, O_B_RING, SHARED_DOWN_RING
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_ram_needed
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
@@ -79,9 +79,9 @@ from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
 from models.experimental.deepseek_v4_flash.tt.common import _profile
 from models.experimental.deepseek_v4_flash.tt.decode.attention import CSA_INDEX_BLOCK_SIZE
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
-    DECODE_GCB_GROUP,
-    KV_GCB,
-    Q_A_GCB,
+    DECODE_RING_GROUP,
+    KV_RING,
+    Q_A_RING,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -112,6 +112,7 @@ _DEVICE_SAMPLING = os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "0") not in ("0
 _TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_TEMPERATURE", "0"))
 _SEED = int(os.environ.get("DEEPSEEK_V4_SEED", "1234"))
 _BALANCE_DRAM_BANKS = os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "0") not in ("0", "", "false", "False")
+_USE_PREFETCHER = os.environ.get("DEEPSEEK_V4_USE_PREFETCHER", "1") not in ("0", "", "false", "False")
 
 
 def _pad_to_tile(n: int) -> int:
@@ -194,6 +195,8 @@ def _construct_model(
         int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers)), config.num_hidden_layers
     )
     top_cache = WeightCache(CACHE_DIR) if CACHE_DIR else None
+    if use_prefetcher is None:
+        use_prefetcher = _USE_PREFETCHER
     model = DeepSeekV41Model(
         config,
         loader,
@@ -219,7 +222,7 @@ def _construct_model(
     )
     logger.info(f"built DeepSeekV41Model with {model.num_layers}/{config.num_hidden_layers} layers")
     # One prefetcher session for the whole run rather than one per step: starting the DRISC
-    # senders is not free, and each GCB's ring state carries from one step to the next. The
+    # senders is not free, and each ring's state carries from one step to the next. The
     # caller owns the stack so the session also covers the generation loop. A no-op when the
     # model was built without the prefetcher.
     prefetcher.enter_context(model.prefetcher_session())
@@ -252,7 +255,7 @@ def _assert_decode_parallelism(model: DeepSeekV41Model, tp_size: int, num_stages
 
 
 def _assert_prefetch_rings(model: DeepSeekV41Model) -> None:
-    """The GCB set the prefetched decode streams through, pinned per stage device.
+    """The ring set the prefetched decode streams through, pinned per stage device.
 
     Each device holds at most the shared ring plus the q_a, kv, o_b and shared-down rings, and
     a device with an Engram layer also its wkv ring -- six, all of the DRISC senders' ~six
@@ -260,17 +263,17 @@ def _assert_prefetch_rings(model: DeepSeekV41Model) -> None:
     """
     if not model.use_prefetcher:
         return
-    allowed = set(DECODE_GCB_GROUP) | {Q_A_GCB, KV_GCB, O_B_GCB, SHARED_DOWN_GCB, ENGRAM_WKV_GCB}
+    allowed = set(DECODE_RING_GROUP) | {Q_A_RING, KV_RING, O_B_RING, SHARED_DOWN_RING, ENGRAM_WKV_RING}
     for _, buffers in model._prefetch_buffers_by_device.values():
         assert set(buffers) <= allowed, f"unexpected prefetch rings {sorted(set(buffers) - allowed)}"
-        rings = {id(gcb) for gcb in buffers.values()}
-        limit = 6 if ENGRAM_WKV_GCB in buffers else 5
-        assert len(rings) <= limit, f"{len(rings)} GCBs on one device, expected at most {limit}"
+        rings = {id(pipes) for pipes in buffers.values()}
+        limit = 6 if ENGRAM_WKV_RING in buffers else 5
+        assert len(rings) <= limit, f"{len(rings)} rings on one device, expected at most {limit}"
     for layer in model.layers:
-        q_a_ring = layer.self_attn.q_a_proj.global_cb
+        q_a_ring = layer.self_attn.q_a_proj.prefetcher_pipes
         assert q_a_ring is not None, "q_a must stream through the prefetcher"
-        assert not hasattr(layer.attn_hc.fn, "global_cb"), "attention hyper-connection fn must not use a GCB"
-        assert not hasattr(layer.ffn_hc.fn, "global_cb"), "FFN hyper-connection fn must not use a GCB"
+        assert not hasattr(layer.attn_hc.fn, "prefetcher_pipes"), "attention hyper-connection fn must not use a ring"
+        assert not hasattr(layer.ffn_hc.fn, "prefetcher_pipes"), "FFN hyper-connection fn must not use a ring"
         proj = getattr(layer.mlp.gate, "gate", None)
         if proj is not None and hasattr(proj, "dram_sharded_weight"):
             assert (

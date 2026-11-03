@@ -96,10 +96,10 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache, _lo
 # Column width of one stash buffer. paged_update_cache double-buffers whole rows on one core, so a
 # hidden-wide (5120) row needs ~1.75 MB of circular buffers, more than L1.
 STASH_PIECE = 1024
-# Depth of every drafter ring, the streaming floor. GCBs take the same L1 offset on every core, so the
+# Depth of every drafter ring, the streaming floor. rings take the same L1 offset on every core, so the
 # five rings stack: ~460 KB a core at bfloat8_b, below which fused_experts' bfloat8_b circular buffers
 # (~840 KB) still fit.
-DSPARK_GCB_PAGES = 2
+DSPARK_RING_PAGES = 2
 # Rows of the target's logits ring (one per decode step, at pos % LOGIT_ROWS): a whole tile, so the
 # accept's one-hot gather has no padded K, and a divisor of ring_rows, so the slot follows from the ring's.
 LOGIT_ROWS = 32
@@ -122,11 +122,11 @@ def dspark_prefetch_rings(tp_size: int) -> dict:
     o_b = {**ATTENTION_LAYOUTS["o_b_proj"], "K": ATTENTION_LAYOUTS["o_b_proj"]["K"] // tp_size}
     down = {"K": MOE_LAYOUTS["shared_down_proj"]["K"] // tp_size, "N": MOE_LAYOUTS["shared_down_proj"]["N"]}
     return {
-        "q_a_proj": PrefetchRing("dspark.q_a", (q_a, {**q_a, "K": 512}), DSPARK_GCB_PAGES),
-        "kv_proj": PrefetchRing("dspark.kv", (kv, {**kv, "K": 1024}), DSPARK_GCB_PAGES),
-        "q_b_proj": PrefetchRing("dspark.q_b", (q_b, {**q_b, "K": 256}), DSPARK_GCB_PAGES),
-        "o_b_proj": PrefetchRing("dspark.o_b", (o_b, {**o_b, "K": 512}), DSPARK_GCB_PAGES),
-        "shared_down_proj": PrefetchRing("dspark.shared_down", (down,), DSPARK_GCB_PAGES),
+        "q_a_proj": PrefetchRing("dspark.q_a", (q_a, {**q_a, "K": 512}), DSPARK_RING_PAGES),
+        "kv_proj": PrefetchRing("dspark.kv", (kv, {**kv, "K": 1024}), DSPARK_RING_PAGES),
+        "q_b_proj": PrefetchRing("dspark.q_b", (q_b, {**q_b, "K": 256}), DSPARK_RING_PAGES),
+        "o_b_proj": PrefetchRing("dspark.o_b", (o_b, {**o_b, "K": 512}), DSPARK_RING_PAGES),
+        "shared_down_proj": PrefetchRing("dspark.shared_down", (down,), DSPARK_RING_PAGES),
     }
 
 
@@ -533,7 +533,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
 
     ``weight_dtype`` (attention projections and ``main_proj``) and ``shared_dtype`` (shared expert) size
     the drafter's rings: it runs on a pipeline stage of its own, so with ``use_prefetcher`` it builds its
-    five GCBs (:func:`dspark_prefetch_rings`) on ``device``. The caller owns the prefetcher session, as for
+    five rings (:func:`dspark_prefetch_rings`) on ``device``. The caller owns the prefetcher session, as for
     the decode layers.
 
     The stash (and the one-hot that gathers from it) lives on ``stash_device``, the decode stage holding

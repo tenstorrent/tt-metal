@@ -7,8 +7,8 @@ Standalone port of :mod:`models.experimental.deepseek_v4_flash.dspark`; the only
 importer in the repo is ``tests/test_dspark_ttnn.py`` -- this module is *not* part of the
 decode model. Every learned projection (``main_proj``, Q/K/V/O, SwiGLU, LM head, Markov
 ``W2``, confidence) is a :class:`~..layers.LinearDecode` whose weight streams through one
-shared decode GCB (:func:`~..layers.make_shared_decode_gcb`), so every construction here
-passes ``use_prefetcher=True`` with an explicit ``global_cb`` / ``global_cb_page_bytes``.
+shared decode ring (:func:`~..layers.make_shared_decode_pipes`), so every construction here
+passes ``use_prefetcher=True`` with an explicit ``prefetcher_pipes`` / ``prefetch_page_bytes``.
 
 Letters used below: ``B`` = users decoded per round (1 here), ``gamma`` =
 ``dspark_block_size`` = draft-block length in query rows, ``C`` = injected context length,
@@ -25,7 +25,7 @@ not a matmul epilogue. RoPE is :func:`~.attention._apply_rope`
 draft block as the decode batch and ``share_cache`` so every query sees the same
 injected K/V.
 
-The sequential Markov loop self-queues each step so it does not occupy the GCB FIFO for
+The sequential Markov loop self-queues each step so it does not occupy the ring FIFO for
 ``gamma`` repeats at hoist time; ``prefetch_weights`` therefore covers the parallel
 backbone (plus the LM head) in forward order. Context and draft K/V are concatenated into
 one ``k_proj`` / ``v_proj`` call each so those weights are consumed once per stage,
@@ -59,12 +59,11 @@ from ..common import DeepSeekV4Module, _HIFI4_SDPA
 from ..layers import (
     DeepSeekV4RMSNorm,
     LinearDecode,
-    decode_gcb_page_bytes,
-    make_shared_decode_gcb,
+    decode_pipe_page_bytes,
+    make_shared_decode_pipes,
 )
 from ..system_config import active_system_config
 from ..weight_cache import WeightCache, _as_cache, _load_weight
-
 
 # Kept clear of the two cores the model pipeline hand-off sockets use. Explicit local
 # coordinates also make the traced path usable on a single-device test mesh, where the
@@ -76,7 +75,7 @@ _TRACE_OUTPUT_SOCKET_CORE = (0, 3)
 def _n_blocks_for(N: int, *, tile: int = 32, target: int = 32) -> int:
     """B-core count for a fully width-sharded ``LinearDecode`` of width ``N``; ``[1, target]``.
 
-    Prefetched weights that share a GCB must agree on this number. ``target``
+    Prefetched weights that share a ring must agree on this number. ``target``
     (32) matches the rest of the Flash decode grid; fall back to any divisor of
     ``N`` whose per-core shard is tile-aligned.
     """
@@ -91,12 +90,12 @@ def _n_blocks_for(N: int, *, tile: int = 32, target: int = 32) -> int:
 
 
 def dspark_decode_specs(config: DSparkConfig, n_blocks: int) -> list[dict]:
-    """``decode_weight_layout`` kwargs for every DSpark ``LinearDecode``, in GCB order.
+    """``decode_weight_layout`` kwargs for every DSpark ``LinearDecode``, in ring order.
 
     Backbone first -- the order :meth:`DSparkModel.forward` runs them, each consuming
     ``[1, 1, rows, K]`` and producing ``[1, 1, rows, N]`` -- then the two sequential heads
     that self-queue per draft step. All use the same ``n_blocks`` so they can share one
-    GCB, and that single FIFO is what makes this order load-bearing rather than cosmetic.
+    ring, and that single FIFO is what makes this order load-bearing rather than cosmetic.
     """
     h, qkv, inter, vocab, rank = (
         config.hidden_size,
@@ -187,10 +186,19 @@ class DSparkAttention(DeepSeekV4Module):
     """
 
     def __init__(
-        self, config: DSparkConfig, weights: dict, prefix: str, device, cache, dtype, n_blocks, global_cb, page_bytes
+        self,
+        config: DSparkConfig,
+        weights: dict,
+        prefix: str,
+        device,
+        cache,
+        dtype,
+        n_blocks,
+        prefetcher_pipes,
+        page_bytes,
     ):
         """``prefix`` is the ``mtp.<i>.attn`` state-dict prefix; the four ``[N, K]`` weights
-        it names become :class:`~..layers.LinearDecode`s that all draw on ``global_cb``
+        it names become :class:`~..layers.LinearDecode`s that all draw on ``prefetcher_pipes``
         (``page_bytes``-sized pages, ``n_blocks`` B cores, ``use_rm_hs=False``)."""
         self.device = device
         self.num_heads = config.num_attention_heads
@@ -203,8 +211,8 @@ class DSparkAttention(DeepSeekV4Module):
             dtype=dtype,
             n_blocks=n_blocks,
             use_prefetcher=True,
-            global_cb=global_cb,
-            global_cb_page_bytes=page_bytes,
+            prefetcher_pipes=prefetcher_pipes,
+            prefetch_page_bytes=page_bytes,
             use_rm_hs=False,
         )
         self.q_proj = LinearDecode(weights[f"{prefix}.q_proj.weight"], device, cache.file("q_proj"), K=h, N=qkv, **kw)
@@ -213,7 +221,7 @@ class DSparkAttention(DeepSeekV4Module):
         self.o_proj = LinearDecode(weights[f"{prefix}.o_proj.weight"], device, cache.file("o_proj"), K=qkv, N=h, **kw)
 
     def prefetch_weights(self) -> None:
-        """Queue the ``[N, K]`` q/k/v/o prefetches in forward order -- one GCB FIFO, so
+        """Queue the ``[N, K]`` q/k/v/o prefetches in forward order -- one ring FIFO, so
         order is a contract, not a convenience."""
         self.q_proj.fetch_weights()
         self.k_proj.fetch_weights()
@@ -301,18 +309,18 @@ class DSparkAttention(DeepSeekV4Module):
 
 
 class DSparkMLP(DeepSeekV4Module):
-    def __init__(self, config, weights, prefix, device, cache, dtype, n_blocks, global_cb, page_bytes):
+    def __init__(self, config, weights, prefix, device, cache, dtype, n_blocks, prefetcher_pipes, page_bytes):
         """SwiGLU MLP: ``gate``/``up`` are ``[I, D]`` and ``down`` ``[D, I]`` torch weights
         (``[out, in]``), each a prefetched :class:`~..layers.LinearDecode` sharing
-        ``global_cb`` / ``page_bytes`` over ``n_blocks`` B cores. ``prefix`` is
+        ``prefetcher_pipes`` / ``page_bytes`` over ``n_blocks`` B cores. ``prefix`` is
         ``mtp.<i>.mlp``."""
         h, inter = config.hidden_size, config.intermediate_size
         kw = dict(
             dtype=dtype,
             n_blocks=n_blocks,
             use_prefetcher=True,
-            global_cb=global_cb,
-            global_cb_page_bytes=page_bytes,
+            prefetcher_pipes=prefetcher_pipes,
+            prefetch_page_bytes=page_bytes,
             use_rm_hs=False,
         )
         self.gate_proj = LinearDecode(
@@ -327,7 +335,7 @@ class DSparkMLP(DeepSeekV4Module):
 
     def prefetch_weights(self) -> None:
         """Queue the ``[I, D]`` gate/up and ``[D, I]`` down prefetches in forward order
-        (single GCB FIFO, so order matters)."""
+        (single ring FIFO, so order matters)."""
         self.gate_proj.fetch_weights()
         self.up_proj.fetch_weights()
         self.down_proj.fetch_weights()
@@ -342,7 +350,19 @@ class DSparkMLP(DeepSeekV4Module):
 
 class DSparkStage(DeepSeekV4Module):
     def __init__(
-        self, config, weights, prefix, device, cache, dtype, n_blocks, global_cb, page_bytes, *, has_main, has_heads
+        self,
+        config,
+        weights,
+        prefix,
+        device,
+        cache,
+        dtype,
+        n_blocks,
+        prefetcher_pipes,
+        page_bytes,
+        *,
+        has_main,
+        has_heads,
     ):
         """One MTP stage: pre-norm attention and pre-norm MLP, plus the optional
         context-fusing ``main_proj`` / ``main_norm`` (only when ``has_main``, stage 0) and
@@ -359,7 +379,7 @@ class DSparkStage(DeepSeekV4Module):
             sharded=True,
         )
         self.attn = DSparkAttention(
-            config, weights, f"{prefix}.attn", device, cache.sub("attn"), dtype, n_blocks, global_cb, page_bytes
+            config, weights, f"{prefix}.attn", device, cache.sub("attn"), dtype, n_blocks, prefetcher_pipes, page_bytes
         )
         self.ffn_norm = DeepSeekV4RMSNorm(
             weights[f"{prefix}.ffn_norm.weight"],
@@ -369,7 +389,7 @@ class DSparkStage(DeepSeekV4Module):
             sharded=True,
         )
         self.mlp = DSparkMLP(
-            config, weights, f"{prefix}.mlp", device, cache.sub("mlp"), dtype, n_blocks, global_cb, page_bytes
+            config, weights, f"{prefix}.mlp", device, cache.sub("mlp"), dtype, n_blocks, prefetcher_pipes, page_bytes
         )
         self.main_proj = None
         self.main_norm = None
@@ -384,8 +404,8 @@ class DSparkStage(DeepSeekV4Module):
                 dtype=dtype,
                 n_blocks=n_blocks,
                 use_prefetcher=True,
-                global_cb=global_cb,
-                global_cb_page_bytes=page_bytes,
+                prefetcher_pipes=prefetcher_pipes,
+                prefetch_page_bytes=page_bytes,
                 use_rm_hs=False,
             )
             self.main_norm = DeepSeekV4RMSNorm(
@@ -448,19 +468,19 @@ class DSparkModel(DeepSeekV4Module):
         n_blocks: Optional[int] = None,
         num_prefetch_pages: Optional[int] = None,
     ):
-        """Build every weight on ``device`` and size the one shared decode GCB.
+        """Build every weight on ``device`` and size the one shared decode ring.
 
         ``weights`` maps torch state-dict keys to tensors. ``n_blocks`` defaults to
         :func:`_n_blocks_for` at ``hidden_size``; ``num_prefetch_pages`` to the active
         profile's ``prefetcher.num_prefetch_pages`` and is the ring depth in pages. The
-        GCB page size comes from :func:`~..layers.decode_gcb_page_bytes` over
+        ring page size comes from :func:`~..layers.decode_pipe_page_bytes` over
         :func:`dspark_decode_specs`, so all of these layers can share one prefetch FIFO.
 
         ``embed_tokens`` and ``markov_w1`` stay ROW_MAJOR ``[V, D]`` / ``[V, rank]`` DRAM
         because ``ttnn.embedding`` takes row-major tables; ``cos_cached`` / ``sin_cached``
         are ``[1, 1, max_position_embeddings, Rd]`` TILE DRAM and ``rot`` is the
         ``[Rd, Rd]`` interleaved rotate matrix. ``confidence_proj`` is the ``[1, D+rank]``
-        head weight zero-padded to ``[V, D+rank]`` so it can share the GCB page geometry
+        head weight zero-padded to ``[V, D+rank]`` so it can share the ring page geometry
         with the LM head.
         """
         if n_blocks is None:
@@ -474,9 +494,9 @@ class DSparkModel(DeepSeekV4Module):
         self.weight_dtype = weight_dtype
 
         specs = dspark_decode_specs(config, n_blocks)
-        page_bytes = decode_gcb_page_bytes(specs, weight_dtype)
-        global_cb = make_shared_decode_gcb(device, specs, weight_dtype, num_pages=num_prefetch_pages)
-        self.global_cb = global_cb
+        page_bytes = decode_pipe_page_bytes(specs, weight_dtype)
+        prefetcher_pipes = make_shared_decode_pipes(device, specs, weight_dtype, num_pages=num_prefetch_pages)
+        self.prefetcher_pipes = prefetcher_pipes
         self.page_bytes = page_bytes
 
         self.embed_tokens = ttnn.as_tensor(
@@ -491,8 +511,8 @@ class DSparkModel(DeepSeekV4Module):
             dtype=weight_dtype,
             n_blocks=n_blocks,
             use_prefetcher=True,
-            global_cb=global_cb,
-            global_cb_page_bytes=page_bytes,
+            prefetcher_pipes=prefetcher_pipes,
+            prefetch_page_bytes=page_bytes,
             use_rm_hs=False,
         )
         self.lm_head = LinearDecode(
@@ -511,7 +531,7 @@ class DSparkModel(DeepSeekV4Module):
                     cache.sub(f"mtp.{i}"),
                     weight_dtype,
                     n_blocks,
-                    global_cb,
+                    prefetcher_pipes,
                     page_bytes,
                     has_main=(i == 0),
                     has_heads=(i == last),
@@ -586,7 +606,7 @@ class DSparkModel(DeepSeekV4Module):
 
     def prefetch_weights(self) -> None:
         """Queue the backbone and head weights in the order :meth:`forward` consumes them, so
-        every ``[K, N]`` slab is already in the GCB ring when its matmul asks for it."""
+        every ``[K, N]`` slab is already in the ring when its matmul asks for it."""
         for stage in self.mtp:
             stage.prefetch_weights()
         self.lm_head.fetch_weights()

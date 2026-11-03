@@ -16,7 +16,7 @@
 #include "ttnn/operations/experimental/matmul_decode/packed_weight_spec.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
+#include "ttnn/prefetcher_pipe.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tile.hpp>
@@ -68,19 +68,19 @@ struct MatmulDecodeDeviceOperation {
         int batch = 1;
         int b_blocks = 1;
         int n_blocks = 1;
-        // DRAM-sender GlobalCircularBuffer feeding in1 from the tensor prefetcher.
-        // When set, the weight is a DRAM ND-sharded tensor (one slab per receiver)
-        // and the receiver grid comes from the GCB, not from a legacy shard spec.
-        std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
-        // GCB pages per receiver slab. 1 keeps the whole slab in one page (the GCB must then hold
-        // a slab); > 1 cuts the slab into that many K-blocks and streams them, so the GCB only has
-        // to hold a couple of pages. Must equal the prefetch request's block_count.
-        uint32_t global_cb_k_blocks = 1;
+        // Prefetcher pipes feeding in1 from the tensor prefetcher, one per DRAM bank. When set, the
+        // weight is a DRAM ND-sharded tensor (one slab per receiver) and the receiver grid is the
+        // union of the pipes' receivers, not a legacy shard spec. Full width-sharded only for now.
+        ttnn::PrefetcherPipeList prefetcher_pipes;
+        // Pipe entries per receiver slab. 1 keeps the whole slab in one entry (the ring must then
+        // hold a slab); > 1 cuts the slab into that many K-blocks and streams them, so the ring only
+        // has to hold a couple of entries. Must equal the prefetch request's block_count.
+        uint32_t prefetch_k_blocks = 1;
         // Fused-weight path (see packed_weight_spec.hpp): input tensor B is one large
         // HEIGHT_SHARDED L1 tensor packing many weights, and this describes where this op's
         // weight lives inside it. When set, all weight geometry (grid, slab shape, N, the
         // K/batch cut) comes from here rather than from B's shard spec, and the in1 CB is bound
-        // to B's buffer at the region's byte offset. Mutually exclusive with global_cb.
+        // to B's buffer at the region's byte offset. Mutually exclusive with prefetcher_pipes.
         std::optional<PackedWeightSpec> packed_weight = std::nullopt;
         // Fuse a fabric all-gather of the local N-shard into the same program. ring_size is
         // derived from A's mesh (not a user argument).
@@ -115,8 +115,8 @@ struct MatmulDecodeDeviceOperation {
         uint32_t rms_norm_group_size = 0;
         // Set when input tensor B is a DRAM ND-sharded weight read by the op itself (no GCB):
         // the cores that each load one weight shard into L1, shard p going to the p-th core in
-        // row-major order. The shard layout is the one global_cb expects. Mutually exclusive
-        // with global_cb and packed_weight.
+        // row-major order. The shard layout is the one prefetcher_pipes expects. Mutually exclusive
+        // with prefetcher_pipes and packed_weight.
         std::optional<CoreRangeSet> dram_weight_grid = std::nullopt;
     };
 
@@ -129,7 +129,18 @@ struct MatmulDecodeDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
+    // Two-hub gather, on Metal 2.0. A cache hit rebinds the tensors and pipes from the new call.
     struct FullWidthSharded {
+        static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    };
+
+    // Full width-sharded with `ring_gather`. Shares its kernels with AllGatherFullWidth, so it stays
+    // a ProgramDescriptor factory.
+    struct FullWidthRingGather {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
@@ -146,6 +157,16 @@ struct MatmulDecodeDeviceOperation {
     };
 
     struct PartialWidthSharded {
+        static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    };
+
+    // Partial width-sharded with `ring_gather`, on L1-resident weights only. Kept a
+    // ProgramDescriptor factory alongside FullWidthRingGather.
+    struct PartialWidthRingGather {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
@@ -154,30 +175,35 @@ struct MatmulDecodeDeviceOperation {
     };
 
     struct BatchedWidthSharded {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
-    using program_factory_t =
-        std::variant<FullWidthSharded, AllGatherFullWidth, PartialWidthSharded, BatchedWidthSharded>;
+    using program_factory_t = std::variant<
+        FullWidthSharded,
+        FullWidthRingGather,
+        AllGatherFullWidth,
+        PartialWidthSharded,
+        PartialWidthRingGather,
+        BatchedWidthSharded>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    // The default reflection hash cannot tell two identically shaped GlobalCircularBuffers apart
-    // (GlobalCircularBuffer::attribute_names carries no address), so the GCB's addresses are folded
-    // in on top of everything the default hash already covered. See the .cpp for why that matters.
-    // Note that declaring this opts the op out of attribute-level canonical-key collision
-    // resolution, so cache separation rests on the hash alone.
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
+
+// The mesh coordinates a Metal 2.0 factory dispatches its program to: the whole of tensor_coords, or
+// the part of it in mesh_coords.
+std::vector<ttnn::MeshCoordinateRange> dispatch_ranges(
+    const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
 }  // namespace ttnn::operations::experimental::matmul_decode
 
@@ -188,8 +214,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
-    uint32_t global_cb_k_blocks = 1,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {},
+    uint32_t prefetch_k_blocks = 1,
     const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight = std::nullopt,
     bool all_gather = false,
     const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,

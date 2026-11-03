@@ -25,6 +25,8 @@
 #endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 using std::uint32_t;
 
@@ -69,13 +71,13 @@ ALWI void square_reduce_scalar_tiles(
 
 // C = A @ B per core. full_in0 is sender-major. matmul_block does not reduce over kt_dim; K is accumulated in the loop.
 //
-// With ENABLE_GLOBAL_CB the in1 tiles arrive through a GCB-backed circular buffer instead of a
-// globally-allocated one, so this kernel must actually wait on them and, when done, tell the
-// reader (via the sync CB) that the GCB page can be released.
+// With IN1_PIPE the in1 tiles arrive through a relay over a PrefetcherPipe's ring instead of
+// sitting resident, so this kernel must actually wait on them; popping a page is what lets the
+// reader hand the pipe entry back to the prefetcher.
 //
-// num_k_blocks > 1 means a receiver's slab arrives as that many GCB pages rather than one, so K
-// becomes the outer loop: a page can only be read while it is held, and it is popped before the
-// next arrives. Every output column is therefore still incomplete when its page is released, and
+// num_k_blocks > 1 means a receiver's slab arrives as that many pipe entries ("pages") rather than
+// one, so K becomes the outer loop: a page can only be read while it is held, and it is popped before
+// the next arrives. Every output column is therefore still incomplete when its page is released, and
 // the running sums live in the output CB, where the packer accumulates into them
 // (pack_reconfig_l1_acc). num_k_blocks == 1 leaves the single-page traversal below unchanged: the
 // loop runs once, the packer never switches into accumulate mode, and the tile indexing collapses
@@ -84,47 +86,43 @@ using namespace ckernel;
 void kernel_main() {
     constexpr uint32_t out_block_w = 1;
 
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t N_tiles_per_core = get_compile_time_arg_val(2);
-    constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(4);
+    constexpr uint32_t M_tiles = get_arg(args::M_tiles);
+    constexpr uint32_t K_tiles = get_arg(args::K_tiles);
+    constexpr uint32_t N_tiles_per_core = get_arg(args::N_tiles_per_core);
+    constexpr uint32_t inA_K_tiles_per_core = get_arg(args::inA_K_tiles_per_core);
+    constexpr uint32_t num_k_blocks = get_arg(args::num_k_blocks);
 
     constexpr uint32_t out_block_h = M_tiles;
     constexpr uint32_t in0_block_w = inA_K_tiles_per_core;
 
-    // Named so op fusion can remap them; the reader gathers A into cb_full_in0, which is what
-    // compute reads as its in0.
-    constexpr uint32_t in0_cb_id = get_named_compile_time_arg_val("cb_full_in0");
-    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t sync_cb_id = get_named_compile_time_arg_val("cb_sync");
+    // The reader gathers A into full_in0, which is what compute reads as its in0.
+    constexpr uint32_t in0_cb_id = dfb::full_in0;
+    constexpr uint32_t in1_cb_id = dfb::in1;
+    constexpr uint32_t out_cb_id = dfb::out;
 #ifdef FUSE_RMS_NORM
-    constexpr uint32_t mm_out_cb_id = get_named_compile_time_arg_val("cb_mm_out");
-    constexpr uint32_t rms_local_cb_id = get_named_compile_time_arg_val("cb_rms_local");
-    constexpr uint32_t rms_gathered_cb_id = get_named_compile_time_arg_val("cb_rms_gathered");
-    // Hub only: the scale as produced here, handed to the writer RISC for multicast. Distinct from
-    // cb_rms_scale, which is the multicast destination and is consumed by compute on every producer.
-    constexpr uint32_t rms_scale_src_cb_id = get_named_compile_time_arg_val("cb_rms_scale_src");
-    constexpr uint32_t rms_scale_cb_id = get_named_compile_time_arg_val("cb_rms_scale");
-    constexpr uint32_t rms_reduce_scaler_cb_id = get_named_compile_time_arg_val("cb_rms_reduce_scaler");
-    constexpr uint32_t rms_reduced_cb_id = get_named_compile_time_arg_val("cb_rms_reduced");
+    constexpr uint32_t mm_out_cb_id = dfb::mm_out;
+    constexpr uint32_t rms_local_cb_id = dfb::rms_local;
+    constexpr uint32_t rms_gathered_cb_id = dfb::rms_gathered;
+    // The scale as produced here on a group hub, handed to the writer RISC for distribution. Distinct
+    // from rms_scale, which is the distribution's destination and is consumed by compute on every producer.
+    constexpr uint32_t rms_scale_src_cb_id = dfb::rms_scale_src;
+    constexpr uint32_t rms_scale_cb_id = dfb::rms_scale;
 #ifdef FUSE_RMS_VECTOR_GAMMA
-    constexpr uint32_t rms_gamma_cb_id = get_named_compile_time_arg_val("cb_rms_gamma");
+    constexpr uint32_t rms_gamma_cb_id = dfb::rms_gamma;
 #endif
-    constexpr uint32_t rms_num_groups = get_named_compile_time_arg_val("rms_num_groups");
-    constexpr uint32_t rms_metadata_arg_base = 4;
+    constexpr uint32_t rms_num_groups = get_arg(args::rms_num_groups);
     constexpr uint32_t rms_local_group_arg_words = 6;
 
-    const uint32_t rms_inv_group_size_bits = get_arg_val<uint32_t>(1);
-    const uint32_t rms_epsilon_bits = get_arg_val<uint32_t>(2);
+    constexpr uint32_t rms_inv_group_size_bits = get_arg(args::rms_inv_group_size_bits);
+    constexpr uint32_t rms_epsilon_bits = get_arg(args::rms_epsilon_bits);
 #ifndef FUSE_RMS_VECTOR_GAMMA
-    const uint32_t rms_gamma_bits = get_arg_val<uint32_t>(3);
+    constexpr uint32_t rms_gamma_bits = get_arg(args::rms_gamma_bits);
 #endif
-    const uint32_t rms_local_group_count = get_arg_val<uint32_t>(rms_metadata_arg_base);
-    const uint32_t rms_hub_group_count = get_arg_val<uint32_t>(rms_metadata_arg_base + 1);
-    const uint32_t rms_hub_contributor_count = get_arg_val<uint32_t>(rms_metadata_arg_base + 2);
-    constexpr uint32_t rms_local_groups_arg_base = rms_metadata_arg_base + 3;
+    // This producer's RMS topology, as varargs (see full_width_rms_norm_transport.hpp).
+    const uint32_t rms_local_group_count = get_vararg(0);
+    const uint32_t rms_hub_group_count = get_vararg(1);
+    const uint32_t rms_hub_contributor_count = get_vararg(2);
+    constexpr uint32_t rms_local_groups_arg_base = 3;
     const uint32_t rms_hub_groups_arg_base =
         rms_local_groups_arg_base + rms_local_group_arg_words * rms_local_group_count;
 #else
@@ -134,18 +132,29 @@ void kernel_main() {
     constexpr uint32_t in0_num_tiles = M_tiles * K_tiles;
     constexpr uint32_t num_senders = K_tiles / inA_K_tiles_per_core;
     constexpr uint32_t sender_slice_tiles = M_tiles * inA_K_tiles_per_core;
-    // One GCB page: k_block_tiles whole K-rows of this receiver's slab.
+    // One page: k_block_tiles whole K-rows of this receiver's slab.
     constexpr uint32_t k_block_tiles = K_tiles / num_k_blocks;
     constexpr uint32_t in1_page_tiles = k_block_tiles * N_tiles_per_core;
 
     CircularBuffer in0_cb(in0_cb_id);
     CircularBuffer out_cb(mm_out_cb_id);
-#ifdef ENABLE_GLOBAL_CB
-    CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer sync_cb(sync_cb_id);
+#ifdef IN1_PIPE
+    // Constructing in1 from its relay token snaps it to the pipe's cursor, which carries over from
+    // the previous launch; a CircularBuffer over the bare id would restart at the ring's base.
+    DataflowBuffer in1_relay(dfb::in1);
 #endif
+    CircularBuffer in1_cb(in1_cb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_out_cb_id);
+
+#ifndef IN1_PIPE
+    // A packed weight's slab starts this many tiles into the shard in1 borrows.
+    constexpr uint32_t in1_tile_offset = get_arg(args::in1_tile_offset);
+    if constexpr (in1_tile_offset > 0) {
+        in1_cb.wait_front(in1_tile_offset);
+        in1_cb.pop_front(in1_tile_offset);
+    }
+#endif
 
     in0_cb.wait_front(in0_num_tiles);
 
@@ -163,7 +172,7 @@ void kernel_main() {
 
     out_cb.reserve_back(M_tiles * N_tiles_per_core);
     if constexpr (num_k_blocks == 1) {
-#ifdef ENABLE_GLOBAL_CB
+#ifdef IN1_PIPE
         in1_cb.wait_front(in1_page_tiles);
 #endif
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
@@ -174,10 +183,8 @@ void kernel_main() {
             pack_block_contiguous(0, mm_out_cb_id, N_tiles_per_core);
             tile_regs_release();
         }
-#ifdef ENABLE_GLOBAL_CB
+#ifdef IN1_PIPE
         in1_cb.pop_front(in1_page_tiles);
-        sync_cb.reserve_back(1);
-        sync_cb.push_back(1);
 #endif
     } else {
         // Each page covers k_block_tiles of the reduction, and MVMUL adds into DST without
@@ -186,7 +193,7 @@ void kernel_main() {
         // reduction is whole. This is why streaming needs no packer L1 accumulation here.
         tile_regs_acquire();
         for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-#ifdef ENABLE_GLOBAL_CB
+#ifdef IN1_PIPE
             in1_cb.wait_front(in1_page_tiles);
 #endif
             const uint32_t in0_tile = kb * k_block_tiles;
@@ -195,11 +202,9 @@ void kernel_main() {
             } else {
                 custom_mm_block<layout, false>(in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, N_tiles_per_core);
             }
-#ifdef ENABLE_GLOBAL_CB
-            // This page has been read in full; release the local alias and let the reader ack it.
+#ifdef IN1_PIPE
+            // This page has been read in full; popping it lets the reader hand it back.
             in1_cb.pop_front(in1_page_tiles);
-            sync_cb.reserve_back(1);
-            sync_cb.push_back(1);
 #endif
         }
         tile_regs_commit();
@@ -214,7 +219,7 @@ void kernel_main() {
 
     out_cb.reserve_back(M_tiles * N_tiles_per_core);
     for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-#ifdef ENABLE_GLOBAL_CB
+#ifdef IN1_PIPE
         in1_cb.wait_front(in1_page_tiles);
 #endif
         const uint32_t k_block_base = kb * k_block_tiles;
@@ -236,11 +241,9 @@ void kernel_main() {
             }
             tile_regs_release();
         }
-#ifdef ENABLE_GLOBAL_CB
-        // This page has been read in full; release the local alias and let the reader ack it.
+#ifdef IN1_PIPE
+        // This page has been read in full; popping it lets the reader hand it back.
         in1_cb.pop_front(in1_page_tiles);
-        sync_cb.reserve_back(1);
-        sync_cb.push_back(1);
 #endif
         if constexpr (num_k_blocks > 1) {
             // From here on the packs add to the partial sums the previous pages left behind.
@@ -286,8 +289,8 @@ void kernel_main() {
     for (uint32_t mt = 0; mt < M_tiles; ++mt) {
         for (uint32_t lg = 0; lg < rms_local_group_count; ++lg) {
             const uint32_t fragment_arg = rms_local_groups_arg_base + lg * rms_local_group_arg_words;
-            const uint32_t local_tile_offset = get_arg_val<uint32_t>(fragment_arg);
-            const uint32_t fragment_tile_count = get_arg_val<uint32_t>(fragment_arg + 1);
+            const uint32_t local_tile_offset = get_vararg(fragment_arg);
+            const uint32_t fragment_tile_count = get_vararg(fragment_arg + 1);
             const uint32_t fragment_start = mt * N_tiles_per_core + local_tile_offset;
 
             rms_local_cb.reserve_back(1);
@@ -313,8 +316,8 @@ void kernel_main() {
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
             uint32_t hub_group_arg = rms_hub_groups_arg_base;
             for (uint32_t hg = 0; hg < rms_hub_group_count; ++hg) {
-                const uint32_t contributor_count = get_arg_val<uint32_t>(hub_group_arg++);
-                const uint32_t gathered_slot_base = get_arg_val<uint32_t>(hub_group_arg++);
+                const uint32_t contributor_count = get_vararg(hub_group_arg++);
+                const uint32_t gathered_slot_base = get_vararg(hub_group_arg++);
                 rms_scale_src_cb.reserve_back(1);
                 tile_regs_acquire();
                 sum_gathered_tiles_exact(
@@ -422,8 +425,8 @@ void kernel_main() {
             final_out_cb.reserve_back(N_tiles_per_core);
             for (uint32_t lg = 0; lg < rms_local_group_count; ++lg) {
                 const uint32_t fragment_arg = rms_local_groups_arg_base + lg * rms_local_group_arg_words;
-                const uint32_t local_tile_offset = get_arg_val<uint32_t>(fragment_arg);
-                const uint32_t fragment_tile_count = get_arg_val<uint32_t>(fragment_arg + 1);
+                const uint32_t local_tile_offset = get_vararg(fragment_arg);
+                const uint32_t fragment_tile_count = get_vararg(fragment_arg + 1);
                 for (uint32_t nt = 0; nt < fragment_tile_count; ++nt) {
                     const uint32_t local_tile = local_tile_offset + nt;
                     tile_regs_acquire();

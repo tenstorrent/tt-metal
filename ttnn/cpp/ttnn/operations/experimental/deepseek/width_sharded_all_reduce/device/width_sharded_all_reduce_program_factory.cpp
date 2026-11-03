@@ -16,6 +16,7 @@
 #include <tt-metalium/tile.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -276,8 +277,10 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
             .compile_args = {reduction_cb_index, reduction_CB_tiles}});
     constexpr bool has_work = true;
     if (!output_cores_unused.empty()) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0, 0, 0});
+        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0, 0});
     }
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program, reduction_reader_kernel_id, {static_cast<uint32_t>(semaphore.address())});
 
     auto reduction_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -299,6 +302,8 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = {device_index, src0_cb_index, face_bytes}});
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program, worker_sender_reader_kernel_id, {static_cast<uint32_t>(input_tensor.buffer()->address())});
 
     std::vector<uint32_t> writer_compile_args = {
         device_index,
@@ -320,6 +325,8 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = writer_compile_args});
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program, worker_sender_writer_kernel_id, {static_cast<uint32_t>(semaphore.address())});
 
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
@@ -345,7 +352,6 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
         }
 
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),
             input_tensor_shard_num_pages,
             worker_num_tiles_to_read,
             input_first_core_tile_start_offset,
@@ -374,7 +380,6 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
 
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,
-            semaphore.address(),
             output_tensor_shard_num_pages,
             worker_num_tiles_to_read,
             0,
@@ -416,8 +421,7 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 
-        std::vector<uint32_t> reduction_reader_rt_args = {
-            has_work, reduction_semaphore_ids[link], semaphore.address(), ring_size};
+        std::vector<uint32_t> reduction_reader_rt_args = {has_work, reduction_semaphore_ids[link], ring_size};
         tt::tt_metal::SetRuntimeArgs(
             program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
     }
@@ -444,22 +448,18 @@ void WidthShardedAllReduceMeshWorkloadFactory::override_runtime_arguments(
     Tensor& output_tensor) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-        auto& worker_reader_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
-        auto& worker_writer_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
-        auto& reduction_reader_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.reduction_reader_kernel_id);
-        for (const auto& core : shared_vars.sender_worker_cores) {
-            worker_reader_sender_runtime_args_by_core[core.x][core.y][0] = tensor_args.input.buffer()->address();
-            worker_writer_sender_runtime_args_by_core[core.x][core.y][1] = shared_vars.out_ready_semaphore.address();
-        }
+        const auto semaphore_address = static_cast<uint32_t>(shared_vars.out_ready_semaphore.address());
+        GetCommonRuntimeArgs(
+            program, shared_vars.worker_sender_reader_kernel_id)[ttnn::ccl::AllReduceReaderCommonArgs::input] =
+            tensor_args.input.buffer()->address();
+        GetCommonRuntimeArgs(
+            program, shared_vars.worker_sender_writer_kernel_id)[ttnn::ccl::AllReduceSemaphoreCommonArgs::semaphore] =
+            semaphore_address;
+        GetCommonRuntimeArgs(
+            program, shared_vars.reduction_reader_kernel_id)[ttnn::ccl::AllReduceSemaphoreCommonArgs::semaphore] =
+            semaphore_address;
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_out, *output_tensor.buffer());
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_reduction, *shared_vars.scratch->buffer());
-        for (const auto& cr : shared_vars.output_tensor_cores.ranges()) {
-            for (const auto& core : corerange_to_cores(cr, std::nullopt, true)) {
-                reduction_reader_runtime_args_by_core[core.x][core.y][2] = shared_vars.out_ready_semaphore.address();
-            }
-        }
     }
 }
 

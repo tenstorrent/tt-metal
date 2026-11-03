@@ -12,9 +12,8 @@
 // Ring-gather reader for in0 in partial-width-sharded matmul_decode. Same *closed*-ring
 // pipeline as reader_full_width_ring_gather.cpp, but the destination on every hop is the
 // receiver's cb_full_in0 slot indexed by *sender_id* (not by arrival order). This matches
-// compute_partial_width_sharded.cpp's `in0_tile = sender * sender_slice_tiles + kc_local`
-// addressing, so the existing compute kernel is reused unchanged: it just wait_front's on
-// cb_full_in0 as before.
+// compute_partial_width_ring_gather.cpp's `in0_tile = sender * sender_slice_tiles + kc_local`
+// addressing: compute just wait_front's on cb_full_in0.
 //
 // Because slots are indexed by sender_id (globally unique per shard), every hop writes to
 // the same L1 offset on the successor (cb_full_in0 has identical geometry on every ring
@@ -41,8 +40,7 @@ void kernel_main() {
     constexpr uint32_t sig_sem_id = get_compile_time_arg_val(2);
     constexpr uint32_t full_in0_num_tiles = get_compile_time_arg_val(3);
     // cb_in1 is aliased to the L1-resident weight tensor and has no producer of its own; this
-    // reader publishes it on compute cores so compute's wait_front(cb_in1) resolves. Mirrors
-    // the equivalent one-shot push in reader_partial_width_sharded.cpp's non-GCB branch.
+    // reader publishes it on compute cores so compute's wait_front(cb_in1) resolves.
     constexpr uint32_t in1_slab_num_tiles = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_in0_id = get_named_compile_time_arg_val("cb_in0");
@@ -150,7 +148,7 @@ void kernel_main() {
         cb_full_in0.push_back(full_in0_num_tiles);
         // Publish the L1-resident weight so compute's wait_front(cb_in1) returns. cb_in1 is
         // aliased to the input B tensor (no producer of its own); this is a one-shot logical
-        // "these tiles are already here" push, symmetric with reader_partial_width_sharded.cpp.
+        // "these tiles are already here" push.
         CircularBuffer cb_in1(cb_in1_id);
         cb_in1.reserve_back(in1_slab_num_tiles);
         cb_in1.push_back(in1_slab_num_tiles);

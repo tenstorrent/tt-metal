@@ -74,10 +74,10 @@ public:
     // whole set costs one page per sender core: 384 B at 8 receivers (a 40 B
     // header and 8 NOC XY pairs padded to 128 B, then the SENT and ACKED blocks
     // of 8 L1-aligned slots, 128 B each on their own 64 B lines), so the zone
-    // holds two such sets live on a core at once. The remaining ~92 KB above the
+    // holds five such sets live on a core at once. The remaining ~91 KB above the
     // zone is reported by kernel_working_region_size() so callers placing a
     // co-resident DRISC kernel know how much L1 they have.
-    static constexpr uint32_t kSenderStateZoneSize = 1 * 1024;
+    static constexpr uint32_t kSenderStateZoneSize = 2 * 1024;
 
     explicit DriscL1Arena(ContextId context_id);
     ~DriscL1Arena() = default;

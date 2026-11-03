@@ -63,10 +63,10 @@ from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
-    DECODE_GCB_GROUP,
-    KV_GCB,
-    Q_A_GCB,
-    ROUTER_GATE_GCB,
+    DECODE_RING_GROUP,
+    KV_RING,
+    Q_A_RING,
+    ROUTER_GATE_RING,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
@@ -193,7 +193,7 @@ def _construct_model(
     )
     logger.info(f"built DeepSeekV4Model with {model.num_layers}/{config.num_hidden_layers} layers")
     # One prefetcher session for the whole run rather than one per step: starting the DRISC
-    # senders is not free, and each GCB's ring state carries from one step to the next. The
+    # senders is not free, and each ring's state carries from one step to the next. The
     # caller owns the stack so the session also covers the generation loop. A no-op when the
     # model was built without the prefetcher.
     prefetcher.enter_context(model.prefetcher_session())
@@ -226,7 +226,7 @@ def _assert_decode_parallelism(model: DeepSeekV4Model, tp_size: int, num_stages:
 
 
 def _assert_prefetch_rings(model: DeepSeekV4Model) -> None:
-    """The GCB set the prefetched decode streams through, pinned per stage device.
+    """The ring set the prefetched decode streams through, pinned per stage device.
 
     Each device holds at most the shared ring plus the q_a, kv and router-gate rings (four
     of the DRISC senders' ~six state slots). Both hyper-connections' ``fn`` run
@@ -234,16 +234,16 @@ def _assert_prefetch_rings(model: DeepSeekV4Model) -> None:
     """
     if not model.use_prefetcher:
         return
-    allowed = set(DECODE_GCB_GROUP) | {Q_A_GCB, KV_GCB, ROUTER_GATE_GCB}
+    allowed = set(DECODE_RING_GROUP) | {Q_A_RING, KV_RING, ROUTER_GATE_RING}
     for _, buffers in model._prefetch_buffers_by_device.values():
         assert set(buffers) <= allowed, f"unexpected prefetch rings {sorted(set(buffers) - allowed)}"
-        rings = {id(gcb) for gcb in buffers.values()}
-        assert len(rings) <= 4, f"{len(rings)} GCBs on one device, expected at most 4"
+        rings = {id(pipes) for pipes in buffers.values()}
+        assert len(rings) <= 4, f"{len(rings)} rings on one device, expected at most 4"
     for layer in model.layers:
-        q_a_ring = layer.self_attn.q_a_proj.global_cb
+        q_a_ring = layer.self_attn.q_a_proj.prefetcher_pipes
         assert q_a_ring is not None, "q_a must stream through the prefetcher"
-        assert not hasattr(layer.attn_hc.fn, "global_cb"), "attention hyper-connection fn must not use a GCB"
-        assert not hasattr(layer.ffn_hc.fn, "global_cb"), "FFN hyper-connection fn must not use a GCB"
+        assert not hasattr(layer.attn_hc.fn, "prefetcher_pipes"), "attention hyper-connection fn must not use a ring"
+        assert not hasattr(layer.ffn_hc.fn, "prefetcher_pipes"), "FFN hyper-connection fn must not use a ring"
         if model.tp_size > 1 and layer.mlp.shared_experts is not None:
             shared = layer.mlp.shared_experts
             assert (

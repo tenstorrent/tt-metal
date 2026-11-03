@@ -7,6 +7,7 @@
 #include "all_gather_writer.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/shape.hpp"
@@ -14,9 +15,11 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include <map>
 #include <memory>
@@ -32,6 +35,31 @@ namespace ttnn::operations::experimental::matmul_decode {
 
 using namespace tt;
 using namespace tt::tt_metal;
+
+using tt::tt_metal::experimental::AddRuntimeArgsForNode;
+using tt::tt_metal::experimental::ComputeHardwareConfig;
+using tt::tt_metal::experimental::ConsumerOf;
+using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
+using tt::tt_metal::experimental::DFBEndpointType;
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::Group;
+using tt::tt_metal::experimental::KernelRunArgs;
+using tt::tt_metal::experimental::KernelSpec;
+using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::PrefetcherPipeArgument;
+using tt::tt_metal::experimental::PrefetcherPipeParameter;
+using tt::tt_metal::experimental::PrefetcherPipeParamName;
+using tt::tt_metal::experimental::ProducerOf;
+using tt::tt_metal::experimental::ProgramRunArgs;
+using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::SemaphoreBinding;
+using tt::tt_metal::experimental::SemaphoreSpec;
+using tt::tt_metal::experimental::SemaphoreSpecName;
+using tt::tt_metal::experimental::TensorBinding;
+using tt::tt_metal::experimental::TensorParameter;
+using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace {
 struct RmsHubContributor {
@@ -60,9 +88,9 @@ struct RmsProducerTopology {
 };
 
 // Ring-gather implementation of FullWidthSharded. Replaces the two-hub gather-then-broadcast
-// with a pipelined ring all-gather on in0. Kept separate from the hub-gather path so we can
-// keep the ENABLE_GLOBAL_CB weight streaming logic on the old path unchanged; the ring-gather
-// path is used only when `ring_gather` is requested on L1-resident weights (plain or packed).
+// with a pipelined ring all-gather on in0. It shares its kernels with the fused fabric all-gather,
+// which Metal 2.0 cannot express, so it stays a ProgramDescriptor; it is used only when
+// `ring_gather` is requested on L1-resident weights (plain or packed).
 ProgramDescriptor create_descriptor_ring_gather_full(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
     const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
@@ -70,41 +98,12 @@ ProgramDescriptor create_descriptor_ring_gather_full(
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
     const GlobalSemaphore* out_ready_semaphore = nullptr,
     const GlobalSemaphore* barrier_semaphore = nullptr);
-}  // namespace
 
-// Full width-sharded: B/output are width(N)-sharded; reader gathers full A onto every core.
-ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    if (operation_attributes.mesh_coords.has_value() &&
-        (!mesh_dispatch_coordinate.has_value() ||
-         std::find(
-             operation_attributes.mesh_coords->begin(),
-             operation_attributes.mesh_coords->end(),
-             *mesh_dispatch_coordinate) == operation_attributes.mesh_coords->end())) {
-        return {};
-    }
-    // Ring gather is opt-in (`ring_gather`) on the L1-resident weight paths (plain and
-    // packed_weight). The two-hub gather remains the default, and the GCB (prefetcher) path
-    // always uses it because the reader<->prefetcher handshake is baked into
-    // reader_full_width_sharded.cpp.
-    if (operation_attributes.ring_gather && !operation_attributes.global_cb.has_value()) {
-        const auto& a_grid = tensor_args.input_tensor_a.memory_config().shard_spec().value().grid;
-        const auto& b_grid = operation_attributes.packed_weight.has_value()
-                                 ? operation_attributes.packed_weight->cores
-                                 : tensor_args.input_tensor_b.memory_config().shard_spec().value().grid;
-        log_info(
-            tt::LogOp,
-            "matmul_decode FullWidthSharded: in0 gather = ring ({}, S={} cores, C={} cores)",
-            a_grid.intersects(b_grid) ? "overlapping S/C" : "disjoint S/C",
-            a_grid.num_cores(),
-            b_grid.num_cores());
-        return create_descriptor_ring_gather_full(
-            operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
-    }
-    (void)mesh_dispatch_coordinate;
+// Two-hub full width-sharded: B/output are width(N)-sharded; the reader gathers full A onto every core.
+ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
+    const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
+    const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
+    MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
@@ -124,11 +123,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
-
-    // Tiny tiles can give in0/in1/out different geometries; each CB needs its own tile descriptor.
-    const TileDescriptor in0_tile_desc{in0_tile};
-    const TileDescriptor in1_tile_desc{inputB_tile};
-    const TileDescriptor out_tile_desc{output_tile};
 
     log_debug(
         tt::LogOp,
@@ -174,18 +168,21 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
 
     MeshDevice* device = input_tensor_a.device();
     auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
-    const bool use_global_cb = operation_attributes.global_cb.has_value();
+    const auto& prefetcher_pipes = operation_attributes.prefetcher_pipes;
+    const bool use_pipes = !prefetcher_pipes.empty();
     // The reader loads this core's slab of a DRAM ND-sharded weight itself.
     const bool in1_from_dram = operation_attributes.dram_weight_grid.has_value();
     // A packed weight is a region of a fused height-sharded tensor whose shard spec spans the
     // whole chip, so this weight's grid comes from the spec.
     const auto& packed = operation_attributes.packed_weight;
-    // A DRAM ND-sharded weight has no legacy shard spec, so the weight grid is the GCB's receiver
+    // A DRAM ND-sharded weight has no legacy shard spec, so the weight grid is the pipes' receiver
     // set or dram_weight_grid. Otherwise it is the weight's own shard grid.
-    auto inputB_core_range_set = use_global_cb        ? operation_attributes.global_cb->receiver_cores()
-                                 : in1_from_dram      ? *operation_attributes.dram_weight_grid
-                                 : packed.has_value() ? packed->cores
-                                                      : input_tensor_b.memory_config().shard_spec().value().grid;
+    auto inputB_core_range_set =
+        use_pipes
+            ? tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(prefetcher_pipes))
+        : in1_from_dram      ? *operation_attributes.dram_weight_grid
+        : packed.has_value() ? packed->cores
+                             : input_tensor_b.memory_config().shard_spec().value().grid;
     auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
     const bool mcast_out = operation_attributes.output_core_grid.has_value();
     const bool mcast_two_hub = mcast_out && operation_attributes.output_mcast_two_hub;
@@ -238,7 +235,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     uint32_t inA_K_tiles_per_core = in0_rm_hs ? 1u : inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
     uint32_t inB_N_tiles_per_core;
-    if (use_global_cb || in1_from_dram || packed.has_value()) {
+    if (use_pipes || in1_from_dram || packed.has_value()) {
         // Neither a DRAM ND-sharded nor a packed weight has a legacy [K, N/n] shard spec to read
         // the per-core width from; it is N split across the weight's cores by definition.
         const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
@@ -247,7 +244,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             N_tiles % num_weight_cores == 0,
             "full_width_sharded matmul_decode with {} requires N in tiles ({}) to be divisible by the weight core "
             "count ({})",
-            use_global_cb ? "global_cb" : (in1_from_dram ? "a DRAM weight" : "packed_weight"),
+            use_pipes ? "prefetcher_pipes" : (in1_from_dram ? "a DRAM weight" : "packed_weight"),
             N_tiles,
             num_weight_cores);
         inB_N_tiles_per_core = N_tiles / num_weight_cores;
@@ -274,7 +271,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     uint32_t rms_max_hub_groups = 0;
     uint32_t rms_max_hub_contributors = 0;
     std::vector<RmsProducerTopology> rms_topology(num_producers);
-    std::vector<CoreCoord> rms_hub_cores;
     if (rms_norm) {
         const uint32_t N = static_cast<uint32_t>(operation_attributes.N);
         const uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
@@ -340,9 +336,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
                 std::max(rms_max_local_groups, static_cast<uint32_t>(topology.local_fragments.size()));
             rms_max_hub_groups = std::max(rms_max_hub_groups, static_cast<uint32_t>(topology.hub_groups.size()));
             rms_max_hub_contributors = std::max(rms_max_hub_contributors, topology.hub_contributor_slots);
-            if (!topology.hub_groups.empty()) {
-                rms_hub_cores.push_back(producer_cores[producer]);
-            }
         }
 
         log_debug(
@@ -356,26 +349,27 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             rms_max_hub_contributors);
     }
 
-    const uint32_t k_block_tiles = K_tiles / operation_attributes.global_cb_k_blocks;
-    // Streaming issues one custom_mm_block per GCB page into the same DST tiles and finalizes on
-    // the last, so a page has to be a legal kt_dim on its own and every output of the row must stay
+    const uint32_t num_k_blocks = operation_attributes.prefetch_k_blocks;
+    const uint32_t k_block_tiles = K_tiles / num_k_blocks;
+    // Streaming issues one custom_mm_block per pipe entry into the same DST tiles and finalizes on
+    // the last, so an entry has to be a legal kt_dim on its own and every output of the row must stay
     // resident in DST across the whole traversal -- which is what restricts it to one tile row.
     const bool in0_rm = input_tensor_a.layout() == Layout::ROW_MAJOR;
-    const bool custom_mm_streams_ok = operation_attributes.global_cb_k_blocks == 1 || M_tiles == 1;
+    const bool custom_mm_streams_ok = num_k_blocks == 1 || M_tiles == 1;
     const bool use_custom_mm = in0_rm && device->arch() == tt::ARCH::BLACKHOLE && !operation_attributes.all_gather &&
                                custom_mm_streams_ok && is_custom_mm_kt_dim(k_block_tiles) &&
                                is_custom_mm_ct_dim(inB_N_tiles_per_core);
     // custom_mm reads each row's K tiles contiguously, but the gather lays A out sender-major
     // ([sender][M][K / senders]), which is that only for one row. Several rows are gathered into a
-    // staging CB and restriped into full_in0 as [M][K] by the reader.
+    // staging buffer and restriped into full_in0 as [M][K] by the reader.
     const bool restripe_in0 = use_custom_mm && !in0_rm_hs && M_tiles > 1;
     TT_FATAL(
         !in0_rm || in0_rm_hs || M_tiles == 1 || use_custom_mm,
         "matmul_decode ROW_MAJOR width-sharded input A with M={} needs custom_mm (Blackhole, no fused all-gather, "
-        "one global_cb K block, an even K block of 2..256 tiles and at most 16 output tiles per core)",
+        "one prefetch K block, an even K block of 2..256 tiles and at most 16 output tiles per core)",
         operation_attributes.M);
     // The RMSNorm statistics want FP32, but custom_mm cannot give DST a 32-bit mode (see the compute
-    // config below), and a 16-bit DST cannot read an FP32 circular buffer: the unpacker consumes each
+    // config below), and a 16-bit DST cannot read an FP32 buffer: the unpacker consumes each
     // FP32 word as two 16-bit datums, which interleaves the tile instead of converting it. The
     // intermediates therefore have to match the DST width.
     const bool rms_fp32_stats = rms_norm && !use_custom_mm;
@@ -389,7 +383,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             reason = "fused all-gather is not supported by custom_mm";
         } else if (!custom_mm_streams_ok) {
             reason =
-                "streamed global_cb K blocks need all of a row's outputs to fit in DST, so custom_mm handles them "
+                "streamed prefetch K blocks need all of a row's outputs to fit in DST, so custom_mm handles them "
                 "for a single in0 tile row only";
         } else if (!is_custom_mm_kt_dim(k_block_tiles)) {
             reason = "the K block must contain an even number of tiles in [2, 256]";
@@ -398,365 +392,271 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         }
         log_warning(tt::LogOp, "matmul_decode is falling back to the general block matmul LLKs: {}", reason);
     }
-    ProgramDescriptor desc;
 
-    // These are this op's own CB indices; every kernel receives them as named "cb_*" compile-time
-    // args, so op fusion can pool-allocate different hardware slots for two instances sharing a
-    // core without either factory having to know about the other.
-    const uint32_t in0_cb_index = CBIndex::c_0;
-    const uint32_t in1_cb_index = CBIndex::c_1;
-    const uint32_t out_cb_index = CBIndex::c_2;
-    const uint32_t full_in0_cb_index = CBIndex::c_3;
-    // GCB path only: sync_cb carries "compute is done reading in1" back to the reader so it can
-    // release the GCB page; remote_cb is the remote (GCB) index aliased onto the local in1 CB.
-    const uint32_t sync_cb_index = CBIndex::c_4;
-    const uint32_t remote_cb_index = CBIndex::c_31;
-    const uint32_t out_full_cb_index = CBIndex::c_5;
-    const uint32_t out_stage_cb_index = CBIndex::c_6;
-    const uint32_t mm_out_cb_index = CBIndex::c_7;
-    const uint32_t gather_in0_cb_index = CBIndex::c_8;
-    const uint32_t rms_local_cb_index = CBIndex::c_10;
-    const uint32_t rms_gathered_cb_index = CBIndex::c_11;
-    const uint32_t rms_scale_cb_index = CBIndex::c_12;
-    const uint32_t rms_scale_src_cb_index = CBIndex::c_13;
-    const uint32_t rms_reduce_scaler_cb_index = CBIndex::c_14;
-    const uint32_t rms_reduced_cb_index = CBIndex::c_15;
-    const uint32_t rms_gamma_cb_index = CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = M_tiles * (in0_rm_hs ? K_tiles : inA_K_tiles_per_core) * in0_tile_size,
-        .core_ranges = all_compute_cores_with_bbox,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = in0_cb_index,
-            .data_format = in0_data_format,
-            .page_size = in0_tile_size,
-            .tile = in0_tile_desc,
-        }}},
-        .buffer = input_tensor_a.buffer(),
-    });
-
-    // A GCB page is `num_k_blocks`-th of a receiver's [K, N/num_receivers] weight slab: a whole
-    // number of K-rows, contiguous in the slab. num_k_blocks == 1 makes the page the whole slab
-    // (one credit per invocation, the GCB must hold a slab); higher values stream the slab in and
-    // let the GCB be smaller than it. The local alias (in1_cb_index) stays tile-paged so the
-    // compute kernel indexes tiles within the page it is holding; the remote index is page-paged
-    // so one page-credit == one K-block.
-    const uint32_t num_k_blocks = operation_attributes.global_cb_k_blocks;
+    // A pipe entry is `num_k_blocks`-th of a receiver's [K, N/num_receivers] weight slab: a whole
+    // number of K-rows, contiguous in the slab. num_k_blocks == 1 makes the entry the whole slab
+    // (the ring must hold a slab); higher values stream the slab in and let the ring be smaller
+    // than it. in1 stays tile-paged so the compute kernel indexes tiles within the entry it holds.
     TT_FATAL(
         K_tiles % num_k_blocks == 0,
-        "full_width_sharded matmul_decode with global_cb_k_blocks={} requires K in tiles ({}) to be divisible by it, "
-        "because a GCB page is a whole number of K-rows of the weight slab",
+        "full_width_sharded matmul_decode with prefetch_k_blocks={} requires K in tiles ({}) to be divisible by it, "
+        "because a pipe entry is a whole number of K-rows of the weight slab",
         num_k_blocks,
         K_tiles);
-    // Streaming completes each output tile across several pages, and on the fallback path the
-    // running sum lives in the output CB itself because the packer accumulates into it. A
+    // Streaming completes each output tile across several entries, and on the fallback path the
+    // running sum lives in the output buffer itself because the packer accumulates into it. A
     // block-float output cannot be read back and added to, so it has to be rejected rather than
-    // quietly dropping partial sums. custom_mm is exempt: it chains the pages into DST and writes
-    // the output CB once.
+    // quietly dropping partial sums. custom_mm is exempt: it chains the entries into DST and writes
+    // the output once.
     TT_FATAL(
         num_k_blocks == 1 || use_custom_mm || out_data_format == tt::DataFormat::Float32 ||
             out_data_format == tt::DataFormat::Float16_b || out_data_format == tt::DataFormat::Float16,
-        "full_width_sharded matmul_decode with global_cb_k_blocks={} accumulates partial sums in the output CB, so "
-        "the output dtype must be float32/bfloat16/float16, but it is {}",
+        "full_width_sharded matmul_decode with prefetch_k_blocks={} accumulates partial sums in the output buffer, "
+        "so the output dtype must be float32/bfloat16/float16, but it is {}",
         num_k_blocks,
         out_data_format);
     const uint32_t in1_k_block_tiles = K_tiles / num_k_blocks;
     const uint32_t in1_slab_num_tiles = K_tiles * inB_N_tiles_per_core;
-    const uint32_t in1_slab_bytes = in1_slab_num_tiles * in1_tile_size;
     const uint32_t in1_page_num_tiles = in1_k_block_tiles * inB_N_tiles_per_core;
     const uint32_t in1_page_bytes = in1_page_num_tiles * in1_tile_size;
-    if (use_global_cb) {
-        const auto& gcb = *operation_attributes.global_cb;
-        // Round the window down to a whole number of pages; the remote CB requires its total
-        // size to be a multiple of its page size, and the local alias only wraps in step with
-        // the remote ring if it spans whole pages too.
-        const uint32_t gcb_window_bytes = (gcb.size() / in1_page_bytes) * in1_page_bytes;
-        // Streaming keeps one page un-acked while the next is published, so the ring has to hold
-        // two. With one page it would deadlock: the reader waits for a page the sender cannot
-        // write until the reader returns the credit it is still holding.
-        const uint32_t min_pages = num_k_blocks > 1 ? 2 : 1;
-        TT_FATAL(
-            gcb_window_bytes >= min_pages * in1_page_bytes,
-            "full_width_sharded matmul_decode with global_cb_k_blocks={} needs a GCB of at least {} page(s) per "
-            "receiver ({} B), but the GCB holds {} B",
-            num_k_blocks,
-            min_pages,
-            min_pages * in1_page_bytes,
-            gcb.size());
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = gcb_window_bytes,
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = in1_cb_index,
-                .data_format = in1_data_format,
-                .page_size = in1_tile_size,
-                .tile = in1_tile_desc,
-            }}},
-            .remote_format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = remote_cb_index,
-                .data_format = in1_data_format,
-                .page_size = in1_page_bytes,
-            }}},
-            .global_circular_buffer = std::addressof(gcb),
-        });
-        // Compute -> reader release signal: one 16 B page (one credit) per in1 page. Deliberately
-        // one page deep -- it is what bounds compute to a single un-acked GCB page, which is the
-        // invariant the two-page ring minimum above is derived from.
-        constexpr uint32_t sync_cb_page_bytes = 16;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = sync_cb_page_bytes,
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = sync_cb_index,
-                .data_format = tt::DataFormat::UInt16,
-                .page_size = sync_cb_page_bytes,
-            }}},
-        });
-    } else if (in1_from_dram) {
-        // The reader fills this with the core's whole DRAM slab before publishing full_in0.
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = in1_slab_bytes,
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = in1_cb_index,
-                .data_format = in1_data_format,
-                .page_size = in1_tile_size,
-                .tile = in1_tile_desc,
-            }}},
-        });
-    } else {
-        // Globally allocated over the resident weight. For a packed weight the buffer is the
-        // fused tensor's, and the region's byte offset into every core's shard re-bases the CB
-        // onto this weight's slab -- the kernels are none the wiser.
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = in1_slab_bytes,
-            .core_ranges = all_compute_cores_with_bbox,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = in1_cb_index,
-                .data_format = in1_data_format,
-                .page_size = in1_tile_size,
-                .tile = in1_tile_desc,
-            }}},
-            .buffer = input_tensor_b.buffer(),
-            .address_offset = packed.has_value() ? packed->tile_offset * in1_tile_size : 0,
+    const uint32_t in1_tile_offset = packed.has_value() ? packed->tile_offset : 0;
+
+    const TensorParamName IN0{"in0"};
+    const TensorParamName IN1{"in1"};
+    const TensorParamName OUTPUT{"output"};
+    const TensorParamName GAMMA{"rms_gamma"};
+
+    const DFBSpecName FULL_IN0_DFB{"full_in0"};
+    const DFBSpecName GATHER_IN0_DFB{"gather_in0"};
+    const DFBSpecName IN1_DFB{"in1"};
+    const DFBSpecName OUT_DFB{"out"};
+    const DFBSpecName MM_OUT_DFB{"mm_out"};
+    const DFBSpecName RMS_GAMMA_DFB{"rms_gamma"};
+    const DFBSpecName RMS_LOCAL_DFB{"rms_local"};
+    const DFBSpecName RMS_GATHERED_DFB{"rms_gathered"};
+    const DFBSpecName RMS_REDUCE_SCALER_DFB{"rms_reduce_scaler"};
+    const DFBSpecName RMS_SCALE_SRC_DFB{"rms_scale_src"};
+    const DFBSpecName RMS_SCALE_DFB{"rms_scale"};
+    const DFBSpecName OUT_FULL_DFB{"out_full"};
+    const DFBSpecName OUT_STAGE_DFB{"out_stage"};
+
+    const SemaphoreSpecName STAGE_SEM{"stage"};
+    const SemaphoreSpecName DONE_SEM{"done"};
+    const SemaphoreSpecName RMS_ARRIVAL_SEM{"rms_arrival"};
+    const SemaphoreSpecName RMS_SCALE_READY_SEM{"rms_scale_ready"};
+    const SemaphoreSpecName OUT_STAGE_SEM{"out_stage"};
+    const SemaphoreSpecName OUT_DONE_SEM{"out_done"};
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Dataflow buffers
+    ////////////////////////////////////////////////////////////////////////////
+    Group<DataflowBufferSpec> dataflow_buffers;
+
+    // The gathered A. The hubs multicast it over the whole bounding box at their own offset of it, so
+    // it is one buffer on every reader core, and its consumer is a compute kernel on all of them.
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = FULL_IN0_DFB,
+        .entry_size = in0_tile_size,
+        .num_entries = M_tiles * K_tiles,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    });
+    if (restripe_in0) {
+        // The gather's destination: same offset on every core, so a sender addresses the hub's copy
+        // with its own write pointer, as it does full_in0 otherwise.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = GATHER_IN0_DFB,
+            .entry_size = in0_tile_size,
+            .num_entries = M_tiles * K_tiles,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
         });
     }
 
-    CBDescriptor local_out_cb_desc{
-        .total_size = M_tiles * inB_N_tiles_per_core * out_tile_size,
-        .core_ranges = mcast_out ? inputB_core_range_set : all_compute_cores_with_bbox,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = out_cb_index,
-            .data_format = out_data_format,
-            .page_size = out_tile_size,
-            .tile = out_tile_desc,
-        }}},
+    std::vector<PrefetcherPipeParamName> pipe_names;
+    Group<PrefetcherPipeParameter> pipe_parameters;
+    if (use_pipes) {
+        const uint32_t ring_size = prefetcher_pipes.front()->ring_size();
+        // Streaming keeps one entry un-acked while the next is published, so the ring has to hold
+        // two. With one entry it would deadlock: the reader waits for an entry the prefetcher cannot
+        // write until the reader returns the credit it is still holding.
+        const uint32_t min_entries = num_k_blocks > 1 ? 2 : 1;
+        TT_FATAL(
+            ring_size >= min_entries * in1_page_bytes,
+            "full_width_sharded matmul_decode with prefetch_k_blocks={} needs a pipe ring of at least {} entr{} "
+            "({} B), but the ring holds {} B",
+            num_k_blocks,
+            min_entries,
+            min_entries == 1 ? "y" : "ies",
+            min_entries * in1_page_bytes,
+            ring_size);
+        for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
+            const PrefetcherPipeParamName name{fmt::format("in1_prefetcher_pipe_{}", p)};
+            pipe_names.push_back(name);
+            pipe_parameters.push_back(PrefetcherPipeParameter{
+                .unique_id = name,
+                .receivers = prefetcher_pipes[p]->receiver_cores(),
+                .ring_size = ring_size,
+                .entry_size = in1_page_bytes,
+            });
+        }
+        // A relay over the rings that pages each entry as its tiles. It covers the ring's whole
+        // entries, and an entry's tiles never wrap: the pipe skips any trailing gap.
+        const uint32_t relay_size = ring_size - ring_size % in1_page_bytes;
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN1_DFB,
+            .entry_size = in1_tile_size,
+            .num_entries = relay_size / in1_tile_size,
+            .data_format_metadata = in1_data_format,
+            .tile_format_metadata = inputB_tile,
+            .advanced_options = {.prefetcher_pipe_relays = pipe_names},
+        });
+    } else if (in1_from_dram) {
+        // The reader fills this with the core's whole DRAM slab before publishing full_in0.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN1_DFB,
+            .entry_size = in1_tile_size,
+            .num_entries = in1_slab_num_tiles,
+            .data_format_metadata = in1_data_format,
+            .tile_format_metadata = inputB_tile,
+        });
+    } else {
+        // Borrows the resident weight. For a packed weight the tensor is the fused one, and the
+        // region's tile offset into every core's shard is skipped by compute before it reads in1.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN1_DFB,
+            .entry_size = in1_tile_size,
+            .num_entries = in1_tile_offset + in1_slab_num_tiles,
+            .data_format_metadata = in1_data_format,
+            .tile_format_metadata = inputB_tile,
+            .borrowed_from = IN1,
+        });
+    }
+
+    // This core's [M, Nc] output slice: the output shard itself unless it is replicated, when it is
+    // staged here for the output writer.
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT_DFB,
+        .entry_size = out_tile_size,
+        .num_entries = M_tiles * inB_N_tiles_per_core,
+        .data_format_metadata = out_data_format,
+        .tile_format_metadata = output_tile,
     };
     if (!mcast_out) {
-        local_out_cb_desc.buffer = output_tensor.buffer();
+        out_dfb.borrowed_from = OUTPUT;
     }
-    desc.cbs.push_back(std::move(local_out_cb_desc));
+    dataflow_buffers.push_back(std::move(out_dfb));
+
+    const tt::DataFormat rms_data_format = rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t rms_tile_size = output_tile.get_tile_size(rms_data_format);
+    const tt::tt_metal::Tile rms_reduce_tile({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+    const uint32_t rms_reduce_tile_size = rms_reduce_tile.get_tile_size(rms_data_format);
+    const bool rms_vector_gamma = rms_norm && tensor_args.rms_norm_gamma.has_value();
     if (rms_norm) {
-        const tt::DataFormat rms_data_format = rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-        const uint32_t rms_tile_size = output_tile.get_tile_size(rms_data_format);
-        const TileDescriptor rms_tile_desc{output_tile};
-        const tt::tt_metal::Tile rms_reduce_tile({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
-        const uint32_t rms_reduce_tile_size = rms_reduce_tile.get_tile_size(rms_data_format);
-        const TileDescriptor rms_reduce_tile_desc{rms_reduce_tile};
         TT_FATAL(
             rms_reduce_tile_size % rms_tile_size == 0,
             "matmul_decode fused RMSNorm requires the local statistic page size {} to divide the reduction tile "
             "size {}",
             rms_tile_size,
             rms_reduce_tile_size);
-        const CoreRangeSet rms_hub_core(rms_hub_cores);
 
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * inB_N_tiles_per_core * out_tile_size,
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = mm_out_cb_index,
-                .data_format = out_data_format,
-                .page_size = out_tile_size,
-                .tile = out_tile_desc,
-            }}},
+        // The matmul result, which the epilogue normalizes into out.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = MM_OUT_DFB,
+            .entry_size = out_tile_size,
+            .num_entries = M_tiles * inB_N_tiles_per_core,
+            .data_format_metadata = out_data_format,
+            .tile_format_metadata = output_tile,
         });
-        if (tensor_args.rms_norm_gamma.has_value()) {
+        if (rms_vector_gamma) {
             const auto& gamma = tensor_args.rms_norm_gamma.value();
             const tt::DataFormat gamma_data_format = datatype_to_dataformat_converter(gamma.dtype());
             const auto& gamma_tile = gamma.tensor_spec().tile();
-            const uint32_t gamma_tile_size = gamma_tile.get_tile_size(gamma_data_format);
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = inB_N_tiles_per_core * gamma_tile_size,
-                .core_ranges = inputB_core_range_set,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = rms_gamma_cb_index,
-                    .data_format = gamma_data_format,
-                    .page_size = gamma_tile_size,
-                    .tile = TileDescriptor{gamma_tile},
-                }}},
-                .buffer = gamma.buffer(),
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = RMS_GAMMA_DFB,
+                .entry_size = gamma_tile.get_tile_size(gamma_data_format),
+                .num_entries = inB_N_tiles_per_core,
+                .data_format_metadata = gamma_data_format,
+                .tile_format_metadata = gamma_tile,
+                .borrowed_from = GAMMA,
             });
         }
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_max_local_groups * rms_tile_size,
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = rms_local_cb_index,
-                .data_format = rms_data_format,
-                .page_size = rms_tile_size,
-                .tile = rms_tile_desc,
-            }}},
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RMS_LOCAL_DFB,
+            .entry_size = rms_tile_size,
+            .num_entries = M_tiles * rms_max_local_groups,
+            .data_format_metadata = rms_data_format,
+            .tile_format_metadata = output_tile,
         });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_max_hub_contributors * rms_reduce_tile_size,
-            // Producers derive each hub destination from their local write pointer, so this gathered
-            // buffer needs one uniform allocation across the transport grid.
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = rms_gathered_cb_index,
-                .data_format = rms_data_format,
-                .page_size = rms_reduce_tile_size,
-                .tile = rms_reduce_tile_desc,
-            }}},
+        // Producers derive each hub destination from their local write pointer, which holds because a
+        // buffer sits at one address on every core it lives on.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RMS_GATHERED_DFB,
+            .entry_size = rms_reduce_tile_size,
+            .num_entries = M_tiles * rms_max_hub_contributors,
+            .data_format_metadata = rms_data_format,
+            .tile_format_metadata = rms_reduce_tile,
         });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = rms_reduce_tile_size,
-            // The output-mcast writer is split into per-NOC binaries. Give every producer the
-            // scaler format so a non-hub-only binary can still compile the runtime-gated hub path.
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = rms_reduce_scaler_cb_index,
-                .data_format = rms_data_format,
-                .page_size = rms_reduce_tile_size,
-                .tile = rms_reduce_tile_desc,
-            }}},
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RMS_REDUCE_SCALER_DFB,
+            .entry_size = rms_reduce_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = rms_data_format,
+            .tile_format_metadata = rms_reduce_tile,
         });
-        // Full reduction tiles, like the gathered input and the scaler: this is where
-        // ``compute_kernel_lib::reduce`` packs, and it requires every buffer it touches to hold a
-        // whole 32x32 page (``is_valid_dfb_tile_page_size``). The narrow ``output_tile`` page this
-        // used to carry tripped that PACK-side assert on the hub under watcher. Only group hubs
-        // allocates it, and only ``[0, 0]`` of each tile is ever read, so the wider page is free.
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_max_hub_groups * rms_reduce_tile_size,
-            .core_ranges = rms_hub_core,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = rms_reduced_cb_index,
-                .data_format = rms_data_format,
-                .page_size = rms_reduce_tile_size,
-                .tile = rms_reduce_tile_desc,
-            }}},
+        // A group hub's scales, from compute to the writer RISC, which unicasts them out of here into
+        // rms_scale, so the hub never has to consume the buffer its own compute is waiting on. Every
+        // producer holds one, so that compute and the writer bind the same buffers on every producer.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RMS_SCALE_SRC_DFB,
+            .entry_size = rms_tile_size,
+            .num_entries = M_tiles * rms_max_hub_groups,
+            .data_format_metadata = rms_data_format,
+            .tile_format_metadata = output_tile,
         });
-        // Hub only. Compute is the sole producer and the writer RISC the sole consumer: the writer
-        // multicasts out of here into cb_rms_scale, so the hub never has to consume the destination CB
-        // that its own compute is waiting on.
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_max_hub_groups * rms_tile_size,
-            .core_ranges = rms_hub_core,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = rms_scale_src_cb_index,
-                .data_format = rms_data_format,
-                .page_size = rms_tile_size,
-                .tile = rms_tile_desc,
-            }}},
-        });
-        // Every hub unicasts scales into contributor-local slots. A uniform allocation over the
-        // producer set lets a hub derive each remote destination from its own CB write pointer.
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_max_local_groups * rms_tile_size,
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = rms_scale_cb_index,
-                .data_format = rms_data_format,
-                .page_size = rms_tile_size,
-                .tile = rms_tile_desc,
-            }}},
+        // Every hub unicasts scales into contributor-local slots, deriving each remote destination
+        // from its own write pointer.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RMS_SCALE_DFB,
+            .entry_size = rms_tile_size,
+            .num_entries = M_tiles * rms_max_local_groups,
+            .data_format_metadata = rms_data_format,
+            .tile_format_metadata = output_tile,
         });
     }
+    const uint32_t N_tiles = div_up(static_cast<uint32_t>(operation_attributes.N), tt::constants::TILE_WIDTH);
     if (mcast_out) {
-        const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * N_tiles * out_tile_size,
-            .core_ranges = output_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = out_full_cb_index,
-                .data_format = out_data_format,
-                .page_size = out_tile_size,
-                .tile = out_tile_desc,
-            }}},
-            .buffer = output_tensor.buffer(),
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = OUT_FULL_DFB,
+            .entry_size = out_tile_size,
+            .num_entries = M_tiles * N_tiles,
+            .data_format_metadata = out_data_format,
+            .tile_format_metadata = output_tile,
+            .borrowed_from = OUTPUT,
         });
-        // Producers stage their slice here for the hub to multicast. Allocated over producers and dest
-        // cores alike so a producer can derive the hub's staging address from its own write pointer.
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * N_tiles * out_tile_size,
-            .core_ranges = inputB_core_range_set.merge(output_core_range_set),
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = out_stage_cb_index,
-                .data_format = out_data_format,
-                .page_size = out_tile_size,
-                .tile = out_tile_desc,
-            }}},
+        // Producers stage their slice here for the hub to multicast. Every output writer binds it, so a
+        // producer can derive the hub's staging address from its own write pointer.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = OUT_STAGE_DFB,
+            .entry_size = out_tile_size,
+            .num_entries = M_tiles * N_tiles,
+            .data_format_metadata = out_data_format,
+            .tile_format_metadata = output_tile,
         });
     }
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = M_tiles * K_tiles * in0_tile_size,
-        .core_ranges = all_compute_cores_with_bbox,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = full_in0_cb_index,
-            .data_format = in0_data_format,
-            .page_size = in0_tile_size,
-            .tile = in0_tile_desc,
-        }}},
-    });
-    if (restripe_in0) {
-        // The gather's destination: same offset on every core, so a sender addresses the hub's copy
-        // with its own write pointer, as it does full_in0 otherwise.
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * K_tiles * in0_tile_size,
-            .core_ranges = all_compute_cores_with_bbox,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = gather_in0_cb_index,
-                .data_format = in0_data_format,
-                .page_size = in0_tile_size,
-                .tile = in0_tile_desc,
-            }}},
-        });
-    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Geometry
+    ////////////////////////////////////////////////////////////////////////////
     // stage: senders bump owning hub after slice write; done: each hub bumps all cores after its mcast half.
     const uint32_t num_senders = inputA_core_range_set.num_cores();
-    constexpr uint32_t stage_sem_id = 0;
-    constexpr uint32_t done_sem_id = 1;
     log_debug(tt::LogOp, "MatmulDecode: num_senders: {}", num_senders);
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = stage_sem_id,
-        .core_ranges = all_compute_cores_with_bbox,
-        .initial_value = 0,
-    });
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = done_sem_id,
-        .core_ranges = all_compute_cores_with_bbox,
-        .initial_value = 0,
-    });
-    constexpr uint32_t rms_arrival_sem_id = 4;
-    constexpr uint32_t rms_scale_ready_sem_id = 5;
-    if (rms_norm) {
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = rms_arrival_sem_id,
-            .core_ranges = inputB_core_range_set,
-            .initial_value = 0,
-        });
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = rms_scale_ready_sem_id,
-            .core_ranges = inputB_core_range_set,
-            .initial_value = 0,
-        });
-    }
 
     const CoreRange mcast_bbox = all_compute_cores_with_bbox.bounding_box();
     const CoreCoord hub0_logical = mcast_bbox.start_coord;
     const CoreCoord hub1_logical = mcast_bbox.end_coord;
-    const CoreCoord mcast_start_phys = device->worker_core_from_logical_core(hub0_logical);
-    const CoreCoord mcast_end_phys = device->worker_core_from_logical_core(hub1_logical);
+    const CoreCoord hub0_phys = device->worker_core_from_logical_core(hub0_logical);
+    const CoreCoord hub1_phys = device->worker_core_from_logical_core(hub1_logical);
     const uint32_t num_receivers = all_compute_cores_with_bbox.num_cores();
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
     const uint32_t split_H = num_senders / 2;
@@ -765,50 +665,22 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     TT_FATAL(
         in0_rm_hs || (num_receivers >= 2 && hub0_logical != hub1_logical),
         "full_width_sharded matmul_decode two-hub broadcast requires a compute rectangle of at least 2 cores");
-
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        shard_num_tiles,
-        in0_tile_size,
-        num_senders,
-        num_receivers,
-        static_cast<uint32_t>(mcast_start_phys.x),
-        static_cast<uint32_t>(mcast_start_phys.y),
-        static_cast<uint32_t>(mcast_end_phys.x),
-        static_cast<uint32_t>(mcast_end_phys.y),
-        stage_sem_id,
-        done_sem_id,
-        static_cast<uint32_t>(mcast_start_phys.x),
-        static_cast<uint32_t>(mcast_start_phys.y),
-        static_cast<uint32_t>(mcast_end_phys.x),
-        static_cast<uint32_t>(mcast_end_phys.y),
-        split_H,
-        in1_page_num_tiles,
-        num_k_blocks,
+    TT_FATAL(
+        M_tiles <= 8,
+        "full_width_sharded matmul_decode requires out_block_h (= M_tiles) <= 8 so it fits in DST, but got M_tiles={} "
+        "(M={}, inputA_tile_height={})",
         M_tiles,
-        K_tiles,
-    };
-    if (in1_from_dram) {
-        TensorAccessorArgs(input_tensor_b.buffer()).append_to(reader_compile_time_args);
-    }
-
-    // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
-    // across the phases it merges and rewrites exactly these args, so positional or hard-coded
-    // indices would leave the kernels pointing at pre-remap slots.
-    KernelDescriptor::NamedCompileTimeArgs reader_named_args = {
-        {"cb_in0", in0_cb_index},
-        {"cb_full_in0", full_in0_cb_index},
-        {"cb_in1", in1_cb_index},
-        {"cb_in1_remote", remote_cb_index},
-        {"cb_sync", sync_cb_index},
-    };
-    if (restripe_in0) {
-        reader_named_args.emplace_back("cb_gather_in0", gather_in0_cb_index);
-    }
+        operation_attributes.M,
+        inputA_tile_height);
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
     std::map<CoreCoord, uint32_t> sender_id_by_core;
     for (uint32_t id = 0; id < sender_cores.size(); id++) {
         sender_id_by_core[sender_cores[id]] = id;
+    }
+    std::map<CoreCoord, uint32_t> producer_id_by_core;
+    for (uint32_t id = 0; id < producer_cores.size(); ++id) {
+        producer_id_by_core[producer_cores[id]] = id;
     }
 
     auto role_of = [&](const CoreCoord& core) -> HubRole {
@@ -821,183 +693,207 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         return HubRole::Plain;
     };
 
-    const std::vector<CoreCoord> all_reader_cores = corerange_to_cores(all_compute_cores_with_bbox, std::nullopt, true);
-
-    auto build_reader_kernel = [&](const std::vector<CoreCoord>& cores, NOC noc) {
-        log_debug(tt::LogOp, "MatmulDecode: building reader kernel for cores: {} on noc: {}", cores, noc);
-        std::vector<CoreRange> ranges;
-        ranges.reserve(cores.size());
-        for (const auto& core : cores) {
-            ranges.emplace_back(core, core);
-        }
-
-        KernelDescriptor reader_kernel_desc;
-        reader_kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp";
-        reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_kernel_desc.core_ranges = CoreRangeSet(ranges);
-        reader_kernel_desc.compile_time_args = reader_compile_time_args;
-        reader_kernel_desc.named_compile_time_args = reader_named_args;
-        reader_kernel_desc.config = DataMovementConfigDescriptor{
-            .processor = DataMovementProcessor::RISCV_1,
-            // The GCB path pins every reader to NOC 0. remote_cb_pop_front acks the page with a
-            // non-posted atomic increment into the DRISC sender's L1, and that ack only comes
-            // back on NOC 0 -- on NOC 1 the following atomic barrier never drains and the core
-            // hangs after the matmul has otherwise finished. Every other GCB consumer in the
-            // repo likewise runs its remote-CB traffic on the DRAM-read NOC. This costs the
-            // two-hub gather its NOC split (both hubs mcast on NOC 0) in the GCB path only.
-            .noc = use_global_cb ? NOC::NOC_0 : noc,
-        };
-        if (use_global_cb) {
-            reader_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
-        }
-        if (in1_from_dram) {
-            reader_kernel_desc.defines.emplace_back("IN1_FROM_DRAM", "1");
-        }
-        if (in0_rm_hs) {
-            reader_kernel_desc.defines.emplace_back("IN0_REPLICATED", "1");
-        }
-        if (use_custom_mm) {
-            reader_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
-        }
-        if (restripe_in0) {
-            reader_kernel_desc.defines.emplace_back("IN0_ROW_RESTRIPE", "1");
-        }
-
-        reader_kernel_desc.runtime_args.reserve(cores.size());
-        for (const auto& core : cores) {
-            const auto it = sender_id_by_core.find(core);
-            const bool is_sender = it != sender_id_by_core.end();
-            const uint32_t sender_id = is_sender ? it->second : 0;
-            // The reader runs on the merged A-and-B bounding box, but only B cores are GCB
-            // receivers and only they have the in1 / sync CBs configured.
-            const bool is_in1_receiver = inputB_core_range_set.contains(core);
-            if (in1_from_dram) {
-                const auto producer_it = std::find(producer_cores.begin(), producer_cores.end(), core);
-                const uint32_t in1_shard_id =
-                    is_in1_receiver ? static_cast<uint32_t>(producer_it - producer_cores.begin()) : 0;
-                reader_kernel_desc.emplace_runtime_args(
-                    core,
-                    {static_cast<uint32_t>(is_sender),
-                     sender_id,
-                     static_cast<uint32_t>(role_of(core)),
-                     static_cast<uint32_t>(is_in1_receiver),
-                     input_tensor_b.buffer(),
-                     in1_shard_id});
-                continue;
-            }
-            reader_kernel_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(is_sender),
-                    sender_id,
-                    static_cast<uint32_t>(role_of(core)),
-                    static_cast<uint32_t>(is_in1_receiver)});
-        }
-        return reader_kernel_desc;
-    };
-
-    // Pick NOC by traffic direction: hub0 mcasts on NOC0, hub1 on NOC1; senders use the NOC toward their hub.
-    std::vector<CoreCoord> noc0_cores;
-    std::vector<CoreCoord> noc1_cores;
-    std::vector<CoreCoord> default_noc_cores;
+    // Pick NOC by traffic direction: hub0 mcasts on NOC0, hub1 on NOC1; senders use the NOC toward
+    // their hub. Pipe delivery pins every reader to NOC 0: pop_front acks the entry with a non-posted
+    // atomic increment into the DRAM sender, and that ack only comes back on NOC 0 -- on NOC 1 the
+    // following atomic barrier never drains and the core hangs after the matmul has otherwise
+    // finished. This costs the two-hub gather its NOC split (both hubs mcast on NOC 0) on that path.
     // The writer must not land on the same NOC as the reader on any core, so remember the choice.
+    const std::vector<CoreCoord> all_reader_cores = corerange_to_cores(all_compute_cores_with_bbox, std::nullopt, true);
     std::map<CoreCoord, NOC> reader_noc_by_core;
     for (const auto& core : all_reader_cores) {
         const HubRole role = role_of(core);
-        if (role == HubRole::Hub0) {
-            noc0_cores.push_back(core);
-            reader_noc_by_core[core] = NOC::NOC_0;
-            continue;
-        }
-        if (role == HubRole::Hub1) {
-            noc1_cores.push_back(core);
-            reader_noc_by_core[core] = NOC::NOC_1;
-            continue;
-        }
         const auto it = sender_id_by_core.find(core);
-        if (it == sender_id_by_core.end()) {
-            default_noc_cores.push_back(core);
-            // RISCV_1_default resolves to NOC_1 for NCRISC.
-            reader_noc_by_core[core] = NOC::NOC_1;
-        } else if (it->second < split_H) {
-            noc1_cores.push_back(core);
-            reader_noc_by_core[core] = NOC::NOC_1;
+        NOC noc;
+        if (use_pipes || role == HubRole::Hub0) {
+            noc = NOC::NOC_0;
+        } else if (role == HubRole::Hub1 || it == sender_id_by_core.end() || it->second < split_H) {
+            noc = NOC::NOC_1;
         } else {
-            noc0_cores.push_back(core);
-            reader_noc_by_core[core] = NOC::NOC_0;
-        }
-    }
-
-    if (use_global_cb) {
-        // build_reader_kernel pins every GCB reader to NOC0 regardless of the split above.
-        for (auto& [core, noc] : reader_noc_by_core) {
             noc = NOC::NOC_0;
         }
+        reader_noc_by_core[core] = noc;
     }
-    if (!noc0_cores.empty()) {
-        desc.kernels.push_back(build_reader_kernel(noc0_cores, NOC::NOC_0));
-    }
-    if (!noc1_cores.empty()) {
-        desc.kernels.push_back(build_reader_kernel(noc1_cores, NOC::NOC_1));
-    }
-    if (!default_noc_cores.empty()) {
-        desc.kernels.push_back(build_reader_kernel(default_noc_cores, NOC::RISCV_1_default));
-    }
+    const auto opposite = [](NOC noc) { return noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0; };
 
-    TT_FATAL(
-        M_tiles <= 8,
-        "full_width_sharded matmul_decode requires out_block_h (= M_tiles) <= 8 so it fits in DST, but got M_tiles={} "
-        "(M={}, inputA_tile_height={})",
-        M_tiles,
-        operation_attributes.M,
-        inputA_tile_height);
-
-    // Runtime RMS topology layout:
+    // Runtime RMS topology, as varargs:
     //   [local_group_count, hub_group_count, hub_contributor_count]
     //   local group: [local_tile_offset, tile_count, hub_x, hub_y, hub_gathered_slot, hub_row_stride]
     //   hub group:   [contributor_count, gathered_slot_base,
     //                 contributor_x, contributor_y, contributor_scale_slot, contributor_row_stride, ...]
-    // Group and contributor lists are contiguous in global-N order, so indices need not be sent.
-    auto rms_topology_runtime_args = [&](const std::vector<RmsProducerTopology>& topology_by_producer,
-                                         const std::optional<uint32_t>& producer_index) {
-        KernelDescriptor::CoreRuntimeArgs args;
-        if (!producer_index.has_value()) {
-            args = {0, 0, 0};
-            return args;
+    // Group and contributor lists are contiguous in global-N order, so indices need not be sent. Every
+    // producer's list is padded to the longest, since a kernel takes one vararg count.
+    std::vector<std::vector<uint32_t>> rms_topology_varargs(num_producers);
+    uint32_t rms_num_varargs = 0;
+    if (rms_norm) {
+        for (uint32_t producer = 0; producer < num_producers; ++producer) {
+            const auto& topology = rms_topology[producer];
+            auto& args = rms_topology_varargs[producer];
+            args.push_back(static_cast<uint32_t>(topology.local_fragments.size()));
+            args.push_back(static_cast<uint32_t>(topology.hub_groups.size()));
+            args.push_back(topology.hub_contributor_slots);
+            for (const auto& fragment : topology.local_fragments) {
+                const CoreCoord hub_phys =
+                    device->worker_core_from_logical_core(producer_cores[fragment.hub_producer_index]);
+                args.push_back(fragment.local_tile_offset);
+                args.push_back(fragment.tile_count);
+                args.push_back(hub_phys.x);
+                args.push_back(hub_phys.y);
+                args.push_back(fragment.hub_gathered_slot);
+                args.push_back(rms_topology[fragment.hub_producer_index].hub_contributor_slots);
+            }
+            for (const auto& hub_group : topology.hub_groups) {
+                args.push_back(static_cast<uint32_t>(hub_group.contributors.size()));
+                args.push_back(hub_group.gathered_slot_base);
+                for (const auto& contributor : hub_group.contributors) {
+                    const CoreCoord contributor_phys =
+                        device->worker_core_from_logical_core(producer_cores[contributor.producer_index]);
+                    args.push_back(contributor_phys.x);
+                    args.push_back(contributor_phys.y);
+                    args.push_back(contributor.producer_scale_slot);
+                    args.push_back(
+                        static_cast<uint32_t>(rms_topology[contributor.producer_index].local_fragments.size()));
+                }
+            }
+            rms_num_varargs = std::max(rms_num_varargs, static_cast<uint32_t>(args.size()));
         }
-        const auto& topology = topology_by_producer[*producer_index];
-        args.reserve(
-            3 + 6 * topology.local_fragments.size() + 2 * topology.hub_groups.size() +
-            4 * topology.hub_contributor_slots);
-        args.push_back(static_cast<uint32_t>(topology.local_fragments.size()));
-        args.push_back(static_cast<uint32_t>(topology.hub_groups.size()));
-        args.push_back(topology.hub_contributor_slots);
-        for (const auto& fragment : topology.local_fragments) {
-            const CoreCoord hub_phys =
-                device->worker_core_from_logical_core(producer_cores[fragment.hub_producer_index]);
-            args.push_back(fragment.local_tile_offset);
-            args.push_back(fragment.tile_count);
-            args.push_back(hub_phys.x);
-            args.push_back(hub_phys.y);
-            args.push_back(fragment.hub_gathered_slot);
-            args.push_back(topology_by_producer[fragment.hub_producer_index].hub_contributor_slots);
+        for (auto& args : rms_topology_varargs) {
+            args.resize(rms_num_varargs, 0);
         }
-        for (const auto& hub_group : topology.hub_groups) {
-            args.push_back(static_cast<uint32_t>(hub_group.contributors.size()));
-            args.push_back(hub_group.gathered_slot_base);
-            for (const auto& contributor : hub_group.contributors) {
-                const CoreCoord contributor_phys =
-                    device->worker_core_from_logical_core(producer_cores[contributor.producer_index]);
-                args.push_back(contributor_phys.x);
-                args.push_back(contributor_phys.y);
-                args.push_back(contributor.producer_scale_slot);
-                args.push_back(
-                    static_cast<uint32_t>(topology_by_producer[contributor.producer_index].local_fragments.size()));
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Semaphores
+    ////////////////////////////////////////////////////////////////////////////
+    Group<SemaphoreSpec> semaphores = {
+        SemaphoreSpec{.unique_id = STAGE_SEM, .target_nodes = all_compute_cores_with_bbox},
+        SemaphoreSpec{.unique_id = DONE_SEM, .target_nodes = all_compute_cores_with_bbox},
+    };
+    if (rms_norm) {
+        semaphores.push_back(SemaphoreSpec{.unique_id = RMS_ARRIVAL_SEM, .target_nodes = inputB_core_range_set});
+        semaphores.push_back(SemaphoreSpec{.unique_id = RMS_SCALE_READY_SEM, .target_nodes = inputB_core_range_set});
+    }
+    // Hubs live in the dest bbox and need not be producers, so the output writer covers both sets.
+    const CoreRangeSet writer_core_range_set = inputB_core_range_set.merge(output_core_range_set);
+    if (mcast_out) {
+        semaphores.push_back(SemaphoreSpec{.unique_id = OUT_STAGE_SEM, .target_nodes = writer_core_range_set});
+        semaphores.push_back(SemaphoreSpec{.unique_id = OUT_DONE_SEM, .target_nodes = writer_core_range_set});
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    Group<KernelSpec> kernels;
+    ProgramRunArgs run_args;
+    // The kernels each core runs, from which the work units are derived.
+    std::map<CoreCoord, Group<KernelSpecName>> kernels_by_core;
+
+    // DM kernels come in one KernelSpec per group of cores that share a NOC and a buffer-binding
+    // role, because a KernelSpec fixes both.
+    auto group_cores = [](const std::vector<CoreCoord>& cores, auto&& key_of) {
+        std::map<decltype(key_of(cores.front())), std::vector<CoreCoord>> groups;
+        for (const auto& core : cores) {
+            groups[key_of(core)].push_back(core);
+        }
+        return groups;
+    };
+    auto dm_config = [](DataMovementProcessor processor, NOC noc) {
+        return DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
+        };
+    };
+
+    // ---- Reader (RISCV_1) on the whole bounding box ----
+    const KernelSpec::CompileTimeArgs reader_cta = {
+        {"shard_num_tiles", shard_num_tiles},
+        {"tile_size_bytes", in0_tile_size},
+        {"num_senders", num_senders},
+        {"num_receivers", num_receivers},
+        {"hub0_noc_x", static_cast<uint32_t>(hub0_phys.x)},
+        {"hub0_noc_y", static_cast<uint32_t>(hub0_phys.y)},
+        {"hub1_noc_x", static_cast<uint32_t>(hub1_phys.x)},
+        {"hub1_noc_y", static_cast<uint32_t>(hub1_phys.y)},
+        {"split_H", split_H},
+        {"in0_M_tiles", M_tiles},
+        {"in0_K_tiles", K_tiles},
+    };
+    const auto reader_groups = group_cores(all_reader_cores, [&](const CoreCoord& core) {
+        return std::make_pair(reader_noc_by_core.at(core), inputB_core_range_set.contains(core));
+    });
+    for (const auto& [key, cores] : reader_groups) {
+        const auto& [noc, is_in1_receiver] = key;
+        const KernelSpecName name{
+            fmt::format("reader_noc{}{}", static_cast<int>(noc), is_in1_receiver ? "_weight" : "_relay")};
+        KernelSpec reader{
+            .unique_id = name,
+            .source =
+                "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+                "reader_full_width_sharded.cpp",
+            .dfb_bindings = {ProducerOf(FULL_IN0_DFB, "full_in0")},
+            .semaphore_bindings =
+                {SemaphoreBinding{.semaphore_spec_name = STAGE_SEM, .accessor_name = "stage"},
+                 SemaphoreBinding{.semaphore_spec_name = DONE_SEM, .accessor_name = "done"}},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"}},
+            .compile_time_args = reader_cta,
+            .runtime_arg_schema = {.runtime_arg_names = {"is_sender", "sender_id", "role"}},
+            .hw_config = dm_config(DataMovementProcessor::RISCV_1, noc),
+        };
+        auto& defines = reader.compiler_options.defines;
+        if (restripe_in0) {
+            // Written by the hubs' multicast and read back by this core alone.
+            reader.dfb_bindings.push_back(ProducerOf(GATHER_IN0_DFB, "gather_in0"));
+            reader.dfb_bindings.push_back(ConsumerOf(GATHER_IN0_DFB, "gather_in0"));
+            defines.emplace("IN0_ROW_RESTRIPE", "1");
+        }
+        if (in0_rm_hs) {
+            defines.emplace("IN0_REPLICATED", "1");
+        }
+        if (use_custom_mm) {
+            defines.emplace("USE_CUSTOM_MM", "1");
+        }
+        if (is_in1_receiver) {
+            defines.emplace("IN1_RECEIVER", "1");
+            reader.dfb_bindings.push_back(ProducerOf(IN1_DFB, "in1"));
+            reader.compile_time_args.emplace("in1_page_tiles", in1_page_num_tiles);
+            if (use_pipes) {
+                defines.emplace("IN1_PIPE", "1");
+                reader.compile_time_args.emplace("num_k_blocks", num_k_blocks);
+                reader.advanced_options.prefetcher_pipe_bindings = {
+                    {.pipe_parameter_names = pipe_names, .accessor_name = "in1"}};
+            } else {
+                reader.compile_time_args.emplace("in1_tile_offset", in1_tile_offset);
+            }
+            if (in1_from_dram) {
+                defines.emplace("IN1_FROM_DRAM", "1");
+                reader.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = IN1, .accessor_name = "in1"});
+                reader.runtime_arg_schema.runtime_arg_names.push_back("in1_shard_id");
+            }
+            if (!mcast_out) {
+                defines.emplace("OUT_CONSUMER", "1");
+                reader.dfb_bindings.push_back(ConsumerOf(OUT_DFB, "out"));
+                reader.compile_time_args.emplace("out_num_tiles", M_tiles * inB_N_tiles_per_core);
             }
         }
-        return args;
-    };
+
+        KernelRunArgs reader_run_args{.kernel = name};
+        for (const auto& core : cores) {
+            const auto it = sender_id_by_core.find(core);
+            const bool is_sender = it != sender_id_by_core.end();
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"is_sender", static_cast<uint32_t>(is_sender)},
+                 {"sender_id", is_sender ? it->second : 0u},
+                 {"role", static_cast<uint32_t>(role_of(core))}});
+            if (is_in1_receiver && in1_from_dram) {
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values, core, {{"in1_shard_id", producer_id_by_core.at(core)}});
+            }
+            kernels_by_core[core].push_back(name);
+        }
+        kernels.push_back(std::move(reader));
+        run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    }
 
     log_debug(
         tt::LogOp,
@@ -1006,318 +902,407 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         K_tiles,
         inB_N_tiles_per_core,
         inA_K_tiles_per_core);
-    KernelDescriptor compute_kernel_desc;
-    compute_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/compute_full_width_sharded.cpp";
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = inputB_core_range_set;
-    compute_kernel_desc.compile_time_args = {
-        M_tiles,
-        K_tiles,
-        inB_N_tiles_per_core,
-        inA_K_tiles_per_core,
-        num_k_blocks,
-    };
-    compute_kernel_desc.named_compile_time_args = {
-        {"cb_full_in0", full_in0_cb_index},
-        {"cb_in1", in1_cb_index},
-        {"cb_out", out_cb_index},
-        {"cb_sync", sync_cb_index},
-    };
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = use_custom_mm ? MathFidelity::LoFi : MathFidelity::HiFi4,
-        // The RMSNorm epilogue accumulates a sum of squares in DST, so it prefers a 32-bit DST.
-        // custom_mm cannot offer one: its split_acc finalization folds partials back through
-        // MOVD2B and its dense_packing halves the DST tile stride to 32 rows, and both encode
-        // 16-bit DST geometry. custom_mm therefore wins, and the statistics run in BF16 (see
-        // rms_fp32_stats, which keeps the intermediate CBs in step with the DST width).
-        .fp32_dest_acc_en = rms_fp32_stats,
-        .math_approx_mode = false,
-    };
-    if (use_custom_mm) {
-        compute_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
-    }
-    if (use_global_cb) {
-        compute_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
-    }
-    if (rms_norm) {
-        compute_kernel_desc.defines.emplace_back("FUSE_RMS_NORM", "1");
-        // TODO(debug): temporary. "local" dumps this core's partial mean of squares to the output,
-        // "scale" dumps the multicast scale, so the stages can be read back from host.
-        if (const char* dump = std::getenv("TT_RMS_DEBUG_DUMP"); dump != nullptr) {
-            if (std::string_view{dump} == "copy") {
-                compute_kernel_desc.defines.emplace_back("RMS_DEBUG_DUMP_COPY", "1");
-            } else if (std::string_view{dump} == "local") {
-                compute_kernel_desc.defines.emplace_back("RMS_DEBUG_DUMP_LOCAL", "1");
-            } else if (std::string_view{dump} == "scale") {
-                compute_kernel_desc.defines.emplace_back("RMS_DEBUG_DUMP_SCALE", "1");
+
+    // ---- Compute on the weight cores ----
+    {
+        const KernelSpecName name{"compute"};
+        KernelSpec compute{
+            .unique_id = name,
+            .source =
+                "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/"
+                "compute_full_width_sharded.cpp",
+            .dfb_bindings =
+                {ConsumerOf(FULL_IN0_DFB, "full_in0"), ConsumerOf(IN1_DFB, "in1"), ProducerOf(OUT_DFB, "out")},
+            .compile_time_args =
+                {
+                    {"M_tiles", M_tiles},
+                    {"K_tiles", K_tiles},
+                    {"N_tiles_per_core", inB_N_tiles_per_core},
+                    {"inA_K_tiles_per_core", inA_K_tiles_per_core},
+                    {"num_k_blocks", num_k_blocks},
+                },
+            .hw_config =
+                ComputeHardwareConfig{
+                    .fpu_math_fidelity = use_custom_mm ? MathFidelity::LoFi : MathFidelity::HiFi4,
+                    // The RMSNorm epilogue accumulates a sum of squares in DST, so it prefers a 32-bit
+                    // DST. custom_mm cannot offer one: its split_acc finalization folds partials back
+                    // through MOVD2B and its dense_packing halves the DST tile stride to 32 rows, and
+                    // both encode 16-bit DST geometry. custom_mm therefore wins, and the statistics run
+                    // in BF16 (see rms_fp32_stats, which keeps the intermediates in step with the DST
+                    // width).
+                    .enable_32_bit_dest = rms_fp32_stats,
+                },
+        };
+        // The legacy builder's ComputeConfig defaults to O3; Metal 2.0's CompilerOptions defaults to O2.
+        compute.compiler_options.opt_level = KernelBuildOptLevel::O3;
+        auto& defines = compute.compiler_options.defines;
+        if (use_custom_mm) {
+            defines.emplace("USE_CUSTOM_MM", "1");
+        }
+        if (use_pipes) {
+            defines.emplace("IN1_PIPE", "1");
+        } else {
+            compute.compile_time_args.emplace("in1_tile_offset", in1_tile_offset);
+        }
+        KernelRunArgs compute_run_args{.kernel = name};
+        if (rms_norm) {
+            defines.emplace("FUSE_RMS_NORM", "1");
+            // TODO(debug): temporary. "local" dumps this core's partial mean of squares to the output,
+            // "scale" dumps the multicast scale, so the stages can be read back from host.
+            if (const char* dump = std::getenv("TT_RMS_DEBUG_DUMP"); dump != nullptr) {
+                if (std::string_view{dump} == "copy") {
+                    defines.emplace("RMS_DEBUG_DUMP_COPY", "1");
+                } else if (std::string_view{dump} == "local") {
+                    defines.emplace("RMS_DEBUG_DUMP_LOCAL", "1");
+                } else if (std::string_view{dump} == "scale") {
+                    defines.emplace("RMS_DEBUG_DUMP_SCALE", "1");
+                }
+            }
+            compute.dfb_bindings.push_back(ProducerOf(MM_OUT_DFB, "mm_out"));
+            compute.dfb_bindings.push_back(ConsumerOf(MM_OUT_DFB, "mm_out"));
+            compute.dfb_bindings.push_back(ProducerOf(RMS_LOCAL_DFB, "rms_local"));
+            compute.dfb_bindings.push_back(ConsumerOf(RMS_GATHERED_DFB, "rms_gathered"));
+            compute.dfb_bindings.push_back(ProducerOf(RMS_SCALE_SRC_DFB, "rms_scale_src"));
+            compute.dfb_bindings.push_back(ConsumerOf(RMS_SCALE_DFB, "rms_scale"));
+            if (rms_vector_gamma) {
+                defines.emplace("FUSE_RMS_VECTOR_GAMMA", "1");
+                compute.dfb_bindings.push_back(ConsumerOf(RMS_GAMMA_DFB, "rms_gamma"));
+            }
+            compute.compile_time_args.emplace("rms_num_groups", rms_num_groups);
+            compute.compile_time_args.emplace(
+                "rms_inv_group_size_bits",
+                std::bit_cast<uint32_t>(1.0F / static_cast<float>(rms_group_tiles * tt::constants::TILE_WIDTH)));
+            compute.compile_time_args.emplace(
+                "rms_epsilon_bits", std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon));
+            compute.compile_time_args.emplace(
+                "rms_gamma_bits", std::bit_cast<uint32_t>(operation_attributes.rms_norm_gamma.value_or(1.0F)));
+            compute.advanced_options.num_runtime_varargs = rms_num_varargs;
+            for (uint32_t producer = 0; producer < num_producers; ++producer) {
+                compute_run_args.advanced_options.runtime_varargs[producer_cores[producer]] =
+                    rms_topology_varargs[producer];
             }
         }
-        compute_kernel_desc.named_compile_time_args.emplace_back("cb_mm_out", mm_out_cb_index);
-        compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_local", rms_local_cb_index);
-        compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_gathered", rms_gathered_cb_index);
-        compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_scale_src", rms_scale_src_cb_index);
-        compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_scale", rms_scale_cb_index);
-        compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_reduce_scaler", rms_reduce_scaler_cb_index);
-        compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_reduced", rms_reduced_cb_index);
-        if (tensor_args.rms_norm_gamma.has_value()) {
-            compute_kernel_desc.defines.emplace_back("FUSE_RMS_VECTOR_GAMMA", "1");
-            compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_gamma", rms_gamma_cb_index);
+        // Metal 2.0 requires an unpack mode for every Float32 buffer a compute kernel consumes with
+        // 32-bit DEST; the legacy default unpacks through SrcA/B.
+        auto& compute_hw = std::get<ComputeHardwareConfig>(compute.hw_config);
+        if (compute_hw.enable_32_bit_dest) {
+            for (const auto& binding : compute.dfb_bindings) {
+                const auto dfb = std::find_if(dataflow_buffers.begin(), dataflow_buffers.end(), [&](const auto& d) {
+                    return d.unique_id == binding.dfb_spec_name;
+                });
+                if (binding.endpoint_type == DFBEndpointType::CONSUMER &&
+                    dfb->data_format_metadata == tt::DataFormat::Float32) {
+                    compute_hw.unpack_modes.emplace(binding.dfb_spec_name, UnpackMode::UnpackToSrc);
+                }
+            }
         }
-        compute_kernel_desc.named_compile_time_args.emplace_back("rms_group_tiles", rms_group_tiles);
-        compute_kernel_desc.named_compile_time_args.emplace_back("rms_num_groups", rms_num_groups);
-        compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_local_groups", rms_max_local_groups);
-        compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_hub_groups", rms_max_hub_groups);
-        compute_kernel_desc.named_compile_time_args.emplace_back("rms_max_hub_contributors", rms_max_hub_contributors);
-        const uint32_t inv_group_size_bits =
-            std::bit_cast<uint32_t>(1.0F / static_cast<float>(rms_group_tiles * tt::constants::TILE_WIDTH));
-        const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon);
-        const uint32_t gamma_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_gamma.value_or(1.0F));
-        compute_kernel_desc.runtime_args.reserve(producer_cores.size());
-        for (uint32_t producer = 0; producer < producer_cores.size(); ++producer) {
-            auto args = KernelDescriptor::CoreRuntimeArgs{
-                static_cast<uint32_t>(producer == 0), inv_group_size_bits, epsilon_bits, gamma_bits};
-            auto topology_args = rms_topology_runtime_args(rms_topology, producer);
-            args.insert(args.end(), topology_args.begin(), topology_args.end());
-            compute_kernel_desc.runtime_args.emplace_back(producer_cores[producer], std::move(args));
+        for (const auto& core : producer_cores) {
+            kernels_by_core[core].push_back(name);
         }
+        kernels.push_back(std::move(compute));
+        run_args.kernel_run_args.push_back(std::move(compute_run_args));
     }
-    desc.kernels.push_back(std::move(compute_kernel_desc));
 
-    const KernelDescriptor::NamedCompileTimeArgs rms_writer_named = {
-        {"cb_rms_local", rms_local_cb_index},
-        {"cb_rms_gathered", rms_gathered_cb_index},
-        {"cb_rms_scale_src", rms_scale_src_cb_index},
-        {"cb_rms_scale", rms_scale_cb_index},
-        {"cb_rms_reduce_scaler", rms_reduce_scaler_cb_index},
-        {"rms_arrival_sem", rms_arrival_sem_id},
-        {"rms_scale_ready_sem", rms_scale_ready_sem_id},
-        {"rms_m_tiles", M_tiles},
-        {"rms_local_tile_size",
-         output_tile.get_tile_size(rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)},
-        {"rms_reduce_tile_size",
-         tt::tt_metal::Tile({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH})
-             .get_tile_size(rms_fp32_stats ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)},
-    };
-    std::map<CoreCoord, uint32_t> rms_producer_id_by_core;
-    for (uint32_t id = 0; id < producer_cores.size(); ++id) {
-        rms_producer_id_by_core[producer_cores[id]] = id;
+    // ---- Drain of the gathered A on the bounding-box cores that hold no weight ----
+    std::vector<CoreCoord> drain_cores;
+    for (const auto& core : all_reader_cores) {
+        if (!inputB_core_range_set.contains(core)) {
+            drain_cores.push_back(core);
+        }
     }
-    auto rms_runtime_args = [&](const CoreCoord& core, uint32_t metadata_arg_base) {
-        const auto producer_it = rms_producer_id_by_core.find(core);
-        const std::optional<uint32_t> producer =
-            producer_it == rms_producer_id_by_core.end() ? std::nullopt : std::optional<uint32_t>{producer_it->second};
-        auto grouped_args = rms_topology_runtime_args(rms_topology, producer);
-        KernelDescriptor::CoreRuntimeArgs args;
-        args.reserve(1 + grouped_args.size());
-        args.push_back(metadata_arg_base);
-        args.insert(args.end(), grouped_args.begin(), grouped_args.end());
-        return args;
+    if (!drain_cores.empty()) {
+        const KernelSpecName name{"in0_drain"};
+        kernels.push_back(KernelSpec{
+            .unique_id = name,
+            .source = "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/"
+                      "compute_full_width_in0_drain.cpp",
+            .dfb_bindings = {ConsumerOf(FULL_IN0_DFB, "full_in0")},
+            .compile_time_args = {{"full_num_tiles", in0_rm_hs ? M_tiles * K_tiles : num_senders * shard_num_tiles}},
+            .hw_config = ComputeHardwareConfig{},
+        });
+        for (const auto& core : drain_cores) {
+            kernels_by_core[core].push_back(name);
+        }
+    }
+
+    // ---- Writers (RISCV_0), always on the opposite NOC from this core's reader ----
+    // BRISC and NCRISC track their non-posted writes in separate counters but share the NIU's ack
+    // register, and the "expected acks" bookkeeping is a non-atomic read-modify-write. Two RISCs
+    // issuing on one NOC therefore race and can drop an increment, leaving the expected count below
+    // the acks that arrive; since the barrier tests for equality it then spins forever. This showed up
+    // as a single core out of 32 stuck in NWBW. Putting both on one NOC for the RMS transport instead
+    // tripped the firmware's end-of-kernel "non-posted writes sent" assert. The kernels are
+    // NOC-agnostic: they flip the multicast rectangle's corners on NOC 1.
+    const uint32_t rms_local_tile_size = rms_tile_size;
+    auto add_rms_transport = [&](KernelSpec& writer,
+                                 KernelRunArgs& writer_run_args,
+                                 const std::vector<CoreCoord>& cores) {
+        writer.dfb_bindings.push_back(ConsumerOf(RMS_LOCAL_DFB, "rms_local"));
+        writer.dfb_bindings.push_back(ProducerOf(RMS_GATHERED_DFB, "rms_gathered"));
+        writer.dfb_bindings.push_back(ConsumerOf(RMS_SCALE_SRC_DFB, "rms_scale_src"));
+        writer.dfb_bindings.push_back(ProducerOf(RMS_SCALE_DFB, "rms_scale"));
+        writer.dfb_bindings.push_back(ProducerOf(RMS_REDUCE_SCALER_DFB, "rms_reduce_scaler"));
+        writer.dfb_bindings.push_back(ConsumerOf(RMS_REDUCE_SCALER_DFB, "rms_reduce_scaler"));
+        writer.semaphore_bindings.push_back(
+            SemaphoreBinding{.semaphore_spec_name = RMS_ARRIVAL_SEM, .accessor_name = "rms_arrival"});
+        writer.semaphore_bindings.push_back(
+            SemaphoreBinding{.semaphore_spec_name = RMS_SCALE_READY_SEM, .accessor_name = "rms_scale_ready"});
+        writer.compile_time_args.emplace("rms_m_tiles", M_tiles);
+        writer.compile_time_args.emplace("rms_local_tile_size", rms_local_tile_size);
+        writer.compile_time_args.emplace("rms_reduce_tile_size", rms_reduce_tile_size);
+        if (rms_vector_gamma) {
+            // gamma is resident in the tensor it borrows and compute reads it in place, so this
+            // binding only gives the buffer the producer it must have.
+            writer.dfb_bindings.push_back(ProducerOf(RMS_GAMMA_DFB, "rms_gamma"));
+        }
+        writer.advanced_options.num_runtime_varargs = rms_num_varargs;
+        for (const auto& core : cores) {
+            writer_run_args.advanced_options.runtime_varargs[core] = rms_topology_varargs[producer_id_by_core.at(core)];
+        }
     };
 
     if (rms_norm && !mcast_out) {
-        auto build_rms_writer = [&](const std::vector<CoreCoord>& cores, NOC noc) {
-            std::vector<CoreRange> ranges;
-            ranges.reserve(cores.size());
-            for (const auto& core : cores) {
-                ranges.emplace_back(core, core);
-            }
-            KernelDescriptor rms_writer;
-            rms_writer.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
-                "writer_full_width_rms_norm.cpp";
-            rms_writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            rms_writer.core_ranges = CoreRangeSet(ranges);
-            rms_writer.named_compile_time_args = rms_writer_named;
-            rms_writer.config = DataMovementConfigDescriptor{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = noc,
+        const auto writer_groups =
+            group_cores(producer_cores, [&](const CoreCoord& core) { return opposite(reader_noc_by_core.at(core)); });
+        for (const auto& [noc, cores] : writer_groups) {
+            const KernelSpecName name{fmt::format("rms_writer_noc{}", static_cast<int>(noc))};
+            KernelSpec writer{
+                .unique_id = name,
+                .source =
+                    "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+                    "writer_full_width_rms_norm.cpp",
+                .hw_config = dm_config(DataMovementProcessor::RISCV_0, noc),
             };
-            rms_writer.runtime_args.reserve(cores.size());
+            KernelRunArgs writer_run_args{.kernel = name};
+            add_rms_transport(writer, writer_run_args, cores);
             for (const auto& core : cores) {
-                rms_writer.runtime_args.emplace_back(core, rms_runtime_args(core, 1));
+                kernels_by_core[core].push_back(name);
             }
-            return rms_writer;
-        };
-
-        // Opposite NOC from this core's reader, for the reason spelled out at the output-mcast
-        // writer below: the two RISCs count their own non-posted writes but share the NIU's
-        // registers, so putting both on one NOC corrupts the bookkeeping. Sharing NOC 1 with the
-        // reader here tripped the firmware's end-of-kernel "non-posted writes sent" assert (the
-        // per-RISC issued count can no longer match the NIU's sent count) rather than hanging a
-        // barrier. The transport kernel is NOC-agnostic: it flips the multicast rectangle's
-        // corners when it runs on NOC 1.
-        std::vector<CoreCoord> noc0_w;
-        std::vector<CoreCoord> noc1_w;
-        for (const auto& core : producer_cores) {
-            const auto noc_it = reader_noc_by_core.find(core);
-            TT_FATAL(
-                noc_it != reader_noc_by_core.end(),
-                "full_width_sharded matmul_decode fused RMSNorm: writer core {} has no reader, so its NOC cannot be "
-                "chosen opposite the reader's",
-                core.str());
-            if (noc_it->second == NOC::NOC_0) {
-                noc1_w.push_back(core);
-            } else {
-                noc0_w.push_back(core);
-            }
-        }
-        if (!noc0_w.empty()) {
-            desc.kernels.push_back(build_rms_writer(noc0_w, NOC::NOC_0));
-        }
-        if (!noc1_w.empty()) {
-            desc.kernels.push_back(build_rms_writer(noc1_w, NOC::NOC_1));
+            kernels.push_back(std::move(writer));
+            run_args.kernel_run_args.push_back(std::move(writer_run_args));
         }
     }
 
     if (mcast_out) {
-        const uint32_t N_tiles = div_up(static_cast<uint32_t>(operation_attributes.N), tt::constants::TILE_WIDTH);
         // One multicast sender per NOC: hub0 on NOC0 covers producers [0, split_P), hub1 on NOC1 the
         // rest. With a single hub, split_P spans every producer so hub0 owns the whole N range.
         const uint32_t num_out_hubs = mcast_two_hub ? 2u : 1u;
         const uint32_t split_P = mcast_two_hub ? num_producers / 2 : num_producers;
         const CoreRange dest_bbox = output_core_range_set.bounding_box();
-        const CoreCoord hub0_logical = dest_bbox.start_coord;
-        const CoreCoord hub1_logical = dest_bbox.end_coord;
+        const CoreCoord out_hub0_logical = dest_bbox.start_coord;
+        const CoreCoord out_hub1_logical = dest_bbox.end_coord;
         // Both hubs come from the dest bbox corners, so a one-core grid collapses them into the
         // same core: it would be tagged Hub0 and hub1's half of N would never be written.
         TT_FATAL(
-            !mcast_two_hub || hub0_logical != hub1_logical,
+            !mcast_two_hub || out_hub0_logical != out_hub1_logical,
             "matmul_decode output_mcast_two_hub needs an output_core_grid of at least two cores, but got {}",
             output_core_range_set.str());
-        const CoreCoord dest_start_phys = device->worker_core_from_logical_core(hub0_logical);
-        const CoreCoord dest_end_phys = device->worker_core_from_logical_core(hub1_logical);
-        const uint32_t num_dest_cores = output_core_range_set.num_cores();
-        constexpr uint32_t out_stage_sem_id = 2;
-        constexpr uint32_t out_done_sem_id = 3;
-        // Hubs live in the dest bbox and need not be producers, so the writer covers both sets.
-        auto writer_bbox = inputB_core_range_set.merge(output_core_range_set);
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = out_stage_sem_id,
-            .core_ranges = writer_bbox,
-            .initial_value = 0,
-        });
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = out_done_sem_id,
-            .core_ranges = writer_bbox,
-            .initial_value = 0,
-        });
-
-        const KernelDescriptor::CompileTimeArgs writer_ct_args = {
-            M_tiles,
-            inB_N_tiles_per_core,
-            N_tiles,
-            out_tile_size,
-            num_dest_cores,
-            static_cast<uint32_t>(dest_start_phys.x),
-            static_cast<uint32_t>(dest_start_phys.y),
-            static_cast<uint32_t>(dest_end_phys.x),
-            static_cast<uint32_t>(dest_end_phys.y),
-            out_stage_sem_id,
-            out_done_sem_id,
-            static_cast<uint32_t>(dest_start_phys.x),
-            static_cast<uint32_t>(dest_start_phys.y),
-            static_cast<uint32_t>(dest_end_phys.x),
-            static_cast<uint32_t>(dest_end_phys.y),
-            split_P,
-            num_producers,
-            num_out_hubs,
-        };
-        KernelDescriptor::NamedCompileTimeArgs writer_named = {
-            {"cb_out", out_cb_index},
-            {"cb_out_stage", out_stage_cb_index},
-            {"cb_out_full", out_full_cb_index},
-        };
-        if (rms_norm) {
-            writer_named.insert(writer_named.end(), rms_writer_named.begin(), rms_writer_named.end());
-        }
-
-        std::map<CoreCoord, uint32_t> producer_id_by_core;
-        for (uint32_t id = 0; id < producer_cores.size(); id++) {
-            producer_id_by_core[producer_cores[id]] = id;
-        }
+        const CoreCoord out_hub0_phys = device->worker_core_from_logical_core(out_hub0_logical);
+        const CoreCoord out_hub1_phys = device->worker_core_from_logical_core(out_hub1_logical);
         auto out_role_of = [&](const CoreCoord& core) -> HubRole {
-            if (core == hub0_logical) {
+            if (core == out_hub0_logical) {
                 return HubRole::Hub0;
             }
-            if (mcast_two_hub && core == hub1_logical) {
+            if (mcast_two_hub && core == out_hub1_logical) {
                 return HubRole::Hub1;
             }
             return HubRole::Plain;
         };
 
-        const std::vector<CoreCoord> writer_cores = corerange_to_cores(writer_bbox, std::nullopt, true);
-        auto build_writer = [&](const std::vector<CoreCoord>& cores, NOC noc) {
-            std::vector<CoreRange> ranges;
-            ranges.reserve(cores.size());
-            for (const auto& core : cores) {
-                ranges.emplace_back(core, core);
-            }
-            KernelDescriptor writer;
-            writer.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
-                "writer_full_width_output_mcast.cpp";
-            writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            writer.core_ranges = CoreRangeSet(ranges);
-            writer.compile_time_args = writer_ct_args;
-            writer.named_compile_time_args = writer_named;
-            writer.config = DataMovementConfigDescriptor{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = noc,
-            };
-            if (rms_norm) {
-                writer.defines.emplace_back("FUSE_RMS_NORM", "1");
-            }
-            writer.runtime_args.reserve(cores.size());
-            for (const auto& core : cores) {
-                const auto it = producer_id_by_core.find(core);
-                const bool is_producer = it != producer_id_by_core.end();
-                const uint32_t n_idx = is_producer ? it->second : 0;
-                const bool is_dest = output_core_range_set.contains(core);
-                KernelDescriptor::CoreRuntimeArgs args = {
-                    static_cast<uint32_t>(is_producer),
-                    n_idx,
-                    static_cast<uint32_t>(out_role_of(core)),
-                    static_cast<uint32_t>(is_dest)};
-                if (rms_norm) {
-                    auto rms_args = rms_runtime_args(core, 5);
-                    args.insert(args.end(), rms_args.begin(), rms_args.end());
-                }
-                writer.runtime_args.emplace_back(core, std::move(args));
-            }
-            return writer;
-        };
-
-        std::vector<CoreCoord> noc0_w;
-        std::vector<CoreCoord> noc1_w;
-        // Always the opposite NOC from this core's reader. BRISC and NCRISC track their non-posted
-        // writes in separate counters but share the NIU's ack register, and the "expected acks"
-        // bookkeeping is a non-atomic read-modify-write. Two RISCs issuing on one NOC therefore race
-        // and can drop an increment, leaving the expected count below the acks that arrive; since the
-        // barrier tests for equality it then spins forever. This showed up as a single core out of 32
-        // stuck in NWBW. Both hubs still end up on different NOCs, since their readers do.
+        const std::vector<CoreCoord> writer_cores = corerange_to_cores(writer_core_range_set, std::nullopt, true);
         for (const auto& core : writer_cores) {
-            const auto noc_it = reader_noc_by_core.find(core);
             TT_FATAL(
-                noc_it != reader_noc_by_core.end(),
+                reader_noc_by_core.contains(core),
                 "full_width_sharded matmul_decode output mcast: writer core {} has no reader, so its NOC cannot be "
                 "chosen opposite the reader's",
                 core.str());
-            if (noc_it->second == NOC::NOC_0) {
-                noc1_w.push_back(core);
-            } else {
-                noc0_w.push_back(core);
+        }
+        const auto writer_groups = group_cores(writer_cores, [&](const CoreCoord& core) {
+            return std::make_tuple(
+                opposite(reader_noc_by_core.at(core)),
+                inputB_core_range_set.contains(core),
+                output_core_range_set.contains(core));
+        });
+        for (const auto& [key, cores] : writer_groups) {
+            const auto& [noc, is_producer, is_dest] = key;
+            const KernelSpecName name{fmt::format(
+                "out_writer_noc{}{}{}", static_cast<int>(noc), is_producer ? "_producer" : "", is_dest ? "_dest" : "")};
+            KernelSpec writer{
+                .unique_id = name,
+                .source =
+                    "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+                    "writer_full_width_output_mcast.cpp",
+                .dfb_bindings = {ProducerOf(OUT_STAGE_DFB, "out_stage"), ConsumerOf(OUT_STAGE_DFB, "out_stage")},
+                .semaphore_bindings =
+                    {SemaphoreBinding{.semaphore_spec_name = OUT_STAGE_SEM, .accessor_name = "out_stage"},
+                     SemaphoreBinding{.semaphore_spec_name = OUT_DONE_SEM, .accessor_name = "out_done"}},
+                .compile_time_args =
+                    {
+                        {"M_tiles", M_tiles},
+                        {"Nc_tiles", inB_N_tiles_per_core},
+                        {"N_tiles", N_tiles},
+                        {"tile_size_bytes", out_tile_size},
+                        {"num_dest_cores", static_cast<uint32_t>(output_core_range_set.num_cores())},
+                        {"hub0_noc_x", static_cast<uint32_t>(out_hub0_phys.x)},
+                        {"hub0_noc_y", static_cast<uint32_t>(out_hub0_phys.y)},
+                        {"hub1_noc_x", static_cast<uint32_t>(out_hub1_phys.x)},
+                        {"hub1_noc_y", static_cast<uint32_t>(out_hub1_phys.y)},
+                        {"split_P", split_P},
+                        {"num_producers", num_producers},
+                        {"num_hubs", num_out_hubs},
+                    },
+                .runtime_arg_schema = {.runtime_arg_names = {"n_idx", "role"}},
+                .hw_config = dm_config(DataMovementProcessor::RISCV_0, noc),
+            };
+            KernelRunArgs writer_run_args{.kernel = name};
+            if (is_producer) {
+                writer.compiler_options.defines.emplace("IS_PRODUCER", "1");
+                writer.dfb_bindings.push_back(ConsumerOf(OUT_DFB, "out"));
+                if (rms_norm) {
+                    writer.compiler_options.defines.emplace("FUSE_RMS_NORM", "1");
+                    add_rms_transport(writer, writer_run_args, cores);
+                }
             }
-        }
-        if (!noc0_w.empty()) {
-            desc.kernels.push_back(build_writer(noc0_w, NOC::NOC_0));
-        }
-        if (!noc1_w.empty()) {
-            desc.kernels.push_back(build_writer(noc1_w, NOC::NOC_1));
+            if (is_dest) {
+                // Filled by the hubs' multicast; nothing local reads it.
+                writer.compiler_options.defines.emplace("IS_DEST", "1");
+                writer.dfb_bindings.push_back(ProducerOf(OUT_FULL_DFB, "out_full"));
+                writer.dfb_bindings.push_back(ConsumerOf(OUT_FULL_DFB, "out_full"));
+            }
+            for (const auto& core : cores) {
+                const auto it = producer_id_by_core.find(core);
+                AddRuntimeArgsForNode(
+                    writer_run_args.runtime_arg_values,
+                    core,
+                    {{"n_idx", it != producer_id_by_core.end() ? it->second : 0u},
+                     {"role", static_cast<uint32_t>(out_role_of(core))}});
+                kernels_by_core[core].push_back(name);
+            }
+            kernels.push_back(std::move(writer));
+            run_args.kernel_run_args.push_back(std::move(writer_run_args));
         }
     }
 
-    return desc;
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Work units
+    ////////////////////////////////////////////////////////////////////////////
+    // Work units may not overlap, so each one is the set of cores that run exactly the same kernels.
+    std::map<std::vector<std::string>, std::pair<Group<KernelSpecName>, std::vector<CoreRange>>> work_unit_by_kernels;
+    for (const auto& [core, core_kernels] : kernels_by_core) {
+        std::vector<std::string> key;
+        for (const auto& name : core_kernels) {
+            key.push_back(name.get());
+        }
+        auto& [unit_kernels, unit_cores] = work_unit_by_kernels[key];
+        unit_kernels = core_kernels;
+        unit_cores.emplace_back(core, core);
+    }
+    Group<WorkUnitSpec> work_units;
+    for (auto& [key, unit] : work_unit_by_kernels) {
+        std::string unit_name;
+        for (const auto& kernel : key) {
+            unit_name += (unit_name.empty() ? "" : "+") + std::string(kernel);
+        }
+        work_units.push_back(WorkUnitSpec{
+            .name = std::move(unit_name),
+            .kernels = std::move(unit.first),
+            .target_nodes = CoreRangeSet(unit.second),
+        });
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensors
+    ////////////////////////////////////////////////////////////////////////////
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = IN0, .spec = input_tensor_a.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()},
+    };
+    run_args.tensor_args = {
+        {IN0, input_tensor_a.mesh_tensor()},
+        {OUTPUT, output_tensor.mesh_tensor()},
+    };
+    if (!use_pipes) {
+        tensor_parameters.push_back(TensorParameter{.unique_id = IN1, .spec = input_tensor_b.tensor_spec()});
+        run_args.tensor_args.emplace(IN1, input_tensor_b.mesh_tensor());
+    }
+    if (rms_vector_gamma) {
+        const auto& gamma = tensor_args.rms_norm_gamma.value();
+        tensor_parameters.push_back(TensorParameter{.unique_id = GAMMA, .spec = gamma.tensor_spec()});
+        run_args.tensor_args.emplace(GAMMA, gamma.mesh_tensor());
+    }
+    for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            pipe_names[p], PrefetcherPipeArgument{*prefetcher_pipes[p]});
+    }
+
+    ProgramSpec spec{
+        .name = "matmul_decode_full_width_sharded",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+        .advanced_options = {.prefetcher_pipe_parameters = std::move(pipe_parameters)},
+    };
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+}  // namespace
+
+std::vector<ttnn::MeshCoordinateRange> dispatch_ranges(
+    const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    if (!operation_attributes.mesh_coords.has_value()) {
+        return tensor_coords.ranges();
+    }
+    std::vector<ttnn::MeshCoordinateRange> ranges;
+    for (const auto& coord : tensor_coords.coords()) {
+        if (std::find(operation_attributes.mesh_coords->begin(), operation_attributes.mesh_coords->end(), coord) !=
+            operation_attributes.mesh_coords->end()) {
+            ranges.emplace_back(coord);
+        }
+    }
+    return ranges;
+}
+
+ttnn::device_operation::MeshWorkloadArtifacts
+MatmulDecodeDeviceOperation::FullWidthSharded::create_mesh_workload_artifacts(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    auto artifacts = create_two_hub_artifacts(operation_attributes, tensor_args, tensor_return_value);
+    ttnn::device_operation::MeshWorkloadArtifacts workload;
+    for (const auto& range : dispatch_ranges(operation_attributes, tensor_coords)) {
+        workload.programs.push_back({.range = range, .spec = artifacts.spec, .run_params = artifacts.run_params});
+    }
+    return workload;
+}
+
+ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthRingGather::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    if (operation_attributes.mesh_coords.has_value() &&
+        (!mesh_dispatch_coordinate.has_value() ||
+         std::find(
+             operation_attributes.mesh_coords->begin(),
+             operation_attributes.mesh_coords->end(),
+             *mesh_dispatch_coordinate) == operation_attributes.mesh_coords->end())) {
+        return {};
+    }
+    const auto& a_grid = tensor_args.input_tensor_a.memory_config().shard_spec().value().grid;
+    const auto& b_grid = operation_attributes.packed_weight.has_value()
+                             ? operation_attributes.packed_weight->cores
+                             : tensor_args.input_tensor_b.memory_config().shard_spec().value().grid;
+    log_info(
+        tt::LogOp,
+        "matmul_decode FullWidthSharded: in0 gather = ring ({}, S={} cores, C={} cores)",
+        a_grid.intersects(b_grid) ? "overlapping S/C" : "disjoint S/C",
+        a_grid.num_cores(),
+        b_grid.num_cores());
+    return create_descriptor_ring_gather_full(
+        operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
 }
 
 namespace {
@@ -1907,8 +1892,8 @@ tt::tt_metal::WorkloadDescriptor MatmulDecodeDeviceOperation::AllGatherFullWidth
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     TT_FATAL(operation_attributes.all_gather, "internal error: all-gather workload factory used without all_gather");
     TT_FATAL(
-        !operation_attributes.global_cb.has_value(),
-        "matmul_decode all_gather is not supported with global_cb (tensor prefetcher)");
+        operation_attributes.prefetcher_pipes.empty(),
+        "matmul_decode all_gather is not supported with prefetcher_pipes (tensor prefetcher)");
 
     auto* mesh_device = tensor_args.input_tensor_a.device();
     const auto subdevice_id = mesh_device->get_sub_device_ids().at(0);

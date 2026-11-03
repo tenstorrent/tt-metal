@@ -11,6 +11,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tt-metalium/work_split.hpp"
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <cmath>
@@ -19,15 +20,15 @@
 
 namespace ttnn::operations::experimental::matmul_decode {
 
-uint32_t gcb_num_receivers(const tt::tt_metal::experimental::GlobalCircularBuffer& gcb) {
-    return gcb.receiver_cores().num_cores();
+namespace {
+CoreRangeSet prefetcher_pipe_receivers(const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    return tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(prefetcher_pipes));
 }
 
-namespace {
 CoreRangeSet weight_core_grid(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes, const Tensor& input_tensor_b) {
-    if (operation_attributes.global_cb.has_value()) {
-        return operation_attributes.global_cb->receiver_cores();
+    if (!operation_attributes.prefetcher_pipes.empty()) {
+        return prefetcher_pipe_receivers(operation_attributes.prefetcher_pipes);
     }
     if (operation_attributes.packed_weight.has_value()) {
         return operation_attributes.packed_weight->cores;
@@ -217,7 +218,13 @@ MatmulDecodeDeviceOperation::program_factory_t MatmulDecodeDeviceOperation::sele
         return AllGatherFullWidth{};
     }
     if (operation_attributes.partial_width_sharded) {
+        if (operation_attributes.ring_gather) {
+            return PartialWidthRingGather{};
+        }
         return PartialWidthSharded{};
+    }
+    if (operation_attributes.ring_gather) {
+        return FullWidthRingGather{};
     }
     return FullWidthSharded{};
 }
@@ -233,10 +240,33 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     const bool batched = operation_attributes.batch > 1;
     const bool partial = !batched && operation_attributes.partial_width_sharded;
 
+    const auto& prefetcher_pipes = operation_attributes.prefetcher_pipes;
+    if (!prefetcher_pipes.empty()) {
+        const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
+        for (size_t p = 0; p < pipes.size(); ++p) {
+            const tt::tt_metal::experimental::PrefetcherPipe& pipe = pipes[p];
+            TT_FATAL(
+                pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram,
+                "matmul_decode prefetcher_pipes must be DRAM-sender (tensor prefetcher) pipes, but pipe {} (sender "
+                "{}) has a {} sender",
+                p,
+                pipe.sender_core().str(),
+                pipe.sender_core_type());
+            TT_FATAL(
+                pipe.ring_size() == pipes.front().get().ring_size(),
+                "matmul_decode prefetcher_pipes requires one ring size across every pipe: pipe {} has {} B, pipe 0 "
+                "has {} B",
+                p,
+                pipe.ring_size(),
+                pipes.front().get().ring_size());
+        }
+    }
+
     if (operation_attributes.dram_weight_grid.has_value()) {
         TT_FATAL(
-            !operation_attributes.global_cb.has_value(),
-            "matmul_decode reads a DRAM weight either through global_cb (tensor prefetcher) or by itself, not both");
+            prefetcher_pipes.empty(),
+            "matmul_decode reads a DRAM weight either through prefetcher_pipes (tensor prefetcher) or by itself, not "
+            "both");
         TT_FATAL(
             !operation_attributes.packed_weight.has_value(),
             "matmul_decode packed_weight is L1-resident and cannot be combined with a DRAM weight");
@@ -293,9 +323,9 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             "matmul_decode mesh_coords and all_gather are mutually exclusive; broadcast the restricted result "
             "explicitly");
         TT_FATAL(
-            !operation_attributes.global_cb.has_value(),
-            "matmul_decode mesh_coords is not supported with global_cb because every prefetched rank must consume "
-            "its queued weight pages");
+            prefetcher_pipes.empty(),
+            "matmul_decode mesh_coords is not supported with prefetcher_pipes because every prefetched rank must "
+            "consume its queued weight entries");
         for (const auto& coord : *operation_attributes.mesh_coords) {
             TT_FATAL(
                 input_tensor_a.device()->get_view().contains(coord),
@@ -310,8 +340,8 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             "matmul_decode all_gather requires a multi-device mesh, but the input mesh has {} device(s)",
             operation_attributes.ring_size);
         TT_FATAL(
-            !operation_attributes.global_cb.has_value(),
-            "matmul_decode all_gather is not supported with global_cb (tensor prefetcher)");
+            prefetcher_pipes.empty(),
+            "matmul_decode all_gather is not supported with prefetcher_pipes (tensor prefetcher)");
         TT_FATAL(!batched, "matmul_decode all_gather is not supported with the batched width-sharded factory");
         TT_FATAL(
             !partial,
@@ -321,9 +351,9 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
 
     if (operation_attributes.ring_gather) {
         TT_FATAL(
-            !operation_attributes.global_cb.has_value(),
-            "matmul_decode ring_gather is not supported with global_cb (tensor prefetcher); the "
-            "reader<->prefetcher handshake lives on the two-hub gather path");
+            prefetcher_pipes.empty(),
+            "matmul_decode ring_gather is not supported with prefetcher_pipes (tensor prefetcher); pipe delivery "
+            "lives on the two-hub gather path");
         TT_FATAL(!batched, "matmul_decode ring_gather is not supported with the batched width-sharded factory");
     }
 
@@ -509,12 +539,12 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         }
         return;
     }
-    const bool b_from_gcb = operation_attributes.global_cb.has_value();
+    const bool b_from_pipes = !operation_attributes.prefetcher_pipes.empty();
     const bool b_from_dram = operation_attributes.dram_weight_grid.has_value();
-    if (b_from_gcb || b_from_dram) {
-        // A DRAM weight -- streamed by the prefetcher through the GCB, or read by the op itself --
+    if (b_from_pipes || b_from_dram) {
+        // A DRAM weight -- streamed by the prefetcher through pipes, or read by the op itself --
         // is an ND-sharded tensor: one contiguous slab per weight core, whose shape depends on the
-        // factory that will consume it. The weight grid comes from the GCB's receivers or from
+        // factory that will consume it. The weight grid comes from the pipes' receivers or from
         // dram_weight_grid, not from a legacy shard spec.
         //
         // memory_layout() is deliberately not checked: TensorSpec back-fills an equivalent legacy
@@ -522,14 +552,14 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         // shard whose shard count fits the DRAM grid, i.e. num_receivers <= num_dram_banks), which
         // reports the layout as WIDTH_SHARDED even though the tensor was created ND-sharded. The
         // NdShardSpec below is the property this path actually needs.
-        const char* source = b_from_gcb ? "global_cb" : "a DRAM weight";
+        const char* source = b_from_pipes ? "prefetcher_pipes" : "a DRAM weight";
         TT_FATAL(
             input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "matmul_decode with global_cb requires input tensor B to live in DRAM (the prefetcher reads DRAM), "
-            "but it is in L1");
+            "matmul_decode with {} requires input tensor B to live in DRAM, but it is in L1",
+            source);
         const int num_receivers = static_cast<int>(
-            b_from_gcb ? gcb_num_receivers(*operation_attributes.global_cb)
-                       : operation_attributes.dram_weight_grid->num_cores());
+            b_from_pipes ? prefetcher_pipe_receivers(operation_attributes.prefetcher_pipes).num_cores()
+                         : operation_attributes.dram_weight_grid->num_cores());
         TT_FATAL(num_receivers > 0, "matmul_decode with {} requires at least one weight core", source);
         // Note: the NdShardSpec lives on the Tensor, not on the MemoryConfig, and the shard count
         // comes from the buffer's BufferDistributionSpec -- same accessors the recv-contig weight
@@ -686,7 +716,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
 
         // A DRAM weight carries no legacy shard spec; the branch above has already checked the
         // equivalent slab shape and block count against the weight grid.
-        if (!b_from_gcb && !b_from_dram) {
+        if (!b_from_pipes && !b_from_dram) {
             const auto& b_shard = input_tensor_b.memory_config().shard_spec().value();
             const uint32_t b_shard_h = b_shard.shape[0];
             const uint32_t b_shard_w = b_shard.shape[1];
@@ -766,7 +796,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             a_shard.shape[1],
             tt::constants::TILE_WIDTH);
 
-        const bool b_nd_sharded = b_from_gcb || b_from_dram;
+        const bool b_nd_sharded = b_from_pipes || b_from_dram;
         // A DRAM weight carries no legacy shard spec, so its [Kc, Nc] slab comes from the ND shard
         // shape the branch above validated.
         const uint32_t Kc = b_nd_sharded ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-2])
@@ -856,24 +886,6 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         "Input tensor B must have the same N dimension as the operation attributes");
 }
 
-ttsl::hash::hash_t MatmulDecodeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // GlobalCircularBuffer hashes on (sender_receiver_core_mapping, size, buffer_type) and not on its
-    // address, so two identically shaped GCBs are indistinguishable to the default reflection hash.
-    // The program bakes in this GCB's addresses, so without folding an address in, a second call with
-    // a different same-shaped GCB reuses a program pointing at the first one and hangs waiting for
-    // credits written into the other buffer. Hashing `attributes` and `tensor_args` wholesale keeps
-    // this additive: both still cover every member (and any added later) exactly as the default hash
-    // did. Both GCB addresses are folded in because the program depends on both, and the config and
-    // data buffers are independent allocations -- a replacement GCB could reuse one address without
-    // reusing the other.
-    const auto gcb_identity =
-        attributes.global_cb.has_value()
-            ? std::make_pair(attributes.global_cb->config_address(), attributes.global_cb->buffer_address())
-            : std::make_pair(tt::tt_metal::DeviceAddr{0}, tt::tt_metal::DeviceAddr{0});
-    return tt::tt_metal::operation::hash_operation<MatmulDecodeDeviceOperation>(attributes, gcb_identity, tensor_args);
-}
-
 MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -948,16 +960,16 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
 
     // Neither a DRAM ND-sharded weight nor a packed weight (a region of the fused L1 tensor)
     // carries a usable legacy shard spec, so the weight-holding (= output) grid comes from the
-    // GCB's receivers, dram_weight_grid or the packed spec's cores instead.
+    // pipes' receivers, dram_weight_grid or the packed spec's cores instead.
     const bool is_packed = operation_attributes.packed_weight.has_value();
     CoreRangeSet output_core_range_set = weight_core_grid(operation_attributes, input_tensor_b);
     int output_num_cores = output_core_range_set.num_cores();
     if (operation_attributes.partial_width_sharded) {
-        const int Nc = operation_attributes.global_cb.has_value() || operation_attributes.dram_weight_grid.has_value()
-                           ? static_cast<int>(input_tensor_b.nd_shard_spec().value().shard_shape[-1])
-                       : is_packed
-                           ? static_cast<int>(operation_attributes.N / operation_attributes.packed_weight->n_blocks())
-                           : static_cast<int>(input_tensor_b.memory_config().shard_spec().value().shape[1]);
+        const int Nc =
+            !operation_attributes.prefetcher_pipes.empty() || operation_attributes.dram_weight_grid.has_value()
+                ? static_cast<int>(input_tensor_b.nd_shard_spec().value().shard_shape[-1])
+            : is_packed ? static_cast<int>(operation_attributes.N / operation_attributes.packed_weight->n_blocks())
+                        : static_cast<int>(input_tensor_b.memory_config().shard_spec().value().shape[1]);
         const int N_tiles = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
         const int Nc_tiles = Nc / tt::constants::TILE_WIDTH;
         const int N_blocks = N_tiles / Nc_tiles;
@@ -1012,8 +1024,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     bool partial_width_sharded,
     std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    uint32_t global_cb_k_blocks,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    uint32_t prefetch_k_blocks,
     const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight,
     bool all_gather,
     const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords,
@@ -1026,11 +1038,10 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     uint32_t rms_norm_group_size,
     const std::optional<CoreRangeSet>& weight_core_grid) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
-    using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
 
-    // A DRAM weight without a GCB is read into L1 by the op itself, one ND shard per weight core.
+    // A DRAM weight without pipes is read into L1 by the op itself, one ND shard per weight core.
     std::optional<CoreRangeSet> dram_weight_grid;
-    if (!global_cb.has_value() && !packed_weight.has_value() &&
+    if (prefetcher_pipes.empty() && !packed_weight.has_value() &&
         input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM) {
         TT_FATAL(
             input_tensor_b.nd_shard_spec().has_value() &&
@@ -1044,7 +1055,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     } else {
         TT_FATAL(
             !weight_core_grid.has_value(),
-            "matmul_decode weight_core_grid applies only to a DRAM ND-sharded weight read without global_cb");
+            "matmul_decode weight_core_grid applies only to a DRAM ND-sharded weight read without prefetcher_pipes");
     }
 
     std::optional<float> rms_norm_gamma_scalar;
@@ -1109,22 +1120,23 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     };
 
     // `compute_output_specs` runs before `validate_on_program_cache_miss` and already reads the
-    // weight's ND shard shape on the GCB path, so these preconditions have to sit ahead of both --
+    // weight's ND shard shape on the pipe path, so these preconditions have to sit ahead of both --
     // otherwise a legacy-sharded weight dies there with a bare bad_optional_access.
     //
     // The per-mode "does this cut the slab evenly" checks need tile geometry and live in the
     // factories; these two only need the arguments.
     TT_FATAL(
-        global_cb_k_blocks >= 1, "matmul_decode global_cb_k_blocks must be at least 1, but got {}", global_cb_k_blocks);
+        prefetch_k_blocks >= 1, "matmul_decode prefetch_k_blocks must be at least 1, but got {}", prefetch_k_blocks);
     TT_FATAL(
-        global_cb.has_value() || global_cb_k_blocks == 1,
-        "matmul_decode global_cb_k_blocks ({}) applies only to the global_cb path: without a GCB the weight is "
+        !prefetcher_pipes.empty() || prefetch_k_blocks == 1,
+        "matmul_decode prefetch_k_blocks ({}) applies only to the prefetcher_pipes path: without pipes the weight is "
         "already L1-resident and there is nothing to stream",
-        global_cb_k_blocks);
-    if (global_cb.has_value()) {
+        prefetch_k_blocks);
+    if (!prefetcher_pipes.empty()) {
         TT_FATAL(
             input_tensor_b.nd_shard_spec().has_value(),
-            "matmul_decode with global_cb requires input tensor B to be ND_SHARDED (receiver-contiguous, one shard "
+            "matmul_decode with prefetcher_pipes requires input tensor B to be ND_SHARDED (receiver-contiguous, one "
+            "shard "
             "per receiver), but its memory layout is {} and it carries no NdShardSpec",
             input_tensor_b.memory_config().memory_layout());
     }
@@ -1137,8 +1149,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         // `partial_width_sharded` argument is ignored.
         const auto& pw = *packed_weight;
         TT_FATAL(
-            !global_cb.has_value(),
-            "matmul_decode packed_weight and global_cb are mutually exclusive: a packed weight is already "
+            prefetcher_pipes.empty(),
+            "matmul_decode packed_weight and prefetcher_pipes are mutually exclusive: a packed weight is already "
             "L1-resident inside the fused tensor, there is nothing for the prefetcher to stream");
         TT_FATAL(
             pw.K > 0 && pw.N > 0 && pw.num_cores() > 0,
@@ -1178,8 +1190,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             static_cast<int>(pw.batch),
             static_cast<int>(pw.b_blocks),
             static_cast<int>(pw.n_blocks()),
-            /*global_cb=*/std::nullopt,
-            /*global_cb_k_blocks=*/1,
+            /*prefetcher_pipes=*/{},
+            /*prefetch_k_blocks=*/1,
             packed_weight,
         });
         auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma_tensor};
@@ -1213,7 +1225,9 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             b_blocks);
         const int N = weight_width / b_blocks;
         const int num_B_cores =
-            global_cb.has_value() ? static_cast<int>(gcb_num_receivers(*global_cb))
+            !prefetcher_pipes.empty() ? static_cast<int>(tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
+                                                             ttnn::prefetcher_pipe_refs(prefetcher_pipes))
+                                                             .num_cores())
             : dram_weight_grid.has_value()
                 ? static_cast<int>(dram_weight_grid->num_cores())
                 : static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
@@ -1243,8 +1257,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             batch,
             b_blocks,
             n_blocks,
-            global_cb,
-            global_cb_k_blocks,
+            prefetcher_pipes,
+            prefetch_k_blocks,
         });
         auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma_tensor};
         return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -1295,8 +1309,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         /*batch=*/1,
         /*b_blocks=*/1,
         /*n_blocks=*/1,
-        global_cb,
-        global_cb_k_blocks,
+        prefetcher_pipes,
+        prefetch_k_blocks,
     });
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

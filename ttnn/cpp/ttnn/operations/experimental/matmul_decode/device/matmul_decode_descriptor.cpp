@@ -10,6 +10,7 @@
 #include <optional>
 
 #include <tt-metalium/mesh_coord.hpp>
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
@@ -32,8 +33,8 @@ RealOp::operation_attributes_t to_real_attributes(const MatmulDecodeParams& p) {
         p.batch,
         p.b_blocks,
         p.n_blocks,
-        p.global_cb,
-        p.global_cb_k_blocks,
+        /*prefetcher_pipes=*/{},
+        /*prefetch_k_blocks=*/1,
         p.packed_weight,
         p.all_gather,
         p.ring_size,
@@ -54,11 +55,9 @@ RealOp::tensor_args_t to_real_tensor_args(const MatmulDecodeInputs& t) {
     return RealOp::tensor_args_t{t.input_tensor_a, t.input_tensor_b, t.rms_norm_gamma};
 }
 
-// Each program factory's create_descriptor() embeds a raw
-// `const GlobalCircularBuffer*` (see CBDescriptor::global_circular_buffer in
-// program_descriptors.hpp) straight into the returned ProgramDescriptor, on the
-// assumption that whatever owns `operation_attributes_t` -- and therefore its
-// by-value `global_cb` -- outlives the descriptor's use. That holds for the normal
+// A program factory's create_descriptor() may embed pointers into `operation_attributes_t`
+// straight into the returned ProgramDescriptor (as CBDescriptor::global_circular_buffer did), on
+// the assumption that whatever owns `operation_attributes_t` outlives the descriptor's use. That holds for the normal
 // synchronous device-operation invoke path (operation_attributes_t lives on the
 // calling stack through Program build), but not here: `to_real_attributes(...)`
 // below builds a fresh by-value copy that is a temporary of the single
@@ -70,9 +69,8 @@ RealOp::tensor_args_t to_real_tensor_args(const MatmulDecodeInputs& t) {
 //
 // Fix: keep one owning copy of operation_attributes_t alive for the process
 // lifetime per create_descriptor() call and hand create_descriptor a reference into
-// that copy instead of a bare temporary. GlobalCircularBuffers are long-lived,
-// model-scoped objects in practice (built once per weight layout, not per call), so
-// the leaked set stays small; this trades a bounded, permanent allocation for
+// that copy instead of a bare temporary. The attributes are small, so the leaked set stays
+// small; this trades a bounded, permanent allocation for
 // correctness without changing the shared ProgramDescriptor/CBDescriptor ownership
 // model.
 const RealOp::operation_attributes_t& keep_attributes_alive(RealOp::operation_attributes_t&& attrs) {
@@ -97,7 +95,8 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
 
 ttsl::hash::hash_t MatmulDecodeDeviceOperation::compute_descriptor_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return RealOp::compute_program_hash(to_real_attributes(operation_attributes), to_real_tensor_args(tensor_args));
+    return tt::tt_metal::operation::hash_operation<RealOp>(
+        to_real_attributes(operation_attributes), to_real_tensor_args(tensor_args));
 }
 
 RealOp::program_factory_t matmul_decode_select_program_factory(
@@ -105,32 +104,24 @@ RealOp::program_factory_t matmul_decode_select_program_factory(
     return RealOp::select_program_factory(to_real_attributes(operation_attributes), to_real_tensor_args(tensor_args));
 }
 
-tt::tt_metal::ProgramDescriptor matmul_decode_full_width_sharded_create_descriptor(
+tt::tt_metal::ProgramDescriptor matmul_decode_full_width_ring_gather_create_descriptor(
     const MatmulDecodeParams& operation_attributes,
     const MatmulDecodeInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     const auto& real_attrs = keep_attributes_alive(to_real_attributes(operation_attributes));
-    return RealOp::FullWidthSharded::create_descriptor(
+    return RealOp::FullWidthRingGather::create_descriptor(
         real_attrs, to_real_tensor_args(tensor_args), tensor_return_value, mesh_dispatch_coordinate);
 }
 
-tt::tt_metal::ProgramDescriptor matmul_decode_partial_width_sharded_create_descriptor(
+tt::tt_metal::ProgramDescriptor matmul_decode_partial_width_ring_gather_create_descriptor(
     const MatmulDecodeParams& operation_attributes,
     const MatmulDecodeInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     const auto& real_attrs = keep_attributes_alive(to_real_attributes(operation_attributes));
-    return RealOp::PartialWidthSharded::create_descriptor(
-        real_attrs, to_real_tensor_args(tensor_args), tensor_return_value);
-}
-
-tt::tt_metal::ProgramDescriptor matmul_decode_batched_width_sharded_create_descriptor(
-    const MatmulDecodeParams& operation_attributes,
-    const MatmulDecodeInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    const auto& real_attrs = keep_attributes_alive(to_real_attributes(operation_attributes));
-    return RealOp::BatchedWidthSharded::create_descriptor(
-        real_attrs, to_real_tensor_args(tensor_args), tensor_return_value);
+    return RealOp::PartialWidthRingGather::create_descriptor(
+        real_attrs, to_real_tensor_args(tensor_args), tensor_return_value, mesh_dispatch_coordinate);
 }
 
 }  // namespace ttnn::prim
