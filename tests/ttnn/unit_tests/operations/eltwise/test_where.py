@@ -1442,7 +1442,7 @@ def test_ttnn_where_uint8_ttt(c_shape, t_shape, f_shape, condition, device):
     ttnn_F = ttnn.from_torch(F, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
 
-    assert ttnn_result.dtype() == ttnn.uint8
+    assert ttnn_result.dtype == ttnn.uint8
     result = ttnn.to_torch(ttnn_result)
     assert torch.equal(result, golden), f"expected {golden.flatten()[:8].tolist()}, got {result.flatten()[:8].tolist()}"
 
