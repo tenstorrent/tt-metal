@@ -228,8 +228,8 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; midpoint of two hosts that differ by ~7%, so both sit in the band.
-    (61, 11, 10): [0.360, 0.368, 0.403, 0.430, 0.461, 0.490, 0.514, 0.544, 0.584, 0.619, 0.653],
+    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
+    (61, 11, 10): [0.391, 0.389, 0.416, 0.446, 0.475, 0.504, 0.532, 0.561, 0.601, 0.634, 0.666],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -285,29 +285,29 @@ MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] 
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, median of two CI runs (11-01). Host-dispatch bound and flat with
-    # depth, so this row catches an eager-dispatch regression and cannot see MLA.
+    # Cut on bh_sc1_high_power, run 36924348392. Host-dispatch bound and flat with depth, so this
+    # row catches an eager-dispatch regression and cannot see MLA.
     (36, 20, 10): [
-        0.278,
-        0.279,
-        0.277,
-        0.276,
-        0.275,
-        0.280,
-        0.278,
-        0.280,
-        0.284,
-        0.283,
-        0.287,
-        0.279,
-        0.276,
-        0.277,
-        0.280,
-        0.279,
-        0.277,
-        0.279,
-        0.276,
-        0.276,
+        0.380,
+        0.379,
+        0.379,
+        0.377,
+        0.376,
+        0.376,
+        0.380,
+        0.383,
+        0.393,
+        0.379,
+        0.379,
+        0.383,
+        0.381,
+        0.381,
+        0.378,
+        0.384,
+        0.378,
+        0.381,
+        0.386,
+        0.381,
     ],
 }
 

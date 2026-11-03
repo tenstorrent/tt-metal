@@ -63,8 +63,8 @@ DEVICE_MS_BASELINES = {
 # Allowed run-to-run variation either side of the baseline, keyed by context_k. Only SLOW fails;
 # FAST is reported so the baseline can be updated.
 # Device time excludes host staging, so its margins are tighter.
-WALL_MS_MARGINS = {10: 0.04, 100: 0.04, 256: 0.03}
-DEVICE_MS_MARGINS = {1: 0.04, 10: 0.04, 100: 0.04, 256: 0.03}
+WALL_MS_MARGINS = {10: 0.03, 100: 0.03, 256: 0.02}
+DEVICE_MS_MARGINS = {1: 0.02, 10: 0.02, 100: 0.02, 256: 0.015}
 
 
 def _ranges(baselines, margins):

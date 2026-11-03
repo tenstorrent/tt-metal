@@ -1,7 +1,7 @@
 {
   "margin": {
-    "throughput_tok_s": 0.03,
-    "ttft_s": 0.03,
+    "throughput_tok_s": 0.015,
+    "ttft_s": 0.015,
     "chunk_time_ms": 0.1
   },
   "baselines": {
@@ -9,30 +9,23 @@
       "sc4": {
         "probe": "@250k",
         "8kw": {
-          "throughput_tok_s": 6866,
-          "ttft_s": 22.98,
-          "chunk_time_ms": 2879
+          "throughput_tok_s": 6848,
+          "ttft_s": 23.0,
+          "chunk_time_ms": 2883
         }
       },
       "sc1": {
         "probe": "@250k",
         "14kw": {
-          "throughput_tok_s": 2439,
-          "ttft_s": 59.67,
-          "chunk_time_ms": 2161
+          "throughput_tok_s": 2421,
+          "ttft_s": 60.11,
+          "chunk_time_ms": 2174
         }
       }
     },
     "glm53": {
       "sc4": {
         "probe": "@1020k",
-        "margin": {
-          "@1020k": {
-            "throughput_tok_s": 0.04,
-            "ttft_s": 0.04,
-            "chunk_time_ms": 0.2
-          }
-        },
         "8kw": {
           "throughput_tok_s": 23434,
           "ttft_s": 32.67,
@@ -41,12 +34,6 @@
       },
       "sc1": {
         "probe": "@1020k",
-        "margin": {
-          "@1020k": {
-            "throughput_tok_s": 0.04,
-            "ttft_s": 0.04
-          }
-        },
         "14kw": {
           "throughput_tok_s": 6733,
           "ttft_s": 115.26,
@@ -58,34 +45,34 @@
       "sc4": {
         "margin": {
           "@5k": {
-            "throughput_tok_s": 0.06,
+            "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.25
+            "chunk_time_ms": 0.05
           },
           "@50k": {
-            "throughput_tok_s": 0.06,
+            "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.25
+            "chunk_time_ms": 0.05
           },
           "@100k": {
-            "throughput_tok_s": 0.06,
+            "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.25
+            "chunk_time_ms": 0.05
           },
           "@255k": {
-            "throughput_tok_s": 0.06,
+            "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.25
+            "chunk_time_ms": 0.05
           },
           "@510k": {
-            "throughput_tok_s": 0.06,
+            "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.25
+            "chunk_time_ms": 0.05
           },
           "@1M": {
-            "throughput_tok_s": 0.06,
+            "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.25
+            "chunk_time_ms": 0.05
           }
         },
         "8kw": {
@@ -123,34 +110,34 @@
       "sc1": {
         "margin": {
           "@5k": {
-            "throughput_tok_s": 0.07,
-            "ttft_s": 0.06,
-            "chunk_time_ms": 0.2
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
           },
           "@50k": {
-            "throughput_tok_s": 0.07,
-            "ttft_s": 0.06,
-            "chunk_time_ms": 0.2
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
           },
           "@100k": {
-            "throughput_tok_s": 0.07,
-            "ttft_s": 0.06,
-            "chunk_time_ms": 0.2
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
           },
           "@255k": {
-            "throughput_tok_s": 0.07,
-            "ttft_s": 0.06,
-            "chunk_time_ms": 0.2
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
           },
           "@510k": {
-            "throughput_tok_s": 0.07,
-            "ttft_s": 0.06,
-            "chunk_time_ms": 0.2
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
           },
           "@1M": {
-            "throughput_tok_s": 0.07,
-            "ttft_s": 0.06,
-            "chunk_time_ms": 0.2
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
           }
         },
         "14kw": {
