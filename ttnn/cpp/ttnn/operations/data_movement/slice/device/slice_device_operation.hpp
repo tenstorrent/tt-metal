@@ -24,6 +24,11 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up = false);
 uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up = false);
 
+// Whether the tile slice factory can take a begin row that is not a multiple of the tile height: it then builds each
+// output tile from the two input tiles the rows straddle. Needs 32x32 tiles of a fixed-size element type and
+// interleaved input and output; anything else is sliced through ROW_MAJOR.
+bool tile_slice_supports_row_shift(const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
+
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {

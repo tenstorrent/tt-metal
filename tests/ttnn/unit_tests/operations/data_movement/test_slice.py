@@ -2358,3 +2358,49 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     explicit = ttnn.slice(tt_input, start, end, slice_dim=2, num_devices=2, memory_config=mem_config)
     assert list(explicit.memory_config().nd_shard_spec.shard_shape) == [1, 1, 64, 64]
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
+
+
+TILE_ROW_SHIFT_CASES = [
+    # (input shape, begins, ends)
+    ((1, 16, 256, 64), (0, 0, 1, 0), (1, 16, 256, 64)),
+    ((1, 1, 4096, 1024), (0, 0, 5, 0), (1, 1, 6, 1024)),
+    ((1, 1, 35, 1536), (0, 0, 17, 0), (1, 1, 18, 1536)),
+    ((1, 1, 35, 1536), (0, 0, 34, 0), (1, 1, 35, 1536)),
+    ((1, 1, 64, 64), (0, 0, 33, 0), (1, 1, 64, 64)),
+    ((2, 3, 100, 96), (0, 0, 7, 0), (2, 3, 100, 96)),
+    ((2, 3, 100, 96), (0, 0, 31, 32), (2, 3, 40, 96)),
+    ((3, 5, 96, 64), (1, 1, 45, 32), (3, 4, 90, 64)),
+    ((4, 70, 64), (0, 3, 0), (4, 69, 64)),
+    ((300, 160), (17, 32), (280, 128)),
+    ((1, 1, 32, 64), (0, 0, 31, 0), (1, 1, 32, 64)),
+]
+
+
+@pytest.mark.parametrize("shape, begins, ends", TILE_ROW_SHIFT_CASES)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16])
+def test_slice_tile_begin_row_inside_tile(device, shape, begins, ends, dtype):
+    """TILE slices whose begin row is not a multiple of 32 build each output tile from the two input tiles it
+    straddles instead of round-tripping the whole input through ROW_MAJOR."""
+    torch.manual_seed(0)
+    torch_input = random_torch_tensor(dtype, shape)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = torch_input[tuple(slice(b, e) for b, e in zip(begins, ends))]
+    output = ttnn.slice(ttnn_input, begins, ends)
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert_equal(expected, ttnn.to_torch(output).to(expected.dtype))
+
+
+@pytest.mark.parametrize(
+    "memory_config, dtype",
+    [(ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16), (ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat8_b)],
+    ids=["l1_bf16", "dram_bfp8_row_major_path"],
+)
+def test_slice_tile_begin_row_inside_tile_memory_and_block_float(device, memory_config, dtype):
+    torch.manual_seed(0)
+    torch_input = torch.rand((2, 3, 100, 96)).bfloat16().float()
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    reference = ttnn.to_torch(ttnn_input).float()
+    output = ttnn.slice(ttnn_input, (0, 1, 13, 32), (2, 3, 77, 96))
+    assert_equal(reference[0:2, 1:3, 13:77, 32:96], ttnn.to_torch(output).float())

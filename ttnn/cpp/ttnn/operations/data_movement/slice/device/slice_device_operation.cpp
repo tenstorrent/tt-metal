@@ -81,6 +81,17 @@ uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& s
     return get_tiled_start_offset(shape, slice_start, round_up);
 }
 
+bool tile_slice_supports_row_shift(const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using namespace tt::constants;
+    const auto dtype = input_tensor.dtype();
+    const bool fixed_size_elements = dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32 ||
+                                     dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16;
+    const auto tile = input_tensor.tensor_spec().tile();
+    return input_tensor.layout() == Layout::TILE && input_tensor.padded_shape().rank() >= 2 && fixed_size_elements &&
+           tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH && !input_tensor.is_sharded() &&
+           !output_mem_config.is_sharded();
+}
+
 uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
     uint32_t start_offset = 0;
 
@@ -226,9 +237,18 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
             tensor_args.input.physical_volume(),
             TILE_HW);
-        TT_FATAL(
-            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (args.slice_start[-2] % TILE_HEIGHT == 0),
-            "Can only slice tilized tensor with height begin index aligned to tiles");
+        // A begin row inside a tile is supported natively for some inputs (the factory shifts rows across tiles);
+        // the end may then fall inside the last input tile row, since the output is padded to whole tiles anyway.
+        if (args.slice_start[-2] % TILE_HEIGHT != 0) {
+            TT_FATAL(
+                ttnn::operations::data_movement::tile_slice_supports_row_shift(
+                    tensor_args.input, args.output_mem_config),
+                "Can only slice this tilized tensor with height begin index aligned to tiles");
+        } else {
+            TT_FATAL(
+                output_tensor_shape[-2] % TILE_HEIGHT == 0,
+                "Can only slice tilized tensor with height begin index aligned to tiles");
+        }
         TT_FATAL(
             (output_tensor_shape[-1] % TILE_WIDTH == 0) && (args.slice_start[-1] % TILE_WIDTH == 0),
             "Can only slice tilized tensor with width begin index aligned to tiles");
