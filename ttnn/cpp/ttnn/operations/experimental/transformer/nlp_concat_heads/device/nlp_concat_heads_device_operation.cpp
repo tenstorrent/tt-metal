@@ -5,8 +5,26 @@
 #include "nlp_concat_heads_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 namespace ttnn::experimental::prim {
+
+namespace {
+// The runtime-rows program serves an interleaved input and output only; sharded keeps the default program.
+bool row_free(const NlpConcatHeadsParams& args, const Tensor& input) {
+    return args.runtime_rows && !input.is_sharded() && !args.output_mem_config.is_sharded();
+}
+}  // namespace
+
+NLPConcatHeadsDeviceOperation::program_factory_t NLPConcatHeadsDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (row_free(args, tensor_args)) {
+        return NLPConcatHeadsRuntimeRowsProgramFactory{};
+    }
+    return NLPConcatHeadsProgramFactory{};
+}
+
 void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;
@@ -63,6 +81,29 @@ void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+void NLPConcatHeadsDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (!row_free(args, tensor_args)) {
+        validate_on_program_cache_miss(args, tensor_args);
+        return;
+    }
+    TT_FATAL(
+        tensor_args.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
+        "Input height {} must be tile aligned",
+        tensor_args.padded_shape()[-2]);
+}
+
+ttsl::hash::hash_t NLPConcatHeadsDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (!row_free(args, tensor_args)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<NLPConcatHeadsDeviceOperation>, args, tensor_args);
+    }
+    constexpr uint64_t kSalt = 0x6e6c705f636f6e63ULL;  // "nlp_conc"
+    return tt::tt_metal::operation::hash_operation<NLPConcatHeadsDeviceOperation>(
+        args, ttnn::operations::common::hash_spec_without_rows(tensor_args, kSalt));
+}
+
 NLPConcatHeadsDeviceOperation::spec_return_value_t NLPConcatHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;
@@ -104,11 +145,13 @@ NLPConcatHeadsDeviceOperation::tensor_return_value_t NLPConcatHeadsDeviceOperati
 
 namespace ttnn::prim {
 
-Tensor nlp_concat_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+Tensor nlp_concat_heads(
+    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config, bool runtime_rows) {
     using OperationType = ttnn::experimental::prim::NLPConcatHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+        .runtime_rows = runtime_rows,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);
