@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
@@ -1728,11 +1729,31 @@ namespace ttnn {
 //   1 zero   -> 1 at the zero, 0 elsewhere
 //   2+ zeros -> 0
 std::vector<Tensor> prod_bw(
-    const Tensor& grad,
+    const Tensor& grad_arg,
     const Tensor& input,
     const std::optional<std::int64_t> dim,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    // torch.prod(x, dim, keepdim=False) yields a grad with the reduced dim removed. The math below assumes the
+    // keepdim layout, so restore the size-1 dim before using it.
+    Tensor grad = grad_arg;
+    if (dim.has_value()) {
+        const auto input_rank = static_cast<std::int64_t>(input.logical_shape().rank());
+        if (input_rank > 1 && static_cast<std::int64_t>(grad_arg.logical_shape().rank()) == input_rank - 1) {
+            const std::int64_t norm_dim = *dim < 0 ? *dim + input_rank : *dim;
+            ttsl::SmallVector<std::uint32_t> keepdim_shape;
+            for (std::int64_t i = 0; i < input_rank - 1; ++i) {
+                if (i == norm_dim) {
+                    keepdim_shape.push_back(1);
+                }
+                keepdim_shape.push_back(grad_arg.logical_shape()[i]);
+            }
+            if (norm_dim == input_rank - 1) {
+                keepdim_shape.push_back(1);
+            }
+            grad = ttnn::reshape(grad_arg, ttnn::Shape(keepdim_shape));
+        }
+    }
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
 
