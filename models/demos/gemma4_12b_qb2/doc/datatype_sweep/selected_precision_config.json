@@ -1,7 +1,7 @@
 {
  "schema": "gemma4_12b_precision/v1",
- "config_id": "b0_lmh4_lofi",
- "description": "baseline + BFP4 LoFi LM head",
+ "config_id": "w8_lmh4_lofi",
+ "description": "BFP8 weights on every layer (no BFP4 exceptions) + BFP4 LoFi LM head",
  "weights": {
   "groups": {
    "qkv": "fused q/k/v projection (column-parallel by head)",
@@ -15,33 +15,7 @@
    "gate_up": "bfp8",
    "down": "bfp8"
   },
-  "layer_exceptions": [
-   {
-    "layers": "13-26,35-39",
-    "dtype": {
-     "gate_up": "bfp4"
-    }
-   },
-   {
-    "layers": "13-24",
-    "dtype": {
-     "down": "bfp4"
-    }
-   },
-   {
-    "layers": "13-20,22,23,25",
-    "dtype": {
-     "qkv": "bfp4",
-     "o": "bfp4"
-    }
-   },
-   {
-    "layers": "24,36,37",
-    "dtype": {
-     "qkv": "bfp4"
-    }
-   }
-  ]
+  "layer_exceptions": []
  },
  "compute_fidelity": {
   "decode_matmul": {
@@ -132,16 +106,15 @@
   "note": "on-device two-level top-32 per chip over the vocab-sharded BF16 logits; greedy = lowest-id argmax"
  },
  "selection": {
-  "selected_from": "re-selection in the vLLM stage (doc/datatype_sweep/README.md 'Stage-9 re-selection'): the previous selection gu4all_down4_13_46_o4in_lmh4 fails the recall set (11 / 14). b0_lmh4_lofi is selected by scripts/aggregate.py's rule: the fastest config that passes the token gate, the v5 screen, the full-context check and the recall set, where accepted configs with overlapping TF repetition ranges are tied and the tie goes to the fewest matmul math-fidelity passes (b0_lmh4_hifi2 is bit-identical and tied; same-session token-out LoFi 12.261-12.262 ms vs HiFi2 12.264-12.265 ms, logs/stage9/perf_token_out_*_ab*.json)",
-  "token_gate": "min(run_prefill_check, run_teacher_forcing) on bringup/references/gemma4_12b_it_aime24_chat.refpt: top-1 >= 0.90, top-5 >= 0.98, top-100 = 1.00",
-  "screen": "clean shared qualitative suite; tests/test_full_model.py user-split and non-aligned tests on natural text; HF-anchored split-placement check (long 8k reference, B = 8 / 16, every row on both placements top-5 >= 0.98, top-100 = 1.00, split-vs-unsplit PCC > 0.9); long 8k prefill check (top-5 >= 0.98, top-100 = 1.00); 7 full-context needle variants at 131K / 262K tokens: every pass key retrieved, no extra thought block; stage-9 addition: the plugin's chunked-prefill recall set (tests/tt/test_chunked_prefill.py prompts in chat format, thinking off: solo split, 3-budget split, 3 rounds x 4 shared-step documents, about 11K / 33K tokens): every passphrase recalled with no extra thought block",
-  "ranking_metric": "trace-verified teacher-forcing decode t/s/u (batch 1, 99 forced steps, median of 5)",
-  "sweep_result": "doc/datatype_sweep/results/b0_lmh4_lofi_stage9.json",
-  "screen_result": "doc/datatype_sweep/results/screen/b0_lmh4_lofi__screen.json",
-  "full_context_result": "doc/datatype_sweep/results/fullctx_variants/b0_lmh4_lofi.json",
-  "lm_head_program": "DRAM-sharded, 3 readers per bank (BFP4 head; tt/model.py LM_HEAD_PROGRAM_BY_DTYPE)",
+  "selected_from": "b0_lmh4_lofi (the stage-9 selection) without its BFP4 weight exceptions (layers 13-26 / 35-39 gate_up, 13-24 down, 13-25 qkv / o, 24 / 36 / 37 qkv), after GPQA Diamond scored 66.7 against the 74.2 same-protocol GPU reference",
+  "accuracy_check": "teacher forcing on GPQA reasoning traces (thinking on, 8 traces, 8000 positions) against HF bf16 on the CPU: KL(HF || TT) x1000 74 -> 28, top-1 0.925 -> 0.952, top-1 misses where HF p >= 0.9: 12 -> 0; HF bf16 vs fp32 reference: 0.3, 0.994, 0. A CPU emulation of the block-float weights on the HF model gives KL x1000 30 for the BFP4 exceptions and 1.0 for BFP8 everywhere",
+  "speed": "local vLLM 128/128: 1 user 12.6 -> 13.2 ms/token, 32 users 1383 -> 1332 tok/s",
+  "previous_selection": {
+   "config_id": "b0_lmh4_lofi",
+   "selected_from": "re-selection in the vLLM stage (doc/datatype_sweep/README.md 'Stage-9 re-selection'): the previous selection gu4all_down4_13_46_o4in_lmh4 fails the recall set (11 / 14). b0_lmh4_lofi is selected by scripts/aggregate.py's rule: the fastest config that passes the token gate, the v5 screen, the full-context check and the recall set, where accepted configs with overlapping TF repetition ranges are tied and the tie goes to the fewest matmul math-fidelity passes (b0_lmh4_hifi2 is bit-identical and tied; same-session token-out LoFi 12.261-12.262 ms vs HiFi2 12.264-12.265 ms, logs/stage9/perf_token_out_*_ab*.json)",
+   "token_gate": "min(run_prefill_check, run_teacher_forcing) on bringup/references/gemma4_12b_it_aime24_chat.refpt: top-1 >= 0.90, top-5 >= 0.98, top-100 = 1.00"
+  },
   "safe_fallback": "precision='baseline' (configs/baseline_stage7.json) or GEMMA4_PRECISION_CONFIG=<path>",
-  "consumed_by": "tt/precision.py PrecisionConfig.load(None) in Gemma4Model.__init__ (build_generator and every adapter built on them); Gemma4Model verifies the built model against it",
-  "recall_set_result": "doc/vllm_integration/logs/recall_set/b0_lmh4_lofi.json"
+  "consumed_by": "tt/precision.py PrecisionConfig.load(None) in Gemma4Model.__init__ (build_generator and every adapter built on them); Gemma4Model verifies the built model against it"
  }
 }
