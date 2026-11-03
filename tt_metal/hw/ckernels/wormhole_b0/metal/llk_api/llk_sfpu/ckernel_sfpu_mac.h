@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
@@ -51,7 +52,7 @@ inline void mac_init() {
     //
     // sfpi defaults the loads and the first row's store to the arch's no-increment addr_mod
     // (ADDR_MOD_3 here), which is what we want; only the second row's store overrides it,
-    // with the auto-advancing mod set above.
+    // with the auto-advancing mod programmed at entry (set in this execute, restored after the replay loop).
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
     lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
@@ -93,10 +94,10 @@ inline void mac_init() {
 // mac_tile call is only valid immediately after mac_tile_init.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_mac(
-    [[maybe_unused]] const uint dst_index_in0,  // input a  (fixed at 0)
-    [[maybe_unused]] const uint dst_index_in1,  // input b  (fixed at 1)
-    [[maybe_unused]] const uint dst_index_in2,  // input c  (fixed at 2)
-    [[maybe_unused]] const uint dst_index_out) {  // output  (fixed at 0)
+    [[maybe_unused]] const std::uint32_t dst_index_in0,    // input a  (fixed at 0)
+    [[maybe_unused]] const std::uint32_t dst_index_in1,    // input b  (fixed at 1)
+    [[maybe_unused]] const std::uint32_t dst_index_in2,    // input c  (fixed at 2)
+    [[maybe_unused]] const std::uint32_t dst_index_out) {  // output  (fixed at 0)
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_mac(). Supported data formats are: Float32, Float16_b.");
