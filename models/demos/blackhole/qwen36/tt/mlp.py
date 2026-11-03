@@ -269,6 +269,21 @@ class Qwen36MLP:
                 fused_activation=None,
                 mcast_in0=True,
             )
+        elif down_pc is None and hidden.shape[-2] == 2048 and hidden.shape[-1] == 17408 and w.w2.shape[-1] == 5120:
+            # prefill 2048 rows: Blackhole sweep measured 2D mcast 13x10 in0_block_w=8 at 2246 vs 10472 us/call for the default
+            down_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=7,
+                out_block_w=13,
+                per_core_M=7,
+                per_core_N=13,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=True,
+            )
         output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output
