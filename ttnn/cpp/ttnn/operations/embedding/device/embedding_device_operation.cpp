@@ -18,13 +18,16 @@ namespace ttnn::prim {
 
 namespace {
 // The runtime-rows factory serves the fused tilized gather with an interleaved output; only that
-// configuration hashes without the index length and the table row count.
+// configuration hashes without the index length and the table row count. A sharded preallocated
+// output stays on the fused factory, which reads the shard spec off the output tensor.
 bool row_free_configuration(
     const EmbeddingsDeviceOperation::operation_attributes_t& operation_attributes,
     const EmbeddingsDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& output = tensor_args.optional_output_tensor;
     return operation_attributes.runtime_rows && operation_attributes.tilized &&
            tensor_args.input_tensor_arg.layout() == Layout::ROW_MAJOR &&
-           !is_sharded(operation_attributes.output_mem_config.memory_layout());
+           !is_sharded(operation_attributes.output_mem_config.memory_layout()) &&
+           !(output.has_value() && output->is_sharded());
 }
 }  // namespace
 
@@ -141,18 +144,29 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_hit(
     }
     // Only the row-dependent invariants: the index length and the table rows are not in the hash.
     const auto& a = tensor_args.input_tensor_arg;
+    const auto& weights = tensor_args.weight_arg;
     TT_FATAL(
         a.padded_shape()[-1] % TILE_HEIGHT == 0,
         "Input tensor width {} must be a multiple of tile height {} to have the output tensor tilized",
         a.padded_shape()[-1],
         TILE_HEIGHT);
     TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    if (operation_attributes.embeddings_type == EmbeddingsType::BINARY) {
+        // The reader copies rows 0 and 1 of the table into its local cache.
+        TT_FATAL(weights.padded_shape()[-2] == 2, "Weight tensor must have 2 embeddings for BINARY Embeddings Type");
+    }
     if (tensor_args.optional_output_tensor.has_value()) {
+        // The writer emits the folded [batch * length, width] tile grid in order, whatever the output's rank
+        // (the wrapper passes a rank-2 output through unchanged for 1-D indices).
         const auto& output_shape = tensor_args.optional_output_tensor->padded_shape();
+        const uint64_t embeddings = a.padded_shape().volume();
         TT_FATAL(
-            output_shape[0] == a.padded_shape()[0] && output_shape[-2] == a.padded_shape()[-1],
-            "Preallocated output shape {} does not match the index tensor shape {}",
+            output_shape[-1] == weights.padded_shape()[-1] &&
+                output_shape.volume() == embeddings * weights.padded_shape()[-1],
+            "Preallocated output shape {} does not hold the [{}, {}] embeddings of the index tensor shape {}",
             output_shape,
+            embeddings,
+            weights.padded_shape()[-1],
             a.padded_shape());
     }
 }

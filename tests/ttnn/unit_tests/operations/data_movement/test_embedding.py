@@ -1053,3 +1053,89 @@ def test_embedding_fused_idle_cores(device, batch_size, sentence_sizes, hidden_e
         indices = torch.randint(0, vocabulary_size, (batch_size, sentence_size))
         _run_fused_gather(device, indices, torch_weights)
     assert device.num_program_cache_entries() == 1
+
+
+def test_embedding_fused_binary_table_rows_rechecked_on_hit(device, expect_error):
+    """BINARY serves rows 0 and 1 of the table out of a local copy. The table's row count is not in the
+    runtime-rows hash, so a one-row table hitting the two-row program must be refused on the hit."""
+    torch.manual_seed(0)
+    hidden_embedding_dim = 128
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    indices = torch.randint(0, 2, (1, 256))
+    torch_weights = torch_random((2, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    _run_fused_gather(device, indices, torch_weights, ttnn.EmbeddingsType.BINARY)
+    assert device.num_program_cache_entries() == 1
+
+    input_tensor = ttnn.from_torch(torch.zeros((1, 256), dtype=torch.int64), dtype=ttnn.uint32, device=device)
+    one_row_table = ttnn.from_torch(torch_weights[:1], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must have 2 embeddings for BINARY"):
+        ttnn.embedding(
+            input_tensor,
+            one_row_table,
+            embeddings_type=ttnn.EmbeddingsType.BINARY,
+            layout=ttnn.TILE_LAYOUT,
+            runtime_rows=True,
+        )
+
+
+@pytest.mark.parametrize("runtime_rows", [True, False])
+def test_embedding_fused_sharded_preallocated_output(device, runtime_rows):
+    """A sharded preallocated output with no memory_config: the runtime-rows flag leaves it on the fused
+    factory, which reads the shard spec off the output tensor."""
+    torch.manual_seed(0)
+    batch_size, sentence_size, hidden_embedding_dim, vocabulary_size = 2, 256, 1024, 4096
+    num_cores_x, num_cores_y = 8, 1
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores_x > compute_grid_size.x or num_cores_y > compute_grid_size.y:
+        pytest.skip(f"Need a {num_cores_x}x{num_cores_y} core grid but device has {compute_grid_size}")
+    shard_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))]
+    )
+    shard_shape = (batch_size * sentence_size, hidden_embedding_dim // (num_cores_x * num_cores_y))
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    indices = torch.randint(0, vocabulary_size, (batch_size, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    preallocated = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([batch_size, 1, sentence_size, hidden_embedding_dim]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        output_mem_config,
+    )
+    output = ttnn.embedding(
+        input_tensor, weights, layout=ttnn.TILE_LAYOUT, output_tensor=preallocated, runtime_rows=runtime_rows
+    )
+    expected = torch.nn.functional.embedding(indices, torch_weights)
+    assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
+
+
+def test_embedding_fused_rank2_preallocated_output_cache_hit(device):
+    """1-D indices with a preallocated [S, H] output: the wrapper passes the output through at rank 2, so the
+    hit-time check compares the folded tile grid, not a batch dim the output does not have."""
+    torch.manual_seed(0)
+    vocabulary_size, hidden_embedding_dim = 512, 128
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    for sentence_size in (256, 256, 128):
+        indices = torch.randint(0, vocabulary_size, (sentence_size,))
+        input_tensor = ttnn.from_torch(indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        preallocated = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([sentence_size, hidden_embedding_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output = ttnn.embedding(
+            input_tensor, weights, layout=ttnn.TILE_LAYOUT, output_tensor=preallocated, runtime_rows=True
+        )
+        expected = torch.nn.functional.embedding(indices, torch_weights)
+        assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
+    assert device.num_program_cache_entries() == 1
