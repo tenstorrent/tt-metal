@@ -9,9 +9,54 @@ memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
 import ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
+import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet as _gdn_mod
+
+
+class _DecodeOProjTtnn:
+    """ttnn shim for the decode path only: injects a swept program config into the o_proj
+    ttnn.linear inside gated_deltanet_forward_ttnn (that module is outside the editable tree)."""
+
+    def __init__(self, o_w):
+        self._o_w = o_w
+
+    def __getattr__(self, name):
+        return getattr(ttnn, name)
+
+    def linear(self, a, b, *args, **kwargs):
+        if b is self._o_w and kwargs.get("program_config") is None:
+            shp = list(a.shape)
+            m = 1
+            for d in shp[:-1]:
+                m *= d
+            if m <= 32:
+                kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                    in0_block_w=4,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=1,
+                    out_block_w=2,
+                    per_core_M=1,
+                    per_core_N=2,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
+        return ttnn.linear(a, b, *args, **kwargs)
 
 
 def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
+    if mode == "recurrent":
+        _orig_ttnn = _gdn_mod.ttnn
+        _gdn_mod.ttnn = _DecodeOProjTtnn(gdn.weights.o_proj_weight)
+        try:
+            return _recurrent_forward_impl(gdn, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
+        finally:
+            _gdn_mod.ttnn = _orig_ttnn
+    return _recurrent_forward_impl(gdn, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
+
+
+def _recurrent_forward_impl(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
     """Non-kernel GDN forward. mode='chunk' (prefill, may delegate to the prefill kernel) or
     'recurrent' (single-token decode). Reads weights/state/dims off the gdn instance; updates
     gdn's recurrent + conv state in place.
