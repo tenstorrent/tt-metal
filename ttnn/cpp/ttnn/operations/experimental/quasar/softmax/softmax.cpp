@@ -13,8 +13,11 @@ namespace ttnn::operations::experimental::quasar {
 
 namespace {
 // LoFi, approx off, fp32 accumulation: the row statistics (max, sum) and the exp intermediates are
-// kept in fp32 when the config asks for it. Every multiply has a bf16 operand (the input or the
-// scaler tile), and on Quasar one fidelity phase covers a bf16 mantissa.
+// kept in fp32 when the config asks for it. LoFi is a temporary default: the compute API programs the
+// math source formats once, at startup, so the fp32 intermediates run under the input's bf16 format,
+// and the simulator refuses the extra fidelity phases there. LoFi drops their low mantissa bits (the
+// reduce multiplies the fp32 exps, the normalization the fp32 exps by the fp32 reciprocal). Back to
+// HiFi4 once the math formats are programmed per op.
 DeviceComputeKernelConfig softmax_default_compute_config(tt::ARCH arch) {
     return init_device_compute_kernel_config(
         arch,
