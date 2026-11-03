@@ -9,8 +9,19 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/qkv_causal_conv1d_silu.hpp"
 #include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::experimental::kda {
+
+// How `history`, the predecessor carry and the returned carry store the three rows preceding the input.
+enum class QkvCausalConv1dSiluHistoryLayout : uint8_t {
+    // [1, 3, Q+K+V]: page r is history row r.
+    ROWS,
+    // [1, (Q+K+V)/64, 3*64]: page c holds the three rows of channels [64c, 64c+64), row r at element 64r.
+    SEGMENTS,
+};
+
+}  // namespace ttnn::experimental::kda
 
 namespace ttnn::experimental::prim {
 

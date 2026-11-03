@@ -1,4 +1,7 @@
-set(TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_API_HEADERS qkv_causal_conv1d_silu.hpp)
+set(TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_API_HEADERS
+    qkv_causal_conv1d_silu.hpp
+    device/qkv_causal_conv1d_silu_device_operation_types.hpp
+)
 
 set(TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_SRCS
     qkv_causal_conv1d_silu.cpp
