@@ -550,6 +550,37 @@ class Qwen36Model:
             # the fp32 -> bf16 cast on this [1,1,B,vocab/tp] tensor actually returns garbage (the
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
+        elif (
+            not self._lmhead_vocab_sharded
+            and x.shape[-2] <= 32
+            and x.shape[-1] == 5120
+            and self.lm_head_weight.shape[-1] == 248320
+        ):
+            # single-device decode (one 32-row tile), base path: Blackhole sweep measured in0_block_w=1
+            # at 3488.0 vs 3513.1 us/call for the default 13x10 1D-mcast (in0_block_w=2); precision is
+            # held at the call's own default compute config.
+            kw = dict(
+                program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                    in0_block_w=1,
+                    out_subblock_h=1,
+                    out_subblock_w=6,
+                    out_block_h=1,
+                    out_block_w=60,
+                    per_core_M=1,
+                    per_core_N=60,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                ),
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                    dst_full_sync_en=False,
+                ),
+            )
         logits = ttnn.linear(x, self.lm_head_weight, **kw)
         if self._lmhead_vocab_sharded:
             from models.tt_transformers.tt.ccl import tt_all_gather
