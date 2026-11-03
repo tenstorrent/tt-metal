@@ -232,14 +232,17 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     EXPECT_EQ(snapshot.compile_time_args.at(1), 0u);
     EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
     tt::tt_metal::Program program;
-    copy.append_semaphores(program);
-    std::vector<uint32_t> ct, first_rt, second_rt;
-    copy.append_compile_time_args_to(ct);
-    copy.append_runtime_args_to(first_rt, {0, 0});
-    copy.append_runtime_args_to(second_rt, {3, 0});
-    EXPECT_EQ(test::emitted_metadata(ct, 0).mcast.ack_count, UINT32_MAX);
-    EXPECT_EQ(first_rt.at(2), 1u);  // Generic roles, phase, then per-sender ACK.
-    EXPECT_EQ(second_rt.at(2), 2u);
+    tt::tt_metal::DataMovementConfig kernel_config;
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> rt{{{0, 0}, {}}, {{3, 0}, {}}};
+    copy.attach(
+        program,
+        CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({3, 0}, {3, 0})}),
+        kernel_config,
+        "copy",
+        rt);
+    EXPECT_EQ(test::emitted_metadata(kernel_config.compile_args, 0).mcast.ack_count, UINT32_MAX);
+    EXPECT_EQ(rt.at(0).second.at(2), 1u);  // Generic roles, phase, then per-sender ACK.
+    EXPECT_EQ(rt.at(1).second.at(2), 2u);
 }
 
 TEST_F(McastFixture, DefaultEmptyAndDisabledHandshakes) {
@@ -361,7 +364,6 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     channel.attach(descriptor, "channel", std::array{std::ref(kernel)}, 0);
     auto direct = channel;
     tt::tt_metal::Program program;
-    direct.append_semaphores(program);
     const auto ct_offset = static_cast<uint32_t>(direct_ct.size());
     const auto rt_offset = static_cast<uint32_t>(
         std::max_element(direct_rt.begin(), direct_rt.end(), [](const auto& lhs, const auto& rhs) {
@@ -369,12 +371,13 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
         })->second.size());
     EXPECT_EQ(ct_offset, 1u);
     EXPECT_EQ(rt_offset, 2u);
-    direct.append_compile_time_args_to(direct_ct);
+    // The direct-Program adapter requires a uniform prefix, so pad as the descriptor adapter does.
     for (auto& [core, args] : direct_rt) {
         args.resize(rt_offset, 0u);
-        direct.append_runtime_args_to(args, core);
     }
-    EXPECT_EQ(direct_ct, kernel.compile_time_args);
+    tt::tt_metal::DataMovementConfig direct_config{.compile_args = direct_ct};
+    direct.attach(program, receivers, direct_config, "channel", direct_rt);
+    EXPECT_EQ(direct_config.compile_args, kernel.compile_time_args);
     EXPECT_EQ(direct_rt, kernel.runtime_args);
     EXPECT_EQ(kernel.runtime_args.front().second.at(1), 0u);
 

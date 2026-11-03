@@ -47,8 +47,8 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     runtime,
 )
@@ -65,7 +65,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # The no-MOP LLK replays a four-face MVMUL walk, so it is full-32x32-tile only (the same
 # restriction the regular Quasar matmul carries, tt-metal #45208).
@@ -79,18 +79,6 @@ DEST_SYNC_MODE = DestSync.Half
 # Plain (non-2x) formats out of Quasar's matmul set. MX formats are covered by the 2x test below,
 # which needs the MX golden machinery anyway.
 MATMUL_FORMATS = input_output_formats([DataFormat.Float16, DataFormat.Float16_b])
-
-
-def _dest_bank_max_tiles(formats, dest_acc):
-    """Max result-tile count for a (format, dest_acc) pair on DestSync.Half.
-
-    A 32-bit destination register (dest_acc=Yes, or a format the harness forces onto 32-bit dest)
-    holds half as many tiles as the 16-bit one. Mirrors test_matmul_custom._dest_bank_max_tiles.
-    """
-    capacity_divisor = (
-        2 if (is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes) else 1
-    )
-    return DEST_SYNC_TILE_LIMITS[DEST_SYNC_MODE] // capacity_divisor
 
 
 def _run_matmul_custom_no_mop(
@@ -206,11 +194,7 @@ def _run_matmul_custom_no_mop(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the math /
     # pack_src format the result was produced in) so the comparison validates the device's MX output
@@ -232,7 +216,10 @@ def _run_matmul_custom_no_mop(
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     dimensions=runtime(
         lambda formats, dest_acc: generate_matmul_dimension_combinations(
-            _dest_bank_max_tiles(formats, dest_acc)
+            max_dest_tiles(
+                is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes,
+                DEST_SYNC_MODE,
+            )
         )
     ),
 )
