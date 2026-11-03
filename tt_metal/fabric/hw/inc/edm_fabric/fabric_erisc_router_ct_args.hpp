@@ -228,6 +228,41 @@ constexpr bool skip_src_ch_id_update = NAMED_CT_ARG("SKIP_SRC_CH_ID_UPDATE") != 
 
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC0");
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC1");
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC2 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC2");
+
+// Per-VC features, indexed by VC, as the host sets them (one arg or define per VC: MAX_NUM_VCS entries each).
+static_assert(MAX_NUM_VCS == 3, "the per-VC features below list one host arg per VC");
+// Whether this router services the VC's traffic (FABRIC_2D_VC<n>_SERVICED; VC0 always).
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_serviced = {
+    true,
+#if defined(FABRIC_2D_VC1_SERVICED)
+    true,
+#else
+    false,
+#endif
+#if defined(FABRIC_2D_VC2_SERVICED)
+    true,
+#else
+    false,
+#endif
+};
+// Whether the VC's packets are first-level acked: the far sender returns a slot to its producer when the packet has
+// arrived, on an ack, rather than when it is completed (ENABLE_FIRST_LEVEL_ACK_VC<n>).
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_first_level_ack_enabled = {
+    ENABLE_FIRST_LEVEL_ACK_VC0, ENABLE_FIRST_LEVEL_ACK_VC1, ENABLE_FIRST_LEVEL_ACK_VC2};
+// The VC's receiver channel's index in the host's per-receiver-channel arrays (on both routers of a link).
+constexpr std::array<size_t, MAX_NUM_VCS> receiver_channel_by_vc = {
+    VC0_RECEIVER_CHANNEL, VC1_RECEIVER_CHANNEL, VC2_RECEIVER_CHANNEL};
+// Whether the VC's receiver channel forwards onto VC1's downstream routers here (crossover, on an intermesh router:
+// FABRIC_2D_VC0_CROSSOVER_TO_VC1, VC2_CROSSOVER_TO_VC1); VC1's forwards on VC1.
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_crossover_to_vc1 = {
+#if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+    true,
+#else
+    false,
+#endif
+    false,
+    NAMED_CT_ARG("VC2_CROSSOVER_TO_VC1") != 0};
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = NAMED_CT_ARG("ENABLE_RISC_CPU_DATA_CACHE");
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE");
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
@@ -299,8 +334,30 @@ constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOC
 constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_9_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_9_CONN_INFO_ADDR");
+// Each sender channel's connection semaphore (the address its runtime arg also carries).
+constexpr size_t local_sender_channel_0_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_0_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_1_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_1_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_2_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_2_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_3_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_3_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_4_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_4_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_5_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_5_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_6_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_6_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_7_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_7_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_8_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_8_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_9_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_9_CONNECTION_SEMAPHORE_ADDR");
 // The same, by channel: each sender channel's connection info (its worker's location, the read counter a disconnected
-// worker's credits go to), in L1 at compile-time addresses.
+// worker's credits go to) and its connection semaphore (a worker channel's connection state), in L1 at compile-time
+// addresses.
 constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_addrs = {
     local_sender_channel_0_connection_info_addr,
     local_sender_channel_1_connection_info_addr,
@@ -312,6 +369,17 @@ constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_add
     local_sender_channel_7_connection_info_addr,
     local_sender_channel_8_connection_info_addr,
     local_sender_channel_9_connection_info_addr};
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_semaphore_addrs = {
+    local_sender_channel_0_connection_semaphore_addr,
+    local_sender_channel_1_connection_semaphore_addr,
+    local_sender_channel_2_connection_semaphore_addr,
+    local_sender_channel_3_connection_semaphore_addr,
+    local_sender_channel_4_connection_semaphore_addr,
+    local_sender_channel_5_connection_semaphore_addr,
+    local_sender_channel_6_connection_semaphore_addr,
+    local_sender_channel_7_connection_semaphore_addr,
+    local_sender_channel_8_connection_semaphore_addr,
+    local_sender_channel_9_connection_semaphore_addr};
 
 // ============================================================================
 // Status pointers
@@ -331,6 +399,20 @@ constexpr uint32_t notify_worker_of_read_counter_update_src_address =
 // ============================================================================
 // Channel servicing flags
 // ============================================================================
+// Whether a sender channel position takes a worker: the first sender channel of each VC whose routing mode has a worker
+// (SENDER_CH_<i>_IS_WORKER_CHANNEL; erisc_datamover_builder.cpp), whether or not trimming services it.
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_worker = {
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_3_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_4_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_5_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_WORKER_CHANNEL")),
+};
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_0_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_1_SERVICED")),
@@ -748,8 +830,8 @@ constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
-// TODO: Pass this value from host
-constexpr uint8_t NUM_TRANSACTION_IDS = enable_deadlock_avoidance ? 8 : 4;
+// NoC transaction IDs per receiver channel (the host's choice); the receiver channels take consecutive ranges.
+constexpr uint8_t NUM_TRANSACTION_IDS = NAMED_CT_ARG("NUM_TRANSACTION_IDS");
 
 constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();

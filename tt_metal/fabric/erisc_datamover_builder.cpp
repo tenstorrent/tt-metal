@@ -1030,6 +1030,15 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    // A worker channel: the first sender channel of each VC whose routing mode has a worker, which a worker (or the
+    // fabric's mux) connects to at run time; every other sender channel is forwarded into by an upstream router.
+    // VC0: the worker-connected channel; VC1 (inter-mesh): none; VC2 (neighbour exchange): its one channel. A channel
+    // position's role, whether or not trimming services it.
+    auto is_worker_channel = [&](size_t channel_id) -> bool {
+        const size_t vc2_first = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        return channel_id == get_worker_connected_sender_channel() ||
+               (actual_sender_channels_vc2 > 0 && channel_id == vc2_first);
+    };
     auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
         if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
             return false;
@@ -1039,14 +1048,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             return false;
         }
 
-        const size_t worker_channel = get_worker_connected_sender_channel();
-        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
-        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
-        const bool is_worker_channel = channel_id == worker_channel;
-        const bool is_vc2_channel = channel_id >= vc2_start && channel_id < vc2_end;
         const bool has_static_peer = this->sender_channel_connection_liveness_check_disable_array[channel_id];
 
-        return !is_worker_channel && !is_vc2_channel && !has_static_peer;
+        return !is_worker_channel(channel_id) && !has_static_peer;
     };
 
     const auto& builder_context = fabric_context.get_builder_context();
@@ -1167,8 +1171,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["NUM_DOWNSTREAM_SENDERS_VC1"] = num_vc1_downstream_edms;
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
+    named_args["ETH_TXQ_SEQ_UPDATE_TIMEOUT"] = this->eth_txq_seq_update_timeout;
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
+    // NoC transaction IDs per receiver channel; the receiver channels take consecutive ranges of them.
+    named_args["NUM_TRANSACTION_IDS"] = final_enable_deadlock_avoidance ? 8 : 4;
     named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
@@ -1182,6 +1189,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // agree across every VC1 link, since the acking receiver and upstream sender are on different
     // routers, so it cannot be enabled per-router.
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;
+    // VC2 (neighbour exchange): one hop and no bubble flow control, so no first-level acks.
+    named_args["ENABLE_FIRST_LEVEL_ACK_VC2"] = 0;
+    // Whether VC2's receiver forwards onto VC1's downstream routers here (crossover, as FABRIC_2D_VC0_CROSSOVER_TO_VC1
+    // is for VC0). Neighbour exchange never forwards.
+    named_args["VC2_CROSSOVER_TO_VC1"] = 0;
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
@@ -1201,6 +1213,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", i)] =
             static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[i]);
+    }
+    // Each sender channel's connection semaphore, the address its runtime arg also carries, so a router can read a
+    // worker's connection state without loading a pointer.
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_CONNECTION_SEMAPHORE_ADDR", i)] =
+            static_cast<uint32_t>(config.sender_channels_connection_semaphore_address[i]);
     }
 
     // --- Status pointers ---
@@ -1310,6 +1328,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                             this->is_sender_channel_serviced_[risc_id][i])
                                       : 0;
     }
+    // Which sender channel positions are worker channels (is_worker_channel above), whether or not trimming services
+    // them. LIVE_CHECK_SKIP is the connection protocol, which differs from the role on a channel trimming forces on.
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_IS_WORKER_CHANNEL", i)] =
+            (i < num_sender_channels) ? static_cast<uint32_t>(is_worker_channel(i)) : 0;
+    }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("SENDER_CH_{}_IS_INJECTION", i)] =
             (i < num_sender_channels)
@@ -1320,9 +1344,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("SENDER_CH_{}_ACK_NOC_ID", i)] =
             (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_noc_ids[i]) : 0;
     }
+    // A worker channel's credits go out on a command buffer of their own, so the router can keep it programmed for
+    // them: VC0's worker channel on WR, VC2's on WR_REG. Every other channel keeps the config's (the atomics buffer).
+    using NocCmdBuf = FabricEriscDatamoverConfig::NocCmdBuf;
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        NocCmdBuf ack_cmd_buf = config.sender_channel_ack_cmd_buf_ids[i];
+        if (i < num_sender_channels && is_worker_channel(i)) {
+            ack_cmd_buf =
+                i == get_worker_connected_sender_channel() ? NocCmdBuf::WR_CMD_BUF : NocCmdBuf::WR_REG_CMD_BUF;
+        }
         named_args[fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", i)] =
-            (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_cmd_buf_ids[i]) : 0;
+            (i < num_sender_channels) ? static_cast<uint32_t>(ack_cmd_buf) : 0;
     }
 
     // --- Receiver channel per-channel arrays (always emit MAX entries; 0 for unused) ---
@@ -1404,6 +1436,24 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
     named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
     named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
+    // A receiver channel left serviced (the capture saw it consume packets) while its VC shows neither forwards nor
+    // local writes contradicts itself: every packet a receiver consumes is forwarded or written here. The router takes
+    // the two flags as agreeing (forwarding is off on a serviced channel only where the channel delivers every packet:
+    // VC2's, VC0's on a speedy router), so such a capture is a capture failure.
+    for (size_t vc = 0; vc < 2; vc++) {
+        const bool vc_has_receiver = vc == 0 || config.num_used_receiver_channels_per_vc[1] != 0;
+        const bool delivers_only = vc == 0 && enable_speedy_vc0;
+        TT_FATAL(
+            !vc_has_receiver || delivers_only || !this->is_receiver_channel_serviced_[risc_id][vc] ||
+                compute_disable_rx_forwarding(vc) == 0,
+            "Channel trimming capture is inconsistent for the router at fabric node {}, Ethernet channel {}: receiver "
+            "channel {} (VC{}) consumed packets but the capture records neither forwards nor local writes on its VC. "
+            "Recapture the channel trimming profile.",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            vc,
+            vc);
+    }
 
     // Credit amortization named compile-time args
     uint32_t sender_amort_freq = 0;
@@ -1805,6 +1855,10 @@ void FabricEriscDatamoverBuilder::set_wait_for_host_signal(bool wait_for_host_si
 
 void FabricEriscDatamoverBuilder::set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type) {
     this->firmware_context_switch_type = type;
+}
+
+void FabricEriscDatamoverBuilder::set_eth_txq_seq_update_timeout(uint32_t cycles) {
+    this->eth_txq_seq_update_timeout = cycles;
 }
 
 void FabricEriscDatamoverBuilder::apply_channel_trimming_overrides(const ChannelTrimmingOverrides& overrides) {
