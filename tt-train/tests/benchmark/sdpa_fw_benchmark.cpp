@@ -11,15 +11,17 @@
 // is not timed here: build this file on the merge-base with run() calling
 // sdpa_fw(query, key, value, sc.mask_type, mask, 0.0F, true, gate) to compare. Measured that way on
 // Blackhole p150b (merge-base 0fff850f3c6 vs the chunk-knob branch, us per launch), this kernel at main's
-// chunking matches main's kernel, so the speedups are the chunking and the schedule, not a kernel change:
+// chunking matches main's kernel within noise, so the speedups below are the chunking (and, with a mask
+// tensor, the head stacking) and the schedule, not a kernel change:
 //
 //   scenario                    main's kernel   this kernel, main's chunking   default pick (no cuts)
-//   tinyllama_s2048_causal             1656.4                         1656.6          882.7
-//   tinyllama_s4096_causal             6263.0                         6209.3         2571.4
-//   llama8b_s2048_causal               3149.2                         3163.8         1321.9
-//   tinyllama_s2048_nomask             3038.2                         3031.3         1244.7
-//   tinyllama_s2048_arbitrary          4103.9                         3839.1         1861.0
-//   tinyllama_s2048_causal_gate        1704.1                         1718.1          950.1
+//   tinyllama_s2048_causal             1656.4                         1603.8          666.6
+//   tinyllama_s4096_causal             6263.0                         6051.3         2192.1
+//   llama8b_s2048_causal               3149.2                         3081.7          972.0
+//   tinyllama_s2048_nomask             3038.2                         3007.2         1220.8
+//   tinyllama_s2048_arbitrary          4103.9                         3825.9         1369.6
+//   llama8b_s2048_arbitrary          not timed                         6638.3         2083.7
+//   tinyllama_s2048_causal_gate        1704.1                         1669.0          717.5
 //
 // Historical chunk-only branch measurements (4a9383108cf), before the scheduler:
 // Per-chip rows on p150b with a 120-core compute grid (warmup 3, measured 20):
@@ -81,10 +83,10 @@ struct Scenario {
 };
 
 // TinyLlama 1.1B (32/4 heads, D=64), Llama-3-8B style (32/8, D=128), then the other modes of the shared
-// kernel on the TinyLlama shape: no mask, an explicit (causal) mask tensor, and the output gate. Then the
-// per-chip shapes of tensor-parallel runs: few heads leave the schedule fewer items than cores, which is
-// where cutting the heavy causal items pays (pass 0,0,0,1 to time the same rows uncut). Then the model
-// table.
+// kernel on the TinyLlama shape: no mask, an explicit (causal) mask tensor (also on the Llama-3-8B shape),
+// and the output gate. Then the per-chip shapes of tensor-parallel runs: few heads leave the schedule fewer
+// items than cores, which is where cutting the heavy causal items pays (pass 0,0,0,1 to time the same rows
+// uncut). Then the model table.
 const std::vector<Scenario> kScenarios = {
     // Per-chip full-attention shapes: Qwen3.8 TP4 and Llama-70B TP8.
     {"qwen3_8_tp4_s1024_causal", 1U, 6U, 1U, 1024U, 256U, ttml::metal::AttentionMaskType::Causal},
@@ -144,7 +146,7 @@ const ttml::metal::SDPAForwardProgramConfig kMainConfig{
 struct Row {
     std::string label;
     double device_us = 0.0;
-    double speedup = 0.0;         // main_us / device_us, both this kernel
+    double speedup = 0.0;         // main_chunking_us / device_us, both this kernel
     double dram_alloc_mib = 0.0;  // allocated by the first launch: outputs, logsumexp, scratch
     float max_abs_diff = 0.0F;
     std::string units;  // "<senders>S/<mergers>M" of the schedule
@@ -281,7 +283,7 @@ void run_scenario(
         picked.Sk_chunk_t * tt::constants::TILE_HEIGHT,
         picked.heads_per_item,
         grid.x * grid.y);
-    fmt::print("this kernel at main's chunking (q=32, k=128, h=1, no cuts): {:.1f} us\n", main_us);
+    fmt::print("this kernel at main's chunking (q=32, k=128, h=1, no cuts): {:.1f} us\n", main_chunking_us);
     fmt::print(
         "{:<24} {:>12} {:>9} {:>13} {:>12} {:>10}\n",
         "config",
@@ -368,7 +370,8 @@ int main(int argc, char** argv) {
             cfg.max_pieces = 1U;
             cfg.causal_pairs = true;
             extra_configs.push_back(cfg);
-        } else if (std::sscanf(
+        } else if (
+            std::sscanf(
                 argv[i],
                 "%u,%u,%u,%u,%u",
                 &cfg.q_chunk_size,

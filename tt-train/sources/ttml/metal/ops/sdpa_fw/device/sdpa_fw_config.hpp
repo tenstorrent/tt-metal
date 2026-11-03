@@ -83,7 +83,12 @@ constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;  // running P @ V accumula
 constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;
 constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 constexpr auto kGateCbIndex = tt::CBIndex::c_16;
-constexpr uint32_t kNumSDPAForwardCbs = 17U;
+// Split units: a sender's running state goes out through c_18 to its scratch slot, a merger's partials
+// come in through c_17; c_19 holds the partial's rescale factor while it is folded in.
+constexpr auto kPartialInCbIndex = tt::CBIndex::c_17;
+constexpr auto kPartialOutCbIndex = tt::CBIndex::c_18;
+constexpr auto kPartialAlphaCbIndex = tt::CBIndex::c_19;
+constexpr uint32_t kNumSDPAForwardCbs = 20U;
 
 // Circular-buffer depths in tiles; 0 = the CB is not created.
 struct SDPAForwardCbTiles {
@@ -105,6 +110,16 @@ struct SDPAForwardCbTiles {
 
 // with_partials: the CBs of split units (sender / merger) are present.
 SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, bool with_partials);
+
+// One circular buffer as the program creates it. cb_plan is the one place that says which CBs are bf16
+// and which fp32: the factory creates the CBs from it and l1_bytes sums it, so the fit check cannot drift
+// from the program.
+struct SDPAForwardCb {
+    tt::CBIndex index;
+    tt::DataFormat format;
+    uint32_t tiles;
+};
+std::array<SDPAForwardCb, kNumSDPAForwardCbs> cb_plan(const SDPAForwardCbTiles& tiles);
 uint64_t l1_bytes(const SDPAForwardCbTiles& tiles);
 
 // Work item = one Q chunk of one head stack, see kernels/sdpa_fw_work_list.hpp. Each core gets a list
@@ -185,9 +200,10 @@ void check_chunks(
     uint64_t l1_budget_bytes,
     uint32_t grid_cores);
 
-// check_chunks, then picks the unset knobs by a shape rule, shrinking them until they fit l1_budget_bytes
-// (with the split units' CBs when the schedule cuts) and keep the config's cores busy. Throws when even
-// the smallest chunks do not fit.
+// check_chunks, then picks the unset knobs by a shape rule (four rows per item; up to four heads of a K/V
+// group stacked when there is a mask tensor, one otherwise; four or eight K/V tiles per step), shrinking them
+// until they fit l1_budget_bytes (with the split units' CBs when the schedule cuts) and keep the config's
+// cores busy. Throws when even the smallest config does not fit.
 SDPAForwardChunks resolve_chunks(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,
