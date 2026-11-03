@@ -60,6 +60,13 @@ int main()
         // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
         llk_perf::configure_from_brisc();
 
+        {
+            // Versim experiment: invalidate the TRISC instruction caches before every launch (the next launch may load
+            // other ELFs; a stale icache line ran the previous kernel's code). cfg RISCV_IC_INVALIDATE, bits 1..3 = TRISCs.
+            volatile std::uint32_t tt_reg_ptr* cfg_regs = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE);
+            cfg_regs[157]                               = 0xEU;
+            cfg_regs[157]                               = 0U;
+        }
         clear_trisc_soft_reset();
 
 #if defined(TT_METAL_TTSIM) // ttsim models no BRISC reads of the TRISC PC buffers, and nothing there is timed: wait on L1
