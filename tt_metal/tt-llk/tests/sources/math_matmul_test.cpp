@@ -232,7 +232,7 @@ constexpr bool matmul_row_end_fold_k = false;
 #ifdef MATMUL_SFPU_AFTER
 // an SFPU op after the matmul block in one kernel (init once at the start, as Metal's full inits do): relu on every tile of the block
 #include "ckernel_sfpu.h"
-#include "sfpu/ckernel_sfpu_relu.h"
+#include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #endif
