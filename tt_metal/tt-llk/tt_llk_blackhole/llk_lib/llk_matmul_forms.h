@@ -775,11 +775,15 @@ constexpr bool matmul_format_block_float(const DataFormat f)
     return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b;
 }
 
-// Two tile blocks of one K tile to a block float output at LoFi and HiFi2: the closed block through llk_pack_block (first block closed, then the W form) reads 4 to 10 cycles behind
+// Two and three tile blocks of one K tile at LoFi and HiFi2 (cells below): the closed block through llk_pack_block (first block closed, then the W form) reads 4 to 10 cycles behind
 // main's per-tile pack on the sweep's production sequence; HiFi3 and HiFi4 keep it.
 constexpr bool matmul_pack_two_tile_per_tile(const MathFidelity fidelity, const DataFormat out, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
 {
-    return kt == 1 && rt * ct == 2 && matmul_format_block_float(out) && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2);
+    return kt == 1 &&
+           ((rt * ct == 2 && matmul_format_block_float(out) && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2)) ||
+            // LoFi blocks of two tiles to Float16 or Float16_b read 5 cycles behind main with the plain block (48 of 52 rows), to Float32 6 ahead; a three tile Bfp8_b block 12 behind
+            (rt * ct == 2 && fidelity == MathFidelity::LoFi && (out == DataFormat::Float16 || out == DataFormat::Float16_b)) ||
+            (rt * ct == 3 && fidelity == MathFidelity::LoFi && out == DataFormat::Bfp8_b));
 }
 
 struct matmul_pack_block_cell
@@ -792,6 +796,7 @@ struct matmul_pack_block_cell
 };
 // Blocks of three or more K tiles at LoFi and HiFi2 where the closed block pack read slower than the per-tile pack in the tt-llk sweep (any K, accumulate and packer L1 accumulate).
 inline constexpr matmul_pack_block_cell matmul_pack_per_tile_cells[] = {
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 7},
     {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3},
     {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 1},
     {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 1},

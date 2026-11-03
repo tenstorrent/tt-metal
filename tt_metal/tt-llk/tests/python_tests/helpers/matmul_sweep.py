@@ -109,6 +109,7 @@ _PACK_LLKX_FORMATS = frozenset(_PACK_SHORT)
 _PACK_GRID_FORMATS = frozenset({DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Float32})
 # (fidelity, output, A, B, rt, ct): blocks of three or more K tiles where the closed block pack reads slower than the per-tile pack (matmul_pack_per_tile_cells in llk_matmul_forms.h)
 _PACK_PER_TILE_ROWS = (
+    ('LoFi', 'B4', 'F16b', 'B8', 1, 7),
     ('HiFi2', 'B4', 'B4', 'F32', 1, 3),
     ('HiFi2', 'B4', 'B4', 'F32', 2, 1),
     ('HiFi2', 'B4', 'B4', 'F32', 3, 1),
@@ -762,12 +763,13 @@ _PACK_FULL_L1_PER_TILE = frozenset({("HiFi2", "F32", "B8", "F32", 6, 2, 1), ("Lo
 
 
 def _two_tile_per_tile(formats, math_fidelity, rt_dim, ct_dim, kt_dim):
-    """Two tile blocks of one K tile to a block float output at LoFi and HiFi2: the per-tile pack (matmul_pack_two_tile_per_tile in llk_matmul_forms.h)."""
-    return (
-        kt_dim == 1
-        and rt_dim * ct_dim == 2
-        and formats.output_format in (DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
-        and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)
+    """Two and three tile blocks of one K tile that keep the per-tile pack (matmul_pack_two_tile_per_tile in llk_matmul_forms.h)."""
+    out = formats.output_format
+    tiles = rt_dim * ct_dim
+    return kt_dim == 1 and (
+        (tiles == 2 and out in (DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b) and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2))
+        or (tiles == 2 and math_fidelity == MathFidelity.LoFi and out in (DataFormat.Float16, DataFormat.Float16_b))
+        or (tiles == 3 and math_fidelity == MathFidelity.LoFi and out == DataFormat.Bfp8_b)
     )
 
 
