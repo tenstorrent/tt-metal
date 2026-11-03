@@ -97,8 +97,17 @@ void matmul_blocks(DFB0& a, DFB1& b, DFB2& o, Epilogue epilogue = {}) {
     o.push_back(Mt * Nt);
 }
 
+// INVESTIGATION R2: add `bits` to the raw FP32 bits of DST tiles [0, n) (pre-round for a truncating source register).
+void preround_dst(uint32_t n, uint32_t bits) {
+    binop_with_scalar_tile_init();
+#pragma GCC unroll 1
+    for (uint32_t tile = 0; tile < n; ++tile) {
+        add_unary_tile_int32(tile, bits);
+    }
+}
+
 // Apply a typed binary operation tilewise, batching each destination-register synchronization.
-template <ElementwiseBinaryOp Op, typename DFB0, typename DFB1, typename DFB2>
+template <ElementwiseBinaryOp Op, uint32_t Preround = 0, typename DFB0, typename DFB1, typename DFB2>
 void elementwise_binary(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
@@ -125,6 +134,16 @@ void elementwise_binary(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
             sub_block(a_id, b_id, block_start, block_start, 0, block_tiles);
         } else {
             mul_block(a_id, b_id, block_start, block_start, 0, block_tiles);
+        }
+        if constexpr (Preround != 0) {
+            preround_dst(block_tiles, Preround);
+            if constexpr (Op == ElementwiseBinaryOp::Add) {
+                add_init(a_id, b_id);
+            } else if constexpr (Op == ElementwiseBinaryOp::Subtract) {
+                sub_init(a_id, b_id);
+            } else {
+                mul_init(a_id, b_id);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -287,7 +306,7 @@ void reciprocal_tiles(DFB0& in, DFB1& o, uint32_t n) {
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
-template <typename DFB0, typename DFB1, typename DFB2>
+template <uint32_t Preround = 0, typename DFB0, typename DFB1, typename DFB2>
 void multiply_by_column(DFB0& a, DFB1& col, DFB2& o, uint32_t Mt, uint32_t Nt) {
     const uint32_t a_id = a.get_id();
     const uint32_t col_id = col.get_id();
@@ -304,6 +323,10 @@ void multiply_by_column(DFB0& a, DFB1& col, DFB2& o, uint32_t Mt, uint32_t Nt) {
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             const uint32_t input_tile = block_start + tile;
             mul_tiles_bcast_cols(a_id, col_id, input_tile, input_tile / Nt, tile);
+        }
+        if constexpr (Preround != 0) {
+            preround_dst(block_tiles, Preround);
+            mul_bcast_cols_init(a_id, col_id);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -454,6 +477,8 @@ void reduce_squared_rows_to_inverse_norms(
             binop_with_scalar_tile_init();
             mul_unary_tile(dst, scale_bits);
         }
+        binop_with_scalar_tile_init();
+        add_unary_tile_int32(dst, 0x1000u);  // INVESTIGATION R2: read as SrcB
     };
 
     compute_kernel_lib::
@@ -491,7 +516,7 @@ void normalize_l2_rows(
         RowTiles, ColumnTiles, eps_bits, scale_bits);
 
     inverse_norms.wait_front(RowTiles);
-    multiply_by_column(input, inverse_norms, normalized, RowTiles, ColumnTiles);
+    multiply_by_column<0x2000u>(input, inverse_norms, normalized, RowTiles, ColumnTiles);
     normalized.wait_front(matrix_tiles);
     inverse_norms.pop_front(RowTiles);
     input.pop_front(matrix_tiles);
@@ -510,6 +535,8 @@ void activate_beta(DFB0& logits, DFB1& beta) {
         tile_regs_acquire();
         copy_tile(logits.get_id(), tile, 0);
         sigmoid_tile<VectorMode::RC, false>(0);
+        preround_dst(1, 0x1000u);  // INVESTIGATION R2: read as SrcB
+        sigmoid_tile_init<false>();
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, beta.get_id(), tile);
@@ -588,9 +615,10 @@ void prepare_scan_and_pairwise_inputs(
     pack_reconfig_data_format(q_decay.get_id(), k_beta_pairwise.get_id());
     {
         auto& beta_k = q_pairwise;
-        multiply_by_column(normalized_k, beta, beta_k, Ct, Kt);
+        multiply_by_column<0x2000u>(normalized_k, beta, beta_k, Ct, Kt);
         beta_k.wait_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, centered_decay, k_beta_pairwise, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply, 0x1000u>(
+            beta_k, centered_decay, k_beta_pairwise, chunk_key_tiles);
         k_beta_pairwise.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
         pack_reconfig_data_format(k_beta_pairwise.get_id(), kd.get_id());
         elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, gate_decay, kd, chunk_key_tiles);
@@ -599,7 +627,8 @@ void prepare_scan_and_pairwise_inputs(
     }
     beta.pop_front(Ct);
     gate_decay.pop_front(chunk_key_tiles);
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, chunk_key_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Multiply, 0x1000u>(
+        normalized_q, centered_decay, q_pairwise, chunk_key_tiles);
     q_pairwise.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
     normalized_q.pop_front(chunk_key_tiles);
     centered_decay.pop_front(chunk_key_tiles);
@@ -626,7 +655,7 @@ template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
 void prepare_k_pairwise(DFB0& normalized_k, DFB1& centered_inverse_decay, DFB2& k_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(
+    elementwise_binary<ElementwiseBinaryOp::Multiply, 0x2000u>(
         normalized_k, centered_inverse_decay, k_pairwise, chunk_key_tiles);
     k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G); INVESTIGATION B: normalized_k stays for k_dec
     centered_inverse_decay.pop_front(chunk_key_tiles);
@@ -729,7 +758,7 @@ void prepare_decay_outputs(
         // INVESTIGATION B: k_dec = k * exp(G_last - G) (anchor_decay holds exp(G_last - G); k_pairwise is the
         // normalized_k it was given).
         pack_reconfig_data_format(final_decay.get_id(), k_dec.get_id());
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply, 0x1000u>(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
         k_dec.wait_front(chunk_key_tiles);
         k_pairwise.pop_front(chunk_key_tiles);
         anchor_decay.pop_front(chunk_key_tiles);
