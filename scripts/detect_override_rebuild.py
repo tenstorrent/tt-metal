@@ -72,13 +72,6 @@ REBUILD = re.compile(r"\b(?:[A-Za-z_]\w*::)?create_(?:\w+_)?descriptor\s*\(|\bap
 SUPPRESS = re.compile(r"//\s*override-rebuild-ok\b")
 
 
-def _mask_comments(text):
-    """Blank out comment, string-literal and char-literal contents, preserving length and newlines, so
-    a rebuild merely *described* in a comment — or a brace/quote inside a literal such as ``'}'`` or
-    ``'"'`` — cannot corrupt brace/parse tracking or be flagged."""
-    return blank_noncode(text, blank_directives=False)
-
-
 def _body_span(text, open_paren_idx):
     """Return (start, end) of the brace-delimited body following a declaration, or None if it is a
     declaration only (ends in ``;``)."""
@@ -123,7 +116,7 @@ def check(path):
     if "override_runtime_arguments" not in text:
         return []
     # Match against a comment-free view; report against the original.
-    scan = _mask_comments(text)
+    scan = blank_noncode(text, blank_directives=False)
 
     line_starts = [0]
     for m in re.finditer(r"\n", text):
@@ -168,13 +161,17 @@ def _selftest():
             print(f"SELFTEST FAIL: {msg}")
 
     # --- masker: char literals must not corrupt brace tracking, digit separators must survive ---
-    masked = _mask_comments("void override_runtime_arguments() { char c = '}'; create_descriptor(x); }")
+    text = "void override_runtime_arguments() { char c = '}'; create_descriptor(x); }"
+    masked = blank_noncode(text, blank_directives=False)
     expect("create_descriptor" in masked, "char literal '}' truncated the body before create_descriptor")
-    expect("1'000'000" in _mask_comments("int n = 1'000'000; create_descriptor(y);"), "digit separator mis-masked")
-    expect(
-        "create_descriptor" in _mask_comments('const char* s = "}"; create_descriptor(z);'),
-        "string literal masking regressed",
-    )
+
+    text = "int n = 1'000'000; create_descriptor(y);"
+    masked = blank_noncode(text, blank_directives=False)
+    expect("1'000'000" in masked, "digit separator mis-masked")
+
+    text = 'const char* s = "}"; create_descriptor(z);'
+    masked = blank_noncode(text, blank_directives=False)
+    expect("create_descriptor" in masked, "string literal masking regressed")
 
     # --- path guard: traversal is rejected, an in-repo path resolves ---
     expect(_safe_path("../../../../etc/passwd") is None, "path traversal not rejected")
