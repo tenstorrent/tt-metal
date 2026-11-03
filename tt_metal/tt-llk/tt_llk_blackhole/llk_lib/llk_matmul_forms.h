@@ -1470,7 +1470,7 @@ constexpr int matmul_pack_dense_form(const MathFidelity fidelity, const std::uin
 
 // The output pack form of a matmul block: matmul_pack_form_base_k, and for the blocks it leaves on the per-tile pack at half sync (two or more full tiles, throttle 0, 2 or 3, no packer L1 accumulate,
 // Float and block float formats) the block pack of the LLK-only sweep: the plain block run, the closed block for a block float output, except the cells of matmul_pack_llkx_per_tile_cells.
-constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
+constexpr int matmul_pack_form_blocks_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
                                  const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
                                  const bool l1_acc = false)
 {
@@ -1498,6 +1498,15 @@ constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sy
         form = matmul_format_block_float(out) ? 2 : 1;
     }
     return form;
+}
+
+// The closed block writes the tiles back to back, which takes L1 bank cycles from the unpacker reads (writes win the bank arbiter); at half sync the blocks take the per-tile pack instead.
+constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
+                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
+                                 const bool l1_acc = false)
+{
+    const int form = matmul_pack_form_blocks_k(fidelity, half_sync, throttle, kt, rt, ct, in_a, in_b, out, r0, c1, dense_pages, l1_acc);
+    return (half_sync && form == 2) ? 0 : form;
 }
 
 
