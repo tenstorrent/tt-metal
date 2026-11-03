@@ -22,7 +22,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -33,6 +32,7 @@ from helpers.llk_params import (
 from helpers.param_config import (
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
@@ -78,10 +78,6 @@ REDUCE_FORMATS = (
     ]
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 )
-
-
-def reduce_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def reduce_dest_acc_modes(formats):
@@ -133,7 +129,7 @@ def reduce_math_fidelities(formats, pool_type):
     pool_type=POOL_TYPES,
     math_fidelity=reduce_math_fidelities,
     is_reduce_to_one=reduce_is_reduce_to_one_modes,
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -328,7 +324,7 @@ _ARCH = get_chip_architecture()
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )

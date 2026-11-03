@@ -6,7 +6,7 @@
 #include "fabric_command_interface.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <stdexcept>
 #include <chrono>
 #include <llrt/tt_cluster.hpp>

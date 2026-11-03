@@ -34,6 +34,10 @@ _LAYER_KEYS = [
     "post_feedforward_layernorm.weight",
 ]
 
+# Low-precision mode (default): BFP4 weights, BFP8 KV cache, LoFi matmuls, HiFi2 SDPA.
+# MUSE_LOW_PRECISION=0 selects BFP8 weights, BF16 KV cache, HiFi2 matmuls, HiFi4 SDPA.
+LOW_PRECISION = os.environ.get("MUSE_LOW_PRECISION", "1") == "1"
+
 
 def checkpoint_dir() -> str:
     return os.environ.get("HF_MODEL") or DEFAULT_CKPT_DIR
@@ -82,11 +86,11 @@ class MuseGlimmerModelArgs:
     max_seq_len: int = 8192
     max_prefill_len: int = 8192
     block_size: int = 64
-    attn_weight_dtype: ttnn.DataType = ttnn.bfloat8_b
-    mlp_weight_dtype: ttnn.DataType = ttnn.bfloat8_b
-    lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b
+    attn_weight_dtype: ttnn.DataType = ttnn.bfloat4_b if LOW_PRECISION else ttnn.bfloat8_b
+    mlp_weight_dtype: ttnn.DataType = ttnn.bfloat4_b if LOW_PRECISION else ttnn.bfloat8_b
+    lm_head_dtype: ttnn.DataType = ttnn.bfloat4_b if LOW_PRECISION else ttnn.bfloat8_b
     embed_dtype: ttnn.DataType = ttnn.bfloat16
-    kv_cache_dtype: ttnn.DataType = ttnn.bfloat16
+    kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b if LOW_PRECISION else ttnn.bfloat16
     cache_dir: Optional[str] = None
     _handles: dict = field(default_factory=dict, init=False, repr=False, compare=False)
     _weight_map: Optional[dict] = field(default=None, init=False, repr=False, compare=False)
@@ -242,6 +246,12 @@ class MuseGlimmerModelArgs:
     @property
     def max_num_blocks(self) -> int:
         return self.max_batch_size * self.max_num_blocks_per_user
+
+    @property
+    def sliding_kv_blocks(self) -> int:
+        """Per-user KV blocks of a sliding layer: a ring of the window plus one 256-row prefill pad, so the last
+        `sliding_window` real rows of a padded prompt survive the fill. Never more than the full span."""
+        return min(self.max_num_blocks_per_user, math.ceil((self.sliding_window + 256) / self.block_size))
 
     def is_sliding(self, i: int) -> bool:
         return self.layer_types[i] == "sliding_attention"

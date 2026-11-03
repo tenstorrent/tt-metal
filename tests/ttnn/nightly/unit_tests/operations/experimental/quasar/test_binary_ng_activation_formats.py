@@ -19,6 +19,11 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 _GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 _FULL = (1, 1, 96, 96)
 _SHAPES = [
