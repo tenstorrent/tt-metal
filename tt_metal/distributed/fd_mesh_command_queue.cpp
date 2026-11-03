@@ -64,6 +64,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "distributed/mesh_device_view_impl.hpp"
 #include "dispatch/simple_trace_allocator.hpp"
 #if defined(TT_UMD_BUILD_SIMULATION)
 #include "buffers/simulator_direct_write.hpp"
@@ -104,19 +105,13 @@ public:
         }
     }
 
-    bool enabled() const { return enabled_; }
-
-    void record(ChipId device_id, uint64_t runtime_id, SubDeviceId sub_device_id) const {
-        tt::RecordProgramSubDevice(
-            context_id_, device_id, manager_id_, runtime_id, sub_device_id, num_available_worker_cores_);
-    }
-
     void record(const std::vector<Device*>& devices, uint64_t runtime_id, SubDeviceId sub_device_id) const {
         if (!enabled_) {
             return;
         }
         for (const auto* device : devices) {
-            record(device->id(), runtime_id, sub_device_id);
+            tt::RecordProgramSubDevice(
+                context_id_, device->id(), manager_id_, runtime_id, sub_device_id, num_available_worker_cores_);
         }
     }
 
@@ -446,8 +441,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         TT_FATAL(!blocking, "Blocking is not supported when recording a trace.");
         trace_nodes_.push_back(MeshTraceNode{});
         auto& trace_node = trace_nodes_.back();
-        bool use_prefetcher_cache =
-            mesh_workload.impl().get_finalized_metadata().max_program_kernels_sizeB <= this->prefetcher_cache_sizeB_;
+        // generate_dispatch_commands() made this decision when it built the command sequences the
+        // trace nodes start from, so trace capture reads it like eager enqueue does rather than
+        // re-deriving it. A workload with no kernel binaries has no kernels buffer to cache.
+        bool use_prefetcher_cache = mesh_workload.impl().use_prefetcher_cache_;
         for (auto& [device_range, program] : mesh_workload.get_programs()) {
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
                 device_range,
@@ -926,13 +923,9 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-    bool blocking,
-    std::vector<MemoryPin> memory_pins) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking, std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>,
-        std::move(num_txns_per_device),
-        std::move(memory_pins)));
+        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device), std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 
@@ -1753,13 +1746,12 @@ void FDMeshCommandQueue::record_end() {
                 trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
                 ProgramBinaryStatus::Committed);
 
+            // Per node, not hoisted above the loop: sub_device_id, and so num_available_worker_cores,
+            // is per node. The devices come from the view, not get_local_devices(): that cache is
+            // filled under the api lock, which record_end does not hold.
             const SubDeviceRecorder trace_sub_device_recorder(mesh_device_, sub_device_id);
-            if (trace_sub_device_recorder.enabled()) {
-                for_each_local(mesh_device_, range, [&](const MeshCoordinate& coord) {
-                    trace_sub_device_recorder.record(
-                        mesh_device_->impl().get_device(coord)->id(), node.program_runtime_id, sub_device_id);
-                });
-            }
+            trace_sub_device_recorder.record(
+                mesh_device_->get_view().impl().get_devices(range), node.program_runtime_id, sub_device_id);
 
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(

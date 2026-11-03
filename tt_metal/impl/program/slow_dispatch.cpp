@@ -166,7 +166,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         program.impl().get_program_config(index).local_cb_size / sizeof(uint32_t);
                     for (const auto& circular_buffer : cbs_on_core) {
                         for (uint32_t buffer_index : circular_buffer->local_buffer_indices()) {
-                            uint32_t base_index = buffer_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                            uint32_t base_index = program_dispatch::local_cb_config_slot(buffer_index);
                             uint32_t addr_in_bytes = circular_buffer->address();
                             uint32_t size_in_bytes = circular_buffer->size();
                             uint32_t num_pages = circular_buffer->num_pages(buffer_index);
@@ -178,8 +178,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         }
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
-                                remote_offset_index +
-                                ((max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                                program_dispatch::remote_cb_config_slot(remote_offset_index, max_dfbs, buffer_index);
                             uint32_t config_address = circular_buffer->config_address();
                             circular_buffer_config_vec[base_index] = config_address;
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
