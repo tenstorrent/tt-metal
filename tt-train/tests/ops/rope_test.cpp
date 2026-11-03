@@ -532,7 +532,8 @@ TEST_F(RoPETest, BackwardTest) {
 
 TEST_F(RoPETest, PerRowPositionsMatchScalarRoPE) {
     constexpr uint32_t batch = 2U;
-    const std::vector<uint32_t> starts = {3U, 17U};
+    // The second positions use the same params. Start 0 uses the scalar overload with no slice.
+    const std::vector<std::vector<uint32_t>> starts_per_positions = {{3U, 17U}, {0U, 95U}};
     auto* device = &autograd::ctx().get_device();
 
     auto rope_and_grad = [device](const xt::xarray<float>& x, const xt::xarray<float>& dout, auto rope_fn) {
@@ -548,40 +549,44 @@ TEST_F(RoPETest, PerRowPositionsMatchScalarRoPE) {
     for (uint32_t head_dim : {64U, 128U}) {
         for (uint32_t seq_len : {1U, 5U, 32U}) {
             SCOPED_TRACE(fmt::format("head_dim={} seq_len={}", head_dim, seq_len));
-            auto params = ops::build_rope_params(/*sequence_length=*/64U, head_dim);
+            auto params = ops::build_rope_params(/*sequence_length=*/128U, head_dim);
 
-            std::vector<uint32_t> ids_data;
-            for (uint32_t start : starts) {
-                for (uint32_t j = 0; j < seq_len; ++j) {
-                    ids_data.push_back(start + j);
+            for (const auto& starts : starts_per_positions) {
+                std::vector<uint32_t> ids_data;
+                for (uint32_t start : starts) {
+                    for (uint32_t j = 0; j < seq_len; ++j) {
+                        ids_data.push_back(start + j);
+                    }
                 }
-            }
-            const ops::RotaryEmbeddingPositions ids(
-                autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                    ids_data, ttnn::Shape({batch, seq_len}), device, ttnn::Layout::ROW_MAJOR)));
+                const ops::RotaryEmbeddingPositions ids(
+                    autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        ids_data, ttnn::Shape({batch, seq_len}), device, ttnn::Layout::ROW_MAJOR)));
 
-            auto random_input = [&](uint32_t num_heads) {
-                xt::xarray<float> data = xt::empty<float>({batch, num_heads, seq_len, head_dim});
-                core::parallel_generate<float>(
-                    data,
-                    []() { return std::normal_distribution<float>(0.0F, 1.0F); },
-                    autograd::ctx().get_generator()());
-                return data;
-            };
+                auto random_input = [&](uint32_t num_heads) {
+                    xt::xarray<float> data = xt::empty<float>({batch, num_heads, seq_len, head_dim});
+                    core::parallel_generate<float>(
+                        data,
+                        []() { return std::normal_distribution<float>(0.0F, 1.0F); },
+                        autograd::ctx().get_generator()());
+                    return data;
+                };
 
-            for (uint32_t num_heads : {4U, 2U}) {
-                const auto x = random_input(num_heads);
-                const auto dout = random_input(num_heads);
-                const auto [out, grad] =
-                    rope_and_grad(x, dout, [&](const autograd::TensorPtr& in) { return ops::rope(in, params, ids); });
+                // Each head count runs two times. The second run uses the rows from the first run.
+                for (uint32_t num_heads : {4U, 2U, 4U, 2U}) {
+                    const auto x = random_input(num_heads);
+                    const auto dout = random_input(num_heads);
+                    const auto [out, grad] = rope_and_grad(
+                        x, dout, [&](const autograd::TensorPtr& in) { return ops::rope(in, params, ids); });
 
-                for (uint32_t b = 0; b < batch; ++b) {
-                    const xt::xarray<float> x_b = xt::view(x, xt::range(b, b + 1));
-                    const xt::xarray<float> dout_b = xt::view(dout, xt::range(b, b + 1));
-                    const auto [ref_out, ref_grad] = rope_and_grad(
-                        x_b, dout_b, [&](const autograd::TensorPtr& in) { return ops::rope(in, params, starts[b]); });
-                    EXPECT_TRUE(xt::view(out, xt::range(b, b + 1)) == ref_out);
-                    EXPECT_TRUE(xt::view(grad, xt::range(b, b + 1)) == ref_grad);
+                    for (uint32_t b = 0; b < batch; ++b) {
+                        const xt::xarray<float> x_b = xt::view(x, xt::range(b, b + 1));
+                        const xt::xarray<float> dout_b = xt::view(dout, xt::range(b, b + 1));
+                        const auto [ref_out, ref_grad] = rope_and_grad(x_b, dout_b, [&](const autograd::TensorPtr& in) {
+                            return ops::rope(in, params, starts[b]);
+                        });
+                        EXPECT_TRUE(xt::view(out, xt::range(b, b + 1)) == ref_out);
+                        EXPECT_TRUE(xt::view(grad, xt::range(b, b + 1)) == ref_grad);
+                    }
                 }
             }
         }
