@@ -22,6 +22,12 @@ from models.demos.blackhole.qwen36.tt.dflash2_tp import DFlash2DrafterTP
 from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 from qwen36_resident import weights as Q
 
+# 1: restore the initial recurrent state before every prompt, also when the prefill handoff overwrites it (A/B)
+FULL_RESET = os.environ.get("RESIDENT_PREFILL_FULL_RESET", "0") == "1"
+# 0: no host synchronization between the drafter's context fill and the prompt's verify step (the first-step race, A/B
+# only; see _fill_context)
+FILL_SYNC = os.environ.get("RESIDENT_DFLASH_FILL_SYNC", "1") == "1"
+
 
 # The drafter checkpoint the resident engine was validated with, pinned to its commit: resolve_weights_dir finds
 # snapshots/<rev> in the HF cache offline (HF_HUB_OFFLINE=1) without a refs/main entry, which a cache populated by
@@ -219,21 +225,26 @@ class ResidentDFlash:
 
     def _prompt(self, ids, draft_context=True):
         """the prompt through verify steps (R tokens each, all accepted): returns the first generated token"""
-        self.m.reset()
+
+        def mark(name):
+            if self.prompt_times is not None:
+                ttnn.synchronize_device(self.mesh)
+                self.prompt_times.append((name, time.perf_counter()))
+
+        P, R = len(ids), self.R
+        prefill = self.pp is not None and self.use_prefill and P > 1 and draft_context
+        mark("begin")
+        # the initial recurrent state (a ~37 MB / chip host upload, ~80 ms) only where no handoff overwrites it: the
+        # handoff writes every GDN layer's state into slot 0 and the conv history rows the first step reads (the ring's
+        # first block), and reset never restores the KV caches (stale rows are masked)
+        self.m.reset(state=not prefill or FULL_RESET)
         self.ring = self.slot = 0
         self.prev = None
-        P, R = len(ids), self.R
         start = 0
-        if self.pp is not None and self.use_prefill and P > 1 and draft_context:
+        if prefill:
             # the prefill and its handoff (GDN states into the committed base, conv histories at ring 0, KV) of all but
             # the last token, and the drafter's context from the prefill's taps
             start = P - 1
-
-            def mark(name):
-                if self.prompt_times is not None:
-                    ttnn.synchronize_device(self.mesh)
-                    self.prompt_times.append((name, time.perf_counter()))
-
             mark("start")
             self.pp.reset()
             self.pp.run(torch.tensor(ids[:start]))
@@ -292,6 +303,14 @@ class ResidentDFlash:
         self.drafter.fill_context(dev, s0, valid_len=n_tokens - s0)
         for t in dev:
             ttnn.deallocate(t)
+        if FILL_SYNC:
+            # every chip done with the fill before the verify step is enqueued: a resident step's hubs push their first
+            # round into the peers' hub slots (CB 0, mlp_hub.cpp) as soon as they start, so a chip still running the
+            # fill's last ops (their CBs at those L1 addresses) loses its peers' slots and corrupts its own fill. The
+            # draft does the same before every later step (DFlash2DrafterTP.draft). 2026-10-30, whenever one chip lagged
+            # (chip 1's AICLK throttle under sustained decode): first-step logits all 0 (first token 0, "!") and a
+            # drafter context that accepted no draft for the whole request
+            ttnn.synchronize_device(self.mesh)
 
     # ------------------------------------------------------------------ serving (one request at a time)
     def start(self, ids):

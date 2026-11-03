@@ -12,9 +12,15 @@ token from the chips' top 32 logits and writes the next step's token state, so o
 the adapter only replays the trace, and the runner reads the (token, position) word one step late. Any other
 step samples on the host from the full logits, with the host writing the token state.
 
+Several users (max_num_seqs > 1): initialize_vllm_model returns Qwen36ResidentRowsForCausalLM instead, the
+rows-mode build (launches of 8 independent users, paged KV pool) behind the host bookkeeping of vllm_rows.py;
+max_num_seqs 1 keeps the single-user build above unchanged.
+
 Qwen36ResidentMTPForCausalLM serves greedy MTP speculative decode (qwen36_resident.mtp) through the
 plugin's adaptive block output: every decode step commits MTP_BLOCK tokens, the device running MTP_DEPTH
-verify + draft steps ahead of the host so it keeps decoding during the runner's per-step work.
+verify + draft steps ahead of the host so it keeps decoding during the runner's per-step work. It is greedy-only
+(greedy_only = True): every request is served greedily, and the server logs one warning the first time a request
+with temperature > 0 arrives (greedy_only.install, run on import in the API server process).
 """
 import os
 
@@ -23,23 +29,28 @@ from loguru import logger
 from vllm.transformers_utils.config import uses_mrope
 
 import ttnn
+from qwen36_resident import greedy_only
 from qwen36_resident import weights as Q
 from qwen36_resident.model import TOP_K, Dims, ResidentModel, State
 from qwen36_resident.mtp import SpecDecoder
 from qwen36_resident.prefill.pp_prefill import PPPrefill
+from qwen36_resident.spec_serving import DFLASH_BLOCK, DFLASH_POS_MARGIN, DFLASH_VERIFY, MTP_BLOCK, MTP_DEPTH
+from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, resident_capabilities
 
-PREFILL_CHUNKS = (128, 256, 512, 1024)
+# the PP prefill's chunk sizes (RESIDENT_PREFILL_CHUNKS: the multi profile may drop 128, whose small-matmul weight copies
+# cost 3.21 GB/chip); the largest is the chunk unit a split prompt resumes at, and every one divides it
+PREFILL_CHUNKS = tuple(int(c) for c in os.environ.get("RESIDENT_PREFILL_CHUNKS", "128,256,512,1024").split(","))
+# 1: restore the decode model's initial recurrent state before every prompt, also when the prefill handoff overwrites
+# it (A/B of the skipped ~37 MB / chip upload, as qwen36_resident.dflash)
+FULL_RESET = os.environ.get("RESIDENT_PREFILL_FULL_RESET", "0") == "1"
+if max(PREFILL_CHUNKS) != CHUNK_UNIT or any(CHUNK_UNIT % c for c in PREFILL_CHUNKS):
+    raise ValueError(f"RESIDENT_PREFILL_CHUNKS {PREFILL_CHUNKS}: the largest must be {CHUNK_UNIT}, every one divide it")
+greedy_only.install()
 
 
 class Qwen36ResidentForCausalLM:
-    model_capabilities = {
-        "supports_prefix_caching": False,
-        "supports_async_decode": True,
-        # the hub samples from the top TOP_K logits; anything else samples on the host from the logits
-        "supports_sample_on_device": True,
-        "max_device_top_k": TOP_K,
-        "supports_device_penalties": False,
-    }
+    # the chunk keys (several users) only where the running plugin has the TT chunk core: see resident_capabilities
+    model_capabilities = resident_capabilities(top_k=TOP_K)
     decode_input_update_contract = 1
 
     def __init__(self, mesh, ck, max_seq_len, mrope):
@@ -70,18 +81,26 @@ class Qwen36ResidentForCausalLM:
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, **kwargs):
-        assert max_batch_size == 1, "the prefill hands its state to one decode user: serve with max_num_seqs=1"
         # the served revision: a cache filled for a pinned commit need not hold refs/main
         path = Q.checkpoint_dir(
             os.environ.get("HF_MODEL") or hf_config._name_or_path, getattr(hf_config, "_commit_hash", None)
         )
         ck = Q.Checkpoint(path)
+        if max_batch_size > 1 and cls is Qwen36ResidentForCausalLM:
+            logger.info(f"Building the resident Qwen3.6 model for {max_batch_size} users of up to {max_seq_len} tokens")
+            return Qwen36ResidentRowsForCausalLM(mesh_device, ck, max_seq_len, max_batch_size, uses_mrope(hf_config))
+        assert max_batch_size == 1, f"{cls.__name__} serves one user: max_num_seqs=1"
         logger.info(f"Building the resident Qwen3.6 model for up to {max_seq_len} tokens")
         return cls(mesh_device, ck, max_seq_len, mrope=uses_mrope(hf_config))
 
     @classmethod
     def get_max_tokens_all_users(cls, max_model_len=None, max_num_seqs=None, **kwargs):
-        return int(max_model_len) * int(max_num_seqs or 1)
+        """the KV pool in tokens: max_model_len per user unless RESIDENT_MAX_TOKENS_ALL_USERS sets it (several users;
+        8.7 KB per token per chip)"""
+        users = int(max_num_seqs or 1)
+        if users > 1 and os.environ.get("RESIDENT_MAX_TOKENS_ALL_USERS"):
+            return int(os.environ["RESIDENT_MAX_TOKENS_ALL_USERS"])
+        return int(max_model_len) * users
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         return []
@@ -103,11 +122,18 @@ class Qwen36ResidentForCausalLM:
         logits = self.model.logits()[:, : self.d.vocab_chip].reshape(-1)[: self.vocab]
         return logits.view(1, 1, -1)
 
-    def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
+    def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, start_pos=None, **kwargs):
         assert tokens.shape[0] == 1, "one user per prefill"
+        if start_pos is not None and int(start_pos[0]) > 0:
+            # the chunk core of vllm-tt-plugin resident-mu keeps one user's prompts whole; an older plugin splits
+            # prompts for a model that declares supports_chunked_prefill
+            raise RuntimeError("one user: a prompt is prefilled whole (serve with vllm-tt-plugin resident-mu)")
         T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
         ids = tokens[0, :T]
-        self.model.reset()
+        # the initial recurrent state (a host upload of every GDN state and conv history) only where no handoff
+        # overwrites it: a prompt of one token. The handoff writes every GDN layer's state and the conv history the
+        # first step reads; reset never restores the KV caches (stale rows are masked)
+        self.model.reset(state=T <= 1 or FULL_RESET)
         self.pp.reset()
         if T > 1:
             self.pp.run(ids[: T - 1])
@@ -162,8 +188,70 @@ class Qwen36ResidentForCausalLM:
         return ttnn.to_torch(out).reshape(-1)[:1].to(torch.int32).view(1, 1)
 
 
-MTP_BLOCK = int(os.environ.get("QWEN36_MTP_BLOCK", "4"))
-MTP_DEPTH = int(os.environ.get("QWEN36_MTP_DEPTH", "4"))
+class Qwen36ResidentRowsForCausalLM(ResidentRowsAdapter):
+    """Several users: a rows-mode ResidentModel (launches of 8 rows, paged KV pool of the plugin's block count, one
+    trace per launch), built in allocate_kv_cache once the plugin knows its block count, and the PP prefill. Device
+    sampling needs the rows-mode hub feed (WP7): without it, launch without sample_on_device_mode (host sampling)."""
+
+    model_capabilities = dict(Qwen36ResidentForCausalLM.model_capabilities)
+
+    def __init__(self, mesh, ck, max_seq_len, max_batch, mrope):
+        cfg = ck.config
+        self.mesh, self.ck = mesh, ck
+        self.layers, self.interval = cfg["num_hidden_layers"], cfg["full_attention_interval"]
+        n = mesh.get_num_devices()
+        self.d = Dims(n, mesh.dram_grid_size().x, vocab=cfg["vocab_size"])
+        self.emb = Q.embedding(ck)
+        C = max(PREFILL_CHUNKS)
+        self.max_len = -(-max_seq_len // C) * C
+        self.pp = PPPrefill(mesh, ck, self.layers, self.interval, chunk=list(PREFILL_CHUNKS), max_len=self.max_len)
+        super().__init__(None, cfg["vocab_size"], max_seq_len, max_batch, C, mrope)
+
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        """build the rows-mode model on a KV pool of the plugin's block count (its block ids index the pool)"""
+        nb = int(kv_cache_shape[0])
+        n_attn = sum((l + 1) % self.interval == 0 for l in range(self.layers))
+        sts = [
+            State(self.d, self.layers - n_attn, n_attn, 0, max_pos=self.max_len + 64, zero=True, kv=False)
+            for _ in range(self.n_slots)
+        ]
+        logger.info(f"Resident rows model: {self.n_slots} slots, KV pool {nb} blocks")
+        w = Q.load(self.ck, self.d, self.layers, self.interval)
+        # every slot starts on block 0 (vLLM's null block): the page tables come with each request. embed: the hub
+        # draws each row's next token and feeds it (device sampling; the prefill's embedding table)
+        model = ResidentModel(
+            self.mesh,
+            self.d,
+            w,
+            sts,
+            self.layers,
+            self.interval,
+            lm_head=True,
+            embed=self.pp.embed,
+            kv_pool_blocks=nb,
+            block_tables=[[0]] * self.n_slots,
+            rows=True,
+        )
+        del w
+        # contract section 6a: everything that allocates comes before the captures, which replay the L1 layout they
+        # see. The warm-ups compile the handoff / hist_scatter programs and make clear_slot's buffers and semaphore
+        # (both write slot 0, which holds nothing yet).
+        self.pp.handoff(model, 1, block_table=[0], slot=0)
+        model.clear_slot(0)
+        model.capture_trace()
+        self.pp.capture()
+        if model.sample:
+            model.reset(state=False)  # zero the feeding hubs' counters while idle
+        self.engine = RowsEngine(
+            model, self.pp, self.emb, self.vocab, self.d.vocab_chip, self.n_slots, self.chunk, mesh=self.mesh
+        )
+        return []
+
+    def warmup_model_prefill(self, *args, **kwargs):
+        pass
+
+    def warmup_model_decode(self, *args, **kwargs):
+        pass
 
 
 class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
@@ -171,17 +259,23 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
     the prefill's logits) must be their argmax; anything else raises. One user (max_num_seqs=1), so every
     request owns the scheduler's block session and every decode step is a block step."""
 
+    greedy_only = True
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
         # decode returns the committed tokens
         "supports_sample_on_device": True,
         "supports_device_penalties": False,
         "output_tokens_per_step": MTP_BLOCK,
         "tt_adaptive_block_output": True,
+        # synchronous serving (the platform turns --async-scheduling off): with async scheduling vLLM's batch queue
+        # pops the prefill's first token only after the first block step has run (one MTP block of TTFT); the solo
+        # block step has no readback to overlap. RESIDENT_MTP_ASYNC=1: async as before (A/B)
+        "supports_async_decode": os.environ.get("RESIDENT_MTP_ASYNC", "0") == "1",
         # positions one block step may run ahead: the block, then MTP_DEPTH steps of up to 2 each
         "tt_block_kv_extent_tokens": MTP_BLOCK + 2 * MTP_DEPTH + 2,
     }
+
+    block, name = MTP_BLOCK, "MTP"
 
     def __init__(self, mesh, ck, max_seq_len, mrope):
         self.mesh, self.mrope = mesh, mrope
@@ -191,6 +285,9 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
         self.eos = int(cfg["eos_token_id"])
         self.spec = SpecDecoder(mesh, ck, cfg["num_hidden_layers"], max_seq_len, prefill=True)
         self._first = None
+
+    def _next_block(self):
+        return self.spec.next_block(MTP_BLOCK, MTP_DEPTH, self.max_seq_len)
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         assert tokens.shape[0] == 1, "one user per prefill"
@@ -209,13 +306,15 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
             token = int(tokens.reshape(-1)[0])
             if token != self._first:
                 raise RuntimeError(
-                    f"MTP serving is greedy only: the runner's first token {token} is not the argmax "
+                    f"{self.name} serving is greedy only: the runner's first token {token} is not the argmax "
                     f"{self._first} the device decodes from"
                 )
             self._first = None
-        block = self.spec.next_block(MTP_BLOCK, MTP_DEPTH, self.max_seq_len)
+        block = self._next_block()
+        if len(block) > self.block:
+            raise RuntimeError(f"{self.name} committed {len(block)} tokens for a block of {self.block}")
         # short only at the position limit: the scheduler trims at the first stop token
-        out = torch.full((1, MTP_BLOCK), self.eos, dtype=torch.int32)
+        out = torch.full((1, self.block), self.eos, dtype=torch.int32)
         out[0, : len(block)] = torch.tensor(block, dtype=torch.int32)
         return out
 
@@ -228,3 +327,48 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
 
     def release_persistent_capture(self):
         self.spec.stop()
+
+
+class Qwen36ResidentDFlashForCausalLM(Qwen36ResidentMTPForCausalLM):
+    """Greedy DFlash2 speculative decode (lane dfl's qwen36_resident.dflash.ResidentDFlash: PP prefill, R=8 verify
+    model, drafter) through the plugin's adaptive block output, as the MTP class: one user, every decode step commits
+    DFLASH_BLOCK tokens (the decoder carries the extra accepted tokens of an iteration to the next block)."""
+
+    block, name = DFLASH_BLOCK, "DFlash2"
+    model_capabilities = dict(
+        Qwen36ResidentMTPForCausalLM.model_capabilities,
+        output_tokens_per_step=DFLASH_BLOCK,
+        # positions one block step may write from its start: holding block - 1 tokens, one more iteration verifies
+        # DFLASH_VERIFY rows past them; doubled verify for slack (the drafter's ring is its own memory)
+        tt_block_kv_extent_tokens=DFLASH_BLOCK + 2 * DFLASH_VERIFY,
+        # synchronous serving (the platform turns --async-scheduling off): a block step runs on the host to its end,
+        # so the async schedule overlaps nothing, and its batch queue held the prefill's first token until the first
+        # block step had run (one block, ~60 ms, of TTFT). RESIDENT_DFLASH_ASYNC=1: async as before (A/B)
+        supports_async_decode=os.environ.get("RESIDENT_DFLASH_ASYNC", "0") == "1",
+    )
+
+    def __init__(self, mesh, ck, max_seq_len, mrope):
+        from qwen36_resident.dflash import ResidentDFlash
+
+        self.mesh, self.mrope = mesh, mrope
+        cfg = ck.config
+        self.vocab = cfg["vocab_size"]
+        self.max_seq_len = max_seq_len
+        self.eos = int(cfg["eos_token_id"])
+        self.spec = ResidentDFlash(mesh, ck, max_seq_len + DFLASH_POS_MARGIN, prefill=True)
+        if self.spec.max_prompt_tokens < max_seq_len:
+            raise RuntimeError(
+                f"ResidentDFlash takes prompts of up to {self.spec.max_prompt_tokens} tokens, "
+                f"below max_model_len {max_seq_len}"
+            )
+        self._first = None
+
+    def _next_block(self):
+        # committed positions stay below max_model_len; the decoder's verify rows never reach its max_pos
+        return self.spec.next_block(self.block, self.max_seq_len)
+
+    def release_request(self, row):
+        st = self.spec.stats()
+        if st.get("iterations"):
+            logger.info(f"DFlash2 request: {st}")
+        super().release_request(row)

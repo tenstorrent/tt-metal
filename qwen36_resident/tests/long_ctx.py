@@ -203,8 +203,12 @@ def run_ttnn(a):
 
 # ---------------------------------------------------------------------------------------------- resident
 def check_zero_dram(mesh):
-    """common.zero_dram zeroes exactly its tensors: three neighbouring buffers of ones (interleaved bf8 tiles,
-    height-sharded bf8 tiles as the decode KV caches, interleaved uint32 rows), the middle one of each kind zeroed"""
+    """common.zero_dram zeroes exactly its tensors, one or many per call: runs of neighbouring buffers of ones of four
+    kinds (interleaved bf8 tiles, height-sharded bf8 tiles as the decode KV caches, interleaved uint32 rows, one 64-byte
+    page that leaves three of every bank's four cores without a range), every other buffer zeroed. One tensor per call
+    first (as device_zeros, which seeds the program cache), then 28 per call twice (as PPPrefill.reset; the second hits
+    the cache at other addresses), then one per call again: a cache hit must not reuse a program built for shorter
+    per-core runtime args (the 0d5fc31baa6 reset crash)"""
     from qwen36_resident.common import zero_dram
 
     banks = mesh.dram_grid_size().x
@@ -218,24 +222,41 @@ def check_zero_dram(mesh):
         ),
     )
     kinds = [
+        ([1, 16], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
         ([5, 4, 64, 256], ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
         ([banks * 3 * 32, 256], ttnn.bfloat8_b, ttnn.TILE_LAYOUT, sharded),
         ([77, 32], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
     ]
     rep = ttnn.ReplicateTensorToMesh(mesh)
-    for shape, dt, layout, mc in kinds:
-        ones = torch.ones(shape, dtype=torch.int32 if dt == ttnn.uint32 else torch.float32)
-        ts = [
-            ttnn.from_torch(ones, dtype=dt, layout=layout, device=mesh, memory_config=mc, mesh_mapper=rep)
-            for _ in range(3)
-        ]
-        zero_dram(mesh, [ts[1]])
-        got = [ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float() for t in ts]
-        assert got[1].abs().max() == 0, ("not zeroed", shape, dt)
-        assert all(bool((g == 1).all()) for g in (got[0], got[2])), ("a neighbour changed", shape, dt)
-        for t in ts:
-            ttnn.deallocate(t)
-    log("zero_dram: zeroes its tensors and leaves the neighbours alone")
+    comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+
+    def run(per_kind, batched):
+        """2 per_kind + 1 neighbours of each kind, the odd ones zeroed (all in one call when batched); returns them"""
+        runs = []
+        for shape, dt, layout, mc in kinds:
+            ones = torch.ones(shape, dtype=torch.int32 if dt == ttnn.uint32 else torch.float32)
+            runs.append(
+                [
+                    ttnn.from_torch(ones, dtype=dt, layout=layout, device=mesh, memory_config=mc, mesh_mapper=rep)
+                    for _ in range(2 * per_kind + 1)
+                ]
+            )
+        zeroed = [t for ts in runs for t in ts[1::2]]
+        for group in [zeroed] if batched else [[t] for t in zeroed]:
+            zero_dram(mesh, group)
+        for (shape, dt, _, _), ts in zip(kinds, runs):
+            for i, t in enumerate(ts):
+                got = ttnn.to_torch(t, mesh_composer=comp).float()
+                if i % 2:
+                    assert got.abs().max() == 0, ("not zeroed", shape, dt, len(zeroed) if batched else 1)
+                else:
+                    assert bool((got == 1).all()), ("a neighbour changed", shape, dt, len(zeroed) if batched else 1)
+        return [t for ts in runs for t in ts]
+
+    live = run(1, False) + run(7, True) + run(7, True) + run(1, False)
+    for t in live:
+        ttnn.deallocate(t)
+    log("zero_dram: zeroes its tensors and leaves the neighbours alone (1 per call, 28 per call twice, 1 per call)")
 
 
 class Resident:

@@ -6,7 +6,7 @@
 // either to consecutive pages of an interleaved tensor (kind 0) or to consecutive bytes of one DRAM bank
 // (kind 1, the decode's bank-sharded KV cache). Pages for this chip are written over the NoC, the others
 // over fabric (1D line, unicast; a fused increment of the destination's handoff semaphore per packet).
-// The kernel ends once this chip has sent its pages and received `expected` packets.
+// The kernel ends once this chip has sent its pages and received `expected` packets (taken off the semaphore).
 //
 // Job (16 words, 64 B: DRAM reads land 64 B aligned): dst_chip, src_base, src_page, page_bytes, kind, dst_base,
 // dst_page (kind 0) / bank (kind 1), count, 8 unused. Runtime args: 0 jobs address (DRAM interleaved, 64 B pages), 1
@@ -107,7 +107,12 @@ void kernel_main() {
     }
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     noc_semaphore_wait_min(sem, expected);
-    noc_semaphore_set(sem, 0);
+    // take this call's packets off the count atomically (not a reset to 0): in a pipelined pass (run_batch) another
+    // chip may already run the next boundary's handoff, whose packets can land before this call ends
+    if (expected) {
+        noc_semaphore_inc(sem_noc, 0u - expected);
+        noc_async_atomic_barrier();
+    }
     if (fabric.is_logically_connected()) {
         fabric.close();
     }

@@ -117,11 +117,27 @@ def quantize(w, dtype):
     return ttnn.to_torch(ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT)).float()
 
 
+ZERO_DRAM_TENSORS = (341 - 2) // 2  # per zero_dram program: 2 + 2 args per tensor per core, max_runtime_args 341
+
+
 def zero_dram(mesh, tensors, cores_per_bank=4, chunk=32768):
     """zero-fill DRAM tensors on device (kernels/dram_zero.cpp), on every chip, without a host image: per bank
     the allocator's part of each buffer, ceil(pages / banks) aligned pages from the buffer address (interleaved
     or sharded over all banks). All-zero bytes are zeros in every format used (bf16, fp32, bf8 / bf4 tiles,
-    integers)."""
+    integers).
+
+    Every core's runtime args are padded to 2 + 2 * len(tensors) and len(tensors) is a compile-time arg: generic_op's
+    program hash covers the number of cores with runtime args but not each core's arg count, and a cache hit only
+    overwrites the cached program's args in place, so a call with more ranges per core than the program that seeded
+    the cache wrote past them (a 28-tensor PPPrefill.reset after a 1-tensor device_zeros: TT_FATAL "Index 4 is larger
+    than runtime args size 4", then a segfault or a hung dispatch)."""
+    tensors = list(tensors)
+    for i in range(0, len(tensors), ZERO_DRAM_TENSORS):
+        _zero_dram(mesh, tensors[i : i + ZERO_DRAM_TENSORS], cores_per_bank, chunk)
+    ttnn.synchronize_device(mesh)
+
+
+def _zero_dram(mesh, tensors, cores_per_bank, chunk):
     banks = mesh.dram_grid_size().x
     grid = mesh.compute_with_storage_grid_size()
     cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(banks * cores_per_bank)]
@@ -136,15 +152,16 @@ def zero_dram(mesh, tensors, cores_per_bank=4, chunk=32768):
                     ranges[b * cores_per_bank + k] += [t.buffer_address() + lo, hi - lo]
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     rt = ttnn.RuntimeArgs()
+    width = 2 * len(tensors)  # (a tensor gives a core one range at most)
     for i, c in enumerate(cores):
-        rt[c.x][c.y] = [i // cores_per_bank, len(ranges[i]) // 2] + ranges[i]
+        rt[c.x][c.y] = [i // cores_per_bank, len(ranges[i]) // 2] + ranges[i] + [0] * (width - len(ranges[i]))
     program = ttnn.ProgramDescriptor(
         kernels=[
             ttnn.KernelDescriptor(
                 kernel_source=f"{PKG_DIR}/kernels/dram_zero.cpp",
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=core_set,
-                compile_time_args=[chunk],
+                compile_time_args=[chunk, len(tensors)],  # (the args' length, in the program hash)
                 runtime_args=rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -163,9 +180,7 @@ def zero_dram(mesh, tensors, cores_per_bank=4, chunk=32768):
     n = mesh.get_num_devices()
     pd = ttnn.MeshProgramDescriptor()
     pd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, n - 1))] = program
-    io = list(tensors)
-    ttnn.generic_op(io * 2 if len(io) == 1 else io, pd)  # (generic_op takes an input and an output at least)
-    ttnn.synchronize_device(mesh)
+    ttnn.generic_op(tensors * 2 if len(tensors) == 1 else tensors, pd)  # (generic_op takes an input and an output)
 
 
 def device_zeros(mesh, shape, dtype, memory_config, layout=ttnn.TILE_LAYOUT):

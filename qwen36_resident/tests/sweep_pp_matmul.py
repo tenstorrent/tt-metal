@@ -106,7 +106,7 @@ def ulps(a, b):
     return float(((a - b).abs() / torch.pow(2.0, e - 7)).max())
 
 
-def sweep_sdpa(mesh, starts, iters):
+def sweep_sdpa(mesh, starts, iters, cands=None, dump="", ref_dump=""):
     """the prefill's chunked SDPA (pp_prefill._attn: 24 q heads x 1024 rows over a paged bf8 KV of 4 heads, block 64)
     at chunk starts `starts`: q / k chunk sizes and math fidelity against the prefill's (128, 128, HiFi4); random KV
     over the causal extent"""
@@ -123,7 +123,12 @@ def sweep_sdpa(mesh, starts, iters):
         ),
     )
     grid = mesh.compute_with_storage_grid_size()
-    cands = [(q, k, f) for q, k in ((128, 128), (128, 256), (256, 256), (256, 512), (512, 512)) for f in fid]
+    if cands is None:
+        cands = [(q, k, f) for q, k in ((128, 128), (128, 256), (256, 256), (256, 512), (512, 512)) for f in fid]
+    # dump: save every candidate's output; ref_dump: take the reference output from another run's dump (a process with
+    # other static env, e.g. TT_SDPA_GQA_MCAST=1, read once per process by the SDPA program factory)
+    saved = {}
+    refs = torch.load(ref_dump) if ref_dump else None
     out = []
     for cs in starts:
         blocks = (cs + C) // block
@@ -136,9 +141,9 @@ def sweep_sdpa(mesh, starts, iters):
         pt = rm(torch.arange(blocks, dtype=torch.int32).reshape(1, blocks))
         start = rm(torch.tensor([cs], dtype=torch.int32))
 
-        def run(qc, kc, f):
+        def run(qc, kc, f, approx=False):
             pc = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=grid, q_chunk_size=qc, k_chunk_size=kc, exp_approx_mode=False
+                compute_with_storage_grid_size=grid, q_chunk_size=qc, k_chunk_size=kc, exp_approx_mode=approx
             )
             op = lambda: ttnn.transformer.chunked_scaled_dot_product_attention(
                 q, K, V, pt, chunk_start_idx_tensor=start, scale=1.0 / math.sqrt(HD), program_config=pc,
@@ -155,25 +160,34 @@ def sweep_sdpa(mesh, starts, iters):
             return (time.perf_counter() - t0) / iters * 1e3, res
 
         ref_ms, ref = run(128, 128, "HiFi4")
+        if refs is not None:
+            if not torch.equal(refs[(cs, (128, 128, "HiFi4"))], ref):
+                print(f"  NOTE: this process's (128, 128, HiFi4) differs from {ref_dump}'s", flush=True)
+            ref = refs[(cs, (128, 128, "HiFi4"))]
+        saved[(cs, (128, 128, "HiFi4"))] = ref
         row = dict(chunk_start=cs, ref_ms=ref_ms, cands=[])
         print(f"sdpa start {cs}: reference (128, 128, HiFi4) {ref_ms:.3f} ms", flush=True)
-        for qc, kc, f in cands:
+        for cand in cands:
+            qc, kc, f = cand[:3]
             try:
-                ms, res = run(qc, kc, f)
+                ms, res = run(qc, kc, f, len(cand) > 3 and cand[3] == "approx")
             except Exception as e:
-                row["cands"].append(dict(cand=(qc, kc, f), error=str(e).splitlines()[0][:160]))
+                row["cands"].append(dict(cand=tuple(cand), error=str(e).splitlines()[0][:160]))
                 continue
+            saved[(cs, tuple(cand))] = res
             same = torch.equal(res, ref)
-            r = dict(cand=(qc, kc, f), ms=ms, bit_identical=same, max_ulps=0.0 if same else ulps(res, ref))
+            r = dict(cand=tuple(cand), ms=ms, bit_identical=same, max_ulps=0.0 if same else ulps(res, ref))
             r["max_abs"] = float((res - ref).abs().max())
             row["cands"].append(r)
             print(
-                f"  {(qc, kc, f)}: {ms:.3f} ms, identical {same} ({r['max_ulps']:.1f} ulps, {r['max_abs']:.2e})",
+                f"  {tuple(cand)}: {ms:.3f} ms, identical {same} ({r['max_ulps']:.1f} ulps, {r['max_abs']:.2e})",
                 flush=True,
             )
         out.append(row)
         for t in (q, K, V, pt, start):
             ttnn.deallocate(t)
+    if dump:
+        torch.save(saved, dump)
     return out
 
 
@@ -184,6 +198,9 @@ def main():
     ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--leaders", type=int, default=4)
     ap.add_argument("--sdpa", default="", help="chunk starts of an SDPA sweep (instead of the matmuls)")
+    ap.add_argument("--sdpa-cands", default="", help="q:k:fidelity,... (default: the q / k / fidelity grid)")
+    ap.add_argument("--sdpa-dump", default="")
+    ap.add_argument("--sdpa-ref", default="")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     faulthandler.dump_traceback_later(300, repeat=True, file=sys.stderr)
@@ -197,7 +214,11 @@ def main():
     results = []
     if a.sdpa:
         try:
-            json.dump(sweep_sdpa(mesh, [int(v) for v in a.sdpa.split(",")], a.iters), open(a.out, "w"), indent=1)
+            cands = None
+            if a.sdpa_cands:
+                cands = [(int(c[0]), int(c[1]), *c[2:]) for c in (x.split(":") for x in a.sdpa_cands.split(","))]
+            res = sweep_sdpa(mesh, [int(v) for v in a.sdpa.split(",")], a.iters, cands, a.sdpa_dump, a.sdpa_ref)
+            json.dump(res, open(a.out, "w"), indent=1)
         finally:
             ttnn.close_mesh_device(mesh)
         return

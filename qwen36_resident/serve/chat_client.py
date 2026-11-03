@@ -31,7 +31,8 @@ def model_name(port):
 
 
 def chat(port, model, msgs, max_tokens, thinking, sampling, ignore_eos=False):
-    """one streamed chat request: prompt ids, generated ids, text, TTFT and per-chunk arrival times"""
+    """one streamed chat request: prompt ids, generated ids, text, TTFT and per-chunk arrival times; raises when the
+    server failed the request (an error event, or no finish reason)"""
     body = dict(
         model=model,
         messages=msgs,
@@ -59,6 +60,8 @@ def chat(port, model, msgs, max_tokens, thinking, sampling, ignore_eos=False):
             if not line.startswith("data:") or line.endswith("[DONE]"):
                 continue
             d = json.loads(line[5:])
+            if "error" in d:  # the server failed the request mid-stream (a dead engine, ...)
+                raise RuntimeError(f"server error in the stream after {len(ids)} tokens: {d['error']}")
             if d.get("prompt_token_ids") is not None:
                 prompt_ids = d["prompt_token_ids"]
             if d.get("usage"):
@@ -70,6 +73,8 @@ def chat(port, model, msgs, max_tokens, thinking, sampling, ignore_eos=False):
                 delta = c.get("delta") or {}
                 text.append((delta.get("reasoning_content") or "") + (delta.get("content") or ""))
                 finish = c.get("finish_reason") or finish
+    if finish in (None, "error"):
+        raise RuntimeError(f"stream ended with finish reason {finish} after {len(ids)} tokens")
     ttft = times[0][0] if times else None
     n_after = len(ids) - times[0][1] if times else 0
     decode_s = times[-1][0] - times[0][0] if times else 0.0
