@@ -1481,6 +1481,8 @@ class Orchestrator:
         import hashlib
 
         keep = {k: task.get(k) for k in ("brief", "ab", "ab_rungs", "ab_positions")}
+        if isinstance(keep["ab"], dict) and "keep_default" in keep["ab"]:  # F241: what the accept ships, not measured
+            keep["ab"] = {k: v for k, v in keep["ab"].items() if k != "keep_default"}
         return hashlib.sha256(json.dumps(keep, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
     def ab_code_key(self, task: dict) -> str:
