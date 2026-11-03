@@ -19,14 +19,15 @@ void kernel_main() {
     constexpr uint32_t tiles = get_compile_time_arg_val(2);
     constexpr uint32_t chips = get_compile_time_arg_val(3);
 
-    init_sfpu(cb_in, cb_sum);
+    compute_kernel_hw_startup(cb_in, cb_sum);
+    copy_init(cb_in);
     for (uint32_t t = 0; t < tiles; t++) {
         cb_wait_front(cb_in, chips);
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_in);
+        copy_init(cb_in);
         copy_tile(cb_in, 0, 0);
         for (uint32_t c = 1; c < chips; c++) {
-            copy_tile_to_dst_init_short(cb_in);
+            copy_init(cb_in);
             copy_tile(cb_in, c, 1);
             add_binary_tile_init();
             add_binary_tile(0, 1, 0);

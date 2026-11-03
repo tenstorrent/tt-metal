@@ -30,7 +30,7 @@ namespace {
 // dst[idst] <- cb[tile] (unpacked through srcA in cb's format).
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t idst) {
     reconfig_data_format_srca(cb);
-    copy_tile_to_dst_init_short(cb);
+    copy_init(cb);
     copy_tile(cb, tile, idst);
 }
 
