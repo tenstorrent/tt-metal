@@ -286,18 +286,21 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint32_t axis = args.get_1d_axis();
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
-                // The crossover is set by each device's input bytes: about the same with 1, 2 and 4 links, on rings of
-                // 4 and 8 devices (T3000 1x8; 6U Galaxy, payloads 4352-7168 B, bf16/bf8/bf4/fp32 tiles and row-major),
-                // while pages do not line up across dtypes.
+                // The crossover is set by each device's input bytes per link, on rings of 4 and 8 devices and across
+                // dtypes, while pages do not line up across dtypes.
                 const uint64_t input_bytes =
                     static_cast<uint64_t>(input_tensor.buffer()->num_pages()) * input_tensor.buffer()->page_size();
+                const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
                 const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
                 if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
-                    // Ring: unicast from 120-250 KB per device. A torus ring of 8 devices crosses earlier, as 2D
-                    // multicast forwards slowly (128-160 KB per device: unicast up to 18% faster).
-                    constexpr uint64_t ring_unicast_bytes = 192 * 1024, torus_ring_unicast_bytes = 128 * 1024;
-                    use_unicast = input_bytes >= ((is_2d_fabric && args.num_devices >= 8) ? torus_ring_unicast_bytes
-                                                                                          : ring_unicast_bytes);
+                    // Ring: unicast from 48 KB per device per link (6U Galaxy capped to 1, 2 and 4 links, payloads
+                    // 4352 and 6144 B: crossing at 32-48, 64-96 and 160-192 KB per device). A torus ring of 8 devices
+                    // crosses earlier, as 2D multicast forwards slowly (4 links, 128-160 KB per device: unicast up to
+                    // 18% faster).
+                    constexpr uint64_t ring_unicast_link_bytes = 48 * 1024, torus_ring_unicast_link_bytes = 32 * 1024;
+                    use_unicast = input_bytes >= num_links * ((is_2d_fabric && args.num_devices >= 8)
+                                                                  ? torus_ring_unicast_link_bytes
+                                                                  : ring_unicast_link_bytes);
                 } else if (is_2d_fabric) {
                     // Line on a 2D fabric: 2D multicast forwards slowly, so on an 8-device axis unicast is 10-33%
                     // faster from 2 MB per device (Galaxy, 4 links, payload 4352-6144 B; at 7168 B within 3%). On 4
