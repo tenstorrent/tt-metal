@@ -151,16 +151,14 @@ void kernel_main() {
 
 #ifdef USE_CUSTOM_MM
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = true;
+    constexpr auto layout = CustomMmDestLayout::DenseSplitAcc;
     constexpr bool finalize = true;
 
     static_assert(k_block_tiles >= 2 && k_block_tiles <= 256 && k_block_tiles % 2 == 0);
     static_assert(N_tiles_per_core >= 1 && N_tiles_per_core <= 16);
     static_assert(num_k_blocks == 1 || M_tiles == 1, "streamed custom_mm keeps a whole output row in DST");
 
-    custom_mm_block_init_short<transpose, split_acc, dense_packing>(
-        in0_cb_id, in1_cb_id, mm_out_cb_id, N_tiles_per_core);
+    custom_mm_block_init_short<transpose, layout>(in0_cb_id, in1_cb_id, mm_out_cb_id, N_tiles_per_core);
     pack_block_contiguous_init(mm_out_cb_id);
 
     out_cb.reserve_back(M_tiles * N_tiles_per_core);
@@ -170,7 +168,7 @@ void kernel_main() {
 #endif
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
             tile_regs_acquire();
-            custom_mm_block<finalize, false>(in0_cb_id, in1_cb_id, mt * K_tiles, 0, 0, K_tiles, N_tiles_per_core);
+            custom_mm_block<layout, finalize>(in0_cb_id, in1_cb_id, mt * K_tiles, 0, 0, K_tiles, N_tiles_per_core);
             tile_regs_commit();
             tile_regs_wait();
             pack_block_contiguous(0, mm_out_cb_id, N_tiles_per_core);
@@ -193,9 +191,9 @@ void kernel_main() {
 #endif
             const uint32_t in0_tile = kb * k_block_tiles;
             if (kb == num_k_blocks - 1) {
-                custom_mm_block<true, false>(in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, N_tiles_per_core);
+                custom_mm_block<layout, true>(in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, N_tiles_per_core);
             } else {
-                custom_mm_block<false, false>(in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, N_tiles_per_core);
+                custom_mm_block<layout, false>(in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, N_tiles_per_core);
             }
 #ifdef ENABLE_GLOBAL_CB
             // This page has been read in full; release the local alias and let the reader ack it.
@@ -209,7 +207,7 @@ void kernel_main() {
         pack_block_contiguous(0, mm_out_cb_id, N_tiles_per_core);
         tile_regs_release();
     }
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<layout>(mm_out_cb_id);
     out_cb.push_back(M_tiles * N_tiles_per_core);
 #else
     matmul_block_init(in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
