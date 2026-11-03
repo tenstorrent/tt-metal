@@ -29,10 +29,10 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIM, round_to_dest_width
 from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import CLAMPED_SILU_PARAMS, TILE_COUNT
+from helpers.test_variant_parameters import CLAMPED_SILU_PARAMS, LOOP_FACTOR, TILE_COUNT
 from helpers.utils import passed_test, result_tensor
 
 # Same format in and out, as these are activations applied in place on Pack.
@@ -110,7 +110,18 @@ def _clamped_silu_golden(x, op, scalar0, scalar1, dest_acc):
     return round_to_dest_width(y, dest_acc)
 
 
-def _run(formats, dest_acc, op, scalars, input_range):
+def _run(
+    formats,
+    dest_acc,
+    op,
+    scalars,
+    input_range,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     scalar0, scalar1 = scalars
 
     low, high = input_range
@@ -124,30 +135,41 @@ def _run(formats, dest_acc, op, scalars, input_range):
 
     golden = _clamped_silu_golden(src_A, op, scalar0, scalar1, dest_acc)
 
-    configuration = TestConfig(
-        "sources/sfpu_clamped_silu_test.cpp",
-        formats,
-        templates=[
-            CLAMPED_SILU_PARAMS(clamped_silu_op=op, scalar0=scalar0, scalar1=scalar1),
-        ],
-        runtimes=[
-            TILE_COUNT(1),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_clamped_silu_test.cpp",
+            formats=formats,
+            templates=[
+                CLAMPED_SILU_PARAMS(
+                    clamped_silu_op=op, scalar0=scalar0, scalar1=scalar1
+                ),
+            ],
+            runtimes=[
+                LOOP_FACTOR(1),
+                TILE_COUNT(1),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=formats.input_format.is_32_bit(),
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
     )
+    if is_perf:
+        return
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = outcome.result
     res = result_tensor(res_from_L1, formats.output_format)
     return res.to(torch.float32), golden, src_A.to(torch.float32)
 
@@ -160,8 +182,32 @@ def _run(formats, dest_acc, op, scalars, input_range):
     scalars=lambda op: _op_scalars(op),
     input_range=lambda op: _op_ranges(op),
 )
-def test_sfpu_clamped_silu(formats, dest_acc, op, scalars, input_range):
+def test_sfpu_clamped_silu(
+    formats,
+    dest_acc,
+    op,
+    scalars,
+    input_range,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     scalar0, scalar1 = scalars
+    if is_perf:
+        _run(
+            formats,
+            dest_acc,
+            op,
+            scalars,
+            input_range,
+            is_perf=is_perf,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+        )
+        return
     res, golden, x = _run(formats, dest_acc, op, scalars, input_range)
 
     assert passed_test(

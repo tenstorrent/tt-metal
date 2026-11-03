@@ -52,6 +52,7 @@ from helpers.llk_params import (
     MathOperation,
 )
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import StimuliMode, TestConfig
 from helpers.test_variant_parameters import (
@@ -70,6 +71,13 @@ from helpers.test_variant_parameters import (
 pytestmark = skip_for_quasar
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt16)
+
+_ACTIVE_PERF = None
+
+
+class _PerfFinished(Exception):
+    """Raised after a perf execute_llk so the functional golden is skipped."""
+
 
 MODE_GATE, MODE_BINARY, MODE_MOVE, MODE_RUN = 0, 1, 2, 3
 MOVE_STEP0, MOVE_STEP1, MOVE_STEP1_HI, MOVE_STEP2, MOVE_COPY4ROWS = 0, 1, 2, 3, 4
@@ -211,17 +219,21 @@ def _config(
     acc_to_dest=False,
     num_faces=4,
 ):
-    return TestConfig(
-        "sources/generalized_moe_gate_test.cpp",
-        FORMATS,
-        templates=[
-            gmg,
-            MATH_OP(mathop=math_op),
-            MATH_FIDELITY(fidelity),
-            APPROX_MODE(approx),
-            ACC_TO_DEST(acc_to_dest),
-            DEST_SYNC(dest_sync),
-        ],
+    templates = [
+        # Placeholder so perf_schema_derive sees every GENERALIZED_MOE_GATE
+        # column; runtime always replaces it with the caller's config.
+        GENERALIZED_MOE_GATE(),
+        MATH_OP(mathop=math_op),
+        MATH_FIDELITY(fidelity),
+        APPROX_MODE(approx),
+        ACC_TO_DEST(acc_to_dest),
+        DEST_SYNC(dest_sync),
+    ]
+    templates[0] = gmg
+    return dict(
+        test_name="sources/generalized_moe_gate_test.cpp",
+        formats=FORMATS,
+        templates=templates,
         runtimes=[TILE_COUNT(4), NUM_FACES(num_faces, num_faces, num_faces)],
         variant_stimuli=StimuliConfig(
             torch.cat([_tile(t) for t in tiles]),
@@ -238,26 +250,50 @@ def _config(
     )
 
 
-def _run(*configurations, view=_faces):
+def _run(
+    *configurations,
+    view=_faces,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """Build every variant before running any of them.
 
     run() raises the compile-producer skip, so a test that builds inside the run loop never reaches
     its later variants and the consumer pass then looks for an ELF nobody produced.
     """
-    if len(configurations) > 1 and TestConfig.STIMULI_MODE != StimuliMode.INLINE:
-        # StimuliConfig.save_to_cache and GeneratorProxy both key on sha256(PYTEST_CURRENT_TEST),
-        # i.e. one cache slot per test node, so a test with several configurations would have them
-        # all collapse onto whichever ran first. Under --stimuli-only it is worse: the first run()
-        # raises the cache-and-skip, so the later configurations never get written at all. The
-        # differential tests here are exactly the ones that would then pass vacuously, comparing a
-        # stimulus against itself, so refuse rather than report a green.
+    if _ACTIVE_PERF is not None:
+        is_perf, perf_report, run_types, loop_factor = _ACTIVE_PERF
+    if is_perf:
+        # Later configurations exist for the golden compare. They repeat a recorded
+        # key (or a key another wrapper already emits) and are not a separate measurement.
+        execute_llk(
+            is_perf=True,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+            test_config_kwargs=configurations[0],
+        )
+        raise _PerfFinished
+    if len(configurations) == 1:
+        outcome = execute_llk(
+            is_perf=False,
+            loop_factor=loop_factor,
+            test_config_kwargs=configurations[0],
+        )
+        return view(outcome.result)
+    if TestConfig.STIMULI_MODE != StimuliMode.INLINE:
         pytest.skip(
             "multi-configuration test cannot use the per-test-node stimuli cache "
             "(--stimuli-only / --use-stimuli); see tt-llk stimuli cache keying"
         )
-    for configuration in configurations:
+    configs = [
+        TestConfig(**with_functional_defaults(kwargs)) for kwargs in configurations
+    ]
+    for configuration in configs:
         configuration.prepare()
-    results = [view(configuration.run().result) for configuration in configurations]
+    results = [view(configuration.run().result) for configuration in configs]
     return results[0] if len(results) == 1 else results
 
 
@@ -1675,3 +1711,15 @@ def test_generalized_moe_gate_idx_offset():
         assert torch.equal(
             base[region], shifted[region]
         ), f"idx_offset also wrote region {region}"
+
+
+def invoke_with_perf(fn, *args, is_perf, perf_report, run_types, loop_factor, **kwargs):
+    """Run a functional test under perf, skipping golden after execute_llk."""
+    global _ACTIVE_PERF
+    _ACTIVE_PERF = (is_perf, perf_report, run_types, loop_factor)
+    try:
+        fn(*args, **kwargs)
+    except _PerfFinished:
+        return
+    finally:
+        _ACTIVE_PERF = None

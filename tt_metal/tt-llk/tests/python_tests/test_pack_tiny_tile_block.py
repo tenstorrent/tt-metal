@@ -21,16 +21,18 @@ from helpers.llk_params import (
     format_tile_sizes,
 )
 from helpers.param_config import max_dest_tiles, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     IN_TILE_DIMS,
     L1_ACC,
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PACK_TINY_RECONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
 )
@@ -45,6 +47,13 @@ def _make_config(
     num_tiles,
     formats,
     dest_acc,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    test_name="sources/pack_tiny_tile_block_test.cpp",
+    reconfig=False,
 ):
     """Build TestConfig for a given tile shape and tile count."""
     tile_r, tile_c = tile_dims
@@ -84,41 +93,48 @@ def _make_config(
         f"{num_blocks} blocks of {num_tiles_in_block}"
     )
 
-    configuration = TestConfig(
-        "sources/pack_tiny_tile_block_test.cpp",
-        formats,
-        templates=[],
-        runtimes=[
-            DEST_INDEX(0),
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
-            TEST_FACE_DIMS(face_r_dim),
-            IN_TILE_DIMS(tile_r, tile_c),
-            L1_ACC(L1Accumulation.No),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=list(tile_dims),
-            use_dense_tile_dimensions=True,
-            operand_res_tile_size=calculate_tile_size_bytes(
-                formats.output_format, list(tile_dims), format_tile_sizes
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name=test_name,
+            formats=formats,
+            templates=[PACK_TINY_RECONFIG(reconfig=reconfig)],
+            runtimes=[
+                LOOP_FACTOR(1),
+                DEST_INDEX(0),
+                TILE_COUNT(tile_cnt_A),
+                NUM_FACES(num_faces),
+                TEST_FACE_DIMS(face_r_dim),
+                IN_TILE_DIMS(tile_r, tile_c),
+                L1_ACC(L1Accumulation.No),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                num_faces=num_faces,
+                face_r_dim=face_r_dim,
+                tile_dimensions=list(tile_dims),
+                use_dense_tile_dimensions=True,
+                operand_res_tile_size=calculate_tile_size_bytes(
+                    formats.output_format, list(tile_dims), format_tile_sizes
+                ),
             ),
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
 
-    return configuration, golden_tensor, torch_format
+    return outcome, golden_tensor, torch_format
 
 
 # ── Main test ───────────────────────────────────────────────────────────────
@@ -144,14 +160,26 @@ def test_pack_tiny_tile_block(
     dest_acc,
     tile_dims,
     num_tiles,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
-    configuration, golden_tensor, _ = _make_config(
-        tile_dims, num_tiles, formats, dest_acc
+    outcome, golden_tensor, _ = _make_config(
+        tile_dims,
+        num_tiles,
+        formats,
+        dest_acc,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        return
 
-    res_from_L1 = configuration.run().result
-
-    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
+    res_tensor = result_tensor(outcome.result, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 
@@ -172,72 +200,33 @@ def test_pack_tiny_tile_block(
     ],
     num_tiles=[2, 4, 8],
 )
-def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
+def test_pack_tiny_tile_reconfig(
+    formats,
+    dest_acc,
+    tile_dims,
+    num_tiles,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """Init pack for 32x32, then full re-init for tiny tiles, then multi-tile
     block-contiguous pack. Validates the transition between tile shapes."""
-    tile_r, tile_c = tile_dims
-    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
-    num_faces = num_faces_r_dim * num_faces_c_dim
-
-    input_dimensions = [tile_r * num_tiles, tile_c]
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        tile_dimensions=list(tile_dims),
-    )
-
-    torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
-
-    max_tiles_in_dest = max_dest_tiles(
-        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit()
-    )
-    if num_faces < 4:
-        max_tiles_in_dest = max_tiles_in_dest * (4 // num_faces)
-
-    num_tiles_in_block = min(tile_cnt_A, max_tiles_in_dest)
-    num_blocks = tile_cnt_A // num_tiles_in_block
-
-    assert num_blocks * num_tiles_in_block == tile_cnt_A
-
-    configuration = TestConfig(
-        "sources/pack_tiny_tile_reconfig_test.cpp",
+    outcome, golden_tensor, _ = _make_config(
+        tile_dims,
+        num_tiles,
         formats,
-        templates=[],
-        runtimes=[
-            DEST_INDEX(0),
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
-            TEST_FACE_DIMS(face_r_dim),
-            IN_TILE_DIMS(tile_r, tile_c),
-            L1_ACC(L1Accumulation.No),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=list(tile_dims),
-            use_dense_tile_dimensions=True,
-            operand_res_tile_size=calculate_tile_size_bytes(
-                formats.output_format, list(tile_dims), format_tile_sizes
-            ),
-        ),
-        dest_acc=dest_acc,
+        dest_acc,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_name="sources/pack_tiny_tile_reconfig_test.cpp",
+        reconfig=True,
     )
+    if is_perf:
+        return
 
-    res_from_L1 = configuration.run().result
-
-    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
+    res_tensor = result_tensor(outcome.result, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

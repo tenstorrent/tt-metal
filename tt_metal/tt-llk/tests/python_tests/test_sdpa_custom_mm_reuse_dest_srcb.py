@@ -64,9 +64,9 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     SDPA_CUSTOM_MM_REUSE_DEST,
@@ -101,7 +101,18 @@ FACE0_TOP_ROWS = 8
 DEFINED_LANES = FACE0_TOP_ROWS * FACE_DIM  # 128
 
 
-def _run(math_fidelity, formats, dest_acc, kt_dim, nt_dim):
+def _run(
+    math_fidelity,
+    formats,
+    dest_acc,
+    kt_dim,
+    nt_dim,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.output_format]
@@ -156,30 +167,37 @@ def _run(math_fidelity, formats, dest_acc, kt_dim, nt_dim):
         src_P, dimensions=input_A_dimensions, stimuli_format=formats.input_format
     )
 
-    configuration = TestConfig(
-        "sources/sdpa_custom_mm_reuse_dest_srcb_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=kt_dim, nt_dim=nt_dim),
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            # buffer_A = V (SrcA, unpacked by the reuse unpack)
-            tilized_V.flatten(),
-            formats.input_format,
-            # buffer_B = P (datacopied into DEST as SrcB source)
-            tilized_P.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_V,
-            tile_count_B=tile_cnt_P,
-            tile_count_res=nt_dim,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sdpa_custom_mm_reuse_dest_srcb_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(math_fidelity),
+                SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=kt_dim, nt_dim=nt_dim),
+            ],
+            runtimes=[],
+            variant_stimuli=StimuliConfig(
+                # buffer_A = V (SrcA, unpacked by the reuse unpack)
+                tilized_V.flatten(),
+                formats.input_format,
+                # buffer_B = P (datacopied into DEST as SrcB source)
+                tilized_P.flatten(),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_V,
+                tile_count_B=tile_cnt_P,
+                tile_count_res=nt_dim,
+            ),
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return None
+    res_from_L1 = outcome.result
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
     golden_tensor = torch.tensor(golden_tensor, dtype=torch_format)

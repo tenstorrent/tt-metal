@@ -29,7 +29,6 @@ checked in this harness (no BH card); the bar is a clean Blackhole compile plus
 a golden faithfully mirroring the header math.
 """
 
-import pytest
 import torch
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat
@@ -44,9 +43,9 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     MATH_FIDELITY,
@@ -59,17 +58,6 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-
-# WEDGES THE DEVICE — skipped, not run. In bit-exact run 32156210309 this test hit a
-# device error mid-run (test_eltwise_add_scalar.py:253) that wedged the Tensix, cascading
-# TENSIX-TIMED-OUT into every subsequent test on the core. A wedge cannot be xfailed; it
-# must not execute on hardware. Root cause (our seed-then-fold DEST_TO_SRCA driver vs the
-# merged deepseek_binary_dest_reuse_add_tiles header) needs a BH-card debug session.
-# TODO: fix the driver and un-skip.
-pytestmark = pytest.mark.skip(
-    reason="Wedges the Tensix on BH (run 32156210309) — cascades timeouts into all "
-    "later tests; needs a BH-card debug of the DEST_TO_SRCA fold. Un-skip once fixed."
-)
 
 
 def _prepare_dest_reuse_inputs(
@@ -206,55 +194,67 @@ def test_eltwise_add_scalar(
     tile_dimensions,
     input_dimensions,
     output_dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     prepared = _prepare_dest_reuse_inputs(
         formats, input_dimensions, output_dimensions, tile_dimensions
     )
-    golden_tensor = _compute_dest_reuse_golden(prepared)
+    golden_tensor = None if is_perf else _compute_dest_reuse_golden(prepared)
 
     dest_acc = dest_acc_for(formats.output_format)
 
-    configuration = TestConfig(
-        "sources/eltwise_add_scalar_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            DEST_SYNC(),
-        ],
-        runtimes=[
-            NUM_TILES_IN_BLOCK(
-                prepared["output_tiles_in_block"],
-                input_num_tiles_in_block=prepared["input_tiles_in_block"],
-                output_num_tiles_in_block=prepared["output_tiles_in_block"],
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/eltwise_add_scalar_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(math_fidelity),
+                DEST_SYNC(),
+            ],
+            runtimes=[
+                NUM_TILES_IN_BLOCK(
+                    prepared["output_tiles_in_block"],
+                    input_num_tiles_in_block=prepared["input_tiles_in_block"],
+                    output_num_tiles_in_block=prepared["output_tiles_in_block"],
+                ),
+                NUM_BLOCKS(
+                    prepared["output_num_blocks"],
+                    input_num_blocks=prepared["input_num_blocks"],
+                    output_num_blocks=prepared["output_num_blocks"],
+                ),
+                NUM_FACES_R_DIM(prepared["num_faces_r_dim"]),
+                NUM_FACES_C_DIM(prepared["num_faces_c_dim"]),
+                TEST_FACE_DIMS(face_r_dim=prepared["face_r_dim"]),
+            ],
+            variant_stimuli=StimuliConfig(
+                prepared["src_A_tilized_flat"],
+                formats.input_format,
+                prepared["src_B_tilized_flat"],
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=prepared["tile_cnt_input"],
+                tile_count_B=prepared["tile_cnt_input"],
+                tile_count_res=prepared["tile_cnt_output"],
+                num_faces=prepared["num_faces"],
+                face_r_dim=prepared["face_r_dim"],
+                tile_dimensions=tile_dimensions,
+                use_dense_tile_dimensions=True,
             ),
-            NUM_BLOCKS(
-                prepared["output_num_blocks"],
-                input_num_blocks=prepared["input_num_blocks"],
-                output_num_blocks=prepared["output_num_blocks"],
-            ),
-            NUM_FACES_R_DIM(prepared["num_faces_r_dim"]),
-            NUM_FACES_C_DIM(prepared["num_faces_c_dim"]),
-            TEST_FACE_DIMS(face_r_dim=prepared["face_r_dim"]),
-        ],
-        variant_stimuli=StimuliConfig(
-            prepared["src_A_tilized_flat"],
-            formats.input_format,
-            prepared["src_B_tilized_flat"],
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=prepared["tile_cnt_input"],
-            tile_count_B=prepared["tile_cnt_input"],
-            tile_count_res=prepared["tile_cnt_output"],
-            num_faces=prepared["num_faces"],
-            face_r_dim=prepared["face_r_dim"],
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
+            dest_acc=dest_acc,
+            unpack_to_dest=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
     assert len(res_from_L1) == len(golden_tensor)
 
     res_tensor = torch.tensor(res_from_L1, dtype=prepared["torch_format"])

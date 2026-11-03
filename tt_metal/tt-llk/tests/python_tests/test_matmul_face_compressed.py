@@ -231,7 +231,19 @@ SUPPORTED_M = {1, 8}
 SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4")}
 
 
-def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
+def run_face_compressed(
+    M,
+    K,
+    N,
+    assignment,
+    pcc_threshold=None,
+    compression_case=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     run_compressed(
         M,
         K,
@@ -245,6 +257,11 @@ def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
         pack_b,
         encode_meta,
         pcc_threshold=pcc_threshold,
+        compression_case=compression_case,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
 
 

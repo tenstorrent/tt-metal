@@ -7,8 +7,11 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -26,42 +29,69 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        params.num_faces_A,
-        params.num_faces_B,
-        params.TILE_SIZE_UNPACK_A,
-        params.TILE_SIZE_UNPACK_B);
-    _llk_unpack_AB_matmul_init_<>(
-        0 /* transpose */,
-        params.CT_DIM,
-        params.RT_DIM,
-        params.KT_DIM,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* unpA_num_faces */,
-        4 /* unpB_num_faces */,
-        false /* unpA_partial_face */,
-        false /* unpB_partial_face */);
-    for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+
     {
-        _llk_unpack_AB_matmul_<>(
-            L1_ADDRESS(params.buffer_A[0]),
-            L1_ADDRESS(params.buffer_B[0]),
-            j,
-            j * params.CT_DIM,
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            params.num_faces_A,
+            params.num_faces_B,
             params.TILE_SIZE_UNPACK_A,
-            params.TILE_SIZE_UNPACK_B,
-            false /* unpA_partial_face */,
-            false /* unpB_partial_face */,
+            params.TILE_SIZE_UNPACK_B);
+        _llk_unpack_AB_matmul_init_<>(
+            0 /* transpose */,
             params.CT_DIM,
             params.RT_DIM,
-            params.KT_DIM);
+            params.KT_DIM,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            4 /* unpA_num_faces */,
+            4 /* unpB_num_faces */,
+            false /* unpA_partial_face */,
+            false /* unpB_partial_face */);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Blackhole posts the reused operand once and the reloaded operand
+            // ct (or rt) times per K. A paired dvalid per K under-posts when ct is 2.
+            _perf_unpack_matmul_mock(LOOP_FACTOR, params.RT_DIM, params.KT_DIM, params.CT_DIM);
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+                {
+                    _llk_unpack_AB_matmul_<>(
+                        L1_ADDRESS(params.buffer_A[0]),
+                        L1_ADDRESS(params.buffer_B[0]),
+                        j,
+                        j * params.CT_DIM,
+                        params.TILE_SIZE_UNPACK_A,
+                        params.TILE_SIZE_UNPACK_B,
+                        false /* unpA_partial_face */,
+                        false /* unpB_partial_face */,
+                        params.CT_DIM,
+                        params.RT_DIM,
+                        params.KT_DIM);
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -78,16 +108,48 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_matmul_init_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
-        TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, params.CT_DIM, params.RT_DIM);
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_wait_for_dest_available_<dest_sync>();
-    for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+
     {
-        _llk_math_matmul_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(0 /* dst_index */, params.CT_DIM, params.RT_DIM);
+        START_PERF_MEASURE("INIT")
+        _llk_math_matmul_init_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
+            TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, params.CT_DIM, params.RT_DIM);
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        PROFILER_SYNC();
     }
-    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _perf_math_matmul_mock(LOOP_FACTOR, params.RT_DIM, params.KT_DIM, params.CT_DIM);
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<dest_sync>();
+                }
+                for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+                {
+                    _llk_math_matmul_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(0 /* dst_index */, params.CT_DIM, params.RT_DIM);
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+
     _llk_math_matmul_uninit_no_mop_();
 }
 
@@ -104,15 +166,42 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
-    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+
     {
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
     }
-    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
+                for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+                {
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

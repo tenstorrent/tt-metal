@@ -37,8 +37,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -67,35 +70,66 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-
-    // ---- seed: one ordinary tile, which the math thread datacopies into DEST[0] ----
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
-
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
-
-    if constexpr (RMSNORM_CLOBBER_UNPA_X_END)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
-        // Leave unpacker A's X span at one row, as _llk_unpack_A_top32_rm_init_ does; the rmsnorm init must
-        // re-program it.
-        config_unpacker_x_end<p_setadc::UNP_A>(1 /*face_r_dim*/);
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+
+        // ---- seed: one ordinary tile, which the math thread datacopies into DEST[0] ----
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+
+        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
+
+        if constexpr (RMSNORM_CLOBBER_UNPA_X_END)
+        {
+            // Leave unpacker A's X span at one row, as _llk_unpack_A_top32_rm_init_ does; the rmsnorm init must
+            // re-program it.
+            config_unpacker_x_end<p_setadc::UNP_A>(1 /*face_r_dim*/);
+        }
+
+        // ---- the op under test ----
+        // acc_to_dest=true and DEST_TO_SRCB are forced by the static_assert in
+        // _llk_unpack_A_rmsnorm_mop_config_. DEST_TO_SRCB is what routes the base address to
+        // unpacker A (SrcA) -- SCALAR with acc_to_dest alone would route it to unpacker B -- and the
+        // init programs unpacker A's X span to match; SrcB is fed a dummy dvalid for the MOVD2B on
+        // the math thread.
+        _llk_unpack_A_rmsnorm_init_<RMSNORM_NUM_TILES, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            RMSNORM_UNPACK_FULL_TRANSPOSE /* transpose_of_faces */,
+            RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */,
+            FACE_R_DIM,
+            RMSNORM_NUM_FACES);
+        PROFILER_SYNC();
     }
-
-    // ---- the op under test ----
-    // acc_to_dest=true and DEST_TO_SRCB are forced by the static_assert in
-    // _llk_unpack_A_rmsnorm_mop_config_. DEST_TO_SRCB is what routes the base address to
-    // unpacker A (SrcA) -- SCALAR with acc_to_dest alone would route it to unpacker B -- and the
-    // init programs unpacker A's X span to match; SrcB is fed a dummy dvalid for the MOVD2B on
-    // the math thread.
-    _llk_unpack_A_rmsnorm_init_<RMSNORM_NUM_TILES, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-        RMSNORM_UNPACK_FULL_TRANSPOSE /* transpose_of_faces */, RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */, FACE_R_DIM, RMSNORM_NUM_FACES);
-
-    // ONE call: the MOP itself walks all RMSNORM_NUM_TILES tiles from this base address.
-    _llk_unpack_A_<BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-        L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Scalar dest-reuse: 1 dummy SrcB (MOP start_op) + N tiles * faces SrcA.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_unpack_set_valid(ckernel::SrcB);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(RMSNORM_NUM_TILES * RMSNORM_NUM_FACES);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // ONE call: the MOP itself walks all RMSNORM_NUM_TILES tiles from this base address.
+                _llk_unpack_A_<BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -121,30 +155,73 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-
-    if constexpr (RMSNORM_PRESERVE_SRC_ZERO_FLAG)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
-        // Leave the Src zero flag at keep, as copy_init does; the rmsnorm init must restore the default.
-        math::_configure_preserve_zero_flag_state_();
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+        if constexpr (RMSNORM_PRESERVE_SRC_ZERO_FLAG)
+        {
+            // Leave the Src zero flag at keep, as copy_init does; the rmsnorm init must restore the default.
+            math::_configure_preserve_zero_flag_state_();
+        }
+
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+
+        // Seed DEST[0]; element [0] of it becomes the broadcast scalar. The
+        // dest-available wait is inside the L1_TO_L1 loop, before each math call.
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            0 /* dst_index */, formats.math, formats.math);
+
+        _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, MATH_FIDELITY>(RMSNORM_NUM_FACES, 0 /* acc_to_dest */);
+        PROFILER_SYNC();
     }
-
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
-
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
-
-    // Seed DEST[0]; element [0] of it becomes the broadcast scalar.
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        0 /* dst_index */, formats.math, formats.math);
-
-    _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, MATH_FIDELITY>(RMSNORM_NUM_FACES, 0 /* acc_to_dest */);
-
-    _llk_math_rmsnorm_bcast_scalar_dest_reuse_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, MATH_FIDELITY, RMSNORM_CLEAR_DEST>(
-        0 /* src_index */, 0 /* dst_index */);
-
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(RMSNORM_NUM_TILES * RMSNORM_NUM_FACES);
+                _perf_math_clear_valid(ckernel::SrcB);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // clear_dest issues CLR_HALF / CLR_ALL. Without this wait the
+                // second iteration clears the half the packer is still draining.
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+                _llk_math_rmsnorm_bcast_scalar_dest_reuse_<
+                    ELTWISE_BINARY_OP,
+                    RMSNORM_NUM_TILES,
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    MATH_FIDELITY,
+                    RMSNORM_CLEAR_DEST>(0 /* src_index */, 0 /* dst_index */);
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -159,18 +236,41 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
-
-    _llk_packer_wait_for_math_done_();
-
-    for (std::uint32_t tile = 0; tile < RMSNORM_NUM_TILES; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
+        PROFILER_SYNC();
     }
-
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
+                for (std::uint32_t tile = 0; tile < RMSNORM_NUM_TILES; ++tile)
+                {
+                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

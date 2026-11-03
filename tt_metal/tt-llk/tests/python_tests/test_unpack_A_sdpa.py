@@ -40,9 +40,9 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
 )
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
@@ -185,6 +185,11 @@ def test_unpack_A_sdpa(
     num_faces,
     face_r_dim,
     input_dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     partial_face = face_r_dim < 16
     num_faces_r_dim, num_faces_c_dim = legacy_num_faces_to_grid(num_faces)
@@ -224,55 +229,62 @@ def test_unpack_A_sdpa(
         BlocksCalculationAlgorithm.Standard,
     )
 
-    configuration = TestConfig(
-        testname,
-        formats,
-        templates=[
-            STOCHASTIC_ROUNDING(StochasticRounding.No),
-            BROADCAST_TYPE(BroadcastType.None_),
-            ACC_TO_DEST(False),
-            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
-            PARTIAL_FACE(
-                partial_a=partial_face,
-                partial_face_pack=partial_face,
-                partial_b=partial_face,
-                partial_face_math=partial_face,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name=testname,
+            formats=formats,
+            templates=[
+                STOCHASTIC_ROUNDING(StochasticRounding.No),
+                BROADCAST_TYPE(BroadcastType.None_),
+                ACC_TO_DEST(False),
+                REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
+                PARTIAL_FACE(
+                    partial_a=partial_face,
+                    partial_face_pack=partial_face,
+                    partial_b=partial_face,
+                    partial_face_math=partial_face,
+                ),
+                DISABLE_SRC_ZERO_FLAG(False),
+            ],
+            runtimes=[
+                # Identity SDPA path: no transpose of faces / within-face 16x16.
+                UNPACK_TRANS_FACES(Transpose.No),
+                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+                NUM_FACES(num_faces),
+                NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+                NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
+                TILE_COUNT(tile_cnt_A),
+                TEST_FACE_DIMS(face_r_dim=face_r_dim),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                NUM_BLOCKS(num_blocks),
+                INPUT_DIMENSIONS(
+                    raw_dimensions[0] // TILE_DIMENSIONS[0],
+                    raw_dimensions[1] // TILE_DIMENSIONS[1],
+                ),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                num_faces=num_faces,
+                face_r_dim=face_r_dim,
             ),
-            DISABLE_SRC_ZERO_FLAG(False),
-        ],
-        runtimes=[
-            # Identity SDPA path: no transpose of faces / within-face 16x16.
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-            NUM_FACES(num_faces),
-            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
-            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
-            TILE_COUNT(tile_cnt_A),
-            TEST_FACE_DIMS(face_r_dim=face_r_dim),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            NUM_BLOCKS(num_blocks),
-            INPUT_DIMENSIONS(
-                raw_dimensions[0] // TILE_DIMENSIONS[0],
-                raw_dimensions[1] // TILE_DIMENSIONS[1],
-            ),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
+            dest_acc=DestAccumulation.No,
+            unpack_to_dest=False,
         ),
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     assert len(res_from_L1) == len(
         golden_tensor

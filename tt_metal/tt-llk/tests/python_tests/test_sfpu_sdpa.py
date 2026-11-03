@@ -29,11 +29,12 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
+    LOOP_FACTOR,
     SDPA_EXP_SCALE,
     SDPA_OP,
     SDPA_SOFTPLUS_PARAMS,
@@ -243,7 +244,15 @@ def _variants():
     variant=_variants(),
     precision=list(Precision),
 )
-def test_sfpu_sdpa(variant, precision):
+def test_sfpu_sdpa(
+    variant,
+    precision,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     op = variant.op
 
     formats = InputOutputFormat(precision.data_format, precision.data_format)
@@ -264,26 +273,35 @@ def test_sfpu_sdpa(variant, precision):
         src_A, TILE_DIMENSIONS, stimuli_format=formats.input_format
     ).flatten()
 
-    configuration = TestConfig(
-        "sources/sfpu_sdpa_test.cpp",
-        formats,
-        templates=_templates(variant),
-        variant_stimuli=StimuliConfig(
-            src_A_tilized,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_sdpa_test.cpp",
+            formats=formats,
+            templates=_templates(variant),
+            variant_stimuli=StimuliConfig(
+                src_A_tilized,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+            ),
+            dest_acc=precision.dest_acc,
+            unpack_to_dest=precision.unpack_to_dest,
+            disable_format_inference=True,
+            compile_time_formats=True,
+            runtimes=[LOOP_FACTOR(1)],
         ),
-        dest_acc=precision.dest_acc,
-        unpack_to_dest=precision.unpack_to_dest,
-        disable_format_inference=True,
-        compile_time_formats=True,
     )
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, TILE_DIMENSIONS)
@@ -349,7 +367,15 @@ def _dest_configurations():
     dest_config=_dest_configurations(),
     scale_bf16=list(CORRECTION_SCALE_BF16_VALUES),
 )
-def test_sfpu_sdpa_correction(dest_config, scale_bf16):
+def test_sfpu_sdpa_correction(
+    dest_config,
+    scale_bf16,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     precision, dest_sync = dest_config
 
     formats = InputOutputFormat(precision.data_format, precision.data_format)
@@ -377,28 +403,39 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
         ]
     )
 
-    configuration = TestConfig(
-        "sources/sfpu_sdpa_test.cpp",
-        formats,
-        templates=_templates(
-            Variant(SdpaOp.Correction, exp_scale_bf16=scale_bf16, dest_sync=dest_sync)
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_sdpa_test.cpp",
+            formats=formats,
+            templates=_templates(
+                Variant(
+                    SdpaOp.Correction, exp_scale_bf16=scale_bf16, dest_sync=dest_sync
+                )
+            ),
+            variant_stimuli=StimuliConfig(
+                src_A_tilized,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=num_tiles,
+                tile_count_B=1,
+                tile_count_res=num_tiles,
+            ),
+            dest_acc=precision.dest_acc,
+            unpack_to_dest=precision.unpack_to_dest,
+            disable_format_inference=True,
+            compile_time_formats=True,
+            runtimes=[LOOP_FACTOR(1)],
         ),
-        variant_stimuli=StimuliConfig(
-            src_A_tilized,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=num_tiles,
-            tile_count_B=1,
-            tile_count_res=num_tiles,
-        ),
-        dest_acc=precision.dest_acc,
-        unpack_to_dest=precision.unpack_to_dest,
-        disable_format_inference=True,
-        compile_time_formats=True,
     )
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     res_flat = result_tensor(res_from_L1, formats.output_format)
     res_tiles = [

@@ -73,9 +73,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
@@ -164,6 +164,11 @@ def _run(
     clobber_unpa_x_end=False,
     preserve_src_zero_flag=False,
     operands=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     """Compile+run one variant.
 
@@ -190,39 +195,47 @@ def _run(
         src_A, src_B = operands
         tile_cnt_A, tile_cnt_B = num_tiles, 1
 
-    configuration = TestConfig(
-        "sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp",
-        formats,
-        templates=[
-            MATH_OP(mathop=mathop),
-            MATH_FIDELITY(math_fidelity),
-            RMSNORM_DEST_REUSE(
-                rmsnorm_num_tiles=num_tiles,
-                rmsnorm_num_faces=num_faces,
-                clear_dest=clear_dest,
-                unpack_full_transpose=unpack_full_transpose,
-                rmsnorm_clobber_unpa_x_end=clobber_unpa_x_end,
-                rmsnorm_preserve_src_zero_flag=preserve_src_zero_flag,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_OP(mathop=mathop),
+                MATH_FIDELITY(math_fidelity),
+                RMSNORM_DEST_REUSE(
+                    rmsnorm_num_tiles=num_tiles,
+                    rmsnorm_num_faces=num_faces,
+                    clear_dest=clear_dest,
+                    unpack_full_transpose=unpack_full_transpose,
+                    rmsnorm_clobber_unpa_x_end=clobber_unpa_x_end,
+                    rmsnorm_preserve_src_zero_flag=preserve_src_zero_flag,
+                ),
+            ],
+            runtimes=[],
+            variant_stimuli=StimuliConfig(
+                src_A.flatten(),
+                formats.input_format,
+                src_B.flatten(),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=num_tiles,
             ),
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            src_A.flatten(),
-            formats.input_format,
-            src_B.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=num_tiles,
+            # See the module docstring: the op's own static_assert rejects unpack-to-dest.
+            unpack_to_dest=False,
+            dest_acc=dest_acc,
         ),
-        # See the module docstring: the op's own static_assert rejects unpack-to-dest.
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
     )
+    if is_perf:
+        return None
 
     span = num_tiles * ELEMENTS_PER_TILE
-    res_from_L1 = configuration.run().result[:span]
+    res_from_L1 = outcome.result[:span]
     torch_format = format_dict[formats.output_format]
 
     device = torch.tensor(res_from_L1, dtype=torch_format).flatten().to(torch.float32)

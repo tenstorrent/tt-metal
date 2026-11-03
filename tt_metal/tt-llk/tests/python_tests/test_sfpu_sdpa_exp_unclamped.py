@@ -54,9 +54,10 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
     SFPU_SCALE_EN,
     SFPU_UNARY_SCALAR,
     TILE_COUNT,
@@ -88,7 +89,18 @@ INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0), (-400.0, 0.0)]
     scale=[BF16_ONE, BF16_HALF],
     num_tiles=[1, 2],
 )
-def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tiles):
+def test_sfpu_sdpa_exp_unclamped(
+    formats,
+    input_range,
+    scale_en,
+    scale,
+    num_tiles,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     if not scale_en and scale != BF16_ONE:
         # The template drops the multiply entirely, so the scale value is dead.
         pytest.skip("scale is not read when SCALE_EN is false")
@@ -109,32 +121,41 @@ def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tile
     golden_generator = get_golden_generator(SdpaExpUnclampedGolden)
     golden_tensor = golden_generator(src_A, effective_scale, formats.output_format)
 
-    configuration = TestConfig(
-        "sources/sfpu_sdpa_exp_unclamped_test.cpp",
-        formats,
-        templates=[
-            SFPU_SCALE_EN(scale_en=scale_en),
-            SFPU_UNARY_SCALAR(value_bits=scale),
-        ],
-        runtimes=[
-            TILE_COUNT(num_tiles),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=num_tiles,
-            tile_count_B=1,
-            tile_count_res=num_tiles,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_sdpa_exp_unclamped_test.cpp",
+            formats=formats,
+            templates=[
+                SFPU_SCALE_EN(scale_en=scale_en),
+                SFPU_UNARY_SCALAR(value_bits=scale),
+            ],
+            runtimes=[
+                LOOP_FACTOR(1),
+                TILE_COUNT(num_tiles),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=num_tiles,
+                tile_count_B=1,
+                tile_count_res=num_tiles,
+            ),
+            # Pinned, not swept: the kernel static_asserts !is_fp32_dest_acc_en.
+            dest_acc=DestAccumulation.No,
+            unpack_to_dest=False,
         ),
-        # Pinned, not swept: the kernel static_asserts !is_fp32_dest_acc_en.
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
     )
+    if is_perf:
+        return
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = outcome.result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     assert passed_test(

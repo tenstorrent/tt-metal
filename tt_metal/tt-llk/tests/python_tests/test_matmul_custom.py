@@ -20,14 +20,15 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
 )
 from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
     MATH_FIDELITY,
     NUM_FACES,
+    PERF_CASE_SET,
     THROTTLE_LEVEL,
     TILE_COUNT,
 )
@@ -76,6 +77,12 @@ def _run_matmul_custom(
     throttle_level: int,
     boot_mode: BootMode,
     dest_sync: DestSync = DestSync.Half,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    perf_case_set=0,
 ):
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -116,34 +123,44 @@ def _run_matmul_custom(
         tilized_A = src_A
         tilized_B = src_B
 
-    configuration = TestConfig(
-        "sources/matmul_custom_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            THROTTLE_LEVEL(throttle_level),
-            DEST_SYNC(dest_sync),
-        ],
-        runtimes=[
-            NUM_FACES(),
-            TILE_COUNT(matmul_dims.output_tile_cnt),
-            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
-            formats.input_format,
-            tilized_B.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=matmul_dims.output_tile_cnt,
-        ),
-        dest_acc=dest_acc,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
         boot_mode=boot_mode,
+        test_config_kwargs=dict(
+            test_name="sources/matmul_custom_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(math_fidelity),
+                THROTTLE_LEVEL(throttle_level),
+                DEST_SYNC(dest_sync),
+            ]
+            + ([PERF_CASE_SET(perf_case_set)] if is_perf else []),
+            runtimes=[
+                NUM_FACES(),
+                TILE_COUNT(matmul_dims.output_tile_cnt),
+                CRK_TILE_DIMM(
+                    matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim
+                ),
+            ],
+            variant_stimuli=StimuliConfig(
+                tilized_A.flatten(),
+                formats.input_format,
+                tilized_B.flatten(),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=matmul_dims.output_tile_cnt,
+            ),
+            dest_acc=dest_acc,
+        ),
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 

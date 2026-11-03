@@ -11,9 +11,9 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE
 from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, TemplateParameter
+from helpers.test_variant_parameters import DEST_SYNC, LOOP_FACTOR, TemplateParameter
 
 pytestmark = [skip_for_quasar, skip_for_wormhole]
 
@@ -48,7 +48,15 @@ class Packing(TemplateParameter):
         (2, DestSync.Half),
     ],
 )
-def test_topk_pack_supplied_indices(case, alias_sync):
+def test_topk_pack_supplied_indices(
+    case,
+    alias_sync,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     alias, dest_sync = alias_sync
     k, half = case
     tiles = (k + ELEMENTS_PER_TILE - 1) // ELEMENTS_PER_TILE
@@ -63,24 +71,33 @@ def test_topk_pack_supplied_indices(case, alias_sync):
     ids[::11] = SENTINEL_ID
     ids[1:5] = torch.tensor([0, INDEX_MASK, INDEX_MASK + 1, SCORE_MASK])
     formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
-    config = TestConfig(
-        "sources/topk_pack_supplied_indices_test.cpp",
-        formats,
-        templates=[Packing(k, half, alias), DEST_SYNC(dest_sync)],
-        variant_stimuli=StimuliConfig(
-            scores,
-            DataFormat.UInt32,
-            ids,
-            DataFormat.UInt32,
-            DataFormat.UInt32,
-            tile_count_A=tiles,
-            tile_count_B=tiles,
-            tile_count_res=tiles,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/topk_pack_supplied_indices_test.cpp",
+            formats=formats,
+            templates=[Packing(k, half, alias), DEST_SYNC(dest_sync)],
+            runtimes=[LOOP_FACTOR(1)],
+            variant_stimuli=StimuliConfig(
+                scores,
+                DataFormat.UInt32,
+                ids,
+                DataFormat.UInt32,
+                DataFormat.UInt32,
+                tile_count_A=tiles,
+                tile_count_B=tiles,
+                tile_count_res=tiles,
+            ),
+            unpack_to_dest=True,
+            dest_acc=DestAccumulation.Yes,
         ),
-        unpack_to_dest=True,
-        dest_acc=DestAccumulation.Yes,
     )
-    result = torch.tensor(config.run().result, dtype=torch.int64)[
+    if is_perf:
+        return
+    result = torch.tensor(outcome.result, dtype=torch.int64)[
         : tiles * ELEMENTS_PER_TILE
     ]
     expected = torch.full_like(scores, PACKED_PADDING)

@@ -242,22 +242,7 @@ def _canonical_bcast_col_config(
     return configuration
 
 
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
-    ),
-    mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
-    dest_acc=[DestAccumulation.No],
-    math_fidelity=ALL_MATH_FIDELITIES,
-    broadcast_type=[BroadcastType.Column],
-    tile_rows=_TILE_ROWS,
-    # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
-    # sections, exercising destination bank switching in the custom pipeline.
-    input_width=list(range(32, 257, 32)) + [1024],
-)
-def test_eltwise_bcast_col_custom(
+def _run_eltwise_bcast_col_custom(
     formats,
     mathop,
     dest_acc,
@@ -265,6 +250,11 @@ def test_eltwise_bcast_col_custom(
     broadcast_type,
     tile_rows,
     input_width,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
@@ -351,6 +341,17 @@ def test_eltwise_bcast_col_custom(
         DestSync.Half, dest_acc, formats, input_dimensions_A, tile_dimensions=tile_dims
     )
 
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    config_kwargs = {}
+    if not is_perf:
+        config_kwargs = {
+            "num_faces": num_faces,
+            "face_r_dim": face_r_dim,
+            "num_blocks": num_blocks,
+            "num_tiles_in_block": num_tiles_in_block,
+        }
     configuration = create_eltwise_bcast_col_custom_config(
         formats,
         mathop,
@@ -373,12 +374,16 @@ def test_eltwise_bcast_col_custom(
             tile_dimensions=tile_dims,
             use_dense_tile_dimensions=True,
         ),
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        run_types=run_types or [PerfRunType.L1_TO_L1],
         preserve_src_zero_flag=False,
-        num_faces=num_faces,
-        face_r_dim=face_r_dim,
-        num_blocks=num_blocks,
-        num_tiles_in_block=num_tiles_in_block,
+        **config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
     canonical = None
     if mathop == MathOperation.Elwmul:
         canonical = _canonical_bcast_col_config(
@@ -444,6 +449,41 @@ def test_eltwise_bcast_col_custom(
         assert (
             mismatched == 0
         ), f"{mismatched} of {res_tilized.numel()} elements differ from the canonical bcast-col MUL at {math_fidelity.name}"
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+        ]
+    ),
+    mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
+    dest_acc=[DestAccumulation.No],
+    math_fidelity=ALL_MATH_FIDELITIES,
+    broadcast_type=[BroadcastType.Column],
+    tile_rows=_TILE_ROWS,
+    # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
+    # sections, exercising destination bank switching in the custom pipeline.
+    input_width=list(range(32, 257, 32)) + [1024],
+)
+def test_eltwise_bcast_col_custom(
+    formats,
+    mathop,
+    dest_acc,
+    math_fidelity,
+    broadcast_type,
+    tile_rows,
+    input_width,
+):
+    _run_eltwise_bcast_col_custom(
+        formats,
+        mathop,
+        dest_acc,
+        math_fidelity,
+        broadcast_type,
+        tile_rows,
+        input_width,
+    )
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).

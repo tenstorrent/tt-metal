@@ -9,8 +9,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -59,22 +62,42 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t src_format = formats.unpack_A_src;
     const std::uint32_t dst_format = formats.unpack_A_dst;
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-    ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
-    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
-        for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+        ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            unpack_copy_tile(params, r, c, src_format, dst_format);
-            _llk_unpack_set_srcb_dummy_valid_();
-            if (c > 0)
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_set_srcb_dummy_valid_();
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+                    {
+                        unpack_copy_tile(params, r, c, src_format, dst_format);
+                        _llk_unpack_set_srcb_dummy_valid_();
+                        if (c > 0)
+                        {
+                            _llk_unpack_set_srcb_dummy_valid_();
+                        }
+                    }
+                }
             }
         }
+        PROFILER_SYNC();
     }
 }
 
@@ -106,26 +129,51 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t math_format = formats.math;
 
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::_llk_math_topk_xl_copy_init_(math_format);
-    topk_xl_split::init_tokens();
-    topk_xl_scrub_dest();
-    topk_xl_split::start_pack();
-
-    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
-        _llk_math_wait_for_dest_available_<dest_sync>();
-        constexpr bool prefetch = topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS);
-        topk_xl_split::math_row<TOPK_XL_K>(
-            TOPK_XL_NUM_CHUNKS,
-            [math_format](std::uint32_t chunk, std::uint32_t tile) { copy_chunk(chunk, tile, math_format); },
-            prefetch && r > 0,
-            prefetch && r + 1 < TOPK_XL_NUM_ROWS);
-        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+        ckernel::_llk_math_topk_xl_copy_init_(math_format);
+        topk_xl_split::init_tokens();
+        topk_xl_scrub_dest();
+        topk_xl_split::start_pack();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<dest_sync>();
+                    }
+                    constexpr bool prefetch = topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS);
+                    topk_xl_split::math_row<TOPK_XL_K>(
+                        TOPK_XL_NUM_CHUNKS,
+                        [math_format](std::uint32_t chunk, std::uint32_t tile) { copy_chunk(chunk, tile, math_format); },
+                        prefetch && r > 0,
+                        prefetch && r + 1 < TOPK_XL_NUM_ROWS);
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 
     topk_xl_scrub_dest();
@@ -145,30 +193,67 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-    topk_xl_split::wait_start();
-
-    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
-        topk_xl_split::pack_row<TOPK_XL_K>(
-            TOPK_XL_NUM_CHUNKS, TOPK_XL_ASCENDING /*mirror_last*/, [] { topk_xl_split::split_indices<TOPK_XL_K, true /*stall_after*/>(TOPK_XL_SEG_BASE); });
-        _llk_packer_wait_for_math_done_();
-        _llk_pack_mop_config_<PackMode::Default, false /* zero_output */>(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */);
-        for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        topk_xl_split::wait_start();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        // Math posts F2S and waits on S2F. PACK_ISOLATE does not run math, so it
+        // must not take those tokens. UNPACK_ISOLATE and MATH_ISOLATE do run math,
+        // and pack has to answer S2F or math never clears the dvalids unpack posted.
+        // Those two modes skip only the L1 pack.
+        constexpr bool exchange_tokens = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
+        constexpr bool pack_l1         = PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
+        if constexpr (exchange_tokens || pack_l1)
         {
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(params.buffer_Res[2 * TILES_PER_SEQ * r + t]));
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    if constexpr (exchange_tokens)
+                    {
+                        topk_xl_split::pack_row<TOPK_XL_K>(
+                            TOPK_XL_NUM_CHUNKS,
+                            TOPK_XL_ASCENDING /*mirror_last*/,
+                            [] { topk_xl_split::split_indices<TOPK_XL_K, true /*stall_after*/>(TOPK_XL_SEG_BASE); });
+                    }
+                    if constexpr (pack_l1)
+                    {
+                        if constexpr (sync_with_math)
+                        {
+                            _llk_packer_wait_for_math_done_();
+                        }
+                        _llk_pack_mop_config_<PackMode::Default, false /* zero_output */>(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */);
+                        for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
+                        {
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(params.buffer_Res[2 * TILES_PER_SEQ * r + t]));
+                        }
+                        if constexpr (sync_with_math)
+                        {
+                            if (topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS) && r + 1 < TOPK_XL_NUM_ROWS)
+                            {
+                                topk_xl_split::release_dest_bank0<is_fp32_dest_acc_en>();
+                            }
+                            else
+                            {
+                                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                            }
+                        }
+                    }
+                }
+            }
         }
-        if (topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS) && r + 1 < TOPK_XL_NUM_ROWS)
-        {
-            topk_xl_split::release_dest_bank0<is_fp32_dest_acc_en>();
-        }
-        else
-        {
-            _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-        }
+        PROFILER_SYNC();
     }
 }
 

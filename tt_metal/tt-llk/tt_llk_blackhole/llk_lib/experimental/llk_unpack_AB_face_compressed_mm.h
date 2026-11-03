@@ -351,7 +351,11 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     if constexpr (clear_src)
     {
+        // The both-bank clear waits until math has released SrcB. Drain the unpacker first so it
+        // cannot start while the previous call's zero-src publish is still in the pipe.
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
     }
     cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
@@ -431,6 +435,9 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     if constexpr (ct_dim == 1 && finalize)
     {
+        // Publish the finalize operands. Stall_Clr waits on the unpacker's own bank; a preceding
+        // STALLWAIT on SRCB_CLR/SRCA_CLR samples the Matrix Unit bank, which is the other bank once
+        // double-buffering is in steady state, so that wait never completes.
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
         TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);

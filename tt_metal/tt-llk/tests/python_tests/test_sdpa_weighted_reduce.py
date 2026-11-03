@@ -57,9 +57,9 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
@@ -99,6 +99,11 @@ def test_sdpa_weighted_reduce(
     formats,
     dest_acc,
     fill_constants,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     weight_value, qk_value = fill_constants
     input_dimensions = [TILE_DIM, TILE_DIM]  # single [32, 32] tile per operand
@@ -145,27 +150,35 @@ def test_sdpa_weighted_reduce(
     golden_row = torch.full((TILE_DIM,), reduced_value, dtype=torch_format)
     # *******************************************************
 
-    configuration = TestConfig(
-        "sources/sdpa_weighted_reduce_test.cpp",
-        formats,
-        templates=[],  # dims are fixed constexpr in the C++ driver; no compile-time knobs
-        runtimes=[
-            TILE_COUNT(tile_cnt_qk),
-        ],
-        variant_stimuli=StimuliConfig(
-            weights_src,
-            formats.input_format,
-            qk_src,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_w,
-            tile_count_B=tile_cnt_qk,
-            tile_count_res=1,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sdpa_weighted_reduce_test.cpp",
+            formats=formats,
+            templates=[],  # dims are fixed constexpr in the C++ driver; no compile-time knobs
+            runtimes=[
+                TILE_COUNT(tile_cnt_qk),
+            ],
+            variant_stimuli=StimuliConfig(
+                weights_src,
+                formats.input_format,
+                qk_src,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_w,
+                tile_count_B=tile_cnt_qk,
+                tile_count_res=1,
+            ),
+            unpack_to_dest=False,  # matmul unpack feeds SrcA/SrcB; inputs must not go straight to dest
+            dest_acc=dest_acc,
         ),
-        unpack_to_dest=False,  # matmul unpack feeds SrcA/SrcB; inputs must not go straight to dest
-        dest_acc=dest_acc,
     )
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)

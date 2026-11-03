@@ -47,9 +47,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     IN_FACE_DIMS,
     MATH_OP,
@@ -102,6 +102,11 @@ def run_sdpa_bcast_col_srcb_reuse(
     mathop=MathOperation.Elwmul,
     num_tiles=1,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     """Drive `cpp_source` (an SDPA bcast-col SrcB-reuse kernel) and assert against the golden.
 
@@ -186,43 +191,50 @@ def run_sdpa_bcast_col_srcb_reuse(
                 MathFidelity.LoFi,
             )
 
-    configuration = TestConfig(
-        cpp_source,
-        formats,
-        templates=[
-            # NUM_FACES is a TEMPLATE parameter here, not a runtime one: the MATH mop needs the face
-            # count as a compile-time constant (its ADDR_MOD dest.incr lands in a SETC16 whose
-            # immediate takes the "n" asm constraint), and it emits `constexpr num_faces`, which the
-            # unpack/pack sides read just as happily as the math thread.
-            NUM_FACES(SDPA_NUM_FACES, SDPA_NUM_FACES, SDPA_NUM_FACES),
-            MATH_OP(mathop=mathop),
-            SDPA_BCAST_NUM_TILES(sdpa_bcast_num_tiles=num_tiles),
-        ],
-        runtimes=[
-            TILE_COUNT(num_tiles),
-            IN_FACE_DIMS(
-                in0_face_r_dim=SDPA_FACE_R_DIM, in1_face_r_dim=SDPA_FACE_R_DIM
-            ),
-        ],
-        variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
-            formats.input_format,
-            tilized_B.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=num_tiles,
-            num_faces=SDPA_NUM_FACES,
-            face_r_dim=SDPA_FACE_R_DIM,
-            tile_dimensions=SDPA_TILE_DIMS,
-            use_dense_tile_dimensions=True,
-        ),
-        dest_acc=DestAccumulation.No,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
         boot_mode=boot_mode,
+        test_config_kwargs=dict(
+            test_name=cpp_source,
+            formats=formats,
+            templates=[
+                # NUM_FACES is a TEMPLATE parameter here, not a runtime one: the MATH mop needs the face
+                # count as a compile-time constant (its ADDR_MOD dest.incr lands in a SETC16 whose
+                # immediate takes the "n" asm constraint), and it emits `constexpr num_faces`, which the
+                # unpack/pack sides read just as happily as the math thread.
+                NUM_FACES(SDPA_NUM_FACES, SDPA_NUM_FACES, SDPA_NUM_FACES),
+                MATH_OP(mathop=mathop),
+                SDPA_BCAST_NUM_TILES(sdpa_bcast_num_tiles=num_tiles),
+            ],
+            runtimes=[
+                TILE_COUNT(num_tiles),
+                IN_FACE_DIMS(
+                    in0_face_r_dim=SDPA_FACE_R_DIM, in1_face_r_dim=SDPA_FACE_R_DIM
+                ),
+            ],
+            variant_stimuli=StimuliConfig(
+                tilized_A.flatten(),
+                formats.input_format,
+                tilized_B.flatten(),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=num_tiles,
+                num_faces=SDPA_NUM_FACES,
+                face_r_dim=SDPA_FACE_R_DIM,
+                tile_dimensions=SDPA_TILE_DIMS,
+                use_dense_tile_dimensions=True,
+            ),
+            dest_acc=DestAccumulation.No,
+        ),
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     res_from_L1 = untilize_block(
         res_from_L1,

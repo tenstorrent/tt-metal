@@ -22,8 +22,8 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CUSTOM_MM_REUSE_CFG,
     NUM_FACES,
@@ -60,7 +60,16 @@ def _tile(t, dims, fmt, face_r_dim=16):
     dest_acc=[DestAccumulation.No],
     reuse_kt_nt=REUSE_KT_NT,
 )
-def test_custom_mm_reuse_dest_srcb(formats, dest_acc, reuse_kt_nt):
+def test_custom_mm_reuse_dest_srcb(
+    formats,
+    dest_acc,
+    reuse_kt_nt,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     REUSE_KT, REUSE_NT = reuse_kt_nt
     torch_format = format_dict[formats.output_format]
     in_fmt = formats.input_format
@@ -109,37 +118,44 @@ def test_custom_mm_reuse_dest_srcb(formats, dest_acc, reuse_kt_nt):
     B0_bytes = bytes(packer(_tile(B0.flatten(), dims=[kp, kt], fmt=in_fmt)))
     B1_bytes = bytes(packer(_tile(B1.flatten(), dims=[kt, nt], fmt=in_fmt)))
 
-    configuration = TestConfig(
-        "sources/custom_mm_reuse_dest_srcb_test.cpp",
-        formats,
-        templates=[
-            CUSTOM_MM_REUSE_CFG(
-                in0_tile_r_dim=IN0_TILE_R_DIM,
-                producer_kt=PRODUCER_KT,
-                reuse_kt=REUSE_KT,
-                reuse_nt=REUSE_NT,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/custom_mm_reuse_dest_srcb_test.cpp",
+            formats=formats,
+            templates=[
+                CUSTOM_MM_REUSE_CFG(
+                    in0_tile_r_dim=IN0_TILE_R_DIM,
+                    producer_kt=PRODUCER_KT,
+                    reuse_kt=REUSE_KT,
+                    reuse_nt=REUSE_NT,
+                ),
+            ],
+            runtimes=[
+                NUM_FACES(num_faces=4, num_faces_A=2, num_faces_B=4),
+            ],
+            variant_stimuli=StimuliConfig(
+                A0_bytes,
+                in_fmt,
+                B0_bytes,
+                in_fmt,
+                formats.output_format,
+                tile_count_A=PRODUCER_KT,  # in0 spans PRODUCER_KT tiles along K
+                tile_count_B=PRODUCER_KT * REUSE_KT,
+                tile_count_res=REUSE_NT,
+                buffer_C=B1_bytes,
+                stimuli_C_format=in_fmt,
+                tile_count_C=REUSE_KT * REUSE_NT,
             ),
-        ],
-        runtimes=[
-            NUM_FACES(num_faces=4, num_faces_A=2, num_faces_B=4),
-        ],
-        variant_stimuli=StimuliConfig(
-            A0_bytes,
-            in_fmt,
-            B0_bytes,
-            in_fmt,
-            formats.output_format,
-            tile_count_A=PRODUCER_KT,  # in0 spans PRODUCER_KT tiles along K
-            tile_count_B=PRODUCER_KT * REUSE_KT,
-            tile_count_res=REUSE_NT,
-            buffer_C=B1_bytes,
-            stimuli_C_format=in_fmt,
-            tile_count_C=REUSE_KT * REUSE_NT,
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     # Each output tile is packed as two 8-row faces (cols 0..15, then cols 16..31);

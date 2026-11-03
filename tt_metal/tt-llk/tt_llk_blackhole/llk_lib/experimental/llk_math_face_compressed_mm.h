@@ -392,6 +392,10 @@ inline void _llk_math_face_compressed_mm_(
     LLK_ASSERT(kt_dim >= 2 && kt_dim <= 256 && kt_dim % 2 == 0, "face_compressed_mm (math): kt_dim must be an even number in [2, 256]");
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 8, "face_compressed_mm (math): unsupported face_r_dim (expected 1 or 8)");
 
+    // Same counters as the single iteration a functional run makes. The next call otherwise
+    // resumes mid-bank, and its first MVMUL waits on a Src the unpacker has already retired.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH);
+    math::reset_counters(p_setrwc::SET_ABD_F);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     // Geometry of the math meta section: one 6-bit meta per four faces, packed at its own width, so five

@@ -14,9 +14,9 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_FACES,
@@ -35,6 +35,11 @@ from helpers.utils import passed_test, result_tensor
 def test_unary_datacopy_custom(
     formats,
     dest_acc,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     input_dimensions = [128, 256]
     num_faces = 4
@@ -46,43 +51,51 @@ def test_unary_datacopy_custom(
         input_dimensions_B=input_dimensions,
     )
 
-    generate_golden = get_golden_generator(DataCopyGolden)
-    golden_tensor = generate_golden(
-        src_A, formats.output_format, num_faces, input_dimensions
-    )
+    golden_tensor = None
+    if not is_perf:
+        generate_golden = get_golden_generator(DataCopyGolden)
+        golden_tensor = generate_golden(
+            src_A, formats.output_format, num_faces, input_dimensions
+        )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
 
-    configuration = TestConfig(
-        "sources/eltwise_unary_datacopy_custom_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/eltwise_unary_datacopy_custom_test.cpp",
+            formats=formats,
+            templates=[
+                generate_input_dim(input_dimensions, input_dimensions),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+                NUM_FACES(num_faces),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                num_faces=num_faces,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
     )
-
-    outcome = configuration.run()
+    if is_perf:
+        return
     res_from_L1 = outcome.result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)

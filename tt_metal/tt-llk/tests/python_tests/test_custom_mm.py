@@ -54,17 +54,19 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     MathFidelity,
+    PerfRunType,
 )
 from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
 from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
     CUSTOM_MM_LAYOUT,
     DEST_SYNC,
     IN_FACE_DIMS,
+    LOOP_FACTOR,
     NUM_FACES,
     TemplateParameter,
 )
@@ -147,6 +149,10 @@ def _build_custom_mm(
     preserve_zero_flag=False,
     layout=CustomMmDestLayout.Dense,
     dest_sync=DestSync.Half,
+    *,
+    is_perf=False,
+    run_types=None,
+    loop_factor=1,
 ):
     """Build (but do not run) one custom_mm variant; return it with its (M, N) golden."""
     K = kt * DEFAULT_TILE_R_DIM
@@ -210,25 +216,30 @@ def _build_custom_mm(
         ),
     ).reshape(M, N)
 
-    configuration = TestConfig(
-        "sources/custom_mm_test.cpp",
-        formats,
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            calls if calls is not None else CUSTOM_MM_CALLS(),
-            CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
-            CUSTOM_MM_LAYOUT(layout),
-            DEST_SYNC(dest_sync),
-        ],
-        runtimes=[
-            # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
-            NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=CustomMMStimuliConfig(
-            kt, ct, in0_format, in1_format, out_format, packed_a, packed_b
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types or [PerfRunType.L1_TO_L1],
+        test_config_kwargs=dict(
+            test_name="sources/custom_mm_test.cpp",
+            formats=formats,
+            templates=[
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                calls if calls is not None else CUSTOM_MM_CALLS(),
+                CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
+                CUSTOM_MM_LAYOUT(layout),
+                DEST_SYNC(dest_sync),
+            ],
+            runtimes=[
+                # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
+                NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
+                IN_FACE_DIMS(in0_face_r_dim=M),
+                LOOP_FACTOR(loop_factor),
+            ],
+            variant_stimuli=CustomMMStimuliConfig(
+                kt, ct, in0_format, in1_format, out_format, packed_a, packed_b
+            ),
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
     return configuration, golden
 
@@ -270,11 +281,18 @@ def _run_custom_mm(
     preserve_zero_flag=False,
     operands=None,
     layout=CustomMmDestLayout.Dense,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
     """
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
     torch_a, torch_b = operands if operands is not None else _seeded_operands(M, kt, ct)
     out_format = formats.output_format
     configuration, golden = _build_custom_mm(
@@ -288,7 +306,13 @@ def _run_custom_mm(
         calls,
         preserve_zero_flag,
         layout,
+        is_perf=is_perf,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return None
     res_tensor = _device_rows(configuration.run().result, M, ct, out_format)
 
     torch_out = torch.float32 if out_format == DataFormat.Float32 else torch.bfloat16
@@ -476,7 +500,19 @@ COMPACT_CT_DIMS_16BIT = [1, 3, 4, 7, 25, 32]
 COMPACT_CT_DIMS_32BIT = [1, 16]
 
 
-def _run_compact_against_default(M, kt, ct, formats, dest_acc, dest_sync=DestSync.Half):
+def _run_compact_against_default(
+    M,
+    kt,
+    ct,
+    formats,
+    dest_acc,
+    dest_sync=DestSync.Half,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """Run custom_mm in the Compact layout and require it bit-identical to Default-layout runs.
 
     The reference packs the same B in column slices narrow enough for the default 64-row
@@ -500,7 +536,15 @@ def _run_compact_against_default(M, kt, ct, formats, dest_acc, dest_sync=DestSyn
         torch_b,
         layout=CustomMmDestLayout.Compact,
         dest_sync=dest_sync,
+        is_perf=is_perf,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        if perf_report is None:
+            raise ValueError("perf_report must be provided when is_perf=True")
+        compact.run(perf_report)
+        return
     slices = []
     for c0 in range(0, ct, max_default_ct):
         width = min(max_default_ct, ct - c0)

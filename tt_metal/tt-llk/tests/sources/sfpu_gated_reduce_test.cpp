@@ -4,8 +4,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -22,14 +25,41 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
-    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
-        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+        _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            if constexpr (!unpack_to_dest)
+            {
+                _perf_unpack_loop_set_valid<true /* src A */, is_fp32_dest_acc_en>(LOOP_FACTOR * params.TILE_CNT * TILE_NUM_FACES);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 #endif
@@ -50,10 +80,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
-        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
+            ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+        PROFILER_SYNC();
+    }
 
     constexpr int iterations    = GATED_REDUCE_ROWS <= 4 ? 2 : GATED_REDUCE_ROWS <= 8 ? 4 : 8;
     constexpr auto vector_mode  = GATED_REDUCE_ROWS <= 16 ? VectorMode::R : VectorMode::RC;
@@ -65,32 +102,73 @@ void run_kernel(RUNTIME_PARAMETERS params)
         GATED_REDUCE_OUT_SCALE,
         is_fp32_dest_acc_en,
         iterations>;
-    for (std::uint32_t base = 0; base < params.TILE_CNT; base += block_tiles)
     {
-        _llk_math_wait_for_dest_available_<dest_sync>();
-        for (std::uint32_t tile = 0; tile < block_tiles; ++tile)
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                tile, formats.math, formats.math);
         }
-        if (base != 0)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            // Approximate exp overwrites LREG12 (vConstFloatPrgm0). Reinitializing
-            // sigmoid must restore the 2.0 constant used by its reciprocal.
-            sfpu::exp_init<true /*APPROXIMATION_MODE*/, 0x3f800000 /*scale*/, true /*CLAMP_NEGATIVE*/, is_fp32_dest_acc_en>();
+            if constexpr (unpack_to_dest)
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            tile % block_tiles, formats.math, formats.math);
+                    }
+                }
+            }
+            else
+            {
+                _perf_math_loop_clear_valid<true /* src A */, true /* src B */>(LOOP_FACTOR * params.TILE_CNT * TILE_NUM_FACES);
+            }
         }
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::silu>();
-        sfpu::sigmoid_init<false /*APPROXIMATION_MODE*/>();
-        // Swap the scales in the last block to exercise their independent runtime arguments.
-        const auto block     = base / block_tiles;
-        const auto scale     = block == 2 ? params.GATED_OUT_SCALE_BITS : params.GATED_SCALE_BITS;
-        const auto out_scale = block == 2 ? params.GATED_SCALE_BITS : params.GATED_OUT_SCALE_BITS;
-        // First block has two experts; next has guards on both sides; last is a partial batch.
-        for (std::uint32_t gate = block; gate + 1 < block_tiles; gate += 2)
+        else
         {
-            _llk_math_eltwise_unary_sfpu_params_(gated_reduce, gate, vector_mode, scale, out_scale, params.GATED_LIMIT_BITS, params.GATED_ALPHA_BITS);
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t base = 0; base < params.TILE_CNT; base += block_tiles)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<dest_sync>();
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || !unpack_to_dest)
+                    {
+                        for (std::uint32_t tile = 0; tile < block_tiles; ++tile)
+                        {
+                            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                                tile, formats.math, formats.math);
+                        }
+                    }
+                    if (base != 0)
+                    {
+                        // Approximate exp overwrites LREG12 (vConstFloatPrgm0). Reinitializing
+                        // sigmoid must restore the 2.0 constant used by its reciprocal.
+                        sfpu::exp_init<true /*APPROXIMATION_MODE*/, 0x3f800000 /*scale*/, true /*CLAMP_NEGATIVE*/, is_fp32_dest_acc_en>();
+                    }
+                    _llk_math_eltwise_unary_sfpu_init_<SfpuType::silu>();
+                    sfpu::sigmoid_init<false /*APPROXIMATION_MODE*/>();
+                    // Swap the scales in the last block to exercise their independent runtime arguments.
+                    const auto block     = base / block_tiles;
+                    const auto scale     = block == 2 ? params.GATED_OUT_SCALE_BITS : params.GATED_SCALE_BITS;
+                    const auto out_scale = block == 2 ? params.GATED_SCALE_BITS : params.GATED_OUT_SCALE_BITS;
+                    // First block has two experts; next has guards on both sides; last is a partial batch.
+                    for (std::uint32_t gate = block; gate + 1 < block_tiles; gate += 2)
+                    {
+                        _llk_math_eltwise_unary_sfpu_params_(
+                            gated_reduce, gate, vector_mode, scale, out_scale, params.GATED_LIMIT_BITS, params.GATED_ALPHA_BITS);
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
         }
-        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
     }
 }
 #endif
@@ -104,17 +182,44 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
-    for (std::uint32_t base = 0; base < params.TILE_CNT; base += block_tiles)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
-        _llk_packer_wait_for_math_done_();
-        for (std::uint32_t tile = 0; tile < block_tiles; ++tile)
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+        _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[base + tile]));
         }
-        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        else
+        {
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t base = 0; base < params.TILE_CNT; base += block_tiles)
+                {
+                    if constexpr (sync_with_math)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
+                    for (std::uint32_t tile = 0; tile < block_tiles; ++tile)
+                    {
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[base + tile]));
+                    }
+                    if constexpr (sync_with_math)
+                    {
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 #endif

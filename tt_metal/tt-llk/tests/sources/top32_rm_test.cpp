@@ -87,8 +87,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -241,27 +244,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t src_format = formats.unpack_A_src;
     const std::uint32_t dst_format = formats.unpack_A_dst;
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-
-    if constexpr (PRE_SORTED_MODE)
     {
-        for (std::uint32_t chunk = 0; chunk < NUM_TILE_CHUNKS; chunk++)
-        {
-            // transpose_init, per api/compute/transpose.h: transpose_of_faces always;
-            // within-face 16x16 and acc_to_dest only on the non-32-bit path, where the
-            // unpacker does the whole 32x32 by itself (acc_to_dest with unpack_to_dest is
-            // static_asserted out in llk_unpack_A.h). Re-run per chunk to stay in step with
-            // the math thread's own re-init.
-            _llk_unpack_A_init_<BroadcastType::NONE, !unpack_to_dest /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                1 /* transpose_of_faces */, unpack_to_dest ? 0 : 1 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, src_format, dst_format);
-
-            unpack_transpose_tile(params.buffer_A[chunk], src_format, dst_format);
-            unpack_transpose_tile(params.buffer_B[chunk], src_format, dst_format);
-        }
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+        PROFILER_SYNC();
     }
 
     const std::uint32_t values_base  = L1_ADDRESS(params.buffer_A[0]);
@@ -275,28 +268,65 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 #endif
 
-    // Mode 0 walks the whole row; mode 1 only the remainder after its whole tiles, which is
-    // how top32_rm_dev_compute_v2.cpp finishes a row that is not a multiple of 1024. Both use
-    // the same per-chunk pair, which branches on unpack_to_dest -- see unpack_chunk.
     constexpr std::uint32_t FIRST_CHUNK = PRE_SORTED_MODE ? TAIL_FIRST : 0;
 
-    for (std::uint32_t first = FIRST_CHUNK; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
     {
-        const std::uint32_t chunk     = first / ELEMENTS_PER_CHUNK;
-        const std::uint32_t num_faces = chunk_num_faces(first);
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PRE_SORTED_MODE)
+                {
+                    for (std::uint32_t chunk = 0; chunk < NUM_TILE_CHUNKS; chunk++)
+                    {
+                        // transpose_init, per api/compute/transpose.h: transpose_of_faces always;
+                        // within-face 16x16 and acc_to_dest only on the non-32-bit path, where the
+                        // unpacker does the whole 32x32 by itself (acc_to_dest with unpack_to_dest is
+                        // static_asserted out in llk_unpack_A.h). Re-run per chunk to stay in step with
+                        // the math thread's own re-init.
+                        _llk_unpack_A_init_<BroadcastType::NONE, !unpack_to_dest /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                            1 /* transpose_of_faces */,
+                            unpack_to_dest ? 0 : 1 /* within_face_16x16_transpose */,
+                            ckernel::DEFAULT_TENSOR_SHAPE,
+                            src_format,
+                            dst_format);
+
+                        unpack_transpose_tile(params.buffer_A[chunk], src_format, dst_format);
+                        unpack_transpose_tile(params.buffer_B[chunk], src_format, dst_format);
+                    }
+                }
+
+                // Mode 0 walks the whole row; mode 1 only the remainder after its whole tiles,
+                // which is how top32_rm_dev_compute_v2.cpp finishes a non-tile-aligned row.
+                for (std::uint32_t first = FIRST_CHUNK; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
+                {
+                    const std::uint32_t chunk     = first / ELEMENTS_PER_CHUNK;
+                    const std::uint32_t num_faces = chunk_num_faces(first);
 
 #if TOP32_VIA_WRAPPERS
-        // Mode 0 only: mode 1 holds Float32 in Dest (unpack-to-dest above, math built for it),
-        // where the Metal wrapper would send Float32 through SrcA.
-        if constexpr (!PRE_SORTED_MODE)
-        {
-            unpack_chunk(VALUES_OPERAND, chunk, num_faces);
-            unpack_chunk(INDICES_OPERAND, chunk, num_faces);
-            continue;
-        }
+                    // Mode 0 drives the Metal wrapper; mode 1 keeps the primitives for its tail.
+                    if constexpr (!PRE_SORTED_MODE)
+                    {
+                        unpack_chunk(VALUES_OPERAND, chunk, num_faces);
+                        unpack_chunk(INDICES_OPERAND, chunk, num_faces);
+                    }
+                    else
+                    {
+                        unpack_chunk(values_base, chunk, num_faces, src_format, dst_format);
+                        unpack_chunk(indices_base, chunk, num_faces, src_format, dst_format);
+                    }
+#else
+                    unpack_chunk(values_base, chunk, num_faces, src_format, dst_format);
+                    unpack_chunk(indices_base, chunk, num_faces, src_format, dst_format);
 #endif
-        unpack_chunk(values_base, chunk, num_faces, src_format, dst_format);
-        unpack_chunk(indices_base, chunk, num_faces, src_format, dst_format);
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -481,26 +511,45 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t math_format = formats.math;
 
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
-
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
-
-    // _top32_rm_init_ programs this family's ADDR_MODs, MOP and REPLAY buffer. It cannot
-    // coexist with _topk_xl_init_<K, fused>() in one kernel -- they overlap in all three
-    // (measured on BH p100a: the math thread hangs) -- which is why nothing here touches
-    // the topk_xl family.
-    if constexpr (PRE_SORTED_MODE)
     {
-        // Chunk 0 seeds the running top32. The transpose init is re-run before every
-        // chunk's pair of transposes, as the consumer does: the SFPU family in between owns
-        // ADDR_MOD_6 and the SFPU control register, the datacopy owns the MOP and the rest
-        // of the ADDR_MODs, and only the datacopy half has to be reinstated.
-        math_transpose_init(math_format);
-        math_transpose_tile(VALUE_TILE, math_format);
-        math_transpose_tile(INDEX_TILE, math_format);
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        PROFILER_SYNC();
+    }
+
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+
+                // _top32_rm_init_ programs this family's ADDR_MODs, MOP and REPLAY buffer. It cannot
+                // coexist with _topk_xl_init_<K, fused>() in one kernel -- they overlap in all three
+                // (measured on BH p100a: the math thread hangs) -- which is why nothing here touches
+                // the topk_xl family.
+                if constexpr (PRE_SORTED_MODE)
+                {
+                    // Chunk 0 seeds the running top32. The transpose init is re-run before every
+                    // chunk's pair of transposes, as the consumer does: the SFPU family in between owns
+                    // ADDR_MOD_6 and the SFPU control register, the datacopy owns the MOP and the rest
+                    // of the ADDR_MODs, and only the datacopy half has to be reinstated.
+                    math_transpose_init(math_format);
+                    math_transpose_tile(VALUE_TILE, math_format);
+                    math_transpose_tile(INDEX_TILE, math_format);
 
 #if TOP32_VIA_WRAPPERS
         llk_math_deepseek_top32_rm_init<false /* APPROXIMATE */>();
@@ -547,49 +596,55 @@ void run_kernel(RUNTIME_PARAMETERS params)
             top32_merge(VALUE_TILE, true /* across_tiles */);
             top32_rebuild(VALUE_TILE, DESCENDING, true /* skip_second */);
         }
-
-        _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
-        return;
-    }
-
+                }
+                else
+                {
 #if TOP32_VIA_WRAPPERS
-    llk_math_deepseek_top32_rm_init<false /* APPROXIMATE */>();
+                    llk_math_deepseek_top32_rm_init<false /* APPROXIMATE */>();
 #else
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::_top32_rm_init_();
+                    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+                    ckernel::sfpu::_top32_rm_init_();
 #endif
 
-    for (std::uint32_t first = 0; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
-    {
-        const std::uint32_t num_faces = chunk_num_faces(first);
-        const bool is_first_chunk     = (first == 0);
+                    for (std::uint32_t first = 0; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
+                    {
+                        const std::uint32_t num_faces = chunk_num_faces(first);
+                        const bool is_first_chunk     = (first == 0);
 
-        const std::uint32_t value_tile = is_first_chunk ? VALUE_TILE : STAGE_VALUE_TILE;
-        const std::uint32_t index_tile = is_first_chunk ? INDEX_TILE : STAGE_INDEX_TILE;
+                        const std::uint32_t value_tile = is_first_chunk ? VALUE_TILE : STAGE_VALUE_TILE;
+                        const std::uint32_t index_tile = is_first_chunk ? INDEX_TILE : STAGE_INDEX_TILE;
 
-        copy_chunk_to_dest(value_tile, num_faces, math_format, math_format);
-        copy_chunk_to_dest(index_tile, num_faces, math_format, math_format);
+                        copy_chunk_to_dest(value_tile, num_faces, math_format, math_format);
+                        copy_chunk_to_dest(index_tile, num_faces, math_format, math_format);
 
-        if (is_first_chunk)
-        {
-            // Seeds the running top32.
-            sort_chunk(VALUE_TILE, DESCENDING);
-            continue;
+                        if (is_first_chunk)
+                        {
+                            // Seeds the running top32.
+                            sort_chunk(VALUE_TILE, DESCENDING);
+                            continue;
+                        }
+
+                        // The staged chunk is rebuilt ASCENDING so that the two columns form one bitonic
+                        // sequence for the across-tiles merge below.
+                        top32_phases_steps(STAGE_VALUE_TILE, DESCENDING);
+                        top32_merge(STAGE_VALUE_TILE, false /* across_tiles */);
+                        top32_rebuild(STAGE_VALUE_TILE, ASCENDING, true /* skip_second */);
+
+                        // Fold the staged top32 into the running one. across_tiles=true is what makes the
+                        // merge read its second operand a whole tile (64 Dest rows) away.
+                        top32_merge(VALUE_TILE, true /* across_tiles */);
+                        top32_rebuild(VALUE_TILE, DESCENDING, true /* skip_second */);
+                    }
+                }
+
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
         }
-
-        // The staged chunk is rebuilt ASCENDING so that the two columns form one bitonic
-        // sequence for the across-tiles merge below.
-        top32_phases_steps(STAGE_VALUE_TILE, DESCENDING);
-        top32_merge(STAGE_VALUE_TILE, false /* across_tiles */);
-        top32_rebuild(STAGE_VALUE_TILE, ASCENDING, true /* skip_second */);
-
-        // Fold the staged top32 into the running one. across_tiles=true is what makes the
-        // merge read its second operand a whole tile (64 Dest rows) away.
-        top32_merge(VALUE_TILE, true /* across_tiles */);
-        top32_rebuild(VALUE_TILE, DESCENDING, true /* skip_second */);
+        PROFILER_SYNC();
     }
-
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -604,21 +659,47 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (sync_with_math)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
 
-    _llk_packer_wait_for_math_done_();
+                // The result is a COLUMN: one datum per Dest row, 32 rows of it. Narrowing the packer's
+                // x count to a single datum is what turns that column into 32 contiguous L1 elements,
+                // and is exactly what the consumer does before its two pack_tile calls.
+                TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0);
 
-    // The result is a COLUMN: one datum per Dest row, 32 rows of it. Narrowing the packer's
-    // x count to a single datum is what turns that column into 32 contiguous L1 elements,
-    // and is exactly what the consumer does before its two pack_tile calls.
-    TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0);
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(VALUE_TILE, L1_ADDRESS(params.buffer_Res[0]));
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(INDEX_TILE, L1_ADDRESS(params.buffer_Res[1]));
 
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(VALUE_TILE, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(INDEX_TILE, L1_ADDRESS(params.buffer_Res[1]));
-
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                if constexpr (sync_with_math)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

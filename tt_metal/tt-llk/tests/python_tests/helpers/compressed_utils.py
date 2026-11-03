@@ -23,9 +23,10 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.pack import pack_bfp2_b, pack_bfp4_b, pack_bfp8_b, pack_bfp16
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    COMPRESSED_META,
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
     CUSTOM_MM_LAYOUT,
@@ -385,6 +386,12 @@ def run_compressed(
     calls=CUSTOM_MM_CALLS(),
     dest_layout=CustomMmDestLayout.Dense,
     dest_sync=DestSync.Half,
+    compression_case=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -485,28 +492,36 @@ def run_compressed(
         input_B_format=DataFormat.Float16_b,
     ).reshape(M, N)
 
-    configuration = TestConfig(
-        kernel,
-        InputOutputFormat(
-            input_format=DataFormat.Float16_b,
-            output_format=DataFormat.Float16_b,
-            input_format_B=DataFormat.Bfp8_b,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name=kernel,
+            formats=InputOutputFormat(
+                input_format=DataFormat.Float16_b,
+                output_format=DataFormat.Float16_b,
+                input_format_B=DataFormat.Bfp8_b,
+            ),
+            templates=[
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                CUSTOM_MM_CALLS(calls.num_calls, calls.rearm),
+                CUSTOM_MM_LAYOUT(dest_layout),
+                DEST_SYNC(dest_sync),
+            ]
+            + ([COMPRESSED_META(compression_case, meta)] if is_perf else []),
+            runtimes=[
+                NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
+                IN_FACE_DIMS(in0_face_r_dim=M),
+            ],
+            variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
+            dest_acc=DestAccumulation.No,
         ),
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            calls,
-            CUSTOM_MM_LAYOUT(dest_layout),
-            DEST_SYNC(dest_sync),
-        ],
-        runtimes=[
-            NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
-        dest_acc=DestAccumulation.No,
     )
-
-    res = configuration.run().result
+    if is_perf:
+        return
+    res = outcome.result
     # Device packs the result as ct = N//32 tiles; within a tile the two 16-col faces
     # (M x FACE_C_DIM, row-major) sit contiguously, then padding out to a full 32-row tile.
     # Drop the per-tile padding (span = len // ct) and reorder to row-major (M, N).
