@@ -89,7 +89,9 @@ devices, so run it once per host of a multi-rank run.
   `[0, real_len)`, and the KV Manager moves that window whatever range the call names. Both sides must
   tag configs 1 and 2 `Snapshot` and span one window, so decode runs one KDA state per user
   (`TT_K3_KDA_STATE_SLOTS=1`). `KimiK3Adapter.layer_position_range` gives the in-repo migration driver
-  `[0, W)`: one call per run of same-kind layers, and the byte verify walks that window.
+  `[0, W)`: one call per run of consecutive layers with equal ranges, and the byte verify walks each
+  layer's own range. At `real_len == W` that range equals the MLA layers' `[0, real_len)`, so every
+  layer goes in one call; the Snapshot configs still move whole.
 * The state is a fold over the prefix, not position-addressed: decode must resume at exactly the
   prefilled length; replaying a chunk advances it twice.
 * Only the final state after the last chunk is meaningful; per-chunk copies are valid but wasted.

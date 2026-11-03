@@ -142,7 +142,7 @@ def test_layer_position_range_follows_the_contract():
     assert adapter.layer_position_range(92, 56_320) == (0, 56_320)
 
 
-def test_driver_groups_consecutive_same_axis_layers_into_runs():
+def test_driver_groups_consecutive_equal_range_layers_into_runs():
     from models.demos.common.prefill.runners.migration_driver import _layer_runs
 
     real_len = 56_320
@@ -157,6 +157,10 @@ def test_driver_groups_consecutive_same_axis_layers_into_runs():
         kinds = {layer in mla for layer in range(start, end)}
         assert len(kinds) == 1
         assert (pos_start, pos_end) == ((0, real_len) if kinds.pop() else window)
+    # At real_len == W the KDA window equals the MLA token range, so every layer shares one call.
+    assert _layer_runs(range(KimiK3Config.NUM_LAYERS), 36_864, KimiK3Adapter().layer_position_range) == [
+        (0, KimiK3Config.NUM_LAYERS, 0, 36_864)
+    ]
     # A subset keeps its own layers only and never merges across a gap.
     assert _layer_runs([22, 23, 27], real_len, KimiK3Adapter().layer_position_range) == [
         (22, 23, *window),

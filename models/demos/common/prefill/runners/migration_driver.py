@@ -288,9 +288,10 @@ class MigrationDriver:
 def _layer_runs(layers, real_len: int, position_range) -> list:
     """Consecutive layers sharing a position range, as ``(layer_start, layer_end, pos_start, pos_end)``.
 
-    One /migrate applies one position range to every config of its layers, so layers whose caches sit
-    on different axes (Kimi-K3: MLA on tokens, KDA on the contract's synthetic window) need separate
-    calls; consecutive layers with equal ranges share a call.
+    One /migrate applies one position range to every config of its layers, so consecutive layers share
+    a call exactly when their ranges are equal. A Snapshot config moves whole whatever the range, so
+    Kimi-K3's KDA layers (``[0, W)``) share a call with its MLA layers (``[0, real_len)``) when
+    ``real_len == W``.
     """
     runs = []
     for layer in sorted(int(l) for l in layers):
