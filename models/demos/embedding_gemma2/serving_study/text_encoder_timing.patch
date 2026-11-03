@@ -1,0 +1,74 @@
+diff --git a/models/demos/embedding_gemma2/tt/text_encoder.py b/models/demos/embedding_gemma2/tt/text_encoder.py
+index 4abb1044bc8..573fc626891 100644
+--- a/models/demos/embedding_gemma2/tt/text_encoder.py
++++ b/models/demos/embedding_gemma2/tt/text_encoder.py
+@@ -16,6 +16,10 @@ reuses that trace.
+ 
+ from __future__ import annotations
+ 
++import json
++import os
++import time
++
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
+@@ -47,6 +51,9 @@ class _Trace:
+     embedding: ttnn.Tensor
+ 
+ 
++_TIMING_LOG = os.environ.get("EMB_TIMING_LOG")
++
++
+ class TextEncoder(LightweightModule):
+     def __init__(self, model: TextModel, device):
+         super().__init__()
+@@ -127,6 +134,8 @@ class TextEncoder(LightweightModule):
+         traced: bool = False,
+         return_last_hidden: bool = False,
+     ):
++        if traced and _TIMING_LOG and not return_last_hidden:
++            return self._encode_timed(input_ids, attention_mask)
+         host = self.prepare_inputs(input_ids, attention_mask)
+         if traced:
+             last, emb = self.replay(host)
+@@ -146,6 +155,39 @@ class TextEncoder(LightweightModule):
+             return out, self.read_last_hidden(last, host.batch, host.logical_seq_len)
+         return out
+ 
++    def _encode_timed(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None):
++        """Traced encode with a device sync between phases; appends one JSON line per call to EMB_TIMING_LOG.
++
++        Comparison instrumentation (serving-path latency study), not for production: the syncs remove overlap.
++        """
++        t0 = time.perf_counter()
++        host = self.prepare_inputs(input_ids, attention_mask)
++        t1 = time.perf_counter()
++        tr = self._traces[(host.batch, host.seq_len)]
++        ttnn.copy_host_to_device_tensor(host.input_ids, tr.input_ids)
++        ttnn.copy_host_to_device_tensor(host.keep, tr.keep)
++        ttnn.synchronize_device(self.device)
++        t2 = time.perf_counter()
++        ttnn.execute_trace(self.device, tr.trace_id, cq_id=0, blocking=False)
++        ttnn.synchronize_device(self.device)
++        t3 = time.perf_counter()
++        out = self.read_embedding(tr.embedding, host.batch)
++        t4 = time.perf_counter()
++        rec = dict(
++            pid=os.getpid(),
++            t=t0,
++            batch=host.batch,
++            bucket=host.seq_len,
++            tokens=int(host.logical_seq_len),
++            prep_ms=(t1 - t0) * 1e3,
++            h2d_ms=(t2 - t1) * 1e3,
++            device_ms=(t3 - t2) * 1e3,
++            d2h_ms=(t4 - t3) * 1e3,
++        )
++        with open(_TIMING_LOG, "a") as f:
++            f.write(json.dumps(rec) + "\n")
++        return out
++
+     # ---------------------------------------------------------------- trace
+     def capture_all(self, shapes) -> None:
+         """Capture one trace per (batch, bucket) in `shapes`, in three phases.
