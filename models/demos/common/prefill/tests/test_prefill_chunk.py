@@ -15,8 +15,10 @@ from models.demos.common.prefill.prefill_chunk import (
     INVALID_SLOT,
     SHUTDOWN_WORD,
     WARMUP_WORD,
+    MediaRef,
     PrefillChunk,
     decode_forward_metadata,
+    decode_media_refs,
     forward_metadata_words,
     metadata_size_bytes,
     pack_forward_metadata,
@@ -25,6 +27,7 @@ from models.demos.common.prefill.prefill_chunk import (
     pad_chunks,
     sentinel_metadata,
     validate_chunks,
+    validate_media_refs,
 )
 
 C, SP = 1024, 8
@@ -264,3 +267,57 @@ def test_packed_forward_capabilities_name_every_flag():
     assert caps == {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": False}
     (reason,) = packed_forward_refusals(4, use_trace=True, d2h_acks=True, **caps)
     assert "LAYER_ACK_D2H" in reason
+
+
+KEY = bytes(range(32))
+
+
+def test_media_refs_example_bytes():
+    ref = MediaRef(0, 100, 576, KEY)
+    expected = struct.pack("<3I", 3, 0, C) + struct.pack("<I", 1) + struct.pack("<3I", 0, 100, 576) + KEY + bytes(44)
+    raw = pack_forward_metadata([PrefillChunk(3, 0, C)], 1, [ref], max_refs=2)
+    assert raw == expected
+    assert len(raw) == metadata_size_bytes(1, max_refs=2) == 104
+    assert decode_forward_metadata(as_int32_words(raw), 1) == [PrefillChunk(3, 0, C)]
+    assert decode_media_refs(raw, 1, 2) == [ref]
+
+
+def test_media_refs_off_keeps_the_bytes():
+    chunks = [PrefillChunk(0, 0, C), PrefillChunk(1, C, 2 * C)]
+    assert metadata_size_bytes(2, max_refs=0) == metadata_size_bytes(2)
+    assert pack_forward_metadata(chunks, 2, max_refs=0) == pack_forward_metadata(chunks, 2)
+    assert decode_media_refs(pack_forward_metadata(chunks, 2), 2, 0) == []
+
+
+def test_media_refs_in_a_packed_forward():
+    chunks = [PrefillChunk(0, C, 2 * C), PrefillChunk(1, 0, 500), EMPTY]
+    refs = [MediaRef(0, 900, 300, KEY), MediaRef(1, 10, 50, KEY), MediaRef(1, 100, 50, KEY)]
+    raw = pack_forward_metadata(chunks, 3, refs, max_refs=4)
+    assert decode_forward_metadata(as_int32_words(raw), 3) == chunks
+    assert decode_media_refs(raw, 3, 4) == refs
+    validate_media_refs(refs, chunks)
+
+
+def test_media_refs_sentinel_fills_every_word():
+    raw = sentinel_metadata(SHUTDOWN_WORD, 2, max_refs=3)
+    assert raw == pack_forward_metadata([PrefillChunk(SHUTDOWN_WORD, SHUTDOWN_WORD, SHUTDOWN_WORD)], 2, max_refs=3)
+    assert as_int32_words(raw) == [SHUTDOWN_WORD] * (metadata_size_bytes(2, max_refs=3) // 4)
+
+
+def test_media_refs_reject_bad_metadata(expect_error):
+    chunks = [PrefillChunk(0, C, 2 * C), EMPTY]
+    with expect_error(ValueError, "2 media refs, the metadata holds 1"):
+        pack_forward_metadata(chunks, 2, [MediaRef(0, C, 1, KEY)] * 2, max_refs=1)
+    raw = bytearray(pack_forward_metadata(chunks, 2, max_refs=1))
+    raw[metadata_size_bytes(2)] = 2
+    with expect_error(ValueError, "n_refs=2"):
+        decode_media_refs(bytes(raw), 2, 1)
+    for ref, message in [
+        (MediaRef(1, 0, 10, KEY), "no non-empty chunk 1"),
+        (MediaRef(0, 0, C, KEY), "does not overlap"),
+        (MediaRef(0, 2 * C, 10, KEY), "does not overlap"),
+    ]:
+        with expect_error(ValueError, message):
+            validate_media_refs([ref], chunks)
+    with expect_error(ValueError, "overlaps"):
+        validate_media_refs([MediaRef(0, C, 20, KEY), MediaRef(0, C + 10, 20, KEY)], chunks)
