@@ -1899,7 +1899,8 @@ class TtRoutedExperts(LightweightModule):
             self.mesh.rows, T, has_idx=idx is not None, in_prefill=self.mesh.in_prefill
         )
         if self.mesh.rows > 1:
-            if compact_gather and hybrid_gather_mode() == "fabric":
+            fabric_rows = self.mesh.rows * T <= TILE  # the fabric programs assemble one tile row
+            if compact_gather and fabric_rows and hybrid_gather_mode() == "fabric":
                 x, dense_w = self._gather_rows_fabric(x, dense_w, l1=self._stream_x_into_l1(self.mesh.rows * T))
             elif compact_gather:
                 x = self._gather_rows_compact(x, l1=self._stream_x_into_l1(self.mesh.rows * T))
@@ -1917,7 +1918,7 @@ class TtRoutedExperts(LightweightModule):
             if idx is not None:
                 ttnn.deallocate(idx)
                 ttnn.deallocate(w)
-            if combine == "fabric" and y.shape[-2] == self.mesh.rows * T:
+            if combine == "fabric" and fabric_rows and y.shape[-2] == self.mesh.rows * T:
                 y = self._combine_rows_fabric(y, T)
             elif combine != "rs" and y.shape[-2] == self.mesh.rows * T:
                 y = self._combine_rows_allreduce(y, T, ccl=combine == "allreduce_ccl")
