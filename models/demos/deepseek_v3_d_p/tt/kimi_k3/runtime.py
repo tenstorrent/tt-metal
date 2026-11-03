@@ -46,7 +46,12 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         layers exist only on the rank that produced them, so they arrive in the payload. Mirrors
         `KimiK3Adapter.pipeline_activation_planes`, which sizes the socket — the two are read at the
         same boundary and disagreeing shows up as a rendezvous failure, not a wrong answer.
+
+        Once the model is built it answers (TtKimiK3Transformer.inbound_planes): the same count, except for a model on
+        the plain residual stream (the bisection arm), whose handoff carries the live sum alone.
         """
+        if getattr(self, "model_built", False):
+            return self.model.inbound_planes
         return 1 + self.config.first_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
 
     def _pack_activation(self, hidden, partial):

@@ -52,8 +52,8 @@ class KimiK3Adapter(MLAPrefillAdapter):
     routing_use_l1_small_for_semaphores = True
 
     # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET > chunk size): TtKimiK3Runtime.prefill_forward, traced and with
-    # per-chunk D2H acks, on any pipeline rank. No indexer, so supports_packed_forward_indexer_indices stays off. At most
-    # MAX_PACKED_ROWS_PER_CHIP MoE rows per chip per forward (the model refuses more at build).
+    # per-chunk D2H acks, on any pipeline rank. No indexer, so supports_packed_forward_indexer_indices stays off. At
+    # most MAX_PACKED_ROWS_PER_CHIP MoE rows per chip per forward (the model refuses more at build).
     supports_packed_forward = True
     supports_packed_forward_trace = True
     supports_packed_forward_d2h_acks = True

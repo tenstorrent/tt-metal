@@ -14,10 +14,10 @@ tests pin that down device against device, so they need the TTNN weight cache bu
 * test_k3_multiuser_interleaved_matches_sequential: one chunk per forward. N users prefilled chunk by chunk in
   round-robin order into one set of slots, and each user start to finish into another, must agree: last-layer
   output, every KDA layer's carries and every MLA layer's KV.
-* test_k3_packed_forward_matches_one_chunk_forwards: two chunks per forward (FORWARD_CHUNKS). A schedule with partial chunks, a
-  partial chunk followed by a real one, one user's consecutive chunks in the same forward (the second continues
-  the first's KDA carry and reads its KV), users at different depths and empty tail chunks must match the same
-  chunks each alone in its own forward.
+* test_k3_packed_forward_matches_one_chunk_forwards: two chunks per forward (FORWARD_CHUNKS). A schedule with
+  partial chunks, a partial chunk followed by a real one, one user's consecutive chunks in the same forward (the
+  second continues the first's KDA carry and reads its KV), users at different depths and empty tail chunks must
+  match the same chunks each alone in its own forward.
 * test_k3_packed_traced_matches_eager: the same schedule through TtKimiK3Runtime.prefill_forward with use_trace
   (one capture, replayed per forward; each chunk position's slot and bounds and the MoE padding config read on
   device) must leave the same KDA carries and KV as the eager packed forward.
@@ -568,11 +568,30 @@ def test_k3_packed_traced_matches_eager(variant, config_only, mesh_device, devic
 PIPELINE_LAYERS = 16
 PIPELINE_SPLIT = 12
 D2H_READ_TIMEOUT_S = 120
-# Past the boundary, two ranks round differently from one: the AttnRes stream crosses as a materialized tensor (the
-# handoff), where one rank keeps folding the pending write into its next read. Rank 0 stays bit-exact; rank 1 measured
-# PCC >= 0.999743 (job 169741), and Kimi-K3's own one-chunk split test (test_transformer_pipeline_split.py) likewise
-# gates on PCC rather than bit-exactness.
+# Why two ranks round differently from one under AttnRes, although the planes cross in the same dtype and layout: the
+# call shape at the boundary. In one rank, layer 11's output is still a pending write when layer 12's read runs, and
+# attn_res_gather_softmax(pending=...) scores the stream with that addend folded in inside the kernel. At a split,
+# rank 0's handoff settles it first with a separate ttnn.add (TtAttnResStream.detach), so rank 1's first read scores an
+# already-materialized sum. Everything after it follows. Rank 0 stays bit-exact; rank 1 measured PCC >= 0.999743 (job
+# 169741). This is a serving property of any Kimi-K3 split, packed or not -- its own one-chunk split test
+# (test_transformer_pipeline_split.py) gates on PCC too -- and handing the pending addend over as its own plane would
+# remove it. With the plain residual stream there is no deferred write, and the split is asserted bit-exact.
 PIPELINE_PCC = 0.9995
+
+
+class _PlainK3Transformer(TtKimiK3Transformer):
+    """Kimi-K3 on the plain residual stream (the bisection arm), as a runtime builds it: the handoff is the live sum."""
+
+    HANDS_OFF_SEALED = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            *args, residual_factory=lambda hidden, block_residual=None: PlainResidualStream(hidden), **kwargs
+        )
+
+
+class _PlainK3Runtime(TtKimiK3Runtime):
+    MODEL_CLS = _PlainK3Transformer
 
 
 def _read_d2h_records(service, count):
@@ -673,10 +692,14 @@ def _release(runtimes):
         r.release_trace()  # also the model's sub-device managers
 
 
-@pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
+@pytest.mark.parametrize(
+    "traced, residual",
+    [(False, "attnres"), (False, "plain"), (True, "attnres")],
+    ids=["eager-attnres", "eager-plain", "traced-attnres"],
+)
 @_common
 def test_k3_packed_pipeline_matches_one_rank(
-    variant, config_only, mesh_device, device_params, num_links, weight_cache_path, traced
+    variant, config_only, mesh_device, device_params, num_links, weight_cache_path, traced, residual
 ):
     """Packed forwards split over two pipeline ranks (layers 0..11 and 12..15) must leave the same KDA carries and KV as
     one rank holding all 16 layers, with rank 0's packed activation -- the live AttnRes stream and its sealed snapshot,
@@ -685,11 +708,11 @@ def test_k3_packed_pipeline_matches_one_rank(
     Rank 0 acks through a real D2H service: one 12 B (slot, start, end) record per non-empty chunk per layer, each
     chunk's records contiguous and in pack order (#63438's packed contract), after the forward's writes.
 
-    Eager: rank 0 bit-exact against one rank (packing puts every chunk at the same position on both sides, so AttnRes
-    rounds them identically), rank 1 at PIPELINE_PCC (the handoff rounds the AttnRes stream at the boundary). The
-    one-rank reference runs first and is released before the ranks are built, so the mesh never holds both. (The plain residual stream cannot cross a block boundary: its handoff
-    has no sealed snapshot.) Traced: the ranks replay their captures into slots 0..3 against the same two ranks' models
-    run eagerly into slots 4..7, at TRACED_PCC."""
+    Eager, plain residual stream: every layer on both ranks bit-exact against one rank -- the handoff itself is exact.
+    Eager, AttnRes: rank 0 bit-exact (packing puts every chunk at the same position on both sides), rank 1 at
+    PIPELINE_PCC (see there: the boundary settles AttnRes's deferred write differently). The one-rank reference runs
+    first and is released before the ranks are built, so the mesh never holds both. Traced: the ranks replay their
+    captures into slots 0..3 against the same two ranks' models run eagerly into slots 4..7, at TRACED_PCC."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
     lengths, forwards = _packed_schedule()
     num_users = len(lengths)
@@ -706,8 +729,10 @@ def test_k3_packed_pipeline_matches_one_rank(
             toks.append(real + [0] * (CHUNK - len(real)))
         return runtime.make_forward_input(toks, [c.actual_start for c in chunks])
 
+    runtime_cls = _PlainK3Runtime if residual == "plain" else TtKimiK3Runtime
+
     def rt(first, n, use_trace):
-        return TtKimiK3Runtime(
+        return runtime_cls(
             mesh_device,
             config,
             {},
@@ -740,7 +765,8 @@ def test_k3_packed_pipeline_matches_one_rank(
         metadata_ring=True,
     )
     try:
-        assert ranks[1].activation_planes == 2, "rank 1 should receive the live stream and one sealed snapshot"
+        planes = 1 if residual == "plain" else 2
+        assert ranks[1].activation_planes == planes, f"rank 1 should receive {planes} plane(s)"
         for r, caches in zip(ranks, rank_caches):
             r.compile(caches)
         acks_per_chunk = ranks[0]._packed_ack_count()
@@ -797,7 +823,7 @@ def test_k3_packed_pipeline_matches_one_rank(
                     logger.info(f"[pipeline] slot {u} {kind} layer {layer} max|diff| {diff:.3e} PCC {pcc:.6f}")
                     if traced:
                         bad = pcc < TRACED_PCC
-                    elif layer < PIPELINE_SPLIT:
+                    elif residual == "plain" or layer < PIPELINE_SPLIT:
                         bad = diff != 0
                     else:
                         bad = pcc < PIPELINE_PCC
