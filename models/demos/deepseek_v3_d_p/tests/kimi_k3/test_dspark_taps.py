@@ -71,6 +71,7 @@ def test_dspark_taps_match_golden(mesh_device, device_params, sp_axis, tp_axis, 
         mesh_device,
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
+        sp_axis=sp_axis,
         tp_axis=tp_axis,
         weights=load_attn_res_weights(
             mesh_device,
