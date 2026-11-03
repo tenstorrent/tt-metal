@@ -1118,7 +1118,12 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
             q, k, v = [ttnn.to_layout(t[:, :s, :], ttnn.TILE_LAYOUT) for t in (q, k, v)]
         self._roll_conv(projected)
         a = ttnn.typecast(ttnn.to_layout(projections[..., 4096:4108], ttnn.TILE_LAYOUT), ttnn.float32)
-        g = ttnn.multiply(self.a_neg, ttnn.softplus(ttnn.add(a, self.dt_bias)), activations=[ttnn.UnaryOpType.EXP])
+        # Chunked prefill consumes log-space decay; every other recurrence takes exp(g).
+        g = ttnn.multiply(
+            self.a_neg,
+            ttnn.softplus(ttnn.add(a, self.dt_bias)),
+            activations=[] if getattr(self, "prefill_log_decay", False) else [ttnn.UnaryOpType.EXP],
+        )
         beta = ttnn.typecast(ttnn.sigmoid(ttnn.to_layout(projections[..., 4128:4140], ttnn.TILE_LAYOUT)), ttnn.float32)
         o, new_state = self._recurrence(q, k, v, g, beta)
         o = ttnn.typecast(o, ttnn.bfloat16)

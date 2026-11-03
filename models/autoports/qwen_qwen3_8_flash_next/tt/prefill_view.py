@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 
-from .gdn_prefill_resident import PrefillResidentGDN
+from .gdn_prefill_chunk import PrefillChunkGDN, chunk_prefill_enabled, const_tiles
 from .multichip_decoder import AttentionOutputProjection, MeshOps, MultichipDecoder
 from .prefill_hybrid import forward1024
 
@@ -187,7 +187,10 @@ def _decoder(owner, pool, lengths):
     attention.chunk_size = chunk_size
     attention.output_projection = _clone(owner.attention.output_projection, ops, _RowOutputProjection)
     if owner.kind == "linear_attention":
-        attention.__class__ = PrefillResidentGDN
+        attention.__class__ = PrefillChunkGDN
+        attention.prefill_chunk_enabled = chunk_prefill_enabled()
+        if attention.prefill_chunk_enabled:
+            attention.prefill_chunk_consts = const_tiles(ops)
         attention.prefill_resident_enabled = owner.batch_size == 32
         attention.prefill_resident_signatures = {}
         attention.prefill_qk_rm_enabled = True
