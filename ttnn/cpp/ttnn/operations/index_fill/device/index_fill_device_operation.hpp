@@ -14,8 +14,12 @@
 
 namespace ttnn::operations::index_fill {
 
-// Buffer addresses are Buffer* bindings patched on cache hits; every other runtime arg is covered by the
-// default hash.
+inline bool is_col_sharded(TensorMemoryLayout layout) {
+    return layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::BLOCK_SHARDED;
+}
+
+// Runtime args may only depend on the hashed attributes and tensor specs; buffer addresses are passed as
+// Buffer* bindings.
 struct IndexFillOperation {
     struct operation_attributes_t {
         const uint32_t dim;
@@ -35,7 +39,6 @@ struct IndexFillOperation {
         tensor_return_value_t& output);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
