@@ -293,16 +293,11 @@ bool supported_execution_controls(
 }
 
 // One tile per row and at most two tile rows runs on at most two cores in about 1.7 us, so codegen's fixed
-// per-program cost is not amortized. Only the integer dtypes: bf16/fp32 take native's fast tilize, which this gap
-// was not measured against.
+// per-program cost is not amortized: on p100a, bf16 and integer inputs alike measure 0.94-0.98x native.
 bool is_demoted(const Tensor& input, DataType output_dtype) {
     using namespace tt::constants;
 
-    const DataType dtype = input.dtype();
-    if (output_dtype != dtype) {
-        return false;
-    }
-    if (dtype != DataType::UINT16 && dtype != DataType::INT32 && dtype != DataType::UINT32) {
+    if (output_dtype != input.dtype()) {
         return false;
     }
     const uint32_t width = input.padded_shape()[kWidthAxis];

@@ -465,7 +465,7 @@ _DEMOTION_BOUNDARY = [
     ([1, 1, 6 * 32, 32], ttnn.int32, {}, False, "wt1_6_tile_rows"),
     ([1, 1, 2 * 32, 64], ttnn.int32, {}, False, "wt2_2_tile_rows"),
     ([1, 1, 2 * 32, 32], ttnn.bfloat16, {"dtype": ttnn.int32}, False, "wt1_2_tile_rows_to_int32"),
-    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {}, False, "wt1_2_tile_rows_bf16"),
+    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {}, True, "wt1_2_tile_rows_bf16"),
 ]
 
 
