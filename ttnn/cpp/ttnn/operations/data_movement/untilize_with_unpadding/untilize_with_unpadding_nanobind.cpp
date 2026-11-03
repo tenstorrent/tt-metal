@@ -27,7 +27,9 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor
-            output_tensor_end (shape): End indices of input tensor in output tensor.
+            output_tensor_end (shape): Inclusive end index of the output in each dimension of the input, so the
+                output shape is ``output_tensor_end[i] + 1`` in each dimension. Each end must be less than the
+                input's padded extent in that dimension.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.

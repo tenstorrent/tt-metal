@@ -83,6 +83,11 @@ Tensor untilize_with_unpadding(
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
+    TT_FATAL(
+        output_tensor_end.rank() >= input_shape.rank(),
+        "untilize_with_unpadding: output_tensor_end has rank {} but the input has rank {}",
+        output_tensor_end.rank(),
+        input_shape.rank());
     for (auto index = 0; index < input_shape.rank(); ++index) {
         output_end_vector.push_back(output_tensor_end[index]);
     }
@@ -129,12 +134,14 @@ Tensor untilize_with_unpadding(
             "untilize_with_unpadding: a zero-volume input requires a zero-volume output, got {}",
             output_shape);
         for (size_t index = 0; index < input_shape.rank(); ++index) {
+            // From the end: the padded shape of a TILE tensor has at least rank 2.
+            const int padded_index = static_cast<int>(index) - static_cast<int>(input_shape.rank());
             TT_FATAL(
-                output_shape[index] <= input_tensor.padded_shape()[index],
+                output_shape[index] <= input_tensor.padded_shape()[padded_index],
                 "untilize_with_unpadding: output extent {} exceeds the padded input extent {} in "
                 "dimension {}",
                 output_shape[index],
-                input_tensor.padded_shape()[index],
+                input_tensor.padded_shape()[padded_index],
                 index);
         }
 
@@ -163,6 +170,27 @@ Tensor untilize_with_unpadding(
             ttnn::prim::UntilizeWithUnpaddingDeviceOperation::compute_output_specs(attributes, input_tensor),
             input_tensor.device(),
             input_tensor.tensor_topology());
+    }
+
+    // output_tensor_end holds inclusive end indices, so each output extent is end + 1. Unpadding only
+    // removes elements, and the device operation's validation does not bound output_tensor_end: without
+    // this, an end past the input reads beyond its data and returns a tensor larger than the input.
+    // Checked per dimension here rather than in the device operation, which only sees the ends after a
+    // rank > 4 input is squeezed to 4D. The empty-input branch above has its own copy of this check.
+    // The padded shape is indexed from the end: for TILE layout it has at least rank 2, so a rank-1
+    // input [N] is padded to [32, round_up(N)].
+    for (size_t index = 0; index < input_shape.rank(); ++index) {
+        const int padded_index = static_cast<int>(index) - static_cast<int>(input_shape.rank());
+        const uint32_t output_extent = output_tensor_end[index] + 1;
+        TT_FATAL(
+            output_extent <= input_tensor.padded_shape()[padded_index],
+            "untilize_with_unpadding: output extent {} (output_tensor_end[{}] = {}) exceeds the padded input "
+            "extent {} in dimension {}",
+            output_extent,
+            index,
+            output_tensor_end[index],
+            input_tensor.padded_shape()[padded_index],
+            index);
     }
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());

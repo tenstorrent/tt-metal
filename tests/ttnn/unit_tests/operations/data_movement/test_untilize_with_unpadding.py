@@ -1284,6 +1284,40 @@ def test_untilize_with_unpadding_zero_volume_rejects_grown_extent(device, expect
         ttnn.untilize_with_unpadding(tilized, ttnn.Shape([0, 4294967295]))
 
 
+# The same bound on a non-empty input. The ends are inclusive, so [1, 1, 64, 32] on a [1, 1, 64, 64]
+# input asks for a [2, 2, 65, 33] output. The device operation's validation does not look at the ends,
+# so this used to run and return a tensor larger than the input. The rank 5 case also covers the
+# squeeze to 4D, which folds dims 0 and 1 together: ends [1, 0, ...] on [1, 2, ...] give the same
+# folded extent, so only a per-dimension check catches it.
+@pytest.mark.parametrize(
+    "shape, output_end",
+    [
+        ((1, 1, 64, 64), (1, 1, 64, 32)),
+        ((1, 1, 64, 64), (0, 0, 31, 64)),
+        ((1, 2, 1, 32, 32), (1, 0, 0, 31, 31)),
+    ],
+)
+def test_untilize_with_unpadding_rejects_end_past_input(device, shape, output_end, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "exceeds the padded input extent"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape(output_end))
+
+
+# A rank-1 TILE tensor [N] is padded to [32, round_up(N)], so the bound has to line the ends up with
+# the padded shape from the end; compared from the front, N would be checked against the tile height.
+@pytest.mark.parametrize("length", [96, 127])
+def test_untilize_with_unpadding_rank_1_end_within_input(device, length):
+    torch_input = torch.rand((length,), dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    untilized = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([length - 1]))
+
+    assert_equal(ttnn.to_torch(untilized), torch_input)
+
+
 # Both empty shortcuts run ahead of the device operation's validation, so they have to repeat its
 # layout check. Without it an empty ROW_MAJOR input is accepted only because it is empty, while the
 # same tensor at any non-zero size raises "Can only untilize tile major data".
