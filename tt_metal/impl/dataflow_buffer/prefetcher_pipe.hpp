@@ -22,6 +22,7 @@ class DriscL1Allocation;
 class IDevice;
 
 namespace distributed {
+class MeshBuffer;
 class MeshDevice;
 }
 
@@ -113,6 +114,7 @@ private:
     PrefetcherPipeConfigPageLayout layout_;
     uint64_t data_allocation_id_ = 0;
     uint64_t config_allocation_id_ = 0;
+    std::shared_ptr<distributed::MeshBuffer> config_buffer_;
     uint32_t data_address_ = 0;
     uint32_t config_address_ = 0;
     std::unordered_set<CoreCoord> claimed_;

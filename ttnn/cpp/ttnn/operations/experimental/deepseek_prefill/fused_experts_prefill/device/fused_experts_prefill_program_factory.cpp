@@ -73,6 +73,9 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
     const uint32_t dn_total = kt / 2;    // down shards ([I, 64] = 2 output tile columns)
     const uint32_t gu_shard_tiles = kt * 2;
     const uint32_t dn_shard_tiles = it * 2;
+    // Each gate_up column is stored as this many [H / gu_k_shards, 64] row pieces.
+    const uint32_t gu_k_shards =
+        hidden / static_cast<uint32_t>(tensor_args.gate_up_weights[0].memory_config().nd_shard_spec()->shard_shape[-2]);
 
     // Group shape: the experts of a group run one after the other and the gate_up and down phases of an expert
     // are separated by the group's all-gather, so a call takes about (experts per group) * (gate_up shards +
@@ -358,6 +361,8 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
             resident ? 1u : 0u,
             dpp,
             dn_resident ? 1u : 0u,
+            gu_k_shards,
+            it,
         };
         TensorAccessorArgs(*x.buffer()).append_to(reader_ct);
         TensorAccessorArgs(*ids_or_scores.buffer()).append_to(reader_ct);

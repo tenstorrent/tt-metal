@@ -44,6 +44,9 @@ public:
     const std::vector<uint32_t>& get_bank_ids_from_logical_core(
         BufferType buffer_type, const CoreCoord& logical_core) const;
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
+    // Lowest L1 address at which program-local L1 (CBs/DFBs) can start on every worker core:
+    // the L1 base raised past any persistent L1 (e.g. prefetcher pipe rings).
+    DeviceAddr get_program_l1_base() const;
     uint32_t get_alignment(BufferType buffer_type) const;
     // This a proxy of get_config().worker_l1_size,
     // this helper function is made for reports.cpp in TTNN and act as a transient member function.

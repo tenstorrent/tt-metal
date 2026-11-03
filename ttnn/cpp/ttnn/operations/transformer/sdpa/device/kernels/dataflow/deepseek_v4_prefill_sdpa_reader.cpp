@@ -9,7 +9,7 @@
 // both NoCs: the writer gathers rows [0, half) of it, this kernel rows [half, valid).
 
 #include <stdint.h>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"

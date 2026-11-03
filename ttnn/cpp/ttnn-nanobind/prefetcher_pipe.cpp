@@ -129,7 +129,9 @@ void py_module(nb::module_& mod) {
            uint32_t ring_size,
            uint32_t max_receivers_per_pipe,
            tt::tt_metal::BufferType buffer_type,
-           uint32_t num_dram_senders) {
+           uint32_t num_dram_senders,
+           tt::tt_metal::BufferType config_buffer_type,
+           bool overlap_program_l1) {
             auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.experimental.create_prefetcher_pipe_space");
             return tt::tt_metal::experimental::CreatePrefetcherPipeSpace(
                 mesh_device,
@@ -140,6 +142,8 @@ void py_module(nb::module_& mod) {
                     .ring_size = ring_size,
                     .max_receivers_per_pipe = max_receivers_per_pipe,
                     .buffer_type = buffer_type,
+                    .config_buffer_type = config_buffer_type,
+                    .overlap_program_l1 = overlap_program_l1,
                 });
         },
         nb::keep_alive<0, 1>(),
@@ -151,6 +155,8 @@ void py_module(nb::module_& mod) {
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
         nb::kw_only(),
         nb::arg("num_dram_senders") = 0,
+        nb::arg("config_buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("overlap_program_l1") = false,
         R"doc(
             Reserve persistent L1 for PrefetcherPipes on sender_cores ∪ receiver_domain.
 
@@ -167,6 +173,14 @@ void py_module(nb::module_& mod) {
                     most receiver_domain.num_cores().
                 buffer_type (BufferType): must be L1 (the default); the persistent arena lives in
                     worker L1 and no other buffer type is accepted.
+                num_dram_senders (int): DRAM sender endpoints the tensor-prefetcher factory may select.
+                config_buffer_type (BufferType): L1 (the default) keeps the config pages in the
+                    persistent arena beside the ring; L1_SMALL keeps them where no program's circular
+                    buffers reach, so the pipes' read pointers and credit counters survive a program
+                    that reuses the ring's L1 while the pipes are idle.
+                overlap_program_l1 (bool): reserve even on cores a cached program already placed
+                    circular buffers on. That L1 may alias the ring, so such a program must never run
+                    while the pipes hold data.
 
             Returns:
                 PrefetcherPipeSpace

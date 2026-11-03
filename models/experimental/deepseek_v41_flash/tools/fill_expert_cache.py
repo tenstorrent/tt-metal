@@ -18,14 +18,14 @@ cache and renamed into place, so an interrupted run leaves no truncated entries.
 
 The files are the ones experts built for a 1x4 mesh read, one per expert and part holding all four
 ranks' shards. ``--tp-size N`` writes a 1xN mesh's instead, and ``--tp-size 1`` the single-chip
-files ``test_moe.py`` and the TP1 decoder-layer test read. ``--balance-dram-banks`` writes the
-K-split gate_up (``gate_up_fused.tp4.k4``) that experts built with ``balance_dram_banks=True`` read,
-as the decode demo does under ``DEEPSEEK_V4_BALANCE_DRAM_BANKS=1``; down is the same file either way.
+files ``test_moe.py`` and the TP1 decoder-layer test read. By default the gate_up is the K-split one
+(``gate_up_fused.tp4.k4``) that the model's experts read (``balance_dram_banks``, on by default, for both
+decode and prefill); ``--no-balance-dram-banks`` writes the whole-K files the block tests build with
+``balance_dram_banks=False``. Down is the same file either way.
 
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 20 21 24
-    python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 1 2 --tp-size 1
+    python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 1 2 --tp-size 1 --no-balance-dram-banks
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers
-    python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers --balance-dram-banks
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --dspark
 """
 
@@ -180,8 +180,9 @@ def main():
     parser.add_argument("--tp-size", type=int, default=4, help="TP ranks of the 1xN mesh the experts are built for")
     parser.add_argument(
         "--balance-dram-banks",
-        action="store_true",
-        help="K-split gate_up shards over every DRAM bank (decode only; the prefill op reads whole-K shards)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="K-split gate_up shards over every DRAM bank, as the model's experts read them (default)",
     )
     parser.add_argument("--force", action="store_true", help="rewrite experts that are already cached")
     args = parser.parse_args()

@@ -33,16 +33,16 @@ those stages at once and are loaded once each: the prefill model is built by
 embedding table and ``lm_head``. Both are captured once, then every prompt alternates between the two:
 
 1. tokenizer, config and the prompts;
-2. the decode model, built with the DRISC weight prefetcher on (four GCB rings per stage; their config pages in
+2. the decode model, built with the DRISC weight prefetcher on (several prefetch rings per stage; their config pages in
    L1_SMALL), its static state prepared (sized for the longest conversation), a session opened, and every decode
    variant compiled (:meth:`DeepSeekV4Model.compile_traces`) so the buffers its ops keep for themselves exist
    before prefill lays out its memory;
-3. prefill compile: the prefetcher stopped, decode's GCBs freed and its resident L1 tensors parked on the host
+3. prefill compile: the prefetcher stopped, decode's pipes freed and its resident L1 tensors parked on the host
    (:meth:`DeepSeekV4Model.release_prefetch_buffers`) so prefill's circular buffers can take that L1, the prefill
    model built, and its persistent buffers (sized for the longest prompt), sockets and compile run
    (:meth:`DeepSeekV4PrefillModel.compile_traced_prefill`); not timed;
 4. prefill capture, then decode capture: prefill captures its traces, one per stage and position tier
-   (:meth:`DeepSeekV4PrefillModel.capture_traced_prefill`), with decode's L1 still released; then the GCBs are
+   (:meth:`DeepSeekV4PrefillModel.capture_traced_prefill`), with decode's L1 still released; then the pipes are
    rebuilt and the L1 tensors uploaded again under prefill's buffers, the prefetcher restarted
    (:meth:`DeepSeekV4Model.restore_prefetch_buffers`), and one throw-away decode step run, which compiles against
    the rebuilt rings and captures the decode traces. The prefetcher is not stopped again before teardown: that
@@ -54,8 +54,8 @@ embedding table and ``lm_head``. Both are captured once, then every prompt alter
 6. per prompt, decode execute: the session rewound, the prompt's states committed into the decode buffers on
    device, the ragged tail replayed through decode, and up to ``DEEPSEEK_V4_MAX_NEW_TOKENS`` tokens generated.
 
-Prefill and decode share L1: a prefill replay overwrites the GCB ring data, which is empty between decode steps,
-but not the GCB config pages (read pointers and credit counters), which live in L1_SMALL above every circular
+Prefill and decode share L1: a prefill replay overwrites the ring data, which is empty between decode steps,
+but not the pipe config pages (read pointers and credit counters), which live in L1_SMALL above every circular
 buffer; see ``PREFILL_DECODE_PREFETCHER.md``.
 
 Limits: ``test_prefill_decode_demo`` leaves the lightning indexer off, so the conversation (prompt + generated
@@ -93,10 +93,10 @@ chunks and drop the rest, so a long prompt is prefilled whole with no tail throu
 ``DEEPSEEK_V4_TRACE_REGION_SIZE`` (bytes to reserve for the captured traces -- the prefill stage traces, one per
 stage and position tier, and decode's together; unset keeps the ttnn default -- set it, e.g. 500000000, if a capture
 reports the trace region too small), ``DEEPSEEK_V4_L1_SMALL_SIZE`` (bytes of L1_SMALL for the CCL semaphores and the
-GCB config pages, 4096 by default; it must not be 0 with the prefetcher on),
+pipe config pages, 4096 by default; it must not be 0 with the prefetcher on),
 ``DEEPSEEK_V4_PREFETCHER`` (1: decode streams its weights through the DRISC prefetcher; 0: every projection copies
-its weight DRAM -> L1 per call, slower but with no GCBs), ``DEEPSEEK_V4_GCB_HEADROOM`` (16384 by default here: bytes
-per L1 bank the decode model keeps free just above its GCB rings until it creates its host sockets or compiles, so
+its weight DRAM -> L1 per call, slower but with no pipes), ``DEEPSEEK_V4_GCB_HEADROOM`` (16384 by default here: bytes
+per L1 bank the decode model keeps free just above its prefetch rings until it creates its host sockets or compiles, so
 the sockets and the buffers decode's ops keep for themselves land above the rings rather than in the middle of L1
 once the rings are released, where they would cap prefill's circular buffers; ``release_prefetch_buffers`` warns
 about any that is left below them).
@@ -169,7 +169,7 @@ _LONGBENCH_FILE = Path(os.path.expanduser(os.environ.get("DEEPSEEK_V4_LONGBENCH"
 _DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     "num_command_queues": 2,
-    # The ops' global semaphores and the GCB config pages go here instead of L1. The config pages, and the
+    # The ops' global semaphores and the pipe config pages go here instead of L1. The config pages, and the
     # semaphores of decode programs recompiled against the rebuilt rings, are allocated after prefill's capture,
     # so in L1 they could sit under prefill's circular buffers and be overwritten by every replay.
     # It comes out of L1, where prefill's widest stage has only ~7 KB to spare.
@@ -268,7 +268,7 @@ def _run_with_progress(mesh_device, AutoTokenizer, make_prompts, **kwargs) -> li
     progress = _Progress(interval=0.0, stall=0.0)  # never entered: step logging only, no heartbeat thread
     progress.verbose = False
     os.environ["DEEPSEEK_V4_DSPARK"] = "0"  # MTP disabled for now (read by DeepSeekV4Model.__init__): no link on row 2
-    # Room above the GCB rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
+    # Room above the prefetch rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
     os.environ.setdefault("DEEPSEEK_V4_GCB_HEADROOM", "16384")
     # The decode model's prefetcher session spans everything (as in the decode demo).
     with contextlib.ExitStack() as prefetcher:
@@ -529,7 +529,7 @@ def _run(
     sid = decode.open_session()
     decode.activate_session(sid)
 
-    # --- decode compile, then prefill compile and capture, with decode's GCBs and L1 tensors released ----- #
+    # --- decode compile, then prefill compile and capture, with decode's pipes and L1 tensors released ----- #
     prefill = None
     bias_slots = None
     build_seconds = prepare_seconds = 0.0
@@ -548,7 +548,7 @@ def _run(
         progress.step(
             "[3/6] prefill model on the decode stages (sharing decode's routed experts, embedding and lm_head)"
         )
-        # Stops the prefetcher and frees the GCBs; allowed because no decode trace exists yet.
+        # Stops the prefetcher and frees the pipes; allowed because no decode trace exists yet.
         decode.release_prefetch_buffers()
         cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
         t0 = time.perf_counter()
@@ -587,7 +587,7 @@ def _run(
         capture_seconds = time.perf_counter() - t0
         prepare_seconds += capture_seconds
         logger.info(f"traced prefill captured in {capture_seconds:.1f}s")
-        # The GCBs (config pages in L1_SMALL) and the L1 tensors come back under prefill's buffers; restarts the
+        # The pipes (config pages in L1_SMALL) and the L1 tensors come back under prefill's buffers; restarts the
         # prefetcher, which then runs until teardown.
         decode.restore_prefetch_buffers()
 

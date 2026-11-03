@@ -826,6 +826,14 @@ DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const 
     return impl_->get_base_allocator_addr(mem_type);
 }
 
+DeviceAddr Allocator::get_program_l1_base() const {
+    DeviceAddr base = impl_->get_base_allocator_addr(HalMemType::L1);
+    for (const auto& [begin, end] : impl_->persistent_l1().occupied_ranges()) {
+        base = std::max(base, end);
+    }
+    return base;
+}
+
 uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl_->get_alignment(buffer_type); }
 
 Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl_->get_statistics(buffer_type); }

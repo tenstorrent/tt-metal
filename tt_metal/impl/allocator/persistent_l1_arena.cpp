@@ -51,7 +51,7 @@ size_t PersistentL1Arena::seal_index(const CoreCoord& core) const {
 }
 
 PersistentL1Arena::Allocation PersistentL1Arena::allocate(
-    const CoreRangeSet& cores, DeviceAddr size, DeviceAddr alignment) {
+    const CoreRangeSet& cores, DeviceAddr size, DeviceAddr alignment, bool ignore_seals) {
     std::lock_guard lock(mutex_);
     TT_FATAL(!cores.empty(), "Persistent L1 allocation requires at least one core");
     TT_FATAL(size > 0, "Persistent L1 allocation size must be non-zero");
@@ -60,7 +60,7 @@ PersistentL1Arena::Allocation PersistentL1Arena::allocate(
     const auto core_list = corerange_to_cores(cores);
     for (const CoreCoord& core : core_list) {
         TT_FATAL(
-            seal_refcounts_[seal_index(core)] == 0,
+            ignore_seals || seal_refcounts_[seal_index(core)] == 0,
             "Cannot allocate persistent L1 on core {} after program-local L1 placement",
             core.str());
     }

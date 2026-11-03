@@ -17,7 +17,9 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -137,6 +139,9 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     TT_FATAL(
         config_.buffer_type == BufferType::L1,
         "PrefetcherPipeSpace: persistent-arena allocations require BufferType::L1");
+    TT_FATAL(
+        config_.config_buffer_type == BufferType::L1 || config_.config_buffer_type == BufferType::L1_SMALL,
+        "PrefetcherPipeSpace: config pages live in L1 or L1_SMALL");
     TT_FATAL(config_.ring_size > 0, "PrefetcherPipeSpace: ring_size must be > 0");
     const uint32_t l1_alignment = l1_alignment_for(device_);
     TT_FATAL(
@@ -181,7 +186,8 @@ void PrefetcherPipeSpaceImpl::setup_reservation() {
 
     // One ring allocation and one page allocation over the whole domain: every domain core gets
     // the same two addresses, which is the lockstep contract every carved pipe relies on.
-    auto data_allocation = arena.allocate(reservation_cores_, config_.ring_size, l1_alignment);
+    auto data_allocation =
+        arena.allocate(reservation_cores_, config_.ring_size, l1_alignment, config_.overlap_program_l1);
     data_allocation_id_ = data_allocation.id;
     TT_FATAL(
         data_allocation.address <= std::numeric_limits<uint32_t>::max(),
@@ -190,18 +196,37 @@ void PrefetcherPipeSpaceImpl::setup_reservation() {
     data_address_ = static_cast<uint32_t>(data_allocation.address);
 
     // Page-relative block offsets are only line-aligned if the page itself is.
-    auto config_allocation = arena.allocate(
-        reservation_cores_, layout_.page_size, std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN));
-    config_allocation_id_ = config_allocation.id;
-    TT_FATAL(
-        config_allocation.address <= std::numeric_limits<uint32_t>::max(),
-        "PrefetcherPipeSpace config address {} exceeds device-address width",
-        config_allocation.address);
-    config_address_ = static_cast<uint32_t>(config_allocation.address);
-
-    const DeviceAddr persistent_begin = std::min(data_allocation.address, config_allocation.address);
-    const DeviceAddr persistent_end =
-        std::max(data_allocation.address + data_allocation.size, config_allocation.address + config_allocation.size);
+    const uint32_t page_alignment = std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN);
+    DeviceAddr persistent_begin = data_allocation.address;
+    DeviceAddr persistent_end = data_allocation.address + data_allocation.size;
+    if (config_.config_buffer_type == BufferType::L1_SMALL) {
+        // One page per reservation core, at one address on all of them. A sharded buffer is only
+        // L1-aligned, so each shard is padded far enough to start the page on a block boundary.
+        const uint32_t num_cores = reservation_cores_.num_cores();
+        const uint32_t shard_bytes = layout_.page_size + page_alignment - l1_alignment;
+        config_buffer_ = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = static_cast<DeviceAddr>(shard_bytes) * num_cores},
+            distributed::DeviceLocalBufferConfig{
+                .page_size = shard_bytes,
+                .buffer_type = BufferType::L1_SMALL,
+                .sharding_args = BufferShardingArgs(
+                    ShardSpecBuffer(reservation_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1}),
+                    TensorMemoryLayout::HEIGHT_SHARDED),
+            },
+            const_cast<distributed::MeshDevice*>(device_));
+        config_address_ = static_cast<uint32_t>(tt::align(config_buffer_->address(), page_alignment));
+    } else {
+        auto config_allocation =
+            arena.allocate(reservation_cores_, layout_.page_size, page_alignment, config_.overlap_program_l1);
+        config_allocation_id_ = config_allocation.id;
+        TT_FATAL(
+            config_allocation.address <= std::numeric_limits<uint32_t>::max(),
+            "PrefetcherPipeSpace config address {} exceeds device-address width",
+            config_allocation.address);
+        config_address_ = static_cast<uint32_t>(config_allocation.address);
+        persistent_begin = std::min(persistent_begin, config_allocation.address);
+        persistent_end = std::max(persistent_end, config_allocation.address + config_allocation.size);
+    }
     for (const CoreCoord& core : corerange_to_cores(reservation_cores_)) {
         const auto& bank_ids = device_->allocator_impl()->get_bank_ids_from_logical_core(BufferType::L1, core);
         TT_FATAL(bank_ids.size() == 1, "Expected one L1 bank for PrefetcherPipeSpace core {}", core.str());
@@ -240,6 +265,7 @@ PrefetcherPipeSpaceImpl::~PrefetcherPipeSpaceImpl() {
 }
 
 void PrefetcherPipeSpaceImpl::release_allocations() noexcept {
+    config_buffer_.reset();
     if (device_ == nullptr || !device_->is_initialized()) {
         config_allocation_id_ = 0;
         data_allocation_id_ = 0;

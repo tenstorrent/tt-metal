@@ -77,7 +77,9 @@ public:
     PersistentL1Arena(const PersistentL1Arena&) = delete;
     PersistentL1Arena& operator=(const PersistentL1Arena&) = delete;
 
-    Allocation allocate(const CoreRangeSet& cores, DeviceAddr size, DeviceAddr alignment);
+    // `ignore_seals` places the allocation on sealed cores too: the caller guarantees the sealed
+    // program-local L1 it may overlap is never in use at the same time as this allocation.
+    Allocation allocate(const CoreRangeSet& cores, DeviceAddr size, DeviceAddr alignment, bool ignore_seals = false);
     void deallocate(uint64_t allocation_id);
 
     DeviceAddr high_water_mark(const CoreRangeSet& cores) const;
