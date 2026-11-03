@@ -27,6 +27,7 @@ from triage import (
     ScriptConfig,
     TTTriageError,
     log_warning,
+    log_warning_risc,
     recurse_field,
     triage_field,
     hex_serializer,
@@ -62,6 +63,7 @@ script_config = ScriptConfig(
 class KernelCallstackWithMessage:
     callstack: list[CallstackEntry]
     message: str | None
+    pc: int | None  # None if the PC couldn't be read
 
 
 def _pc_not_in_range_message(dispatcher_core_data: DispatcherCoreData) -> str:
@@ -91,26 +93,37 @@ def get_callstack(
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
         if not full_callstack:
-            pc = risc_debug.get_pc()
-            if rewind_pc_for_ebreak:
-                pc = pc - 4
+            pc = risc_debug.get_pc() - (4 if rewind_pc_for_ebreak else 0)
             try:
                 cs = top_callstack(pc, elfs, offsets, context)
+                if len(cs) == 0:
+                    # The first PC read of a running core sometimes resolves in no ELF, so read it once more
+                    first_pc = pc
+                    pc = risc_debug.get_pc() - (4 if rewind_pc_for_ebreak else 0)
+                    cs = top_callstack(pc, elfs, offsets, context)
+                    log_warning_risc(
+                        risc_name,
+                        location,
+                        f"PC 0x{first_pc:08X} was not in range of any provided ELF files, "
+                        f"second read 0x{pc:08X} {'was' if len(cs) > 0 else 'was not either'}.",
+                    )
                 error_message = None
                 if len(cs) == 0:
                     error_message = _pc_not_in_range_message(dispatcher_core_data)
-                return KernelCallstackWithMessage(callstack=cs, message=error_message)
+                return KernelCallstackWithMessage(callstack=cs, message=error_message, pc=pc)
             except TimeoutDeviceRegisterError:
                 raise
             except Exception as e:
-                return KernelCallstackWithMessage(callstack=[], message=str(e))
+                return KernelCallstackWithMessage(callstack=[], message=str(e), pc=pc)
         else:
             try:
                 cs = callstack(location, elfs, offsets, risc_name, neo_id=neo_id)
                 error_message = None
                 if len(cs) == 0:
                     error_message = _pc_not_in_range_message(dispatcher_core_data)
-                return KernelCallstackWithMessage(callstack=cs, message=error_message)
+                return KernelCallstackWithMessage(
+                    callstack=cs, message=error_message, pc=cs[0].pc if len(cs) > 0 else risc_debug.get_pc()
+                )
             except TimeoutDeviceRegisterError:
                 raise
             except Exception as e:
@@ -123,16 +136,16 @@ def get_callstack(
                     cs = top_callstack(pc, elfs, offsets, context)
                     if len(cs) == 0:
                         error_message = "\n".join([error_message, _pc_not_in_range_message(dispatcher_core_data)])
-                    return KernelCallstackWithMessage(callstack=cs, message=error_message)
+                    return KernelCallstackWithMessage(callstack=cs, message=error_message, pc=pc)
                 except TimeoutDeviceRegisterError:
                     raise
                 except Exception as e:
                     # If top callstack failed too, print both error messages
-                    return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]))
+                    return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]), pc=None)
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
-        return KernelCallstackWithMessage(callstack=[], message=str(e))
+        return KernelCallstackWithMessage(callstack=[], message=str(e), pc=None)
 
 
 def format_variable_value(var: CallstackEntryVariable) -> str:
@@ -324,7 +337,9 @@ class CallstackProvider:
             return CallstacksData(
                 dispatcher_core_data=dispatcher_core_data,
                 pc=None,
-                kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
+                kernel_callstack_with_message=KernelCallstackWithMessage(
+                    callstack=[], message="Core is in reset", pc=None
+                ),
             )
 
         if dispatcher_core_data.block_type == "active_eth" and not self.force_active_eth:
@@ -364,7 +379,11 @@ class CallstackProvider:
                         elf_paths.append(dispatcher_core_data.kernel_path)
                         offsets.append(dispatcher_core_data.kernel_offset)
                     gdb_callstack = get_gdb_callstack(location, risc_name, elf_paths, offsets, self.gdb_server)
-                    callstack_with_message = KernelCallstackWithMessage(callstack=gdb_callstack, message=None)
+                    callstack_with_message = KernelCallstackWithMessage(
+                        callstack=gdb_callstack,
+                        message=None,
+                        pc=gdb_callstack[0].pc if len(gdb_callstack) > 0 else None,
+                    )
                     # If GDB failed to get callstack, surface errors and default to top callstack
                     if len(gdb_callstack) == 0:
                         error_message = ""
@@ -391,9 +410,10 @@ class CallstackProvider:
                 # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
                 if len(callstack_with_message.callstack) > 0 and callstack_with_message.callstack[0].pc is None:
                     try:
-                        callstack_with_message.callstack[0].pc = (
+                        callstack_with_message.pc = (
                             location.device.get_block(location).get_risc_debug(risc_name).get_pc()
                         )
+                        callstack_with_message.callstack[0].pc = callstack_with_message.pc
                     except TimeoutDeviceRegisterError:
                         raise
                     except:
@@ -410,9 +430,7 @@ class CallstackProvider:
         # Create result with dispatcher core data (verbose levels handled in serialization)
         return CallstacksData(
             dispatcher_core_data=dispatcher_core_data,
-            pc=callstack_with_message.callstack[0].pc
-            if len(callstack_with_message.callstack) > 0
-            else risc_debug.get_pc(),
+            pc=callstack_with_message.pc,
             kernel_callstack_with_message=callstack_with_message,
         )
 
