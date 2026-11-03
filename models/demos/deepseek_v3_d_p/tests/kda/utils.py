@@ -26,7 +26,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CONVOLUTION_SEGMENT_CHANNELS,
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
-    convolution_tail_from_device_layout,
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
@@ -35,7 +34,10 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    convolution_tail_from_device_layout,
+)
 
 
 @dataclass(frozen=True)

@@ -8,8 +8,6 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
-import torch
-
 import ttnn
 
 KDA_CHUNK_SIZE = ttnn.TILE_SIZE
@@ -70,36 +68,6 @@ def convolution_tail_shape(history_rows: int, width: int) -> tuple[int, int, int
     if width % KDA_CONVOLUTION_SEGMENT_CHANNELS != 0:
         raise ValueError(f"convolution width {width} is not a multiple of {KDA_CONVOLUTION_SEGMENT_CHANNELS}")
     return (1, width // KDA_CONVOLUTION_SEGMENT_CHANNELS, history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS)
-
-
-def convolution_tail_to_device_layout(tail: torch.Tensor) -> torch.Tensor:
-    """`[..., K-1, W]` host rows -> `[..., W/64, (K-1)*64]`, the device layout."""
-    *lead, history_rows, width = tail.shape
-    _, segments, row = convolution_tail_shape(history_rows, width)
-    return (
-        tail.reshape(*lead, history_rows, segments, KDA_CONVOLUTION_SEGMENT_CHANNELS)
-        .transpose(-3, -2)
-        .reshape(*lead, segments, row)
-    )
-
-
-def convolution_tail_from_device_layout(tail: torch.Tensor, history_rows: int) -> torch.Tensor:
-    """`[..., W/64, (K-1)*64]` device layout -> `[..., K-1, W]` host rows, with `history_rows = K-1`.
-
-    Raises unless each page holds `history_rows` rows of one segment, so a `[..., K-1, W]` row tail is refused instead
-    of being decoded into permuted channels.
-    """
-    *lead, segments, row = tail.shape
-    if row != history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS:
-        raise ValueError(
-            f"page of {row} elements is not {history_rows} rows of a {KDA_CONVOLUTION_SEGMENT_CHANNELS}-channel "
-            "segment; not a device-layout convolution tail"
-        )
-    return (
-        tail.reshape(*lead, segments, history_rows, KDA_CONVOLUTION_SEGMENT_CHANNELS)
-        .transpose(-3, -2)
-        .reshape(*lead, history_rows, segments * KDA_CONVOLUTION_SEGMENT_CHANNELS)
-    )
 
 
 def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConfig:

@@ -19,10 +19,6 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
-from models.demos.deepseek_v3_d_p.tt.kda.config import (
-    convolution_tail_from_device_layout,
-    convolution_tail_to_device_layout,
-)
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
@@ -42,7 +38,11 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     kda_segment_bytes,
     populate_kv_chunk_address_table_kda,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_bit_identical,
+    convolution_tail_from_device_layout,
+    convolution_tail_to_device_layout,
+)
 
 pytestmark = [
     run_for_blackhole(),

@@ -9,11 +9,11 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_from_device_layout
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    convolution_tail_from_device_layout,
     make_actual_start,
 )
 
