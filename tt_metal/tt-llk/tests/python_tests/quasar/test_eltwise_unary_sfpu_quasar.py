@@ -759,15 +759,15 @@ def _elwadd_datacopy_dest_image(src: torch.Tensor) -> torch.Tensor:
 # which are a pure unpack/pack gasket datacopy — not an SFPU op — and UInt32, which
 # Quasar's DataFormat enum does not define. Each cast is one of:
 #   float<->float : widen (store) or RNE narrow to fp16 (round-nearest-even)
-#   float<->int32 : SFPCAST
-#   float->narrow int : clamp negatives (unsigned) + RNE narrow
+#   float<->int32 : SFPCAST above 32768, int16 SFP_STOCH_RND below it
+#   float->narrow int : ReLU for unsigned, then one SFP_STOCH_RND (full-float RNE, saturates)
 #   int->float : SFPCAST (+ fp16 narrow if the dst is fp16)
 #   int<->int : store sfpmem mode (widen/equal) or RNE narrow to 8-bit
 #
 # Int16 (signed 16-bit) is not in the ttnn typecast matrix, but the kernel handles
-# it on every path (float<->int16 via SFPCAST + 16-bit store-narrow, int16<->int
-# via the int->int path), so it is swept here too. Mirrors the UInt16 set; Int16
-# has a native Quasar dest format.
+# it on every path (float->int16 is one SFP_STOCH_RND, int16<->int via the int->int
+# path), so it is swept here too. Mirrors the UInt16 set; Int16 has a native Quasar
+# dest format.
 #
 # Int8 is swept with Int8 circular buffers, not the UInt8-declared ones WH/BH needs:
 # Quasar's Int8 is a native dest format whose datums are sign-magnitude, which is
@@ -790,7 +790,7 @@ TYPECAST_CASES = (
     # float <-> float: widen on store, RNE narrow to fp16
     TypecastCase(DataFormat.Float16_b, DataFormat.Float32),
     TypecastCase(DataFormat.Float32, DataFormat.Float16_b),
-    # float <-> int32: SFPCAST (+ fp16 narrow when the dst is fp16)
+    # float <-> int32: SFPCAST above 32768, int16 convert below it (+ fp16 narrow on the way back)
     TypecastCase(DataFormat.Float16_b, DataFormat.Int32),
     TypecastCase(DataFormat.Int32, DataFormat.Float16_b),
     TypecastCase(DataFormat.Float32, DataFormat.Int32),
@@ -810,7 +810,7 @@ TYPECAST_CASES = (
     TypecastCase(DataFormat.UInt8, DataFormat.Float16_b),
     TypecastCase(DataFormat.Float32, DataFormat.UInt8),
     TypecastCase(DataFormat.UInt8, DataFormat.Float32),
-    # float <-> int8: signed RNE narrow, no negative clamp
+    # float <-> int8: signed RNE narrow, saturating to [-127, 127]
     TypecastCase(DataFormat.Float16_b, DataFormat.Int8),
     TypecastCase(DataFormat.Int8, DataFormat.Float16_b),
     TypecastCase(DataFormat.Float32, DataFormat.Int8),
@@ -828,6 +828,7 @@ TYPECAST_CASES = (
     TypecastCase(DataFormat.Int32, DataFormat.Int8),
     TypecastCase(DataFormat.Int8, DataFormat.Int16),
     TypecastCase(DataFormat.Int16, DataFormat.Int8),
+    # Int8 <-> UInt8 plants values outside [0, 127]. See _INT8_UINT8_SEEDS.
     TypecastCase(DataFormat.Int8, DataFormat.UInt8),
     TypecastCase(DataFormat.UInt8, DataFormat.Int8),
 )
@@ -850,6 +851,11 @@ def _is_uint16_to_fp32(src_format: DataFormat, dst_format: DataFormat) -> bool:
 # 32768 and 65535 catch a signed load: Quasar's signed 16-bit format is sign-magnitude,
 # so a signed read gives -0.0 and -32767 instead.
 _UINT16_TO_FP32_SEEDS = (0, 1, 32767, 32768, 65535)
+
+# Int8 -> UInt8 keeps the low 8 bits (TypecastGolden): -1 -> 255, -2 -> 254, -64 -> 192, -127 -> 129.
+# UInt8 -> Int8 saturates to sign-magnitude Int8: 128, 200 and 255 -> 127, and 127 stays 127.
+_INT8_TO_UINT8_SEEDS = (-1, -2, -64, -127)
+_UINT8_TO_INT8_SEEDS = (128, 200, 255, 127)
 
 
 def _prepare_typecast_input(
@@ -907,6 +913,18 @@ def _prepare_typecast_input(
         if _is_uint16_to_fp32(src_format, dst_format):
             flat = result.flatten()
             for i, seed in enumerate(_UINT16_TO_FP32_SEEDS):
+                if i < flat.numel():
+                    flat[i] = seed
+            result = flat.reshape(result.shape)
+
+        int8_uint8_seeds = None
+        if src_format == DataFormat.Int8 and dst_format == DataFormat.UInt8:
+            int8_uint8_seeds = _INT8_TO_UINT8_SEEDS
+        elif src_format == DataFormat.UInt8 and dst_format == DataFormat.Int8:
+            int8_uint8_seeds = _UINT8_TO_INT8_SEEDS
+        if int8_uint8_seeds is not None:
+            flat = result.flatten()
+            for i, seed in enumerate(int8_uint8_seeds):
                 if i < flat.numel():
                     flat[i] = seed
             result = flat.reshape(result.shape)
@@ -1929,10 +1947,15 @@ _TYPECAST_NEGATIVE_CASES = (
     (-65535.0, 0),
 )
 
+# Just past an even .5 tie. SFPCAST keeps 8 fraction bits and rounds these to the even
+# integer; a full-float nearest-even convert rounds them up.
 _TYPECAST_FRACTIONAL_CASES = (
     (0.25, 0),
     (1.75, 2),
     (100.6, 101),
+    (2.503, 3),
+    (10.501, 11),
+    (0.50000006, 1),
 )
 
 # The discriminator: these separate round-nearest-even from round-half-away-from-zero
@@ -1964,136 +1987,36 @@ _TYPECAST_EDGE_GROUPS = (
     ("upper saturation", _TYPECAST_SATURATION_CASES),
 )
 
-_TYPECAST_EDGE_CASES = tuple(
-    case for _, group in _TYPECAST_EDGE_GROUPS for case in group
-)
-
-
-def _typecast_edge_case_tile() -> tuple:
-    """Tile the edge cases over a full 32x32 tile, plus the matching expected tensor.
-
-    The case list is repeated rather than front-loaded and padded: 23 cases into 1024
-    elements is coprime with the 16-wide face row, so each case lands on a different SFPU
-    lane, column parity and face on successive repeats. A clamp that is wrong on only some
-    lanes (the failure mode a mis-set CC enable produces) survives a front-loaded stimulus.
-    """
-    element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-    repeats = math.ceil(element_count / len(_TYPECAST_EDGE_CASES))
-
-    inputs = [value for value, _ in _TYPECAST_EDGE_CASES] * repeats
-    expected = [result for _, result in _TYPECAST_EDGE_CASES] * repeats
-
-    return (
-        torch.tensor(inputs[:element_count], dtype=torch.float32),
-        torch.tensor(expected[:element_count], dtype=torch.int64),
-    )
-
 
 @pytest.mark.quasar
 @parametrize(dest_sync=[DestSync.Half, DestSync.Full])
 def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
+    """Float32 -> UInt16 clamps negatives to 0, rounds nearest-even, and saturates above 65535.
+
+    The randomised sweep cannot see any of those. The case list is repeated across the tile so a
+    lane-dependent clamp failure shows up; the shared runner keeps the count coprime with the
+    16-wide face row.
     """
-    Deterministic proof that Float32 -> UInt16 clamps negatives to 0, rounds nearest-even and
-    saturates above 65535, none of which the randomised Typecast sweep can observe.
-    """
-    dest_sync = dest_sync[0]
-
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt16)
-    variants = generate_quasar_sfpu_format_variants(MathOperation.Typecast, [formats])
-    assert len(variants) == 1, (
-        "expected exactly one Float32 -> UInt16 Quasar variant, got "
-        f"{len(variants)}: {variants}"
-    )
-    variant = variants[0]
-
-    input_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
-    src_A, expected_flat = _typecast_edge_case_tile()
-    # src_B is unused by a unary op, but StimuliConfig requires an operand-B buffer.
-    src_B = torch.zeros_like(src_A)
-
-    configuration = create_test_or_perf_config(
-        is_perf=False,
-        run_types=(PerfRunType.L1_TO_L1,),
-        test_config_kwargs={
-            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
-            "formats": formats,
-            "templates": [
-                MATH_OP(mathop=MathOperation.Typecast),
-                APPROX_MODE(ApproximationMode.No),
-                DATA_COPY_TYPE(DataCopyType.A2D),
-                UNPACKER_ENGINE_SEL(
-                    UnpackerEngine.UnpDest
-                    if variant.unpack_to_dest
-                    else UnpackerEngine.UnpA
-                ),
-                DEST_SYNC(dest_sync),
-                TYPECAST_FORMATS(
-                    input_format=variant.sfpu_src,
-                    output_format=variant.sfpu_dst,
-                ),
-            ],
-            "runtimes": [
-                TILE_COUNT(1),
-                NUM_FACES(MAX_NUM_FACES),
-                TEST_FACE_DIMS(),
-                DEST_INDEX(0),
-                LOOP_FACTOR(1),
-            ],
-            "variant_stimuli": StimuliConfig(
-                src_A,
-                formats.input_format,
-                src_B,
-                formats.input_format,
-                formats.output_format,
-                tile_count_A=1,
-                tile_count_B=1,
-                tile_count_res=1,
-                num_faces=MAX_NUM_FACES,
-            ),
-            "unpack_to_dest": variant.unpack_to_dest,
-            "dest_acc": variant.dest_acc,
-        },
-    )
-
-    variant.apply_formats(configuration.formats_config)
-
-    res_from_L1 = configuration.run().result
-
-    # Typecast is element-wise (not in LAYOUT_SENSITIVE_OPS), so the packed result is read
-    # back in the same row-major order the stimulus was written in — no untilize needed.
-    result = torch.tensor(res_from_L1, dtype=torch.int64)
-    assert (
-        result.numel() == expected_flat.numel()
-    ), f"result has {result.numel()} elements, expected {expected_flat.numel()}"
-
-    period = len(_TYPECAST_EDGE_CASES)
-    case_index = 0
-    for group_name, group in _TYPECAST_EDGE_GROUPS:
-        for value, want in group:
-            # Every repeat of this case across the tile, so a lane-dependent failure shows.
-            got = result[case_index::period]
-            mismatched = (got != want).nonzero().flatten()
-            assert mismatched.numel() == 0, (
-                f"{group_name}: input {value} should convert to {want}, got "
-                f"{got[mismatched[:8]].tolist()} at {mismatched.numel()} of "
-                f"{got.numel()} tile positions"
-            )
-            case_index += 1
-
-    assert torch.equal(result, expected_flat), (
-        "Float32 -> UInt16 mismatch:\n"
-        f"got      {result[:32].tolist()}\n"
-        f"expected {expected_flat[:32].tolist()}"
+    _run_fp32_to_int_edge_case(
+        dest_sync[0], DataFormat.UInt16, _TYPECAST_EDGE_GROUPS, "Float32 -> UInt16"
     )
 
 
 # Float32 -> Int8. The randomised sweep stays inside [-127, 127] and is integer-only, so it never
-# sees saturation or a .5 tie. The kernel converts fp32 -> int32 nearest-even, then int32_to_int8
-# saturates. Sign-magnitude has no -128.
+# sees saturation, a .5 tie, or a fraction just past that tie. Sign-magnitude has no -128.
+# The non-tie fractions are the ones SFPCAST (8 fraction bits) rounds the wrong way.
 _INT8_EDGE_NEGATIVE = (
     (-0.5, 0),
     (-1.5, -2),
     (-200.0, -127),
+)
+_INT8_EDGE_PAST_TIE = (
+    (2.503, 3),
+    (10.501, 11),
+    (0.50000006, 1),
+    (126.500008, 127),
+    (-2.503, -3),
+    (-10.501, -11),
 )
 _INT8_EDGE_TIES = (
     (0.5, 0),
@@ -2117,39 +2040,91 @@ _INT8_EDGE_SATURATION = (
 )
 _INT8_EDGE_GROUPS = (
     ("negative and fractional", _INT8_EDGE_NEGATIVE),
+    ("fraction just past an even tie", _INT8_EDGE_PAST_TIE),
     ("round-nearest-even ties", _INT8_EDGE_TIES),
     ("exact values", _INT8_EDGE_EXACT),
     ("saturation", _INT8_EDGE_SATURATION),
 )
-_INT8_EDGE_CASES = tuple(case for _, group in _INT8_EDGE_GROUPS for case in group)
+
+# Int16 used to keep the low 15 bits, so 32768 and 40000 wrapped. The direct convert saturates.
+_INT16_EDGE_GROUPS = (
+    (
+        "fraction just past an even tie",
+        (
+            (2.503, 3),
+            (10.501, 11),
+            (32766.502, 32767),
+            (-2.503, -3),
+            (-32766.502, -32767),
+        ),
+    ),
+    ("round-nearest-even ties", ((0.5, 0), (2.5, 2))),
+    (
+        "saturation",
+        (
+            (32767.0, 32767),
+            (32768.0, 32767),
+            (40000.0, 32767),
+            (-40000.0, -32767),
+        ),
+    ),
+)
+
+# Int32 uses the int16 convert below 32768 and SFPCAST above it. 2^31 saturates to 2^31-1.
+_INT32_EDGE_GROUPS = (
+    (
+        "fraction just past an even tie",
+        (
+            (2.503, 3),
+            (10.501, 11),
+            (0.50000006, 1),
+            (32766.502, 32767),
+            (-2.503, -3),
+            (-32766.502, -32767),
+        ),
+    ),
+    ("round-nearest-even ties", ((2.5, 2),)),
+    ("above the 8-fraction-bit range", ((40000.0, 40000), (-40000.0, -40000))),
+    ("exact values", ((1.0, 1),)),
+    ("saturation", ((2147483648.0, 2147483647),)),
+)
+
+_UINT8_EDGE_GROUPS = (
+    (
+        "fraction just past an even tie",
+        ((2.503, 3), (10.501, 11), (0.50000006, 1)),
+    ),
+    ("negatives clamp to 0", ((-1.0, 0), (-2.503, 0))),
+    ("round-nearest-even ties", ((0.5, 0), (2.5, 2))),
+    ("exact values", ((1.0, 1), (255.0, 255))),
+    ("saturation", ((256.0, 255), (300.0, 255))),
+)
 
 
-def _int8_edge_case_tile() -> tuple:
-    element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-    repeats = math.ceil(element_count / len(_INT8_EDGE_CASES))
-    inputs = [value for value, _ in _INT8_EDGE_CASES] * repeats
-    expected = [result for _, result in _INT8_EDGE_CASES] * repeats
-    return (
-        torch.tensor(inputs[:element_count], dtype=torch.float32),
-        torch.tensor(expected[:element_count], dtype=torch.int64),
-    )
+def _run_fp32_to_int_edge_case(dest_sync, out_format, groups, label):
+    """Run one Float32 -> integer edge tile. `groups` is (name, [(input, expected), ...]).
 
+    The cases are repeated across the tile. The count stays coprime with the 16-wide face row so
+    each case lands on a different lane; a clamp that is wrong on only some lanes still shows up.
+    """
+    cases = tuple(case for _, group in groups for case in group)
+    assert (
+        math.gcd(len(cases), 16) == 1
+    ), f"{label} has {len(cases)} cases; keep the count coprime with the 16-wide face row"
 
-@pytest.mark.quasar
-@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
-def test_typecast_fp32_to_int8_edge_cases_quasar(dest_sync):
-    """Float32 -> Int8 saturates to [-127, 127] and rounds nearest-even, including .5 ties."""
-    dest_sync = dest_sync[0]
-
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Int8)
+    formats = InputOutputFormat(DataFormat.Float32, out_format)
     variants = generate_quasar_sfpu_format_variants(MathOperation.Typecast, [formats])
-    assert len(variants) == 1, (
-        "expected exactly one Float32 -> Int8 Quasar variant, got "
-        f"{len(variants)}: {variants}"
-    )
+    assert (
+        len(variants) == 1
+    ), f"expected exactly one {label} Quasar variant, got {len(variants)}: {variants}"
     variant = variants[0]
 
-    src_A, expected_flat = _int8_edge_case_tile()
+    element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    repeats = math.ceil(element_count / len(cases))
+    inputs = [value for value, _ in cases] * repeats
+    expected_values = [result for _, result in cases] * repeats
+    src_A = torch.tensor(inputs[:element_count], dtype=torch.float32)
+    expected_flat = torch.tensor(expected_values[:element_count], dtype=torch.int64)
     src_B = torch.zeros_like(src_A)
 
     configuration = create_test_or_perf_config(
@@ -2198,29 +2173,64 @@ def test_typecast_fp32_to_int8_edge_cases_quasar(dest_sync):
 
     variant.apply_formats(configuration.formats_config)
 
-    res_from_L1 = configuration.run().result
-    result = torch.tensor(res_from_L1, dtype=torch.int64)
+    result = torch.tensor(configuration.run().result, dtype=torch.int64)
     assert (
         result.numel() == expected_flat.numel()
-    ), f"result has {result.numel()} elements, expected {expected_flat.numel()}"
+    ), f"{label}: result has {result.numel()} elements, expected {expected_flat.numel()}"
 
-    period = len(_INT8_EDGE_CASES)
+    period = len(cases)
     case_index = 0
-    for group_name, group in _INT8_EDGE_GROUPS:
+    for group_name, group in groups:
         for value, want in group:
             got = result[case_index::period]
             mismatched = (got != want).nonzero().flatten()
             assert mismatched.numel() == 0, (
-                f"{group_name}: input {value} should convert to {want}, got "
+                f"{label} {group_name}: input {value} should convert to {want}, got "
                 f"{got[mismatched[:8]].tolist()} at {mismatched.numel()} of "
                 f"{got.numel()} tile positions"
             )
             case_index += 1
 
     assert torch.equal(result, expected_flat), (
-        "Float32 -> Int8 mismatch:\n"
+        f"{label} mismatch:\n"
         f"got      {result[:32].tolist()}\n"
         f"expected {expected_flat[:32].tolist()}"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp32_to_int8_edge_cases_quasar(dest_sync):
+    """Float32 -> Int8 saturates to [-127, 127] and rounds the full float nearest-even."""
+    _run_fp32_to_int_edge_case(
+        dest_sync[0], DataFormat.Int8, _INT8_EDGE_GROUPS, "Float32 -> Int8"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp32_to_int16_edge_cases_quasar(dest_sync):
+    """Float32 -> Int16 rounds the full float and saturates, including values that used to wrap."""
+    _run_fp32_to_int_edge_case(
+        dest_sync[0], DataFormat.Int16, _INT16_EDGE_GROUPS, "Float32 -> Int16"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp32_to_int32_edge_cases_quasar(dest_sync):
+    """Float32 -> Int32 rounds fractions below 32768 that SFPCAST alone gets wrong."""
+    _run_fp32_to_int_edge_case(
+        dest_sync[0], DataFormat.Int32, _INT32_EDGE_GROUPS, "Float32 -> Int32"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp32_to_uint8_edge_cases_quasar(dest_sync):
+    """Float32 -> UInt8 clamps negatives to 0, rounds the full float, and saturates at 255."""
+    _run_fp32_to_int_edge_case(
+        dest_sync[0], DataFormat.UInt8, _UINT8_EDGE_GROUPS, "Float32 -> UInt8"
     )
 
 
