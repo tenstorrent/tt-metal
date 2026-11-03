@@ -46,6 +46,7 @@
 #include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 void kernel_main() {
@@ -84,14 +85,16 @@ void kernel_main() {
     // Zeroed welford-state CB (2 tiles: mean=0, M2=0). Captured once below while the SFPU is clean,
     // reloaded per row to reset the welford accumulator; see the cold-start capture.
     constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(39);
-    // Per-batch adaLN (CT 40/41/42): weight/bias is [batch,1,H] — broadcast over seq (so the
+    // Per-batch adaLN (CT 40/41): weight/bias is [batch,1,H] — broadcast over seq (so the
     // bcast_rows path applies) but distinct per batch. The reader streams THIS row's batch slice
     // (batch index = global_tile_row / rows_per_batch_tiles, computed reader-side) to the front of
     // weight_cb / bias_cb per row, so compute consumes per row with NO batch offset here —
-    // identical to per-token. For a true-broadcast weight per_batch_* is 0.
+    // identical to per-token. For a true-broadcast weight per_batch_* is 0. CT 42 is the batch.
     constexpr uint32_t per_batch_weight = get_compile_time_arg_val(40);
     constexpr uint32_t per_batch_bias = get_compile_time_arg_val(41);
-    constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(42);
+    // This worker's rows: derived from its static index and the common tile-row count, the same
+    // split the reader and writer compute (runtime_length.hpp).
+    constexpr uint32_t num_workers = get_compile_time_arg_val(43);
 
     CircularBuffer cb_input(input_cb);
     CircularBuffer cb_mean(mean_cb);
@@ -148,10 +151,11 @@ void kernel_main() {
     CircularBuffer cb_norm_result(norm_result_cb);
     CircularBuffer cb_weight_result(weight_result_cb);
 
-    const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
-    // Worker's first GLOBAL tile-row (RT arg 1): maps each local row to its batch for per-batch
-    // adaLN. Only consumed when per_batch_weight/bias; harmless otherwise.
-    const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
+    const uint32_t total_tile_rows = get_common_arg_val<uint32_t>(0);
+    const uint32_t worker_index = get_arg_val<uint32_t>(0);
+    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(total_tile_rows, num_workers);
+    const uint32_t num_tile_rows = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_tile_rows) -
+                                   ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_tile_rows);
 
     compute_kernel_hw_startup(input_cb, input_cb, input_cb);
 
