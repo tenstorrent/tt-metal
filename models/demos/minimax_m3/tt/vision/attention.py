@@ -19,7 +19,7 @@ attention_mask=None, no cu_seqlens).
 head_dim=80 is not tile-aligned, so q/k/v are padded to 96 across wqkv,
 the heads, and wo input. Padded slots hold zeros: they add nothing to
 QK^T, multiply zero-rows of wo, and (with cos=1/sin=0) are untouched by
-RoPE. Scale stays 1/sqrt(80) — padded dims contribute 0 to the dot product.
+RoPE. Scale stays 1/sqrt(80): padded dims contribute 0 to the dot product.
 
 RoPE is one ttnn.experimental.rotary_embedding_llama call for q and one for
 k. That op rotates each pair of lanes (2i, 2i+1) of a head, while rotate_half

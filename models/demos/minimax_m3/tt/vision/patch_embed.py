@@ -9,7 +9,7 @@ stride=(2,14,14), bias=False)`. The M3 image processor (Qwen2-VL lineage)
 pre-cuts each image into non-overlapping spatio-temporal patches and
 *flattens* them, so `pixel_values` already arrives as `(L, 1176)` where
 1176 = 3 (channels) * 2 (temporal_patch) * 14 * 14. On such a patch the
-Conv3d reduces to a single dot product per output channel — i.e. a
+Conv3d reduces to a single dot product per output channel, that is a
 per-patch Linear from 1176 to 1280, with no bias.
 
 We implement exactly that: flatten the Conv3d weight `[1280, 3, 2, 14, 14]`

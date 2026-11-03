@@ -13,7 +13,7 @@ so here an M3VLMLP, fold_patches and a second M3VLMLP.
 
 There is no pre-norm. The 4 grouped patches are consecutive in the
 sequence (the image processor pre-orders patches so each group of
-spatial_merge**2 is a 2x2 spatial block — same ordering the 3D RoPE coords
+spatial_merge**2 is a 2x2 spatial block, the ordering the 3D RoPE coords
 use). All four linears carry bias; the activation is the accurate (erf)
 GELU (`ACT2FN["gelu"]`).
 """
@@ -28,7 +28,7 @@ from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
 
 def fold_patches(x: ttnn.Tensor, merge_factor: int) -> ttnn.Tensor:
     """(1, 1, L, D) tile tensor -> (1, 1, L // merge_factor, merge_factor * D): each merge_factor consecutive patches
-    become one row. The reshape crosses tile rows; go through row-major to keep it exact.
+    become one row. The reshape crosses tile rows, so it runs on a row-major copy.
 
     Consumes x: it is freed once its row-major copy exists, so the fold holds two copies of the activations at a time,
     not three.

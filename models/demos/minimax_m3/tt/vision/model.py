@@ -16,7 +16,7 @@ Forward pipeline (matches `MiniMaxM3VLVisionModel.forward` then
         -> projector         (per-patch MLP -> merge 4 patches -> merge MLP)
         -> vision tokens (L // 4, 6144)
 
-There is NO post-encoder LayerNorm and NO attention windowing — the tower
+There is NO post-encoder LayerNorm and NO attention windowing: the tower
 attends fully. The 3D-RoPE cos/sin depend only on `image_grid_thw`: they are
 computed on host and pushed to DRAM with the first image of a grid, then
 kept for the next images of that grid; each forward copies them to L1 once
@@ -52,8 +52,9 @@ ROPE_CACHE_GRIDS = 16
 class M3VLVisionModel(LightweightModule):
     """Full M3-VL vision tower + optional multimodal projector.
 
-    from_torch's dtype is the dtype of the weights. The pixel values go to the device as bf16 whatever it is, so the
-    activations are bf16, the only dtype the RoPE op (rotary_embedding_llama) takes.
+    from_torch's dtype is the dtype of the weights; only bfloat16 weights have run on a device. The pixel values go to
+    the device as bf16 whatever it is, so the activations are bf16, the only dtype the RoPE op (rotary_embedding_llama)
+    takes.
     """
 
     def __init__(
@@ -67,8 +68,8 @@ class M3VLVisionModel(LightweightModule):
         projector: Optional[M3VLProjector] = None,
     ):
         super().__init__()
-        # The input checks and num_tokens count tokens with image_input.MERGE_SIZE; the RoPE positions and the projector's
-        # fold use the config's merge size.
+        # The input checks and num_tokens count tokens with image_input.MERGE_SIZE; the RoPE positions and the
+        # projector's fold use the config's merge size.
         if config.spatial_merge_size != MERGE_SIZE:
             raise ValueError(
                 f"config spatial_merge_size must be {MERGE_SIZE}, as image_input counts tokens with it,"
@@ -147,10 +148,9 @@ class M3VLVisionModel(LightweightModule):
     def _rope_to_l1(self, cos: ttnn.Tensor, sin: ttnn.Tensor):
         """L1 copies of the cached cos and sin for one forward, which the caller frees.
 
-        At 672x672 the RoPE op reads the cos and sin of each sequence tile again for each of the 16 heads, two thirds
-        of what it reads; with the tables uploaded to L1 once, so without these copies, the image ran 1.7 ms faster on
-        a P150. The cache stays in DRAM: in L1 it would hold the tables of up to ROPE_CACHE_GRIDS grids at all times,
-        in room that circular buffers need.
+        The RoPE op reads the cos and sin of each sequence tile again for each head, so the blocks read them from L1.
+        The cache stays in DRAM: in L1 it would hold the tables of up to ROPE_CACHE_GRIDS grids at all times, in room
+        that circular buffers need.
         """
         return tuple(ttnn.to_memory_config(table, ttnn.L1_MEMORY_CONFIG) for table in (cos, sin))
 

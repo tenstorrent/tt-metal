@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-"""Shared host-side helpers for the MiniMax-M3-VL ttnn modules.
+"""Shared helpers of the MiniMax-M3-VL vision modules.
 
-Small utilities that every submodule needs: the upload of host tensors
-(to_device) and the torch->ttnn Linear weight/bias converters built on it,
-the standard and weight-matmul compute-kernel configs, the weight matmul
-(linear) with its program config, and the SDPA program config.
-Centralised here so the modules don't each copy them.
+The upload of host tensors (to_device) and the torch->ttnn Linear weight/bias
+converters built on it, the compute-kernel configs, the weight matmul (linear)
+with its program config, and the SDPA program config, kept here so the modules
+don't each copy them.
 """
 from __future__ import annotations
 
@@ -26,8 +25,8 @@ LINEAR_L1_BYTES = 1_000_000
 # The largest K block (in0_block_w, in tiles): in that sweep fc2 and the out projection ran slower with 16.
 LINEAR_MAX_IN0_BLOCK_W = 8
 # The fewest tiles of M per core for transpose_mcast: in a size sweep on a P150, a limit of 2 made the weight matmuls
-# slower at 768 patches and one of 5 at 1296 patches; one of 3 made them faster at 1024 patches but has not been
-# timed in a whole forward.
+# slower at 768 patches and one of 5 at 1296 patches. One of 3 made them faster at 1024 patches, but a whole 448x448
+# forward (1024 patches) 0.3 ms faster at most, and it changes the output's rounding.
 LINEAR_MIN_TRANSPOSED_PER_CORE_M = 4
 # Output subblocks (h, w) in the order ttnn's own matmul configs try them.
 _SUBBLOCKS = (
