@@ -2524,3 +2524,5 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
   switch". The accept gate still reuses the A/B 'on' side (it measured the switch value). README (perf picks) and the
   skill say when to use it.
 - Selftest: test_perf_ab.py::test_a_switch_only_accept_keeps_the_shipped_default.
+- keep_default is not part of the A/B key (ab_key): set after the A/B ran (P.28), the report still matches.
+  Selftest test_perf_ab.py::test_adding_keep_default_after_the_ab_keeps_its_report.
