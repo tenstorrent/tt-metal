@@ -136,6 +136,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             return;
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream
+        {
+            // unpack_A publishes a SrcB valid with every SrcA valid, so both are retired here.
+            _perf_math_stream_clear_valid</* clear A */ true, /* clear B */ true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+        }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
