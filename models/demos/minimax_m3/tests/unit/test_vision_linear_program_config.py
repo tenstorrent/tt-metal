@@ -17,14 +17,18 @@ and checked on the host.
 - For every patch count the image processor gives by default (multiples of 4 from 16 to 2304), on the 11x10, 12x10
   and 13x10 core grids that Blackhole chips have depending on harvesting (L1_GRIDS), every config passes the checks the
   matmul device op and its 2D multicast factory make, the factory's circular buffers fit in LINEAR_L1_BYTES, and no
-  config uses transpose_mcast with fewer than LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core.
-- linear() gives ttnn.linear the helper's config for the tiles of its operands' padded shapes and its memory_config,
-  DRAM by default, and runs the activation, the accurate GELU in the MLPs, as an op of its own on the matmul's output,
-  with activation_memory_config, and ttnn.gelu no memory_config when that is None.
+  config uses transpose_mcast with fewer than LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core. For an input in block shards the config
+  differs only in fuse_batch; for an output in block shards only in its subblock, which then passes the checks of a
+  sharded output.
+- linear() gives ttnn.linear the helper's config for the tiles of its operands' padded shapes and for whether its
+  input and output are in block shards, and its memory_config, DRAM by default, and runs the activation, the accurate
+  GELU in the MLPs, as an op of its own on the matmul's output, with activation_memory_config, and ttnn.gelu no
+  memory_config when that is None. It raises for a sharded operand where the helper leaves the config to ttnn.
 - M3VLMLP.fuse_gelu, off as built, runs the accurate GELU as that op; on, it puts the GELU into fc1's config where
   fc1 gets one (256, 2160 and 2304 patches on each grid) and runs it as that op where fc1 keeps ttnn's own (324).
-  The MLP's outputs go where its placement puts them, the fused GELU's where GELU's would. linear() takes the fused
-  form only with the activation.
+  The MLP's outputs go where its placement puts them, the fused GELU's where GELU's would, and with fc1's output in
+  block shards fc1 and fc2 get the configs of a sharded output and input. linear() takes the fused form only with the
+  activation.
 
 The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
 
@@ -46,6 +50,7 @@ from models.demos.minimax_m3.tt.vision import mlp
 from models.demos.minimax_m3.tt.vision.common import (
     DRAM_PLACEMENT,
     L1_INTERLEAVED_PLACEMENT,
+    L1_SHARDED_MLP_PLACEMENT,
     LINEAR_MIN_TRANSPOSED_PER_CORE_M,
     _linear_blocking,
     linear,
@@ -84,6 +89,11 @@ CONFIGS_672 = {
     "merge_linear_1": (False, 2, 16, 8, 2, 2),
     "merge_linear_2": (False, 2, 16, 8, 2, 2),
 }
+# At 2304 patches on 12x10, fc1 writing block shards and fc2 reading them: (FIELDS, fuse_batch).
+CONFIGS_672_SHARDED = {
+    "fc1": ((True, 6, 16, 4, 1, 4), False),
+    "fc2": ((True, 6, 4, 8, 2, 2), True),
+}
 # (linear, patches): the config on a 12x10 grid, None for ttnn's own. The comments give the image and the per-core
 # block (M x N tiles) of the transposed split.
 CONFIGS_MID = {
@@ -96,19 +106,24 @@ CONFIGS_MID = {
 }
 
 
-def _config(name, patches, grid=(12, 10), compute_kernel_config=None):
-    """linear_program_config for one of LINEARS in the forward of an image of `patches` patches."""
+def _config(name, patches, grid=(12, 10), compute_kernel_config=None, **sharded):
+    """linear_program_config for one of LINEARS in the forward of an image of `patches` patches; sharded holds its
+    in0_sharded and out_sharded."""
     in_features, out_features, patches_per_row = LINEARS[name]
     if compute_kernel_config is None:
         compute_kernel_config = linear_compute_config()
     return linear_program_config(
-        grid_device(*grid), patches // patches_per_row, in_features, out_features, compute_kernel_config
+        grid_device(*grid), patches // patches_per_row, in_features, out_features, compute_kernel_config, **sharded
     )
 
 
 def test_vision_linear_program_config_pinned():
-    """The configs at 672x672 and at the sizes of CONFIGS_MID on 12x10; which linears keep ttnn's own config at 256
-    patches on each grid and at 16 patches; the helper's choice with other limits."""
+    """The configs at 672x672 and at the sizes of CONFIGS_MID on 12x10, and fc1's and fc2's at 672x672 with fc1's
+    output in block shards; which linears keep ttnn's own config at 256 patches on each grid and at 16 patches; the
+    helper's choice with other limits."""
+    for name, (want, fuse_batch) in CONFIGS_672_SHARDED.items():
+        config = _config(name, 2304, in0_sharded=name == "fc2", out_sharded=name == "fc1")
+        assert (tuple(getattr(config, f) for f in FIELDS), config.fuse_batch) == (want, fuse_batch), f"{name}: {config}"
     for name, want in CONFIGS_672.items():
         config = _config(name, 2304)
         assert config is not None, name
@@ -136,7 +151,9 @@ def test_vision_linear_program_config_pinned():
 @pytest.mark.parametrize("grid", list(L1_GRID_IDS.values()), ids=list(L1_GRID_IDS))
 def test_vision_linear_program_config_valid(grid, fp32_dest_acc):
     """Every config for every image size, as the device op and the 2D factory check it, and transpose_mcast only with
-    at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core. The encoder accumulates in fp32; the bf16 case is
+    at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core. For an input in block shards the config differs
+    only in fuse_batch; for an output in block shards only in its subblock, which passes a sharded output's checks and
+    is the config's own where that one already does. The encoder accumulates in fp32; the bf16 case is
     linear_compute_config with fp32 accumulation turned off, as a measurement may set it."""
     compute_kernel_config = linear_compute_config()
     compute_kernel_config.fp32_dest_acc_en = fp32_dest_acc
@@ -144,22 +161,40 @@ def test_vision_linear_program_config_valid(grid, fp32_dest_acc):
     for name, (in_features, out_features, patches_per_row) in LINEARS.items():
         for patches in range(16, 2304 + 1, 4):
             config = _config(name, patches, grid, compute_kernel_config)
-            if config is not None:
-                rows = patches // patches_per_row
-                assert_matmul_config_valid(config, rows, in_features, out_features, grid, fp32_dest_acc)
-                if config.transpose_mcast:
-                    assert config.per_core_M >= LINEAR_MIN_TRANSPOSED_PER_CORE_M, f"{name} at {patches} patches"
-                    transposed += 1
-                configs += 1
+            sharded_in0 = _config(name, patches, grid, compute_kernel_config, in0_sharded=True)
+            sharded_out = _config(name, patches, grid, compute_kernel_config, out_sharded=True)
+            if config is None:
+                assert sharded_in0 is None and sharded_out is None, f"{name} at {patches} patches"
+                continue
+            rows = patches // patches_per_row
+            assert_matmul_config_valid(config, rows, in_features, out_features, grid, fp32_dest_acc)
+            if config.transpose_mcast:
+                assert config.per_core_M >= LINEAR_MIN_TRANSPOSED_PER_CORE_M, f"{name} at {patches} patches"
+                transposed += 1
+            configs += 1
+            # The fields besides the subblock: the split and the K blocks, so each output tile's sum and its order.
+            fields = [f for f in FIELDS if f not in ("out_subblock_h", "out_subblock_w")]
+            for other in (sharded_in0, sharded_out):
+                assert [getattr(other, f) for f in fields] == [getattr(config, f) for f in fields], (name, patches)
+            assert sharded_in0.fuse_batch and repr(sharded_in0).replace("fuse_batch=1", "fuse_batch=0") == repr(config)
+            assert not sharded_out.fuse_batch
+            assert_matmul_config_valid(
+                sharded_out, rows, in_features, out_features, grid, fp32_dest_acc, out_sharded=True
+            )
+            # The first subblock in ttnn's order that a sharded output allows: the same where the config's does.
+            if config.out_subblock_h == 1 or config.out_subblock_w == config.per_core_N:
+                assert repr(sharded_out) == repr(config), (name, patches)
     assert configs > 0 and transposed > 0
 
 
-def test_vision_linear(monkeypatch):
+def test_vision_linear(monkeypatch, expect_error):
     """linear() gives ttnn.linear the bias, the compute config, its memory_config, DRAM by default, and the helper's
     config for the tiles of x's and w's padded shapes: fc1 of a 2160-patch image (2176 rows padded) gets the config of
     2160 rows, and of a 16-patch one ttnn's own. It runs the activation, the accurate GELU here, as an op of its own on
     ttnn.linear's output, not as ttnn.linear's activation argument, into activation_memory_config, and ttnn.gelu gets
-    no memory_config when that is None. Without an activation it returns ttnn.linear's output."""
+    no memory_config when that is None. Without an activation it returns ttnn.linear's output. With x or the output in
+    L1 block shards it passes the helper's config for them, and raises where the helper leaves the config to ttnn; with
+    a fused activation the output is activation_memory_config's, here block shards."""
     calls = []
 
     def record(op):
@@ -184,8 +219,14 @@ def test_vision_linear(monkeypatch):
             {"fast_and_approximate_mode": False, "memory_config": ttnn.DRAM_MEMORY_CONFIG},
         ),
     )
+
+    def tensor(padded_rows, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return SimpleNamespace(
+            padded_shape=(1, 1, padded_rows, in_features), device=lambda: device, memory_config=lambda: memory_config
+        )
+
     for patches, padded_rows in ((2160, 2176), (16, 32)):
-        x = SimpleNamespace(padded_shape=(1, 1, padded_rows, in_features), device=lambda: device)
+        x = tensor(padded_rows)
         for memory, linear_memory_config, gelu_kwargs in placements:
             calls.clear()
             assert linear(x, w, "bias", compute_kernel_config, activation=accurate_gelu, **memory) == "gelu output"
@@ -202,6 +243,33 @@ def test_vision_linear(monkeypatch):
             assert gelu == ("gelu", "linear output", (), gelu_kwargs), gelu
         calls.clear()
         assert linear(x, w, None, compute_kernel_config) == "linear output" and len(calls) == 1
+    for in0_sharded, out_sharded in ((True, False), (False, True)):
+        x_config, out_config = (ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if sharded else ttnn.L1_MEMORY_CONFIG
+                                for sharded in (in0_sharded, out_sharded))  # fmt: skip
+        calls.clear()
+        linear(tensor(2176, x_config), w, "bias", compute_kernel_config, memory_config=out_config)
+        [(_, _, _, kwargs)] = calls
+        want = _config("fc1", 2160, in0_sharded=in0_sharded, out_sharded=out_sharded)
+        assert repr(kwargs["program_config"]) == repr(want) and kwargs["memory_config"] == out_config, kwargs
+        with expect_error(ValueError, "needs linear_program_config's config"):
+            linear(tensor(32, x_config), w, "bias", compute_kernel_config, memory_config=out_config)
+    # A fused activation's output is the matmul's: in block shards here, with memory_config interleaved.
+    calls.clear()
+    linear(
+        tensor(2176),
+        w,
+        "bias",
+        compute_kernel_config,
+        activation=accurate_gelu,
+        fused_activation=mlp.ACCURATE_GELU_FUSED,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        activation_memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    )
+    [(op, _, _, kwargs)] = calls
+    want = _config("fc1", 2160, out_sharded=True)
+    want.fused_activation = mlp.ACCURATE_GELU_FUSED
+    assert op == "linear" and kwargs["memory_config"] == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, calls
+    assert repr(kwargs["program_config"]) == repr(want), kwargs
 
 
 def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
@@ -209,10 +277,11 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
     carries an activation. On, where fc1 gets a config (256, 2160 and 2304 patches), that config, with the same
     blocking, carries the accurate GELU and ttnn.gelu does not run; where fc1 keeps ttnn's own (324 patches), ttnn.gelu
     runs as off. fc2 fuses nothing, and a forward with the switch off after one with it on fuses nothing. With the
-    default placement and with L1_INTERLEAVED_PLACEMENT, fc1, GELU and fc2 write the placement's fc1_out, gelu_out and
-    residual, ttnn.gelu gets no memory_config for a gelu_out of None, and fc1 with the GELU fused writes gelu_out.
-    linear() refuses the fused GELU without the separate one, which would leave fc1 without a GELU where it has no
-    config."""
+    default placement, with L1_INTERLEAVED_PLACEMENT and, at 2304 patches, with L1_SHARDED_MLP_PLACEMENT, fc1, GELU and
+    fc2 write the placement's fc1_out, gelu_out and residual, ttnn.gelu gets no memory_config for a gelu_out of None,
+    and fc1 with the GELU fused writes gelu_out, or fc1_out where that is None. With fc1_out in block shards fc1 gets
+    the config of a sharded output and fc2 that of a sharded input, fused or not. linear() refuses the fused GELU
+    without the separate one, which would leave fc1 without a GELU where it has no config."""
     calls = []
 
     # Each recorder returns its call, with the padded shape and device that linear() reads, so an op's x is the call
@@ -223,9 +292,10 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
             SimpleNamespace(
                 op="linear",
                 x=x,
+                w=w,
                 config=program_config,
                 compute_kernel_config=compute_kernel_config,
-                memory_config=memory_config,
+                memory_config=lambda: memory_config,
                 padded_shape=shape,
                 device=x.device,
             )
@@ -233,7 +303,17 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
         return calls[-1]
 
     def record_gelu(x, **kwargs):
-        calls.append(SimpleNamespace(op="gelu", x=x, kwargs=kwargs, padded_shape=x.padded_shape, device=x.device))
+        output = kwargs.get("memory_config", x.memory_config())
+        calls.append(
+            SimpleNamespace(
+                op="gelu",
+                x=x,
+                kwargs=kwargs,
+                memory_config=lambda: output,
+                padded_shape=x.padded_shape,
+                device=x.device,
+            )
+        )
         return calls[-1]
 
     monkeypatch.setattr(mlp, "as_linear_weight", lambda mesh_device, w, dtype: SimpleNamespace(padded_shape=w.T.shape))
@@ -254,10 +334,17 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
         assert model.fuse_gelu is False
         fused = set()
         for patches in (256, 324, 2160, 2304):
-            x = SimpleNamespace(padded_shape=(1, 1, nearest_32(patches), hidden), device=lambda: device)
-            want = _config("fc1", patches, grid)
-            for placement, fuse_gelu in itertools.product((DRAM_PLACEMENT, L1_INTERLEAVED_PLACEMENT), (True, False)):
+            x = SimpleNamespace(
+                padded_shape=(1, 1, nearest_32(patches), hidden),
+                device=lambda: device,
+                memory_config=lambda: ttnn.L1_MEMORY_CONFIG,
+            )
+            sharded = (L1_SHARDED_MLP_PLACEMENT,) if patches == 2304 else ()
+            placements = (DRAM_PLACEMENT, L1_INTERLEAVED_PLACEMENT, *sharded)
+            for placement, fuse_gelu in itertools.product(placements, (True, False)):
                 case = (grid, patches, placement.name, fuse_gelu)
+                hidden_sharded = placement.fc1_out.is_sharded()
+                want = _config("fc1", patches, grid, out_sharded=hidden_sharded)
                 model.fuse_gelu = fuse_gelu
                 calls.clear()
                 out = model(x) if placement is DRAM_PLACEMENT else model(x, placement)
@@ -265,7 +352,10 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
                 assert fc1.op == fc2.op == "linear" and fc1.x is x and out is fc2, (case, calls)
                 assert fc1.compute_kernel_config is fc2.compute_kernel_config is model.compute_kernel_config, case
                 assert fc2.config is None or fc2.config.fused_activation is None, case
-                assert fc2.memory_config == placement.residual, case
+                assert fc2.memory_config() == placement.residual, case
+                if fc2.config is not None:
+                    want_fc2 = _config("fc2", patches, grid, in0_sharded=hidden_sharded)
+                    assert repr(fc2.config) == repr(want_fc2), case
                 if fuse_gelu and want is not None:
                     assert not between and fc2.x is fc1, (case, calls)
                     assert tuple(getattr(fc1.config, f) for f in FIELDS) == tuple(getattr(want, f) for f in FIELDS)
@@ -273,12 +363,12 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
                     assert fc1.config.fused_activation.op_type == ttnn.UnaryOpType.GELU, case
                     assert list(fc1.config.fused_activation.params) == [0.0], case
                     gelu_out = placement.fc1_out if placement.gelu_out is None else placement.gelu_out
-                    assert fc1.memory_config == gelu_out, case
+                    assert fc1.memory_config() == gelu_out, case
                     fused.add(patches)
                 else:
-                    assert fc1.config is None or fc1.config.fused_activation is None, case
+                    assert fc1.config is None or repr(fc1.config) == repr(want), case
                     assert [c.op for c in between] == ["gelu"] and between[0].x is fc1 and fc2.x is between[0], calls
-                    assert fc1.memory_config == placement.fc1_out, case
+                    assert fc1.memory_config() == placement.fc1_out, case
                     output = {} if placement.gelu_out is None else {"memory_config": placement.gelu_out}
                     assert between[0].kwargs == {"fast_and_approximate_mode": False, **output}, case
         assert fused == {256, 2160, 2304}, (grid, fused)

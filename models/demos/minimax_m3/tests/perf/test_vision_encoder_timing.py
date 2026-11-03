@@ -24,9 +24,9 @@ reuse.
 Neither line is the rate of images sent back to back: on the P150 where this was measured, 672x672 forwards run back to
 back for a few seconds settled about 8% slower each, about 76.5 ms against 70.9 ms.
 It asserts that the two outputs have the shape of the 576 tokens, are finite and are equal bit for bit (the same device
-ops on the same input), never a time. M3_VISION_ACTIVATIONS sets M3VLVisionModel.activations, "l1" or "dram", and
-the model's default when unset. Both lines print it and the placement the forward takes, and the test fails if the
-check of L1 before each forward sends the forward to DRAM.
+ops on the same input), never a time. M3_VISION_ACTIVATIONS sets M3VLVisionModel.activations, "l1", "l1_interleaved"
+or "dram", and the model's default when unset. Both lines print it and the placement the forward takes, and the test
+fails if the check of L1 before each forward sends the forward to DRAM.
 
 The model has the checkpoint's 32 layers and projector at its dimensions, with the seeded random weights of the vision
 unit tests (the vision_reference fixture of tests/conftest.py): the time does not depend on the weights' values,

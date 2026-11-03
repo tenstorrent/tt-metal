@@ -100,9 +100,11 @@ def test_vision_attention_sdpa_call(monkeypatch, patches):
     device, events = grid_device(12, 10), []  # events: (op, inputs, keyword arguments, output)
 
     def tensor(*shape):
-        """A device tensor stand-in: its shape, padded to whole tiles, and its device."""
+        """A device tensor stand-in: its shape, padded to whole tiles, its device and its memory config, DRAM."""
         padded_shape = shape[:-2] + tuple(nearest_32(d) for d in shape[-2:])
-        return SimpleNamespace(shape=shape, padded_shape=padded_shape, device=lambda: device)
+        return SimpleNamespace(
+            shape=shape, padded_shape=padded_shape, device=lambda: device, memory_config=lambda: ttnn.DRAM_MEMORY_CONFIG
+        )
 
     def op(name, output):
         def run(*inputs, **kwargs):

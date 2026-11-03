@@ -7,14 +7,15 @@ Two checks per grid, from the same pixel values:
   - forward_tower (patch embed, pre_layrnorm, NUM_LAYERS blocks) vs the reference tower output;
   - forward (tower and projector) vs the reference vision tokens.
 A second test gives one model images of several grids with the same patch count, which it runs on the programs it
-compiled for the first, each with the RoPE tables of its own grid. A third runs one tower with its activations in L1
-and in DRAM and compares the two outputs bit for bit.
+compiled for the first, each with the RoPE tables of its own grid. A third runs one tower with its activations in L1,
+with and without the MLP's hidden activations in block shards, and in DRAM, and compares the outputs bit for bit.
 
 Random weights and pixel values (tests/conftest.py), no checkpoint. The tests run NUM_LAYERS = 2 layers, and the L1
 against DRAM test 3. The checkpoint has 32; that depth is for a real-weight test, since random weights say little
 about error built up over 32 layers.
 
-Run (the second line adds the other grids of VISION_GRIDS to CI_GRIDS and L1_VS_DRAM_CI_GRIDS, in vision_helpers.py):
+Run (the second line adds the other grids of VISION_GRIDS to CI_GRIDS, and of L1_VS_DRAM_ALL_GRIDS to
+L1_VS_DRAM_CI_GRIDS, in vision_helpers.py):
     pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py
     M3_VISION_ALL_GRIDS=1 pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py
 """
@@ -27,11 +28,24 @@ from loguru import logger
 
 import ttnn
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
-from models.demos.minimax_m3.tt.vision.common import DRAM_PLACEMENT, block_placement, l1_free_for_activations
+from models.demos.minimax_m3.tt.vision.common import (
+    ACTIVATIONS,
+    DRAM_PLACEMENT,
+    block_placement,
+    l1_free_for_activations,
+)
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 
 from ..test_factory import parametrize_mesh_with_fabric
-from .vision_helpers import L1_VS_DRAM_CI_GRIDS, MAX_REL_L2, assert_close, grid_name, parametrize_vision_grids, to_host
+from .vision_helpers import (
+    L1_VS_DRAM_ALL_GRIDS,
+    L1_VS_DRAM_CI_GRIDS,
+    MAX_REL_L2,
+    assert_close,
+    grid_name,
+    parametrize_vision_grids,
+    to_host,
+)
 
 NUM_LAYERS = 2  # of the checkpoint's 32
 
@@ -105,14 +119,17 @@ def _l1_state(mesh_device):
 
 @torch.no_grad()
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-@parametrize_vision_grids(L1_VS_DRAM_CI_GRIDS)
+@parametrize_vision_grids(L1_VS_DRAM_CI_GRIDS, L1_VS_DRAM_ALL_GRIDS)
 def test_vision_tower_l1_vs_dram(mesh_device, device_params, grid_thw, vision_reference):
-    """A 3-block tower, run twice on one upload, gives the same output bit for bit with activations "dram" and "l1":
-    block 0 and both layouts the later blocks take in L1, as their input alternates between two addresses. With "l1"
-    the forward takes block_placement's placement, which it logs, and not the DRAM fallback of the check of L1 before
-    each forward, so a smaller L1 bank fails here rather than slowing the encoder. At the grids of L1_VS_DRAM_CI_GRIDS
-    that placement keeps the activations in L1; of the other grids of VISION_GRIDS, h18w18 keeps them in DRAM. Each
-    forward leaves L1 as it found it, so the ops after the tower, the projector's, see the free L1 they saw before."""
+    """A 3-block tower, run on one upload with each of ACTIVATIONS, gives the same output bit for bit with "l1" and
+    "l1_interleaved" as with "dram": block 0 and both layouts the later blocks take in L1, as their input alternates
+    between two addresses. Each forward takes block_placement's placement, which it logs, and not the DRAM fallback of
+    the check of L1 before each forward, so a smaller L1 bank fails here rather than slowing the encoder. At the grids
+    of L1_VS_DRAM_CI_GRIDS both L1 placements keep the activations in L1, and at h36w36 "l1" keeps the MLP's hidden
+    activations in block shards. Of the other grids of L1_VS_DRAM_ALL_GRIDS, which M3_VISION_ALL_GRIDS=1 adds, h18w18
+    keeps them in DRAM, and the rest put the MLP's shards in every layout the rule admits on 11x10, 12x10 and 13x10.
+    Each forward leaves L1 as it found it, so the ops after the tower, the projector's, see the free L1 they saw
+    before."""
     reference = vision_reference()
     model = M3VLVisionModel.from_torch(mesh_device, reference, with_projector=False, dtype=ttnn.bfloat16)
     # A third block, with layer 0's weights: the test compares the two placements, not against the reference.
@@ -125,23 +142,32 @@ def test_vision_tower_l1_vs_dram(mesh_device, device_params, grid_thw, vision_re
     grid = torch.tensor([grid_thw])
     x_tt = model.push_pixel_values(pixel_values, grid)
     name = f"{grid_name(grid_thw)} layers={len(model.blocks)}"
-    l1_placement = block_placement(model.blocks[0], x_tt.padded_shape[-2], "l1")
-    logger.info(f"tower {name}: activations l1 take placement {l1_placement.name}")
-    in_ci = grid_name(grid_thw) in L1_VS_DRAM_CI_GRIDS
-    assert not in_ci or l1_placement is not DRAM_PLACEMENT, f"{name}: block_placement keeps the activations in DRAM"
+    # "dram" first, the output the others must equal.
+    modes = sorted(ACTIVATIONS, key=lambda activations: activations != "dram")
+    placements = {
+        activations: block_placement(model.blocks[0], x_tt.padded_shape[-2], activations) for activations in modes
+    }
+    logger.info(
+        f"tower {name}: " + ", ".join(f"activations {a} take placement {p.name}" for a, p in placements.items())
+    )
+    if grid_name(grid_thw) in L1_VS_DRAM_CI_GRIDS:
+        in_dram = [activations for activations in modes[1:] if placements[activations] is DRAM_PLACEMENT]
+        assert not in_dram, f"{name}: block_placement keeps the activations in DRAM with {in_dram}"
 
     outputs = {}
-    for activations, placement in (("dram", DRAM_PLACEMENT), ("l1", l1_placement)):
+    for activations in modes:
         model.activations = activations
         taken = model.placement(x_tt)
-        assert taken is placement, f"{name}: activations {activations} took placement {taken.name}"
+        assert taken is placements[activations], f"{name}: activations {activations} took placement {taken.name}"
         before = _l1_state(mesh_device)
         out = model.forward_device(x_tt, grid)
         after = _l1_state(mesh_device)
         assert after == before, f"{name}: activations {activations} left L1 at {after}, from {before}"
         outputs[activations] = to_host(out, mesh_device, (rows, hidden))
         ttnn.deallocate(out)
-    num_bad = int((~torch.isfinite(outputs["l1"])).sum())
-    assert not num_bad, f"{name}: {num_bad} of {outputs['l1'].numel()} output values are NaN or Inf"
-    num_diff = int((outputs["l1"].view(torch.int32) != outputs["dram"].view(torch.int32)).sum())
-    assert not num_diff, f"{name}: {num_diff} of {outputs['l1'].numel()} output values differ between l1 and dram"
+    for activations in modes[1:]:
+        out = outputs[activations]
+        num_bad = int((~torch.isfinite(out)).sum())
+        assert not num_bad, f"{name}: {num_bad} of {out.numel()} output values are NaN or Inf with {activations}"
+        num_diff = int((out.view(torch.int32) != outputs["dram"].view(torch.int32)).sum())
+        assert not num_diff, f"{name}: {num_diff} of {out.numel()} output values differ between {activations} and dram"
