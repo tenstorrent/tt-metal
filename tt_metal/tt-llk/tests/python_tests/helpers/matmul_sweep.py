@@ -829,8 +829,6 @@ def matmul_pack_form(
         dense = _PACK_DENSE_CELLS.get((math_fidelity.name, _PACK_SHORT.get(formats.output_format), _PACK_SHORT.get(formats.input_format), _PACK_SHORT.get(formats.input_format_B), rt_dim, ct_dim, kt_dim))
         if dense is not None:
             value = dense
-    if dest_sync == DestSync.Half and value == 2:
-        value = 0
     return MatmulPackForm(
         value,
         (
