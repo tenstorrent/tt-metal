@@ -63,7 +63,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<ttnn::Tensor>& forwarding_buffer,
     const std::vector<GlobalSemaphore>& channel_semaphores,
     bool unified_waves,
-    uint32_t big_first_threshold) {
+    uint32_t big_first_threshold,
+    const std::optional<ttnn::Tensor>& weight_address_table) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -234,7 +235,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
         .dispatched_metadata = dispatched_metadata,
         .expert_offsets = expert_offsets,
         .replicated_global_expert_idx_table = replicated_global_expert_idx_table,
-        .forwarding_buffer = forwarding_buffer};
+        .forwarding_buffer = forwarding_buffer,
+        .weight_table = weight_address_table};
     if (unified_waves) {
         // The wave-planned program sizes its circular buffers from the free L1, so the plan it picks now is part of
         // the program-cache key.

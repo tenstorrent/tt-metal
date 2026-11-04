@@ -16,11 +16,17 @@ from models.common.sampling.tt_sampling import TTSampling
 from models.demos.qwen38_27b_qb2.tt.model import Qwen38Model
 
 
-def configure_fabric(*, payload_bytes=8192):
-    """Configure the measured TP4 ring before the caller opens its mesh."""
+def fabric_router_config(*, payload_bytes=8192):
     router = ttnn.FabricRouterConfig()
     router.max_packet_payload_size_bytes = payload_bytes
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
+    return router
+
+
+def configure_fabric(*, payload_bytes=8192):
+    """Configure the measured TP4 ring before the caller opens its mesh."""
+    ttnn.set_fabric_config(
+        ttnn.FabricConfig.FABRIC_1D_RING, router_config=fabric_router_config(payload_bytes=payload_bytes)
+    )
 
 
 class Qwen38Generator:

@@ -47,6 +47,12 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         program instead of this op's unified half; overlapped with combine, combine walks each chip's
         experts in that program's predicted finish order. big_first_threshold (0, or at least 96
         tokens) makes it run the experts above that many tokens first.
+
+        weight_address_table is every expert's weight base address as one uint32 ROW_MAJOR DRAM
+        page, [gate[0..E), up[0..E), down[0..E)], read by the kernels in place of per-expert runtime
+        args, which is what lets the union program fit its kernel-config ring at the production
+        expert count. The caller builds it once, alongside the weights, and keeps the two in step:
+        only its shape is checked.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -77,7 +83,8 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("forwarding_buffer") = nb::none(),
         nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{},
         nb::arg("unified_waves") = false,
-        nb::arg("big_first_threshold") = 0);
+        nb::arg("big_first_threshold") = 0,
+        nb::arg("weight_address_table") = nb::none());
 
     ttnn::bind_function<
         "hybrid_routed_expert_moe_channel_semaphore_count",
