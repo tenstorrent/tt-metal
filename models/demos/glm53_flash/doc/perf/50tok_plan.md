@@ -364,3 +364,14 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   step 32.59 vs 32.95 ms (-0.36 ms, ~8 us per layer) while at 32 users it is +20 us per layer: the block's fixed
   handshake cost is roughly constant and the expert phase inside it scales with the active experts, so the gain
   appears only where the three programs' launch cost dominated. Still far from the 13 ms the floor needs.
+- 2026-11-04 07:00 CORRECTION from the profiled unit test (`tracy_unit_persist`, device 0, traced): consecutive
+  programs show ~0 us op-to-op gaps (the dispatcher writes a program's config while the previous one runs), so in a
+  traced decode the launch count is NOT the cost; the persistent block's period (~560 us) is the sum of its three
+  parts (~488 us) plus ~30 us of in-program handshakes. The step is bound by the ops' device time at tiny batch:
+  layer 4 at 32 users = MHC 52 + 19 + 52 + 19, all-reduces 42 + 24, qkv 69, KDA 72, experts 215, shared 36,
+  router 30, o-proj 27, small matmuls 23 (us). At 8 users the experts shrink, the rest stays: ~730 us/layer.
+  The 50 tok/s/u floor (440 us/layer) therefore needs the small-op chain cut: the four MHC phases (142 us), the two
+  all-reduces (66-80 us), the shared expert overlapped with the routed experts (36 us), the router folded (30 us).
+  The persistent program remains the vehicle (phases on disjoint cores overlap, exchanges fused), but the order of
+  work changes: MHC + all-reduce latency first. `chain_tracy_b1` profiles layer 4 at 8 users (today's path and the
+  block) for the budget in the floor's regime.
