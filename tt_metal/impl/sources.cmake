@@ -21,6 +21,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/risc_firmware_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/dram_core_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/dram_geometry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device_util.cpp
