@@ -443,9 +443,10 @@ public:
                 }
             }
             for (const auto& cb : desc.cbs) {
-                const tt::tt_metal::Buffer* cb_buffer =
-                    cb.buffer != nullptr ? cb.buffer
-                                         : (cb.tensor ? cb.tensor->mesh_buffer().get_reference_buffer() : nullptr);
+                const tt::tt_metal::Buffer* cb_buffer = cb.buffer;
+                if (cb_buffer == nullptr && cb.tensor != nullptr) {
+                    cb_buffer = cb.tensor->mesh_buffer().get_reference_buffer();
+                }
                 if (cb_buffer != nullptr && std::find(buffers.begin(), buffers.end(), cb_buffer) != buffers.end()) {
                     return true;
                 }
