@@ -163,7 +163,14 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
         }
         mesh_device->wait_for_thread_pool();
     }
+    if (is_finalized()) {
+        return;
+    }
     finalize_offsets(mesh_device);
+    // Finalize re-places programs whose kernel config outgrew the ring.
+    for (auto& [device_range, _] : programs_) {
+        this->compile_program(device_range, mesh_device);
+    }
 }
 
 void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {

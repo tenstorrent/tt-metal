@@ -85,19 +85,12 @@ void check_program_metadata_size(Program& program) {
     const auto& metadata_sizes = program.impl().get_program_config_sizes();
     for (uint32_t pct_index = 0; pct_index < hal.get_programmable_core_type_count(); pct_index++) {
         HalProgrammableCoreType pct = hal.get_programmable_core_type(pct_index);
-        uint32_t metadata_size = metadata_sizes[pct_index];
-        // TENSIX disallows hal.get_dev_size(KERNEL_CONFIG); its window is dynamic
-        // = DEFAULT_UNRESERVED_base - KERNEL_CONFIG_base. Other core types report a
-        // static KERNEL_CONFIG size. Mirrors program_dispatch::initialize_worker_config_buf_mgr.
-        uint32_t window_size;
+        // Tensix config grows into the program's own L1 stack.
         if (pct == HalProgrammableCoreType::TENSIX) {
-            uint32_t kc_base = static_cast<uint32_t>(hal.get_dev_addr(pct, HalL1MemAddrType::KERNEL_CONFIG));
-            uint32_t unreserved_base =
-                static_cast<uint32_t>(hal.get_dev_addr(pct, HalL1MemAddrType::DEFAULT_UNRESERVED));
-            window_size = unreserved_base - kc_base;
-        } else {
-            window_size = hal.get_dev_size(pct, HalL1MemAddrType::KERNEL_CONFIG);
+            continue;
         }
+        uint32_t metadata_size = metadata_sizes[pct_index];
+        uint32_t window_size = hal.get_dev_size(pct, HalL1MemAddrType::KERNEL_CONFIG);
         if (metadata_size > window_size) {
             TT_THROW(
                 "Program metadata size {} exceeds reserved KERNEL_CONFIG window {} for programmable core type {}",

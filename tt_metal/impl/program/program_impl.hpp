@@ -283,6 +283,12 @@ public:
     // Call before allocate_circular_buffers, allocate_dataflow_buffers and allocate_scratchpads.
     // Seals the program's cores in the device's persistent L1 and sets the base address of every registered region.
     void prepare_ephemeral_allocation(const IDevice* device);
+    // End of the slow-dispatch Tensix kernel config.
+    DeviceAddr tensix_kernel_config_end() const;
+    // Re-places program L1 above an oversized kernel config.
+    void place_ephemeral_allocation_above_kernel_config(const IDevice* device);
+    // For programs sharing L1 with fast dispatch.
+    void validate_kernel_config_fits_ringbuffer(const IDevice* device) const;
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);

@@ -2243,8 +2243,48 @@ void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     }
 
     auto& persistent_l1 = device->allocator_impl()->persistent_l1();
-    tt::tt_metal::detail::prepare_ephemeral_allocation(this->cb_allocation_metadata_, persistent_l1);
-    tt::tt_metal::detail::prepare_ephemeral_allocation(this->dfb_allocation_metadata_, persistent_l1);
+    const DeviceAddr floor =
+        tt::align(this->tensix_kernel_config_end(), device->allocator()->get_alignment(BufferType::DRAM));
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->cb_allocation_metadata_, persistent_l1, floor);
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->dfb_allocation_metadata_, persistent_l1, floor);
+}
+
+DeviceAddr detail::ProgramImpl::tensix_kernel_config_end() const {
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG) +
+           this->program_config_sizes_[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)];
+}
+
+void detail::ProgramImpl::place_ephemeral_allocation_above_kernel_config(const IDevice* device) {
+    if (this->tensix_kernel_config_end() <= device->allocator()->get_base_allocator_addr(HalMemType::L1)) {
+        return;
+    }
+    // Cores without CBs still need the config region sealed and validated.
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    for (const auto& [_, kernel] :
+         this->kernels_[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)]) {
+        register_ephemeral_allocation(this->cb_allocation_metadata_, kernel->core_range_set());
+    }
+    // CB-less programs must stay unregistered with devices.
+    if (!this->circular_buffers_.empty()) {
+        this->invalidate_circular_buffer_allocation();
+    }
+    this->invalidate_dataflow_buffer_allocation();
+}
+
+void detail::ProgramImpl::validate_kernel_config_fits_ringbuffer(const IDevice* device) const {
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    const DeviceAddr kernel_config_base =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    const DeviceAddr ringbuffer_size =
+        device->allocator()->get_base_allocator_addr(HalMemType::L1) - kernel_config_base;
+    const DeviceAddr program_size = this->tensix_kernel_config_end() - kernel_config_base;
+    TT_FATAL(
+        program_size <= ringbuffer_size,
+        "Program size ({}) too large for kernel config buffer ({}) on TENSIX, {} B over",
+        program_size,
+        ringbuffer_size,
+        program_size - ringbuffer_size);
 }
 
 // Scratchpad is a Metal 2.0-only construct.
@@ -3748,8 +3788,11 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
                 metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index));
         };
 
+        // Slow dispatch places CBs above an oversized Tensix config.
+        const bool config_in_ringbuffer =
+            programmable_core_type != HalProgrammableCoreType::TENSIX || metal_ctx.rtoptions().get_fast_dispatch();
         TT_FATAL(
-            state.offset <= max_size,
+            !config_in_ringbuffer || state.offset <= max_size,
             "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
             state.offset,
             max_size,
@@ -3777,7 +3820,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             // Bytes left in the kernel config buffer; its min is how close any program came to the
             // TT_FATAL above. Core types the program doesn't use (offset 0) are skipped: their headroom
             // is the whole buffer, which would only inflate the metric's mean and max.
-            if (state.offset != 0) {
+            if (state.offset != 0 && state.offset <= max_size) {
                 const auto limit = static_cast<uint32_t>(max_size);
                 const uint32_t headroom = limit - state.offset;
                 record_size("program_config_size.headroom", headroom);
@@ -3793,6 +3836,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     // The sem offsets cross programmable_core_types so must be set after the loop above
     for (auto& program : programs) {
         program->set_program_attrs_across_core_types(device);
+        program->place_ephemeral_allocation_above_kernel_config(device);
     }
 
     // Determine the DRAM kernel binary size per program and the max across all programs.
