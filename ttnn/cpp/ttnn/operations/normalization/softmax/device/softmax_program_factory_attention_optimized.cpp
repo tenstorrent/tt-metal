@@ -5,6 +5,7 @@
 #include "softmax_device_operation.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
@@ -13,14 +14,143 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <string>
 #include <utility>
 #include <cstdint>
+#include <vector>
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal::experimental;
+
+SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::InterleavedPlan
+SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::tt_metal;
+    InterleavedPlan plan;
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto* device = input_tensor.device();
+    const auto arch = device->arch();
+    const auto out_spec = SoftmaxDeviceOperation::compute_output_specs(attributes, tensor_args);
+    const auto plain_dram = [](BufferType buffer_type, DataType dtype) {
+        return buffer_type == BufferType::DRAM && (dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32);
+    };
+    const auto& shape = input_tensor.padded_shape();
+    const std::uint32_t W = shape[-1], H = (input_tensor.physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
+    const std::uint32_t Wt = W / input_tensor.tensor_spec().tile().get_width();
+    const std::uint32_t Ht = H / input_tensor.tensor_spec().tile().get_height();
+    if (arch != tt::ARCH::WORMHOLE_B0 || tensor_args.mask.has_value() || Wt < 8 ||
+        !plain_dram(input_tensor.memory_config().buffer_type(), input_tensor.dtype()) ||
+        !plain_dram(out_spec.memory_config().buffer_type(), out_spec.data_type())) {
+        return plan;
+    }
+    const bool mask_padded_data = W > input_tensor.logical_shape()[-1];
+    constexpr std::uint64_t l1_reserve_bytes = 16384;
+    const std::uint64_t l1_budget_bytes = (ttnn::operations::core::usable_program_l1_capacity(device) >> 16) << 16;
+    const std::uint64_t l1_bank = device->allocator()->get_bank_size(BufferType::L1);
+
+    const tt::DataFormat in0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const bool batched_io = attributes.numeric_stable || (Wt > 8 && in0_cb_data_format != tt::DataFormat::Float32);
+    const std::uint32_t in0_tile_size = tt::tile_size(in0_cb_data_format);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(arch, attributes.compute_kernel_config);
+    const std::uint32_t max_scaler_tile_size = tt::tile_size(
+        in0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b);
+    const std::uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const std::uint32_t out0_tile_size = tt::tile_size(datatype_to_dataformat_converter(out_spec.data_type()));
+    const bool bulk_fp32 = fp32_dest_acc_en && (in0_cb_data_format == tt::DataFormat::Float32 ||
+                                                attributes.has_explicit_compute_kernel_config);
+    const std::uint32_t im_tile_size = tt::tile_size(bulk_fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b);
+    const std::uint32_t acc_tile_size =
+        tt::tile_size(fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b);
+
+    std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
+    if (Wt % block_size != 0) {
+        const std::uint32_t divisor = static_cast<std::uint32_t>(tt::tt_metal::find_max_divisor(Wt, block_size));
+        if (tt::div_up(Wt, block_size) == Wt / divisor) {
+            block_size = divisor;
+        }
+    }
+    const std::uint32_t wt_blocks = tt::div_up(Wt, block_size) * block_size;
+    const std::uint32_t in0_t = attributes.numeric_stable && !mask_padded_data ? wt_blocks : block_size * 2;
+    const std::uint32_t out0_t = block_size * 2;
+    std::uint64_t cb_size_sum_bytes = (std::uint64_t{in0_t} * in0_tile_size) +
+                                      (std::uint64_t{wt_blocks} * im_tile_size) +
+                                      (std::uint64_t{out0_t} * out0_tile_size) + (5ull * im_tile_size);
+    if (attributes.numeric_stable && mask_padded_data) {
+        cb_size_sum_bytes += std::uint64_t{wt_blocks} * im_tile_size;
+    }
+    const bool use_large_kernel = (device->l1_size_per_core() * 0.9) < cb_size_sum_bytes;
+    const std::uint64_t deep_need = cb_size_sum_bytes + (3ull * out0_t * out0_tile_size);
+    plan.deep_out = batched_io && !use_large_kernel && Wt % block_size == 0 &&
+                    (device->l1_size_per_core() * 0.9) >= deep_need && l1_budget_bytes >= deep_need + l1_reserve_bytes;
+
+    const auto grid = device->compute_with_storage_grid_size();
+    if (use_large_kernel && !mask_padded_data && attributes.numeric_stable && NC * Ht <= 16 && Wt % block_size == 0) {
+        const std::uint64_t streamed_entry_bytes = in0_tile_size + (2ull * im_tile_size);
+        const std::uint64_t single_entry_bytes = (std::uint64_t{out0_t} * out0_tile_size) + (3ull * acc_tile_size) +
+                                                 (2ull * im_tile_size) + max_scaler_tile_size + acc_tile_size +
+                                                 (2ull * bf16_tile_size);
+        const std::uint64_t entries_that_fit =
+            l1_bank > single_entry_bytes ? (l1_bank - single_entry_bytes) / streamed_entry_bytes : 0;
+        constexpr std::uint32_t max_large_kernel_cb_entries = 80;
+        const std::uint32_t L =
+            (std::min<std::uint32_t>(max_large_kernel_cb_entries, static_cast<std::uint32_t>(entries_that_fit)) /
+             block_size) *
+            block_size;
+        if (L >= block_size) {
+            const std::uint32_t nchunk = tt::div_up(Wt, L);
+            const std::uint32_t last_len = Wt - (nchunk - 1) * L;
+            const std::uint32_t grid_n = grid.x * grid.y;
+            const std::uint32_t req = grid_n / std::max<std::uint32_t>(1u, std::min<std::uint32_t>(NC * Ht, grid.y));
+            for (std::uint32_t active = std::min<std::uint32_t>(std::min<std::uint32_t>(req, nchunk), grid_n);
+                 active <= std::min<std::uint32_t>(nchunk, grid_n);
+                 ++active) {
+                std::uint32_t t_max = 0, nck_max = 0;
+                for (std::uint32_t c = 0; c < active; ++c) {
+                    const std::uint32_t ck0 = c * nchunk / active;
+                    const std::uint32_t nck = (c + 1) * nchunk / active - ck0;
+                    std::uint32_t tcount = 0;
+                    for (std::uint32_t k = ck0; k < ck0 + nck; ++k) {
+                        tcount += (k == nchunk - 1) ? last_len : L;
+                    }
+                    t_max = std::max(t_max, tcount);
+                    nck_max = std::max(nck_max, nck);
+                }
+                const std::uint64_t need = std::uint64_t{t_max} * in0_tile_size + std::uint64_t{L} * im_tile_size +
+                                           2ull * block_size * out0_tile_size + (4ull + active) * im_tile_size +
+                                           (5ull + nck_max + nchunk) * acc_tile_size + max_scaler_tile_size +
+                                           acc_tile_size + l1_reserve_bytes;
+                if (need <= std::min(l1_bank, l1_budget_bytes)) {
+                    plan.split_active = active;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!use_large_kernel && !mask_padded_data && attributes.numeric_stable) {
+        const std::uint32_t lim = std::min<std::uint32_t>(8u, (grid.x * grid.y) / std::max<std::uint32_t>(1u, NC * Ht));
+        std::uint32_t C = 1;
+        while (C * 2 <= lim) {
+            C *= 2;
+        }
+        const std::uint32_t min_tiles = in0_cb_data_format == tt::DataFormat::Float32 ? 4u : 16u;
+        while (C >= 2 && (Wt % (C * block_size) != 0 || Wt / C < min_tiles)) {
+            C /= 2;
+        }
+        const bool shape_ok = (C <= grid.x && grid.x % C == 0) || (C % grid.x == 0 && C / grid.x <= grid.y);
+        const std::uint64_t need = std::uint64_t{Wt / C} * (in0_tile_size + im_tile_size) +
+                                   2ull * block_size * out0_tile_size + (3ull + C) * im_tile_size +
+                                   6ull * acc_tile_size + max_scaler_tile_size + acc_tile_size + l1_reserve_bytes;
+        if (C >= 2 && shape_ok && need <= std::min(l1_bank, l1_budget_bytes)) {
+            plan.chain_c = C;
+        }
+    }
+    return plan;
+}
 
 ttnn::device_operation::ProgramArtifacts
 SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_artifacts(
@@ -63,8 +193,16 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
 
     auto* device = input_tensor.device();
     const auto arch = device->arch();
+    const auto plain_dram = [](const Tensor& t) {
+        return t.memory_config().buffer_type() == BufferType::DRAM &&
+               (t.dtype() == DataType::BFLOAT16 || t.dtype() == DataType::FLOAT32);
+    };
+    const bool row_parallel = arch == tt::ARCH::WORMHOLE_B0 && plain_dram(input_tensor) && plain_dram(output_tensor);
+    const auto plan = select_plan(attributes, tensor_args);
 
     const tt::DataFormat in0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const bool batched_io = row_parallel && !has_mask && Wt >= 8 &&
+                            (attributes.numeric_stable || (Wt > 8 && in0_cb_data_format != tt::DataFormat::Float32));
     const std::uint32_t in0_tile_size = tt::tile_size(in0_cb_data_format);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -225,6 +363,537 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         in4_t % block_size == 0,
         "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
         in4_t);
+    const bool deep_out = plan.deep_out;
+
+    if (plan.split_active != 0 && row_parallel && use_large_kernel && !has_mask && !mask_padded_data &&
+        attributes.numeric_stable && NC * Ht <= 16 && Wt % block_size == 0 && dfb_length % block_size == 0) {
+        const auto ws_grid = device->compute_with_storage_grid_size();
+        const std::uint32_t L = dfb_length;
+        const std::uint32_t nchunk = tt::div_up(Wt, L);
+        const std::uint32_t last_len = Wt - (nchunk - 1) * L;
+        const std::uint32_t grid_n = ws_grid.x * ws_grid.y;
+        const std::uint32_t req = grid_n / std::max<std::uint32_t>(1u, std::min<std::uint32_t>(NC * Ht, ws_grid.y));
+        std::uint32_t active = std::min<std::uint32_t>(std::min<std::uint32_t>(req, nchunk), grid_n);
+        std::vector<std::uint32_t> ck0, nck, tcount;
+        std::uint32_t t_max = 0, nck_max = 0, rect_w = 1, rect_h = 1, rect_n = 1;
+        bool fits = false;
+        for (; active <= std::min<std::uint32_t>(nchunk, grid_n); ++active) {
+            rect_w = std::min<std::uint32_t>(active, ws_grid.x);
+            rect_h = tt::div_up(active, rect_w);
+            rect_n = rect_w * rect_h;
+            ck0.assign(rect_n, 0);
+            nck.assign(rect_n, 0);
+            tcount.assign(rect_n, 0);
+            t_max = 0;
+            nck_max = 0;
+            for (std::uint32_t c = 0; c < active; ++c) {
+                ck0[c] = c * nchunk / active;
+                nck[c] = (c + 1) * nchunk / active - ck0[c];
+                for (std::uint32_t k = ck0[c]; k < ck0[c] + nck[c]; ++k) {
+                    tcount[c] += (k == nchunk - 1) ? last_len : L;
+                }
+                t_max = std::max(t_max, tcount[c]);
+                nck_max = std::max(nck_max, nck[c]);
+            }
+            if (active == plan.split_active) {
+                fits = true;
+                break;
+            }
+        }
+        do {
+            if (!fits) {
+                break;
+            }
+            const std::uint32_t n_rows = NC * Ht;
+            const std::uint32_t n_groups = std::max<std::uint32_t>(
+                1u, std::min<std::uint32_t>(n_rows, static_cast<std::uint32_t>(ws_grid.y) / rect_h));
+            const CoreRange ws_rect({0, 0}, {rect_w - 1, n_groups * rect_h - 1});
+            const CoreRangeSet ws_nodes(ws_rect);
+
+            const KernelSpecName W_READER{"reader"};
+            const KernelSpecName W_WRITER{"writer"};
+            const KernelSpecName W_COMPUTE{"compute"};
+            const TensorParamName W_SRC{"src"};
+            const TensorParamName W_DST{"dst"};
+            const DFBSpecName W_IN0{"in0"}, W_OUT0{"out0"}, W_MAXSC{"max_scaler"}, W_SUMSC{"sum_scaler"},
+                W_EXPS{"exps"}, W_PMAX{"pmax"}, W_RMAX{"rmax"}, W_MOUT{"mout"}, W_MCB{"mcb"}, W_PSUM{"psum"},
+                W_RSUM{"rsum"}, W_PREV{"prev"}, W_ROUT{"rout"}, W_RCB{"rcb"};
+            const SemaphoreSpecName S_RMAX{"rmax_sem"}, S_RSUM{"rsum_sem"}, S_M{"m_sem"}, S_R{"r_sem"};
+
+            Group<DataflowBufferSpec> wdfbs;
+            auto add_dfb = [&](const DFBSpecName& n, std::uint32_t sz, std::uint32_t cnt, tt::DataFormat f) {
+                wdfbs.push_back(DataflowBufferSpec{
+                    .unique_id = n, .entry_size = sz, .num_entries = cnt, .data_format_metadata = f});
+            };
+            add_dfb(W_IN0, in0_tile_size, t_max, in0_cb_data_format);
+            add_dfb(W_OUT0, out0_tile_size, block_size * 2, out0_cb_data_format);
+            add_dfb(W_MAXSC, max_scaler_tile_size, 1, max_scaler_cb_data_format);
+            add_dfb(W_SUMSC, sum_scaler_tile_size, 1, sum_scaler_cb_data_format);
+            add_dfb(W_EXPS, im_tile_size, L, im_cb_data_format);
+            add_dfb(W_PMAX, im_tile_size, 1, im_cb_data_format);
+            add_dfb(W_RMAX, im_tile_size, active, im_cb_data_format);
+            add_dfb(W_MOUT, im_tile_size, 1, im_cb_data_format);
+            add_dfb(W_MCB, im_tile_size, 1, im_cb_data_format);
+            add_dfb(W_PSUM, acc_tile_size, nck_max, acc_cb_data_format);
+            add_dfb(W_RSUM, acc_tile_size, nchunk, acc_cb_data_format);
+            add_dfb(W_PREV, acc_tile_size, 2, acc_cb_data_format);
+            add_dfb(W_ROUT, acc_tile_size, 1, acc_cb_data_format);
+            add_dfb(W_RCB, acc_tile_size, 1, acc_cb_data_format);
+
+            KernelSpec::CompilerOptions::Defines wbase;
+            wbase["NUMERIC_STABLE"] = "1";
+            KernelSpec::CompilerOptions::Defines wcomp = wbase;
+            wcomp["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+            wcomp["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+
+            auto w_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
+            if (fp32_dest_acc_en) {
+                auto um = [&](const DFBSpecName& n, tt::DataFormat f, bool to_dest) {
+                    if (f == tt::DataFormat::Float32) {
+                        w_hw.unpack_modes.insert(
+                            {n,
+                             to_dest ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc});
+                    }
+                };
+                um(W_IN0, in0_cb_data_format, false);
+                um(W_MAXSC, max_scaler_cb_data_format, false);
+                um(W_SUMSC, sum_scaler_cb_data_format, false);
+                um(W_EXPS, im_cb_data_format, false);
+                um(W_RMAX, im_cb_data_format, false);
+                um(W_MCB, im_cb_data_format, false);
+                um(W_RSUM, acc_cb_data_format, true);
+                um(W_PREV, acc_cb_data_format, false);
+                um(W_RCB, acc_cb_data_format, false);
+            }
+
+            KernelSpec w_reader{
+                .unique_id = W_READER,
+                .source =
+                    std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/dataflow/reader_unary_interleaved_sm_row_split.cpp",
+                .compiler_options = {.defines = wbase},
+                .dfb_bindings =
+                    {DFBBinding{
+                         .dfb_spec_name = W_IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+                     DFBBinding{
+                         .dfb_spec_name = W_MAXSC,
+                         .accessor_name = "max_scaler",
+                         .endpoint_type = DFBEndpointType::PRODUCER},
+                     DFBBinding{
+                         .dfb_spec_name = W_SUMSC,
+                         .accessor_name = "sum_scaler",
+                         .endpoint_type = DFBEndpointType::PRODUCER}},
+                .tensor_bindings = {TensorBinding{.tensor_parameter_name = W_SRC, .accessor_name = "src"}},
+                .runtime_arg_schema =
+                    {.runtime_arg_names = {"T", "t0", "num_rows", "Wt", "blk", "pad", "row0", "rstride"}},
+                .hw_config = ttnn::create_reader_datamovement_config(),
+            };
+            KernelSpec w_writer{
+                .unique_id = W_WRITER,
+                .source =
+                    std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/dataflow/writer_unary_interleaved_sm_row_split.cpp",
+                .compiler_options = {.defines = wbase},
+                .dfb_bindings =
+                    {DFBBinding{
+                         .dfb_spec_name = W_OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER},
+                     DFBBinding{
+                         .dfb_spec_name = W_PMAX, .accessor_name = "pmax", .endpoint_type = DFBEndpointType::CONSUMER},
+                     DFBBinding{
+                         .dfb_spec_name = W_RMAX, .accessor_name = "rmax", .endpoint_type = DFBEndpointType::PRODUCER},
+                     DFBBinding{
+                         .dfb_spec_name = W_MOUT, .accessor_name = "mout", .endpoint_type = DFBEndpointType::CONSUMER},
+                     DFBBinding{
+                         .dfb_spec_name = W_MCB, .accessor_name = "mcb", .endpoint_type = DFBEndpointType::PRODUCER},
+                     DFBBinding{
+                         .dfb_spec_name = W_PSUM, .accessor_name = "psum", .endpoint_type = DFBEndpointType::CONSUMER},
+                     DFBBinding{
+                         .dfb_spec_name = W_RSUM, .accessor_name = "rsum", .endpoint_type = DFBEndpointType::PRODUCER},
+                     DFBBinding{
+                         .dfb_spec_name = W_ROUT, .accessor_name = "rout", .endpoint_type = DFBEndpointType::CONSUMER},
+                     DFBBinding{
+                         .dfb_spec_name = W_RCB, .accessor_name = "rcb", .endpoint_type = DFBEndpointType::PRODUCER}},
+                .semaphore_bindings =
+                    {SemaphoreBinding{.semaphore_spec_name = S_RMAX, .accessor_name = "rmax_sem"},
+                     SemaphoreBinding{.semaphore_spec_name = S_RSUM, .accessor_name = "rsum_sem"},
+                     SemaphoreBinding{.semaphore_spec_name = S_M, .accessor_name = "m_sem"},
+                     SemaphoreBinding{.semaphore_spec_name = S_R, .accessor_name = "r_sem"}},
+                .tensor_bindings = {TensorBinding{.tensor_parameter_name = W_DST, .accessor_name = "dst"}},
+                .runtime_arg_schema = {.runtime_arg_names = {"c",   "active",   "is_comb", "comb_x", "comb_y",
+                                                             "x0",  "y0",       "x1",      "y1",     "rect_n",
+                                                             "ck0", "nck",      "nchunk",  "T",      "t0",
+                                                             "Wt",  "num_rows", "blk",     "row0",   "rstride"}},
+                .hw_config = ttnn::create_writer_datamovement_config(),
+            };
+            Group<DFBBinding> w_cb = {
+                DFBBinding{.dfb_spec_name = W_IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = W_MAXSC,
+                    .accessor_name = "max_scaler",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = W_SUMSC,
+                    .accessor_name = "sum_scaler",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = W_PMAX, .accessor_name = "pmax", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = W_RMAX, .accessor_name = "rmax", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = W_MOUT, .accessor_name = "mout", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{.dfb_spec_name = W_MCB, .accessor_name = "mcb", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = W_PSUM, .accessor_name = "psum", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = W_RSUM, .accessor_name = "rsum", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = W_ROUT, .accessor_name = "rout", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{.dfb_spec_name = W_RCB, .accessor_name = "rcb", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = W_OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::PRODUCER},
+            };
+            for (const auto* n : {&W_EXPS, &W_PREV}) {
+                const char* acc = (n == &W_EXPS) ? "exps" : "prev";
+                w_cb.push_back(
+                    DFBBinding{.dfb_spec_name = *n, .accessor_name = acc, .endpoint_type = DFBEndpointType::PRODUCER});
+                w_cb.push_back(
+                    DFBBinding{.dfb_spec_name = *n, .accessor_name = acc, .endpoint_type = DFBEndpointType::CONSUMER});
+            }
+            KernelSpec w_compute{
+                .unique_id = W_COMPUTE,
+                .source = std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_row_split.cpp",
+                .compiler_options = {.defines = wcomp, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+                .dfb_bindings = w_cb,
+                .runtime_arg_schema =
+                    {.runtime_arg_names =
+                         {"T", "nck", "ck0", "nchunk", "L", "last_len", "is_comb", "active", "num_rows", "blk", "pad"}},
+                .hw_config = w_hw,
+            };
+
+            Group<SemaphoreSpec> wsems;
+            for (const auto* s : {&S_RMAX, &S_RSUM, &S_M, &S_R}) {
+                wsems.push_back(SemaphoreSpec{.unique_id = *s, .target_nodes = ws_nodes});
+            }
+            Group<WorkUnitSpec> wwus;
+            wwus.push_back(
+                WorkUnitSpec{.name = "wu", .kernels = {W_READER, W_WRITER, W_COMPUTE}, .target_nodes = ws_nodes});
+            ProgramSpec wspec{
+                .name = "softmax_row_split",
+                .kernels = {w_reader, w_writer, w_compute},
+                .dataflow_buffers = std::move(wdfbs),
+                .semaphores = std::move(wsems),
+                .tensor_parameters =
+                    {TensorParameter{.unique_id = W_SRC, .spec = input_tensor.tensor_spec()},
+                     TensorParameter{.unique_id = W_DST, .spec = output_tensor.tensor_spec()}},
+                .work_units = std::move(wwus),
+            };
+
+            ProgramRunArgs wrun;
+            KernelRunArgs wr_ra{.kernel = W_READER};
+            KernelRunArgs ww_ra{.kernel = W_WRITER};
+            KernelRunArgs wc_ra{.kernel = W_COMPUTE};
+            for (std::uint32_t gi = 0; gi < n_groups * rect_n; ++gi) {
+                const std::uint32_t grp = gi / rect_n;
+                const std::uint32_t c = gi % rect_n;
+                const CoreCoord core = {c % rect_w, grp * rect_h + c / rect_w};
+                const auto p0 = device->worker_core_from_logical_core(CoreCoord{0, grp * rect_h});
+                const auto p1 = device->worker_core_from_logical_core(CoreCoord{rect_w - 1, grp * rect_h + rect_h - 1});
+                const std::uint32_t g_rows = (n_rows - grp + n_groups - 1) / n_groups;
+                const std::uint32_t t0 = ck0[c] * L;
+                AddRuntimeArgsForNode(
+                    wr_ra.runtime_arg_values,
+                    core,
+                    {{"T", tcount[c]},
+                     {"t0", t0},
+                     {"num_rows", g_rows},
+                     {"Wt", Wt},
+                     {"blk", block_size},
+                     {"pad", t_max - tcount[c]},
+                     {"row0", grp},
+                     {"rstride", n_groups}});
+                AddRuntimeArgsForNode(
+                    ww_ra.runtime_arg_values,
+                    core,
+                    {{"c", c},
+                     {"active", active},
+                     {"is_comb", c == 0 ? 1u : 0u},
+                     {"comb_x", static_cast<std::uint32_t>(p0.x)},
+                     {"comb_y", static_cast<std::uint32_t>(p0.y)},
+                     {"x0", static_cast<std::uint32_t>(p0.x)},
+                     {"y0", static_cast<std::uint32_t>(p0.y)},
+                     {"x1", static_cast<std::uint32_t>(p1.x)},
+                     {"y1", static_cast<std::uint32_t>(p1.y)},
+                     {"rect_n", rect_n},
+                     {"ck0", ck0[c]},
+                     {"nck", nck[c]},
+                     {"nchunk", nchunk},
+                     {"T", tcount[c]},
+                     {"t0", t0},
+                     {"Wt", Wt},
+                     {"num_rows", g_rows},
+                     {"blk", block_size},
+                     {"row0", grp},
+                     {"rstride", n_groups}});
+                AddRuntimeArgsForNode(
+                    wc_ra.runtime_arg_values,
+                    core,
+                    {{"T", tcount[c]},
+                     {"nck", nck[c]},
+                     {"ck0", ck0[c]},
+                     {"nchunk", nchunk},
+                     {"L", L},
+                     {"last_len", last_len},
+                     {"is_comb", c == 0 ? 1u : 0u},
+                     {"active", active},
+                     {"num_rows", g_rows},
+                     {"blk", block_size},
+                     {"pad", t_max - tcount[c]}});
+            }
+            wrun.kernel_run_args = {std::move(wr_ra), std::move(ww_ra), std::move(wc_ra)};
+            wrun.tensor_args.emplace(W_SRC, input_tensor.mesh_tensor());
+            wrun.tensor_args.emplace(W_DST, output_tensor.mesh_tensor());
+            return ttnn::device_operation::ProgramArtifacts{.spec = std::move(wspec), .run_params = std::move(wrun)};
+        } while (false);
+    }
+
+    if (row_parallel && !use_large_kernel && !has_mask && !mask_padded_data && attributes.numeric_stable) {
+        const auto wc_grid = device->compute_with_storage_grid_size();
+        const std::uint32_t lim =
+            std::min<std::uint32_t>(8u, (wc_grid.x * wc_grid.y) / std::max<std::uint32_t>(1u, NC * Ht));
+        std::uint32_t C = 1;
+        while (C * 2 <= lim) {
+            C *= 2;
+        }
+        const std::uint32_t min_tiles = in0_cb_data_format == tt::DataFormat::Float32 ? 4u : 16u;
+        while (C >= 2 && (Wt % (C * block_size) != 0 || Wt / C < min_tiles)) {
+            C /= 2;
+        }
+        const std::uint32_t gx = wc_grid.x, gy = wc_grid.y;
+        const bool shape_ok = (C <= gx && gx % C == 0) || (C % gx == 0 && C / gx <= gy);
+        const std::uint32_t T = Wt / C;
+        if (C >= 2 && C == plan.chain_c && shape_ok && Wt % (C * block_size) == 0) {
+            const std::uint32_t n_rows = NC * Ht;
+            const std::uint32_t per_row = C <= gx ? gx / C : 0;
+            const std::uint32_t cap = C <= gx ? per_row * gy : gy / (C / gx);
+            const std::uint32_t G = std::max<std::uint32_t>(1u, std::min<std::uint32_t>(n_rows, cap));
+            auto logical = [&](std::uint32_t g, std::uint32_t c) -> CoreCoord {
+                if (C <= gx) {
+                    return CoreCoord{(g % per_row) * C + c, g / per_row};
+                }
+                return CoreCoord{c % gx, g * (C / gx) + c / gx};
+            };
+            CoreRangeSet wc_nodes;
+            for (std::uint32_t g = 0; g < G; ++g) {
+                const CoreCoord a = logical(g, 0), b = logical(g, C - 1);
+                wc_nodes = wc_nodes.merge(CoreRangeSet(CoreRange(a, CoreCoord{std::max(a.x, b.x), b.y})));
+            }
+
+            const KernelSpecName C_READER{"reader"};
+            const KernelSpecName C_WRITER{"writer"};
+            const KernelSpecName C_COMPUTE{"compute"};
+            const TensorParamName C_SRC{"src"};
+            const TensorParamName C_DST{"dst"};
+            const DFBSpecName C_IN0{"in0"}, C_OUT0{"out0"}, C_MAXSC{"max_scaler"}, C_SUMSC{"sum_scaler"},
+                C_EXPS{"exps"}, C_PMAX{"pmax"}, C_RMAX{"rmax"}, C_MOUT{"mout"}, C_MCB{"mcb"}, C_PACC{"pacc"},
+                C_RACC{"racc"}, C_ROUT{"rout"}, C_RCB{"rcb"};
+            const SemaphoreSpecName CS_RMAX{"rmax_sem"}, CS_M{"m_sem"}, CS_ACC{"acc_sem"}, CS_R{"r_sem"};
+
+            Group<DataflowBufferSpec> cdfbs;
+            auto add_dfb = [&](const DFBSpecName& n, std::uint32_t sz, std::uint32_t cnt, tt::DataFormat f) {
+                cdfbs.push_back(DataflowBufferSpec{
+                    .unique_id = n, .entry_size = sz, .num_entries = cnt, .data_format_metadata = f});
+            };
+            add_dfb(C_IN0, in0_tile_size, T, in0_cb_data_format);
+            add_dfb(C_OUT0, out0_tile_size, block_size * 2, out0_cb_data_format);
+            add_dfb(C_MAXSC, max_scaler_tile_size, 1, max_scaler_cb_data_format);
+            add_dfb(C_SUMSC, sum_scaler_tile_size, 1, sum_scaler_cb_data_format);
+            add_dfb(C_EXPS, im_tile_size, T, im_cb_data_format);
+            add_dfb(C_PMAX, im_tile_size, 1, im_cb_data_format);
+            add_dfb(C_RMAX, im_tile_size, C, im_cb_data_format);
+            add_dfb(C_MOUT, im_tile_size, 1, im_cb_data_format);
+            add_dfb(C_MCB, im_tile_size, 1, im_cb_data_format);
+            add_dfb(C_PACC, acc_tile_size, 1, acc_cb_data_format);
+            add_dfb(C_RACC, acc_tile_size, 1, acc_cb_data_format);
+            add_dfb(C_ROUT, acc_tile_size, 1, acc_cb_data_format);
+            add_dfb(C_RCB, acc_tile_size, 1, acc_cb_data_format);
+
+            KernelSpec::CompilerOptions::Defines cbase;
+            cbase["NUMERIC_STABLE"] = "1";
+            KernelSpec::CompilerOptions::Defines ccomp = cbase;
+            KernelSpec::CompilerOptions::Defines cread = cbase;
+            cread["READ_BATCH"] = "32";
+            ccomp["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+            ccomp["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+            auto c_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
+            if (fp32_dest_acc_en) {
+                auto um = [&](const DFBSpecName& n, tt::DataFormat f, bool to_dest) {
+                    if (f == tt::DataFormat::Float32) {
+                        c_hw.unpack_modes.insert(
+                            {n,
+                             to_dest ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc});
+                    }
+                };
+                um(C_IN0, in0_cb_data_format, false);
+                um(C_MAXSC, max_scaler_cb_data_format, false);
+                um(C_SUMSC, sum_scaler_cb_data_format, false);
+                um(C_EXPS, im_cb_data_format, false);
+                um(C_RMAX, im_cb_data_format, false);
+                um(C_MCB, im_cb_data_format, false);
+                um(C_RACC, acc_cb_data_format, true);
+                um(C_RCB, acc_cb_data_format, false);
+            }
+            auto P = [](const DFBSpecName& n, const char* a) {
+                return DFBBinding{.dfb_spec_name = n, .accessor_name = a, .endpoint_type = DFBEndpointType::PRODUCER};
+            };
+            auto Q = [](const DFBSpecName& n, const char* a) {
+                return DFBBinding{.dfb_spec_name = n, .accessor_name = a, .endpoint_type = DFBEndpointType::CONSUMER};
+            };
+            KernelSpec c_reader{
+                .unique_id = C_READER,
+                .source =
+                    std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/dataflow/reader_unary_interleaved_sm_row_split.cpp",
+                .compiler_options = {.defines = cread},
+                .dfb_bindings = {P(C_IN0, "in0"), P(C_MAXSC, "max_scaler"), P(C_SUMSC, "sum_scaler")},
+                .tensor_bindings = {TensorBinding{.tensor_parameter_name = C_SRC, .accessor_name = "src"}},
+                .runtime_arg_schema =
+                    {.runtime_arg_names = {"T", "t0", "num_rows", "Wt", "blk", "pad", "row0", "rstride"}},
+                .hw_config = ttnn::create_reader_datamovement_config(),
+            };
+            KernelSpec c_writer{
+                .unique_id = C_WRITER,
+                .source =
+                    std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/dataflow/writer_unary_interleaved_sm_row_chain.cpp",
+                .compiler_options = {.defines = cbase},
+                .dfb_bindings =
+                    {Q(C_OUT0, "out0"),
+                     Q(C_PMAX, "pmax"),
+                     P(C_RMAX, "rmax"),
+                     Q(C_MOUT, "mout"),
+                     P(C_MCB, "mcb"),
+                     Q(C_PACC, "pacc"),
+                     P(C_RACC, "racc"),
+                     Q(C_ROUT, "rout"),
+                     P(C_RCB, "rcb")},
+                .semaphore_bindings =
+                    {SemaphoreBinding{.semaphore_spec_name = CS_RMAX, .accessor_name = "rmax_sem"},
+                     SemaphoreBinding{.semaphore_spec_name = CS_M, .accessor_name = "m_sem"},
+                     SemaphoreBinding{.semaphore_spec_name = CS_ACC, .accessor_name = "acc_sem"},
+                     SemaphoreBinding{.semaphore_spec_name = CS_R, .accessor_name = "r_sem"}},
+                .tensor_bindings = {TensorBinding{.tensor_parameter_name = C_DST, .accessor_name = "dst"}},
+                .runtime_arg_schema =
+                    {.runtime_arg_names =
+                         {"c",
+                          "C",
+                          "comb_x",
+                          "comb_y",
+                          "next_x",
+                          "next_y",
+                          "x0",
+                          "y0",
+                          "x1",
+                          "y1",
+                          "T",
+                          "t0",
+                          "Wt",
+                          "num_rows",
+                          "blk",
+                          "row0",
+                          "rstride"}},
+                .hw_config = ttnn::create_writer_datamovement_config(),
+            };
+            Group<DFBBinding> c_cb = {
+                Q(C_IN0, "in0"),
+                Q(C_MAXSC, "max_scaler"),
+                Q(C_SUMSC, "sum_scaler"),
+                P(C_PMAX, "pmax"),
+                Q(C_RMAX, "rmax"),
+                P(C_MOUT, "mout"),
+                Q(C_MCB, "mcb"),
+                P(C_PACC, "pacc"),
+                Q(C_RACC, "racc"),
+                P(C_ROUT, "rout"),
+                Q(C_RCB, "rcb"),
+                P(C_OUT0, "out0"),
+                P(C_EXPS, "exps"),
+                Q(C_EXPS, "exps")};
+            KernelSpec c_compute{
+                .unique_id = C_COMPUTE,
+                .source = std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_row_chain.cpp",
+                .compiler_options = {.defines = ccomp, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+                .dfb_bindings = c_cb,
+                .runtime_arg_schema = {.runtime_arg_names = {"T", "c", "C", "num_rows", "blk"}},
+                .hw_config = c_hw,
+            };
+            Group<SemaphoreSpec> csems;
+            for (const auto* s : {&CS_RMAX, &CS_M, &CS_ACC, &CS_R}) {
+                csems.push_back(SemaphoreSpec{.unique_id = *s, .target_nodes = wc_nodes});
+            }
+            Group<WorkUnitSpec> cwus;
+            cwus.push_back(
+                WorkUnitSpec{.name = "wu", .kernels = {C_READER, C_WRITER, C_COMPUTE}, .target_nodes = wc_nodes});
+            ProgramSpec cspec{
+                .name = "softmax_row_chain",
+                .kernels = {c_reader, c_writer, c_compute},
+                .dataflow_buffers = std::move(cdfbs),
+                .semaphores = std::move(csems),
+                .tensor_parameters =
+                    {TensorParameter{.unique_id = C_SRC, .spec = input_tensor.tensor_spec()},
+                     TensorParameter{.unique_id = C_DST, .spec = output_tensor.tensor_spec()}},
+                .work_units = std::move(cwus),
+            };
+            ProgramRunArgs crun;
+            KernelRunArgs cr_ra{.kernel = C_READER};
+            KernelRunArgs cw_ra{.kernel = C_WRITER};
+            KernelRunArgs cc_ra{.kernel = C_COMPUTE};
+            for (std::uint32_t g = 0; g < G; ++g) {
+                const std::uint32_t g_rows = (n_rows - g + G - 1) / G;
+                const auto pa = device->worker_core_from_logical_core(logical(g, 0));
+                const auto pb = device->worker_core_from_logical_core(logical(g, C - 1));
+                for (std::uint32_t c = 0; c < C; ++c) {
+                    const CoreCoord core = logical(g, c);
+                    const auto pn = device->worker_core_from_logical_core(logical(g, c + 1 < C ? c + 1 : c));
+                    const std::uint32_t t0 = c * T;
+                    AddRuntimeArgsForNode(
+                        cr_ra.runtime_arg_values,
+                        core,
+                        {{"T", T},
+                         {"t0", t0},
+                         {"num_rows", g_rows},
+                         {"Wt", Wt},
+                         {"blk", block_size},
+                         {"pad", 0u},
+                         {"row0", g},
+                         {"rstride", G}});
+                    AddRuntimeArgsForNode(
+                        cw_ra.runtime_arg_values,
+                        core,
+                        {{"c", c},
+                         {"C", C},
+                         {"comb_x", static_cast<std::uint32_t>(pa.x)},
+                         {"comb_y", static_cast<std::uint32_t>(pa.y)},
+                         {"next_x", static_cast<std::uint32_t>(pn.x)},
+                         {"next_y", static_cast<std::uint32_t>(pn.y)},
+                         {"x0", static_cast<std::uint32_t>(std::min(pa.x, pb.x))},
+                         {"y0", static_cast<std::uint32_t>(pa.y)},
+                         {"x1", static_cast<std::uint32_t>(std::max(pa.x, pb.x))},
+                         {"y1", static_cast<std::uint32_t>(pb.y)},
+                         {"T", T},
+                         {"t0", t0},
+                         {"Wt", Wt},
+                         {"num_rows", g_rows},
+                         {"blk", block_size},
+                         {"row0", g},
+                         {"rstride", G}});
+                    AddRuntimeArgsForNode(
+                        cc_ra.runtime_arg_values,
+                        core,
+                        {{"T", T}, {"c", c}, {"C", C}, {"num_rows", g_rows}, {"blk", block_size}});
+                }
+            }
+            crun.kernel_run_args = {std::move(cr_ra), std::move(cw_ra), std::move(cc_ra)};
+            crun.tensor_args.emplace(C_SRC, input_tensor.mesh_tensor());
+            crun.tensor_args.emplace(C_DST, output_tensor.mesh_tensor());
+            return ttnn::device_operation::ProgramArtifacts{.spec = std::move(cspec), .run_params = std::move(crun)};
+        }
+    }
 
     // Work split
     const std::uint32_t num_tile_rows = NC * Ht;
@@ -272,7 +941,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = OUT0,
         .entry_size = out0_tile_size,
-        .num_entries = out0_t,
+        .num_entries = out0_t * (deep_out ? 4u : 1u),
         .data_format_metadata = out0_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = RECIP_SUM_EXPS,
@@ -365,6 +1034,12 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     }
 
     KernelSpec::CompilerOptions::Defines compute_defines = base_defines;
+    KernelSpec::CompilerOptions::Defines reader_defines = base_defines;
+    KernelSpec::CompilerOptions::Defines writer_defines;
+    if (batched_io) {
+        reader_defines["READ_BATCH"] = use_large_kernel ? "16" : "32";
+        writer_defines["FLUSH_WRITES"] = "1";
+    }
     compute_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     compute_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     // The small compute kernel gates the pad-mask (c_5) intermediate (c_10) path on the host-known
@@ -417,7 +1092,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .source = std::string(SOFTMAX_KERNEL_PATH_ATTENTION) +
                   (use_large_kernel ? "/dataflow/reader_unary_interleaved_sm_large_tensor.cpp"
                                     : "/dataflow/reader_unary_interleaved_sm.cpp"),
-        .compiler_options = {.defines = base_defines},
+        .compiler_options = {.defines = reader_defines},
         .dfb_bindings = reader_bindings,
         .tensor_bindings = reader_tensor_bindings,
         .compile_time_args = reader_cta,
@@ -430,6 +1105,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .unique_id = WRITER,
         .source =
             std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp",
+        .compiler_options = {.defines = writer_defines},
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{
