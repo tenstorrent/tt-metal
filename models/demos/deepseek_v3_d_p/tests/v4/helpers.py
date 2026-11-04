@@ -5,6 +5,8 @@
 """Stream packing, mesh rows, device<->host transfers, PCC grading and the multi-user prefill schedule
 shared by the V4 tests."""
 
+from types import SimpleNamespace
+
 import pytest
 from loguru import logger
 
@@ -12,6 +14,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.tt.v4.kv_caches import CSA, HCA, V4KvCaches, build_v4_kv_chunk_table
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 # How far below its model's floor a CSA layer is graded: with production top-k, bf16 can swap
@@ -123,3 +126,51 @@ def assert_same_on_device(label, first, again):
         taps = [(f"layer {i}", first_layers[i][c], again_layers[i][c]) for i in range(len(again_layers))]
         for name, a, b in [*taps, ("output", first_outs[c], again_outs[c])]:
             assert_bit_identical(a, b, name=f"[{label}] chunk {c} {name}")
+
+
+# ---- Fake KV chunk tables for the host-only migration tests ----
+
+
+# Each kind's stand-in base past ``base``, far enough apart that no two kinds' pages share an address.
+KIND_OFFSETS = (0, 0x10000000, 0x20000000)
+
+
+def fake_v4_caches(config, first, count, base=0x1000):
+    """A rank's ``V4KvCaches`` with stand-in tensors, HCA / CSA / index at ``base`` + ``KIND_OFFSETS``."""
+    ids = range(first, first + count)
+    hca = tuple(i for i in ids if config.layer_types[i] == HCA)
+    csa = tuple(i for i in ids if config.layer_types[i] == CSA)
+    hca_t, csa_t, index_t = (SimpleNamespace(buffer_address=lambda o=o: base + o) for o in KIND_OFFSETS)
+    return V4KvCaches(first, hca, csa, hca_t if hca else None, csa_t if csa else None, index_t)
+
+
+def stage_layout(stage, fnids, num_banks=8, rank=0):
+    """One rank's entry of a gathered stage layout, as ``allgather_kv_stage_layout`` builds it."""
+    return dict(
+        rank=rank,
+        base_addr=stage.base_addr,
+        num_banks=num_banks,
+        first_layer=stage.first_layer,
+        count=stage.count,
+        host_tag=rank,
+        fnids=fnids,
+    )
+
+
+def fake_fnids(rank, mesh_shape=(2, 2)):
+    rows, cols = mesh_shape
+    return [[ttnn.FabricNodeId(ttnn.MeshId(rank), r * cols + c) for c in range(cols)] for r in range(rows)]
+
+
+def build_fake_table(tmp_path, config, layouts, mesh_shape, users, max_seq_len=10240, chunk=5120):
+    path = build_v4_kv_chunk_table(
+        config,
+        stage_layouts=layouts,
+        mesh_shape=mesh_shape,
+        sp_axis=0,
+        num_users=users,
+        max_seq_len=max_seq_len,
+        chunk=chunk,
+        path=str(tmp_path / "v4.pb"),
+    )
+    return ttnn.experimental.disaggregation.import_from_protobuf_file(path)

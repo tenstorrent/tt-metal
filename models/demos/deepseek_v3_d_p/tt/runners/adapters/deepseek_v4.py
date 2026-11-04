@@ -75,6 +75,10 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
 
         return CACHE_KINDS[config_id] if 0 <= config_id < len(CACHE_KINDS) else "other"
 
+    def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
+        """Every boundary carries the residual streams, one plane each (``TtV4Runtime.activation_planes``)."""
+        return self.model_config.HC_MULT
+
     def layer_split_boundaries(self, num_layers: int) -> set:
         """Layer 0, or any layer past the hash-routed ones."""
         return {0} | set(range(self.model_config.NUM_HASH_LAYERS, num_layers + 1))

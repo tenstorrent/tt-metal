@@ -146,6 +146,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for model_key in ("kimi27", "glm52"):
             for system in ("sc1", "sc4"):
                 (mgd_dir / f"{model_key}_{system}_mgd.textproto").touch()
+        for system in ("sc1", "sc4"):  # the shared descriptors the harness reads
+            (mgd_dir / f"{system}_mgd.textproto").touch()
         # manifest_env() reads PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS straight off these, so the
         # fake tree needs them or the harness dies before it launches anything. Values mirror the
         # real manifests; only their presence and the sc1 override path are under test here.
@@ -155,6 +157,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
             ("kimi27", 256000, 86),
             ("glm52", 1049600, 28),
             ("mistral4", 61440, 1),
+            ("dsv4_flash", 56320, 2),
+            ("dsv4_pro", 56320, 2),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
@@ -262,6 +266,21 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 expected_length = 256000 if model == "kimi27" else 1049600
                 self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], str(expected_length))
                 self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(expected_length // 5120))
+
+    def test_deepseek_v4_runs_its_one_config_over_the_whole_golden(self):
+        # Flash fits one galaxy; Pro needs four.
+        for model, config, other in (("dsv4_flash", "sc1", "sc4"), ("dsv4_pro", "sc4", "sc1")):
+            with self.subTest(model=model):
+                result, records = self.run_harness(model)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"{config}_mgd.textproto", " ".join(self.one_record(records, "runner_launch")["args"]))
+                self.assertEqual(
+                    self.one_record(records, "producer")["env"]["PREFILL_PRODUCER_CHUNKS"], str(56320 // 5120)
+                )
+                runner = self.one_record(records, "runner")["env"]
+                self.assertEqual(runner.get("PREFILL_NUM_LAYERS"), "10" if config == "sc1" else None)
+                result, _ = self.run_harness(model, config=other)
+                self.assertIn(f"{model} does not support config '{other}'", result.stderr)
 
     def test_sc1_windows_preserve_model_defaults(self):
         for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm52", 256000)):

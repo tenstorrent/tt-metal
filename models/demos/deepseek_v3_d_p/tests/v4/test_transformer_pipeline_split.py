@@ -6,7 +6,8 @@
 the second, against the unsplit CPU reference.
 
 Random weights. The first rank's output is the packed residual streams, handed straight to the second
-rank, so this grades the handoff shape and the per-rank build: embedding only on the first, head and
+rank through the runner's D2D format (one bf16 plane per stream), so this grades the handoff's
+precision and shape and the per-rank build: embedding only on the first, head and
 norm only on the last, global layer indices on both. Layers 1-2 are hash-routed, so the second rank is
 given the host ids the first rank would read off its token tensor.
 """
@@ -32,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tests.v4.helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
+from models.demos.deepseek_v3_d_p.tt.v4.runtime import planes_to_streams, streams_to_planes
 
 _PRO_FLOOR, _FLASH_FLOOR = 0.98, 0.99
 _NUM_LAYERS = 3
@@ -76,7 +78,9 @@ def run_transformer_pipeline_split(mesh_device, device_params, num_links, seq_le
 
     per_layer = []
     tap = lambda _i, h: per_layer.append(streams_to_host(mesh_device, h, config.hc_mult))
-    handoff = ranks[0](upload_tokens(mesh_device, input_ids), actual_isl=seq_len, layer_tap=tap)
+    streams = ranks[0](upload_tokens(mesh_device, input_ids), actual_isl=seq_len, layer_tap=tap)
+    # Through the runner's D2D format: one bf16 plane per stream, back to fp32 streams on the next rank.
+    handoff = planes_to_streams(streams_to_planes(streams, config.hc_mult))
     out = ranks[1](handoff, actual_isl=seq_len, input_ids=input_ids, layer_tap=tap)
 
     assert_layers_and_output(

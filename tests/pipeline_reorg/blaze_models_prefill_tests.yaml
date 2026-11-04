@@ -856,7 +856,7 @@
     (
       timeout -k 2m 2m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_runtime_contract.py models/demos/deepseek_v3_d_p/tests/v4/test_migration_stages.py -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_runtime_contract.py models/demos/deepseek_v3_d_p/tests/v4/test_migration_stages.py models/demos/deepseek_v3_d_p/tests/v4/test_migration_readback.py -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
@@ -2189,6 +2189,34 @@
   budget_type: demo
   sp_config: sc1
 
+
+# DeepSeek-V4-Flash mock migration (Gate 1): the runner prefills the 55K golden prompt over layers 0-9 and
+# publishes the three-config KV chunk table (HCA compressed rows, CSA compressed rows, CSA index keys); the
+# producer reads every chunk back device-lessly through it and grades each against the vLLM golden
+# (tt/v4/kv_validation.py). Pro needs four galaxies and has no SC4 leg yet: the models demo SC4 budget is spent.
+- name: "(DeepSeek-V4-Flash) prefill KV chunk table accuracy 55k@5k, layers 0-9, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh dsv4_flash
+  test_type: dsv4_prefill_runner_kv_pcc
+  test_tags: [dsv4_flash, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      # Not yet measured. The 43-layer Flash depth section is bounded at 67 min, nearly all checkpoint load;
+      # ten of those layers, the producer's read-back and the mesh unwind are bounded here.
+      timeout: 40
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
 
 # ===== Op-level, no model under test ===================================================================
 

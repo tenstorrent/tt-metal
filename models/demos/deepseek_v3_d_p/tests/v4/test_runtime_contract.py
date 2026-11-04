@@ -154,8 +154,6 @@ def test_a_reset_that_fails_mid_stack_makes_the_slot_demand_another(expect_error
         (dict(mtp_levels=1, use_trace=False, num_users=1, dflash_enabled=False), "no MTP predictor"),
         (dict(mtp_levels=0, use_trace=True, num_users=1, dflash_enabled=False), "eager-only"),
         (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=True), "no DFlash"),
-        (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=False, is_last_rank=False), "single-rank"),
-        (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=False, is_first_rank=False), "single-rank"),
     ],
 )
 def test_runtime_rejects_unsupported_config_before_the_shared_build(monkeypatch, expect_error, config, message):
@@ -184,6 +182,7 @@ def test_runtime_builds_more_than_one_user_slot(monkeypatch):
 def test_runtime_resets_the_slot_state_only_at_request_head(monkeypatch, actual_start, resets, slot_id, reset_slot):
     runtime = object.__new__(TtV4Runtime)
     runtime.model = Mock()
+    runtime.config = SimpleNamespace(is_first_rank=True, is_last_rank=True)
     parent_chunk = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_chunk)
     # Positional, as the runner calls it: slot_id is the third argument and actual_start the fourth.
@@ -197,6 +196,40 @@ def test_runtime_resets_the_slot_state_only_at_request_head(monkeypatch, actual_
     call = parent_chunk.call_args
     forwarded = inspect.signature(TtPrefillRuntime.prefill_chunk).bind(*call.args, **call.kwargs)
     assert forwarded.arguments["slot_id"] == slot_id
+
+
+@pytest.mark.parametrize("first, last", [(False, False), (False, True), (True, False)], ids=["middle", "last", "first"])
+def test_a_pipeline_rank_converts_the_handoff_between_planes_and_streams(monkeypatch, first, last):
+    """A non-first rank unpacks the D2D planes it receives; a non-last rank packs what it sends on."""
+    from models.demos.deepseek_v3_d_p.tt.v4 import runtime as v4_runtime
+
+    runtime = object.__new__(TtV4Runtime)
+    runtime.model, runtime.hf_config = Mock(), SimpleNamespace(hc_mult=4)
+    runtime.config = SimpleNamespace(is_first_rank=first, is_last_rank=last)
+    received, streams_in, streams_out, sent = object(), object(), object(), object()
+    monkeypatch.setattr(v4_runtime, "planes_to_streams", Mock(return_value=streams_in))
+    monkeypatch.setattr(v4_runtime, "streams_to_planes", Mock(return_value=sent))
+    monkeypatch.setattr(v4_runtime.ttnn, "deallocate", Mock())
+    parent_chunk = create_autospec(TtPrefillRuntime.prefill_chunk, return_value=streams_out)
+    monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_chunk)
+
+    out = runtime.prefill_chunk(received, object(), 0, 5120, 10240)
+
+    call = parent_chunk.call_args
+    model_input = inspect.signature(TtPrefillRuntime.prefill_chunk).bind(*call.args, **call.kwargs).arguments
+    assert model_input["input_tensor"] is (received if first else streams_in)
+    assert out is (streams_out if last else sent)
+    if not last:
+        v4_runtime.streams_to_planes.assert_called_once_with(streams_out, 4)
+
+
+@pytest.mark.parametrize("name, model_cfg", _ADAPTERS)
+def test_adapter_and_runtime_agree_on_the_handoff_planes(name, model_cfg):
+    adapter = get_adapter(name)
+    assert {adapter.pipeline_activation_planes(i) for i in range(model_cfg.NUM_LAYERS + 1)} == {model_cfg.HC_MULT}
+    runtime = object.__new__(TtV4Runtime)
+    runtime.hf_config = SimpleNamespace(hc_mult=model_cfg.HC_MULT)
+    assert runtime.activation_planes == model_cfg.HC_MULT
 
 
 @pytest.mark.parametrize("name, model_cfg", _ADAPTERS)
