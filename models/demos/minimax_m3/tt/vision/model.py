@@ -164,10 +164,12 @@ class M3VLVisionModel(LightweightModule):
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt)
         cos_tt, sin_tt = self._rope_to_l1(*self._cached_rope(image_grid_thw))
-        for blk in self.blocks:
-            x_tt = blk(x_tt, cos_tt, sin_tt)
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
+        try:
+            for blk in self.blocks:
+                x_tt = blk(x_tt, cos_tt, sin_tt)
+        finally:
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
         return x_tt
 
     def forward_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
