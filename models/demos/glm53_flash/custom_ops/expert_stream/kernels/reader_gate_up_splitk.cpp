@@ -47,8 +47,9 @@ void kernel_main() {
     constexpr uint32_t KS_MAX = SPLITK_KS_MAX;
     constexpr uint32_t E_TILES = (E + 31) / 32;
     constexpr uint32_t col_bytes = kt * tile_bytes;
-    constexpr uint32_t slot_bytes = KS_MAX * page_bytes;
-    static_assert(kt * page_bytes == col_bytes, "page size must divide the column");
+    // the stream reads one tile per packet (the plain stream's page_bytes packets of 8 tiles do not divide a K slice)
+    constexpr uint32_t slot_bytes = KS_MAX * tile_bytes;
+    (void)page_bytes;
 #ifdef ROUTING_FOLD
     constexpr uint32_t R_TILES = (E + 62) / 32;
     cb_reserve_back(cb_r, R_TILES + 1);
@@ -90,9 +91,9 @@ void kernel_main() {
 #else
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
 #endif
-    constexpr uint32_t src_step = page_bytes;
+    constexpr uint32_t src_step = tile_bytes;
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
-    noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
+    noc_async_read_one_packet_set_state<true>(w_base, tile_bytes, vc);
     constexpr uint32_t num_buffers = 3;
     constexpr uint32_t extra_in_flight = 1;
     cb_reserve_back(cb_w, KS_MAX * (extra_in_flight + 1));
@@ -120,7 +121,7 @@ void kernel_main() {
 #endif
             noc_async_read_set_trid(trid);
             for (uint32_t p = 0; p < ks; ++p) {
-                noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write + p * page_bytes, trid);
+                noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write + p * tile_bytes, trid);
                 src += src_step;
             }
             l1_write += slot_bytes;
