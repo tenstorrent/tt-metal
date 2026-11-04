@@ -44,17 +44,20 @@ def placement_balanced(pop: torch.Tensor, rows: int) -> torch.Tensor:
 
 
 def step_loads(ids: torch.Tensor, row_of: torch.Tensor, rows: int, second: torch.Tensor | None = None) -> torch.Tensor:
-    """``ids`` [steps, users, k] -> [steps, rows] loads. With ``second`` (the duplicate row per expert, -1 = none)
-    every selection of a duplicated expert goes to the lighter of its rows in selection order (greedy, dynamic)."""
+    """``ids`` [steps, users, k] -> [steps, rows] loads = the DISTINCT experts of the step on each row (the weights
+    stream once per expert and the 32-row tile covers every user, so the expert phase scales with distinct experts).
+    With ``second`` (the duplicate row per expert, -1 = none) every distinct duplicated expert goes to the lighter
+    of its rows, in decreasing-popularity order of the step's experts (greedy, dynamic)."""
     S = ids.shape[0]
     flat = ids.reshape(S, -1)
-    if second is None:
-        rows_of = row_of[flat]  # [S, users*k]
-        return torch.stack([torch.bincount(rows_of[s], minlength=rows) for s in range(S)]).float()
     out = torch.zeros(S, rows)
     for s in range(S):
+        experts = torch.unique(flat[s])
+        if second is None:
+            out[s] = torch.bincount(row_of[experts], minlength=rows).float()
+            continue
         load = torch.zeros(rows)
-        for e in flat[s].tolist():
+        for e in experts.tolist():
             r1, r2 = int(row_of[e]), int(second[e])
             r = r1 if r2 < 0 or load[r1] <= load[r2] else r2
             load[r] += 1
