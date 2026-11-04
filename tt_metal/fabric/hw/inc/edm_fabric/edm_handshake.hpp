@@ -146,7 +146,7 @@ FORCE_INLINE void initialize_edm_common_datastructures(uint32_t handshake_regist
         erisc_info->channels[i].bytes_sent = 0;
         erisc_info->channels[i].receiver_ack = 0;
     }
-    *(volatile tt_l1_ptr uint32_t*)handshake_register_address = 0;
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(handshake_register_address)) = 0;
 }
 
 /*
