@@ -6733,7 +6733,7 @@ def record_kernel_attempt(
     # agent can exhaust the entire ladder on every op with zero code changes and zero real
     # measurements (287 attempts, 0 diffs observed in the first model that hit this).
     _diff_now = _capture_attempt_diff()
-    _max_no_diff = int(os.environ.get("PERF_MCP_MAX_NO_DIFF_ATTEMPTS", "1"))
+    _max_no_diff = int(os.environ.get("PERF_MCP_MAX_NO_DIFF_ATTEMPTS", "0"))
     if not _diff_now and "wedged" not in (note or "").lower() and os.environ.get("PERF_MCP_ALLOW_NO_DIFF") != "1":
         _prior_no_diff = sum(
             1
