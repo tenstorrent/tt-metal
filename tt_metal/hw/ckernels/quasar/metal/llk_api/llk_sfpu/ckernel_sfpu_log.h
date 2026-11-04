@@ -203,6 +203,15 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
     return result;
 }
 
+// The log_base_scale_factor the generated log10 kernel is fitted for, as FP32 bits; any other log_base_scale_factor
+// runs the stock kernel.
+inline constexpr std::uint32_t log10_bf16_log_base_scale_factor_bits = 0x3ede5bd9u;
+// Whether BF16 DEST runs the generated log10 kernel as one call over the whole tile.
+inline constexpr bool log10_bf16_whole_tile = false;
+// The stock log10 kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void log10_bf16_tile_init() {}
+
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
