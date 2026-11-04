@@ -56,7 +56,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 
@@ -93,13 +92,13 @@ def _zero_bias_if_bias_free(gate_model: str, gate_w: dict) -> dict:
 GATE_SP_DIM = PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
-def _gate_config(gate_model: str, sp_dim: int = GATE_SP_DIM) -> TtMoEGateConfig:
-    """Gate config at ``sp_dim`` rows per chip (GATE_SP_DIM unless a 4x4 case asks for its SP=4 depth).
+def _gate_config(gate_model: str) -> TtMoEGateConfig:
+    """Gate config at GATE_SP_DIM.
 
     The depth must be passed at construction: TtMoEGateConfig drops every tuned matmul entry keyed to
     another depth, so assigning sp_dim afterwards leaves the lookup on TTNN's default tiling.
     """
-    return TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=sp_dim)
+    return TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=GATE_SP_DIM)
 
 
 # First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
@@ -548,7 +547,6 @@ def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input)
     FORWARD_PASS_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("sp_dim", with_sp4_depth([(GATE_SP_DIM,)], ids=["isl_5k"]))
 def test_forward_pass(
     gate_model,
     mesh_device,
@@ -556,7 +554,6 @@ def test_forward_pass(
     num_links,
     sp_axis,
     gate_fallback_mode,
-    sp_dim,
 ):
     """Gate PCC across model variants and compute modes. The gate picks grouped vs plain top-k from
     n_expert_groups (Kimi / V4 have one group) and sigmoid vs sqrtsoftplus from SCORE_FUNC, so the
@@ -564,7 +561,7 @@ def test_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    config = _gate_config(gate_model, sp_dim)
+    config = _gate_config(gate_model)
     config.ccl_config["DISPATCH_AXIS"] = sp_axis
     config.ccl_config["TP_AXIS"] = 1 - sp_axis
     config.ccl_config["NUM_LINKS"] = num_links

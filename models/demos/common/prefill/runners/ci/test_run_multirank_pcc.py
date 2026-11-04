@@ -118,6 +118,11 @@ elif args and args[0].endswith("gen_pipeline_binding.py"):
 elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
     record("runner")
     crash = os.environ.get("TEST_RUNNER_CRASH")
+    if os.environ.get("TEST_RUNNER_HANDLED_TRACEBACK"):
+        # A traceback the rank logged and recovered from (logger.exception): no uncaught-exception marker.
+        log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / "rank.1" / "stderr"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("Traceback (most recent call last):\nRuntimeError: retrying the D2D connect\n")
     if crash != "bringup":
         Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
     if crash:
@@ -129,7 +134,10 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
             time.sleep(0.01)
         log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / "rank.1" / "stderr"
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text("Traceback (most recent call last):\nRuntimeError: TIMEOUT: device timeout\n")
+        log.write_text(
+            "Traceback (most recent call last):\nRuntimeError: TIMEOUT: device timeout\n"
+            "PREFILL_UNCAUGHT_EXCEPTION: RuntimeError\n"
+        )
         inspector = Path(os.environ["TT_METAL_HOME"]) / "generated" / "inspector"
         inspector.mkdir(parents=True, exist_ok=True)
         (inspector / "dispatch.yaml").write_text("stub inspector dump\n")
@@ -140,6 +148,8 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
         if time.monotonic() > deadline:
             sys.exit(99)
         time.sleep(0.01)
+    if os.environ.get("TEST_RUNNER_HANDLED_TRACEBACK"):
+        time.sleep(11)  # outlive one 10 s pass of the crash watchdog, so it has seen the traceback
     sys.exit(int(os.environ.get("TEST_RUNNER_RC", "0")))
 elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
     record("producer")
@@ -566,6 +576,12 @@ class MultirankPccHarnessTests(unittest.TestCase):
             [path.name for path in (evidence / "inspector").glob("*/dispatch.yaml")], ["dispatch.yaml"], output
         )
         return output, records
+
+    def test_a_handled_traceback_does_not_stop_the_run(self):
+        result, _ = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS, extra_env={"TEST_RUNNER_HANDLED_TRACEBACK": "1"})
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertNotIn("a rank crashed", output)
 
     def test_a_silent_hang_dumps_stacks_and_triage_then_stops_the_run(self):
         summaries = tempfile.TemporaryDirectory()

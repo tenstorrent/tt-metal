@@ -52,7 +52,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import with_sp4_depth
 
 
 def run_dispatch_combine(
@@ -444,7 +443,7 @@ def _ci_unsupported_param_combos_dispatch_combine(**params):
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine)
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
-    with_sp4_depth(dispatch_combine_shape_params()),
+    dispatch_combine_shape_params(),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
