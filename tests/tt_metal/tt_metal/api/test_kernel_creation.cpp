@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/core_coord.hpp>
-#include "context/metal_env_accessor.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <exception>
 #include <set>
 #include <string>
@@ -17,10 +15,8 @@
 #include "base_types.hpp"
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/program.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -64,11 +60,9 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        const auto& dispatch_core_config =
-            MetalContext::instance(mesh_device->impl().get_context_id()).get_dispatch_core_config();
+        const auto& dispatch_core_config = mesh_device->impl().metal_context().get_dispatch_core_config();
         CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
-        MetalEnvImpl& env_impl =
-            MetalEnvAccessor(MetalContext::instance(mesh_device->impl().get_context_id()).get_env()).impl();
+        auto& env_impl = mesh_device->impl().metal_env();
         std::vector<CoreCoord> dispatch_cores = tt::get_logical_dispatch_cores(
             env_impl, mesh_device->get_device_ids()[0], mesh_device->num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;

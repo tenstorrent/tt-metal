@@ -13,7 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include <device.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -151,11 +151,11 @@ void write_dram_sender_l1(
     const CoreCoord& sender_logical,
     DeviceAddr local_addr,
     std::span<const std::byte> bytes) {
-    auto& metal_ctx = MetalContext::instance(mesh_device.impl().get_context_id());
+    auto& env = mesh_device.impl().metal_env();
     const uint64_t write_addr =
-        metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
+        env.get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
     const CoreCoord virtual_core = device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
-    metal_ctx.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
+    env.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
 }
 
 }  // namespace tt::tt_metal

@@ -17,6 +17,7 @@
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
 
@@ -136,8 +137,8 @@ TEST_F(DevicePrintDramFixture, DramPrintFactorial) {
 TEST_F(DevicePrintDramFixture, DramPrintSkipsSysengEndpoints) {
     DRAM_SKIP_GUARDS();
     for (auto& mesh_device : this->devices_) {
-        auto& context = MetalContext::instance(mesh_device->impl().get_context_id());
-        const auto& cluster = context.get_cluster();
+        auto& context = mesh_device->impl().metal_context();
+        const auto& cluster = mesh_device->impl().metal_env().get_cluster();
         for (IDevice* device : mesh_device->get_devices()) {
             const auto& soc_desc = cluster.get_soc_desc(device->id());
             std::unordered_set<CoreCoord> noc0_endpoints;

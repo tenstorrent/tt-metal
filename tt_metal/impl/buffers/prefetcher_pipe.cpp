@@ -601,7 +601,7 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
     }
     validate_dram_senders_across_mesh(device_, sender_mapping);
 
-    const auto& hal = MetalContext::instance(device_->impl().get_context_id()).hal();
+    const auto& hal = device_->impl().metal_env().get_hal();
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
         "set_dram_sender_cores requires programmable DRAM cores");
