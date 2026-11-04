@@ -30,6 +30,15 @@ wormhole_b0:
   - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_device_typecast_integer[integer=DataType.UINT16]
   - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_device_typecast_uint16_matches_golden
 
+  # 32-bit (FP32/INT32) unpack to Dest is read as unpack_to_dst=0 on the Wormhole sim
+  # (UndefinedBehavior: tensix_unpacr: unpack_to_dst=0 ...); passes on Wormhole hardware.
+  # https://github.com/tenstorrent/ttsim/issues/18
+  - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_add_integer_to_bfp2
+  - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_device_typecast_float[other=DataType.FLOAT32]
+  - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_device_typecast_integer[integer=DataType.INT32]
+  - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_device_typecast_integer[integer=DataType.UINT32]
+  - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_device_typecast_signed_integer[integer=DataType.INT32]
+
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
