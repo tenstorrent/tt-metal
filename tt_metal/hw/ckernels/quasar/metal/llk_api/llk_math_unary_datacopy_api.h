@@ -25,6 +25,8 @@
  * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math init when type is B2D
  * @tparam unpack_to_dest Set true to enable the UNP_DEST routing decision (unary, non-broadcast path)
  * @param operand Logical dataflow buffer id for the input operand
+ * @note With EN_32BIT_DEST, an Int16 operand needs unpack_to_dest, including the B2D broadcast path.
+ *       The FPU cannot datacopy Int16 into a 32-bit Dest. The check below is LLK_ASSERT-only.
  */
 template <
     DataCopyType type,
