@@ -133,8 +133,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const uint32_t Skt_ = k_chunk / tt::constants::TILE_WIDTH;
     const uint32_t kdeq_mode = ::sparse_sdpa::kdeq_batch_mode();
     const bool kv_in_l1 = t.kv.memory_config().buffer_type() == tt::tt_metal::BufferType::L1;
-    const bool kdeq_batch = scaled_kv && ::sparse_sdpa::KDEQ_SLABS % Skt_ == 0 &&
-                            (kdeq_mode == 2 || (kdeq_mode == 1 && kv_in_l1));
+    const bool kdeq_batch =
+        scaled_kv && ::sparse_sdpa::KDEQ_SLABS % Skt_ == 0 && (kdeq_mode == 2 || (kdeq_mode == 1 && kv_in_l1));
     const uint32_t krm_slabs = kdeq_batch ? ::sparse_sdpa::KDEQ_SLABS : ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH;
     if (scaled_kv) {
         // One double-buffered allocation with an owning FP8 FIFO and a format-only BF16 RoPE alias. Both use
