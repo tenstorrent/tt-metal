@@ -56,6 +56,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/core/tensor/kernels/d2d_relay_common.hpp"
 
 // CT-arg layout (must stay in sync with build_sender_program in
 // ttnn/core/tensor/d2d_stream_service.cpp). The SAME full layout is passed to both
@@ -111,12 +112,13 @@ constexpr auto input_tensor_accessor_args = TensorAccessorArgs<30>();
 // block shared by every extra segment follows them (all DRAM interleaved). Each segment's
 // receiver backing address is one RT arg after the primary's.
 constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
+// Bytes of one scratch ring slot: room for the largest group of pages packed into one packet.
+constexpr uint32_t slot_bytes = get_named_compile_time_arg_val("slot_bytes");
 constexpr uint32_t extra_segments_ct_offset = input_tensor_accessor_args.next_compile_time_args_offset();
 constexpr uint32_t kExtraSegmentCtArgs = 4;
 
 // Emit `size` bytes from a contiguous L1 source to a single remote NoC address over
-// fabric, split into <= fabric_max_payload_size packets. Used for both a tensor page
-// (its DRAM home in the receiver backing tensor) and the optional metadata blob.
+// fabric, split into <= fabric_max_payload_size packets. Used for the optional metadata blob.
 FORCE_INLINE void fabric_write_bytes(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     uint64_t dst_addr,
@@ -137,49 +139,24 @@ FORCE_INLINE void fabric_write_bytes(
     }
 }
 
-// Largest power of 2 <= n (n >= 1). Rounds the read-ring depth down to a power of 2 so
-// the ring slot index is a bitmask rather than a modulo.
-// Following uses Hacker's Delight formula
-constexpr uint32_t floor_pow2(uint32_t n) {
-    if (n == 0) {
-        return 0;
-    }
-    return 1u << (31 - __builtin_clz(n));
-}
-
-// Thin compile-time transaction-id ring. Depth is a power of 2 (asserted), so a page
-// index maps to its ring slot with a bitmask and to its trid with slot + Base. Page k
-// and page k + Depth share a slot/trid — exactly the "ship slot for page k, then
-// prefetch the page Depth ahead into it" reuse the streaming loop relies on.
-template <uint32_t Depth, uint32_t Base>
-struct TridRing {
-    static_assert(Depth > 0 && (Depth & (Depth - 1)) == 0, "TridRing Depth must be a power of 2");
-    static constexpr uint32_t depth = Depth;
-    static constexpr uint32_t slot(uint32_t page) { return page & (Depth - 1); }
-    static constexpr uint32_t trid(uint32_t page) { return Base + (page & (Depth - 1)); }
-};
-
 // Read pipelining: stream pages through a trid ring over the scratch CB so DRAM reads
 // overlap the fabric writes. Ring depth = the scratch CB's slot capacity
-// (num_read_slots, host-sized), rounded DOWN to a power of 2 (TridRing's bitmask) —
+// (num_read_slots, host-sized), rounded DOWN to a power of 2 (the slot index is a bitmask) —
 // independent of pages_per_chunk, so a large tensor page (small pages_per_chunk) still
 // pipelines at full depth.
-constexpr uint32_t kRingDepth = floor_pow2(num_read_slots);
+constexpr uint32_t kRingDepth = d2d_relay::floor_pow2(num_read_slots);
 // Each lane (RISC) gets a DISJOINT trid range so the two RISCs on this core never
 // share a NoC transaction id — the trid-barrier counters are not assumed independent
 // across the two RISCs. Lane 0 -> [1, 1+depth), lane 1 -> [1+depth, 1+2*depth).
 constexpr uint32_t kLaneId = is_master ? 0u : 1u;
 constexpr uint32_t kTridBase = 1u + kLaneId * kRingDepth;
 static_assert(2u * kRingDepth <= 15u, "two lanes of trids must fit in the 0..15 transaction-id space");
-using ReadRing = TridRing<kRingDepth, kTridBase>;
 
 // Stream this lane's contiguous page range [page_start_, page_end_) DIRECTLY into the
 // receiver DRAM tensor over `conn`, pipelining the DRAM reads (in_acc) with the fabric
-// writes (out_acc) through the trid ring: only the trid we are about to ship is
-// barriered, so up to ReadRing::depth reads stay in flight behind the current write;
-// each fabric write flushes locally, freeing its scratch slot, so we immediately
-// prefetch the page one ring ahead into it. in_acc/out_acc share the per-shard spec
-// (same accessor args, different base address).
+// writes (out_acc) through the trid ring: each slot holds a packet's worth of pages, so up
+// to kRingDepth packets are read ahead of the one being written. in_acc/out_acc share
+// the per-shard spec (same accessor args, different base address).
 template <typename Acc>
 FORCE_INLINE void stream_pages(
     const Noc& noc,
@@ -191,35 +168,8 @@ FORCE_INLINE void stream_pages(
     uint32_t page_end_,
     uint32_t page_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
-    const uint32_t n = page_end_ - page_start_;
-    const uint32_t prime = (ReadRing::depth < n) ? ReadRing::depth : n;
-    CoreLocalMem<uint32_t> scratch(cb_l1_addr);
-    for (uint32_t i = 0; i < prime; ++i) {
-        noc.async_read<NocOptions::TXN_ID>(
-            in_acc,
-            scratch,
-            page_size,
-            {.page_id = page_start_ + i},
-            {.offset_bytes = i * page_size},
-            NocOptVals{.trid = ReadRing::trid(i)});
-    }
-    for (uint32_t k = 0; k < n; ++k) {
-        const uint32_t slot = ReadRing::slot(k);
-        const uint32_t trid = ReadRing::trid(k);
-        const uint32_t src = cb_l1_addr + slot * page_size;
-        noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = trid});
-        fabric_write_bytes(conn, out_acc.get_noc_addr(page_start_ + k), src, page_size, data_packet_header_addr);
-        const uint32_t next = k + ReadRing::depth;
-        if (next < n) {
-            noc.async_read<NocOptions::TXN_ID>(
-                in_acc,
-                scratch,
-                page_size,
-                {.page_id = page_start_ + next},
-                {.offset_bytes = slot * page_size},
-                NocOptVals{.trid = trid});
-        }
-    }
+    d2d_relay::stream_sized_pages<fabric_max_payload_size, slot_bytes, kRingDepth, kTridBase>(
+        noc, conn, in_acc, out_acc, cb_l1_addr, page_start_, page_end_, page_size, data_packet_header_addr);
 }
 
 // The primary segment's page size is a compile-time constant; inlining stream_pages with it
