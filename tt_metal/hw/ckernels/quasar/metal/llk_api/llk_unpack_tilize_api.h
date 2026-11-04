@@ -80,6 +80,7 @@ inline void llk_unpack_tilize_block(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     const LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb, "unpack_tilize_block");
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
 
     // Compute how many l1_index units fit in one DFB entry.
@@ -217,6 +218,8 @@ inline void llk_unpack_tilizeA_B(
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb_interface_a, "unpack_tilizeA_B operandA");
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb_interface_b, "unpack_tilizeA_B operandB");
 
     const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx;
     // Compute how many l1_index units fit in one DFB entry.

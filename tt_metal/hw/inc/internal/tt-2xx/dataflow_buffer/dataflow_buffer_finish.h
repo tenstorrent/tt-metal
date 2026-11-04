@@ -24,6 +24,9 @@
 #if defined(COMPILE_FOR_TRISC)
 #include "ckernel_trisc_common.h"
 #endif
+#if defined(COMPILE_FOR_TRISC) && DFB_TRISC_HAS_INTERFACE
+#include "llk_io.h"  // DFB_TILE_COUNTER_COUNT_MASK
+#endif
 
 // The DFBs hart `hart_u8` is bound to this launch, bit per logical id. A Metal 2.0 kernel's come from its
 // bindings at compile time (kernel_bindings_generated.h). A legacy kernel reads its participation from the DFB
@@ -324,7 +327,7 @@ FORCE_INLINE void dfb_trisc_kernel_exit() {
             drained = true;
             for (uint8_t i = 0; i < intf.num_tcs_to_rr; i++) {
                 const uint8_t tc_id = dfb::get_counter_id(intf.tc_slots[i].packed_tile_counter);
-                if ((ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu) != 0) {
+                if ((ckernel::trisc::tile_counters[tc_id].f.posted & DFB_TILE_COUNTER_COUNT_MASK) != 0) {
                     drained = false;
                 }
             }
