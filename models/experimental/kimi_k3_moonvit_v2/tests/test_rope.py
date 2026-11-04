@@ -22,8 +22,11 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     MeshRows,
     P150_AND_RING,
     REFERENCE,
+    SIMULATOR_GRID,
+    SIMULATOR,
     reference_rope,
     ring_parallel,
+    simulator_config,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import check_grid, resolve_parallel
 from models.experimental.kimi_k3_moonvit_v2.tt.rope import TT_Rope
@@ -40,10 +43,9 @@ def write_tables(tt_rope: TT_Rope, config, rows: MeshRows, h: int, w: int):
     return tt_rope.write(*(rows.held(t) for t in host_prep.rope_tables(config, h, w)))
 
 
-@P150_AND_RING
-@ROW_GRIDS
-def test_rope_tables(mesh_device, sp_axis, num_links, config, size):
-    h, w = check_grid(torch.tensor(row_grid(size)), config)
+def check_rope_tables(mesh_device, sp_axis, num_links, config, grid) -> None:
+    """`grid` padded to `config.max_patches`, the ring's length; one chip runs its quarter (`MeshRows`)."""
+    h, w = check_grid(torch.tensor(grid), config)
     rows = MeshRows(h * w, config.max_patches, sp_axis)
     tt_rope = build(mesh_device, sp_axis, num_links, config)
     previous = write_tables(tt_rope, config, rows, 8, 8)
@@ -55,11 +57,9 @@ def test_rope_tables(mesh_device, sp_axis, num_links, config, size):
     assert_quality(sin, rows.gather(rope.sin, mesh_device), pcc=0.9999, relative_rmse=0.003, label="sin")
 
 
-@P150_AND_RING
-@REFERENCE
-@ROW_GRIDS
-def test_rope_apply(mesh_device, sp_axis, num_links, config, reference, size):
-    grid_thws = torch.tensor(row_grid(size))
+def check_rope_apply(mesh_device, sp_axis, num_links, config, reference, grid) -> None:
+    """`grid` padded to `config.max_patches`, the ring's length; one chip runs its quarter (`MeshRows`)."""
+    grid_thws = torch.tensor(grid)
     h, w = check_grid(grid_thws, config)
     rows = MeshRows(h * w, config.max_patches, sp_axis)
     q = random_tensor(h * w, config.num_attention_heads, config.head_dim)
@@ -74,3 +74,28 @@ def test_rope_apply(mesh_device, sp_axis, num_links, config, reference, size):
     q_tt = rows.shard(q_window, mesh_device)  # [1, heads, S/sp, head_dim]
     out = ttnn.experimental.rotary_embedding_llama(q_tt, rope.cos, rope.sin, rope.trans_mat, is_decode_mode=False)
     assert_quality(rows.take(golden), rows.gather(out, mesh_device), relative_rmse=0.008)
+
+
+@P150_AND_RING
+@ROW_GRIDS
+def test_rope_tables(mesh_device, sp_axis, num_links, config, size):
+    check_rope_tables(mesh_device, sp_axis, num_links, config, row_grid(size))
+
+
+@SIMULATOR
+def test_rope_tables_small(mesh_device, sp_axis, num_links, config):
+    """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
+    check_rope_tables(mesh_device, sp_axis, num_links, simulator_config(config), SIMULATOR_GRID)
+
+
+@P150_AND_RING
+@REFERENCE
+@ROW_GRIDS
+def test_rope_apply(mesh_device, sp_axis, num_links, config, reference, size):
+    check_rope_apply(mesh_device, sp_axis, num_links, config, reference, row_grid(size))
+
+
+@SIMULATOR
+def test_rope_apply_small(mesh_device, sp_axis, num_links, config, reference):
+    """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
+    check_rope_apply(mesh_device, sp_axis, num_links, simulator_config(config), reference, SIMULATOR_GRID)

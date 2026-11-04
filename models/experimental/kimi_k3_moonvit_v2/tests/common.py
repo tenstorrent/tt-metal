@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import os
 import time
 
@@ -116,15 +117,33 @@ RING_TRACE = mesh_params(
 TRACE_WARMUP = 2
 TRACE_ITERATIONS = 10
 
-# ttsim (TT_METAL_SIMULATOR) simulates one chip at about 1/100 of silicon speed. The ROW_GRIDS cases pad
-# to 16,384 rows per chip, so they skip there; each row-wise part also has a SIMULATOR_GRID case on one
-# chip, with random weights: the chip's quarter of a ring padded to SIMULATOR_ROWS, 128 rows.
+# ttsim (TT_METAL_SIMULATOR) simulates one chip at about 1/100 of silicon speed, too slow for the
+# full padded length (16,384 rows per chip). Sim tests opt in with `@SIMULATOR`; on ttsim, conftest.py
+# skips every other device test. Each row-wise part has one: one chip, random weights, SIMULATOR_GRID
+# in a config padded to SIMULATOR_ROWS (`simulator_config`), so the chip runs its quarter, 128 rows.
+# They also run on hardware.
 ON_SIMULATOR = bool(os.environ.get("TT_METAL_SIMULATOR"))
-NOT_ON_SIMULATOR = pytest.mark.skipif(ON_SIMULATOR, reason="full padded length is too slow on ttsim")
-SINGLE_CHIP = mesh_params(P150)
+SIMULATOR_MARK = "simulator"
 SIMULATOR_ROWS = 512
 # 120 rows, all in the first chip's quarter: the real rows end inside a tile, padding after them.
 SIMULATOR_GRID = [(1, 6, 20)]
+
+
+def SIMULATOR(test):
+    """Mark `test` as a sim test: the `simulator` mark, one P150, and random weights if it takes
+    `reference`."""
+    marks = [getattr(pytest.mark, SIMULATOR_MARK), mesh_params(P150)]
+    if "reference" in inspect.signature(test).parameters:
+        marks.append(pytest.mark.parametrize("reference", ["random"], indirect=True))
+    for mark in marks:
+        test = mark(test)
+    return test
+
+
+def simulator_config(config: MoonViTConfig) -> MoonViTConfig:
+    """`config` padded to SIMULATOR_ROWS, for every sim test: the checks, host prep and device tables
+    all follow `max_patches`, and `device_config` gives one chip its quarter, as for the full length."""
+    return dataclasses.replace(config, max_patches=SIMULATOR_ROWS)
 
 
 def device_config(config: MoonViTConfig, sp_axis: int | None) -> MoonViTConfig:
