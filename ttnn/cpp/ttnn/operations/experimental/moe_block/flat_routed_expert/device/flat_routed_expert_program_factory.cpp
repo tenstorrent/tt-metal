@@ -275,10 +275,10 @@ FlatProgramHandles add_flat_routed_expert_program(
     // row-major y (cfg.y_row_major): the down compute pack-untilizes, the writers send row segments (y_row_major.hpp)
     const bool yrm = cfg.y_row_major;
     // the row-major out CB (bf16 row tiles of PCD pages) takes what the down cores' arena holds after the out region's
-    // start (the plan sizes the arena for the largest role; the plan's 2 KB margin is kept), at most 2 MT (a virtual
-    // expert ahead) and 8 (the writers' transaction ids 8..15)
+    // start up to the CBs every arena core shares (meta 6 / counts 7 at meta_off, past the largest role; the plan's
+    // 2 KB margin is kept), at most 2 MT (a virtual expert ahead) and 8 (the writers' transaction ids 8..15)
     auto yrm_rows = [&](uint32_t pw) {
-        const uint32_t room = p.arena_tiles * 2048 - p.o_off - 2048;
+        const uint32_t room = p.meta_off - p.o_off - 2048;
         return std::min({room / (pw * 2048), 2 * MT, 8u});
     };
     auto yrm_def = [&](Defines d, uint32_t pw = 0) {
