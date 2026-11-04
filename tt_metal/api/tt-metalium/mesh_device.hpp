@@ -309,7 +309,8 @@ public:
      * By default the submesh has its own allocator, so its buffers can land at the same addresses as this mesh's
      * buffers on the shared devices. With share_allocator, the submesh allocates through this mesh's allocator
      * instead, so the buffers of this mesh and of every sharing submesh never overlap. A sharing submesh does not
-     * support traces or sub-device managers, and it is closed when this mesh closes.
+     * support traces, sub-device managers or command lists, and it is closed when this mesh closes. Free its buffers
+     * before closing it: a buffer that outlives it stays reserved in this mesh's allocator until this mesh closes.
      *
      * Overlapping meshes still run one after another. Call quiesce_devices() between a phase on this mesh and a
      * phase on an overlapping submesh. For a sharing submesh this is enforced: enqueueing on it while an overlapping

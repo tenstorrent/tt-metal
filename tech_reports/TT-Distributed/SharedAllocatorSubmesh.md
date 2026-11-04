@@ -27,20 +27,23 @@ submeshes created without it.
 
 - Buffers of the parent and of every sharing submesh never overlap, in DRAM and in L1. The parent's allocator works in
   lock step on all of its chips, so a submesh buffer also reserves its range on the parent's other chips. That wastes
-  space on those chips but needs no new allocator.
+  space on those chips but needs no new allocator. The same holds for the DRISC L1 that DRAM-sender prefetcher pipes
+  use on Blackhole: a sharing submesh places it through the parent's arena.
 - A submesh program's circular buffers are checked against the L1 buffers of the whole family (the submesh reports the
   parent's lowest occupied L1 address), so a clash fails at enqueue time, as it does inside one mesh.
 - Switching between overlapping meshes is explicit. A command queue of a sharing submesh (or of its parent or a
   sibling) that goes from idle to in use while an overlapping mesh of the family still has a command queue in use
   raises a `TT_FATAL` that names both meshes and says to call `quiesce_devices()`. Disjoint siblings may run at the same
-  time. The check only involves sharing submeshes, so existing code that uses overlapping meshes without
-  `share_allocator` behaves as before.
+  time. The check only involves sharing submeshes, and a family without one skips it, so existing code that uses
+  overlapping meshes without `share_allocator` behaves as before.
 - `quiesce_devices()` now also clears each command queue's record of what the prefetcher caches. The prefetcher is per
   chip but that record is per mesh, so after another mesh used the chip (a submesh read was enough), the first mesh's
   next workload replayed a stale cache entry and hung. The record does not depend on the allocator, so this applies to
   overlapping submeshes without `share_allocator` too; the hang was reproduced and fixed with a sharing submesh.
 - Closing the parent first closes its sharing submeshes, because they free their buffers through the parent's
   allocator. Submesh buffers that outlive the parent are dropped without being freed.
+- Free a sharing submesh's buffers before closing or dropping the submesh. A buffer that outlives its submesh is
+  dropped without being freed, so its range stays reserved in the parent's allocator until the parent closes.
 
 ## What it does not do
 
@@ -50,7 +53,8 @@ submeshes created without it.
   mesh, and sharing them with the parent is follow-up work. The parent can still capture and replay traces.
 - No sub-device managers or command lists on a sharing submesh (they would need their own allocators).
 - No HYBRID allocator mode, no remote-only parents.
-- The overlap check assumes one thread drives the overlapping meshes.
+- The overlap check runs only under fast dispatch. It assumes that one thread drives the overlapping meshes, and that
+  no mesh of the family is created or closed while another thread enqueues work on one of them.
 
 ## Why a fatal error instead of an automatic quiesce
 
@@ -72,9 +76,10 @@ each, medians (`test_switch_cost` in `tests/ttnn/unit_tests/base_functionality/t
 | A step of 16 small ops on the parent, after a parent step, ending in a finish | 289.0 us | 322.9 us |
 | The same step right after a submesh step, ending in a quiesce | 302.4 us | 339.0 us |
 
-So a switch costs about 13 us over a back-to-back step (13.4 us here, 13.6 us in a second run): the quiesce itself plus resending the two programs' binaries
-that the prefetcher no longer caches. The resend grows with the number of programs a step runs; it was not measured
-for a full model. Against a decode step of tens of milliseconds this is well under 1%.
+So a switch costs about 13 us over a back-to-back step (13.4 us here, 13.6 us in a second run): the quiesce itself
+plus resending the two programs' binaries that the prefetcher no longer caches. The resend grows with the number of
+programs a step runs; it was not measured for a full model. Against a decode step of tens of milliseconds this is well
+under 1%.
 
 ## How a serving runtime uses it
 

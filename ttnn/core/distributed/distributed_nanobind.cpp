@@ -314,8 +314,8 @@ void py_module(nb::module_& mod) {
                     submesh_shape (MeshShape): Shape of the submesh.
                     offset (MeshCoordinate, optional): Coordinate of the submesh's first device in this mesh.
                     share_allocator (bool): Allocate through this mesh's allocator, so the buffers of this mesh and
-                        of the submesh never overlap. Traces and sub-device managers are not supported on such a
-                        submesh, and it closes when this mesh closes.
+                        of the submesh never overlap. Traces, sub-device managers and command lists are not
+                        supported on such a submesh, and it closes when this mesh closes.
 
                 Overlapping meshes run one after another. Call quiesce_devices() on this mesh before switching
                 between it and an overlapping submesh. With share_allocator, enqueueing without it raises.
