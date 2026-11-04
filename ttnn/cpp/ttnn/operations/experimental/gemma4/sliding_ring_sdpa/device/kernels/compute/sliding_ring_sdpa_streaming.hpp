@@ -7,8 +7,28 @@
 // Gemma4 sliding ring SDPA's copy of sdpa_ring_v2 (compute_streaming.hpp). The rest of the streaming
 // primitives stay shared; only the ring loop is forked so Gemma4-only changes do not touch the shared op.
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp"
+#include "cpp/ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/sliding_ring_sdpa_derived_slots.hpp"
 
 namespace gemma4_sliding {
+
+// Lanes: per-lane logical_nt and KV-pad Q mapping (K fields unused), filled once by the compute kernel from
+// cb_kv_pad_derived. With num_lanes > 1, sdpa_ring_v2 loads each unit's lane (flat unit / units_per_lane) before its
+// sliding plan and masks.
+namespace lanes {
+// Plain aggregates: a kernel global must not need dynamic initialization (KVPadRotationContext has member
+// initializers), so each lane's Q mapping is copied into the unit's context field by field.
+struct LaneQMapping {
+    uint32_t q_pre_wrap_start_tile;
+    uint32_t q_pre_wrap_tile_count;
+    uint32_t q_post_wrap_start_tile;
+    uint32_t q_valid_tile_count;
+};
+struct LaneTable {
+    uint32_t logical_nt[ring_joint::kMaxLanes];
+    LaneQMapping q_mapping[ring_joint::kMaxLanes];
+};
+inline LaneTable table;
+}  // namespace lanes
 
 /**
  * Streaming Ring SDPA (v2), sliding-window copy: one synthetic ring pass per Q chunk over the local
@@ -96,13 +116,17 @@ template <
     uint32_t kv_region_Nt = q_local_padded_Nt,
     // Split-KV: GROUPED_KV_SOURCE_COUNT > 1. Keeps the per-source path free of packed branches.
     bool packed_kv_enabled = false,
+    // Lanes: requests stacked in one call (see lanes::LaneTable); 1 is the single-request op. A lane owns
+    // units_per_lane consecutive flat units (NH * num_q_chunks).
+    uint32_t num_lanes = 1,
+    uint32_t units_per_lane = 0,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
     const uint32_t num_q_chunks,
     const uint32_t num_local_k_chunks,
-    const uint32_t logical_nt,
+    const uint32_t logical_nt_arg,
     const bool ring_iter_needs_global_n_mask,
     const bool ring_iter_needs_joint_n_mask,
     const bool local_n_needs_masking,
@@ -114,7 +138,7 @@ void sdpa_ring_v2(
     const uint32_t q_per_core = 1,
     const MaskCtx& lw_mask = {},
     const bool use_zigzag_balancing = false,
-    const ChunkedContext& chunked = {},
+    const ChunkedContext& chunked_arg = {},
     const bool is_first_active_iter = true,
     // Sliding K split only: this core's band of the work plan (ring_joint_ksplit.hpp).
     const uint32_t sliding_split_idx = 0,
@@ -124,6 +148,9 @@ void sdpa_ring_v2(
     // Rows of newest slabs this pass appends (packed_kv_pass_rows).
     const uint32_t packed_newest_rows = 0) {
     init_sdpa_streaming_semaphores();
+    // Lanes reload these per unit (see lanes::LaneTable); the lambdas below capture them by reference.
+    uint32_t logical_nt = logical_nt_arg;
+    ChunkedContext chunked = chunked_arg;
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
     // The shared op's dense ring loop (per-source ring iterations, DRAM-staged accumulators, balanced
@@ -161,7 +188,18 @@ void sdpa_ring_v2(
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        const uint32_t q_unit = remap_q_index(q, num_q_chunks, use_zigzag_balancing);
+        uint32_t q_chunk = q_unit % num_q_chunks;
+        if constexpr (num_lanes > 1) {
+            static_assert(num_lanes <= ring_joint::kMaxLanes && units_per_lane > 0);
+            const uint32_t lane = q_unit / units_per_lane;
+            logical_nt = lanes::table.logical_nt[lane];
+            const lanes::LaneQMapping& q_mapping = lanes::table.q_mapping[lane];
+            chunked.kv_pad_rotation.q_pre_wrap_start_tile = q_mapping.q_pre_wrap_start_tile;
+            chunked.kv_pad_rotation.q_pre_wrap_tile_count = q_mapping.q_pre_wrap_tile_count;
+            chunked.kv_pad_rotation.q_post_wrap_start_tile = q_mapping.q_post_wrap_start_tile;
+            chunked.kv_pad_rotation.q_valid_tile_count = q_mapping.q_valid_tile_count;
+        }
 
         // Absolute tile row of this Q chunk's first row.
         const uint32_t q_start_tile =
