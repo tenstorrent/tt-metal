@@ -821,3 +821,16 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
     assert_with_pcc(ref2, out2, 0.9999)
 
     assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize("shape", [(1, 16, 160, 400), (1, 16, 64, 96), (1, 48, 40, 72), (2, 24, 20, 33)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+def test_permute_row_major_channels_last_exact(device, shape, dtype, memory_config):
+    torch.manual_seed(0)
+    torch_input = random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    output_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))
+    assert_equal(torch.permute(torch_input, (0, 2, 3, 1)), ttnn.to_torch(output_tensor))
