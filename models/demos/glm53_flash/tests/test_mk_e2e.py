@@ -52,7 +52,14 @@ def _layers() -> list[int]:
 
 
 def chat_prompt(tok, isl: int) -> list[int]:
-    """a chat-rendered prompt of (about) isl tokens: filler text cut to the token budget + a question"""
+    """a chat-rendered prompt of (about) isl tokens: filler text cut to the token budget + a question; or the text of
+    GLM53_MK_PROMPT (=@file) as the whole user message (the HF greedy reference's prompt: ISL = its length)"""
+    fixed = os.environ.get("GLM53_MK_PROMPT", "")
+    if fixed.startswith("@"):
+        with open(fixed[1:]) as f:
+            fixed = f.read().strip()
+    if fixed:
+        return tok.encode_chat([{"role": "user", "content": fixed}])
     overhead = len(tok.encode_chat([{"role": "user", "content": QUESTION}]))
     budget = max(8, isl - overhead - 2)
     filler_ids = tok.encode(FILLER * (budget // 16 + 2))[:budget]
