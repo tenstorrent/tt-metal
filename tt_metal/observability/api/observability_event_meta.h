@@ -2,45 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Per-event metadata for observability events. A metadata type is a plain C++ struct; an event carries one constant
-// value of it, which the compiler marshals into the event's ELF record and the host unmarshals at load. The device
-// never sees it: it only has the event's descriptor id (hostdev/observability_event_descriptor.h).
+// Per-event metadata for observability events, as the device and the host both see it. A metadata type is a plain C++
+// struct; an event carries one constant value of it, which the device compiler marshals into the event's ELF record
+// and the host unmarshals at load. The device never sees the value at run time: it only has the event's descriptor id
+// (hostdev/observability_event_descriptor.h).
+//
+// This header is public: host compilers, inside and outside tt-metal, compile it from tt_metal/observability/api, and
+// the device compiler compiles the copy the JIT build stages (jit_build/staged_includes.hpp), unchanged. It holds what
+// both sides must agree on -- the metadata types, the rules a metadata type must follow and the signature that names a
+// type in its record -- and nothing that only one side uses. The device's marshalling is in
+// hostdev/observability_event_descriptor.h; the host reads a record's value back with Metadata::as<T>()
+// (tt-metalium/experimental/observability_event_meta.hpp).
 //
 // A metadata type must be a simple aggregate: a struct with public data members only -- no base classes,
 // constructors, C arrays, const or reference members -- and 1..kMaxFields of them, each one of
 //   const char*        set from a string literal
 //   integer or enum    of 1, 2, 4 or 8 bytes (bool included)
 //   a nested struct    itself a simple aggregate
-// and every value must be a compile-time constant; an event's strings, quoted, must fit its kMaxEventAsmBytes of
-// assembler text. Its FIRST field is the event's name, a const char* that every
+// and every value must be a compile-time constant. Its FIRST field is the event's name, a const char* that every
 // event sets to a non-empty string. The type must be named at namespace scope (not in an anonymous namespace, not
 // local to a function, not unnamed), because the host matches it by the name the compiler spells. check_event_type<T>()
 // enforces all of this with readable errors.
 //
-// One event, one record per distinct metadata value: the event's label carries a hash of the value, so copies of an
-// event with the same value (inlined, or template instantiations) share a handle and an id, and instantiations whose
-// values differ (e.g. a colour taken from a template parameter) each get their own.
-//
-// Marshalling: emit_event() walks the struct's fields (C++17 aggregate decomposition) inside a constant expression
-// and returns assembler text, which the event's asm((...)) statement emits. Unmarshalling: the host walks the same
-// fields of the same struct (Metadata::as<T>()).
-//
-// Record in .tt_event_descriptor_meta (little-endian; one per event; records are 4-byte aligned and contiguous):
-//   [0]  u32 id          the handle's VMA in .tt_event_descriptor_ids (rebased by the host at load)
-//   [4]  u32 signature   VMA in .tt_event_descriptor_str of "<type name>:<field codes>", e.g.
-//   "tt::observability_event::ZoneColorMeta:sw" [8]  u32 file        VMA in .tt_event_descriptor_str [12] u32 line
-//   [16] the leaf fields in declaration order, nested structs flattened in place, each aligned to min(its size,
-//        4); then padding to 4
-// Field codes: 's' const char* (u32 VMA in .tt_event_descriptor_str), 'b' 1 byte, 'h' 2, 'w' 4, 'q' 8; a nested
-// struct is its own codes in braces, so {const char* name; Style{u32, u8} style; u16 flags;} is "s{wb}h". Braces carry
-// no bytes.
+// Both sides walk the struct's fields the same way (C++17 aggregate decomposition, for_each_leaf), and name the type
+// with the same signature, "<type name>:<field codes>", e.g. "tt::observability_event::ZoneColorMeta:sw".
+// Field codes: 's' const char*, 'b' 1 byte, 'h' 2, 'w' 4, 'q' 8; a nested struct is its own codes in braces, so
+// {const char* name; Style{u32, u8} style; u16 flags;} is "s{wb}h". Braces carry no bytes.
 #pragma once
 
-#include <stddef.h>
-#include <stdint.h>
-
-#include <type_traits>
-#include <utility>
+#include "observability/api/base.h"
 
 namespace tt::observability_event {
 
@@ -69,9 +59,6 @@ struct ZoneUnitMeta {
 // ---- Field walk, shared by the device marshaller and the host unmarshaller -----------------------------------------
 
 inline constexpr size_t kMaxFields = 8;
-// The assembler text one event may generate (its strings, quoted, plus a few hundred bytes of directives).
-inline constexpr size_t kMaxEventAsmBytes = 2048;
-inline constexpr size_t kRecordHeaderBytes = 16;
 
 namespace detail {
 
@@ -441,256 +428,6 @@ constexpr void write_signature(Sink& out) {
     write_codes<T>(out);
 }
 
-// Never defined: an event whose assembler text would pass kMaxEventAsmBytes calls it during constant evaluation, and
-// the compiler's error ("call to non-constexpr function") quotes this name.
-void observability_event_metadata_too_long_shorten_its_strings();
-
-// Assembler text, built in a constant expression and handed to asm((...)). Always NUL-terminated.
-struct AsmText {
-    char buf[kMaxEventAsmBytes] = {};
-    size_t n = 0;
-    constexpr void put(char c) {
-        if (n + 1 >= kMaxEventAsmBytes) {
-            observability_event_metadata_too_long_shorten_its_strings();
-            return;
-        }
-        buf[n++] = c;
-    }
-    constexpr void put(const char* s) {
-        while (*s != 0) {
-            put(*s++);
-        }
-    }
-    constexpr void put_u(uint64_t v) {
-        char t[24] = {};
-        int i = 0;
-        do {
-            t[i++] = static_cast<char>('0' + v % 10);
-            v /= 10;
-        } while (v != 0);
-        while (i != 0) {
-            put(t[--i]);
-        }
-    }
-    // A quoted .asciz operand. Every byte outside printable ASCII -- a newline, a tab, UTF-8 -- becomes a three-digit
-    // octal escape, so the assembler stores it unchanged and the text stays on one line.
-    constexpr void put_quoted(const char* s) {
-        put('"');
-        for (; *s != 0; s++) {
-            const auto u = static_cast<unsigned char>(*s);
-            if (*s == '"' || *s == '\\') {
-                put('\\');
-                put(*s);
-            } else if (u < 0x20 || u >= 0x7F) {
-                put('\\');
-                put(static_cast<char>('0' + (u >> 6)));
-                put(static_cast<char>('0' + ((u >> 3) & 7)));
-                put(static_cast<char>('0' + (u & 7)));
-            } else {
-                put(*s);
-            }
-        }
-        put('"');
-    }
-    constexpr void put_hex(uint64_t v) {
-        for (int i = 60; i >= 0; i -= 4) {
-            put("0123456789abcdef"[(v >> i) & 0xF]);
-        }
-    }
-    constexpr const char* data() const { return buf; }
-    constexpr size_t size() const { return n; }
-};
-
-// FNV-1a over an event's metadata value: its signature, then every leaf field.
-struct Fnv1a {
-    uint64_t h = 0xcbf29ce484222325ull;
-    constexpr void put(char c) {
-        h ^= static_cast<uint8_t>(c);
-        h *= 0x100000001b3ull;
-    }
-};
-
-template <class T>
-constexpr uint64_t meta_hash(const T& meta) {
-    Fnv1a f;
-    write_signature<T>(f);
-    for_each_leaf(meta, [&](const auto& v) {
-        using F = field_t<decltype(v)>;
-        if constexpr (std::is_same_v<F, const char*>) {
-            for (const char* s = v != nullptr ? v : ""; *s != 0; s++) {
-                f.put(*s);
-            }
-            f.put(0);
-        } else {
-            const uint64_t bits = field_bits(v);
-            for (int i = 0; i < 64; i += 8) {
-                f.put(static_cast<char>(bits >> i));
-            }
-        }
-    });
-    return f.h;
-}
-
-// Never defined: an event whose name is null or empty calls it during constant evaluation, and the compiler's error
-// ("call to non-constexpr function") quotes this name.
-void observability_event_name_must_be_a_non_empty_string_literal();
-
-template <class T>
-constexpr const char* event_name(const T& meta) {
-    const char* name = nullptr;
-    bool first = true;
-    for_each_field(meta, [&](const auto& v) {
-        if constexpr (std::is_same_v<field_t<decltype(v)>, const char*>) {
-            if (first) {
-                name = v;
-            }
-        }
-        first = false;
-    });
-    return name;
-}
-
-// The event's name -- its metadata's first field -- is set and non-empty.
-template <class T>
-constexpr bool event_name_ok(const T& meta) {
-    const char* name = event_name(meta);
-    return name != nullptr && *name != 0;
-}
-
-// A .long pointing at a fresh copy of S in .tt_event_descriptor_str (the section is "MS", so the linker keeps one
-// copy). A null pointer is stored as "".
-constexpr void put_string_ref(AsmText& a, const char* s) {
-    a.put(".pushsection .tt_event_descriptor_str,\"MS\",@progbits,1\n8880:\t.asciz ");
-    a.put_quoted(s != nullptr ? s : "");
-    a.put("\n.popsection\n.long 8880b\n");
-}
-
-struct SignatureText {
-    AsmText* a;
-    constexpr void put(char c) { a->put(c == '"' || c == '\\' ? '_' : c); }
-};
-
-// The whole event: handle, record and the lui/addi that loads the id into %0. The handle's label is the event's
-// label plus a hash of the metadata value, and guarded by .ifndef: copies of the event with the same value share
-// one handle and one record, copies with different values (template instantiations) each get their own.
-template <class T>
-constexpr AsmText emit_event(const T& meta, const char* event_label, const char* file, uint32_t line) {
-    if (!event_name_ok(meta)) {
-        observability_event_name_must_be_a_non_empty_string_literal();
-    }
-    const uint64_t hash = meta_hash(meta);
-    AsmText a;
-    auto label = [&] {
-        a.put(event_label);
-        a.put('_');
-        a.put_hex(hash);
-    };
-    a.put(".ifndef ");
-    label();
-    a.put("\n.pushsection .tt_event_descriptor_ids,\"\",@progbits\n");
-    label();
-    a.put(":\t.byte 0\n.popsection\n");
-
-    a.put(".pushsection .tt_event_descriptor_meta,\"\",@progbits\n.balign 4\n.long ");
-    label();
-    a.put("\n.pushsection .tt_event_descriptor_str,\"MS\",@progbits,1\n8880:\t.asciz \"");
-    SignatureText sig{&a};
-    write_signature<T>(sig);
-    a.put("\"\n.popsection\n.long 8880b\n");
-    put_string_ref(a, file);
-    a.put(".long ");
-    a.put_u(line);
-    a.put("\n");
-
-    for_each_leaf(meta, [&](const auto& v) {
-        using F = field_t<decltype(v)>;
-        constexpr char code = field_code<F>();
-        if constexpr (code == 's') {
-            put_string_ref(a, v);
-        } else {
-            constexpr size_t bytes = code_bytes(code);
-            a.put(".balign ");
-            a.put_u(bytes < 4 ? bytes : 4);
-            a.put(bytes == 1 ? "\n.byte " : bytes == 2 ? "\n.short " : bytes == 4 ? "\n.long " : "\n.quad ");
-            a.put_u(field_bits(v));
-            a.put("\n");
-        }
-    });
-    a.put(".balign 4\n.popsection\n.endif\n\tlui %0, %%hi(");
-    label();
-    a.put(")\n\taddi %0, %0, %%lo(");
-    label();
-    a.put(")");
-    return a;
-}
-
 }  // namespace detail
 
 }  // namespace tt::observability_event
-
-#if !defined(__riscv)
-// ---- Host side --------------------------------------------------------------------------------------------------
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
-
-namespace tt::observability_event {
-
-// One unmarshalled field: s for 's', bits for the integer codes.
-struct FieldValue {
-    char code = 0;
-    uint64_t bits = 0;
-    const char* s = nullptr;  // valid for the life of the process
-};
-
-// An event's metadata as the host holds it before anyone asks for a type.
-struct Metadata {
-    std::string_view signature;      // "<type name>:<field codes>"
-    std::vector<FieldValue> fields;  // one per leaf field, nested structs flattened
-
-    std::string_view type_name() const { return signature.substr(0, signature.rfind(':')); }
-
-    // The value as T, or nullopt when the event carries another type.
-    template <class T>
-    std::optional<T> as() const;
-};
-
-template <class T>
-const std::string& signature_of() {
-    static const std::string sig = [] {
-        struct Sink {
-            std::string s;
-            void put(char c) { s.push_back(c == '"' || c == '\\' ? '_' : c); }
-        } out;
-        detail::write_signature<T>(out);
-        return std::move(out.s);
-    }();
-    return sig;
-}
-
-template <class T>
-std::optional<T> Metadata::as() const {
-    if (signature != signature_of<T>()) {
-        return std::nullopt;
-    }
-    T t{};
-    size_t i = 0;
-    detail::for_each_leaf(t, [&](auto& f) {
-        using F = detail::field_t<decltype(f)>;
-        const FieldValue& v = fields[i++];  // the signature matched, so there is one value per leaf
-        if constexpr (std::is_same_v<F, const char*>) {
-            f = v.s;
-        } else if constexpr (std::is_same_v<F, bool>) {
-            f = v.bits != 0;
-        } else if constexpr (std::is_enum_v<F>) {
-            f = static_cast<F>(static_cast<std::make_unsigned_t<std::underlying_type_t<F>>>(v.bits));
-        } else {
-            f = static_cast<F>(static_cast<std::make_unsigned_t<F>>(v.bits));
-        }
-    });
-    return t;
-}
-
-}  // namespace tt::observability_event
-#endif

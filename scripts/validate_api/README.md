@@ -47,6 +47,17 @@ and the frozen UMD header allowlist. Unused allowed prefixes are also reported.
 The legacy include-style skip list remains unchanged; it does not exempt headers
 from the new guard and stability-boundary checks.
 
+Public headers may include `<observability/api/...>`, the headers that the
+device and host compilers share, and no other `<observability/...>` header. The
+host owns them, in `tt_metal/observability/api/`; the device compiles a copy the
+JIT build stages, in which a header of `tt_metal/hw/observability/api/` replaces
+the host header of the same name. Both folders have their own hook,
+`validate-observability-api` (`validate_observability_api.py`): a header
+includes only other `observability/api/` headers, gets standard headers only
+through `observability/api/base.h`, whose short list is closed, and has no
+conditional on the side being compiled (`__riscv`, `COMPILE_FOR_*`, ...). Every
+device kernel that includes such a header pays for what it pulls in.
+
 For all `.h`, `.hpp`, `.hh`, and `.hxx` files under `tt_metal/api/`, it also checks:
 
 - Unconditional `#pragma once` before declarations and other directives.

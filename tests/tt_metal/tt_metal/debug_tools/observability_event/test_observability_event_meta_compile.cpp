@@ -40,7 +40,8 @@ constexpr const char* kCasesKernel = "tests/tt_metal/tt_metal/test_kernels/misc/
 // What the linker says when a kernel has no firmware ELF to link against.
 constexpr std::string_view kNoFirmwareLinkError = "non constant or forward reference address expression";
 
-// Every rule message in hostdev/observability_event_meta.h, so a case can be checked for breaking only its own rule.
+// Every rule message in observability/api/observability_event_meta.h, so a case can be checked for breaking only its
+// own rule.
 constexpr std::string_view kRuleMessages[] = {
     "must be a simple aggregate",
     "cannot have a base class",

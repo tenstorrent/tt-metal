@@ -83,6 +83,12 @@ repos:
       language: system
       always_run: true
       pass_filenames: false
+    - id: validate-observability-api
+      name: "observability/api: include only observability/api headers; standard headers only through base.h"
+      entry: python3 scripts/validate_api/validate_observability_api.py tt_metal/observability/api tt_metal/hw/observability/api
+      language: system
+      files: ^(tt_metal/observability/api/|tt_metal/hw/observability/api/|scripts/validate_api/validate_observability_api\.py$)
+      pass_filenames: false
     - id: test-metalium-api
       name: test-metalium-api
       entry: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'

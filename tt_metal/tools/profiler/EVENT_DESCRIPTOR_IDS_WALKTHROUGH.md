@@ -30,7 +30,7 @@ compile, link and load, to the device sending its id and the host turning that i
 metadata.
 
 **The event.** For this example we picked a scoped event that carries three fields of metadata, a name, a colour and a
-time unit: `DeviceZoneScopedNCU("T1_Zone5", 0x42D4F4, TimeUnit::Microseconds)`. The unit is how a consumer should
+time unit: `DeviceZoneScopedNCU("T1_Zone5", 0x42D4F4, kernel_profiler::TimeUnit::Microseconds)`. The unit is how a consumer should
 present the zone's duration; the device and the host still count in cycles. It marks the start and end of a region of code. It sits
 in the demo compute kernel next to nine others (`T1_Zone0` … `T1_Zone9`), which carry the two-field `ZoneColorMeta`. We
 chose it because it is in the middle of the kernel, so its numbers are not zeros. Every other kind of observability event gets
@@ -43,9 +43,10 @@ p100a, running the demo program:
 test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1
 ```
 
-Why it works this way is in [the design document](EVENT_DESCRIPTOR_IDS.md); the metadata rules and the record
-layout are in `tt_metal/hw/inc/hostdev/observability_event_meta.h`. This page only shows each step and where each number
-comes from.
+Why it works this way is in [the design document](EVENT_DESCRIPTOR_IDS.md); the metadata rules are in
+`tt_metal/observability/api/observability_event_meta.h` and the record layout in
+`tt_metal/hw/inc/hostdev/observability_event_descriptor.h`. This page only shows each step and where each number comes
+from.
 
 ## Before you start: the fixed numbers
 
@@ -57,7 +58,7 @@ the kernel.
 | `0x06600000` | `TT_EVENT_DESCRIPTOR_STR_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_event_descriptor_str` (the strings) |
 | `0x06700000` | `TT_EVENT_DESCRIPTOR_META_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_event_descriptor_meta` (the records) |
 | `0x06800000` | `TT_EVENT_DESCRIPTOR_IDS_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_event_descriptor_ids` (the handles) |
-| `16` | `kRecordHeaderBytes` | `tt_metal/hw/inc/hostdev/observability_event_meta.h` | bytes of a record's fixed header; the event's metadata fields follow it |
+| `16` | `kRecordHeaderBytes` | `tt_metal/hw/inc/hostdev/observability_event_descriptor.h` | bytes of a record's fixed header; the event's metadata fields follow it |
 | `0xFFFF` | `TT_ZONE_STALL_ID` | `tt_metal/hw/inc/hostdev/observability_event_descriptor.h` | reserved id; the space handed out is `0 … 0xFFFE` |
 
 The three addresses are **made up**. None of these sections is ever loaded onto the device, so their addresses
@@ -73,18 +74,22 @@ bytes in file order. So the number `0x06800005` is stored as the bytes `05 00 80
 
 ## 1. Source: the observability event
 
-The TRISC1 (math) kernel opens the event:
+The event is **line 126** of `test_streaming_profiler_zones/kernels/zones_compute.cpp`; the host reports that line
+at the end. It is the sixth of the kernel's ten scoped events, `T1_Zone0` … `T1_Zone9`:
+
+```cpp
+ZONE_U(ZTAG "_Zone5", 30000u, 0x42D4F4u, kernel_profiler::TimeUnit::Microseconds);  // ~12 us, cyan, in us
+```
+
+`ZONE_U` is the demo kernel's own macro. On TRISC1 (math), where `ZTAG` is `"T1"`, it opens the event and then
+spins on the wall clock for 30000 ticks:
 
 ```cpp
 {
-    DeviceZoneScopedNCU("T1_Zone5", 0x42D4F4, kernel_profiler::TimeUnit::Microseconds);
-    ...   // ~12 us of work
+    DeviceZoneScopedNCU("T1_Zone5", 0x42D4F4u, kernel_profiler::TimeUnit::Microseconds);
+    // spin on the wall clock for 30000 ticks, ~12 us
 }
 ```
-
-It sits at **line 126** of `test_streaming_profiler_zones/kernels/zones_compute.cpp` (through the kernel's `ZONE_U`
-macro); the host reports that line at the end. It is the sixth of the kernel's ten scoped events, `T1_Zone0` …
-`T1_Zone9`.
 
 **The event's metadata is a struct.** Each zone macro takes exactly the fields of one fixed type and passes the event
 a constant value of it; the host gets that value back, field by field. `DeviceZoneScopedN(name)` passes
@@ -92,7 +97,7 @@ a constant value of it; the host gets that value back, field by field. `DeviceZo
 use, and `DeviceZoneScopedNCU(name, color, unit)` passes this one:
 
 ```cpp
-// tt_metal/hw/inc/hostdev/observability_event_meta.h
+// tt_metal/observability/api/observability_event_meta.h
 enum class TimeUnit : uint8_t { Cycles, Nanoseconds, Microseconds, Milliseconds };
 
 struct ZoneUnitMeta {
@@ -182,15 +187,20 @@ behave like the case without the hash, so it is not checked for.
 computed by the compiler:
 
 ```cpp
-static constexpr auto tt_event_meta = ::tt::observability_event::ZoneUnitMeta{"T1_Zone5", 0x42D4F4, TimeUnit::Microseconds};
-asm((::tt::observability_event::detail::emit_event(tt_event_meta, "__tt_observability_event_0_6", __FILE__, __LINE__)) : "=r"(v));
+static constexpr auto tt_event_meta = ::tt::observability_event::ZoneUnitMeta{
+    "T1_Zone5",
+    0x42D4F4,
+    kernel_profiler::TimeUnit::Microseconds};
+asm((::tt::observability_event::detail::emit_event(
+        tt_event_meta, "__tt_observability_event_0_6", __FILE__, __LINE__))
+    : "=r"(v));
 ```
 
 `emit_event` is a `constexpr` function, so GCC runs it **during compilation** and uses the text it returns as the asm
-template. It walks the struct's fields with a C++17 structured binding, here
-`auto& [name, color, unit] = meta;`, finding how many
-fields there are by testing how many initializers `T{...}` accepts, and writes one directive per field. A binding
-needs a fixed number of names, so `emit_event` checks the field count and uses the binding written for it; those are
+template. It walks the struct's fields with a C++17 structured binding, here `auto& [name, color, unit] = meta;`,
+finding how many fields there are by testing how many initializers `T{...}` accepts, and writes one directive per
+field. A binding needs a fixed number of names, so the field walk (`for_each_field`, in
+`observability/api/observability_event_meta.h`) checks the field count and uses the binding written for it; those are
 written out for 1 to 8 fields, which is where the limit of 8 fields per struct comes from. Nothing of it runs on the
 device. The text it returns for this event:
 
@@ -284,7 +294,7 @@ offset  address   label             event
   6     06800006  __tt_observability_event_0_7_…   T1_Zone6
    …
   9     06800009  __tt_observability_event_0_10_…  T1_Zone9
- 10     0680000a  __tt_observability_event_0_11_…  TRISC-KERNEL (the whole-kernel event opened by the wrapper `trisck.cc`)
+ 10     0680000a  __tt_observability_event_0_11_…  TRISC-KERNEL (the whole-kernel event, opened by `trisck.cc`)
  11     0680000b  __tt_observability_event_0_0_…   STACK-OVERFLOW
 ```
 
@@ -367,9 +377,12 @@ The three that mention this handle:
 
 ```
 at address  type            symbol
-00007cc4    R_RISCV_HI20    __tt_observability_event_0_6_a2c1de433b077f49   ← the lui from step 5   (upper 20 bits)
-00007cc8    R_RISCV_LO12_I  __tt_observability_event_0_6_a2c1de433b077f49   ← the addi from step 5  (lower 12 bits)
-06700078    R_RISCV_32      __tt_observability_event_0_6_a2c1de433b077f49   ← the record's id slot from step 6 (all 32 bits)
+00007cc4    R_RISCV_HI20    __tt_observability_event_0_6_a2c1de433b077f49
+                            ↑ the lui from step 5 (upper 20 bits)
+00007cc8    R_RISCV_LO12_I  __tt_observability_event_0_6_a2c1de433b077f49
+                            ↑ the addi from step 5 (lower 12 bits)
+06700078    R_RISCV_32      __tt_observability_event_0_6_a2c1de433b077f49
+                            ↑ the record's id slot from step 6 (all 32 bits)
 ```
 
 These three lines are exactly the list of places the host will change in steps 10 and 11. They sit among 19,681
@@ -481,13 +494,14 @@ multiple of 4, the record is 28 bytes, and the next one starts right after it. I
 into a string (subtract `0x06600000`, read up to `\0`, as in step 6) and publishes:
 
 ```
-events[51] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 126,
-              meta = "tt::observability_event::ZoneUnitMeta:swb" { "T1_Zone5", 0x42d4f4, Microseconds } }
+descriptors[51] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 126,
+                   meta = "tt::observability_event::ZoneUnitMeta:swb" { "T1_Zone5", 0x42d4f4, Microseconds } }
 ```
 
 A reader gets the struct back by asking for its type. `as<T>()` checks the signature against `T`'s and walks `T`'s
-fields with the same structured binding the compiler used in step 3, filling each one in. The host and the device
-include the same `hostdev/observability_event_meta.h`, so both name the type alike:
+fields with the same structured binding the compiler used in step 3, filling each one in. The host includes
+`observability/api/observability_event_meta.h` and the device the copy of it that the JIT build stages, so both name
+the type alike:
 
 ```cpp
 if (auto v = event.meta->as<tt::observability_event::ZoneUnitMeta>()) {
@@ -554,7 +568,7 @@ The relay carries the ring buffer to the host. The decoder masks off the type to
 `0x18000033 & 0x7FFFFFF = 51` (`0x7FFFFFF` is 27 one-bits), and calls `descriptor_of(51)`, which is one array load:
 
 ```
-events[51]  →  "T1_Zone5"  zones_compute.cpp:126  ZoneUnitMeta{ color 0x42d4f4, unit Microseconds }
+descriptors[51]  →  "T1_Zone5"  zones_compute.cpp:126  ZoneUnitMeta{ color 0x42d4f4, unit Microseconds }
 ```
 
 A consumer reads the metadata from there with `as<ZoneUnitMeta>()`: it can draw `T1_Zone5` in its own colour and

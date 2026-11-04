@@ -24,7 +24,7 @@ namespace tt::llrt {
 namespace {
 
 // The fixed part of a .tt_event_descriptor_meta record; the event's metadata fields follow
-// (hostdev/observability_event_meta.h).
+// (hostdev/observability_event_descriptor.h).
 struct RecordHeader {
     uint32_t descriptor_id;  // the handle's VMA in .tt_event_descriptor_ids, which RebaseDescriptorIds has
                              // already moved

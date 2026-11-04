@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "hostdev/observability_event_meta.h"
+#include <tt-metalium/experimental/observability_event_meta.hpp>
 
 namespace ll_api {
 class ElfFile;

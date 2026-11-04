@@ -164,7 +164,7 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Observability event names + __FILE__ strings. Mergeable strings, so each distinct
+  /* Observability event strings: signatures, __FILE__ and string fields. Mergeable strings, so each distinct
      string is stored once however many events reference it. .tt_event_descriptor_meta holds VMAs into here,
      which the host rebases by this section's sh_addr. (INFO) strips SHF_ALLOC, so the section
      never enters a PT_LOAD and costs no device memory. */
@@ -176,9 +176,9 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Event records: {id, signature_ptr, file_ptr, line} followed by the event's metadata struct,
-     emitted by TT_OBSERVABILITY_EVENT (hostdev/observability_event_descriptor.h, layout in hostdev/observability_event_meta.h);
-     the host sizes each record from its signature. (INFO) for the same reason as above. */
+  /* Event records: {id, signature_ptr, file_ptr, line} followed by the event's metadata struct, emitted by
+     TT_OBSERVABILITY_EVENT (the layout is in hostdev/observability_event_descriptor.h); the host sizes each record
+     from its signature. (INFO) for the same reason as above. */
   .tt_event_descriptor_meta TT_EVENT_DESCRIPTOR_META_VMA (INFO) :
   {
     __tt_event_descriptor_meta_start = .;

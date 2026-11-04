@@ -1,7 +1,7 @@
 # How an observability event gets its descriptor id
 
 Every marker a device kernel emits carries a small integer, the **descriptor id**, and the host turns it back
-into a name and a source location (`BR_Zone3`, `zones_dm.cpp:120`). This document explains how that id is
+into a name and a source location (`BR_Zone3`, `zones_dm.cpp:122`). This document explains how that id is
 made, why it costs nothing on the device, and why it can never collide.
 
 The one-sentence version: **an event's descriptor id is the address of a one-byte handle the event emits into a
@@ -27,7 +27,7 @@ flowchart TB
   E[("kernel.elf in the JIT cache<br/>ids baked into lui / addi")]:::file
   subgraph LD[" 2 · Load — host, once per ELF per process "]
     R["reserve the next block [base, base + n)<br/>rewrite the lui / addi immediates to base + k"]:::load
-    N["register the names<br/>events[base + k] = X @ file:line"]:::load
+    N["register the names<br/>descriptors[base + k] = X @ file:line"]:::load
     R --> N
   end
   subgraph RN[" 3 · Launch — every program run "]
@@ -49,8 +49,8 @@ byte of L1:
 | section | placed at (link) | flags | contents | who reads it |
 |---|---|---|---|---|
 | `.tt_event_descriptor_ids` | `0x6800000` | none | one zero byte per event; **the byte's address is the id** | the loader (size = number of events) |
-| `.tt_event_descriptor_meta` | `0x6700000` | `M`, entsize 16 | one 16-byte record per event: `{id, name_ptr, file_ptr, line}` | the loader, to name ids |
-| `.tt_event_descriptor_str` | `0x6600000` | `MS` | the zone names and `__FILE__` strings, deduplicated by the linker | the loader, via the record pointers |
+| `.tt_event_descriptor_meta` | `0x6700000` | none, 4-aligned | one record per event: a 16-byte header `{id, signature_ptr, file_ptr, line}`, then the event's metadata struct | the loader, to name ids |
+| `.tt_event_descriptor_str` | `0x6600000` | `MS` | the signatures, `__FILE__` and string fields, deduplicated by the linker | the loader, via the record pointers |
 
 ## 1. The device side: what an event emits
 
@@ -64,45 +64,58 @@ flowchart LR
 
   Z["DeviceZoneScopedN('X')"]:::code
   I["<b>.tt_event_descriptor_ids</b> — never loaded<br/>one zero byte; its address is the id"]:::sec
-  M["<b>.tt_event_descriptor_meta</b> — never loaded<br/>{ id, name_ptr, file_ptr, line }"]:::sec
-  T["<b>.tt_event_descriptor_str</b> — never loaded<br/>'X', 'kernel.cpp'"]:::sec
+  M["<b>.tt_event_descriptor_meta</b> — never loaded<br/>{ id, signature_ptr, file_ptr, line, name_ptr }"]:::sec
+  T["<b>.tt_event_descriptor_str</b> — never loaded<br/>'tt::observability_event::EventMeta:s',<br/>'kernel.cpp', 'X'"]:::sec
   C["<b>.text</b> — the device<br/>lui / addi of the id, then the marker"]:::code
 
   Z --> I
   Z --> M
   Z --> T
   Z --> C
-  M -. id, name, file .-> I
+  M -. id .-> I
   M -.-> T
   C -. relocation .-> I
 ```
 
-`DeviceZoneScopedN("MY-ZONE")` expands (simplified; the real macro is `TT_EVENT_DESCRIPTOR_DEFINE_ID` in
-`hw/inc/hostdev/observability_event_descriptor.h`) to:
+`DeviceZoneScopedN("MY-ZONE")` expands, through `TT_OBSERVABILITY_EVENT` in
+`hw/inc/hostdev/observability_event_descriptor.h`, to:
 
 ```cpp
-struct hash {                                   // one type per event
+struct hash {  // one type per event
     static inline __attribute__((always_inline)) uint32_t descriptor_id() {
         uint32_t v;
-        asm(".ifndef __tt_observability_event_0_7\n"           // first appearance in this assembly only:
-            " .pushsection .tt_event_descriptor_ids\n"
-            " __tt_observability_event_0_7: .byte 0\n"          //   the handle -- its address is the id
-            " .popsection\n"
-            " .pushsection .tt_event_descriptor_str,\"MS\"\n"
-            " 8880: .asciz \"MY-ZONE\"\n"
-            " 8881: .asciz \"<__FILE__>\"\n"
-            " .popsection\n"
-            " .pushsection .tt_event_descriptor_meta,\"M\",@progbits,16\n"
-            " .long __tt_observability_event_0_7, 8880b, 8881b, <__LINE__>\n"   // the record
-            " .popsection\n"
-            ".endif\n"
-            "lui  %0, %hi(__tt_observability_event_0_7)\n"      // every appearance: materialize the id
-            "addi %0, %0, %lo(__tt_observability_event_0_7)"
+        static constexpr auto tt_event_meta = ::tt::observability_event::EventMeta{"MY-ZONE"};
+        asm((::tt::observability_event::detail::emit_event(
+                tt_event_meta, "__tt_observability_event_0_7", __FILE__, __LINE__))
             : "=r"(v));
         return v;
     }
 };
-kernel_profiler::profileScope<hash> zone;        // ~profileScope: mark_zone_close(hash::descriptor_id(), start)
+// ~profileScope: mark_zone_close(hash::descriptor_id(), start)
+kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+```
+
+`emit_event` runs at compile time and returns the asm text. `L` is the event's label,
+`__tt_observability_event_0_7_<hash of the value>`, and each `<"…">` is the address of that string, which the text
+places in `.tt_event_descriptor_str` with an `.asciz` of its own:
+
+```asm
+.ifndef L                                       # first appearance in this assembly only:
+.pushsection .tt_event_descriptor_ids,"",@progbits
+L:      .byte 0                                 #   the handle -- its address is the id
+.popsection
+.pushsection .tt_event_descriptor_meta,"",@progbits
+.balign 4
+.long L                                         #   the record: the id slot,
+.long <"tt::observability_event::EventMeta:s">  #   the signature,
+.long <"<__FILE__>">                            #   the file,
+.long <__LINE__>                                #   the line,
+.long <"MY-ZONE">                               #   then the struct's fields
+.balign 4
+.popsection
+.endif
+lui  %0, %hi(L)                                 # every appearance: materialize the id
+addi %0, %0, %lo(L)
 ```
 
 What matters in that expansion:
@@ -119,14 +132,16 @@ What matters in that expansion:
   but then the loader could patch only 12 bits and the whole process would have 2047 ids.
 - **`.ifndef` makes it one handle per event.** An event inside an inline function or a template is expanded
   wherever the function is; the guard assembles the handle and the record only the first time the label is
-  seen in this assembly, so an inlined event has one id however many copies of its code exist.
-- **`__tt_observability_event_<tu>_<counter>` is only a label *name*, never the id.** The id is the label's address. The
+  seen in this assembly, so an inlined event has one id however many copies of its code exist. The label ends
+  in a hash of the metadata value, so template instantiations that give one event different values (a colour
+  from a template parameter) get a handle and an id each.
+- **`__tt_observability_event_<tu>_<counter>_<hash>` is only a label *name*, never the id.** The id is the label's address. The
   name exists so the `lui`/`addi` and the record can refer to the handle, and so `.ifndef` can recognize a
   event it has already emitted. It is local to the object file and gone after assembly; nothing on the device
   or the host ever sees it. `<counter>` is `__COUNTER__`, unique within the translation unit; `<tu>` is
   `TT_PROFILER_TU_ID`, which the JIT build sets to the TU's index in its link (`jit_build/build.cpp`), so
-  names stay apart when LTO merges a link's TUs into one assembly. On main the same define came from a
-  registry and formed the upper bits of the id; here it does neither.
+  names stay apart when LTO merges a link's TUs into one assembly. `<hash>` is the FNV-1a hash of the metadata
+  value. The TU id is not part of the id.
 - **Everything is assembler directives, not C++ objects.** A `static` with a section attribute inside a
   vague-linkage function (inline, template, class-template member) becomes COMDAT, which GCC refuses to put
   in a named section (`-fno-lto`: "section type conflict"; LTO: an internal compiler error). The asm form
@@ -142,7 +157,8 @@ zero.
 
 ```
 .tt_event_descriptor_ids 0x6800000 (INFO) : { KEEP(*(.tt_event_descriptor_ids)) }
-ASSERT(__tt_event_descriptor_ids_end - __tt_event_descriptor_ids_start < 0xFFFF, "more KERNEL_PROFILER events in one image than the 16-bit descriptor id space holds")
+ASSERT(__tt_event_descriptor_ids_end - __tt_event_descriptor_ids_start < 0xFFFF,
+       "more observability events in one image than the 16-bit descriptor id space holds")
 ```
 
 `(INFO)` strips `SHF_ALLOC`; the linker lays the handles out back to back, so an image with 15 events
@@ -169,20 +185,20 @@ It opens the ELF once and calls `ObservabilityEventMetaRegistry::ingest_elf(path
    lives in `.tt_event_descriptor_ids` and rewrites the bytes it points at, in the in-memory copy:
 
    ```
-   on disk (as linked)                     in memory after load, base = 15, k = 2
-   ───────────────────────────────         ──────────────────────────────────────
-   lui  a4, 0x06800   R_RISCV_HI20   ──►   lui  a4, 0x0
-   addi a4, a4, 2     R_RISCV_LO12_I ──►   addi a4, a4, 17
+   on disk (as linked)                               in memory after load, base = 15, k = 2
+   ───────────────────────────────────               ──────────────────────────────────────
+   lui  a4, 0x06800             R_RISCV_HI20    ──►  lui  a4, 0x0
+   addi a4, a4, 2               R_RISCV_LO12_I  ──►  addi a4, a4, 17
    .tt_event_descriptor_meta:
-   06800002 <name> <file> <line>  R_RISCV_32 ──►   00000011 <name> <file> <line>
+   06800002 <sig> <file> <line> … R_RISCV_32    ──►  00000011 <sig> <file> <line> …
    ```
 
    Each half of a `lui`/`addi` pair carries the full symbol value in its own relocation, so the two are
    patched independently (`hi20 = (v + 0x800) >> 12`, `lo12 = v & 0xfff`); there is no pairing to recover.
    The section header and symbol table are updated too, so a dump of the loaded image (the `.xip.elf` the
    loader writes next to each kernel) reads true.
-4. **Harvest** the records: each record's word0 is now its final id; the name and file pointers are resolved
-   through `.tt_event_descriptor_str`; the entries are handed to the streaming profiler's listener, which fills
+4. **Harvest** the records: each record's word0 is now its final id; its signature sizes the record, and the
+   signature, file and string-field pointers are resolved through `.tt_event_descriptor_str`; the entries are handed to the streaming profiler's listener, which fills
    `DescriptorRegistry::descriptors[id]` (`api/tt-metalium/experimental/streaming_profiler.hpp`). A record's id must
    fall inside the image's own block; anything else is counted as malformed and reported.
 
@@ -190,11 +206,11 @@ Because this happens before the segments are packed, a zone's name is registered
 that emits it can run. The order images load decides the ids:
 
 ```
-process id space (16 bits)
-┌──────────┬──────────────┬──────────────┬───────────┬ ─ ─ ─ ─ ─ ┬────────┐
-│ fw brisc │ zones_dm/nc  │ zones_dm/br  │ compute/… │   free    │ 0xFFFF │
-│  (0 ids) │  [0, 15)     │  [15, 30)    │  [30, …)  │           │ STALL  │
-└──────────┴──────────────┴──────────────┴───────────┴ ─ ─ ─ ─ ─ ┴────────┘
+process id space (16 bits), the demo program on a p100a
+┌──────────┬─────────────┬─────────────┬─────────────────────┬ ─ ─ ─┬────────┐
+│ profiler │ zones_dm/nc │ zones_dm/br │ zones_compute/t0–t2 │ free │ 0xFFFF │
+│  [0, 4)  │   [4, 19)   │   [19, 34)  │       [34, 70)      │      │ STALL  │
+└──────────┴─────────────┴─────────────┴─────────────────────┴ ─ ─ ─┴────────┘
 ```
 
 `0xFFFF` is `TT_ZONE_STALL_ID`: the producer's own back-pressure zone, recognized by value, never handed
@@ -226,7 +242,8 @@ under that concurrency because only one short step touches shared state:
    advance `next_id += n`. Two concurrent loads therefore always get disjoint blocks.
 2. **Rebase** -- no lock: `RebaseDescriptorIds(base)` patches this caller's own in-memory copy of the ELF, which no
    other thread can see.
-3. **Publish** -- under the mutex again: parse the records and fill `events[]`.
+3. **Publish** -- under the mutex again: parse the records, register them, and hand them to the listener, which
+   fills `descriptors[]`.
 
 The registry also keys blocks by path, so even a direct second call for one path reuses its block instead of
 consuming a new one. What concurrency does change is *which* image gets *which* block: when two loads race,
@@ -260,12 +277,18 @@ affects whether they are unique.
 - A kernel as linked, and as loaded (`R` = `runtime/sfpi/compiler/bin/riscv-tt-elf-readelf`):
 
   ```sh
-  $R -S -W brisc.elf          | grep tt_event_descriptor_ids                      # .tt_event_descriptor_ids at 06800000, size = events
-  $R -S -W brisc.elf.xip.elf  | grep tt_event_descriptor_ids                      # the same section at its block base
-  $R -x .tt_event_descriptor_meta brisc.elf.xip.elf                               # word0 of each record = the final id
-  $R -p .tt_event_descriptor_str brisc.elf.xip.elf                                # the names
-  riscv-tt-elf-objdump -d brisc.elf.xip.elf | grep -B1 __tt_observability_event_  # lui aN,0x0 / addi aN,aN,<id>
-  $R -l -W brisc.elf | grep -A4 "Segment Sections"                                # no .tt_event_descriptor_* in any PT_LOAD
+  # .tt_event_descriptor_ids at 06800000, size = events
+  $R -S -W brisc.elf | grep tt_event_descriptor_ids
+  # the same section at its block base
+  $R -S -W brisc.elf.xip.elf | grep tt_event_descriptor_ids
+  # word0 of each record = the final id
+  $R -x .tt_event_descriptor_meta brisc.elf.xip.elf
+  # the signatures, files and names
+  $R -p .tt_event_descriptor_str brisc.elf.xip.elf
+  # lui aN,0x0 / addi aN,aN,<id>
+  riscv-tt-elf-objdump -d brisc.elf.xip.elf | grep -B1 __tt_observability_event_
+  # no .tt_event_descriptor_* in any PT_LOAD
+  $R -l -W brisc.elf | grep -A4 "Segment Sections"
   ```
 - Failure messages and what they mean:
 
@@ -299,7 +322,11 @@ affects whether they are unique.
 
 | file | role |
 |---|---|
-| `tt_metal/hw/inc/hostdev/observability_event_descriptor.h` | `TT_EVENT_DESCRIPTOR_DEFINE_ID`, the id-space constants, the link VMA |
+| `tt_metal/observability/api/observability_event_meta.h` | the metadata types and their rules, the field walk and the signature; public, compiled by the host from here and by the device from the copy the JIT build stages |
+| `tt_metal/hw/observability/api/` | device versions of `observability/api` headers; one replaces the host header of the same name in the staged copy |
+| `tt_metal/jit_build/staged_includes.{hpp,cpp}` | stages that copy, `<cache>/include/<hash>/observability/api/`, and puts it on the device include path |
+| `tt_metal/hw/inc/hostdev/observability_event_descriptor.h` | `TT_EVENT_DESCRIPTOR_DEFINE_ID`, `emit_event` and the record layout, the id-space constants, the link VMA |
+| `tt_metal/api/tt-metalium/experimental/observability_event_meta.hpp` | `Metadata::as<T>()`, the host's way back to the struct |
 | `tt_metal/hw/inc/internal/profiler/kernel_profiler_streaming.hpp` | `profileScope<Event>` and the `DeviceZone*`/`DeviceRecordEvent`/`DeviceTimestampedData` macros |
 | `tt_metal/hw/toolchain/main.ld` | places the three sections, asserts the per-image budget |
 | `tt_metal/jit_build/build.cpp` | `-DTT_PROFILER_TU_ID=<index>` per TU; `--emit-relocs` for firmware under the streaming profiler |

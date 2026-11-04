@@ -46,6 +46,7 @@
 #include "jit_build_settings.hpp"
 #include "jit_build_utils.hpp"
 #include "pch.hpp"
+#include "staged_includes.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
@@ -449,6 +450,7 @@ void JitBuildEnv::init(
         root_ + "ttnn",
         root_ + "ttnn/cpp",
         root_ + "tt_metal/hw/inc",
+        tt::jit_build::stage_observability_api(root_, out_root_),
         root_ + "tt_metal/tt-llk/common",
         root_ + "tt_metal/tt-llk/tools/include",
         root_ + "tt_metal/hostdevcommon/api",
