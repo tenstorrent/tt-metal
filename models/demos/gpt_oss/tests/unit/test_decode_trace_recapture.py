@@ -10,9 +10,12 @@ decode replay then overwrites them and the next prefill of that length hangs or 
 decode trace, and re-captures a trace that has become older than the program cache over its existing inputs: at the
 end of a prefill call and before a decode replay, whatever the reload flags. The trace installs, the prefill call and
 the decode replays below go through the generator itself, over fake devices. No device needed.
+
+Also: gpt_oss prefill tails slice the last-token tile with runtime bounds, so a new prompt length within a padded
+length compiles no new program.
 """
 
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import pytest
 import torch
@@ -240,3 +243,85 @@ def test_models_that_do_not_opt_in_keep_their_trace(fake_device, make_generator)
     assert fake_device.released == []
     assert fake_device.replayed == [1, 1]
     assert generator._decode_trace_baselines == {}
+
+
+class _Tensor:
+    def __init__(self, shape):
+        self.shape = shape
+
+    def deallocate(self, force=True):
+        pass
+
+
+def test_eager_prefill_tail_programs_key_on_the_padded_length(monkeypatch):
+    """Last tokens in different tiles of one padded length: same slice program, bounds written at runtime."""
+    model = Model.__new__(Model)
+    model.layers = []
+    model.mesh_device = object()
+    model._tail_slice_start, model._tail_slice_end = "start bounds", "end bounds"
+    writes, slices = [], []
+    monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: tensor.tolist())
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, device: writes.append((device, host)))
+
+    def fake_slice(*args, **kwargs):
+        slices.append((args[1:], {k: v for k, v in kwargs.items() if k != "input_tensor"}))
+        return _Tensor((1, 1, 32, 2880))
+
+    monkeypatch.setattr(ttnn, "slice", fake_slice)
+
+    def tail(last_token_idx, **kwargs):
+        return model._forward_layers_and_head(
+            _Tensor((1, 1, 2048, 2880)),
+            None,
+            None,
+            None,
+            None,
+            get_last_token=(last_token_idx // 32) * 32,
+            is_decode=False,
+            skip_lm_head=True,
+            **kwargs,
+        )
+
+    for last_token_idx in (5, 1000, 1999):
+        tail(last_token_idx)
+    # One program key: the same tensor-arg slice for every offset; the offsets go to the device at runtime.
+    runtime = dict(starts="start bounds", ends="end bounds", slice_dim=2, num_devices=64)
+    assert slices == [((), runtime)] * 3
+    assert [host for _, host in writes[::2]] == [[0, 0, 0, 0], [0, 0, 992, 0], [0, 0, 1984, 0]]
+
+    # A forward captured into a trace (the row-sharded path) keeps literal bounds: no host write.
+    slices.clear()
+    writes.clear()
+    tail(1000, literal_last_token_bounds=True)
+    assert slices == [(((0, 0, 992, 0), (1, 1, 1024, 2880)), {})]
+    assert writes == []
+
+
+@pytest.mark.parametrize("skip_lm", [True, False], ids=["lm_head_skipped", "lm_head"])
+def test_row_sharded_tail_offset(monkeypatch, skip_lm):
+    """The row-sharded forwards slice literal bounds; when their output is not read the offset is fixed."""
+    seen = []
+
+    def forward(tokens_iter, page_table, kv_cache, fixed_glt, skip_lm_head, batch_size):
+        seen.append(fixed_glt)
+
+    model = SimpleNamespace(mesh_device=SimpleNamespace(shape=(4, 8)), vocab_size=16)
+    model.prepare_row_sharded_prefill_iter = MethodType(Model.prepare_row_sharded_prefill_iter, model)
+    model.run_row_sharded_prefill_forward = forward
+    model.extract_prefill_logits_to_host = lambda *args, **kwargs: None
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda _: None)
+    for length in (70, 100):  # last tokens in tiles 64 and 96 of the 128 padded length
+        Model.row_sharded_batched_prefill(
+            model,
+            torch.ones(4, 128, dtype=torch.long),
+            torch.zeros(4, 2, dtype=torch.int32),
+            [[SimpleNamespace(shape=(128, 1, 64, 32))]],
+            prompt_lens=[length] * 4,
+            prefill_seq_lens=[128] * 4,
+            enable_trace=False,
+            sampling_params=object() if skip_lm else None,
+            model_args=SimpleNamespace(max_local_batch_size=32, vocab_size=16),
+            trace_cache={"ids": {}, "inputs": {}, "outputs": {}},
+        )
+    assert seen == ([0, 0] if skip_lm else [64, 96])
