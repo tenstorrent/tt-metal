@@ -4,8 +4,12 @@
 
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation.hpp"
 
+#include <map>
 #include <string_view>
 
+#include "ttnn/device_operation.hpp"
+#include "ttnn/global_circular_buffer.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
@@ -13,6 +17,8 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
+#include "tt-metalium/experimental/prefetcher_pipe.hpp"
+#include "tt-metalium/experimental/tensor_prefetcher.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/unreachable.hpp"
 
@@ -756,6 +762,113 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
         ring_size);
 }
 
+// B over prefetcher pipes, on the cores the plan placed one C slice each (core i of plan.cores computes C slice i, the
+// i-th slice of N). The matmul declares one ring geometry for every pipe. Only the Tensor prefetcher's DRAM-sender
+// pipes carry a weight <-> matmul contract the matmul can check; a worker-sender pipe's producer is the caller's.
+void validate_unified_prefetcher_pipes(
+    const ttnn::PrefetcherPipeList& prefetcher_pipes, const Tensor& input_tensor_b, const MatmulUnifiedPlan& plan) {
+    using tt::tt_metal::ShardDistributionStrategy;
+    using tt::tt_metal::experimental::SenderCoreType;
+    const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
+    const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
+    for (size_t p = 0; p < pipes.size(); ++p) {
+        const tt::tt_metal::experimental::PrefetcherPipe& pipe = pipes[p];
+        TT_FATAL(
+            pipe.sender_core_type() == first_pipe.sender_core_type() && pipe.ring_size() == first_pipe.ring_size(),
+            "prefetcher_pipes must share a sender kind and a ring size: pipe {} has a {} sender and {} B, pipe 0 a {} "
+            "sender and {} B",
+            p,
+            pipe.sender_core_type(),
+            pipe.ring_size(),
+            first_pipe.sender_core_type(),
+            first_pipe.ring_size());
+    }
+    if (first_pipe.sender_core_type() != SenderCoreType::Dram) {
+        return;
+    }
+
+    // The weight's layout: the Tensor prefetcher sends each receiver its own N slice in K-blocks, as it feeds a 1D
+    // mcast_in0 matmul whose in0_block_w is the K chunk and whose per_core_N is the C slice width.
+    ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(
+        operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+            .in0_block_w = plan.K_chunk_tiles, .per_core_N = plan.C_slice_N_tiles, .mcast_in0 = true},
+        input_tensor_b,
+        prefetcher_pipes);
+
+    // The bank pairing: core i must be sent weight shard i. A receiver-contiguous weight's shard i sits on bank
+    // i % banks at bank-local shard i / banks (ROUND_ROBIN_1D) or on bank i / shards_per_bank (CONTIGUOUS_1D). A
+    // K-row-major weight has one shard per bank, which the prefetcher slices across the bank's receivers in order, so
+    // bank-local slice r of bank b holds N slice b * R + r: the CONTIGUOUS_1D walk with slices for shards.
+    const tt::tt_metal::Buffer* weight_buffer = input_tensor_b.mesh_tensor().mesh_buffer().get_reference_buffer();
+    const auto& bds = weight_buffer->buffer_distribution_spec();
+    TT_FATAL(bds.has_value(), "prefetcher_pipes needs a DRAM-sharded B, which carries a buffer distribution spec");
+    const ShardDistributionStrategy strategy = bds->shard_distribution_strategy();
+    TT_FATAL(
+        strategy == ShardDistributionStrategy::ROUND_ROBIN_1D || strategy == ShardDistributionStrategy::CONTIGUOUS_1D,
+        "prefetcher_pipes needs a ROUND_ROBIN_1D or CONTIGUOUS_1D B, but its shard distribution strategy is {}",
+        strategy);
+    std::map<std::pair<uint32_t, uint32_t>, CoreCoord> receiver_of_shard;
+    for (const auto& delivery : tt::tt_metal::experimental::GetTensorPrefetcherReceiverShards(pipes)) {
+        receiver_of_shard.emplace(std::pair{delivery.bank, delivery.bank_local_shard}, delivery.receiver);
+    }
+    const std::vector<CoreCoord>& banks = bds->cores();
+    const size_t num_cores = plan.cores.size();
+    const bool krow_major = weight_buffer->has_shard_spec() && bds->num_shards() < num_cores;
+    const bool contiguous = krow_major || strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
+    const size_t shards_per_bank = (krow_major ? num_cores : bds->num_shards()) / bds->num_cores_with_data();
+    for (size_t i = 0; i < num_cores; ++i) {
+        const size_t bank_index = contiguous ? i / shards_per_bank : i % banks.size();
+        const auto bank_local_shard = static_cast<uint32_t>(contiguous ? i % shards_per_bank : i / banks.size());
+        const auto bank = static_cast<uint32_t>(banks[bank_index].x);
+        const auto it = receiver_of_shard.find({bank, bank_local_shard});
+        TT_FATAL(
+            it != receiver_of_shard.end() && it->second == plan.cores[i],
+            "prefetcher_pipes: core {} computes C slice {} (cores in row-major order), whose B shard sits at "
+            "bank-local shard {} of DRAM bank {} under B's {} distribution, but the pipes deliver that shard to {}. "
+            "Pair each bank with the cores whose shards it holds.",
+            plan.cores[i].str(),
+            i,
+            bank_local_shard,
+            bank,
+            strategy,
+            it == receiver_of_shard.end() ? std::string("no receiver") : it->second.str());
+    }
+}
+
+// Over the Tensor prefetcher's pipes the op queues the request that feeds them, with the K-blocking of its plan, which
+// a caller cannot work out. A worker-sender pipe's producer is the caller's.
+void queue_B_tensor_prefetcher_request(const MatmulParams& attributes, const MatmulInputs& tensor_args) {
+    namespace metal_exp = tt::tt_metal::experimental;
+    const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes);
+    // A NO_DISPATCH graph capture runs this op without launching its program, so nothing would drain the request.
+    if (pipes.front().get().sender_core_type() != metal_exp::SenderCoreType::Dram ||
+        ttnn::device_operation::detail::graph_capture_blocks_dispatch()) {
+        return;
+    }
+    const Tensor& input_tensor_a = tensor_args.input_tensors.at(0);
+    const Tensor& input_tensor_b = tensor_args.input_tensors.at(1);
+    const std::optional<const Tensor>& bias = tensor_args.optional_input_tensors.at(0);
+    const MatmulUnifiedPlan plan =
+        plan_unified_matmul(
+            input_tensor_a,
+            input_tensor_b,
+            bias.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(bias->dtype())) : 0,
+            std::get<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
+                attributes.program_config.value()),
+            attributes,
+            tensor_args.optional_output_tensors.empty() ? std::nullopt : tensor_args.optional_output_tensors.at(0),
+            /*must_fit=*/true)
+            .value();
+    // Natural K order: every core consumes its K chunks as they arrive.
+    const std::vector<metal_exp::TensorPrefetcherInput> request = {
+        {input_tensor_b.mesh_tensor(), plan.K_chunks_per_C_slice}};
+    auto* mesh_device = input_tensor_b.device();
+    // The calling thread's current queue is the one launch dispatches on, so a trace recording there captures the
+    // request with the program and re-sends it on every replay.
+    metal_exp::QueueTensorPrefetcherRequest(
+        *mesh_device, pipes, std::nullopt, request, &mesh_device->mesh_command_queue());
+}
+
 }  // namespace
 
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
@@ -840,6 +953,12 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         (input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
+    TT_FATAL(
+        attributes.prefetcher_pipes.empty() ||
+            std::holds_alternative<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
+                attributes.program_config.value()),
+        "prefetcher_pipes delivery of B is supported only with MatmulUnifiedProgramConfig, got {}",
+        ttsl::get_active_type_name_in_variant(attributes.program_config.value()));
     validate_matmul_matrix_dimensions(a_shape, b_shape, a_shape_padded, b_shape_padded, in0_tile, in1_tile);
 
     const bool is_optional_output_tensor =
@@ -1890,16 +2009,21 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     "MatmulUnifiedProgramConfig fuses a bias of one row, broadcast down M (got {} rows); ttnn.linear "
                     "adds a taller one separately",
                     optional_bias.has_value() ? optional_bias->logical_shape()[-2] : 0);
-                (void)plan_unified_matmul(
-                    input_tensor_a,
-                    input_tensor_b,
-                    optional_bias.has_value()
-                        ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(optional_bias->dtype()))
-                        : 0,
-                    program_config,
-                    attributes,
-                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0),
-                    /*must_fit=*/true);
+                const MatmulUnifiedPlan plan =
+                    plan_unified_matmul(
+                        input_tensor_a,
+                        input_tensor_b,
+                        optional_bias.has_value()
+                            ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(optional_bias->dtype()))
+                            : 0,
+                        program_config,
+                        attributes,
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0),
+                        /*must_fit=*/true)
+                        .value();
+                if (plan.B_from_pipes) {
+                    validate_unified_prefetcher_pipes(attributes.prefetcher_pipes, input_tensor_b, plan);
+                }
             } else {
                 TT_FATAL(
                     input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -2461,7 +2585,8 @@ MatmulParams create_matmul_attributes(
         parameters.transpose_b,
         output_tile,
         parameters.global_cb,
-        parameters.sub_device_id};
+        parameters.sub_device_id,
+        parameters.prefetcher_pipes};
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
@@ -2486,8 +2611,15 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
         normalized_attributes);
     operations::experimental::quasar::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
-    return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        normalized_attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
+    MatmulInputs inputs{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}};
+    if (!normalized_attributes.prefetcher_pipes.empty()) {
+        // The request goes out ahead of the program, so it is validated here as well as in launch: a request whose
+        // matmul is then rejected leaves the prefetcher blocked on a ring nothing drains, and stop_tensor_prefetcher
+        // hangs behind it.
+        MatmulDeviceOperation::validate_on_program_cache_miss(normalized_attributes, inputs);
+        queue_B_tensor_prefetcher_request(normalized_attributes, inputs);
+    }
+    return ttnn::device_operation::launch<MatmulDeviceOperation>(normalized_attributes, std::move(inputs));
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(

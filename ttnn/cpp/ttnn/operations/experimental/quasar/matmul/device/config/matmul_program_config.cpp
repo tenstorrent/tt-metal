@@ -1014,7 +1014,22 @@ MatmulProgramConfig get_program_config(
         return attributes.program_config.value();
     }
     // Quasar takes the Quasar-native matmul wherever it runs, fusing user_fused_activation as the legacy auto config
-    // for a user grid does; the legacy picker covers the rest.
+    // for a user grid does; the legacy picker covers the rest. Only the Quasar-native matmul reads B from prefetcher
+    // pipes.
+    if (!attributes.prefetcher_pipes.empty()) {
+        std::optional<MatmulUnifiedProgramConfig> unified = ttnn::prim::qsr::choose_unified_placement(
+            input_tensor_a,
+            input_tensor_b,
+            bias_single_tile_size,
+            attributes,
+            MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation});
+        TT_FATAL(
+            unified.has_value(),
+            "prefetcher_pipes: no MatmulUnifiedProgramConfig on the pipes' receivers fits L1, or the unified matmul "
+            "does not support this matmul (transposed operands, untilized output, tiles other than 32x32, a "
+            "sub-device)");
+        return unified.value();
+    }
     if (input_tensor_a.device()->arch() == tt::ARCH::QUASAR) {
         std::optional<MatmulUnifiedProgramConfig> unified = ttnn::prim::qsr::choose_unified_placement(
             input_tensor_a,
