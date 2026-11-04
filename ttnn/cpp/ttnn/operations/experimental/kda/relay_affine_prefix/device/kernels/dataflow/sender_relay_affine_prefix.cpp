@@ -4,13 +4,14 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "hostdev/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 
 using namespace tt::tt_fabric;
+using namespace tt::tt_fabric::linear::experimental;
 
 constexpr uint32_t cb_stage = get_compile_time_arg_val(0);
 constexpr uint32_t cb_eout = get_compile_time_arg_val(1);  // at the same address on the head cores
@@ -63,7 +64,9 @@ void kernel_main() {
     const uint32_t landed_semaphore = last ? final_semaphore : arrival_semaphore;
     const uint32_t ack_semaphore = get_semaphore(ack_semaphore_id);
 
-    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+    RoutingPlaneConnectionManager fabric;
+    open_connections(fabric, 1, arg);
+    auto* to_successor = &fabric.get(0).sender;
     // The relay's unit is one tile column of a head's state (column-major storage): the successor computes that
     // column of its state as soon as it lands. Units go through `slots` buffers: unit u + slots - 1 is read out of its
     // head core while earlier units' packets are on the link, and a slot (and its packet headers) is reused only
@@ -77,14 +80,11 @@ void kernel_main() {
             // the SP axis.
             (void)fabric_set_unicast_route(hdrs[b][c], dst_chip_id, dst_mesh_id);
 #else
-            // 1D routing: the connection leaves towards the successor's side of the line.
             (void)dst_chip_id;
             (void)dst_mesh_id;
-            hdrs[b][c]->to_chip_unicast(static_cast<uint8_t>(successor_hops));
 #endif
         }
     }
-    conn.open();
     const uint32_t units = num_heads * kt;
     const auto head_xy = [&](uint32_t u) { return get_arg_val<uint32_t>(head_args + u / kt); };
     // Head k's writer counts its finished columns into its count semaphore on this core. Blackhole's data-movement
@@ -131,17 +131,22 @@ void kernel_main() {
             const uint32_t bytes = offset + chunk_bytes <= unit_bytes ? chunk_bytes : unit_bytes - offset;
             const uint64_t dst = get_noc_addr(hx, hy, column + offset);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[u % slots][c];
+            // 1D routing: the connection leaves towards the successor's side of the line (2D ignores the hops).
             if (c + 1 == chunks) {
-                hdr->to_noc_fused_unicast_write_atomic_inc(
-                    NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(hx, hy, landed_semaphore), 1, true}, bytes);
+                fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                    to_successor,
+                    hdr,
+                    buffer + offset,
+                    bytes,
+                    NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(hx, hy, landed_semaphore), 1, true},
+                    successor_hops);
             } else {
-                hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
+                fabric_unicast_noc_unicast_write(
+                    to_successor, hdr, buffer + offset, bytes, NocUnicastCommandHeader{dst}, successor_hops);
             }
-            conn.wait_for_empty_write_slot();
-            conn.send_current_slot_non_blocking(buffer + offset, bytes, reinterpret_cast<uint32_t>(hdr));
         }
     }
     noc_async_writes_flushed();
-    conn.close();
+    close_connections(fabric);
     noc_async_atomic_barrier();
 }
