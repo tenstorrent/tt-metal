@@ -22,6 +22,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_bit_identical,
     collect_accuracy_and_determinism_results,
     decode_tail,
+    encode_tail,
     assert_equal,
 )
 
@@ -62,6 +63,8 @@ def _qkv_causal_conv1d_silu_ops(
     history: torch.Tensor | ttnn.Tensor,
     taps: tuple[torch.Tensor | ttnn.Tensor, ...],
     outputs: tuple[torch.Tensor | ttnn.Tensor, ...],
+    *,
+    page_channels: int | None,
 ) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
     if len(taps) != 4 or len(outputs) != 3:
         raise ValueError("QKV causal Conv1D plus SiLU requires four taps and three outputs")
@@ -78,7 +81,7 @@ def _qkv_causal_conv1d_silu_ops(
 
     batch, sequence, width = input_tensor.shape
     if (
-        math.prod(history.shape) != batch * 3 * width
+        tuple(history.shape) != tuple(encode_tail(torch.empty((1, 3, width)), page_channels).shape)
         or any(tap.shape[-1] != width or math.prod(tap.shape) != width for tap in taps)
         or any(output.shape != (batch, sequence, output.shape[-1]) for output in outputs)
         or sum(output.shape[-1] for output in outputs) != width
@@ -100,8 +103,9 @@ def _qkv_causal_conv1d_silu_performance(
     *,
     measured_ns: float,
     math_fidelity: ttnn.MathFidelity,
+    page_channels: int | None,
 ) -> perf_model.KdaPerformance:
-    fpu, sfpu = _qkv_causal_conv1d_silu_ops(input_tensor, history, taps, outputs)
+    fpu, sfpu = _qkv_causal_conv1d_silu_ops(input_tensor, history, taps, outputs, page_channels=page_channels)
     return perf_model.performance(
         fpu=fpu,
         sfpu=sfpu,
@@ -112,16 +116,36 @@ def _qkv_causal_conv1d_silu_performance(
     )
 
 
-def test_qkv_causal_conv1d_silu_work_golden() -> None:
-    fpu, sfpu = _qkv_causal_conv1d_silu_ops(
+def _work_golden_ops(
+    history_shape: tuple[int, int, int], page_channels: int | None
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    return _qkv_causal_conv1d_silu_ops(
         torch.empty((1, 2, 4)),
-        torch.empty((1, 3, 4)),
+        torch.empty(history_shape),
         tuple(torch.empty((1, 1, 4)) for _ in range(4)),
         (torch.empty((1, 2, 1)), torch.empty((1, 2, 2)), torch.empty((1, 2, 1))),
+        page_channels=page_channels,
     )
+
+
+@pytest.mark.parametrize(("history_shape", "page_channels"), [((1, 3, 4), None), ((1, 2, 6), 2)])
+def test_qkv_causal_conv1d_silu_work_golden(history_shape: tuple[int, int, int], page_channels: int | None) -> None:
+    fpu, sfpu = _work_golden_ops(history_shape, page_channels)
 
     assert fpu == perf_model.FpuOps(multiply_ops=32, add_ops=24)
     assert sfpu == perf_model.SfpuOps(silu_ops=8)
+
+
+# Same element count as the expected tail, wrong shape for the requested layout.
+@pytest.mark.parametrize(
+    ("history_shape", "page_channels"),
+    [((1, 4, 3), None), ((1, 6, 2), None), ((1, 3, 4), 2), ((1, 4, 3), 2), ((1, 3, 4), 4), ((1, 2, 6), 4)],
+)
+def test_qkv_causal_conv1d_silu_work_rejects_wrong_tail_shape(
+    expect_error: Callable, history_shape: tuple[int, int, int], page_channels: int | None
+) -> None:
+    with expect_error(ValueError, "tensor shapes are inconsistent"):
+        _work_golden_ops(history_shape, page_channels)
 
 
 def _run(
@@ -478,6 +502,7 @@ def test_qkv_causal_conv1d_silu_production_performance(
         outputs,
         measured_ns=duration_ns,
         math_fidelity=ttnn.MathFidelity.HiFi4,
+        page_channels=None,
     )
     logger.info(
         f"QKV causal Conv1D plus SiLU {case.case_id}: measured_ns={duration_ns:.0f}, "
