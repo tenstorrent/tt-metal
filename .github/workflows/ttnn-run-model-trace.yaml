@@ -320,10 +320,9 @@ jobs:
 
           # After the per-model env, so a cache override covers both the download and the test.
           if [[ -n "$HF_MODEL" ]]; then
-            # Same rule as is_hub_id in resolve_trace_runner.py: an org/name that is not a
-            # directory in the checkout is a hub id; anything else is a local path.
-            SLASHES="${HF_MODEL//[^\/]/}"
-            if [[ "$HF_MODEL" == /* || -d "$HF_MODEL" || ${#SLASHES} -gt 1 ]]; then
+            # The resolver's coverage check classifies HF_MODEL with the same function.
+            HF_MODEL_KIND=$(python3 model_tracer/resolve_trace_runner.py --is-hub-id "$HF_MODEL")
+            if [[ "$HF_MODEL_KIND" == path ]]; then
               if [[ -d "$HF_MODEL" ]]; then
                 echo "Using local weights at $HF_MODEL"
               else
@@ -887,9 +886,15 @@ jobs:
             )
 
             # PR creation on this repo intermittently fails with a generic GraphQL error, and a
-            # failed call can still open the PR, so check for one before each retry.
+            # failed call can still open the PR. Look for an open PR before every attempt (this
+            # also covers a job rerun) and once more after the last one. gh's error goes to the log.
+            open_pr() { gh pr list --head "$BRANCH_NAME" --state open --json url --jq '.[0].url // ""' || true; }
             PR_URL=""
             for attempt in 1 2 3; do
+              PR_URL=$(open_pr)
+              if [[ -n "$PR_URL" ]]; then
+                break
+              fi
               if PR_URL=$(gh pr create \
                   --base "$BASE_REF" \
                   --head "$BRANCH_NAME" \
@@ -897,12 +902,12 @@ jobs:
                   --body "$PR_BODY"); then
                 break
               fi
+              echo "::warning::gh pr create failed (attempt $attempt of 3); its error is above"
               sleep $((attempt * 30))
-              PR_URL=$(gh pr list --head "$BRANCH_NAME" --state open --json url --jq '.[0].url // ""' || true)
-              if [[ -n "$PR_URL" ]]; then
-                break
-              fi
             done
+            if [[ -z "$PR_URL" ]]; then
+              PR_URL=$(open_pr)
+            fi
             if [[ -z "$PR_URL" ]]; then
               echo "::error::Could not open the manifest PR. Open it by hand from branch $BRANCH_NAME (trace_run_id=$TRACE_RUN_ID)."
               exit 1

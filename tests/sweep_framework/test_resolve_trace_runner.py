@@ -11,6 +11,7 @@ from model_tracer.resolve_trace_runner import (
     check_models,
     hf_model_coverage,
     is_hub_id,
+    main,
     resolve_sku,
     weights_mount,
 )
@@ -141,14 +142,14 @@ def test_coverage_drops_placeholders_and_shell_expansions(tmp_path):
     assert hf_model_coverage(tmp_path) == {}
 
 
-@pytest.mark.parametrize("model", ["meta-llama/Llama-3.2-1B-Instruct", "Qwen/Qwen3-0.6B", "org/a.b_c-d"])
+@pytest.mark.parametrize("model", ["meta-llama/Llama-3.2-1B-Instruct", "Qwen/Qwen3-0.6B", "org/a.b_c-d", "gpt2"])
 def test_is_hub_id_accepts_org_name(model, tmp_path):
     assert is_hub_id(model, tmp_path)
 
 
 @pytest.mark.parametrize(
     "model",
-    ["/mnt/MLPerf/x/y", "models/demos/gemma4/configs/gemma-4-E2B-it", "org/name/extra", "single", "-org/name", ""],
+    ["/mnt/MLPerf/x/y", "models/demos/gemma4/configs/gemma-4-E2B-it", "org/name/extra", "./local", "-org/name", ""],
 )
 def test_is_hub_id_rejects_paths_and_junk(model, tmp_path):
     assert not is_hub_id(model, tmp_path)
@@ -157,7 +158,18 @@ def test_is_hub_id_rejects_paths_and_junk(model, tmp_path):
 def test_is_hub_id_rejects_existing_repo_dir(tmp_path):
     (tmp_path / "configs" / "model").mkdir(parents=True)
     assert not is_hub_id("configs/model", tmp_path)
+    assert not is_hub_id("configs", tmp_path)
     assert is_hub_id("configs/other", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "model, kind", [("Qwen/Qwen3-0.6B", "hub"), ("/mnt/MLPerf/x", "path"), ("model_tracer", "path")]
+)
+def test_is_hub_id_cli_prints_kind(model, kind, monkeypatch, capsys):
+    # ttnn-run-model-trace.yaml runs this from the repo root to classify HF_MODEL.
+    monkeypatch.setattr("sys.argv", ["resolve_trace_runner.py", "--is-hub-id", model])
+    assert main() == 0
+    assert capsys.readouterr().out == kind + "\n"
 
 
 COVERAGE = {"meta-llama/Llama-3.2-1B-Instruct": {"wh_n150"}, "Qwen/Qwen3-0.6B": {"bh_p150"}}

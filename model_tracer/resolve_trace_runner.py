@@ -45,11 +45,15 @@ ONLINE_MODES = ("local-disk", "lfc")
 HF_DOWNLOAD_MODES = ("local-disk",)
 
 _HF_MODEL_RE = re.compile(r"""\bHF_MODEL[ \t]*[=:][ \t]*["']?([A-Za-z0-9_.\-/]+)""")
-_HUB_ID_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
+_HUB_ID_RE = re.compile(r"^[A-Za-z0-9][\w.-]*(/[\w.-]+)?$")
 
 
 def is_hub_id(model, repo_root="."):
-    """True for an HF hub id (org/name); False for a local path, absolute or repo-relative."""
+    """True for an HF hub id (org/name, or a legacy bare name such as gpt2); False for a local path.
+
+    ttnn-run-model-trace.yaml calls this through --is-hub-id, so the workflow and the coverage
+    check classify HF_MODEL the same way.
+    """
     return bool(_HUB_ID_RE.match(model)) and not (Path(repo_root) / model).is_dir()
 
 
@@ -177,11 +181,17 @@ def check_models(hf_models, sku, skus, coverage, repo_root="."):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--runner-label", required=True)
+    parser.add_argument("--runner-label")
+    parser.add_argument("--is-hub-id", metavar="HF_MODEL", help="print hub or path for HF_MODEL and exit")
     parser.add_argument("--matrix", default='{"include": []}', help="trace matrix JSON (entries with hf_model)")
     parser.add_argument("--sku-config", default=".github/sku_config.yaml")
     parser.add_argument("--test-yaml-dir", default="tests/pipeline_reorg")
     args = parser.parse_args()
+    if args.is_hub_id is not None:
+        print("hub" if is_hub_id(args.is_hub_id) else "path")
+        return 0
+    if not args.runner_label:
+        parser.error("--runner-label is required")
 
     with open(args.sku_config) as f:
         skus = yaml.safe_load(f)["skus"]
