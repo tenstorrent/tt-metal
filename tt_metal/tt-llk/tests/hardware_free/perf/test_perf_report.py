@@ -1130,3 +1130,70 @@ def test_quasar_schema_drops_every_l1_client_metric_column():
         for base in (key, stat_column(key, MEAN), stat_column(key, STD)):
             assert metric_column("SFPU_ISOLATE", base) in QSR_DROPPED
     assert metric_column("L1_TO_L1", "l1_client_invalid_0_pct") not in QSR_DROPPED
+
+
+def _chunk_report(xs, *extra_columns):
+    """One chunk of a module: INIT rows with a sweep column x and, optionally, extra sweep columns."""
+    frame = pd.DataFrame(
+        {
+            "x": xs,
+            **{column: [0] * len(xs) for column in extra_columns},
+            MARKER: ["INIT"] * len(xs),
+            "cycles": [100] * len(xs),
+        }
+    )
+    report = PerfReport()
+    report.append(frame, label="chunk")
+    return report
+
+
+MODULE, WORKER = "perf_mod", "gw0"
+WORKER_CSV = f"{MODULE}.{WORKER}.csv"
+
+
+@pytest.fixture
+def worker_plugin(tmp_path, monkeypatch):
+    """The plugin writing a worker's CSVs into tmp_path, with no chunk of any module seen yet."""
+    from helpers import llk_pytest_plugin as plugin
+
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", tmp_path)
+    monkeypatch.setattr(plugin, "_MODULE_REPORTS", {})
+    return plugin
+
+
+def test_worker_csv_keeps_every_chunk_of_a_module(tmp_path, worker_plugin):
+    # worksteal can run a module in several chunks on one worker: its CSVs must keep the rows of all of them
+    (tmp_path / WORKER_CSV).write_text("x\n99\n")  # left by an earlier session
+    worker_plugin._dump_perf_report(MODULE, WORKER, _chunk_report([1, 2]))
+    # every test of this chunk skipped
+    worker_plugin._dump_perf_report(MODULE, WORKER, PerfReport())
+    worker_plugin._dump_perf_report(MODULE, WORKER, _chunk_report([3]))
+
+    for name in (WORKER_CSV, f"{MODULE}.{WORKER}.post.csv"):
+        assert pd.read_csv(tmp_path / name)["x"].tolist() == [1, 2, 3]
+
+
+def test_worker_csv_rejects_chunks_with_different_columns(tmp_path, worker_plugin):
+    # the schema check covers every chunk of the module and fails before the CSV is rewritten
+    worker_plugin._dump_perf_report(MODULE, WORKER, _chunk_report([1]))
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        PerfSchemaError
+    ):
+        worker_plugin._dump_perf_report(MODULE, WORKER, _chunk_report([2], "y"))
+
+    assert pd.read_csv(tmp_path / WORKER_CSV)["x"].tolist() == [1]
+
+
+def test_worker_csv_rejects_tests_with_different_columns_in_one_chunk(
+    tmp_path, worker_plugin
+):
+    # a module usually runs as one chunk: its tests are checked against each other, by name, before any write
+    report = PerfReport()
+    report.append(_chunk_report([1], "m1").frame(), label="test_a")
+    report.append(_chunk_report([2], "m2").frame(), label="test_b")
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        PerfSchemaError, match=r"test_a[\s\S]*test_b"
+    ):
+        worker_plugin._dump_perf_report(MODULE, WORKER, report)
+
+    assert not (tmp_path / WORKER_CSV).exists()
