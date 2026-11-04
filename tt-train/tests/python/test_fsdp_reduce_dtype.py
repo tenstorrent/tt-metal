@@ -162,6 +162,11 @@ def test_rejects_reduce_dtypes_other_than_bf16_and_fp32(expect_error):
         ttml.fsdp.fully_shard(object(), reduce_dtype=ttnn.DataType.UINT32)
 
 
+def test_takes_reduce_dtype_by_keyword_only(expect_error):
+    with expect_error(TypeError, "positional"):
+        ttml.fsdp.fully_shard(object(), "auto", "fsdp", True, (), ttnn.DataType.FLOAT32)
+
+
 # train.py shards before create_optimizer applies the config, so it reads precision.reduce_dtype for FSDP itself.
 @pytest.mark.requires_device
 @pytest.mark.parametrize(

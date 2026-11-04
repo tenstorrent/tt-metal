@@ -124,7 +124,7 @@ class FSDPState:
         module: AbstractModuleBase,
         mesh_axis: str,
         reshard_after_forward: bool,
-        reduce_dtype: Any = None,
+        reduce_dtype: Optional[ttnn.DataType] = None,
     ) -> None:
         self.module = module
         self.mesh_axis_name = mesh_axis
@@ -719,7 +719,8 @@ def fully_shard(
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
     replicate: Sequence[str] = (),
-    reduce_dtype: Any = None,
+    *,
+    reduce_dtype: Optional[ttnn.DataType] = None,
 ) -> AbstractModuleBase:
     """Wrap ``module`` with torch-style FSDP in place.
 

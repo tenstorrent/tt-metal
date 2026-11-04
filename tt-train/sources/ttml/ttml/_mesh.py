@@ -231,7 +231,9 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dtype=None):
+def sync_gradients(
+    parameters, axis_names: tuple[str, ...] = ("dp",), *, reduce_dtype: ttnn.DataType | None = None
+) -> None:
     """Average parameter gradients across one or more mesh axes.
 
     For each parameter with an initialized gradient, the grad is all-reduced

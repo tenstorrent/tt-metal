@@ -48,6 +48,12 @@ def test_rejects_reduce_dtypes_other_than_bf16_and_fp32(expect_error):
         ttml.sync_gradients(ttml.NamedParameters(), reduce_dtype=ttnn.DataType.UINT32)
 
 
+# Keyword-only, as in the C++ bindings, so a call always names it.
+def test_takes_reduce_dtype_by_keyword_only(expect_error):
+    with expect_error(TypeError, "positional"):
+        ttml.sync_gradients(ttml.NamedParameters(), ("dp",), ttnn.DataType.FLOAT32)
+
+
 def _synchronized(values: np.ndarray, **reduce_dtype) -> np.ndarray:
     parameters, parameter = _parameters_with_gradients(values)
     ttml.sync_gradients(parameters, axis_names=("dp",), **reduce_dtype)
