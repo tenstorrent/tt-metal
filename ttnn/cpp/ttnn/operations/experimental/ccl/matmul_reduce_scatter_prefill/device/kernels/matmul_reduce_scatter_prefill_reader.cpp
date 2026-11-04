@@ -35,6 +35,19 @@
 // focus 640x2048x7168 traced: helper receive 126.1-126.6 us -> split ack/wait + polled
 // arrivals 123.1-124.0 us (first window lands 12.8 -> 10.9 us; entry-2 stall gone); GLM -5.0, MiMo -2.3, Linear
 // -7.7..-11 us. Keep W's ack fused after A (concurrent A-column / W-row multicasts stalled in the NoC, +16..+32 us).
+//
+// MRS_ADDCMUL (gated programs only): this kernel also reads the fused epilogue's operands, as the only reader of its
+// core's NoCs (the writer only writes; a second RISC reading on a NoC would share its read command buffer and break
+// both RISCs' read barriers). At the first K-step of a fin entry it issues the entry's addcmul_a tiles and addcmul_b
+// tiles (a broadcast b: its row tile 0 per wave column) on the A-read NoC (NoC1 when A alternates) under transaction id ADDCMUL_TRID (the step
+// reads use 1..NUM_TRIDS), and at the entry's last K-step it waits for exactly those and pushes them, so compute has
+// them by the time the entry's matmul ends. The CBs hold one fin entry (a broadcast b: core_n row tiles, else P): the
+// next fin entry is a whole chunk walk later, and compute pops a fin entry's operands with its finish, which needs no
+// further read of this kernel, so the next fin entry's reserve can only wait, never deadlock.
+// MRS_BIAS (bias programs only): every entry's bias row tiles (row tile 0 of the bias at the entry's core_n columns,
+// in the entry's block) under transaction id BIAS_TRID, issued one entry ahead (at the previous entry's first K-step,
+// when the CB has room; else at the entry's own) and pushed at the entry's first K-step, before its windows: compute
+// adds them in the entry's first super-block.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -559,7 +572,139 @@ void kernel_main() {
         w_slot = w_slot + 1 == w_cap_windows ? 0 : w_slot + 1;
     };
 
+#if defined(MRS_ADDCMUL) || defined(MRS_BIAS)
+    // the epilogue's reads (and their transaction ids) on one NoC: A's read NoC, or NoC1 when A alternates over both
+    // (a fold along M, whose W reads are on NoC0)
+    constexpr uint8_t epi_noc = a_alternate ? uint8_t{1} : a_read_noc;
+#endif
+#ifdef MRS_ADDCMUL
+    namespace act = mrs::reader_addcmul_ct;
+    constexpr uint32_t add_ct0 = decltype(w_args)::next_compile_time_args_offset();
+    constexpr uint32_t cb_add_a = get_compile_time_arg_val(add_ct0 + act::CB_A);
+    constexpr uint32_t cb_add_b = get_compile_time_arg_val(add_ct0 + act::CB_B);
+    constexpr bool b_bcast = get_compile_time_arg_val(add_ct0 + act::B_BCAST) != 0;
+    constexpr uint32_t add_a_bytes = get_compile_time_arg_val(add_ct0 + act::A_PAGE_BYTES);
+    constexpr uint32_t add_b_bytes = get_compile_time_arg_val(add_ct0 + act::B_PAGE_BYTES);
+    constexpr uint32_t fin_entry = get_compile_time_arg_val(add_ct0 + act::FIN_ENTRY);
+    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(add_ct0 + act::OUT_N_TILES);
+    constexpr auto add_a_args = TensorAccessorArgs<add_ct0 + act::COUNT>();
+    constexpr auto add_b_args = TensorAccessorArgs<decltype(add_a_args)::next_compile_time_args_offset()>();
+    constexpr uint32_t b_tiles = b_bcast ? core_n : P;  // addcmul_b tiles per fin entry
+    constexpr uint32_t ADDCMUL_TRID = NUM_TRIDS + 1;
+    static_assert(ADDCMUL_TRID <= NOC_MAX_TRANSACTION_ID, "the epilogue's reads need a transaction id of their own");
+    const auto add_a_acc =
+        TensorAccessor(add_a_args, get_common_arg_val<uint32_t>(mrs::reader_addcmul_common::A_ADDR), add_a_bytes);
+    const auto add_b_acc =
+        TensorAccessor(add_b_args, get_common_arg_val<uint32_t>(mrs::reader_addcmul_common::B_ADDR), add_b_bytes);
+    // the fin entry's operands at its first K-step (issue) and its last (wait, push); entry eg of the walk
+    auto addcmul_step = [&](uint32_t s) {
+        const uint32_t eg = s / num_k_blocks;
+        const uint32_t kbi = s % num_k_blocks;
+        if (eg % num_entries != fin_entry) {
+            return;
+        }
+        if (kbi == 0) {
+            uint32_t im, in;
+            chunk_mn(eg / num_entries, im, in);
+            const uint32_t wave = wave_of(s);
+            const uint32_t row_off = wave & 0xFF, col_off = (wave >> 8) & 0xFF, cols = wave >> 24;
+            const uint32_t m_valid_w = wave_valid(valid_ext(block_m, chunk_m, im, row0), row_off, (wave >> 16) & 0xFF);
+            const uint32_t n_valid_w = wave_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);
+            cb_reserve_back(cb_add_a, P);
+            cb_reserve_back(cb_add_b, b_tiles);
+            const uint32_t a_dst = get_write_ptr(cb_add_a);
+            const uint32_t b_dst = get_write_ptr(cb_add_b);
+            const uint32_t col_page = in * chunk_n + col0 + col_off;
+            noc_async_read_set_trid(ADDCMUL_TRID, epi_noc);
+            for (uint32_t i = 0; i < m_valid_w; ++i) {
+                const uint32_t page = (im * chunk_m + row0 + row_off + i) * out_n_tiles + col_page;
+                for (uint32_t j = 0; j < n_valid_w; ++j) {
+                    noc_async_read(
+                        add_a_acc.get_noc_addr(page + j, 0, epi_noc),
+                        a_dst + (i * cols + j) * add_a_bytes,
+                        add_a_bytes,
+                        epi_noc);
+                    if constexpr (!b_bcast) {
+                        noc_async_read(
+                            add_b_acc.get_noc_addr(page + j, 0, epi_noc),
+                            b_dst + (i * cols + j) * add_b_bytes,
+                            add_b_bytes,
+                            epi_noc);
+                    }
+                }
+            }
+            if constexpr (b_bcast) {
+                for (uint32_t j = 0; j < n_valid_w; ++j) {
+                    noc_async_read(
+                        add_b_acc.get_noc_addr(col_page + j, 0, epi_noc),
+                        b_dst + j * add_b_bytes,
+                        add_b_bytes,
+                        epi_noc);
+                }
+            }
+        }
+        if (kbi == num_k_blocks - 1) {
+            noc_async_read_barrier_with_trid(ADDCMUL_TRID, epi_noc);
+            cb_push_back(cb_add_a, P);
+            cb_push_back(cb_add_b, b_tiles);
+        }
+    };
+#endif
+#ifdef MRS_BIAS
+    namespace bct = mrs::reader_bias_ct;
+#ifdef MRS_ADDCMUL
+    constexpr uint32_t bias_ct0 = decltype(add_b_args)::next_compile_time_args_offset();
+#else
+    constexpr uint32_t bias_ct0 = decltype(w_args)::next_compile_time_args_offset();
+#endif
+    constexpr uint32_t cb_bias = get_compile_time_arg_val(bias_ct0 + bct::CB_BIAS);
+    constexpr uint32_t bias_bytes = get_compile_time_arg_val(bias_ct0 + bct::BIAS_PAGE_BYTES);
+    constexpr auto bias_args = TensorAccessorArgs<bias_ct0 + bct::COUNT>();
+    constexpr uint32_t BIAS_TRID = NUM_TRIDS + 2;
+    static_assert(BIAS_TRID <= NOC_MAX_TRANSACTION_ID, "the bias reads need a transaction id of their own");
+    const auto bias_acc =
+        TensorAccessor(bias_args, get_common_arg_val<uint32_t>(mrs::reader_addcmul_common::BIAS_ADDR), bias_bytes);
+    uint32_t bias_issued = 0;  // entries whose bias reads are issued
+    // reserve and issue entry eg's bias row tiles: columns (its block's, in its chunk) at row tile 0
+    auto issue_bias = [&](uint32_t eg) {
+        const uint32_t s0 = eg * num_k_blocks;
+        uint32_t im, in;
+        chunk_mn(eg / num_entries, im, in);
+        const uint32_t wave = wave_of(s0);
+        const uint32_t col_off = (wave >> 8) & 0xFF, cols = wave >> 24;
+        const uint32_t n_valid_w = wave_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);
+        const uint32_t col_page = block_of(s0) * w_col_per_block + in * chunk_n + col0 + col_off;
+        cb_reserve_back(cb_bias, core_n);
+        const uint32_t dst = get_write_ptr(cb_bias);
+        noc_async_read_set_trid(BIAS_TRID, epi_noc);
+        for (uint32_t j = 0; j < n_valid_w; ++j) {
+            noc_async_read(
+                bias_acc.get_noc_addr(col_page + j, 0, epi_noc), dst + j * bias_bytes, bias_bytes, epi_noc);
+        }
+        bias_issued = eg + 1;
+    };
+    auto bias_step = [&](uint32_t s) {
+        if (s % num_k_blocks != 0) {
+            return;
+        }
+        const uint32_t eg = s / num_k_blocks;
+        if (bias_issued <= eg) {
+            issue_bias(eg);  // not read ahead (the CB had no room then)
+        }
+        noc_async_read_barrier_with_trid(BIAS_TRID, epi_noc);
+        cb_push_back(cb_bias, core_n);
+        if (eg + 1 < total_entries && cb_pages_reservable_at_back(cb_bias, core_n)) {
+            issue_bias(eg + 1);
+        }
+    };
+#endif
     for (uint32_t step = 0; step < num_steps; ++step) {
+#ifdef MRS_BIAS
+        bias_step(step);
+#endif
+#ifdef MRS_ADDCMUL
+        addcmul_step(step);
+#endif
         load_step(step);
     }
     while (land_next < total_entries) {

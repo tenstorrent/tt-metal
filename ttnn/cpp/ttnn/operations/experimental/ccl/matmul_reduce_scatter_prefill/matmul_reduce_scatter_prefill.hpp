@@ -42,6 +42,16 @@ enum class MatmulReduceScatterPrefillGrid : uint8_t { GRID_2D, FOLDED_N, FOLDED_
 //                          replays into it).
 //   grid                   the matmul grid every plan the planner weighs uses; a shape that cannot take it (no layout,
 //                          or no plan on it fits L1) is refused. Default: GRID_2D
+//   fused_ternary_scalar, addcmul_input_tensor1, addcmul_input_tensor2
+//                          fused addcmul epilogue (the names of minimal_matmul_strided_reduce_scatter_async's):
+//                          out = addcmul_input_tensor1 + fused_ternary_scalar * (A @ W reduce-scattered) *
+//                          addcmul_input_tensor2, applied in fp32 to each output tile's final sum before its bf16
+//                          store. tensor1 has the output's shape; tensor2 the output's shape or one broadcast row
+//                          [.., 1, N_out]. Both tensors or neither; the scalar defaults to 1. Without them the program
+//                          is exactly the op's program without the epilogue.
+//   bias                   [.., 1, N] per device (minimal_matmul_strided_reduce_scatter_async's bias): added to each
+//                          device's matmul partial before the reduce-scatter, so the output carries the group's sum
+//                          of biases (a bias on one device and zeros on the others adds it once); inside the addcmul.
 Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -54,10 +64,15 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<Tensor>& output_tensor = std::nullopt,
     const std::optional<uint32_t>& l1_headroom = std::nullopt,
     const std::optional<Tensor>& staging_tensor = std::nullopt,
-    MatmulReduceScatterPrefillGrid grid = MatmulReduceScatterPrefillGrid::GRID_2D);
+    MatmulReduceScatterPrefillGrid grid = MatmulReduceScatterPrefillGrid::GRID_2D,
+    const std::optional<float>& fused_ternary_scalar = std::nullopt,
+    const std::optional<Tensor>& addcmul_input_tensor1 = std::nullopt,
+    const std::optional<Tensor>& addcmul_input_tensor2 = std::nullopt,
+    const std::optional<Tensor>& bias = std::nullopt);
 
 // A staging tensor for calls with these arguments (L1, height-sharded bf16 tiles over the full grid, replicated on the
-// mesh), to pass as staging_tensor; the same arguments resolve the same plan as the op.
+// mesh), to pass as staging_tensor; the same arguments resolve the same plan as the op (a call with the addcmul
+// epilogue plans with its buffers, so pass the same addcmul tensors).
 Tensor matmul_reduce_scatter_prefill_staging(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -66,6 +81,9 @@ Tensor matmul_reduce_scatter_prefill_staging(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<int32_t>& num_links = std::nullopt,
     const std::optional<uint32_t>& l1_headroom = std::nullopt,
-    MatmulReduceScatterPrefillGrid grid = MatmulReduceScatterPrefillGrid::GRID_2D);
+    MatmulReduceScatterPrefillGrid grid = MatmulReduceScatterPrefillGrid::GRID_2D,
+    const std::optional<Tensor>& addcmul_input_tensor1 = std::nullopt,
+    const std::optional<Tensor>& addcmul_input_tensor2 = std::nullopt,
+    const std::optional<Tensor>& bias = std::nullopt);
 
 }  // namespace ttnn::experimental

@@ -121,6 +121,18 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
                 it and may differ from the plan with the op's own staging. Other stagings held at the same time are
                 L1 the op does not see (raise ``l1_headroom``). Keep it alive while calls that use it run, traced
                 replays included.
+            fused_ternary_scalar (float, optional): the addcmul epilogue's scalar. Defaults to 1.0.
+            addcmul_input_tensor1 (ttnn.Tensor, optional): fused addcmul epilogue,
+                ``out = addcmul_input_tensor1 + fused_ternary_scalar * (A @ W reduce-scattered) * addcmul_input_tensor2``
+                (the arguments of ``minimal_matmul_strided_reduce_scatter_async``), applied in fp32 to each output
+                tile's final sum before its bfloat16 store. Shaped like the output; bfloat16, bfloat8_b or float32;
+                TILE, DRAM or L1 interleaved, on every device. Give both tensors or neither.
+            addcmul_input_tensor2 (ttnn.Tensor, optional): the epilogue's gate: the output's shape, or one broadcast
+                row ``[..., 1, N_out]`` (bfloat16 or float32); otherwise as addcmul_input_tensor1.
+            bias (ttnn.Tensor, optional): ``[..., 1, N]`` per device (bfloat16 or float32; TILE, DRAM or L1
+                interleaved), added to each device's matmul partial before the reduce-scatter (the bias of
+                ``minimal_matmul_strided_reduce_scatter_async``): the output carries the group's sum of biases, inside
+                the addcmul epilogue when both are given.
 
             grid (ttnn.MatmulReduceScatterPrefillGrid, optional): the matmul grid every plan the planner weighs
                 uses (GRID_2D, FOLDED_N or FOLDED_M); a shape that cannot take it is refused. The op never picks
@@ -146,7 +158,11 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("output_tensor") = nb::none(),
         nb::arg("l1_headroom") = nb::none(),
         nb::arg("staging_tensor") = nb::none(),
-        nb::arg("grid") = ttnn::experimental::MatmulReduceScatterPrefillGrid::GRID_2D);
+        nb::arg("grid") = ttnn::experimental::MatmulReduceScatterPrefillGrid::GRID_2D,
+        nb::arg("fused_ternary_scalar") = nb::none(),
+        nb::arg("addcmul_input_tensor1") = nb::none(),
+        nb::arg("addcmul_input_tensor2") = nb::none(),
+        nb::arg("bias") = nb::none());
 
     ttnn::bind_function<"matmul_reduce_scatter_prefill_staging", "ttnn.experimental.">(
         mod,
@@ -166,6 +182,9 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
             num_links (int, optional): fabric links per hop (1 or 2); None uses every usable link, up to 2.
             l1_headroom (int, optional): as the op takes it. Defaults to 64 KiB.
             grid (ttnn.MatmulReduceScatterPrefillGrid, optional): as the op takes it. Defaults to GRID_2D.
+            addcmul_input_tensor1 (ttnn.Tensor, optional): as the op takes it (the epilogue's buffers change the plan).
+            addcmul_input_tensor2 (ttnn.Tensor, optional): as the op takes it.
+            bias (ttnn.Tensor, optional): as the op takes it.
 
         Returns:
             ttnn.Tensor: the staging, sized exactly for these arguments.
@@ -179,7 +198,10 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("topology") = ttnn::ccl::Topology::Linear,
         nb::arg("num_links") = nb::none(),
         nb::arg("l1_headroom") = nb::none(),
-        nb::arg("grid") = ttnn::experimental::MatmulReduceScatterPrefillGrid::GRID_2D);
+        nb::arg("grid") = ttnn::experimental::MatmulReduceScatterPrefillGrid::GRID_2D,
+        nb::arg("addcmul_input_tensor1") = nb::none(),
+        nb::arg("addcmul_input_tensor2") = nb::none(),
+        nb::arg("bias") = nb::none());
 
     mod.def(
         "_matmul_reduce_scatter_prefill_last_plan",

@@ -129,6 +129,15 @@ struct PlanInputs {
     uint64_t staging_floor = 0;
     Flow flow = Flow::Grid2D;     // the caller's grid: every plan takes it
     bool w_dram_sharded = false;  // W is DRAM width-sharded (keeps the smaller unchunked K-window cap)
+    // fused addcmul epilogue (0: none): bytes per tile of the addcmul_a and addcmul_b CBs (kAddcmulDepth fin entries of
+    // P tiles per matmul core; a broadcast b: win_n) and the DRAM bytes the epilogue reads per output tile (a, plus b
+    // unless broadcast)
+    uint32_t addcmul_a_tile_bytes = 0;
+    uint32_t addcmul_b_tile_bytes = 0;
+    uint32_t addcmul_dram_bytes_per_tile = 0;
+    uint32_t addcmul_b_bcast = 0;  // 1: addcmul_b is one broadcast row (its CB holds a row tile per wave column)
+    // fused bias (0: none): bytes per tile of the bias CB (kBiasDepth entries of the wave's columns per matmul core)
+    uint32_t bias_tile_bytes = 0;
 };
 
 // Planner constants the factory needs too.
@@ -137,6 +146,8 @@ constexpr uint32_t kMailboxStride = 16;      // bytes per matmul core in a port'
 constexpr uint32_t kPortGroup = 4;           // chunks per port batch (cb::PORT_CHUNKS holds 2 batches)
 constexpr uint32_t kPrefetchSteps = 1;       // K-block windows a sender reads ahead
 constexpr uint32_t kL1Headroom = 64 * 1024;  // default l1_headroom: bytes kept free per core beyond the footprint
+constexpr uint32_t kAddcmulDepth = 1;        // fin entries the addcmul_a / addcmul_b CBs hold (one per chunk walk)
+constexpr uint32_t kBiasDepth = 4;           // entries the bias CB holds (the reader reads one entry ahead)
 
 // The entry's plan: the cheapest (chunk_cost_us) of the unchunked plan and the chunk_candidates that fit L1; scatter on
 // M takes the unchunked plan whenever it fits. TT_THROWs when no plan fits L1 or the geometry cannot be laid out. A

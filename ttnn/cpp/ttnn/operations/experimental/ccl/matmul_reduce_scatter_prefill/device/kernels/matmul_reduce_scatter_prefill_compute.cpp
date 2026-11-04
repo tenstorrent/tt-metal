@@ -64,6 +64,9 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_prefill/device/kernels/matmul_reduce_scatter_prefill_args.hpp"
+#ifdef MRS_ADDCMUL
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#endif
 
 namespace ckl = compute_kernel_lib;
 namespace mrs = matmul_reduce_scatter_prefill;
@@ -109,6 +112,163 @@ ALWI void finish_block(uint32_t role, const FinishBuffers& buf) {
     }
 }
 
+#if defined(MRS_BIAS) || defined(MRS_ADDCMUL)
+// DEST[dst] += row 0 of tile in_tile of cb, broadcast over the rows (DEST_TO_SRCA reuse add, BroadcastType::ROW)
+template <uint32_t cb>
+ALWI void add_bcast_row_reuse_init() {
+    UNPACK((llk_unpack_A_init<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(false, false, cb)));
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWADD,
+          BroadcastType::ROW,
+          MathFidelity::LoFi,
+          EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, cb, false)));
+}
+
+template <uint32_t cb>
+ALWI void add_bcast_row_reuse(uint32_t in_tile, uint32_t dst_tile) {
+    UNPACK((llk_unpack_A<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, in_tile)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWADD,
+          BroadcastType::ROW,
+          DST_ACCUM_MODE,
+          MathFidelity::LoFi,
+          EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, cb, dst_tile, true)));
+}
+#endif
+
+#ifdef MRS_ADDCMUL
+// FUSED ADDCMUL EPILOGUE (MRS_ADDCMUL programs only): out = a + scalar * (sum * b) on a fin entry, applied to the
+// final fp32 sum in DEST before the bf16 pack: DEST *= b (DEST_TO_SRCA reuse multiply), DEST *= scalar (SFPU, only
+// when scalar != 1), DEST += a (DEST_TO_SRCA reuse add). a and b are the fin entry's tiles in the slot's dense wave
+// layout (the reader reads them during the entry's matmul), so they index like the arrivals; a broadcast b holds one
+// row tile per wave column, and the unpacker broadcasts its row 0 (BroadcastType::ROW with DEST reuse). The fused
+// finish and the separate (late / lagged) finish run this identical sequence on identical values (determinism, as for
+// the arrivals). The multiply runs at HiFi4 whatever the matmul's fidelity: srcA carries the fp32 sum at tf32 width,
+// and LoFi would keep only 5 of its mantissa bits.
+template <uint32_t cb, bool bcast>
+ALWI void addcmul_mul_reuse_init() {
+    constexpr BroadcastType bt = bcast ? BroadcastType::ROW : BroadcastType::NONE;
+    UNPACK((llk_unpack_A_init<bt, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(false, false, cb)));
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWMUL,
+          bt,
+          MathFidelity::HiFi4,
+          EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, cb, false)));
+}
+
+template <uint32_t cb, bool bcast>
+ALWI void addcmul_mul_reuse(uint32_t in_tile, uint32_t dst_tile) {
+    constexpr BroadcastType bt = bcast ? BroadcastType::ROW : BroadcastType::NONE;
+    UNPACK((llk_unpack_A<bt, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, in_tile)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          bt,
+          DST_ACCUM_MODE,
+          MathFidelity::HiFi4,
+          EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, cb, dst_tile, true)));
+}
+
+// The epilogue on h x w DEST tiles (DEST tile r * w + c, operand tile r * cols + col_base + c; a broadcast b's tile is
+// the operand tile's wave column, operand mod wave_cols). srcA already carries DEST at the hold's (fp32) width;
+// srcb_prev is the CB srcB was last configured for.
+template <uint32_t cb_hold, uint32_t cb_a, uint32_t cb_b, bool b_bcast, bool has_scalar, uint32_t scalar_bits>
+ALWI void addcmul_epilogue(
+    uint32_t srcb_prev, uint32_t col_base, uint32_t cols, uint32_t h, uint32_t w, uint32_t wave_cols) {
+    reconfig_data_format(cb_hold, cb_hold, srcb_prev, cb_b);
+    addcmul_mul_reuse_init<cb_b, b_bcast>();
+    for (uint32_t r = 0; r < h; ++r) {
+        for (uint32_t c = 0; c < w; ++c) {
+            const uint32_t t = r * cols + col_base + c;
+            addcmul_mul_reuse<cb_b, b_bcast>(b_bcast ? t % wave_cols : t, r * w + c);
+        }
+    }
+    if constexpr (has_scalar) {
+        binop_with_scalar_tile_init();
+        for (uint32_t i = 0; i < h * w; ++i) {
+            mul_unary_tile(i, scalar_bits);
+        }
+    }
+    reconfig_data_format(cb_hold, cb_hold, cb_b, cb_a);
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_a);
+    for (uint32_t r = 0; r < h; ++r) {
+        for (uint32_t c = 0; c < w; ++c) {
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_a, r * cols + col_base + c, r * w + c);
+        }
+    }
+}
+
+// finish_block of a fin entry in an MRS_ADDCMUL program (the late / lagged / post-lag fin entries): the same first ops
+// as the fused finish (hold + arrival FPU add, the second arrival by DEST reuse; a lone hold as hold + 0), then the
+// epilogue, packed bf16 into cb_finished. Raw LLK for the same reason as the fused finish: the epilogue's operand
+// order and widths must match the fused branch exactly.
+template <
+    uint32_t cb_hold,
+    uint32_t cb_finished,
+    uint32_t cb_arr_fwd,
+    uint32_t cb_arr_bwd,
+    uint32_t cb_zero,
+    uint32_t cb_a,
+    uint32_t cb_b,
+    uint32_t P,
+    uint32_t win_n,
+    bool b_bcast,
+    bool has_scalar,
+    uint32_t scalar_bits>
+ALWI void finish_block_addcmul(uint32_t role, uint32_t wave_cols) {
+    constexpr uint32_t kDest = 8;  // fp32 full-sync DEST tiles
+    const bool fwd = role == mrs::role::ADD_FWD || role == mrs::role::ADD_BOTH;
+    const bool bwd = role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH;
+    const uint32_t cb_first = fwd ? cb_arr_fwd : (bwd ? cb_arr_bwd : cb_zero);
+    cb_wait_front(cb_hold, P);
+    if (fwd) {
+        cb_wait_front(cb_arr_fwd, P);
+    }
+    if (bwd) {
+        cb_wait_front(cb_arr_bwd, P);
+    }
+    constexpr uint32_t b_tiles = b_bcast ? win_n : P;
+    cb_wait_front(cb_a, P);
+    cb_wait_front(cb_b, b_tiles);
+    cb_reserve_back(cb_finished, P);
+    PACK((pack_reconfig_data_format(cb_finished)));
+    for (uint32_t base = 0; base < P; base += kDest) {
+        const uint32_t n = P - base < kDest ? P - base : kDest;
+        tile_regs_acquire();
+        reconfig_data_format(cb_hold, cb_first);
+        add_init(cb_hold, cb_first);
+        for (uint32_t i = 0; i < n; ++i) {
+            add_tiles(cb_hold, cb_first, base + i, cb_first == cb_zero ? 0 : base + i, i);
+        }
+        uint32_t srcb = cb_first;
+        if (fwd && bwd) {
+            reconfig_data_format(cb_hold, cb_hold, cb_first, cb_arr_bwd);
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_arr_bwd);
+            for (uint32_t i = 0; i < n; ++i) {
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_arr_bwd, base + i, i);
+            }
+            srcb = cb_arr_bwd;
+        }
+        addcmul_epilogue<cb_hold, cb_a, cb_b, b_bcast, has_scalar, scalar_bits>(srcb, base, 0, 1, n, wave_cols);
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile<true>(i, cb_finished, base + i);
+        }
+        tile_regs_release();
+    }
+    cb_push_back(cb_finished, P);
+    cb_pop_front(cb_hold, P);
+    if (fwd) {
+        cb_pop_front(cb_arr_fwd, P);
+    }
+    if (bwd) {
+        cb_pop_front(cb_arr_bwd, P);
+    }
+    cb_pop_front(cb_a, P);
+    cb_pop_front(cb_b, b_tiles);
+}
+#endif
+
 void kernel_main() {
     using namespace mrs::compute_ct;
     constexpr uint32_t cb_act_k_window = get_compile_time_arg_val(CB_ACT_K_WINDOW);
@@ -140,6 +300,24 @@ void kernel_main() {
     DataflowBuffer hold_dfb(cb_partial_hold), fin_dfb(cb_finished), fwd_dfb(cb_arrivals_fwd), bwd_dfb(cb_arrivals_bwd);
     const FinishBuffers finish_bufs{hold_dfb, fin_dfb, fwd_dfb, bwd_dfb};
     cb_wait_front(cb_zero, 1);  // the writer's zero tile; never popped
+#ifdef MRS_BIAS
+    // FUSED BIAS (MRS_BIAS programs only): this device's bias row is added to every entry's partial once, in the first
+    // super-block (DEST += bias, row broadcast, DEST_TO_SRCA reuse), before anything of the entry is packed; the
+    // reduce-scatter then sums the devices' biases, as a matmul bias before a reduce-scatter. The reader pushes win_n
+    // row tiles per entry (the wave's columns), read ahead of the entry's first K-step.
+    constexpr uint32_t cb_bias = mrs::addcmul_cb::BIAS;
+    CircularBuffer bias_buf(cb_bias);
+#endif
+#ifdef MRS_ADDCMUL
+    constexpr uint32_t cb_add_a = get_compile_time_arg_val(mrs::compute_addcmul_ct::CB_A);
+    constexpr uint32_t cb_add_b = get_compile_time_arg_val(mrs::compute_addcmul_ct::CB_B);
+    constexpr bool add_b_bcast = get_compile_time_arg_val(mrs::compute_addcmul_ct::B_BCAST) != 0;
+    constexpr uint32_t add_b_tiles = add_b_bcast ? win_n : P;  // addcmul_b tiles per fin entry (the reader's)
+    constexpr bool add_has_scalar = get_compile_time_arg_val(mrs::compute_addcmul_ct::HAS_SCALAR) != 0;
+    constexpr uint32_t add_scalar_bits = get_compile_time_arg_val(mrs::compute_addcmul_ct::SCALAR_BITS);
+    CircularBuffer add_a_buf(cb_add_a), add_b_buf(cb_add_b);
+    bool entry_fin = false;  // the running entry is a fin entry (its finish applies the epilogue)
+#endif
 
     // UNPACK: have the entry's arrival(s) landed (non-blocking)? Broadcast to MATH and PACK by mailbox.
     auto arrivals_landed = [&](uint32_t role) -> bool {
@@ -155,6 +333,14 @@ void kernel_main() {
             if (role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH) {
                 ready &= landed(cb_arrivals_bwd) ? 1u : 0u;
             }
+#ifdef MRS_ADDCMUL
+            if (entry_fin) {  // the epilogue's operands too: the fused finish must not block on them
+                const uint16_t rec_b = (uint16_t)reg_read((uint32_t)get_cb_tiles_received_ptr(cb_add_b));
+                const bool b_landed =
+                    (uint16_t)(rec_b - (uint16_t)get_local_cb_interface(cb_add_b).tiles_acked) >= add_b_tiles;
+                ready &= (landed(cb_add_a) && b_landed) ? 1u : 0u;
+            }
+#endif
             mailbox_write(ckernel::ThreadId::MathThreadId, ready);
             mailbox_write(ckernel::ThreadId::PackThreadId, ready);
         }));
@@ -203,6 +389,17 @@ void kernel_main() {
                     reuse_add(cb_arrivals_bwd);
                 }
             }
+#ifdef MRS_ADDCMUL
+            if (with_arrivals && entry_fin) {  // the fused finish of a fin entry: the sum is final here
+                if (!any) {  // srcA has not carried DEST yet: give it the hold's width, as every reuse op does
+                    reconfig_data_format(cb_weight_k_window, cb_partial_hold, srcb, srcb);
+                }
+                addcmul_epilogue<cb_partial_hold, cb_add_a, cb_add_b, add_b_bcast, add_has_scalar, add_scalar_bits>(
+                    srcb, col_base, cols, h, w, cols);
+                srcb = cb_add_a;
+                any = true;
+            }
+#endif
             if (any) {
                 reconfig_data_format(cb_partial_hold, cb_weight_k_window, srcb, cb_act_k_window);
                 ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, w, h, kb);
@@ -241,6 +438,12 @@ void kernel_main() {
                 hold_buf.wait_front(P);
             }
             if (fused && last_super) {  // chain start: known up front
+#ifdef MRS_ADDCMUL
+                if (entry_fin) {
+                    add_a_buf.wait_front(P);
+                    add_b_buf.wait_front(add_b_tiles);
+                }
+#endif
                 PACK((pack_reconfig_data_format(cb_finished)));
                 PACK((llk_pack_reconfig_l1_acc(0)));
                 fin_buf.reserve_back(P);
@@ -290,6 +493,23 @@ void kernel_main() {
                             weight_buf.pop_front(w_win);
                         }
                     }
+#ifdef MRS_BIAS
+                    if (g == 0) {
+                        if (first_sb) {
+                            bias_buf.wait_front(win_n);
+                        }
+                        // srcA carries DEST at the hold's width, as every reuse op; matmul state restored after
+                        reconfig_data_format(cb_weight_k_window, cb_partial_hold, cb_act_k_window, cb_bias);
+                        add_bcast_row_reuse_init<cb_bias>();
+                        for (uint32_t r = 0; r < sb_h; ++r) {
+                            for (uint32_t c = 0; c < sb_w; ++c) {
+                                add_bcast_row_reuse<cb_bias>(sc * sb_w + c, r * sb_w + c);
+                            }
+                        }
+                        reconfig_data_format(cb_partial_hold, cb_weight_k_window, cb_bias, cb_act_k_window);
+                        ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
+                    }
+#endif
                     if (fusable && has_arrival && last_super && first_sb) {
                         if (arrivals_landed(role)) {
                             fused = true;
@@ -299,6 +519,12 @@ void kernel_main() {
                             if (role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH) {
                                 bwd_buf.wait_front(P);
                             }
+#ifdef MRS_ADDCMUL
+                            if (entry_fin) {
+                                add_a_buf.wait_front(P);  // landed: returns at once
+                                add_b_buf.wait_front(add_b_tiles);
+                            }
+#endif
                             PACK((pack_reconfig_data_format(cb_finished)));
                             PACK((llk_pack_reconfig_l1_acc(0)));
                             fin_buf.reserve_back(P);
@@ -364,10 +590,19 @@ void kernel_main() {
             if (role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH) {
                 bwd_buf.pop_front(P);
             }
+#ifdef MRS_ADDCMUL
+            if (entry_fin) {
+                add_a_buf.pop_front(P);
+                add_b_buf.pop_front(add_b_tiles);
+            }
+#endif
         } else if (!(fusable && hold_prev)) {  // (a fusable entry with earlier super-blocks pushed its slot already)
             hold_buf.push_back(P);
         }
         PACK((llk_pack_reconfig_l1_acc(0)));  // the finish chains pack plainly
+#ifdef MRS_BIAS
+        bias_buf.pop_front(win_n);
+#endif
         return fused;
     };
 
@@ -382,16 +617,54 @@ void kernel_main() {
             const bool lag =
                 (word >> mrs::role::LAG_SHIFT) & 1;  // host: arrival expected late -> finish behind the next matmul
             const bool fusable = !lag && pending == NONE;
+#ifdef MRS_ADDCMUL
+            entry_fin = ((word >> mrs::role::FIN_SHIFT) & 1) != 0;
+#endif
             const bool fused = matmul_entry(e, chunk_fill && e == 0, fusable, role);
             if (pending != NONE) {
-                finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
-                    get_arg_val<uint32_t>(roles_idx + pending) & 0xFF, finish_bufs);
+#ifdef MRS_ADDCMUL
+                const uint32_t pword = get_arg_val<uint32_t>(roles_idx + pending);
+                if (((pword >> mrs::role::FIN_SHIFT) & 1) != 0) {
+                    finish_block_addcmul<
+                        cb_partial_hold,
+                        cb_finished,
+                        cb_arrivals_fwd,
+                        cb_arrivals_bwd,
+                        cb_zero,
+                        cb_add_a,
+                        cb_add_b,
+                        P,
+                        win_n,
+                        add_b_bcast,
+                        add_has_scalar,
+                        add_scalar_bits>(pword & 0xFF, (get_arg_val<uint32_t>(pending % num_waves) >> 8) & 0xFF);
+                } else
+#endif
+                    finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
+                        get_arg_val<uint32_t>(roles_idx + pending) & 0xFF, finish_bufs);
                 pending = NONE;
             }
             if (lag) {
                 pending = e;  // the add waits for its arrival behind the next entry's matmul
             } else if (!fused) {
-                finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(role, finish_bufs);
+#ifdef MRS_ADDCMUL
+                if (entry_fin) {
+                    finish_block_addcmul<
+                        cb_partial_hold,
+                        cb_finished,
+                        cb_arrivals_fwd,
+                        cb_arrivals_bwd,
+                        cb_zero,
+                        cb_add_a,
+                        cb_add_b,
+                        P,
+                        win_n,
+                        add_b_bcast,
+                        add_has_scalar,
+                        add_scalar_bits>(role, (get_arg_val<uint32_t>(e % num_waves) >> 8) & 0xFF);
+                } else
+#endif
+                    finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(role, finish_bufs);
             }
         }
     }

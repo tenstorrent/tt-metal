@@ -125,7 +125,11 @@ MatmulReduceScatterPrefillParams resolve_params(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<uint32_t>& l1_headroom,
-    ttnn::experimental::MatmulReduceScatterPrefillGrid matmul_grid) {
+    ttnn::experimental::MatmulReduceScatterPrefillGrid matmul_grid,
+    const std::optional<float>& addcmul_scalar,
+    const std::optional<Tensor>& addcmul_a,
+    const std::optional<Tensor>& addcmul_b,
+    const std::optional<Tensor>& bias) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
     using ttnn::experimental::MatmulReduceScatterPrefillGrid;
@@ -179,6 +183,21 @@ MatmulReduceScatterPrefillParams resolve_params(
         "matmul_reduce_scatter_prefill: l1_headroom={} must be smaller than the L1 bank size ({} bytes)",
         headroom,
         l1_bank);
+    // the fused addcmul epilogue's operands, against the output shape
+    ttnn::Shape out_shape = input_tensor.logical_shape();
+    out_shape[-1] = N;
+    if (canonical_dim == -2) {
+        out_shape[-2] = M / G;
+    } else {
+        out_shape[-1] = N / G;
+    }
+    const bool addcmul_bcast = check_addcmul(input_tensor, out_shape, addcmul_a, addcmul_b);
+    const bool addcmul = addcmul_a.has_value();
+    const uint32_t add_a_bytes = addcmul ? static_cast<uint32_t>(addcmul_a->buffer()->aligned_page_size()) : 0;
+    const uint32_t add_b_bytes = addcmul ? static_cast<uint32_t>(addcmul_b->buffer()->aligned_page_size()) : 0;
+    check_bias(input_tensor, weight, bias);
+    const uint32_t bias_bytes = bias.has_value() ? static_cast<uint32_t>(bias->buffer()->aligned_page_size()) : 0;
+
     detail::PlanInputs plan_inputs{
         .G = G,
         .kind = kind,
@@ -196,6 +215,11 @@ MatmulReduceScatterPrefillParams resolve_params(
         .budget = l1_bank - headroom,
         .w_dram_sharded = weight.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
                           weight.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+        .addcmul_a_tile_bytes = add_a_bytes,
+        .addcmul_b_tile_bytes = add_b_bytes,
+        .addcmul_dram_bytes_per_tile = add_a_bytes + (addcmul_bcast ? 0 : add_b_bytes),
+        .addcmul_b_bcast = addcmul_bcast ? 1u : 0u,
+        .bias_tile_bytes = bias_bytes,
     };
     switch (matmul_grid) {
         case MatmulReduceScatterPrefillGrid::GRID_2D: plan_inputs.flow = detail::Flow::Grid2D; break;
@@ -214,6 +238,8 @@ MatmulReduceScatterPrefillParams resolve_params(
         .math_approx_mode = compute_kernel_config.has_value() && compute_kernel_config->math_approx_mode,
         .output_memory_config = out_mem,
         .plan_inputs = plan_inputs,
+        .addcmul_scalar = addcmul ? std::optional<float>(addcmul_scalar.value_or(1.0f)) : std::nullopt,
+        .addcmul_b_bcast = addcmul_bcast,
     };
 }
 
@@ -248,7 +274,11 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const std::optional<Tensor>& output_tensor,
     const std::optional<uint32_t>& l1_headroom,
     const std::optional<Tensor>& staging_tensor,
-    MatmulReduceScatterPrefillGrid grid) {
+    MatmulReduceScatterPrefillGrid grid,
+    const std::optional<float>& fused_ternary_scalar,
+    const std::optional<Tensor>& addcmul_input_tensor1,
+    const std::optional<Tensor>& addcmul_input_tensor2,
+    const std::optional<Tensor>& bias) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
     MatmulReduceScatterPrefillParams params = resolve_params(
         input_tensor,
@@ -260,7 +290,11 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         compute_kernel_config,
         memory_config,
         l1_headroom,
-        grid);
+        grid,
+        fused_ternary_scalar,
+        addcmul_input_tensor1,
+        addcmul_input_tensor2,
+        bias);
     if (staging_tensor.has_value()) {
         plan_for_held_staging(params, *staging_tensor);
     }
@@ -268,11 +302,20 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     auto* mesh = input_tensor.device();
     ensure_mesh_resources(mesh);
     if (staging_tensor.has_value()) {  // the caller's: checked against the plan on a program-cache miss
-        return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, *staging_tensor, params);
+        return ttnn::prim::matmul_reduce_scatter_prefill(
+            input_tensor,
+            weight,
+            output_tensor,
+            *staging_tensor,
+            params,
+            addcmul_input_tensor1,
+            addcmul_input_tensor2,
+            bias);
     }
     // freed when this call returns, like any op intermediate (see allocate_staging), so it holds no L1 between calls
     const Tensor staging = allocate_staging(mesh, detail::staging_tiles(params.plan()));
-    return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, staging, params);
+    return ttnn::prim::matmul_reduce_scatter_prefill(
+        input_tensor, weight, output_tensor, staging, params, addcmul_input_tensor1, addcmul_input_tensor2, bias);
 }
 
 Tensor experimental::matmul_reduce_scatter_prefill_staging(
@@ -283,7 +326,10 @@ Tensor experimental::matmul_reduce_scatter_prefill_staging(
     ttnn::ccl::Topology topology,
     const std::optional<int32_t>& num_links,
     const std::optional<uint32_t>& l1_headroom,
-    MatmulReduceScatterPrefillGrid grid) {
+    MatmulReduceScatterPrefillGrid grid,
+    const std::optional<Tensor>& addcmul_input_tensor1,
+    const std::optional<Tensor>& addcmul_input_tensor2,
+    const std::optional<Tensor>& bias) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
     const MatmulReduceScatterPrefillParams params = resolve_params(
         input_tensor,
@@ -295,7 +341,11 @@ Tensor experimental::matmul_reduce_scatter_prefill_staging(
         std::nullopt,
         std::nullopt,
         l1_headroom,
-        grid);
+        grid,
+        std::nullopt,
+        addcmul_input_tensor1,
+        addcmul_input_tensor2,
+        bias);
     return allocate_staging(input_tensor.device(), detail::staging_tiles(params.plan()));
 }
 
