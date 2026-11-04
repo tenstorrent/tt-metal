@@ -77,7 +77,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, mesh_cache_key
-from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -1010,14 +1009,12 @@ def _fabric2d_torus_xy_8x4(model_cfg):
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
         "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
     ),
-    with_sp4_depth(
-        [
-            # fmt: off
+    [
+        # fmt: off
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
-            # fmt: on
-        ]
-    ),
+        # fmt: on
+    ],
 )
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
@@ -1319,14 +1316,12 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
         "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
     ),
-    with_sp4_depth(
-        [
-            # fmt: off
+    [
+        # fmt: off
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-perf"),
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-pcc"),
-            # fmt: on
-        ]
-    ),
+        # fmt: on
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, sp_axis",
