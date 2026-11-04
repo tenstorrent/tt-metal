@@ -144,3 +144,17 @@ program's config behind the 56 us gather. Consequences for the design:
   persistent layer must keep the rows in lock-step (the exchanges already do) and should fold the all-reduce in.
 Next: step 2 (resident x: no x_g write / read), then fold the router top-k and the shared expert (two always-active
 "experts" with weight 1) and the MoE all-reduce into the block so the preceding op is the 52 us MHC post-mix.
+
+### Step 2 (resident x by multicast) measured and shelved (2026-11-04 07:10)
+
+| variant | MoE block device time (layer 4, chip (0,0), 32 users) | step |
+|---|---|---|
+| three programs (today) | 56.0 + 215.3 + 37.9 = 309.2 us | 37.69 ms |
+| step 1 (one program, x_g in L1) | 305.4 us | 38.37 ms |
+| step 2 (x multicast into the gate|up cores' first CB) | 382.7 us | 40.42 ms |
+
+Eight 16-tile chunk multicasts into two 60-core rects (path-reserved packets, all on the workers' NOC 1) are ~77 us
+slower than one 256 KB x_g write plus 88 independent 256 KB reads. The multicast delivery to 120 cores serialises
+where the per-core reads spread over 88 NIUs; keep the x_g path. The resident-x code stays on arg/glm53_persistent2
+(bit-exact, `resident_x=False` is step 1's behaviour) in case a cheaper landing (one multicast from a staging core,
+or the readers pulling from the workers' L1) is worth a later test.

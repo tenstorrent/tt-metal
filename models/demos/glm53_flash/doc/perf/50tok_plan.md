@@ -380,3 +380,5 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   two 60-core rects (path-reserved, serialized on the workers' NOC) cost ~45 us per layer more than the x_g write
   plus the gate|up cores' own 256 KB reads they replace. Unless the layer profile (`tracy_l4_b4_persist2`) shows the
   loss elsewhere, step 2 is shelved: step 1's x path stays.
+- 2026-11-04 07:10 `tracy_l4_b4_persist2`: the block = 382.7 us vs 305.4 (step 1): the multicast landing itself.
+  Step 2 shelved (design doc). Current best persistent variant = step 1 (wt_persist @8afb4a2b941), a wash vs today.
