@@ -153,7 +153,9 @@ inline DeviceCausalGeometry device_causal_geometry(
         // Bring-up fork: natural query blocks (see operation_attributes_t::natural_query_blocks). The keys stay
         // block-cyclic; the queries of device (d, c) are the contiguous positions chunk_start + d*chunk_local +
         // c*Sq + [0, Sq): a linear diagonal with no straddle, at any tile-aligned start.
-        const uint32_t first = args.chunk_start_idx + device_index * chunk_local + tp_index * Sq;
+        // natural_query_rows (P.31): the queries' own per-SP-rank rows when their chunk is not the key cache's
+        const uint32_t qrows = args.natural_query_rows ? args.natural_query_rows : chunk_local;
+        const uint32_t first = args.chunk_start_idx + device_index * qrows + tp_index * Sq;
         return DeviceCausalGeometry{first / kCausalTileWidth, 0u, 0u};
     }
     TT_FATAL(

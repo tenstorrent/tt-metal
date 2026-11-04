@@ -49,6 +49,45 @@ LINKS = 2  # links per direction (the block's exchange plans its ports for 2)
 COMBINE_SNAP = 2.0**-19  # (MOE_HEAD=fused: order-independent sums below 2^24 x 2^-19 = 32; routed sums peak at 5.4)
 _BLOCKS: dict = {}  # (id(mesh), chunk) -> (mesh, MoEBlock)
 _DONE: dict = {}  # id(mesh) -> (mesh, the done words every layer's flat op shares; each launch leaves them zero)
+# DECODER_SKIP=replay128 (P.31): L1 kept at the top for a second block's persistent words (``reserve_l1``)
+_RESERVE: dict = {}  # id(mesh) -> (mesh, the L1 tensor, bytes a core)
+
+
+def reserve_l1(mesh, nbytes: int) -> None:
+    """P.31, load time, before the first MoE block of ``mesh`` is built: ``nbytes`` of every core's L1 at the top (an
+    L1 buffer), given back just before a second block is built (``TtMoEBlockLayer.block`` of an ``at_chunk`` layer).
+
+    Why: a block bakes its arenas (the fused head's, the exchange's: the largest L1 left) below the persistent words
+    every block keeps at the top of L1 (semaphores, mailboxes, the exchange's words). A second block built later puts
+    its words below the first's - inside the first block's arenas (an assert or a clash at its next call). With this
+    reservation the first (the main chunk's) block is built below it, and the second's words go into it: both blocks
+    then bake their arenas in the same L1 left and take them in turn."""
+    assert id(mesh) not in _RESERVE, "reserve_l1: one reservation a mesh"
+    assert not any(k[0] == id(mesh) for k in _BLOCKS), "reserve_l1: before the mesh's first MoE block is built"
+    grid = mesh.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    t = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([grid.x * grid.y, nbytes // 4]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(crs, [1, nbytes // 4], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+    _RESERVE[id(mesh)] = (mesh, t, int(nbytes))
+
+
+def _l1_blocks(mesh) -> set:
+    """The allocated L1 blocks (address, size) of the allocator's table (offsets from its base, DS41-114)."""
+    v = ttnn.get_memory_view(mesh, ttnn.BufferType.L1)
+    out = set()
+    for b in v.block_table:
+        if str(b.get("allocated", "")).lower() in ("yes", "true", "1"):
+            out.add((int(b["address"]), int(b["size"])))
+    return out
 
 
 def block_model(cfg):
@@ -72,7 +111,7 @@ def block_model(cfg):
     return m
 
 
-def block_options(mesh=None, own_rows: bool = False):
+def block_options(mesh=None, own_rows: bool = False, one_arena: bool = True):
     """max_grid (FIX.15, MAX_WORKER_CORES): the block's own programs inside tt/cores.max_grid(mesh) (11 x 10 on a
     Galaxy; None elsewhere: the whole grid, as before). MOE_HEAD=fused (the default, owner 2026-10-27): the fused head on the column split, the combine snapped (owner
     2026-10-27: keep the snap; bit-identical runs). ops: D2 x gathered, D4 ops head, D7 fixed combine order. MOE_TAIL:
@@ -80,7 +119,8 @@ def block_options(mesh=None, own_rows: bool = False):
     fused tail's descriptors prepared once and dispatched with run_prepared. own_rows (OWN_ROWS, P.23, the fused head):
     the residual is each chip's own rows [S/N, H] (MoEOptions residual "owners"): the head's x through one TP
     all-to-all straight into its x buffer, the fused tail TailA2A's local mode (tilize + the shared expert, no
-    all-to-all)."""
+    all-to-all). one_arena (P.31): MoEOptions.one_arena (False for the decoder tail's 1024-token block: its exchange
+    arena starts below a fused-head program's static CBs on 8x4)."""
     from models.demos.moe_block.moe_block import MoEOptions
 
     tail = settings.get("MOE_TAIL")
@@ -97,6 +137,7 @@ def block_options(mesh=None, own_rows: bool = False):
                 max_grid=cap,
                 residual="owners",
                 owners_a2a_into_head=True,
+                one_arena=one_arena,
             )
         return MoEOptions(head="fused", tail=tail, tail_prepared=tp, combine_snap=COMBINE_SNAP, max_grid=cap)
     assert not own_rows, "OWN_ROWS: MOE_HEAD=fused"
@@ -181,6 +222,7 @@ class TtMoEBlockLayer:
         from models.demos.moe_block.moe_block import Geometry, MoELayer, MoEWeights, RoutedExperts, fuse_gate_up
 
         self.own_rows = bool(own_rows)  # OWN_ROWS (P.23): x and the output are the chip's own rows [S/N, H]
+        self.one_arena = True  # (MoEOptions.one_arena; at_chunk's tail block: False)
 
         # D8: the block's exchange runs the flat op at LoFi with bfp8 x / h tiles (glm); full is not plumbed
         assert settings.get("EXPERTS_PRECISION") == "glm", (
@@ -243,6 +285,23 @@ class TtMoEBlockLayer:
             f"experts_impl={settings.get('EXPERTS_IMPL')}"
         )
 
+    def at_chunk(self, chunk: int) -> "TtMoEBlockLayer":
+        """This layer at another chunk (DECODER_SKIP=replay128, P.31: the decoder tail's 1024-row chunk on 8x4), its
+        weights shared (MoELayer.at: the routed experts' device weights and expert ids, the flat op replanned for the
+        chunk's capacity; the router / shared expert from the same host source, laid out by that chunk's head). Its
+        MoEBlock is the (mesh, chunk)'s own, built at its first call."""
+        from models.demos.moe_block.moe_block import Geometry
+
+        out = copy.copy(self)
+        out.chunk = int(chunk)
+        out.one_arena = False  # (P.31: the head's static CBs reach into the exchange's arena at 1024 tokens on 8x4)
+        host_alloc.reserve_tail_out(self.mesh, out.chunk, int(self.model.emb_dim), own_rows=self.own_rows)
+        out.g = Geometry.of(self.mesh, self.model, out.chunk, LINKS, zigzag=False)
+        out.weights = self.weights.at(self.mesh, out.g, self.model)
+        if self.head == "ops":
+            out.weights.ops()
+        return out
+
     def block(self):
         """The (mesh, chunk)'s MoEBlock, built at the first call (with this layer's weights)."""
         from models.demos.moe_block.moe_block import MoEBlock, WeightCache
@@ -250,6 +309,12 @@ class TtMoEBlockLayer:
         key = (id(self.mesh), self.chunk)
         hit = _BLOCKS.get(key)
         if hit is None or hit[0] is not self.mesh:
+            res = _RESERVE.pop(id(self.mesh), None) if not self.one_arena else None  # (P.31: the tail block)
+            if res is not None:
+                base = int(ttnn.get_allocator_base_address(self.mesh, ttnn.BufferType.L1))
+                top = int(res[1].buffer_address()) - base  # (the reservation's offset in the allocator's table)
+                before = _l1_blocks(self.mesh)
+                ttnn.deallocate(res[1])
             blk = MoEBlock(
                 self.mesh,
                 self.model,
@@ -258,7 +323,7 @@ class TtMoEBlockLayer:
                 WeightCache(path=None, layer=self.layer),
                 num_links=LINKS,
                 dtypes=self.dtypes,
-                options=block_options(self.mesh, own_rows=self.own_rows),
+                options=block_options(self.mesh, own_rows=self.own_rows, one_arena=self.one_arena),
             )
             if settings.get("PREPARED_ALL") == "on":  # (P.14: the fused tail keyed on shapes, addresses patched)
                 from .prepared_tail import install
@@ -266,6 +331,19 @@ class TtMoEBlockLayer:
                 install(blk)
             host_alloc.install_moe(blk)  # HOST_ALLOC=on (P.15): the exchange's arena probe is the call's arena
             hit = _BLOCKS[key] = (self.mesh, blk)
+            if res is not None:  # (P.31: every persistent word of this block inside the reservation, none below it)
+                new = sorted(_l1_blocks(self.mesh) - before)
+                inside = [a for a, n in new if a >= top]
+                below = [(a, n) for a, n in new if a < top]
+                used = (top + res[2] - min(inside)) if inside else 0
+                logger.info(
+                    f"MOE_BLOCK chunk={self.chunk}: L1 reservation {res[2]} B a core at offset {top}, the block's "
+                    f"persistent L1 {used} B in it, {len(below)} blocks below it {below[:4]}"
+                )
+                assert not below, (
+                    f"MoE block at chunk {self.chunk}: persistent L1 below the {res[2]} B reservation {below[:4]}: the "
+                    f"main block's arenas would move (raise TtDS41Model's TAIL_L1_RESERVE)"
+                )
         return hit[1]
 
     def input_buffers(self):

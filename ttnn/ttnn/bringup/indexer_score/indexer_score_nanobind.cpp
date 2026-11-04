@@ -331,6 +331,10 @@ void bind_indexer_score(nb::module_& mod) {
                 later columns untouched.
             block_max_pin: optional bool (default False; needs block_max_out): +inf in block_max_out at each
                 query's own block (the block of its newest visible key, (pos + 1) // ratio - 1).
+            natural_query_rows: optional int (default 0 = block_cyclic_chunk_local; bring-up fork, P.31; needs
+                natural_query_blocks): the query tokens per SP rank when the queries' chunk is not the key cache's
+                (a small chunk scoring keys a larger chunk wrote): device (d, c) holds positions chunk_start_idx +
+                d*natural_query_rows + c*Sq + [0, Sq). Tile-aligned, >= Sq.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -364,7 +368,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("block_keys") = 0,
         nb::arg("block_bias") = nb::none(),
         nb::arg("block_max_out") = nb::none(),
-        nb::arg("block_max_pin") = false);
+        nb::arg("block_max_pin") = false,
+        nb::arg("natural_query_rows") = 0);
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

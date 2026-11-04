@@ -463,6 +463,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_route_plan_hash,
         attrs.key_stripe_split,      // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
         attrs.natural_query_blocks,  // bring-up fork: natural query blocks (linear causal geometry)
+        attrs.natural_query_rows,    // bring-up fork (P.31): the queries' rows per SP rank (0 = the cache's)
         // bring-up fork block epilogue: its presence adds a define, CBs and writer arguments
         attrs.block_keys,
         attrs.block_max_pin,
@@ -948,13 +949,27 @@ ttnn::Tensor launch_indexer_score(
     uint32_t block_keys = 0,
     std::optional<ttnn::Tensor> block_bias = std::nullopt,
     std::optional<ttnn::Tensor> block_max_out = std::nullopt,
-    bool block_max_pin = false) {
+    bool block_max_pin = false,
+    // Bring-up fork (P.31): natural_query_blocks with the queries' own rows per SP rank (operation_attributes_t).
+    uint32_t natural_query_rows = 0) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::bringup::indexer_score::IndexerScoreDeviceOperation;
     using ttnn::operations::bringup::indexer_score::BlockCyclicLayout;
 
     const uint32_t Sq = q.logical_shape()[2];
+    // Bring-up fork (P.31): natural_query_rows, checked first (the block-cyclic query checks below read it)
+    if (natural_query_rows != 0) {
+        TT_FATAL(
+            natural_query_blocks && natural_query_rows % tt::constants::TILE_HEIGHT == 0,
+            "indexer_score: natural_query_rows ({}) needs natural_query_blocks and a tile-aligned count",
+            natural_query_rows);
+        TT_FATAL(
+            natural_query_rows >= Sq,
+            "indexer_score: natural_query_rows ({}) must hold a device's Sq ({}) query rows",
+            natural_query_rows,
+            Sq);
+    }
     TT_FATAL(
         key_compression_ratio == 1 || key_compression_ratio == 2 || key_compression_ratio == 4,
         "indexer_score: key_compression_ratio must be 1 or 4, or 2 in the bring-up fork (got {})",
@@ -1040,13 +1055,17 @@ ttnn::Tensor launch_indexer_score(
             "indexer_score: block_cyclic_chunk_local ({}) must be divisible by key_compression_ratio ({})",
             query_chunk_local,
             key_compression_ratio);
+        // Bring-up fork (P.31): with natural_query_rows the queries' own rows per SP rank take chunk_local's place in
+        // the query checks below (the keys keep chunk_local's stripes).
+        const uint32_t query_rows =
+            (natural_query_blocks && natural_query_rows != 0) ? natural_query_rows : query_chunk_local;
         // chunk_local is one of exactly two legal values (the cross-check sparse_sdpa also applies): q's
         // per-chip seq length (seq sharded only on the SP axis) or tp*q_isl (seq also sliced across the TP
         // axis, post-reshard). Anything else is a producer bug.
         TT_FATAL(
-            query_chunk_local == Sq || query_chunk_local == Sq * tp,
-            "indexer_score: block_cyclic_chunk_local ({}) must be q_isl ({}) or tp*q_isl ({})",
-            query_chunk_local,
+            query_rows == Sq || query_rows == Sq * tp,
+            "indexer_score: block_cyclic_chunk_local / natural_query_rows ({}) must be q_isl ({}) or tp*q_isl ({})",
+            query_rows,
             Sq,
             Sq * tp);
         // Seq sharded across BOTH axes (chunk_local == tp*q_isl, tp > 1) needs the second axis's seq offset.
@@ -1057,7 +1076,7 @@ ttnn::Tensor launch_indexer_score(
         //   (b) seq_shard_axes=[SP, TP] -> the EXACT block-cyclic geometry (mirroring rotated_chip_positions)
         //       adds the tp_rank*Sq sub-offset. Rotation-exact.
         // A lone SP axis (seq_shard_axes=[SP]) would miss the TP offset entirely -- reject that.
-        const bool both_axes = (query_chunk_local == Sq * tp && tp > 1);
+        const bool both_axes = (query_rows == Sq * tp && tp > 1);
         TT_FATAL(
             !(both_axes && cluster_axis.has_value() && !seq_subshard_axis.has_value()),
             "indexer_score: block_cyclic_chunk_local == tp*q_isl (tp={} > 1) with seq_shard_axes=[SP] needs the "
@@ -1070,7 +1089,7 @@ ttnn::Tensor launch_indexer_score(
                 "indexer_score: seq_shard_axes TP axis needs the SP axis present (seq_shard_axes=[SP, TP]) and a "
                 "2D seq shard (block_cyclic_chunk_local == tp*q_isl); got has_sp_axis={}, chunk_local={}, Sq*tp={}",
                 cluster_axis.has_value(),
-                query_chunk_local,
+                query_rows,
                 Sq * tp);
             TT_FATAL(
                 *seq_subshard_axis < mesh_shape.dims() && *seq_subshard_axis != *cluster_axis,
@@ -1191,6 +1210,7 @@ ttnn::Tensor launch_indexer_score(
             "the rotated geometry on device)");
     }
     operation_attributes.natural_query_blocks = natural_query_blocks;
+    operation_attributes.natural_query_rows = natural_query_rows;
     // Bring-up fork block epilogue: the writer biases / pools the untilized scores of the fused ring program.
     const bool epilogue = block_bias.has_value() || block_max_out.has_value();
     TT_FATAL(
@@ -1365,7 +1385,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t block_keys,
     const std::optional<ttnn::Tensor>& block_bias,
     const std::optional<ttnn::Tensor>& block_max_out,
-    bool block_max_pin) {
+    bool block_max_pin,
+    uint32_t natural_query_rows) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::bringup::indexer_score::FusedRingConfig fused_ring;
@@ -1481,7 +1502,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         block_keys,
         block_bias,
         block_max_out,
-        block_max_pin);
+        block_max_pin,
+        natural_query_rows);
 }
 
 }  // namespace ttnn::experimental::bringup

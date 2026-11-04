@@ -198,3 +198,22 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Measured: 8x4 Galaxy, one 5120-token chunk (ring_indexer_score_dsa): 114 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: device/indexer_score_device_operation.cpp, device/indexer_score_device_operation_types.hpp, device/indexer_score_program_factory.cpp, device/ring_indexer_score_dsa_program_factory.cpp, indexer_score_nanobind.cpp
+
+### natural_query_rows: the queries' own rows per SP rank (deepseek_v41_flash_d_p P.31)
+- What: option `natural_query_rows` (int, default 0 = `block_cyclic_chunk_local`) of `ring_indexer_score_dsa` with
+  `natural_query_blocks=True`: device (d, c) holds query positions chunk_start_idx + d natural_query_rows + c Sq +
+  [0, Sq) (device_causal_geometry, indexer_score_host_common.hpp); the keys keep the cache's block-cyclic layout
+  (`block_cyclic_chunk_local`). Tile-aligned and >= Sq, else refused; hashed. Default: the program and its runtime
+  arguments as before (the same first query tile).
+- Why: DeepSeek-V4.1 DECODER_SKIP=replay128 (owner 2026-11-03): the decoder tail runs the last 128 positions as a
+  1024-token chunk (one tile row a chip on 8x4) whose indexers score the index keys the 5120-token chunks wrote (stripe
+  640 tokens a SP rank, queries 128).
+- Tests: `tests/unit/test_natural_query_rows.py` (BRINGUP_TEST_MESH, 8x4 in P.31): 1024-token queries over keys of
+  5120-token chunks at 4 starts, every device vs a float32 reference (future columns -inf, PCC / rel L2), the refusal.
+  8x4: pass, 128 (start, device) pairs, min PCC 0.9999984, worst rel 0.00193 (limits 0.9999 / 0.004). The option's
+  checks run before the block-cyclic query checks (whose q_isl test reads natural_query_rows when it is set). No fork
+  regression suite on the 8x4 (OV-25: F.1 runs it).
+- Needed by: deepseek_v41_flash_d_p P.31
+- Files: device/indexer_score_device_operation.cpp, device/indexer_score_device_operation.hpp,
+  device/indexer_score_device_operation_types.hpp, device/indexer_score_host_common.hpp, indexer_score_nanobind.cpp,
+  tests/unit/test_natural_query_rows.py, README.md

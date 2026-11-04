@@ -198,7 +198,9 @@ class DS41PrefillRuntime:
         nat[end - start :] = PAD_ID
         return nat
 
-    def _run(self, inp, kv, slot, start, end, acks: bool, d2h_service=None, metadata_msg=None, last: bool = True):
+    def _run(
+        self, inp, kv, slot, start, end, acks: bool, d2h_service=None, metadata_msg=None, last: bool | None = None
+    ):
         ttnn = self._ttnn
         model = self.model
         sink = self._sink if acks else None
@@ -208,7 +210,7 @@ class DS41PrefillRuntime:
         model.state = st  # begin_chunk reads (and advances) the active slot's engram tail
         ids = self._host_ids(inp, start, end)
         st.note_tokens(ids, start, end)
-        model.begin_chunk(ids, start, last=last)  # (P.30: last=False skips the decoder under DECODER_SKIP=exact)
+        model.begin_chunk(ids, start, last=last)  # (P.30 / P.31: False skips the decoder; None = not told, every layer)
         h = None
         for k, i in enumerate(self.layer_ids):
             if k == 0 or (self.gap_feed is not None and i in self.gap_feed.starts):
@@ -250,13 +252,14 @@ class DS41PrefillRuntime:
         request_id=0,
         d2h_service=None,
         metadata_msg=None,
-        last=True,
+        last=None,
         **_unused,
     ):
         """``last`` (P.30): whether the chunk is the request's last. tt-d-gen's chunk header has no such flag yet, so
-        the engine never passes it: True (every layer, today's behaviour). Under DECODER_SKIP=exact a caller passing
+        the engine never passes it: None (every layer, today's behaviour). Under DECODER_SKIP=exact a caller passing
         False gets the decoder skipped (layers 20-39 write no window rows for the chunk); the caller then starts the
-        last chunk >= 2688 tokens before its end (the model never pulls back)."""
+        last chunk >= 2688 tokens before its end (the model never pulls back). Under replay128 (P.31) True runs the
+        decoder on the chunk's last <= 128 rows only (the tail model's own caches: not the served decoder rows)."""
         c, m = self.config.chunk_size, self.config.max_seq_len
         start, end = int(actual_start), int(actual_end)
         assert start % 32 == 0, f"actual_start {start} must be tile (32) aligned"
@@ -273,7 +276,7 @@ class DS41PrefillRuntime:
             acks=True,
             d2h_service=d2h_service,
             metadata_msg=metadata_msg,
-            last=bool(last),
+            last=None if last is None else bool(last),
         )
         return None  # last / single rank: the populated cache is the output
 

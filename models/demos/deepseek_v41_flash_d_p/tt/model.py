@@ -103,6 +103,9 @@ from .shared_expert import build_shared_expert
 from .sparse_attention import ChunkMemo, SparseIndexTables, TtSparseAttention
 
 NONE_ID = 0xFFFFFFFF  # the device's "no index" (top-k / candidate pads)
+# DECODER_SKIP=replay128 (P.31): L1 a core kept at the top for the decoder tail's MoE block's persistent words
+# (moe_block_adapter.reserve_l1; the block checks its words fit, and logs what they take: 41216 B on 8x4, P.31)
+TAIL_L1_RESERVE = 48 * 1024
 
 
 class DevH:
@@ -139,6 +142,24 @@ class Skipped:
 SKIPPED = Skipped()
 
 
+class TailH(DevH):
+    """DECODER_SKIP=replay128 (P.31): a block boundary of the decoder tail, in the tail model's geometry (the tail
+    chunk [dec_start, dec_start + tail_chunk), its real rows [dec_start, end) on the first chips; TtDS41Model._tail_at).
+    """
+
+    __slots__ = ()
+
+
+class TailHidden:
+    """DECODER_SKIP=replay128 (P.31): the final norm of the decoder tail: ``t`` [1, 1, tail_chunk / (SP TP), H] (the tail
+    model's own rows), its rows the positions [start, start + tail_chunk), real up to ``end``."""
+
+    __slots__ = ("t", "start", "end")
+
+    def __init__(self, t, start: int, end: int):
+        self.t, self.start, self.end = t, int(start), int(end)
+
+
 class Keep:
     """A step output the per-layer state owns (a served-cache marker, a top-k kept for this chunk's readers): the
     block's freeing never touches it."""
@@ -154,6 +175,8 @@ def _tensors(v) -> list:
         return [v]
     if isinstance(v, DevH):
         return v.tensors()
+    if isinstance(v, TailHidden):
+        return [v.t]
     if isinstance(v, (tuple, list)):
         return [t for x in v for t in _tensors(x)]
     return []  # Keep, None, markers
@@ -205,7 +228,16 @@ class DS41DeviceState:
     (tt/runners/kv_contract.py); None = caches of its own (the ladder). ``keep_history`` False (serving): a store keeps
     only the latest chunk's top-k / pool (its readers run in the same chunk), so nothing grows with the requests."""
 
-    def __init__(self, model: "TtDS41Model", max_seq: int, slabs: dict | None = None, keep_history: bool = True):
+    def __init__(
+        self,
+        model: "TtDS41Model",
+        max_seq: int,
+        slabs: dict | None = None,
+        keep_history: bool = True,
+        compress: dict | None = None,
+    ):
+        """``compress`` (DECODER_SKIP=replay128, P.31): {layer: TtCompressCaches} of another state, shared (the decoder
+        tail's state reads the main state's layer-20 caches; never freed here)."""
         cfg, mesh, tables = model.cfg, model.mesh, model.tables
         self.model, self.cfg, self.mesh, self.max_seq = model, cfg, mesh, max_seq
         self.keep_history = keep_history
@@ -213,8 +245,12 @@ class DS41DeviceState:
         self.window = {
             i: TtWindowCache(mesh, tables, max_seq, slab=slabs.get(i, {}).get("0_window_kv")) for i in model.layers
         }
+        shared = compress or {}
+        self.shared_compress = frozenset(shared)
         self.compress = {
-            i: TtCompressCaches(mesh, tables, max_seq, cfg.ratio(i), cfg.head_dim, cfg.index_dim, slabs=slabs.get(i))
+            i: shared[i]
+            if i in shared
+            else TtCompressCaches(mesh, tables, max_seq, cfg.ratio(i), cfg.head_dim, cfg.index_dim, slabs=slabs.get(i))
             for i in model.layers
             if cfg.is_kv_source(i)
         }
@@ -231,6 +267,10 @@ class DS41DeviceState:
         # DEEP_LAYERS=tail (FIX.17): {chunk start: (layer 20's output DevH, the chunk's end)} of the last two chunks,
         # the deep layers' input for TtDS41Model.tail_pass
         self.deep_in = {}
+        # DECODER_SKIP=replay128 (P.31): the decoder tail's own state (TtDS41Model.tail's window caches, top-k and
+        # candidate stores, ChunkMemo; this state's layer-20 compressed caches shared), made at the first tail chunk
+        self.tail_state = None
+        self.cut = None  # (P.31: the start every layer's window is truncated at, TtWindowCache.truncate)
         model.state = self  # begin_chunk reads (and advances) the active slot's engram tail
 
     # ------------------------------------------------------------------ per chunk (device)
@@ -368,7 +408,11 @@ class DS41DeviceState:
     def free(self) -> None:
         if self.memo is not None:
             self.memo.clear()
-        for c in [*self.window.values(), *self.compress.values()]:
+        if self.tail_state is not None:  # (DECODER_SKIP=replay128: the tail's state, its shared caches left alone)
+            self.tail_state.free()
+            self.tail_state = None
+        mine = [c for i, c in self.compress.items() if i not in self.shared_compress]
+        for c in [*self.window.values(), *mine]:
             c.free()
         for store in (self.topk, self.cands):
             for d in store.values():
@@ -393,6 +437,11 @@ class TtDS41Block:
         self.model, self.cfg, self.mesh, self.layer = model, cfg, mesh, i
         set_load_layer(i)  # (DENSE_WEIGHTS=bfp8: the per-matrix log names the layer)
         self.steps = block_steps(cfg, i)
+        # DECODER_SKIP=replay128 (P.31): a block of the decoder tail (TtDS41Model.tail, the tail chunk's geometry): its
+        # KV source's compressed caches are the main model's (written over the whole chunk by its kv_only), so it has
+        # no compressor; its MoE shares the main block's routed experts (MoELayer.at); its indexer scores keys the main
+        # chunk's geometry laid out (key_rows)
+        tail_of = getattr(model, "tail_of", None)
         r = cfg.ratio(i)
         self.kv_src, self.idx_src = cfg.kv_source_of(i), cfg.index_source_of(i)
         rope = model.rope(r)
@@ -450,7 +499,7 @@ class TtDS41Block:
         kv_norm = ck.weight(p + "attn.kv_norm.weight", torch.float32)
         self.kv = TtWindowKv(mesh, proj, kv_norm, cfg.eps, rope, cfg.rope_dim)
         self.compressor = None
-        if cfg.is_kv_source(i):
+        if cfg.is_kv_source(i) and tail_of is None:
             self.compressor = TtCompressor(
                 mesh, compressor_weights(ck, i), cfg, r, model.compress_rope(r), model.tables, full_rows=self.sp32
             )
@@ -458,6 +507,8 @@ class TtDS41Block:
         if cfg.is_index_source(i):
             self.indexer = build_indexer(mesh, ck, cfg, i, model.max_seq, model.chunk, rope=rope, full_rows=self.sp32)
             self.indexer.local = topk_local()  # INDEXER_TOPK_LOCAL=on (P.8): no TP gather of the top-k
+            if tail_of is not None:  # (P.31: the served index keys are in the main chunk's block-cyclic layout)
+                self.indexer.key_rows = tail_of.chunk // tail_of.sp
         w = attention_weights(ck, i)
         if r:
             self.attention = TtSparseAttention(mesh, cfg, w, rope, model.tables, model.sparse_tables())
@@ -477,7 +528,11 @@ class TtDS41Block:
             self.engram_add = build_engram_add(mesh, ck, cfg, i, rows=model.rows, own_rows=self.own)
         # MoE
         self.moe_block = None
-        if settings.get("MOE_IMPL") == "block":  # (tt/MOE_BLOCK.md: one MoEBlock call in the experts step)
+        if tail_of is not None:  # (P.31: the main block's MoE layer at the tail chunk, its weights shared)
+            assert settings.get("MOE_IMPL") == "block", "DECODER_SKIP=replay128 needs MOE_IMPL=block"
+            self.moe_block = tail_of.blocks[i].moe_block.at_chunk(model.chunk)
+            self.router = self.experts = self.shared = None
+        elif settings.get("MOE_IMPL") == "block":  # (tt/MOE_BLOCK.md: one MoEBlock call in the experts step)
             from .moe_block_adapter import build_moe_block_layer
 
             self.moe_block = build_moe_block_layer(
@@ -558,6 +613,8 @@ class TtDS41Block:
             return out
 
         def compressor(ctx, x):
+            if self.compressor is None:  # (P.31, the decoder tail: the main model's kv_only wrote the chunk's groups)
+                return Keep()
             ckv, k = self.compressor(x, ctx.start)
             self.compressor.write(ckv, k, ctx.start, ctx.extra["end"], ctx.state.compress[i])
             dealloc(ckv)
@@ -806,7 +863,10 @@ class TtDS41Model:
         lm_head: bool = False,
         hasher=None,
         weight_cache=None,
+        tail_of: "TtDS41Model | None" = None,
     ):
+        """``tail_of`` (DECODER_SKIP=replay128, P.31): this model is the decoder tail of that model (its decoder layers
+        at the tail chunk; ``build_tail``): no embedding, no decoder skip of its own."""
         from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import Config
         from models.demos.deepseek_v41_flash_d_p.reference.weights import Checkpoint, EngramTable
 
@@ -824,6 +884,7 @@ class TtDS41Model:
         self.cfg = cfg = Config.from_dir(self.path)
         self.ck = ck = Checkpoint(self.path)
         self.layers = sorted(layers)
+        self.tail_of = tail_of
         self.max_seq, self.chunk = int(max_seq), int(chunk)
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
@@ -860,18 +921,21 @@ class TtDS41Model:
             self._engram_pool = ThreadPoolExecutor(1, thread_name_prefix="engram-async")
         self.engram_times = {}
         # embedding: [V, H/TP] bf16 ROW_MAJOR per chip (the chip's hidden columns), replicated over SP
-        emb = ck.get("embed.weight")
-        assert emb.dtype == torch.bfloat16, emb.dtype  # the device copy is then exact
-        self.vocab = emb.shape[0]
-        self.embed_w = from_torch(
-            emb.contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh,
-            memory_config=DRAM,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 1)),
-        )
-        del emb
+        if tail_of is not None:  # (P.31: the decoder tail takes its input from the main model's layers)
+            self.vocab, self.embed_w = tail_of.vocab, None
+        else:
+            emb = ck.get("embed.weight")
+            assert emb.dtype == torch.bfloat16, emb.dtype  # the device copy is then exact
+            self.vocab = emb.shape[0]
+            self.embed_w = from_torch(
+                emb.contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 1)),
+            )
+            del emb
         # layer 0's pending pre: one-hot on stream 0 (reference first_block_input), [S/SP, 4] fp32, cloned per chunk
         # (MHC_FUSED=on: [S/SP, 24], the width of the mixes the boundary carries; only columns 0..3 are read)
         rows = self.rows
@@ -909,8 +973,9 @@ class TtDS41Model:
         # (TtDS41Block.kv_only) and the rest is skipped; every decoder layer's window cache notes the skipped positions
         self.decoder, self.kv_only = [], frozenset()
         self._skip = False  # this chunk skips the decoder (set per chunk by begin_chunk)
-        if settings.get("DECODER_SKIP") == "exact":
-            assert not self.deep, "DECODER_SKIP=exact and DEEP_LAYERS=tail are two different skips: one at a time"
+        mode = settings.get("DECODER_SKIP")
+        if mode in ("exact", "replay128") and tail_of is None:
+            assert not self.deep, "DECODER_SKIP and DEEP_LAYERS=tail are two different skips: one at a time"
             self.decoder = [i for i in self.layers if cfg.cand_source >= 0 and i >= cfg.cand_source]
             self.kv_only = frozenset(i for i in self.decoder if cfg.is_kv_source(i))
             bad = [i for i in self.decoder if cfg.is_engram(i) or (cfg.is_kv_source(i) and i != cfg.cand_source)]
@@ -918,6 +983,36 @@ class TtDS41Model:
             enc = [i for i in self.layers if i not in self.decoder]
             assert all(j < cfg.cand_source or j in self.kv_only for i in enc for j in cfg.sources(i)), enc
         self._decoder_set = frozenset(self.decoder)
+        # DECODER_SKIP=replay128 (P.31, DeepSeek-V4.1-Flash's SWA Bounded Replay, n_win 128): one code path with exact
+        # but the tail length. The caller's two numbers: replay_rows = how far a request's first chunk on a cached
+        # prefix starts before its new tokens (exact 0: the prefix's caches are complete, its last chunk ran every
+        # layer; replay128 the window, 128, replayed with every window truncated there: ``begin_chunk(.., replay=True)``);
+        # last_rows = the rows a request's last chunk must hold (exact 20 x 127 + 128 -> 2688: the decoder's receptive
+        # field over skipped chunks, P.30; replay128 0: no pull-back). The last chunk (``last=True``) under replay128
+        # runs the decoder only on its last <= 128 rows, as a chunk of its own: the tail model (``build_tail``: the
+        # decoder layers at tail_chunk = 32 SP TP rows, 1024 on 8x4, so the rows sit on mesh row 0 and nothing pads
+        # them to 32 rows on 32 chips; at least the indexer's top-k keys), its windows truncated to the tail
+        self.replay = mode == "replay128" and bool(self.decoder)
+        self.replay_rows = self.last_rows = 0
+        if self.decoder:
+            w = cfg.window
+            self.replay_rows = w if self.replay else 0
+            self.last_rows = 0 if self.replay else -(-(len(self.decoder) * (w - 1) + w) // 32) * 32
+        self.tail, self.tail_chunk, self._tail_mode, self._tail_at = None, 0, False, None
+        self.tail_load_seconds = 0.0
+        if self.replay:
+            assert self.own, "DECODER_SKIP=replay128: the tail's input moves on the chips' own rows (OWN_ROWS=on)"
+            unit = 32 * self.sp * self.tp  # one tile row a chip
+            keys = max(
+                [
+                    cfg.index_topk * max(1, cfg.ratio(cfg.kv_source_of(i)))
+                    for i in self.decoder
+                    if cfg.is_index_source(i)
+                ]
+                + [unit]
+            )  # (TtIndexer: a chunk scores at least top-k keys)
+            self.tail_chunk = -(-keys // unit) * unit
+            assert cfg.window <= self.tail_chunk <= self.chunk, (cfg.window, self.tail_chunk, self.chunk)
         # INDEXER_GLUE=on (P.16): the shared tensors of a chunk (tt/sparse_attention.ChunkMemo) and the last loaded
         # layer that reads each: {layer: [slots dropped after it]}; None = off
         self.memo_last = None
@@ -967,21 +1062,98 @@ class TtDS41Model:
             self._sparse = SparseIndexTables(self.mesh, self.tables, self.cfg.index_topk)
         return self._sparse
 
+    # ------------------------------------------------------------------ DECODER_SKIP=replay128 (P.31): the tail
+    def build_tail(self) -> "TtDS41Model | None":
+        """The decoder tail (load time; made at the first tail chunk when not before): the decoder layers as a model of
+        their own at ``tail_chunk`` rows (its window tables, rope rows, attention / indexer / norm weights; the MoE's
+        routed experts shared with this model's, MoELayer.at), the load-time input buffers its first layer reads (the
+        chips' own rows, zero but where the tail's rows land), and the fabric sends that fill them (tt/tail_send.py)."""
+        if self.tail is not None or not self.replay:
+            return self.tail
+        from .tail_send import TailSend
+
+        t0 = time.time()
+        assert settings.get("CKV_FORMAT") == "bfp4_rows", "DECODER_SKIP=replay128: the shared table is history only"
+        from .moe_block_adapter import reserve_l1
+
+        # (before this model's MoE block is built: the tail block's persistent words go above the main block's)
+        reserve_l1(self.mesh, TAIL_L1_RESERVE)
+        tail = TtDS41Model(
+            self.mesh,
+            self.path,
+            self.decoder,
+            self.max_seq + self.tail_chunk,  # (its rope rows: a tail chunk may run past the prompt's end)
+            self.tail_chunk,
+            lm_head=False,
+            weight_cache=self.weight_cache,
+            tail_of=self,
+        )
+        width = HC * self.cfg.dim
+        sdt = stream_dtype()
+        bufs, sends = [], []
+        for w, dt in ((width, sdt), (self.pre_w, ttnn.float32)):
+            t = from_torch(
+                torch.zeros(1, 1, tail.rows, w),
+                dtype=dt,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=DRAM,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            ccl.pin(self.mesh, t)  # (the block never frees its input; dealloc skips it)
+            bufs.append(t)
+            sends.append(TailSend(self.mesh, self.rows, tail.rows, w, dt))
+        self._tail_in, self._tail_send = tuple(bufs), tuple(sends)
+        self.tail = tail
+        self.tail_load_seconds = time.time() - t0
+        return tail
+
+    def tail_state(self, state: DS41DeviceState) -> DS41DeviceState:
+        """The decoder tail's state of ``state``'s slot (made once): its own window caches, top-k / candidate stores and
+        ChunkMemo; ``state``'s compressed caches of the tail's KV sources shared (written by kv_only over the chunk)."""
+        if state.tail_state is None:
+            tail = self.build_tail()
+            shared = {i: state.compress[i] for i in tail.layers if i in state.compress}
+            state.tail_state = DS41DeviceState(tail, state.max_seq, compress=shared, keep_history=state.keep_history)
+            self.state = state  # (the tail state's constructor made itself the tail model's active state only)
+        return state.tail_state
+
+    def _to_tail(self, h: DevH, a: int, n: int) -> TailH:
+        """Rows [a, a + n) of this chunk's block boundary (the chips' own rows) -> the tail's input (its load-time
+        buffers: rows [0, n) of the tail chunk, chip q its rows [q Rt, (q + 1) Rt)); the stats row is not carried (the
+        tail's attn_hc computes its own)."""
+        for src, dst, send in zip((h.streams, h.pre), self._tail_in, self._tail_send):
+            send(src, dst, a, n)
+        return TailH(self._tail_in[0], self._tail_in[1])
+
     # ------------------------------------------------------------------ per chunk
     def new_state(self, max_seq: int, slabs: dict | None = None, keep_history: bool = True) -> DS41DeviceState:
         return DS41DeviceState(self, max_seq, slabs=slabs, keep_history=keep_history)
 
-    def begin_chunk(self, tokens: torch.Tensor, start: int, last: bool = True) -> None:
+    def begin_chunk(self, tokens: torch.Tensor, start: int, last: bool | None = None, replay: bool = False) -> None:
         """The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the
         active slot's tail, look the rows up (memory-mapped) and send them to the device once. Also empties the
         active slot's ChunkMemo (INDEXER_GLUE=on, P.16; FIX.5): every run of a chunk builds its shared tensors
         itself, even when a slot's last reader layer is not loaded or not run (a re-run of the same start would hit
         it otherwise, and the unread slot would hold its device memory).
         ``last`` (P.30): whether this chunk is the request's last (the caller knows; the model never infers it).
-        True (the default) runs every layer; False under DECODER_SKIP=exact skips the decoder (``layer``); ignored
-        when DECODER_SKIP=off."""
-        self._skip = bool(self.decoder) and not last
+        None (the default: not told, the framework harness / the engine) and, under exact, True run every layer;
+        False under DECODER_SKIP=exact / replay128 skips the decoder (``layer``); True under replay128 (P.31) runs the
+        decoder only on the chunk's last <= 128 rows (the tail model, its windows truncated to them). Ignored when
+        DECODER_SKIP=off.
+        ``replay`` (P.31): the chunk starts a request on a cached prefix, ``replay_rows`` before its new tokens (the
+        caller pulls back). Under replay128 every layer's window is truncated at ``start`` (the carry masked: start
+        class 0); under exact nothing changes (the pull-back recomputes exactly from the complete caches)."""
+        self._skip = bool(self.decoder) and last is False
+        self._tail_mode = self.replay and last is True
+        self._tail_at = None
         st = self.state
+        if self._tail_mode:
+            self.build_tail()
+        if self.replay and st is not None and (replay or st.cut is not None):  # (host only)
+            st.cut = start if replay else None  # every layer's carry rows before start are not read
+            for c in st.window.values():
+                c.truncate(st.cut)
         if st is not None and st.memo is not None:
             st.memo.clear()
         if not self.engram:
@@ -1077,13 +1249,15 @@ class TtDS41Model:
         return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
 
     def layer(self, i: int, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
-        if i in self._decoder_set:  # DECODER_SKIP=exact (P.30)
+        if i in self._decoder_set:  # DECODER_SKIP=exact (P.30) / replay128 (P.31)
             if self._skip:  # not the request's last chunk: layer 20's KV projection only, the rest skipped
                 state.window[i].skip(start, start + self.chunk)
                 if i in self.kv_only:
                     return self.blocks[i].kv_only(h, start, state, end)
-                assert isinstance(h, Skipped), f"layer {i}: DECODER_SKIP=exact skips it on this chunk"
+                assert isinstance(h, Skipped), f"layer {i}: DECODER_SKIP skips it on this chunk"
                 return h
+            if self._tail_mode:  # replay128, the request's last chunk: the decoder on its last <= 128 rows only
+                return self._tail_layer(i, h, start, state, end)
             out = self.blocks[i](h, start, state, end)
             state.window[i].computed(start, start + self.chunk)
             return out
@@ -1095,6 +1269,36 @@ class TtDS41Model:
             state.keep_deep_input(start, start + self.chunk if end is None else end, out)
             return SKIPPED
         return out
+
+    def _tail_layer(self, i: int, h, start: int, state: DS41DeviceState, end: int | None) -> TailH:
+        """DECODER_SKIP=replay128 (P.31), the request's last chunk [start, end). The first decoder layer (20): its KV
+        projection over the whole chunk (kv_only: the compressed KV and index keys every decoder layer reads), then
+        the tail [dec_start, end), dec_start = the 32-aligned start of the last <= 128 rows, moved to the tail model's
+        layout (``_to_tail``) and run through its block; every later decoder layer runs the tail model's block. Every
+        tail layer's window is truncated at dec_start (no carry: start class 0, the rows before it are not read).
+        Returns the tail's boundary (TailH); ``final_norm`` takes it."""
+        tail, ts = self.tail, self.tail_state(state)
+        if i == self.decoder[0]:
+            end = start + self.chunk if end is None else int(end)
+            assert isinstance(h, DevH) and not isinstance(h, TailH), f"layer {i}: the tail starts here"
+            for j in self.kv_only:  # (the decoder's KV sources: layer 20)
+                assert j == i, (j, i)
+                self.blocks[i].kv_only(h, start, state, end)
+            dec = max(start, -(-(end - self.cfg.window) // 32) * 32)
+            self._tail_at = (dec, end)
+            if ts.memo is not None:
+                ts.memo.clear()
+            for c in ts.window.values():
+                c.truncate(dec)
+            x = self._to_tail(h, dec - start, end - dec)
+            out = tail.blocks[i](x, dec, ts, end)
+        else:
+            assert (
+                isinstance(h, TailH) and self._tail_at is not None
+            ), f"layer {i}: the tail runs from {self.decoder[0]}"
+            dec, end = self._tail_at
+            out = tail.blocks[i](h, dec, ts, end)
+        return TailH(out.streams, out.pre, out.stats)
 
     def tail_pass(self, state: DS41DeviceState, end: int | None = None, on_layer=None) -> DevH:
         """DEEP_LAYERS=tail, once the prompt's last chunk ran (the caller signals it; the prompt's length is not
@@ -1140,6 +1344,8 @@ class TtDS41Model:
         handed on (no final norm: no layer computed the chunk's last rows)."""
         if isinstance(h, Skipped):
             return h
+        if isinstance(h, TailH):  # DECODER_SKIP=replay128 (P.31): the tail's rows, in the tail's layout
+            return TailHidden(self.tail.final_norm(DevH(h.streams, h.pre)), *self._tail_at)
         x = self.final_collapse(h.streams, h.pre)
         out = self.final_norm_mod(x)
         dealloc(x)
@@ -1160,7 +1366,13 @@ class TtDS41Model:
         return DevH(streams_to_device(self.mesh, h, hidden), row_split_to_device(self.mesh, pre))
 
     def to_host(self, h) -> torch.Tensor:
-        """DevH -> the reference's packed [S, 4H + 4]; a hidden-split tensor (the final norm) -> [S, H]."""
+        """DevH -> the reference's packed [S, 4H + 4]; a hidden-split tensor (the final norm) -> [S, H]. DECODER_SKIP=
+        replay128 (P.31): a TailH / TailHidden -> the tail chunk's rows [tail_chunk, ..] (positions from its ``start``;
+        real up to ``end``)."""
+        if isinstance(h, TailHidden):
+            return self.tail.to_host(h.t)
+        if isinstance(h, TailH):
+            return self.tail.to_host(DevH(h.streams, h.pre))
         if self.own:  # OWN_ROWS=on (P.23): every tensor is the chips' own rows, concatenated in chip order
             if isinstance(h, DevH):
                 s = own_rows_to_host(self.mesh, h.streams).float()
