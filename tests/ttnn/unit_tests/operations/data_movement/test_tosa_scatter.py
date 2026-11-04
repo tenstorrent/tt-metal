@@ -115,3 +115,35 @@ def test_tosa_scatter_zero_volume_rejects_invalid_operands(
 
     with expect_error(RuntimeError, expected_message):
         ttnn.tosa_scatter(make([2, 0, 4], input_dtype), make([2, 0], index_dtype), make([2, 0, 4], source_dtype))
+
+
+@pytest.mark.parametrize("index_dtype", [ttnn.int32, ttnn.uint32])
+def test_tosa_scatter_index_above_uint16(index_dtype, device):
+    """Indices past 65535 must reach the right rows.
+
+    The index tensor used to be cast to UINT16 on the host, so anything above 65535 wrapped
+    modulo 65536 onto a lower row that still passed the kernel's bounds check, and the scatter
+    silently wrote to the wrong place.
+    """
+    torch.manual_seed(0)
+    N, K, W, C = 1, 70000, 4, 1
+
+    # 69999 and 66000 wrap to 4463 and 464 under a UINT16 cast; 65535 and 3 are unaffected
+    torch_index = torch.tensor([[69999, 66000, 65535, 3]], dtype=torch.int64)
+    torch_input = torch.zeros([N, K, C], dtype=torch.bfloat16)
+    torch_source = torch.tensor([[[1.0], [2.0], [3.0], [4.0]]], dtype=torch.bfloat16)
+
+    layout = ttnn.Layout.ROW_MAJOR
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=layout, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+    ttnn_source = ttnn.from_torch(torch_source, dtype=ttnn.bfloat16, layout=layout, device=device)
+
+    torch_output = torch.scatter(
+        torch_input, dim=1, index=torch_index.unsqueeze(-1).expand([N, W, C]), src=torch_source
+    )
+    ttnn_output = ttnn.to_torch(ttnn.tosa_scatter(ttnn_input, ttnn_index, ttnn_source))
+
+    # name the wrapped rows directly, so a regression reports where it landed rather than a norm
+    written = (ttnn_output.reshape(-1) != 0).nonzero().flatten().tolist()
+    assert written == [3, 65535, 66000, 69999], f"scatter wrote rows {written}"
+    assert_allclose(ttnn_output, torch_output, rtol=1e-3)
