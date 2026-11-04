@@ -34,9 +34,17 @@ I2I_SCAFFOLD = (
 REFERENCE_MULTIPLE = 32
 REFERENCE_MAX_PIXELS = 1024 * 1024
 JPEG_QUALITY = 92
-# The upsampler's own one-chip mesh: qwen36's GDN conv uses L1_SMALL, and its prefill and decode run from captured
-# traces on two command queues. It cannot share chips with a mesh the DiT holds (a submesh has its own allocator).
-DEVICE_PARAMS = {"l1_small_size": 24576, "num_command_queues": 2, "trace_region_size": 256 * 1024 * 1024}
+# qwen36's prefill and decode run from captured traces on two command queues, and its GDN conv uses L1_SMALL. A mesh
+# the upsampler shares with the DiT needs SHARED_MESH_PARAMS on top of the DiT's own.
+SHARED_MESH_PARAMS = {"num_command_queues": 2, "trace_region_size": 256 * 1024 * 1024}
+DEVICE_PARAMS = {"l1_small_size": 24576, **SHARED_MESH_PARAMS}
+
+# What the upsampler allocates per bank on its chip (measured, with margin), held on the DiT's mesh when the two
+# share chips: DRAM bottom-up (weights, KV cache), DRAM top-down (kernel binaries), L1 top-down.
+SHARED_DRAM_BOTTOM = 1938 << 20
+SHARED_DRAM_TOP = 256 << 20
+SHARED_L1_TOP = 34 << 10
+DIT_L1_MARGIN = 2 << 10
 
 
 def resolve_weights_dir() -> Path:
@@ -185,3 +193,99 @@ class Flux3KleinUpsampler:
     def close(self) -> None:
         self.generator.release_persistent_capture()
         self.model.free_kv_caches()
+
+
+def _hold(device: ttnn.MeshDevice, buffer_type: ttnn.BufferType, banks: int, page: int, pages: int) -> ttnn.Tensor:
+    memory_config = ttnn.DRAM_MEMORY_CONFIG if buffer_type == ttnn.BufferType.DRAM else ttnn.L1_MEMORY_CONFIG
+    return ttnn.empty([1, 1, banks * pages, page // 2], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config)
+
+
+def _allocated(device: ttnn.MeshDevice, buffer_type: ttnn.BufferType) -> tuple[int, list[tuple[int, int, bool]]]:
+    view = ttnn.get_memory_view(device, buffer_type)
+    return view.num_banks, [(int(b["address"]), int(b["size"]), b["allocated"] == "yes") for b in view.block_table]
+
+
+def reserve_upsampler_ranges(mesh_device: ttnn.MeshDevice) -> list[ttnn.Tensor]:
+    """Hold, on the DiT's mesh and before anything else allocates on it, the ranges the upsampler's submesh will
+    allocate from on its chip. The submesh's allocator does not see the mesh's, so both would start at the same
+    addresses."""
+    page = 8192
+    banks, _ = _allocated(mesh_device, ttnn.BufferType.DRAM)
+    holds = []
+    pages = SHARED_DRAM_BOTTOM // page
+    while pages:
+        n = min(pages, 16384)
+        holds.append(_hold(mesh_device, ttnn.BufferType.DRAM, banks, page, n))
+        pages -= n
+
+    # kernel binaries are allocated top-down: fill the highest free range bottom-up up to the hold, then free the fill
+    _, blocks = _allocated(mesh_device, ttnn.BufferType.DRAM)
+    _, size = max(((a, s) for a, s, used in blocks if not used and s > 2 * SHARED_DRAM_TOP), key=lambda b: b[0])
+    fill_pages = (size - SHARED_DRAM_TOP) // page
+    top = size - fill_pages * page
+    fill = []
+    while fill_pages:
+        n = min(fill_pages, 16384)
+        fill.append(_hold(mesh_device, ttnn.BufferType.DRAM, banks, page, n))
+        fill_pages -= n
+    holds.append(_hold(mesh_device, ttnn.BufferType.DRAM, banks, top, 1))
+    for t in fill:
+        ttnn.deallocate(t)
+
+    l1_banks, _ = _allocated(mesh_device, ttnn.BufferType.L1)
+    holds.append(_hold(mesh_device, ttnn.BufferType.L1, l1_banks, SHARED_L1_TOP, 1))
+    return holds
+
+
+class Flux3KleinSharedUpsampler:
+    """The upsampler on a (1, 1) submesh of the DiT's mesh, its ranges held by reserve_upsampler_ranges.
+
+    The DiT's mesh owns the command queues outside a call. A switch quiesces the mesh that ran and reads from the
+    one about to run, which drops that mesh's stale prefetcher-cache records. The DiT's resident L1 (its collective
+    semaphores) is held on the submesh too, so the upsampler's circular buffers stay clear of it.
+    """
+
+    def __init__(self, mesh_device: ttnn.MeshDevice, snapshot: str | os.PathLike | None = None) -> None:
+        self._mesh = mesh_device
+        self._mesh_probe = ttnn.from_torch(torch.zeros(32, 32), layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        mesh_device.quiesce_devices()
+        self._submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
+        self._upsampler = Flux3KleinUpsampler(self._submesh, snapshot)
+        self._submesh_probe = ttnn.from_torch(torch.zeros(32, 32), layout=ttnn.TILE_LAYOUT, device=self._submesh)
+        self._dit_l1 = None
+        self._dit_l1_lowest = None
+        self._to_mesh()
+
+    def _hold_dit_l1(self) -> None:
+        # the DiT allocates semaphores the first time it runs a shape, so the hold grows with them
+        _, dit = _allocated(self._mesh, ttnn.BufferType.L1)
+        lowest_dit = min(a for a, _, used in dit if used)
+        if self._dit_l1_lowest is not None and lowest_dit >= self._dit_l1_lowest:
+            return
+        if self._dit_l1 is not None:
+            ttnn.deallocate(self._dit_l1)
+        banks, own = _allocated(self._submesh, ttnn.BufferType.L1)
+        size = (min(a for a, _, used in own if used) - lowest_dit + DIT_L1_MARGIN + 31) // 32 * 32
+        self._dit_l1 = _hold(self._submesh, ttnn.BufferType.L1, banks, size, 1)
+        self._dit_l1_lowest = lowest_dit
+
+    def _to_mesh(self) -> None:
+        self._submesh.quiesce_devices()
+        ttnn.from_device(self._mesh_probe)
+
+    def _to_submesh(self) -> None:
+        self._mesh.quiesce_devices()
+        self._hold_dit_l1()
+        ttnn.from_device(self._submesh_probe)
+
+    def __call__(self, prompt: str, image: Image.Image | None = None) -> str:
+        self._to_submesh()
+        try:
+            return self._upsampler(prompt, image)
+        finally:
+            self._to_mesh()
+
+    def close(self) -> None:
+        self._to_submesh()
+        self._upsampler.close()
+        self._to_mesh()
