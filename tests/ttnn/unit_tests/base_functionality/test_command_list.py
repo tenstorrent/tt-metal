@@ -217,6 +217,25 @@ def test_nested_recording_fails(builder, expect_error):
 
 
 @skip_for_slow_dispatch()
+def test_calls_that_depend_on_recorded_work_fail_while_recording(device, builder, command_lists, expect_error):
+    device_input = allocate_input(device)
+    with builder:
+        out = ttnn.relu(device_input)
+    command_list = builder.build()
+    command_lists.append(command_list)
+    event = ttnn.record_event(device, 0)
+
+    with builder:
+        with expect_error(RuntimeError, "record_event cannot run while a CommandListBuilder is recording"):
+            ttnn.record_event(device, 0)
+        with expect_error(RuntimeError, "wait_for_event cannot run while a CommandListBuilder is recording"):
+            ttnn.wait_for_event(0, event)
+        with expect_error(RuntimeError, "CommandList::enqueue cannot run while a CommandListBuilder is recording"):
+            command_list.enqueue()
+        assert builder.is_recording
+
+
+@skip_for_slow_dispatch()
 def test_one_builder_per_device(device, builder, expect_error):
     with expect_error(RuntimeError, "Only one CommandListBuilder may exist for a MeshDevice"):
         ttnn.experimental.CommandListBuilder(device)

@@ -23,6 +23,10 @@ namespace ttnn::device_operation::detail {
 
 bool is_recording_command_list() { return t_recording != nullptr; }
 
+void throw_if_recording_command_list(std::string_view call_name) {
+    TT_FATAL(t_recording == nullptr, "{} cannot run while a CommandListBuilder is recording on this thread", call_name);
+}
+
 void record_to_command_list(
     std::string_view operation_name,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
@@ -101,6 +105,7 @@ CommandList::CommandList(metal::CommandList metal_list) : metal_list_(std::move(
 
 void CommandList::enqueue(bool blocking, bool check_dram_overlap) {
     ZoneScoped;
+    device_operation::detail::throw_if_recording_command_list("CommandList::enqueue");
     metal::EnqueueCommandList(
         device().mesh_command_queue(metal_list_.cq_id()), metal_list_, blocking, check_dram_overlap);
 }

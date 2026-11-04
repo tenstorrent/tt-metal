@@ -88,6 +88,10 @@ void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_vie
 // True while a ttnn::experimental::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
 bool is_recording_command_list();
 
+// Throws while recording on the calling thread. For calls whose meaning depends on recorded work, so running them at
+// record time would be wrong.
+void throw_if_recording_command_list(std::string_view call_name);
+
 // Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it.
 void record_to_command_list(
     std::string_view operation_name,

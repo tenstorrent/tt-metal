@@ -24,8 +24,11 @@ void py_module_types(nb::module_& mod) {
         Records TTNN operations into command lists instead of running them (experimental).
 
         Inside ``with builder:``, every device operation launched on the calling thread is recorded, not executed.
-        Outputs are allocated but hold stale data until a built list replays. Host reads and writes still run
-        immediately and are not recorded. Ops on other threads run normally.
+        Outputs are allocated but hold stale data until a built list replays. Host reads and writes, and other calls
+        that are not device operations, such as global semaphore resets, still run immediately and are not recorded.
+        Calls whose meaning depends on recorded work raise: ``ttnn.record_event``, ``ttnn.wait_for_event``,
+        ``CommandList.enqueue()``, ``ttnn.experimental.queue_tensor_prefetcher_request`` and
+        ``ttnn.experimental.queue_tensor_prefetcher_wait_for_signal``. Ops on other threads run normally.
 
         Only Metal 2.0 (ProgramSpec) operations can be recorded; any other operation raises, naming the operation.
         No warm-up run is needed: recording compiles each workload and uploads its kernel binaries.
