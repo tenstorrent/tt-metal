@@ -11,6 +11,9 @@
 #include "api/debug/eth_link_status.h"
 #include "tt_eth_ss_regs.h"
 #include "internal/ethernet/tt_eth_api.h"
+#if defined(ARCH_QUASAR)
+#include "internal/tt-2xx/quasar/eth_cce_send.h"
+#endif
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)(NOC_CFG(ROUTER_CFG_2));
     ptr[0] = status;
@@ -82,6 +85,50 @@ volatile uint32_t* RtosTable =
 
 namespace internal_ {
 
+#if defined(ARCH_QUASAR)
+// A Keraunos CCE sends on its command buffer (eth_cce_send.h). There is no base firmware to switch to, so ctx_switch
+// has no effect, and no base-firmware link status for the watcher to check. A remote register write is an inline write
+// to the same flat address in the peer's CCE SRAM.
+FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) { return cce_eth::txq_busy(q_num); }
+
+template <bool ctx_switch = true>
+FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    while (eth_txq_is_busy(q_num)) {
+    }
+    cce_eth::send_bytes(
+        q_num,
+        src_word_addr << BYTES_TO_ETH_WORD_SHIFT,
+        dest_word_addr << BYTES_TO_ETH_WORD_SHIFT,
+        num_words << BYTES_TO_ETH_WORD_SHIFT);
+}
+
+FORCE_INLINE
+void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    ASSERT(!eth_txq_is_busy(q_num));
+    cce_eth::send_bytes(
+        q_num,
+        src_word_addr << BYTES_TO_ETH_WORD_SHIFT,
+        dest_word_addr << BYTES_TO_ETH_WORD_SHIFT,
+        num_words << BYTES_TO_ETH_WORD_SHIFT);
+}
+
+FORCE_INLINE
+void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+    ASSERT(!eth_txq_is_busy(q_num));
+    cce_eth::send_bytes(q_num, src_addr, dest_addr, num_bytes);
+}
+
+template <bool ctx_switch = true>
+FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+    while (eth_txq_is_busy(q_num)) {
+    }
+    cce_eth::send_word(q_num, reg_addr, val);
+}
+FORCE_INLINE
+void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+    cce_eth::send_word(q_num, reg_addr, val);
+}
+#else
 FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
 #ifdef ARCH_WORMHOLE
     return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0;
@@ -165,6 +212,8 @@ void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint32
     eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
 }
+
+#endif
 
 #if !defined(ARCH_QUASAR)
 void check_and_context_switch() {
