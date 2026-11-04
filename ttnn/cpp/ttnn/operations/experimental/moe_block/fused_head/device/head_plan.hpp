@@ -66,6 +66,9 @@ struct HeadLayout {
     uint32_t GX = 11;
     bool compact = false;  // compact RS arrival zones
     bool xdram = false;    // the DRAM fallback: x gathered into DRAM ahead of the program, reloaded a chunk at a time
+    // router iterations: the router stage (logits, top-K, routing rows) runs NIT times, each over NCH / NIT row chunks
+    // on the router cores of one iteration (a barrier across the TP ring between iterations); 1 - all rows at once
+    uint32_t NIT = 1;
     auto operator<=>(const HeadLayout&) const = default;
 };
 
@@ -82,6 +85,7 @@ struct HeadCost {
     double base_us = 26.21;
     double noc_gbs = 11.69;
     double chain_ek = 0.1852;
+    double router_barrier_us = 5.0;  // (a router iteration's barrier across the TP ring: estimated, not calibrated)
     double xmc_gbs = 43.98;
 };
 

@@ -41,8 +41,9 @@ int64_t round_us(double v) { return static_cast<int64_t>(std::nearbyint(v)); }
 enum class Cells : uint8_t { None, Column, Row, Rows };
 
 // head_plan.router_cells: where the router cores go.
-Cells router_cells(const HeadShape& shape, uint32_t GY, uint32_t GX) {
-    const uint32_t nrt = shape.rows / 32 / shape.G, gy = shape.grid[1];
+// nrt: the router cores (a row tile each of the chip's owned rows of one router iteration).
+Cells router_cells(const HeadShape& shape, uint32_t GY, uint32_t GX, uint32_t nrt) {
+    const uint32_t gy = shape.grid[1];
     if (nrt + 2 * shape.links + 1 <= gy) {
         return Cells::Column;
     }
@@ -83,7 +84,7 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
                    " a RISC)";
         }
     }
-    const uint32_t nrt = shape.rows / 32 / G;
+    const uint32_t nrt = shape.rows / 32 / G / lay.NIT;  // (the router cores: one router iteration's row tiles)
     if (lay.GX * lay.GY / L > 128) {
         return "a port's reduce-scatter cores: " + s(lay.GX * lay.GY / L) + " > 128 (x_gather3's rdc / seen tables)";
     }
@@ -94,9 +95,9 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
         const int64_t free = (int64_t(gy) - lay.GY) * lay.GX;
         if (lay.GY >= gy || !(nrt <= lay.GX || nrt <= free)) {
             return "router cores: " + s(nrt) +
-                   " (a row tile each of a chip's owned rows) fit neither the mover column (" + s(gy) + " cells less " +
-                   s(2 * L) + " ports and the watcher) nor the " + s(free) + " free cells under the matmul cores (" +
-                   s(lay.GX) + "x" + s(lay.GY) + ")";
+                   " (a row tile each of a chip's owned rows of a router iteration) fit neither the mover column (" +
+                   s(gy) + " cells less " + s(2 * L) + " ports and the watcher) nor the " + s(free) +
+                   " free cells under the matmul cores (" + s(lay.GX) + "x" + s(lay.GY) + ")";
         }
     }
     const uint32_t nc = nrt;
@@ -303,7 +304,11 @@ std::vector<std::array<uint32_t, 3>> head_layouts(const HeadShape& shape, uint32
             if (CR % GY || CR / GY > mt_max) {
                 continue;
             }
-            if (router_cells(shape, GY, GX) == Cells::None) {
+            bool cells = false;  // (the router cores fit for some router iteration count)
+            for (uint32_t nit = 1; nit <= nch && !cells; ++nit) {
+                cells = nch % nit == 0 && router_cells(shape, GY, GX, nrt / nit) != Cells::None;
+            }
+            if (!cells) {
                 continue;
             }
             out.push_back({GY, CR / GY, nch});
@@ -325,7 +330,8 @@ std::vector<uint32_t> k_steps(const HeadShape& shape) {
 
 std::string describe_layout(const HeadLayout& lay) {
     return "matmul cores " + s(lay.GX) + "x" + s(lay.GY) + " MT " + s(lay.MT) + ", " + s(lay.NCH) + " row chunk" +
-           (lay.NCH > 1 ? "s" : "") + ", K step " + s(lay.KB);
+           (lay.NCH > 1 ? "s" : "") + ", K step " + s(lay.KB) +
+           (lay.NIT > 1 ? ", " + s(lay.NIT) + " router iterations" : "");
 }
 
 HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) {
@@ -357,6 +363,7 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) 
             a.latent = *shape.latent / 32 / shape.G;
         }
         a.router = std::make_pair(shape.E / 32, shape.H / shape.G / 32);  // (the logits on the matmul cores)
+        a.router_iters = lay.NIT;
         a.arena_max = cap;
         a.w_dtype = shape.w_dtype;
         a.xring = lay.xdram ? 2 : 0;
@@ -440,7 +447,8 @@ std::pair<double, Parts> head_cost(
     const int64_t etc = ceil_div(ET, lay.GX);
     const double t_eng = kEngOverhead * double(n) * double(MT) * double(etc) * double(KT / G) * c.rtr_tile / c.clk;
     t_se += t_eng;  // (the logits on the matmul cores)
-    const double t_chain = t_eng + chain;
+    // (router iterations: the router cores' chain once an iteration, a barrier across the TP ring between them)
+    const double t_chain = t_eng + double(lay.NIT) * chain + double(lay.NIT - 1) * c.router_barrier_us;
     const double t = c.base_us + std::max(t_se, t_chain);
     Parts parts = {
         {"gu", round_us(t_gu)},
@@ -461,33 +469,54 @@ std::pair<double, Parts> head_cost(
 
 std::vector<HeadPlanned> head_plan_layouts(
     const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit, bool xdram) {
-    std::vector<HeadPlanned> out;
     const uint32_t GXe = engine_width(shape);
-    for (const auto& [GY, MT, NCH] : head_layouts(shape)) {
-        for (uint32_t kb : k_steps(shape)) {
-            {
-                const std::vector<bool> compacts =
-                    shape.rs_dim() == -2 && shape.G <= 4 ? std::vector<bool>{false, true} : std::vector<bool>{false};
-                HeadLayout lay;
-                HeadSized sized;
-                for (bool compact : compacts) {
-                    lay = HeadLayout{
-                        .GY = GY, .MT = MT, .NCH = NCH, .KB = kb, .GX = GXe, .compact = compact, .xdram = xdram};
-                    sized = head_size(shape, lay, arena_max(kb));
-                    if (sized.eng) {
-                        break;
+    // the router stage in one go (NIT 1) wherever a layout fits that way; router iterations only when none does
+    auto pass = [&](uint32_t max_nit) {
+        std::vector<HeadPlanned> out;
+        for (const auto& [GY, MT, NCH] : head_layouts(shape)) {
+            for (uint32_t kb : k_steps(shape)) {
+                // (the fewest router iterations that fit, up to max_nit: NIT divides the row chunks)
+                for (uint32_t nit = 1; nit <= std::min(NCH, max_nit); ++nit) {
+                    if (NCH % nit) {
+                        continue;
                     }
-                }
-                if (!sized.eng) {
-                    if (keep_unfit) {
-                        out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, kInf, {}, sized.why});
+                    const std::vector<bool> compacts = shape.rs_dim() == -2 && shape.G <= 4
+                                                           ? std::vector<bool>{false, true}
+                                                           : std::vector<bool>{false};
+                    HeadLayout lay;
+                    HeadSized sized;
+                    for (bool compact : compacts) {
+                        lay = HeadLayout{
+                            .GY = GY,
+                            .MT = MT,
+                            .NCH = NCH,
+                            .KB = kb,
+                            .GX = GXe,
+                            .compact = compact,
+                            .xdram = xdram,
+                            .NIT = nit};
+                        sized = head_size(shape, lay, arena_max(kb));
+                        if (sized.eng) {
+                            break;
+                        }
                     }
-                    continue;
+                    if (!sized.eng) {
+                        if (keep_unfit) {
+                            out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, kInf, {}, sized.why});
+                        }
+                        continue;
+                    }
+                    auto [t, parts] = head_cost(shape, lay, *sized.eng);
+                    out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, t, parts, ""});
+                    break;
                 }
-                auto [t, parts] = head_cost(shape, lay, *sized.eng);
-                out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, t, parts, ""});
             }
         }
+        return out;
+    };
+    std::vector<HeadPlanned> out = pass(1);
+    if (std::none_of(out.begin(), out.end(), [](const HeadPlanned& p) { return p.t != kInf; })) {
+        out = pass(std::numeric_limits<uint32_t>::max());
     }
     std::stable_sort(out.begin(), out.end(), [](const HeadPlanned& a, const HeadPlanned& b) {
         return std::make_pair(a.t, -int64_t(a.lay.KB)) < std::make_pair(b.t, -int64_t(b.lay.KB));

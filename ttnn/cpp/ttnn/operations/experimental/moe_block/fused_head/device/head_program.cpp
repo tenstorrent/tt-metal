@@ -620,6 +620,11 @@ std::shared_ptr<const HeadModel> make_head_model(
         ea.latent = *sh.latent / 32 / G;
     }
     ea.router = std::make_pair(sh.E / 32, sh.H / G / 32);  // (the router logits on the matmul cores)
+    TT_FATAL(
+        lay.NIT == 1,
+        "fused_head: {} router iterations planned ({}) - the kernels run the router stage in one go only so far",
+        lay.NIT,
+        describe_layout(lay));
     ea.arena_max = arena_cap_of(config.l1_free, lay.KB, sh.payload, config.cb_floor);
     ea.w_dtype = sh.w_dtype;
     ea.xring = lay.xdram ? 2 : 0;

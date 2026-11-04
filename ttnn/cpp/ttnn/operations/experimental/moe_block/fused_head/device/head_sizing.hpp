@@ -173,6 +173,7 @@ struct SeEngineArgs {
     const RsPlan* rs = nullptr;                           // the down + reduce-scatter's plan (required)
     std::optional<uint32_t> latent;                       // tiles a chip
     std::pair<uint32_t, uint32_t> router{};               // (ET, KTO): the router logits, computed on the engine
+    uint32_t router_iters = 1;  // the router stage over NCH / router_iters row chunks at a time
     int64_t arena_max = kArenaMax;
     WeightDtype w_dtype = WeightDtype::Bf8;
     uint32_t xring = 0;
