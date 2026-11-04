@@ -61,8 +61,24 @@ def build_model(device, n_layers=None):
     print(f"BONSAI_MODEL_LOAD_S={time.time() - t0:.1f} layers={model.args.n_layers}", flush=True)
     kv_cache_shape = [NUM_BLOCKS, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    if os.environ.get("BONSAI_TERNARY_MLP") == "1":
+        # One-token decode MLPs in Bonsai's own ternary weights, read from the GGUF (bonsai2/tt/ternary/mlp.py).
+        # Packed on the host here; swapped in for the dense gate/up/down after the prefill (after_prefill).
+        from models.demos.blackhole.bonsai2.tt.ternary.mlp import prepare_ternary_mlp
+
+        prepare_ternary_mlp(
+            model, os.environ.get("BONSAI_GGUF", "/local/ttuser/jerrywang/bonsai/gguf/Ternary-Bonsai-2-27B-PQ2_0.gguf")
+        )
     page_table = torch.arange(NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
     return model, page_table
+
+
+def after_prefill(model) -> None:
+    """Between the prefill and the decode steps: swap in the ternary decode MLPs when BONSAI_TERNARY_MLP=1."""
+    if os.environ.get("BONSAI_TERNARY_MLP") == "1":
+        from models.demos.blackhole.bonsai2.tt.ternary.mlp import swap_in_ternary_mlp
+
+        swap_in_ternary_mlp(model)
 
 
 def prefill_traced(model, prompt_ids, page_table) -> torch.Tensor:

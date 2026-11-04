@@ -201,6 +201,9 @@ class Qwen36MLP:
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
         if self.num_devices > 1:
             return self._forward_tp(x)
+        if getattr(self, "ternary", None) is not None and x.shape[-2] <= ttnn.TILE_SIZE:
+            # One-token decode in Bonsai's own ternary weights (models/demos/blackhole/bonsai2/tt/ternary/mlp.py).
+            return self.ternary.forward_decode(x)
         w = self.weights
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
@@ -242,7 +245,12 @@ class Qwen36MLP:
                 dtype=ttnn.bfloat8_b,
             )
             w3_out = ttnn.linear(
-                x, w.w3, program_config=_gu_pc(None), compute_kernel_config=gu_ckc, memory_config=mc, dtype=ttnn.bfloat8_b
+                x,
+                w.w3,
+                program_config=_gu_pc(None),
+                compute_kernel_config=gu_ckc,
+                memory_config=mc,
+                dtype=ttnn.bfloat8_b,
             )
             # prefill 2048: SiLU moved from the gate matmul epilogue (~227 us/call extra on Blackhole) into the
             # memory-bound SwiGLU mul as an lhs activation
@@ -255,9 +263,7 @@ class Qwen36MLP:
         if T <= 1:
             hidden = ttnn.mul(w1_out, w3_out, memory_config=mc, dtype=ttnn.bfloat16)
         elif silu_in_mul:
-            hidden = ttnn.mul(
-                w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc
-            )
+            hidden = ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
         else:
             hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)

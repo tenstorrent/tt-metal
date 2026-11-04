@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+// Decode rotation x' = H D x, one 1024-block per core, reader (NCRISC). Gathers row 0 of activation tiles
+// 32b .. 32b+31 (face 0 row 0 then face 1 row 0, 32 B each) into a row-major 32x32 block X[jh, jl] = x[1024b + 32jh +
+// jl], applies the signs D by XOR-ing the bf16 sign bits with the block's mask, and loads the two Hadamard factor
+// tiles.
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    const uint32_t x_addr = get_arg_val<uint32_t>(0);
+    const uint32_t m_addr = get_arg_val<uint32_t>(1);
+    const uint32_t h_addr = get_arg_val<uint32_t>(2);
+    const uint32_t b = get_arg_val<uint32_t>(3);
+    constexpr auto x_args = TensorAccessorArgs<0>();
+    constexpr auto m_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    constexpr auto h_args = TensorAccessorArgs<m_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_x = tt::CBIndex::c_0, cb_m = tt::CBIndex::c_1, cb_h = tt::CBIndex::c_2;
+    const auto xs = TensorAccessor(x_args, x_addr, 2048);
+    const auto ms = TensorAccessor(m_args, m_addr, 2048);
+    const auto hs = TensorAccessor(h_args, h_addr, 2048);
+
+    cb_reserve_back(cb_h, 2);
+    noc_async_read(hs.get_noc_addr(0), get_write_ptr(cb_h), 2048);
+    noc_async_read(hs.get_noc_addr(1), get_write_ptr(cb_h) + 2048, 2048);
+    cb_reserve_back(cb_m, 1);
+    const uint32_t m_l1 = get_write_ptr(cb_m);
+    noc_async_read(ms.get_noc_addr(b), m_l1, 2048);
+    cb_reserve_back(cb_x, 1);
+    const uint32_t x_l1 = get_write_ptr(cb_x);
+    // 64-B reads (face row 0 and row 1) into scratch: DRAM reads must be 64-B aligned and sized on Blackhole, and a
+    // 32-B read of a DRAM-resident activation returned other data. Row 1 is dropped below.
+    constexpr uint32_t cb_scratch = tt::CBIndex::c_3;
+    cb_reserve_back(cb_scratch, 1);
+    const uint32_t sc = get_write_ptr(cb_scratch);
+    for (uint32_t jh = 0; jh < 32; ++jh) {
+        const uint64_t t = xs.get_noc_addr(32 * b + jh);
+        noc_async_read(t, sc + jh * 128, 64);
+        noc_async_read(t + 512, sc + jh * 128 + 64, 64);
+    }
+    noc_async_read_barrier();
+    {
+        volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(x_l1);
+        const volatile tt_l1_ptr uint32_t* src = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(sc);
+        for (uint32_t jh = 0; jh < 32; ++jh) {
+            for (uint32_t w = 0; w < 8; ++w) {
+                dst[jh * 16 + w] = src[jh * 32 + w];
+                dst[jh * 16 + 8 + w] = src[jh * 32 + 16 + w];
+            }
+        }
+    }
+    volatile tt_l1_ptr uint32_t* xw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(x_l1);
+    const volatile tt_l1_ptr uint32_t* mw = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(m_l1);
+    for (uint32_t i = 0; i < 512; ++i) {
+        xw[i] = xw[i] ^ mw[i];
+    }
+    cb_push_back(cb_h, 2);
+    cb_push_back(cb_x, 1);
+}

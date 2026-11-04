@@ -40,6 +40,7 @@ from models.demos.blackhole.qwen36.tests.optimizer_bonsai.bonsai_support import 
     DECODE_CALLS,
     DEVICE_PARAMS,
     PREFILL_SAMPLES,
+    after_prefill,
     append_history,
     build_model,
     decode_step,
@@ -116,6 +117,7 @@ def test_bonsai_perf(mesh_device, device_params):
         append_history("OPTIMIZER_PERF_HISTORY", {"stage": "prefill", "ttft_ms": round(ttft, 3), "isl": P})
         return
 
+    after_prefill(model)
     generator = make_generator(model, device)
     prime_decode(generator, model, first, P, page_table)
     token, pos, tokens, step_ms = first, P, [first], []

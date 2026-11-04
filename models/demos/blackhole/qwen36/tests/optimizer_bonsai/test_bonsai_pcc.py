@@ -29,6 +29,7 @@ from models.demos.blackhole.qwen36.tests.optimizer_bonsai.bonsai_support import 
     BASELINE_PATH,
     CHUNK,
     DEVICE_PARAMS,
+    after_prefill,
     append_history,
     build_model,
     decode_step,
@@ -88,6 +89,7 @@ def test_bonsai_pcc(mesh_device, device_params):
     t0 = time.perf_counter()
     model.capture_prefill_trace_chunked(device, page_table, chunk_size=CHUNK, warmup_masked_buckets=False)
     rows = [prefill_traced(model, prompt, page_table)[:V]]
+    after_prefill(model)
     generator = make_generator(model, device)
     prime_decode(generator, model, cont[0], P, page_table)
     for i in range(G - 1):
