@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -291,7 +292,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             {"float32_dtype",
              (uint32_t)(input_dfb_data_format == tt::DataFormat::Float32 or
                         input_dfb_data_format == tt::DataFormat::UInt32 or
-                        input_dfb_data_format == tt::DataFormat::Int32)}};
+                        input_dfb_data_format == tt::DataFormat::Int32)},
+            {"one_byte_dtype",
+             (uint32_t)(input_dfb_data_format == tt::DataFormat::UInt8 ||
+                        input_dfb_data_format == tt::DataFormat::Int8)}};
         writer.runtime_arg_schema = {
             .runtime_arg_names = {
                 "num_rows_block",
@@ -309,7 +313,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
      */
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_hw_config.unpack_modes = {{SH_IN, UnpackMode::UnpackToDest}};
     }
 
