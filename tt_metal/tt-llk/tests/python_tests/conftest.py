@@ -9,7 +9,7 @@ naming the implementation module. See ``docs/tests/getting_started.md`` §9.
 working for existing tests.
 """
 
-pytest_plugins = ["helpers.llk_pytest_plugin", "fuser.pytest_plugin"]
+pytest_plugins = ["helpers.llk_pytest_plugin", "fuser.pytest_plugin", "helpers.ci_probe"]
 
 import math  # noqa: E402
 from contextlib import contextmanager  # noqa: E402
