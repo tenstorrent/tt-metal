@@ -229,7 +229,7 @@ def encoder_inputs(mesh_device, sp_axis, num_links, config, reference):
     pixels, grid_thws = random_patches(config, [(1, H, W)], SEED)
     host = host_prep.prepare_host_inputs(config, patch_embed.pos_emb_weight, pixels, grid_thws)
     inputs = {
-        "patches": sp_shard(host["patches"], mesh_device, sp_axis, config.max_patches),
+        "patches": sp_shard(host["patches"], mesh_device, sp_axis, config.max_patches, layout=ttnn.ROW_MAJOR_LAYOUT),
         "pos_emb": sp_shard(host["pos_emb"], mesh_device, sp_axis, config.max_patches, ttnn.float32),
         "rope": TT_Rope(config, mesh_device=mesh_device, parallel=parallel).write(host["cos"], host["sin"]),
         "logical_n": logical_length_tensor(mesh_device, host["logical_n"]),

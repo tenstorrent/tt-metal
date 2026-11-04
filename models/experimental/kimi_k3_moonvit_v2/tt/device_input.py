@@ -19,6 +19,9 @@ import torch
 import ttnn
 
 
+_TORCH_FLOAT_DTYPES = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+
+
 class DeviceInput:
     """One fixed-shape input, split along `sp_axis` on dim 2 or replicated when `sp_axis` is None."""
 
@@ -46,8 +49,14 @@ class DeviceInput:
         return ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims)
 
     def write(self, value: torch.Tensor) -> ttnn.Tensor:
-        """Fill the tensor with `value` (any shape with `prod(shape)` elements) and return it."""
+        """Fill the tensor with `value` (any shape with `prod(shape)` elements) and return it.
+
+        A float `value` is cast to the device dtype in torch first: ttnn's own fp32 -> bf16 conversion
+        is much slower (full-size patches: ~350 ms against ~11 ms for the cast)."""
         value = value.reshape(self.shape)
+        torch_dtype = _TORCH_FLOAT_DTYPES.get(self.dtype)
+        if torch_dtype is not None and value.is_floating_point():
+            value = value.to(torch_dtype)
         kwargs = dict(dtype=self.dtype, layout=self.layout, mesh_mapper=self._mesh_mapper())
         if self.tensor is None:
             self.tensor = ttnn.from_torch(

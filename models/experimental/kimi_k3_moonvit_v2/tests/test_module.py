@@ -148,5 +148,6 @@ def test_prepare_inputs_reuses_device_tensors(host_parameters, host_inputs, shal
         ("cos", second["rope"].cos),
         ("sin", second["rope"].sin),
     ):
-        torch.testing.assert_close(actual[0, 0], expected[key], msg=key)
+        # `DeviceInput.write` casts to the device dtype on the host.
+        torch.testing.assert_close(actual[0, 0], expected[key].to(actual.dtype), msg=key)
     assert second["logical_n"].item() == 6 * 20
