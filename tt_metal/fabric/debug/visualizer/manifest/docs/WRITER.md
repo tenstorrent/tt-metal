@@ -49,6 +49,8 @@ value with no enumerator name, such as a bitmask combination, is written as its 
 - **Something that isn't there** is `null` rather than left out, such as a link with no peer or a field the builder
 didn't allocate. Keys are left out only where they don't apply, such as `torus` on a 1D mesh or a field the builder
 doesn't emit on this run.
+- **Values the builder gives each ERISC** are keyed `erisc<r>` (`make_by_erisc_json`): every `fields` object, a sender
+channel's `credits`, and a receiver channel's `forwards_on`.
 - **Two entries with one key** fail the writer, such as two fields keyed alike.
 - **Regions and registers are written as they are.** The writer copies what the passes worked out and computes nothing
 of its own (below).

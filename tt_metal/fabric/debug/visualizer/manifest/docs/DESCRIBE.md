@@ -51,7 +51,7 @@ The rest of `fabric` is what FabricContext derived from the settings:
 | --- | --- |
 | `topology` | The fabric topology |
 | `is_2d_routing` | Whether 2D routing is on |
-| `packet_header` | The registered name ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)) of the header type `visit_packet_header_type` (`packet_header_types.hpp`) picks for the routing mode and FabricContext's 1D extension words or 2D route buffer size, such as `HybridMeshPacketHeaderT<36>`. The type's size, plus the `UDMControlFields` that follow it in UDM mode (`compute_pkt_hdr_size_bytes`), must be FabricContext's header size |
+| `packet_header` | The registered name ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)) of the header type `visit_packet_header_type` (`packet_header_types.hpp`) picks for the routing mode and FabricContext's 1D extension words or 2D route buffer size, such as `HybridMeshPacketHeaderT<36>` |
 | `max_payload_size_bytes`, `channel_buffer_size_bytes` | The payload and channel buffer sizes |
 | `routing_2d_route_buffer_size` | 2D routing only: the packet header's route buffer size |
 | `routing_1d_extension_words` | 1D routing only: the packet header's extension words |

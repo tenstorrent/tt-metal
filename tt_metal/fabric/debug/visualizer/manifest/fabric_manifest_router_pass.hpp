@@ -6,13 +6,12 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <optional>
-#include <string>
-#include <unordered_map>
+#include <span>
 #include <vector>
 
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_kernel_inputs.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 
 namespace tt::tt_metal {
@@ -24,19 +23,6 @@ namespace tt::tt_fabric {
 class FabricEriscDatamoverBuilder;
 struct RouterVcShape;
 
-// The router pass's view of a router's kernel inputs.
-struct RouterKernelInputs {
-    // Shared by eriscs.
-    std::map<std::string, std::string> defines;
-    // Per-erisc.
-    std::vector<tt::tt_metal::DataMovementProcessor> processors;
-    // Per-erisc.
-    std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args;
-};
-
-// Builds RouterKernelInputs from the KernelInputs for each erisc in the router.
-RouterKernelInputs make_router_kernel_inputs(const std::vector<KernelInputs>& kernel_inputs_by_erisc);
-
 // Everything the router pass reads about one router.
 struct ManifestRouterInputs {
     const FabricEriscDatamoverBuilder& erisc_builder;
@@ -45,13 +31,15 @@ struct ManifestRouterInputs {
     const ChipRoutingFacts& chip_facts;
     // get_fabric_router_addresses_to_clear()
     const std::vector<size_t>& addresses_to_clear;
-    const RouterKernelInputs& kernel;
+    // What create_kernel built each RISC's kernel with. The router pass reads what an argument carries from here, and
+    // only uses the builders for info not carried in arguments.
+    const manifest::RouterArgs& args;
     const tt::tt_metal::Hal& hal;
 };
 
-// Throws unless every named argument and define in `kernel` is read by the manifest or listed as unrecorded
-// (fabric_manifest_fields.hpp).
-void check_kernel_inputs_accounted(const RouterKernelInputs& kernel);
+// Throws unless every named argument and define in `kernel_inputs_by_erisc` is read by the manifest or listed as
+// unrecorded (fabric_manifest_fields.hpp).
+void check_kernel_inputs_accounted(std::span<const KernelInputs> kernel_inputs_by_erisc);
 
 // Collects a built router's manifest facts from what its kernels were fed and from its builders.
 manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs);

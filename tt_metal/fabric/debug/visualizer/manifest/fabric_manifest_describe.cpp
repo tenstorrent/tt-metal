@@ -13,13 +13,12 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/arch/architecture_implementation.hpp>
+#include <tt-umd/arch/architecture_implementation.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -132,25 +131,16 @@ CoreRegisters describe_core_registers(const tt::tt_metal::Hal& hal) {
 }
 
 // The registered name of the packet header type the run's routers use: the one the routing mode and its template
-// argument pick, as FabricContext picked it.
-std::string_view describe_packet_header(const FabricContext& fabric_context, FabricUDMMode udm_mode) {
+// argument pick.
+std::string_view describe_packet_header(const FabricContext& fabric_context) {
     const bool is_2d = fabric_context.is_2D_routing_enabled();
     const PacketHeaderConfig config{
         .is_2d = is_2d,
         .extension_words = is_2d ? 0 : fabric_context.get_1d_pkt_hdr_extension_words(),
         .route_buffer_size = is_2d ? fabric_context.get_2d_pkt_hdr_route_buffer_size() : 0,
     };
-    const auto [header_name, header_type_size] =
-        visit_packet_header_type(config, []<typename Header>(std::type_identity<Header>) {
-            return std::pair{get_manifest_type_name<Header>(), sizeof(Header)};
-        });
-    const size_t header_size_bytes = compute_pkt_hdr_size_bytes(header_type_size, udm_mode == FabricUDMMode::ENABLED);
-    TT_FATAL(
-        header_size_bytes == fabric_context.get_fabric_packet_header_size_bytes(),
-        "Fabric manifest: the packet header the routing mode picks takes {} B, but FabricContext's takes {} B",
-        header_size_bytes,
-        fabric_context.get_fabric_packet_header_size_bytes());
-    return header_name;
+    return visit_packet_header_type(
+        config, []<typename Header>(std::type_identity<Header>) { return get_manifest_type_name<Header>(); });
 }
 
 }  // namespace
@@ -182,7 +172,7 @@ FabricInfo describe_fabric(const ControlPlane& control_plane) {
             },
         .topology = fabric_context.get_fabric_topology(),
         .is_2d_routing = is_2d_routing,
-        .packet_header = describe_packet_header(fabric_context, control_plane.get_fabric_udm_mode()),
+        .packet_header = describe_packet_header(fabric_context),
         .max_payload_size_bytes = fabric_context.get_fabric_max_payload_size_bytes(),
         .channel_buffer_size_bytes = fabric_context.get_fabric_channel_buffer_size_bytes(),
         .routing_2d_route_buffer_size =

@@ -279,6 +279,14 @@ inline constexpr auto k_router_fields = [] {
                            "reading what other cores write to its L1.",
         },
         RouterField{
+            .key = "vc0_bubble_flow_control",
+            .source = "ENABLE_DEADLOCK_AVOIDANCE",
+            .category = KERNEL_PARAMS,
+            .content = content::Flag{},
+            .description = "Whether VC0 runs bubble flow control for deadlock avoidance, which adds first-level acks: "
+                           "VC0 senders then also get credits back when the peer receives a packet (acked).",
+        },
+        RouterField{
             .key = "speedy_vc0",
             .source = "ENABLE_SPEEDY_VC0",
             .category = KERNEL_PARAMS,
@@ -338,12 +346,8 @@ inline constexpr auto k_router_fields = [] {
             .description = "Where it records them: the packet sizes each sender channel saw, and which sender and "
                            "receiver channels carried traffic.",
         },
-    };
-}();
 
-inline constexpr auto k_erisc_fields = [] {
-    using enum FieldCategory;
-    return std::array{
+        // What differs between a router's ERISCs by design: each one's role, its handshake, and its context switching.
         RouterField{
             .key = "local_handshake_master",
             .source = "IS_LOCAL_HANDSHAKE_MASTER",
@@ -639,7 +643,6 @@ constexpr bool sources_name_channels(const auto& fields, bool per_channel) {
     return true;
 }
 static_assert(sources_name_channels(k_router_fields, false));
-static_assert(sources_name_channels(k_erisc_fields, false));
 static_assert(sources_name_channels(k_sender_channel_fields, true));
 static_assert(sources_name_channels(k_receiver_channel_fields, true));
 static_assert(sources_name_channels(k_downstream_edge_fields, true));
@@ -679,12 +682,11 @@ constexpr bool same_arg_family(std::string_view a, std::string_view b) {
     return i == a.size() && j == b.size();
 }
 
-// The named arguments the router pass reads to work out facts, rather than through a field table.
+// The named arguments the router pass covers outside the field tables: the ones it reads to work out facts, and the
+// ones whose value it takes from the builder state the builder fed them from.
 inline constexpr auto k_router_pass_args = std::to_array<std::string_view>({
     "NUM_ACTIVE_ERISCS",
-    "ENABLE_DEADLOCK_AVOIDANCE",
     "ACTUAL_VC{}_SENDER_CHANNELS",
-    "NUM_RECEIVER_CHANNELS",
     "TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR",
     "TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR",
     "LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR",
@@ -705,7 +707,6 @@ inline constexpr auto k_router_pass_args = std::to_array<std::string_view>({
 
 // The defines the router pass reads.
 inline constexpr auto k_router_pass_defines = std::to_array<std::string_view>({
-    "FABRIC_2D_VC1_ACTIVE",
     "FABRIC_2D_VC1_SERVICED",
     "FABRIC_2D_VC2_SERVICED",
     "FABRIC_2D_VC0_CROSSOVER_TO_VC1",
@@ -725,6 +726,7 @@ inline constexpr auto k_unrecorded_args = std::to_array<Unrecorded>({
     {"NUM_LOCAL_EDMS", "The chip's local_sync num_routers, from KernelCreationContext."},
     {"EDM_CHANNELS_MASK", "The chip's local_sync router_channels_mask, from KernelCreationContext."},
     {"MY_ERISC_ID", "The ERISC's index in the router's eriscs, which the manifest lists in RISC order."},
+    {"NUM_RECEIVER_CHANNELS", "The router's receiver count. The manifest lists the receivers from the builder's VC shape."},
 
     // The same on every router
     {"MAX_NUM_SENDER_CHANNELS", "builder_config::num_max_sender_channels."},
@@ -766,6 +768,7 @@ inline constexpr std::string_view k_fabric_wide_define =
 
 inline constexpr auto k_unrecorded_defines = std::to_array<Unrecorded>({
     {"FABRIC_2D", "The same fact as IS_2D_FABRIC: both come from is_2D_routing_enabled."},
+    {"FABRIC_2D_VC1_ACTIVE", "The same fact as ACTUAL_VC1_SENDER_CHANNELS > 0: set when the router has VC1 senders."},
     {"ROUTING_MODE", k_fabric_wide_define},
     {"UDM_MODE", k_fabric_wide_define},
     {"FABRIC_1D_PKT_HDR_EXTENSION_WORDS", k_fabric_wide_define},
@@ -784,8 +787,7 @@ constexpr bool table_reads(const auto& fields, std::string_view name) {
 
 // Whether a field table or the router pass reads the named argument `name`.
 constexpr bool manifest_reads_arg(std::string_view name) {
-    return table_reads(k_router_fields, name) || table_reads(k_erisc_fields, name) ||
-           table_reads(k_sender_channel_fields, name) || table_reads(k_receiver_channel_fields, name) ||
+    return table_reads(k_router_fields, name) || table_reads(k_sender_channel_fields, name) || table_reads(k_receiver_channel_fields, name) ||
            table_reads(k_downstream_edge_fields, name) ||
            std::ranges::any_of(k_router_pass_args, [&](std::string_view arg) { return same_arg_family(arg, name); });
 }
