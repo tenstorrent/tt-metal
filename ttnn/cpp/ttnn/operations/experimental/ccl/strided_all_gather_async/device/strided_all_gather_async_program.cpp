@@ -593,6 +593,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 if (use_mux_v2) {
                     // Creates both the forwarder (RISCV_0) and manager
                     tt::tt_fabric::add_fabric_mux_v2_to_program(
+                        *mesh_device,
                         program,
                         *mux_v2_config,
                         mux_logical_core,
