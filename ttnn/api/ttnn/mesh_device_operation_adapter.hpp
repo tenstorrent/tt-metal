@@ -898,17 +898,24 @@ public:
 
         // Metal 2.0's MakeMeshWorkloadFromSpecs needs a MeshDevice; pull it from the first device
         // tensor reachable from tensor_args, falling back to tensor_return_value for output-only
-        // ops (e.g. rand) whose tensor_args carry no input tensor.
+        // ops (e.g. rand) whose tensor_args carry no input tensor, and then, as launch does, to the
+        // MeshDevice* in the attributes of an op with no tensors at all.
         static tt::tt_metal::distributed::MeshDevice* source_mesh_device(
-            const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            const tensor_return_value_t& tensor_return_value) {
             auto first_tensor = ttsl::reflection::get_first_object_of_type<ttnn::Tensor>(tensor_args);
             if (!first_tensor.has_value()) {
                 first_tensor = ttsl::reflection::get_first_object_of_type<ttnn::Tensor>(tensor_return_value);
             }
-            TT_FATAL(
-                first_tensor.has_value(),
-                "ProgramSpec factory adapter requires at least one Tensor in tensor_args or "
-                "tensor_return_value to source the MeshDevice");
+            if (!first_tensor.has_value()) {
+                auto attrs_mesh_device = ttsl::reflection::get_first_object_of_type<ttnn::MeshDevice*>(attrs);
+                TT_FATAL(
+                    attrs_mesh_device.has_value() && attrs_mesh_device.value() != nullptr,
+                    "ProgramSpec factory adapter requires a Tensor in tensor_args or tensor_return_value, or a "
+                    "MeshDevice* in operation_attributes_t, to source the MeshDevice");
+                return attrs_mesh_device.value();
+            }
             auto* mesh_device = first_tensor.value().device();
             TT_FATAL(
                 mesh_device != nullptr,
@@ -1053,7 +1060,7 @@ public:
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
+            auto* mesh_device = SpecBindingSupport::source_mesh_device(attrs, tensor_args, tensor_return_value);
 
             // Enumerate io tensors (inputs + outputs); each artifacts appends its own
             // op-owned tensors. resolve_bindings maps each TensorArgument to an index in
@@ -1174,7 +1181,7 @@ public:
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
+            auto* mesh_device = SpecBindingSupport::source_mesh_device(attrs, tensor_args, tensor_return_value);
 
             auto artifacts = WorkloadSpecFactory::create_mesh_workload_artifacts(
                 attrs, tensor_args, tensor_return_value, tensor_coords);

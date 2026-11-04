@@ -15,23 +15,31 @@
 #include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::test {
 
 // Byte-for-byte validator companion to ttnn.dram_prefetcher / start_tensor_prefetcher.
-// Loads a validator kernel on each receiver core of the supplied GCB; for each pushed
-// page it reads the receiver's expected tile range from `source_tensor` (via
-// TensorAccessor) and memcmps against the received bytes.
+// Loads a validator kernel on each receiver core of the supplied delivery target, a GCB or
+// PrefetcherPipes; for each pushed page it reads the receiver's expected tile range from
+// `source_tensor` (via TensorAccessor) and memcmps against the received bytes.
 struct DramPrefetcherValidatorDeviceOperation {
     struct operation_attributes_t {
         uint32_t num_layers;
         uint32_t print_stride;
-        // optional<> because reflection-based profiler serialization needs a default-
-        // constructible attribute struct, and GlobalCircularBuffer has no default ctor.
+        // Exactly one delivery target is set: global_cb, or a non-empty prefetcher_pipes. optional<>
+        // because reflection-based profiler serialization needs a default-constructible attribute
+        // struct, and GlobalCircularBuffer has no default ctor.
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
+        ttnn::PrefetcherPipeList prefetcher_pipes;
+        // With prefetcher_pipes: the plan the pipes were created from
+        // (create_prefetcher_pipes_for_tensor_prefetcher). It fixes which slab each receiver expects,
+        // so the pipes may be in any order.
+        std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>> bank_to_receivers;
         // When true, expect the streaming prefetcher's ring-rotated delivery: the block at FIFO
         // position p for a receiver is physical block (lead_block + p) mod num_blocks of its slab,
         // consumed one page at a time. False = batched natural order 0..N-1.
@@ -50,6 +58,7 @@ struct DramPrefetcherValidatorDeviceOperation {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
+    // The GlobalCircularBuffer target: a remote CB the validator kernel reads.
     struct ProgramFactory {
         struct shared_variables_t {};
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -67,8 +76,18 @@ struct DramPrefetcherValidatorDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    // The PrefetcherPipe target: a Metal 2.0 spec factory whose program binds the pipes and the source
+    // tensor as parameters, which a cache hit rebinds from prefetcher_pipes and source_tensor.
+    struct PrefetcherPipeSpecFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
 
+    using program_factory_t = std::variant<ProgramFactory, PrefetcherPipeSpecFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -91,12 +110,8 @@ void test_dram_prefetcher_validator(
 // they do above and must match what was queued; the consumer Attaches the pipes and reads them
 // through the device-side experimental::PrefetcherPipe. `bank_to_receivers` is the plan the pipes
 // were created from (create_prefetcher_pipes_for_tensor_prefetcher); it fixes which slab each
-// receiver expects, so `prefetcher_pipes` may be in any order.
-//
-// Unlike the GlobalCircularBuffer path this is not a ttnn device operation: it builds and enqueues
-// its program directly. Every run wants a fresh program anyway -- the validator is checked once per
-// call against freshly delivered data -- so there is nothing for program caching to hit, and the
-// direct path keeps the test op's wiring visible next to what it validates.
+// receiver expects, so `prefetcher_pipes` may be in any order. Returns once the validator has run
+// on the calling thread's command queue.
 void test_tensor_prefetcher_pipe_validator(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const ttnn::Tensor& source_tensor,
@@ -107,8 +122,9 @@ void test_tensor_prefetcher_pipe_validator(
     bool streaming = false,
     const std::vector<uint32_t>& rotation = {});
 
-// The workload test_tensor_prefetcher_pipe_validator enqueues, for a caller that enqueues it some other way,
-// such as recording it into a CommandList.
+// The program test_tensor_prefetcher_pipe_validator launches, as a MeshWorkload for a caller that enqueues it
+// some other way, such as recording it into a CommandList. Each call builds a new program; the program cache is
+// not consulted.
 tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_workload(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const ttnn::Tensor& source_tensor,
