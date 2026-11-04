@@ -13,7 +13,9 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "fused_experts_device_operation_types.hpp"
 
@@ -21,6 +23,18 @@
 #include <tt-metalium/tile.hpp>
 
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
+
+// DRAM weight layout: one shard per core of the serial grid, which is kGridY rows tall and
+// num_weight_shards / kGridY columns wide (8x8 at H == 4096, 10x8 at H == 5120).
+inline constexpr uint32_t kGridY = 8;
+
+// 6-expert path: one 2-column group per expert on a 12-wide grid. gate_up splits I over the group's
+// first `num_producers` cores -- the largest divisor of I/32 that fits the group, so all 2x8 = 16 at
+// I/32 == 16 or 64, and 6 of them at TP12's I/32 == 6 -- on 2x9 = 18 cores (12x9 grid) when I/32
+// divides by 18 but not 16. Down always runs on the group's bottom 2x8 = 16 cores, which keeps the H
+// split at H/64/16 shards per core.
+inline constexpr uint32_t kParallelExperts = 6;
+inline constexpr uint32_t kDownCoresPerExpert = 2 * kGridY;
 
 // ROW_MAJOR + L1 + HEIGHT_SHARDED with a shard spec: the replicated activation row that
 // `all_gather_for_matmul` multicasts onto every matmul core and that `matmul_decode` consumes in
@@ -87,7 +101,17 @@ struct FusedExpertsDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<MultiCore>;
+    // MultiCore plus the all-reduce epilogue: a workload factory, since the scratch and the semaphore
+    // the chips exchange partials through are shared by every program of the workload.
+    struct MultiCoreAllReduce {
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    };
+
+    using program_factory_t = std::variant<MultiCore, MultiCoreAllReduce>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -122,7 +146,10 @@ struct FusedExpertsDeviceOperation {
         const std::optional<Tensor>& shared_down_weights,
         std::optional<float> shared_swiglu_limit,
         const std::optional<Tensor>& router_weight,
-        const std::optional<Tensor>& router_bias);
+        const std::optional<Tensor>& router_bias,
+        std::optional<uint32_t> all_reduce_cluster_axis,
+        uint32_t all_reduce_num_links,
+        tt::tt_fabric::Topology all_reduce_topology);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts
@@ -149,5 +176,8 @@ fused_experts(
     const std::optional<Tensor>& shared_down_weights = std::nullopt,
     std::optional<float> shared_swiglu_limit = std::nullopt,
     const std::optional<Tensor>& router_weight = std::nullopt,
-    const std::optional<Tensor>& router_bias = std::nullopt);
+    const std::optional<Tensor>& router_bias = std::nullopt,
+    std::optional<uint32_t> all_reduce_cluster_axis = std::nullopt,
+    uint32_t all_reduce_num_links = 1,
+    tt::tt_fabric::Topology all_reduce_topology = tt::tt_fabric::Topology::Linear);
 }  // namespace ttnn::prim
