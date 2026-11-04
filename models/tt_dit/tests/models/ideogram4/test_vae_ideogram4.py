@@ -112,6 +112,8 @@ def _make_akl(weights: str, torch_dtype) -> AutoencoderKL:
         ),
         # The API's other output sizes (1024x1024 is above): non-square sizes, where the default 8x8
         # GroupNorm grid does not divide Ht, and the 2K sizes, which use vae_ideogram4's slice table.
+        # The 2K sizes decode the real weights: with random weights, a bf16 torch reference at 2K
+        # lands near PCC 0.99 even where no slice table is involved (2048x2048: 0.988, job 172299).
         *[
             pytest.param(
                 (4, 8),
@@ -122,8 +124,9 @@ def _make_akl(weights: str, torch_dtype) -> AutoencoderKL:
                 ttnn.Topology.Ring,
                 h // 8,
                 w // 8,
-                "random",
+                "real" if max(w, h) == 2048 else "random",
                 id=f"bh_galaxy_tp4_{w}x{h}",
+                marks=_NEEDS_WEIGHTS if max(w, h) == 2048 else (),
             )
             for w, h in [
                 (1280, 720),
@@ -184,3 +187,23 @@ def test_vae_decoder(
         f"-> image {latent_h*8}x{latent_w*8}"
     )
     assert_quality(ref.float(), tt_out_torch.float(), pcc=0.99, relative_rmse=0.15)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((4, 8), {**ring_params, **_L1})],
+    indirect=True,
+    ids=["bh_galaxy_tp4"],
+)
+def test_vae_decoder_rejects_unsupported_size(*, mesh_device: ttnn.MeshDevice, expect_error) -> None:
+    """A size the Galaxy slice table does not cover raises instead of running convs unsliced."""
+    akl = _make_akl("random", torch.bfloat16)
+    parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=0))
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    tt_decoder = Ideogram4VAEDecoder.from_torch(
+        akl, mesh_device=mesh_device, parallel_config=parallel_config, ccl_manager=ccl_manager
+    )
+
+    with expect_error(ValueError, "is not supported on mesh"):
+        tt_decoder.check_output_size(768, 512)
+    tt_decoder.check_output_size(512, 512)
