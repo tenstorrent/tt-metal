@@ -610,14 +610,6 @@ FlatProgramHandles add_flat_routed_expert_program(
         c.set_address_offset(off);
         sv.arena_cbs.emplace_back(CreateCircularBuffer(program, rect_ranges(cores), c), off);
     };
-    uint32_t static_bytes = 0;  // (every static CB, summed: at most the plan's static_l1_bytes, checked below)
-    auto static_cb =
-        [&](uint8_t idx, uint32_t size, const std::vector<CoreCoord>& cores, tt::DataFormat fmt, uint32_t page) {
-            CircularBufferConfig c(size, {{idx, fmt}});
-            c.set_page_size(idx, page);
-            CreateCircularBuffer(program, rect_ranges(cores), c);
-            static_bytes += (size + 63) / 64 * 64;
-        };
     const auto wf = w_format(cfg.weights_bf8);
     const auto bfp8 = tt::DataFormat::Bfp8_b;
     // the down output CB in the arena's out region (bytes = the bfp8 double block): bfp8 tiles, or with row-major y
@@ -640,8 +632,8 @@ FlatProgramHandles add_flat_routed_expert_program(
     arena_cb(1, p.sb_off, kSbSlots * MT * p.sbt * kBf8Tile, p.relays, bfp8, kBf8Tile);
     arena_cb(1, 0, p.ring_g * p.slot * w_tile, p.gu, wf, w_tile);
     arena_cb(0, p.x_off, p.x_slots * x_bytes, p.gu, bfp8, kBf8Tile);
-    static_cb(3, p.hbuf * MT * p.hpc * kBf8Tile, p.gu, bfp8, kBf8Tile);
-    static_cb(16, 2048, p.gu, tt::DataFormat::Float16_b, 2048);
+    arena_cb(3, p.hl_off, p.hbuf * MT * p.hpc * kBf8Tile, p.gu, bfp8, kBf8Tile);
+    arena_cb(16, p.hp_off, 2048, p.gu, tt::DataFormat::Float16_b, 2048);
     arena_cb(2, p.h_off, p.hbuf * p.h_tiles * kBf8Tile, p.down, bfp8, kBf8Tile);
     for (const auto& [pw, ds] : dgroups) {
         const uint32_t kd = FlatRoutedExpertPlan::kd_of(pw, It);
@@ -653,13 +645,16 @@ FlatProgramHandles add_flat_routed_expert_program(
         arena_cb(1, 0, ring * kd * pw * w_tile, cores, wf, w_tile);
         out_cb(cores, pw, 2 * MT * pw * kBf8Tile);
     }
-    static_cb(6, meta_bytes, arena_cores, tt::DataFormat::UInt32, meta_bytes);
-    static_cb(7, 4 * dyn_half, arena_cores, tt::DataFormat::UInt32, 4 * dyn_half);
+    // (meta and the dynamic counts: one offset on every arena core, past every role's own bytes - the plan's sizes)
     TT_FATAL(
-        static_bytes <= p.static_l1_bytes,
-        "flat_routed_expert: static CBs {} B > the plan's static_l1_bytes {} B (callers size the arena with it)",
-        static_bytes,
-        p.static_l1_bytes);
+        meta_bytes == p.meta_bytes && 4 * dyn_half == p.dyn_bytes,
+        "flat_routed_expert: CB 6 / 7 sizes {} / {} B differ from the plan's {} / {} B",
+        meta_bytes,
+        4 * dyn_half,
+        p.meta_bytes,
+        p.dyn_bytes);
+    arena_cb(6, p.meta_off, meta_bytes, arena_cores, tt::DataFormat::UInt32, meta_bytes);
+    arena_cb(7, p.dyn_off, 4 * dyn_half, arena_cores, tt::DataFormat::UInt32, 4 * dyn_half);
 
     override_flat_routed_expert_addresses(program, sv, t);
     return sv;

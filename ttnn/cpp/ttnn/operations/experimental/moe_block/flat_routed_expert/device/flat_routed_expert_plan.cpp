@@ -513,7 +513,7 @@ FlatRoutedExpertPlan make_plan(
 
     // ---- arena (per-role layout, 2 KB aligned) ----
     p.x_off = al(p.ring_g * p.slot * p.w_tile);
-    p.hl_off = p.x_off + al(p.x_slots * x_bytes);  // gate/up: weight ring, x ring (h_local is a static CB)
+    p.hl_off = p.x_off + al(p.x_slots * x_bytes);  // gate/up: weight ring, x ring, then h_local and the pack CB
     uint32_t dn_ring_max = 0;
     for (uint32_t d = 0; d < ND; ++d) {
         const uint32_t kd = FlatRoutedExpertPlan::kd_of(p.pcds[d], p.It);
@@ -529,12 +529,14 @@ FlatRoutedExpertPlan make_plan(
     p.o_off = p.h_off + al(p.hbuf * p.h_tiles * kBf8Tile);
     const uint32_t dn_bytes = std::min(p.o_off + out_bytes + 2048, budget);
     TT_FATAL(p.o_off + al(pcd * 2048) + 2048 <= budget, "flat_routed_expert: down core arena does not fit");
-    const uint32_t gu_bytes = p.hl_off;
-    {  // (the program factory's static CBs, an upper bound)
+    // gate/up: h_local (CB 3: hbuf x MT x hpc bfp8 tiles) and the pack CB (16: one bf16 tile) after the x ring
+    p.hp_off = p.hl_off + al(p.hbuf * p.mt * p.hpc * kBf8Tile);
+    const uint32_t gu_bytes = p.hp_off + al(2048);
+    {  // (CBs 6 / 7, as the program factory sizes them: SE_META_BYTES, 4 x SE_DYN_HALF)
         const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
-        const uint32_t meta_bytes = se_max_e == 16 ? 512 : (se_max_e == 32 ? 1024 : 2048);
-        const auto a64 = [](uint32_t b) { return (b + 63) / 64 * 64; };
-        p.static_l1_bytes = a64(meta_bytes) + a64(4 * dyn_half) + 2048 + a64(p.hbuf * p.mt * p.hpc * kBf8Tile);
+        p.meta_bytes = se_max_e == 16 ? 512 : (se_max_e == 32 ? 1024 : 2048);
+        p.dyn_bytes = 4 * dyn_half;
+        p.static_l1_bytes = 0;  // (every CB is in the arena)
     }
     TT_FATAL(gu_bytes <= budget, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
@@ -567,7 +569,11 @@ FlatRoutedExpertPlan make_plan(
     }
     const uint32_t relay_bytes = p.land_off + al(2 * p.land_slots * p.mt * p.sbt * kBf8Tile);
     TT_FATAL(relay_bytes <= budget, "flat_routed_expert: relay arena does not fit");
-    p.arena_tiles = (std::max({gu_bytes, dn_bytes, relay_bytes}) + 2047) / 2048;
+    // CBs 6 / 7 at one offset on every arena core, past every role's bytes (in arena_tiles: the caller's fit to the
+    // budget counts them)
+    p.meta_off = al(std::max({gu_bytes, dn_bytes, relay_bytes}));
+    p.dyn_off = p.meta_off + al(p.meta_bytes);
+    p.arena_tiles = (p.dyn_off + al(p.dyn_bytes) + 2047) / 2048;
     p.gu_bytes = gu_bytes;
     p.dn_bytes = dn_bytes;
     p.relay_bytes = relay_bytes;
