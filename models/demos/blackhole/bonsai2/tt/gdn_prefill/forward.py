@@ -148,6 +148,25 @@ class ConvPrefill:
         self.consts = ttnn.from_torch(
             torch.cat(m, 0).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
+        # conv2 (BONSAI_CONV2, default on): per channel tile-column one tile of the 4 taps' SFPU lane vectors
+        # (tap k, vector v = 2 fc + par at SFPU row 4 k + v; lane (s, i) = column 16 fc + 2 i + par)
+        tb = taps.bfloat16().float()
+        Dt = self.D // 32
+        vt = torch.zeros(Dt, 32, 32)
+        for k in range(4):
+            for v in range(4):
+                fc, par = v >> 1, v & 1
+                q = 4 * k + v
+                f, kk = q // 8, q % 8
+                cols = 16 * fc + 2 * torch.arange(8) + par
+                for s in range(4):
+                    vt[:, 16 * (f // 2) + 4 * (kk >> 1) + s, 16 * (f % 2) + 2 * torch.arange(8) + (kk & 1)] = tb[
+                        k
+                    ].reshape(Dt, 32)[:, cols]
+        self.tap_vecs = ttnn.from_torch(
+            vt.reshape(Dt * 32, 32).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.v2 = os.environ.get("BONSAI_CONV2", "1") == "1"
         self.device = device
 
     def __call__(self, x, state):
@@ -157,16 +176,19 @@ class ConvPrefill:
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, T, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
         )
+        v2 = self.v2
         grid = device.compute_with_storage_grid_size()
-        ncores = min(grid.x * grid.y, Dt)
+        # conv2: work units (column, time tile) split evenly; conv: whole columns per core
+        ncores = min(grid.x * grid.y, Dt * Tt if v2 else Dt)
         crs = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(c % grid.x, c // grid.x), ttnn.CoreCoord(c % grid.x, c // grid.x))
                 for c in range(ncores)
             ]
         )
+        taps = self.tap_vecs if v2 else self.taps
         rd_ct = []
-        for t in (x, state, self.taps, self.consts):
+        for t in (x, state, taps, self.consts):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         wr_ct = (
             ttnn.TensorAccessorArgs(out).get_compile_time_args()
@@ -184,33 +206,35 @@ class ConvPrefill:
         program = ttnn.ProgramDescriptor(
             kernels=[
                 ttnn.KernelDescriptor(
-                    kernel_source=KERNELS + "conv_reader.cpp",
+                    kernel_source=KERNELS + ("conv2_reader.cpp" if v2 else "conv_reader.cpp"),
                     core_ranges=crs,
                     compile_time_args=rd_ct,
-                    common_runtime_args=[t.buffer_address() for t in (x, state, self.taps, self.consts)]
+                    common_runtime_args=[t.buffer_address() for t in (x, state, taps, self.consts)]
                     + [Dt, ncores, grid.x, Tt, W // 32],
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
-                    kernel_source=KERNELS + "conv_writer.cpp",
+                    kernel_source=KERNELS + ("conv2_writer.cpp" if v2 else "conv_writer.cpp"),
                     core_ranges=crs,
                     compile_time_args=wr_ct,
                     common_runtime_args=[out.buffer_address(), state.buffer_address(), Dt, ncores, grid.x, Tt],
                     config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
-                    kernel_source=KERNELS + "conv_compute.cpp",
+                    kernel_source=KERNELS + ("conv2_compute.cpp" if v2 else "conv_compute.cpp"),
                     core_ranges=crs,
                     compile_time_args=[],
                     common_runtime_args=[Dt, ncores, grid.x, Tt],
                     config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True
+                        math_fidelity=ttnn.MathFidelity.HiFi2 if v2 else ttnn.MathFidelity.HiFi4,
+                        fp32_dest_acc_en=True,
+                        dst_full_sync_en=True,
                     ),
                 ),
             ],
             semaphores=[],
             cbs=[
-                cbd(0, bf, 2048, 2),
+                cbd(0, bf, 2048, 8 if v2 else 2),
                 cbd(1, bf, 2048, 1),
                 cbd(2, bf, 2048, 4),
                 cbd(3, bf, 2048, 11),
@@ -218,9 +242,10 @@ class ConvPrefill:
                 cbd(5, f32, 4096, 4),
                 cbd(16, bf, 2048, 2),
                 cbd(17, bf, 2048, 1),
-            ],
+            ]
+            + ([cbd(6, bf, 2048, 2), cbd(7, bf, 2048, 1)] if v2 else []),
         )
-        ttnn.generic_op([x, state, self.taps, self.consts, out], program)
+        ttnn.generic_op([x, state, taps, self.consts, out], program)
         return out
 
 
