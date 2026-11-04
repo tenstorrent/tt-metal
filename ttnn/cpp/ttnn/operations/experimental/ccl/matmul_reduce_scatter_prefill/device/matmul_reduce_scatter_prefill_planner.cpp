@@ -336,8 +336,8 @@ std::optional<GridChoice> choose_grid_folded(
 // (`unchunked`) takes the fold along N ahead of the 2D grid when it gives each core fewer output tiles. Scatter on N
 // keeps A resident and streams W once per output block, so the fold along N spreads the stream that moves; the fold
 // along M spreads A, read once, and is left to the caller's grid (measured, QB2 1x4 ring: against an unchunked 2D plan
-// it ran 1-6% slower). Chunk splits keep the 2D grid: chunk_cost_us charges a cross-chip handoff per core, so a fold's
-// many cores misrank them (a thin-chunk fold ran 1.34x slower on a large prefill shape).
+// it ran 0.99-1.04x the time). Chunk splits keep the 2D grid: chunk_cost_us charges a cross-chip handoff per core, so a
+// fold's many cores misrank them (a thin-chunk fold ran 1.34x slower on a large prefill shape).
 std::vector<GridChoice> grid_candidates(
     uint32_t gx,
     uint32_t gy,
