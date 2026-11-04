@@ -122,9 +122,7 @@ case "${MODEL}" in
     fi
     case "${CONFIG}" in
       sc4|sc1)
-        # No 4x4 MTP cache exists, so the MTP variants run on the _8x4 configs below.
-        [ "${MTP}" -eq 0 ] || { echo "${MODEL}${VARIANT} runs on sc4_8x4 / sc1_8x4 only (no 4x4 MTP cache)" >&2; exit 2; }
-        # The manifest describes a 4x4 stage: SP=4 on mesh axis 1, 2560-token chunks (640 tokens per chip,
+        # The manifest (the MTP variants' too) describes a 4x4 stage: SP=4 on mesh axis 1, 2560-token chunks (640 tokens per chip,
         # GLM's 8x4 per-chip load), TP-deduped KV and the slots that layout fits. Its 1064960 window is a
         # multiple of the deduped cache's 16 x 256 = 4096-token bank quantum and of the chunk. Two ranks per
         # galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two (all 78 layers) for sc1.
@@ -140,14 +138,12 @@ case "${MODEL}" in
         ;;
       *_8x4)
         # One 8x4 stage per galaxy, SP=8 on axis 0, 5120-token chunks, at the 54 slots that layout fits
-        # (the MTP manifests are 8x4 already and keep their own). Exported to runner and producer, ahead
-        # of the manifest.
-        if [ "${MTP}" -eq 0 ]; then
-          if [ "${SCALE}" = sc4 ]; then : "${PREFILL_NUM_USERS:=54}"; export PREFILL_NUM_USERS; fi
-          LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
-          RUNNER_ENV+=" ${LAYOUT_8X4}"
-          PRODUCER_ENV+=" ${LAYOUT_8X4}"
-        fi
+        # (the MTP variants keep their manifest's slots). Exported to runner and producer, ahead of the
+        # manifest.
+        if [ "${MTP}" -eq 0 ] && [ "${SCALE}" = sc4 ]; then : "${PREFILL_NUM_USERS:=54}"; export PREFILL_NUM_USERS; fi
+        LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
+        RUNNER_ENV+=" ${LAYOUT_8X4}"
+        PRODUCER_ENV+=" ${LAYOUT_8X4}"
         ;;
     esac
     ;;
