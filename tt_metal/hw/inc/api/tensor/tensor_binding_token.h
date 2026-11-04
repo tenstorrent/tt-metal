@@ -129,15 +129,15 @@ constexpr uint32_t get_tile_num_faces(const TensorBindingToken<Cta, Addr>& token
     return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns whether the tile height is less than 32 elements.
+// Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
 template <uint32_t Cta, uint32_t Addr>
-constexpr bool get_partial_face(const TensorBindingToken<Cta, Addr>& token) {
+constexpr uint32_t get_partial_face(const TensorBindingToken<Cta, Addr>& token) {
     return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns whether the tile width is less than 32 elements.
+// Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
 template <uint32_t Cta, uint32_t Addr>
-constexpr bool get_narrow_tile(const TensorBindingToken<Cta, Addr>& token) {
+constexpr uint32_t get_narrow_tile(const TensorBindingToken<Cta, Addr>& token) {
     return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
@@ -213,15 +213,15 @@ constexpr uint32_t get_tile_num_faces(const PerNodeTensorBindingToken<Cta, Addr>
     return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns whether the tile height is less than 32 elements.
+// Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
 template <uint32_t Cta, uint32_t Addr>
-constexpr bool get_partial_face(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+constexpr uint32_t get_partial_face(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns whether the tile width is less than 32 elements.
+// Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
 template <uint32_t Cta, uint32_t Addr>
-constexpr bool get_narrow_tile(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+constexpr uint32_t get_narrow_tile(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
