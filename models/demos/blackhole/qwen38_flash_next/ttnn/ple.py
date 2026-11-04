@@ -160,6 +160,7 @@ _SUB: dict[str, int] | None = None
 
 
 PLE_FAST_ENV = "QWEN38_PLE_FAST"
+PLE_FAST_ADVISE_ROWS = 128  # rows per lookup from which the fast path queues WILLNEED for every row (2+ lanes)
 
 
 def ple_fast() -> bool:
@@ -924,6 +925,16 @@ class Qwen38ResidentPLELookup:
         view = memoryview(payload)
         preadv = os.preadv
         start = 0
+        if len(hashed) >= PLE_FAST_ADVISE_ROWS:
+            # A wide pass (several lanes) reads hundreds of rows spread over a table far larger than the page cache: queue
+            # every cold row's read first so the disk sees them in parallel, not one latency (~70 us) per row.
+            advise = os.posix_fadvise
+            for index in hashed:
+                part, row = divmod(index, rows_per_shard)
+                reader = readers[part]
+                descriptor = reader._descriptor
+                if descriptor is not None:
+                    advise(descriptor, reader._tensor_base + row * row_bytes, row_bytes, os.POSIX_FADV_WILLNEED)
         for index in hashed:
             part, row = divmod(index, rows_per_shard)
             reader = readers[part]

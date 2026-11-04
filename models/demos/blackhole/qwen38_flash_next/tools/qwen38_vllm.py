@@ -1292,7 +1292,11 @@ class Qwen38ForCausalLM:
         def open_chain(warm_hook: Callable[[Any], None] | None) -> Any:
             options = {} if warm_hook is None else {"warm_hook": warm_hook}
             # QWEN38_GREEDY_TAIL default on; "0" keeps the candidate chain in the TAIL
-            if os.environ.get("QWEN38_GREEDY_TAIL", "1") == "1" and max_batch_size == 1:
+            options.update(cls._chain_open_options(mesh_device))
+            candidate_tail = options.get(
+                "sampling", True
+            )  # the MTP subclass opens a greedy chain without the candidate row
+            if os.environ.get("QWEN38_GREEDY_TAIL", "1") == "1" and max_batch_size == 1 and candidate_tail:
                 # the single-slot host sampler draws from the full-vocabulary row, never the candidate row: the TAIL
                 # traces skip the candidate chain (tools/qwen38_sampling_step.SKIP_CANDIDATE_ROW)
                 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step
@@ -1303,10 +1307,9 @@ class Qwen38ForCausalLM:
                     construction,
                     marker=logger.info,
                     chunked_prefill=True,
-                    sampling=True,
                     long_chunks=long_chunks,
                     slab_rows=slab_rows,
-                    **options,
+                    **{"sampling": True, **options},
                 )
             except Exception as error:
                 refusal = None if slab_rows is None else prefill_dense_refusal(error)
@@ -1327,6 +1330,12 @@ class Qwen38ForCausalLM:
             # Batch mode: the chain opens in allocate_kv_cache, where the pool's size is known (see the module docstring).
             return cls(None, allocated_context=allocated_context, batch_lanes=max_batch_size, chain_opener=open_chain)
         return cls(open_chain(None), allocated_context=allocated_context)
+
+    @classmethod
+    def _chain_open_options(cls, mesh_device: Any) -> dict[str, Any]:
+        """Extra ``Qwen38TracedChain.open`` arguments of a subclass (``sampling`` defaults to True); the plain class adds none."""
+
+        return {}
 
     def allocate_kv_cache(self, kv_cache_shape: Any, dtype: Any, num_layers: int) -> None:
         """Single-slot mode: vLLM's paged KV is not used, the chain allocated the resident QSA caches at open, sized by
