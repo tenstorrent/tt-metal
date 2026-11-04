@@ -238,10 +238,9 @@ calls (e.g. for a greedy eval).
 
 The model and tokenizer come from `setup_ttml_model(transformer_config,
 device_config, model_source)`, which the trainer calls. It builds the model for
-`transformer_config.model_type` (`"llama"` or `"qwen3"`). For Llama the
-architecture comes from `transformer_config`. For Qwen3 it is read from the
-HuggingFace config of `model_source`, and only `max_sequence_length` and
-`runner_type` are taken from `transformer_config`.
+`transformer_config.model_type` (`"llama"` or `"qwen3"`). Both take the
+architecture from the HuggingFace config of `model_source`; `transformer_config`
+sets `max_sequence_length`, `runner_type` and, for Llama, `dropout_prob`.
 
 `DeviceConfig` is defined in
 [`ttml/common/config.py`](../sources/ttml/ttml/common/config.py); its
@@ -549,12 +548,10 @@ progress bars, or dashboards belong in additional callbacks.
 
 ## Transformer Config
 
-The completers read the model architecture from `model_source`'s `config.json`.
+`setup_ttml_model` reads the model architecture from `model_source`'s `config.json`.
 The transformer config, a plain dict, sets only what that file does not:
-`LlamaGRPOCompleter` and `LlamaCompleterRemoteRollout` read
-`max_sequence_length`, `dropout_prob` and `runner_type` from it, and
-`Qwen3GRPOCompleter` reads `max_sequence_length`; architecture keys such as
-`num_heads` are ignored. In YAML configs, the
+`max_sequence_length` and `runner_type`, and for Llama `dropout_prob`;
+architecture keys such as `num_heads` are ignored. In YAML configs, the
 transformer config can be provided inline under `transformer_config:` or as a
 path to a separate file via `transformer_config_path:`. The path may use
 `${TT_METAL_RUNTIME_ROOT}` (recommended, matching other tt-train configs) or
@@ -698,7 +695,8 @@ directory (it contains `checkpoint.pkl` and the tokenizer files). A
 `model.safetensors` with ttml parameter names (the old GRPO checkpoint format)
 raises `ValueError`, and a HuggingFace source must provide every model weight.
 Only the weights are loaded: the optimizer starts fresh and the LR schedule
-restarts at step 0.
+restarts at step 0. The checkpoint directory must hold `config.json`;
+`save_checkpoint` writes it from `model_source`.
 
 ---
 
