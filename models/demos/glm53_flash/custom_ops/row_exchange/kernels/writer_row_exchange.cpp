@@ -94,7 +94,7 @@ void kernel_main() {
                 noc_async_read(s_recv.get_noc_addr(r * NP + k / CPP, (k % CPP) * PS), dst, PIECE);
             }
         }
-        if constexpr (MODE == 0 && NSRC * T < 32) {
+        if constexpr (NSRC * T < 32) {
             cb_wait_front(CB_ZERO, 1);
             const uint64_t zero = get_noc_addr(ox, oy, get_read_ptr(CB_ZERO));
             for (uint32_t i = NSRC * T; i < 32; ++i) {
@@ -134,6 +134,14 @@ void kernel_main() {
                     noc_async_read(get_noc_addr(ox, oy, rm), dst, PIECE);
                 } else {
                     noc_async_read(s_recv.get_noc_addr((0 * NSRC + src) * NP + kk / CPP, (kk % CPP) * PS), dst, PIECE);
+                }
+            }
+            if constexpr (NSRC * T < 32) {
+                // the rows past the sources' users must be finite: the selector multiplies them by zero
+                cb_wait_front(CB_ZERO, 1);
+                const uint64_t zero = get_noc_addr(ox, oy, get_read_ptr(CB_ZERO));
+                for (uint32_t i = NSRC * T; i < 32; ++i) {
+                    noc_async_read(zero, rm2 + i * ROW_B, ROW_B);
                 }
             }
             noc_async_read_barrier();

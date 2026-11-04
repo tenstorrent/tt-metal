@@ -52,7 +52,7 @@ void kernel_main() {
         }
         cb_push_back(CB_SEL, 1);
     }
-    if constexpr (MODE == 2 || (MODE == 0 && NSRC * T < 32)) {
+    if constexpr (NSRC * T < 32) {  // the zero block for the rows past the assembled users (every mode)
         cb_reserve_back(CB_ZERO, 1);
         volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CB_ZERO));
         for (uint32_t i = 0; i < PS / 4; ++i) {
