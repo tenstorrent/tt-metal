@@ -1240,7 +1240,9 @@ class TtRoutedExperts(LightweightModule):
             fused=self.stream_fused,
             fused_groups=self._fused_groups(down_readers),
             fused_down_readers=down_readers,
-            split_k=os.environ.get("GLM53_STREAM_SPLITK", "0") == "1",  # the K-split gate|up stream (fused op)
+            # the K-split gate|up stream in waves (default since 2026-11-04: 8 users 29.68 ms vs 32.95, 32 users
+            # 35.47 vs 37.69; GPQA Diamond 85.35 vs 86.87 within the n = 198 noise); GLM53_STREAM_SPLITK=0 = the plain stream
+            split_k=os.environ.get("GLM53_STREAM_SPLITK", "1") == "1",
         )
 
     def _fused_groups(self, down_readers):
