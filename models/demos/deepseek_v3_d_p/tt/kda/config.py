@@ -171,8 +171,8 @@ def tuned_projection_matmul_configs(
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
     Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
-    (bf16, FP32 destination accumulation) at HiFi2; Kimi-K3 runs the output projection at HiFi3 on the
-    same schedule. Subblocks stay within the 4-tile FP32 destination limit.
+    (bf16, FP32 destination accumulation) at HiFi2; not re-tuned at other fidelities. Subblocks stay within
+    the 4-tile FP32 destination limit.
     Returns (None, None) when the blocking does not fit, keeping the auto-selected ttnn.linear configs.
     """
     row_tiles = rows // ttnn.TILE_SIZE
@@ -242,7 +242,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        # HiFi3 for the same SrcB truncation; the input projection stays at HiFi2.
+        # HiFi3 for the same SrcB truncation.
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
