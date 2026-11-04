@@ -195,6 +195,14 @@ _K3_BLOCK_PARAMS = dict(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-y-4x4",
         ),
+        # A 4x4 stage with both axes rings (FABRIC_2D_TORUS_XY): the same 16 chips on
+        # single_bh_galaxy_subtorus_xy4_graph_descriptor.textproto.
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(**_K3_BLOCK_PARAMS),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4",
+        ),
     ],
     indirect=True,
 )
