@@ -26,10 +26,10 @@ maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 `ttKDA` reads and writes the native form and accepts nothing else:
 
 * `recurrent`: `[1, H_local, D, D]` FP32 TILE, interleaved DRAM, stored `[k, v]`
-* `convolution`: `[1, SEG, (K-1) * 64]` BF16 ROW_MAJOR, interleaved DRAM, one 64-channel segment per
-  row (`config.convolution_tail_shape`): row `c` holds the `K-1` history rows of channels
-  `[64c, 64c + 64)`, row `r` at element `64r`; channels run `[q_local | k_local | v_local]`, `D` per
-  head inside a branch, `SEG = 3 * H_local * D / 64`
+* `convolution`: `[1, SEG, (K-1) * 64]` BF16 ROW_MAJOR, interleaved DRAM, channel-paged with one
+  64-channel segment per page (`convolution_page_channels(config)` in `tt/kda/config.py`): page `c`
+  holds the `K-1` history rows of channels `[64c, 64c + 64)`, history row `r` at element `64r`; channels run
+  `[q_local | k_local | v_local]`, `D` per head inside a branch, `SEG = 3 * H_local * D / 64`
 
 with `H_local = 96 / TP`, `D = 128`, `K - 1 = 3`. Heads are TP-sharded; every SP row holds a replica.
 

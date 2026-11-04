@@ -22,9 +22,38 @@ inline uint32_t read_word(Noc& noc, const Accessor& accessor, uint32_t slot) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot)[0];
 }
 
+// A convolution tail (`history`, `final_history`, or a bare predecessor carry) holds `history_rows` rows of every
+// channel in one of two layouts; `page_channels` is the channels one page holds. Token-paged: page `r` is row `r`, all
+// channels. Channel-paged: page `c / page_channels` is the `history_rows` rows of its `page_channels` channels, row
+// after row. The page holding tail row `row` at channel tile `ct`, and that tile row's byte offset in the page.
+struct TailLocation {
+    uint32_t page;
+    uint32_t offset;
+};
+
+template <uint32_t token_paged, uint32_t page_channels>
+inline TailLocation tail_location(uint32_t row, uint32_t ct) {
+    if constexpr (token_paged) {
+        return {row, ct * tile_row_bytes};
+    } else {
+        constexpr uint32_t page_tiles = page_channels / tile_width;
+        return {ct / page_tiles, row * page_channels * element_bytes + ct % page_tiles * tile_row_bytes};
+    }
+}
+
+// The channel tiles one page holds of a tail row whose channel tiles end at `row_end`: the whole row when token-paged.
+template <uint32_t token_paged, uint32_t page_channels>
+inline uint32_t tail_page_tiles(uint32_t row_end) {
+    if constexpr (token_paged) {
+        return row_end;
+    } else {
+        return page_channels / tile_width;
+    }
+}
+
 // Row `row` of a convolution tail's channel tiles [ct_start, ct_start + ct_count) into `destination` at byte
-// `destination_offset`: one read per segment page the range touches.
-template <typename Tail, typename Destination>
+// `destination_offset`: one read per page the range touches.
+template <uint32_t token_paged, uint32_t page_channels, typename Tail, typename Destination>
 inline void read_tail_row(
     Noc& noc,
     const Tail& tail,
@@ -34,16 +63,35 @@ inline void read_tail_row(
     uint32_t ct_count,
     uint32_t destination_offset) {
     const uint32_t ct_end = ct_start + ct_count;
+    const uint32_t page_tiles = tail_page_tiles<token_paged, page_channels>(ct_end);
     for (uint32_t ct = ct_start; ct < ct_end;) {
-        const uint32_t to_segment_end = tiles_per_segment - ct % tiles_per_segment;
-        const uint32_t count = to_segment_end < ct_end - ct ? to_segment_end : ct_end - ct;
+        const uint32_t to_page_end = page_tiles - ct % page_tiles;
+        const uint32_t count = to_page_end < ct_end - ct ? to_page_end : ct_end - ct;
+        const auto [page, offset] = tail_location<token_paged, page_channels>(row, ct);
         noc.async_read(
             tail,
             destination,
             count * tile_row_bytes,
-            {.page_id = tail_page(ct), .offset_bytes = tail_offset(row, ct)},
+            {.page_id = page, .offset_bytes = offset},
             {.offset_bytes = destination_offset + (ct - ct_start) * tile_row_bytes});
         ct += count;
+    }
+}
+
+// The mirror for a whole row: `channel_tiles` tiles' row from `source` at byte `source_offset` into tail row `row`, one
+// write per page.
+template <uint32_t token_paged, uint32_t page_channels, typename Source, typename Tail>
+inline void write_tail_row(
+    Noc& noc, const Source& source, const Tail& tail, uint32_t row, uint32_t channel_tiles, uint32_t source_offset) {
+    const uint32_t page_tiles = tail_page_tiles<token_paged, page_channels>(channel_tiles);
+    for (uint32_t ct = 0; ct < channel_tiles; ct += page_tiles) {
+        const auto [page, offset] = tail_location<token_paged, page_channels>(row, ct);
+        noc.async_write(
+            source,
+            tail,
+            page_tiles * tile_row_bytes,
+            {.offset_bytes = source_offset + ct * tile_row_bytes},
+            {.page_id = page, .offset_bytes = offset});
     }
 }
 

@@ -37,7 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
+from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_page_channels
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
@@ -61,7 +62,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_natural, unrotate_cache_layer
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import convolution_tail_from_device_layout
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import decode_tail
 
 CHUNK = 5120
 # 11 chunks is 56320 tokens — the "55k" leg, and past the 10-chunk mark the memory gate wants.
@@ -274,13 +275,12 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             columns = tuple(mesh_device.shape)[1]
             tp_size = tuple(mesh_device.shape)[TP_AXIS]
             history = KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE - 1
+            page_channels = convolution_page_channels(kimi_k3_kda_config())
             per_chip = KimiK3Config.KDA_NUM_HEADS * KimiK3Config.KDA_HEAD_DIM // tp_size
             tp_shards = []
             for t in range(tp_size):
                 row, column = (0, t) if SP_AXIS == 0 else (t, 0)
-                tp_shards.append(
-                    convolution_tail_from_device_layout(shards[row * columns + column], history).reshape(history, -1)
-                )
+                tp_shards.append(decode_tail(shards[row * columns + column], page_channels).reshape(history, -1))
             got_conv = torch.cat(
                 [
                     torch.cat([sh[:, stream * per_chip : (stream + 1) * per_chip] for sh in tp_shards], dim=-1)

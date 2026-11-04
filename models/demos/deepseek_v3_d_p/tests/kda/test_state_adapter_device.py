@@ -19,6 +19,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
+from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_page_channels
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
@@ -40,8 +41,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     all_zero_bits,
     assert_bit_identical,
-    convolution_tail_from_device_layout,
-    convolution_tail_to_device_layout,
+    decode_tail,
+    encode_tail,
 )
 
 pytestmark = [
@@ -56,6 +57,7 @@ pytestmark = [
 SP_AXIS, TP_AXIS = 0, 1
 LAYER_IDS = (1, 2)
 NUM_SLOTS = 2
+_PAGE_CHANNELS = convolution_page_channels(kimi_k3_kda_config())
 
 
 def _geometry(mesh_device) -> KdaContractGeometry:
@@ -91,8 +93,8 @@ def _native_from_global(mesh_device, geometry, recurrent, convolution) -> KdaSta
     tp = geometry.tensor_parallel_size
     rec_dims, conv_dims = [None, None], [None, None]
     rec_dims[TP_AXIS], conv_dims[TP_AXIS] = 1, 1
-    stacked_conv = convolution_tail_to_device_layout(
-        torch.cat([_per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1)
+    stacked_conv = encode_tail(
+        torch.cat([_per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1), _PAGE_CHANNELS
     )
     mesh_shape = tuple(mesh_device.shape)
     return KdaState(
@@ -183,7 +185,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
                 )
                 assert_bit_identical(
                     want_conv,
-                    convolution_tail_from_device_layout(conv_shards[(row, col)][batch], geometry.conv_history),
+                    decode_tail(conv_shards[(row, col)][batch], _PAGE_CHANNELS),
                     name=f"conv slot{slot} L{layer} ({row},{col})",
                 )
 
@@ -233,7 +235,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
             assert_bit_identical(want_rec, rec_shards[(0, col)][batch], name=f"replay S slot{slot} L{layer} col{col}")
             assert_bit_identical(
                 want_conv,
-                convolution_tail_from_device_layout(conv_shards[(0, col)][batch], geometry.conv_history),
+                decode_tail(conv_shards[(0, col)][batch], _PAGE_CHANNELS),
                 name=f"replay conv slot{slot} L{layer} col{col}",
             )
 

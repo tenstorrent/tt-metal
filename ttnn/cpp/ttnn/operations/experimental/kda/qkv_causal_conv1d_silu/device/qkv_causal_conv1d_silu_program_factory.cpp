@@ -110,6 +110,7 @@ void add_history_exchange(
             ttnn::ccl::is_axis_straight(device, axis),
         "qkv_causal_conv1d_silu: the 2D fabric history exchange needs a straight SP axis");
     const uint32_t row_bytes = channel_tiles * qkv_conv::tile_row_bytes;
+    const auto tail = qkv_causal_conv1d_silu_tail_layout(in.history.logical_shape());
     // A single rank sends nothing; any aligned value satisfies the kernel's static_assert.
     const uint32_t max_payload = sp_size > 1
                                      ? static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes())
@@ -182,7 +183,9 @@ void add_history_exchange(
                  {"sp_rank", coordinate[axis]},
                  {"sp_size", sp_size},
                  {"local_rows", attrs.sequence},
-                 {"has_actual_end", uint32_t(in.actual_end.has_value())}},
+                 {"has_actual_end", uint32_t(in.actual_end.has_value())},
+                 {"token_paged", uint32_t(tail.token_paged)},
+                 {"page_channels", tail.page_channels}},
             .runtime_arg_schema = {.runtime_arg_names = {semaphore_args.begin(), semaphore_args.end()}},
             .hw_config = exchange_datamovement_config(),
         };
@@ -264,6 +267,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const uint32_t max_staged_ct =
         exchange ? qkv_causal_conv1d_silu_staged_ct(Ct, static_cast<uint32_t>(dist.cores.size())) : 0;
     const auto exchange_core_xy = device.worker_core_from_logical_core(exchange_core);
+    const auto tail = qkv_causal_conv1d_silu_tail_layout(in.history.logical_shape());
 
     const tt::tt_metal::experimental::KernelSpecName reader_kernel_name{"reader"};
     const tt::tt_metal::experimental::KernelSpecName writer_kernel_name{"writer"};
@@ -349,7 +353,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
              {"group", group},
              {"input_wt", input_wt},
              {"input_ct_offset", input_ct_offset},
-             {"exchange", uint32_t(exchange)}},
+             {"exchange", uint32_t(exchange)},
+             {"token_paged", uint32_t(tail.token_paged)},
+             {"page_channels", tail.page_channels}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };

@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    convolution_page_channels,
     convolution_tail_shape,
     decay_projection_program_config,
     l1_when_it_fits,
@@ -136,9 +137,9 @@ class KdaState:
     """Caller-owned KDA carries.
 
     ``recurrent`` is TP-local and must be replicated across the SP axis.
-    ``convolution`` is the BF16 row-major DRAM stream tail ``[1, W / 64, (kernel_size - 1) * 64]``
-    over ``W = Q_local + K_local + V_local`` channels, laid out as ``config.convolution_tail_shape``
-    describes. Its channels are sharded across TP and the complete tail is replicated across SP. This history
+    ``convolution`` is the BF16 row-major DRAM stream tail, the last ``kernel_size - 1`` rows of
+    ``Q_local + K_local + V_local`` channels, token- or channel-paged as ``convolution_page_channels(config)``
+    (``tt/kda/config.py``) chooses. Its channels are sharded across TP and the complete tail is replicated across SP. This history
     seeds the logical sequence start; the halo exchange supplies predecessor
     histories from projected tokens for the other segments. Construct state with
     :meth:`ttKDA.allocate_state` or reuse a state returned by :meth:`ttKDA.forward`.
@@ -228,7 +229,9 @@ class ttKDA:
             [1, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim]
         )
         self._convolution_state_shape = ttnn.Shape(
-            list(convolution_tail_shape(self.config.conv_kernel_size - 1, self._convolution_width))
+            convolution_tail_shape(
+                self.config.conv_kernel_size - 1, self._convolution_width, convolution_page_channels(self.config)
+            )
         )
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
             self._convolution_width, program_config.qkv_channel_chunk_size
@@ -373,7 +376,7 @@ class ttKDA:
                 memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             ),
             convolution=ttnn.zeros(
-                convolution_tail_shape(self.config.conv_kernel_size - 1, self._convolution_width),
+                self._convolution_state_shape,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
@@ -419,7 +422,7 @@ class ttKDA:
         if state.recurrent.dtype != KDA_RECURRENT_STATE_DTYPE:
             raise ValueError(f"recurrent state dtype {state.recurrent.dtype} != {KDA_RECURRENT_STATE_DTYPE}")
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
-            raise ValueError("convolution state must be BF16 row-major (one 64-channel segment per row)")
+            raise ValueError("convolution state must be BF16 row-major")
 
     def _project_inputs(
         self,

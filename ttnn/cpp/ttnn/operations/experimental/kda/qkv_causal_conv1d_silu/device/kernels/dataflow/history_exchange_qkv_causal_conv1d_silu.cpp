@@ -49,14 +49,17 @@ template <
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
-    uint32_t has_actual_end>
+    uint32_t has_actual_end,
+    uint32_t token_paged,
+    uint32_t page_channels>
 TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore, uint32_t carry_semaphore) {
     constexpr uint32_t row_bytes = channel_tiles * tile_row_bytes;
     static_assert(max_payload % read_alignment == 0, "row chunks must stay aligned in DRAM");
-    // `history` and `final_history` hold the tail per 64-channel segment (one page each); the exchange buffer and
+    // `history` and `final_history` are token-paged or channel-paged (qkv_conv_dataflow.hpp); the exchange buffer and
     // the L1 scratch keep full rows.
     static_assert(
-        channel_tiles % tiles_per_segment == 0, "the convolution tail is stored in whole 64-channel segments");
+        token_paged || channel_tiles % (page_channels / tile_width) == 0,
+        "the convolution tail is stored in whole pages");
     Noc noc;
     Scratchpad<uint32_t> scratch(scratch::exchange_scratch);
     const auto history = TensorAccessor(tensor::history);
@@ -93,7 +96,8 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
             const bool from_layer_history = position < history_rows && interval.carry_continues_layer_history();
             const uint32_t destination = offset_of(carry) + row * row_bytes;
             if (from_layer_history) {
-                read_tail_row(noc, history, scratch, position, 0, channel_tiles, destination);
+                read_tail_row<token_paged, page_channels>(
+                    noc, history, scratch, position, 0, channel_tiles, destination);
             } else {
                 const uint32_t page =
                     position >= history_rows ? end_page + position - history_rows : predecessor_page + position;
@@ -238,16 +242,10 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         noc_async_atomic_barrier();
         close_connections(connections);
     }
-    // The replacement carry, three full rows in scratch, goes out as segment pages, one write per (segment, row).
-    for (uint32_t ct = 0; ct < channel_tiles; ct += tiles_per_segment) {
-        for (uint32_t row = 0; row < history_rows; ++row) {
-            noc.async_write(
-                scratch,
-                final_history,
-                segment_row_bytes,
-                {.offset_bytes = offset_of(carry) + row * row_bytes + ct * tile_row_bytes},
-                {.page_id = tail_page(ct), .offset_bytes = tail_offset(row, ct)});
-        }
+    // The replacement carry, three full rows in scratch, goes out in history's layout.
+    for (uint32_t row = 0; row < history_rows; ++row) {
+        write_tail_row<token_paged, page_channels>(
+            noc, scratch, final_history, row, channel_tiles, offset_of(carry) + row * row_bytes);
     }
     noc.async_write_barrier();
 }

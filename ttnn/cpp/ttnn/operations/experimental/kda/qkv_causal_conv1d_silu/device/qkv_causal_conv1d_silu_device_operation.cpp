@@ -142,20 +142,43 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
             "qkv_causal_conv1d_silu: exchange_buffer needs its exchange semaphores");
     }
     TT_FATAL(
-        channels % qkv_conv::segment_channels == 0,
-        "qkv_causal_conv1d_silu: Q+K+V must be a multiple of {} (the convolution tail's segment width), got {}",
-        qkv_conv::segment_channels,
-        channels);
-    TT_FATAL(
-        history_shape.rank() == 3 && history_shape[0] == 1 &&
-            history_shape[1] == channels / qkv_conv::segment_channels &&
-            history_shape[2] == qkv_conv::history_rows * qkv_conv::segment_channels,
-        "qkv_causal_conv1d_silu: history must be [1,(Q+K+V)/{},{}] (one {}-channel segment of {} rows per page), got {}",
-        qkv_conv::segment_channels,
-        qkv_conv::history_rows * qkv_conv::segment_channels,
-        qkv_conv::segment_channels,
-        qkv_conv::history_rows,
+        history_shape.rank() == 3 && history_shape[0] == 1,
+        "qkv_causal_conv1d_silu: history must be [1, rows, channels], got {}",
         history_shape);
+    const auto tail = qkv_causal_conv1d_silu_tail_layout(history_shape);
+    if (tail.token_paged) {
+        TT_FATAL(
+            history_shape[2] == channels,
+            "qkv_causal_conv1d_silu: history must be token-paged [1,{},W] with W = Q+K+V = {}, got {}",
+            qkv_conv::history_rows,
+            channels,
+            history_shape);
+        log_debug(
+            tt::LogOp,
+            "qkv_causal_conv1d_silu: history [1, {}, {}] treated as token-paged. "
+            "A channel-paged history looks the same only with one head per chip and one page per head.",
+            qkv_conv::history_rows,
+            channels);
+    } else {
+        TT_FATAL(
+            history_shape[2] % qkv_conv::history_rows == 0,
+            "qkv_causal_conv1d_silu: history must be channel-paged [1,W/P,{0}*P] "
+            "with a last dim divisible by {0}, got {1}",
+            qkv_conv::history_rows,
+            history_shape);
+        TT_FATAL(
+            tail.page_channels % tt::constants::TILE_WIDTH == 0,
+            "qkv_causal_conv1d_silu: history must be channel-paged [1,W/P,{}*P] with P a multiple of {}, got {}",
+            qkv_conv::history_rows,
+            tt::constants::TILE_WIDTH,
+            history_shape);
+        TT_FATAL(
+            history_shape[1] * tail.page_channels == channels,
+            "qkv_causal_conv1d_silu: history must be channel-paged [1,W/P,{}*P] with W = Q+K+V = {}, got {}",
+            qkv_conv::history_rows,
+            channels,
+            history_shape);
+    }
     TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");

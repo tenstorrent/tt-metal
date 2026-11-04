@@ -128,7 +128,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     sp_axis,
                     tp_axis,
                     0,
-                    config.num_heads // tuple(mesh_device.shape)[tp_axis] * config.head_k_dim,
+                    config,
                 ).float()
                 reference_state = KDAReferenceState(
                     recurrent=reconstruct_state_at_sp_rank(

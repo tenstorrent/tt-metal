@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 KDA_CHUNK_SIZE = ttnn.TILE_SIZE
 KDA_QKV_DTYPE = ttnn.bfloat16
@@ -59,18 +60,25 @@ KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 
-# The convolution tail (`KdaState.convolution`) is stored per 64-channel segment, the KDA state migration contract's
-# convolution segment: shape `[1, W / 64, (K-1) * 64]` ROW_MAJOR BF16, page `c // 64` holding the `K-1` history rows of
-# channels `[64c, 64c + 64)`, row `r` at element `64 r`. A page is exactly one slab segment, so the engine's per-slot
-# copy is a plain page copy with no relayout. `qkv_causal_conv1d_silu` reads and writes this layout directly.
-KDA_CONVOLUTION_SEGMENT_CHANNELS = 64
+def convolution_page_channels(config: KDAConfig) -> int | None:
+    """Channels per page of KDA's convolution tail (``KdaState.convolution``), or None when it is token-paged.
+
+    The tail is ``qkv_causal_conv1d_silu``'s three-row history: token-paged ``[1, K-1, W]``, or channel-paged
+    ``[1, W / P, (K-1) * P]`` with ``P`` channels per page. KDA pages it by half a head when that is tile aligned, so at
+    Kimi-K3's head_dim 128 a page is one 64-channel convolution segment of the state migration contract and the slab copy
+    is a page copy. Other head sizes are token-paged, and so are non-square heads: a page must tile Q, K and V alike.
+    """
+    half_head = config.head_k_dim // 2
+    if config.head_k_dim != config.head_v_dim or half_head % ttnn.TILE_SIZE != 0:
+        return None
+    return half_head
 
 
-def convolution_tail_shape(history_rows: int, width: int) -> tuple[int, int, int]:
-    """Device shape of a `[K-1, W]` convolution tail: one 64-channel segment per row."""
-    if width % KDA_CONVOLUTION_SEGMENT_CHANNELS != 0:
-        raise ValueError(f"convolution width {width} is not a multiple of {KDA_CONVOLUTION_SEGMENT_CHANNELS}")
-    return (1, width // KDA_CONVOLUTION_SEGMENT_CHANNELS, history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS)
+def convolution_tail_shape(history_rows: int, width: int, page_channels: int | None) -> tuple[int, int, int]:
+    """Device shape of a ``[K-1, W]`` convolution tail, token-paged when ``page_channels`` is None."""
+    if page_channels is None:
+        return (1, history_rows, width)
+    return (1, width // page_channels, history_rows * page_channels)
 
 
 def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConfig:

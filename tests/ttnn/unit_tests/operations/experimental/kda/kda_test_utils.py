@@ -8,39 +8,35 @@ from collections.abc import Callable, Sequence
 import torch
 import torch.nn.functional as F
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CONVOLUTION_SEGMENT_CHANNELS, convolution_tail_shape
-
-# qkv_causal_conv1d_silu's three history rows.
-QKV_HISTORY_ROWS = 3
 
 
-def convolution_tail_to_device_layout(tail: torch.Tensor) -> torch.Tensor:
-    """`[..., K-1, W]` host rows -> `[..., W/64, (K-1)*64]`, the op's SEGMENTS layout."""
-    *lead, history_rows, width = tail.shape
-    _, segments, row = convolution_tail_shape(history_rows, width)
+def encode_tail(rows: torch.Tensor, page_channels: int | None) -> torch.Tensor:
+    """``[..., K-1, W]`` history rows as a qkv_causal_conv1d_silu convolution tail.
+
+    ``page_channels=None`` is token-paged, the rows themselves. Otherwise channel-paged ``[..., W / P, (K-1) * P]`` with
+    ``P = page_channels``: page ``c`` holds the K-1 rows of channels ``[P c, P c + P)``, row after row.
+    """
+    if page_channels is None:
+        return rows
+    *lead, history_rows, width = rows.shape
+    pages = width // page_channels
     return (
-        tail.reshape(*lead, history_rows, segments, KDA_CONVOLUTION_SEGMENT_CHANNELS)
+        rows.reshape(*lead, history_rows, pages, page_channels)
         .transpose(-3, -2)
-        .reshape(*lead, segments, row)
+        .reshape(*lead, pages, history_rows * page_channels)
     )
 
 
-def convolution_tail_from_device_layout(tail: torch.Tensor, history_rows: int) -> torch.Tensor:
-    """`[..., W/64, (K-1)*64]` SEGMENTS layout -> `[..., K-1, W]` host rows, with `history_rows = K-1`.
-
-    Raises unless each page holds `history_rows` rows of one segment, so a `[..., K-1, W]` row tail is refused instead
-    of being decoded into permuted channels.
-    """
-    *lead, segments, row = tail.shape
-    if row != history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS:
-        raise ValueError(
-            f"page of {row} elements is not {history_rows} rows of a {KDA_CONVOLUTION_SEGMENT_CHANNELS}-channel "
-            "segment; not a device-layout convolution tail"
-        )
+def decode_tail(tail: torch.Tensor, page_channels: int | None) -> torch.Tensor:
+    """Inverse of :func:`encode_tail`: a convolution tail in the stated layout as ``[..., K-1, W]`` rows."""
+    if page_channels is None:
+        return tail
+    *lead, pages, page = tail.shape
+    history_rows = page // page_channels
     return (
-        tail.reshape(*lead, segments, history_rows, KDA_CONVOLUTION_SEGMENT_CHANNELS)
+        tail.reshape(*lead, pages, history_rows, page_channels)
         .transpose(-3, -2)
-        .reshape(*lead, history_rows, segments * KDA_CONVOLUTION_SEGMENT_CHANNELS)
+        .reshape(*lead, history_rows, pages * page_channels)
     )
 
 
@@ -396,6 +392,7 @@ def qkv_device_inputs(
     batch: int = 1,
     history_rows: int = 3,
     seed: int = 223,
+    page_channels: int | None = None,
 ) -> tuple[
     tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]],
     tuple[ttnn.Tensor, ttnn.Tensor, tuple[ttnn.Tensor, ...]],
@@ -410,7 +407,7 @@ def qkv_device_inputs(
     inputs, history, taps = host
     return host, (
         qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
-        qkv_to_device(convolution_tail_to_device_layout(history), device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        qkv_to_device(encode_tail(history, page_channels), device, layout=ttnn.ROW_MAJOR_LAYOUT),
         tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
     )
 

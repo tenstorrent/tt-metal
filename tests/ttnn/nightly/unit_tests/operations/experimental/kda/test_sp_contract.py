@@ -12,10 +12,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    convolution_tail_to_device_layout,
-    make_actual_start,
-)
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import encode_tail, make_actual_start
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     device_protocol,
     host_protocol,
@@ -278,20 +275,30 @@ def test_sp_rectangular_recurrent_reset(mesh_device, axis, key_dim, value_dim):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("axis", [0, 1])
-def test_sp_convolution_rebinds_histories(mesh_device, axis):
-    widths = (64, 64, 64)
+@pytest.mark.parametrize(
+    ("widths", "page_channels", "channel_chunk_size"),
+    [
+        pytest.param((32, 32, 32), None, 96, id="token-paged"),
+        # 3-tile blocks over 2-tile pages: the predecessor read starts and ends inside a page.
+        pytest.param((128, 128, 128), 64, 96, id="channel-paged-64"),
+        pytest.param((64, 64, 128), 32, 128, id="channel-paged-32"),
+    ],
+)
+def test_sp_convolution_rebinds_histories(mesh_device, axis, widths, page_channels, channel_chunk_size):
     previous = []
     cache_entries = None
     for actual_start_value in (0, 32, 64, 96, 32):
         (host, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
-            mesh_device, widths=widths, sequence=64, history_rows=3, seed=2011 + actual_start_value
+            mesh_device,
+            widths=widths,
+            sequence=64,
+            history_rows=3,
+            seed=2011 + actual_start_value,
+            page_channels=page_channels,
         )
         predecessor = history + 2
         predecessor_tt = to_device(
-            convolution_tail_to_device_layout(predecessor),
-            mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            encode_tail(predecessor, page_channels), mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         # Match the BF16 payload used by the native operation exactly.
         predecessor = predecessor.bfloat16()
@@ -303,7 +310,7 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
             history_tt,
             *taps_tt,
             *widths,
-            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=192),
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             predecessor_carry=predecessor_tt,
@@ -376,29 +383,29 @@ def test_sp_payload_contracts(mesh_device, expect_error):
                 tail_entry_states=to_device(initial_state(1, 32, 32), mesh_device),
                 local_rows=local_rows,
             )
-    _, (input_tt, history, taps) = qkv_device_inputs(mesh_device, widths=(64, 64, 64), sequence=64, history_rows=3)
+    _, (input_tt, history, taps) = qkv_device_inputs(mesh_device, widths=(32, 32, 32), sequence=64, history_rows=3)
     for kwargs in ({"actual_start": actual_start}, {"predecessor_carry": history}):
         with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.qkv_causal_conv1d_silu(
                 input_tt,
                 history,
                 *taps,
-                64,
-                64,
-                64,
-                program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=192),
+                32,
+                32,
+                32,
+                program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=96),
                 **kwargs,
             )
-    wrong_history = to_device(torch.zeros(1, 6, 192), mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    wrong_history = to_device(torch.zeros(1, 6, 96), mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     with expect_error(RuntimeError, "history must be"):
         ttnn.experimental.kda.qkv_causal_conv1d_silu(
             input_tt,
             wrong_history,
             *taps,
-            64,
-            64,
-            64,
-            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=192),
+            32,
+            32,
+            32,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=96),
             actual_start=actual_start,
             predecessor_carry=wrong_history,
         )

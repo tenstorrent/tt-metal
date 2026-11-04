@@ -22,14 +22,16 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
+from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_page_channels
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
-    convolution_tail_from_device_layout,
-    convolution_tail_to_device_layout,
+    decode_tail,
+    encode_tail,
     make_actual_start,
 )
 
@@ -37,6 +39,8 @@ pytestmark = [run_for_blackhole()]
 
 _CHANNEL_CHUNK_SIZE = 64
 _HISTORY_ROWS = 3
+# The layer's convolution tail layout at Kimi-K3's heads.
+_PAGE_CHANNELS = convolution_page_channels(kimi_k3_kda_config())
 _NRMSE_THRESHOLD = 0.008
 
 
@@ -195,7 +199,7 @@ class _Exchange:
         )
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         self.history_tt = ttnn.from_torch(
-            convolution_tail_to_device_layout(self.history),
+            encode_tail(self.history, _PAGE_CHANNELS),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
@@ -230,7 +234,7 @@ class _Exchange:
         return [
             [
                 torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0],
-                convolution_tail_from_device_layout(ttnn.to_torch(final), _HISTORY_ROWS),
+                decode_tail(ttnn.to_torch(final), _PAGE_CHANNELS),
             ]
             for *parts, final in zip(q, k, v, carry, strict=True)
         ]

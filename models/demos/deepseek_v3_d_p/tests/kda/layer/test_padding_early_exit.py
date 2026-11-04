@@ -66,7 +66,7 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
         sp_axis,
         tp_axis,
         0,
-        config.num_heads // tuple(mesh_device.shape)[tp_axis] * config.head_k_dim,
+        config,
     ).float()
     reference_initial = KDAReferenceState(
         recurrent=reconstruct_state_at_sp_rank(initial.recurrent, mesh_device, sp_axis, tp_axis, 0).float(),

@@ -36,6 +36,8 @@ template <
     uint32_t input_wt,
     uint32_t input_ct_offset,
     uint32_t exchange,
+    uint32_t token_paged,
+    uint32_t page_channels,
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
@@ -77,10 +79,10 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
     // Read the predecessor's history_rows rows of this channel block's columns into the rows staging area, from the
     // exchange buffer's full-row pages.
-    const auto read_exchange_rows = [&](const auto& source, uint32_t ct_start) {
+    const auto read_exchange_rows = [&](uint32_t ct_start) {
         for (uint32_t row = 0; row < history_rows; ++row) {
             noc.async_read(
-                source,
+                predecessor,
                 scratch,
                 block_row_bytes,
                 {.page_id = predecessor_page + row, .offset_bytes = ct_start * tile_row_bytes},
@@ -90,7 +92,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     // The same, from a convolution tail (`history`, or the bare predecessor carry).
     const auto read_tail = [&](const auto& source, uint32_t ct_start) {
         for (uint32_t row = 0; row < history_rows; ++row) {
-            read_tail_row(noc, source, scratch, row, ct_start, block_ct, offset_of(rows) + row * block_row_bytes);
+            read_tail_row<token_paged, page_channels>(
+                noc, source, scratch, row, ct_start, block_ct, offset_of(rows) + row * block_row_bytes);
         }
     };
 
@@ -156,9 +159,9 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 predecessor_arrived = true;
             }
             if constexpr (exchange) {
-                read_exchange_rows(predecessor, ct_start);
+                read_exchange_rows(ct_start);
             } else {
-                // Without the exchange, predecessor is a bare carry in the history's segment-page layout.
+                // Without the exchange, predecessor is a bare carry in the history's layout.
                 read_tail(predecessor, ct_start);
             }
         } else if (segment_start) {
