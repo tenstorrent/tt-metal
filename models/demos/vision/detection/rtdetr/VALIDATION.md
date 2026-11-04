@@ -97,12 +97,10 @@ Each test performs one warmup, captures the model, and measures eight trace repl
 
 ```bash
 pytest tests/latency.py::test_rtdetr_batch_1_e2e_latency -sv
+pytest tests/latency.py::test_rtdetr_v2_batch_1_e2e_latency -sv
 ```
 
-The test replays the captured trace on eight images. Timing covers preprocessing, input transfer, trace replay, output transfer and postprocessing.
-
-| Metric | RT-DETR v1 |
-|---|---:|
-| Mean latency | 32.79 ms |
-| Median latency | 32.91 ms |
-| Throughput | 30.50 FPS |
+| Metric | RT-DETR v1 | RT-DETRv2 |
+|---|---:|---:|
+| Median latency | 33.70 ms | 33.07 ms |
+| Throughput (median) | 29.67 FPS | 30.24 FPS |
