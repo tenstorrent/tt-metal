@@ -78,21 +78,16 @@ _DRY_RUN = False  # True while the dry run is in progress
 _DRY_RUN_BODY_KEY = pytest.StashKey()
 
 
-def _torch_to_ttnn_dtype(torch_dtype):
-    import torch
-    import ttnn
+_HOST_DTYPES = {}
 
-    return {
-        torch.float32: ttnn.float32,
-        torch.float64: ttnn.float32,
-        torch.bfloat16: ttnn.bfloat16,
-        torch.float16: ttnn.bfloat16,
-        torch.int32: ttnn.uint32,
-        torch.int64: ttnn.uint32,
-        torch.int16: ttnn.uint16,
-        torch.uint8: ttnn.uint8,
-        torch.bool: ttnn.uint8,
-    }.get(torch_dtype, ttnn.bfloat16)
+
+def _from_torch_dtype(real_from_torch, torch_dtype):
+    """The ttnn dtype real_from_torch picks for torch_dtype, read from a one-element host conversion."""
+    import torch
+
+    if torch_dtype not in _HOST_DTYPES:
+        _HOST_DTYPES[torch_dtype] = real_from_torch(torch.zeros(1, dtype=torch_dtype)).dtype
+    return _HOST_DTYPES[torch_dtype]
 
 
 def _mark_stand_in(replacement, original):
@@ -329,7 +324,7 @@ def _boundary_patches():
                         dt, lay, mc = spec.dtype, spec.layout, spec.memory_config
                         shp = ttnn.Shape(tuple(spec.shape))
                     else:
-                        dt = dtype or _torch_to_ttnn_dtype(tensor.dtype)
+                        dt = dtype or _from_torch_dtype(real_from_torch, tensor.dtype)
                         lay = layout or ttnn.ROW_MAJOR_LAYOUT
                         mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
                         shp = ttnn.Shape(tuple(tensor.shape))
