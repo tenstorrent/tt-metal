@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
 #include "sparse_push_plan_work.hpp"
 
@@ -261,7 +262,7 @@ void kernel_main() {
     };
     auto ceil_div = [](uint32_t a, uint32_t b) { return (a + b - 1) / b; };
     // NoC transfers between L1s move whole L1_ALIGNMENT (16 B) units.
-    auto l1_transfer_bytes = [](uint32_t bytes) { return (bytes + L1_ALIGNMENT - 1) / L1_ALIGNMENT * L1_ALIGNMENT; };
+    auto l1_transfer_bytes = [](uint32_t bytes) { return align(bytes, L1_ALIGNMENT); };
     const uint32_t arrive_sem = get_semaphore(kSemArrive);
     const uint32_t go_sem = get_semaphore(kSemGo);
     // Gather on core 0, which multicasts the spans back: concurrent multicasts from every core serialize on the NOC.
