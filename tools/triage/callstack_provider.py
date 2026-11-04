@@ -101,13 +101,14 @@ def get_callstack(
                     # The first PC read of a running core sometimes resolves in no ELF, so read it once more
                     first_pc = pc
                     pc = risc_debug.get_pc() - (4 if rewind_pc_for_ebreak else 0)
-                    cs = top_callstack(pc, elfs, offsets, context)
-                    log_warning_risc(
-                        risc_name,
-                        location,
-                        f"PC 0x{first_pc:08X} was not in range of any provided ELF files, "
-                        f"second read 0x{pc:08X} {'was' if len(cs) > 0 else 'was not either'}.",
-                    )
+                    if pc != first_pc:
+                        cs = top_callstack(pc, elfs, offsets, context)
+                        log_warning_risc(
+                            risc_name,
+                            location,
+                            f"PC 0x{first_pc:08X} was not in range of any provided ELF files, "
+                            f"second read 0x{pc:08X} {'was' if len(cs) > 0 else 'was not either'}.",
+                        )
                 error_message = None
                 if len(cs) == 0:
                     error_message = _pc_not_in_range_message(dispatcher_core_data)
