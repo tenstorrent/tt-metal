@@ -410,13 +410,25 @@ jobs:
           LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
         run: |
           ${{ matrix.test-group.cmd }}
+          mkdir -p perf_data/runs && touch perf_data/runs/leg-complete
 
+      # One retry: a reset on FinalizeArtifact must not cost the architecture its verdict.
       - name: Upload performance data
+        id: upload-perf-data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always() && hashFiles('tt_metal/tt-llk/perf_data/runs/**') != ''
+        continue-on-error: true
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: ${{ env.LLK_PATH }}/perf_data/runs/
+
+      - name: Upload performance data, second attempt
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always() && steps.upload-perf-data.outcome == 'failure'
+        with:
+          name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
+          path: ${{ env.LLK_PATH }}/perf_data/runs/
+          overwrite: true
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -427,9 +439,13 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
             ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
 
+      # Neither this nor the publish below feeds the gate, and the gate refuses to
+      # compare when a measuring leg did not complete. A stalled report upload must
+      # not cost the architecture a verdict it already measured.
       - name: Upload JUnit report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
+        continue-on-error: true
         with:
           name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: |
@@ -441,6 +457,7 @@ jobs:
       - name: Publish Test Results
         uses: mikepenz/action-junit-report@v5
         if: always()
+        continue-on-error: true
         with:
           report_paths: |
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
@@ -655,11 +672,10 @@ jobs:
 
   upload-perf-data:
     name: "Upload perf data to the warehouse"
-    needs: [build-images, llk-perf-exec]
-    # always(): a night that lost shards still produced the ones that finished,
-    # and partial coverage is real data. Publishing it is safe because the
-    # merged run_id carries no attempt, so re-running the failed shards and
-    # re-uploading replays over the partial night instead of adding a second.
+    needs: [build-images, load-test-matrix, llk-perf-exec]
+    # always(): publish each architecture whose legs all completed. The merged
+    # run_id carries no attempt, so re-running the failed shards and
+    # re-uploading publishes the rest under the same run.
     if: ${{ always() && inputs.upload-to-warehouse }}
     runs-on: ubuntu-latest
     # The merge lives in helpers.perf.core, whose imports reach the device
@@ -695,6 +711,21 @@ jobs:
             --in-dir "$GITHUB_WORKSPACE/perf-data" \
             --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
           ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
+      - name: Drop an architecture with an incomplete leg
+        env:
+          MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
+        run: |
+          for f in "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet; do
+            arch=$(basename "$f" .parquet); arch=${arch##*-}
+            case "$arch" in wormhole) label=N150 ;; blackhole) label=P150 ;; *) label=none ;; esac
+            want=$(python3 -c 'import json, os, sys; print(sum(sys.argv[1] in t["runs_on"][0] for t in json.loads(os.environ["MATRIX"] or "[]")))' "$label")
+            got=$(ls "$GITHUB_WORKSPACE"/perf-data/perf-data-"$arch"-*/leg-complete 2>/dev/null | wc -l)
+            if (( want == 0 || got < want )); then
+              echo "::warning::$arch: $got of $want legs completed; not published."
+              rm "$f"
+            fi
+          done
+          ls "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet || { echo "::error::No complete architecture to publish."; exit 1; }
       # The LLK test image has the python env but no ssh client, and the
       # upload action shells out to sftp.
       - name: Install the SFTP client

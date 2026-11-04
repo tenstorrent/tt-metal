@@ -135,11 +135,23 @@ tt::tt_metal::Program create_socket_forward_program(
 
     for (uint32_t i = 0; i < num_bwd_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[i], program, my_core_coord, rt_args);
+            *mesh_device,
+            my_fabric_node_id,
+            upstream_fabric_node_id,
+            bwd_link_indices[i],
+            program,
+            my_core_coord,
+            rt_args);
     }
     for (uint32_t i = 0; i < num_fwd_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[i], program, my_core_coord, rt_args);
+            *mesh_device,
+            my_fabric_node_id,
+            downstream_fabric_node_id,
+            fwd_link_indices[i],
+            program,
+            my_core_coord,
+            rt_args);
     }
 
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, my_core_coord, rt_args);

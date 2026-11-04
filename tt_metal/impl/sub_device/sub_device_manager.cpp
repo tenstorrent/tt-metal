@@ -28,10 +28,6 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
-#include <tt-umd/types/core_coordinates.hpp>
-#include <tt-umd/types/xy_pair.hpp>
-#include "impl/dispatch/vector_aligned.hpp"
-#include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
 using MeshTraceBuffer = tt::tt_metal::distributed::MeshTraceBuffer;

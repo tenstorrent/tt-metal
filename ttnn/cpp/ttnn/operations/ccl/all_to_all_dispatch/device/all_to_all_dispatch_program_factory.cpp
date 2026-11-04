@@ -468,6 +468,7 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
                 token_range_start,
                 token_range_end);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                *mesh_device,
                 src_fabric_node_id,
                 mesh_device->get_fabric_node_id(neighbor_coordinate),
                 link_id,
