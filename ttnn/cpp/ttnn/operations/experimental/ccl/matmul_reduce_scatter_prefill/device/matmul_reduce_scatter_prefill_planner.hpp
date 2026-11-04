@@ -116,6 +116,15 @@ struct PlanInputs {
     // bytes per core of a caller-held staging larger than the plan without it needs (0: the op allocates the staging
     // exactly): the footprint counts the staging at this size, and only plans whose staging fits in it qualify
     uint64_t staging_floor = 0;
+    // fused addcmul epilogue (0: none): bytes per tile of the addcmul_a and addcmul_b CBs (kAddcmulDepth fin entries of
+    // P tiles per matmul core; a broadcast b: win_n) and the DRAM bytes the epilogue reads per output tile (a, plus b
+    // unless broadcast)
+    uint32_t addcmul_a_tile_bytes = 0;
+    uint32_t addcmul_b_tile_bytes = 0;
+    uint32_t addcmul_dram_bytes_per_tile = 0;
+    uint32_t addcmul_b_bcast = 0;  // 1: addcmul_b is one broadcast row (its CB holds a row tile per wave column)
+    // fused bias (0: none): bytes per tile of the bias CB (kBiasDepth entries of the wave's columns per matmul core)
+    uint32_t bias_tile_bytes = 0;
 };
 
 // Planner constants the factory needs too.
@@ -124,6 +133,8 @@ constexpr uint32_t kMailboxStride = 16;      // bytes per matmul core in a port'
 constexpr uint32_t kPortGroup = 4;           // chunks per port batch (cb::PORT_CHUNKS holds 2 batches)
 constexpr uint32_t kPrefetchSteps = 1;       // K-block windows a sender reads ahead
 constexpr uint32_t kL1Headroom = 64 * 1024;  // default l1_headroom: bytes kept free per core beyond the footprint
+constexpr uint32_t kAddcmulDepth = 1;        // fin entries the addcmul_a / addcmul_b CBs hold (one per chunk walk)
+constexpr uint32_t kBiasDepth = 4;           // entries the bias CB holds (the reader reads one entry ahead)
 
 // The entry's plan: 1x1, else the auto (model) search over chunk_candidates. TT_THROWs when no plan fits L1 or the
 // geometry cannot be laid out. A solved plan is remembered per input, so a repeated call looks it up instead of

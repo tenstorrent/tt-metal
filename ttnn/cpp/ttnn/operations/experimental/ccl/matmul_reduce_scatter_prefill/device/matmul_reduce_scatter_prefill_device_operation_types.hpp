@@ -28,9 +28,13 @@ struct MatmulReduceScatterPrefillParams {
     bool math_approx_mode = false;
     tt::tt_metal::MemoryConfig output_memory_config;
     // The plan's inputs, not the plan: the solve is a pure function of them (memoized by solve_plan), so the default
-    // program hash over these 15 scalars keys the program exactly, and a hot call neither copies nor hashes the plan's
+    // program hash over these scalars keys the program exactly, and a hot call neither copies nor hashes the plan's
     // per-chip schedules. plan() looks the solved plan up.
     detail::PlanInputs plan_inputs;
+    // Fused addcmul epilogue (out = addcmul_a + scalar * (A @ W) * addcmul_b) when the call passed the two tensors:
+    // the scalar, and whether addcmul_b is one broadcast row. Unset: the program is exactly the op's without it.
+    std::optional<float> addcmul_scalar;
+    bool addcmul_b_bcast = false;
 
     const detail::Plan& plan() const { return detail::solve_plan(plan_inputs); }
 };
@@ -41,6 +45,11 @@ struct MatmulReduceScatterPrefillInputs {
     const std::optional<Tensor>& output_tensor;
     // L1 finished slots + arrival zones, allocated by the entry for this call only (allocate_staging)
     const Tensor& staging;
+    // the fused addcmul epilogue's operands (both or neither): addcmul_a and addcmul_b
+    const std::optional<Tensor>& addcmul_a;
+    const std::optional<Tensor>& addcmul_b;
+    // the fused bias ([.., 1, N] per device, added to the device's partial before the reduce-scatter)
+    const std::optional<Tensor>& bias;
 };
 
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill

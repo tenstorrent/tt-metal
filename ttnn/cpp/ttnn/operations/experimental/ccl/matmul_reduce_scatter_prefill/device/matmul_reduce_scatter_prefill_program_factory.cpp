@@ -4,6 +4,7 @@
 #include "matmul_reduce_scatter_prefill_program_factory.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <exception>
 #include <map>
@@ -347,6 +348,11 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         "matmul_reduce_scatter_prefill: circular-buffer id {} exceeds the {} circular buffers of this architecture",
         args::cb::ZERO,
         hal::get_num_dataflow_buffers());
+    TT_FATAL(
+        args::addcmul_cb::BIAS < hal::get_num_dataflow_buffers(),
+        "matmul_reduce_scatter_prefill: circular-buffer id {} exceeds the {} circular buffers of this architecture",
+        args::addcmul_cb::BIAS,
+        hal::get_num_dataflow_buffers());
     TT_FATAL(detail::kPortGroup + 1 <= 8, "port sender headers: PORT_GROUP data headers + 1 credit header (pool of 8)");
 
     const MeshCoordinate& coord = *mesh_dispatch_coordinate;
@@ -359,6 +365,13 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const detail::Plan& plan = attrs.plan();
     const detail::GridChoice& gd = plan.grid;
     const detail::WavePlan& waves = plan.waves;
+    // the fused addcmul epilogue: everything it adds is appended (defines, args, CBs, role bits), so an ungated
+    // program is exactly the op's program without it
+    const bool addcmul = attrs.addcmul_scalar.has_value();
+    const bool has_bias = tensor_args.bias.has_value();
+    TT_FATAL(
+        addcmul == (tensor_args.addcmul_a.has_value() && tensor_args.addcmul_b.has_value()),
+        "matmul_reduce_scatter_prefill: addcmul_scalar and the two addcmul tensors go together");
     const uint32_t L = attrs.num_links;
     const uint32_t axis = attrs.cluster_axis;
     const uint32_t G = mesh->shape()[axis];
@@ -540,6 +553,38 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_ct[args::reader_ct::BLOCK_N] = block_n;
     TensorAccessorArgs(*a.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
+    if (addcmul) {
+        // the fin entry (the chip's own block) is the last of a chunk's walk, in both halves
+        for (uint32_t h = 0; h < 2; ++h) {
+            for (uint32_t e = 0; e < num_entries; ++e) {
+                const bool fin = plan.sched.chips[p].roles[plan.sched.chips[p].entries[h][e]][h].dir == Direction::Fin;
+                TT_FATAL(
+                    fin == (e == num_entries - 1),
+                    "matmul_reduce_scatter_prefill: the addcmul epilogue expects the fin entry last in the walk");
+            }
+        }
+        const Tensor& ta = *tensor_args.addcmul_a;
+        const Tensor& tb = *tensor_args.addcmul_b;
+        std::vector<uint32_t> add_ct(args::reader_addcmul_ct::COUNT);
+        add_ct[args::reader_addcmul_ct::CB_A] = args::addcmul_cb::A;
+        add_ct[args::reader_addcmul_ct::CB_B] = args::addcmul_cb::B;
+        add_ct[args::reader_addcmul_ct::B_BCAST] = attrs.addcmul_b_bcast ? 1 : 0;
+        add_ct[args::reader_addcmul_ct::A_PAGE_BYTES] = static_cast<uint32_t>(ta.buffer()->aligned_page_size());
+        add_ct[args::reader_addcmul_ct::B_PAGE_BYTES] = static_cast<uint32_t>(tb.buffer()->aligned_page_size());
+        add_ct[args::reader_addcmul_ct::FIN_ENTRY] = num_entries - 1;
+        add_ct[args::reader_addcmul_ct::OUT_N_TILES] = block_n;
+        mrs_append(reader_ct, add_ct);
+        TensorAccessorArgs(*ta.buffer()).append_to(reader_ct);
+        TensorAccessorArgs(*tb.buffer()).append_to(reader_ct);
+    }
+    if (has_bias) {
+        std::vector<uint32_t> bias_ct(args::reader_bias_ct::COUNT);
+        bias_ct[args::reader_bias_ct::CB_BIAS] = args::addcmul_cb::BIAS;
+        bias_ct[args::reader_bias_ct::BIAS_PAGE_BYTES] =
+            static_cast<uint32_t>(tensor_args.bias->buffer()->aligned_page_size());
+        mrs_append(reader_ct, bias_ct);
+        TensorAccessorArgs(*tensor_args.bias->buffer()).append_to(reader_ct);
+    }
 
     std::vector<uint32_t> compute_ct(args::compute_ct::COUNT);
     compute_ct[args::compute_ct::CB_ACT_K_WINDOW] = args::cb::ACT_K_WINDOW;
@@ -559,6 +604,15 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     compute_ct[args::compute_ct::NUM_CHUNKS] = num_chunks;
     compute_ct[args::compute_ct::N_INNER] = n_inner;
     compute_ct[args::compute_ct::RESIDENT] = resident ? 1 : 0;
+    if (addcmul) {
+        compute_ct.resize(args::compute_addcmul_ct::COUNT);
+        const float scalar = *attrs.addcmul_scalar;
+        compute_ct[args::compute_addcmul_ct::CB_A] = args::addcmul_cb::A;
+        compute_ct[args::compute_addcmul_ct::CB_B] = args::addcmul_cb::B;
+        compute_ct[args::compute_addcmul_ct::B_BCAST] = attrs.addcmul_b_bcast ? 1 : 0;
+        compute_ct[args::compute_addcmul_ct::HAS_SCALAR] = scalar != 1.0f ? 1 : 0;
+        compute_ct[args::compute_addcmul_ct::SCALAR_BITS] = std::bit_cast<uint32_t>(scalar);
+    }
 
     std::vector<uint32_t> writer_ct(args::writer_ct::COUNT);
     writer_ct[args::writer_ct::CB_FINISHED] = args::cb::FINISHED;
@@ -644,8 +698,9 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
             // b is the virtual block (b * W + wave): the reader addresses the real block's operand slice
             ent_words[h].push_back((b / W) | (mask << 16) | (lag << 20));
             ent_words[h].push_back(threshold(kFwd) | (threshold(kBwd) << 16));
-            roles_words[h].push_back(mask | (lag << args::role::LAG_SHIFT));
             const Direction dir = sc.roles[b][h].dir;
+            const uint32_t fin_bit = addcmul && dir == Direction::Fin ? 1u << args::role::FIN_SHIFT : 0u;
+            roles_words[h].push_back(mask | (lag << args::role::LAG_SHIFT) | fin_bit);
             kind_words[h].push_back(
                 dir == Direction::Fin ? args::kind::FIN : (dir == Direction::Fwd ? args::kind::FWD : args::kind::BWD));
         }
@@ -659,6 +714,12 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_reader.cpp");
     reader.core_ranges = mm_crs;
     reader.compile_time_args = std::move(reader_ct);
+    if (addcmul) {
+        reader.defines.emplace_back("MRS_ADDCMUL", "1");
+    }
+    if (has_bias) {
+        reader.defines.emplace_back("MRS_BIAS", "1");
+    }
     reader.config =
         DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_0_default};
 
@@ -666,6 +727,12 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     compute.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_compute.cpp");
     compute.core_ranges = mm_crs;
     compute.compile_time_args = std::move(compute_ct);
+    if (addcmul) {
+        compute.defines.emplace_back("MRS_ADDCMUL", "1");
+    }
+    if (has_bias) {
+        compute.defines.emplace_back("MRS_BIAS", "1");
+    }
     // the cross-device adds accumulate in fp32 DEST; full sync restores 8-tile fp32 subblocks
     compute.config = ComputeConfigDescriptor{
         .math_fidelity = attrs.math_fidelity,
@@ -739,6 +806,16 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_common[args::reader_common::ARR_FWD_ADDR] = arr_addr[kFwd];
     reader_common[args::reader_common::ARR_BWD_ADDR] = arr_addr[kBwd];
     reader_common[args::reader_common::REPORT_CHUNKS] = credit_chunks;
+    if (addcmul || has_bias) {
+        reader_common.resize(args::reader_addcmul_common::COUNT, 0u);
+    }
+    if (addcmul) {
+        reader_common[args::reader_addcmul_common::A_ADDR] = tensor_args.addcmul_a->buffer();
+        reader_common[args::reader_addcmul_common::B_ADDR] = tensor_args.addcmul_b->buffer();
+    }
+    if (has_bias) {
+        reader_common[args::reader_addcmul_common::BIAS_ADDR] = tensor_args.bias->buffer();
+    }
     reader.emplace_common_runtime_args(mrs_rt_list(reader_common));
 
     std::vector<SlotValue> writer_common(args::writer_common::COUNT, 0u);
@@ -912,6 +989,29 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         tt::DataFormat::Float16_b,
         used_port_crs));
     desc.cbs.push_back(mrs_plain_cb(args::cb::ZERO, 1, tile_bytes, tt::DataFormat::Float16_b, mm_crs));
+    if (addcmul) {
+        // a: P tiles per fin entry; b: P, or a row tile per wave column when broadcast
+        for (const auto& [index, t] :
+             {std::pair{args::addcmul_cb::A, &*tensor_args.addcmul_a},
+              std::pair{args::addcmul_cb::B, &*tensor_args.addcmul_b}}) {
+            const uint32_t tiles = index == args::addcmul_cb::B && attrs.addcmul_b_bcast ? win_n : P;
+            desc.cbs.push_back(mrs_plain_cb(
+                index,
+                detail::kAddcmulDepth * tiles,
+                static_cast<uint32_t>(t->buffer()->aligned_page_size()),
+                datatype_to_dataformat_converter(t->dtype()),
+                mm_crs));
+        }
+    }
+    if (has_bias) {
+        const Tensor& tbias = *tensor_args.bias;
+        desc.cbs.push_back(mrs_plain_cb(
+            args::addcmul_cb::BIAS,
+            detail::kBiasDepth * win_n,
+            static_cast<uint32_t>(tbias.buffer()->aligned_page_size()),
+            datatype_to_dataformat_converter(tbias.dtype()),
+            mm_crs));
+    }
     return desc;
 }
 
@@ -972,12 +1072,24 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
     const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
     const auto w_addr = static_cast<uint32_t>(tensor_args.weight.buffer()->address());
     const auto out_addr = static_cast<uint32_t>(output.buffer()->address());
+    const bool addcmul = tensor_args.addcmul_a.has_value();
+    const uint32_t add_a_addr = addcmul ? static_cast<uint32_t>(tensor_args.addcmul_a->buffer()->address()) : 0;
+    const uint32_t add_b_addr = addcmul ? static_cast<uint32_t>(tensor_args.addcmul_b->buffer()->address()) : 0;
+    const bool has_bias = tensor_args.bias.has_value();
+    const uint32_t bias_addr = has_bias ? static_cast<uint32_t>(tensor_args.bias->buffer()->address()) : 0;
     const Buffer& staging = *tensor_args.staging.buffer();
     const auto staging_addr = static_cast<uint32_t>(staging.address());
     for (const auto& [range, sv] : cached.shared_variables) {  // a walk, no lookup per program
         sv.reader.get()[args::reader_common::A_ADDR] = a_addr;
         sv.reader.get()[args::reader_common::W_ADDR] = w_addr;
         sv.writer.get()[args::writer_common::OUT_ADDR] = out_addr;
+        if (addcmul) {
+            sv.reader.get()[args::reader_addcmul_common::A_ADDR] = add_a_addr;
+            sv.reader.get()[args::reader_addcmul_common::B_ADDR] = add_b_addr;
+        }
+        if (has_bias) {
+            sv.reader.get()[args::reader_addcmul_common::BIAS_ADDR] = bias_addr;
+        }
         if (sv.port_reader.get()[args::port_reader_common::FINISHED_BASE] == staging_addr) {
             continue;
         }

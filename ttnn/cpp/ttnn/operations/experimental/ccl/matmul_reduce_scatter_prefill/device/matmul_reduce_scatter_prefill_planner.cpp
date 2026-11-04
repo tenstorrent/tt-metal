@@ -183,6 +183,10 @@ struct Geo {
     std::array<WavePlan, 2> waves_of;                // [resident]
     uint32_t zone_sets = 1;
     uint64_t staging_floor = 0;  // PlanInputs::staging_floor
+    uint64_t addcmul_a_tile_bytes = 0;  // PlanInputs::addcmul_a_tile_bytes (0: no epilogue)
+    uint64_t addcmul_b_tile_bytes = 0;
+    bool addcmul_b_bcast = false;
+    uint64_t bias_tile_bytes = 0;  // PlanInputs::bias_tile_bytes (0: no bias)
 };
 
 uint64_t footprint(
@@ -208,7 +212,10 @@ uint64_t footprint(
         }
         staging = geo.staging_floor;  // the held staging occupies its whole size
     }
-    return a + w + hold + staging + kStageTileBytes;
+    const uint64_t b_tiles = geo.addcmul_b_bcast ? wv.win_n : P;  // 0 bytes without the epilogue
+    const uint64_t addcmul = kAddcmulDepth * ((geo.addcmul_a_tile_bytes * P) + (geo.addcmul_b_tile_bytes * b_tiles));
+    const uint64_t bias = geo.bias_tile_bytes * kBiasDepth * wv.win_n;  // 0 without a bias
+    return a + w + hold + staging + kStageTileBytes + addcmul + bias;
 }
 
 struct KBlock {
@@ -348,6 +355,10 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     geo.scatter_dim = in.scatter_dim;
     geo.zone_sets = pl.zone_sets;
     geo.staging_floor = in.staging_floor;
+    geo.addcmul_a_tile_bytes = in.addcmul_a_tile_bytes;
+    geo.addcmul_b_tile_bytes = in.addcmul_b_tile_bytes;
+    geo.addcmul_b_bcast = in.addcmul_b_bcast != 0;
+    geo.bias_tile_bytes = in.bias_tile_bytes;
     std::array<Transport, 2> sched_of;
     for (uint32_t r = 0; r < 2; ++r) {
         geo.waves_of[r] = wave_plan(gd.core_m, gd.core_n);
@@ -397,6 +408,8 @@ double chunk_cost_us(const Plan& pl, const PlanInputs& in) {
     } else {
         traffic = (pl.resident ? w_bytes : in.G * static_cast<double>(pl.n_m) * w_bytes) + (pl.n_n * a_bytes);
     }
+    // the epilogue's reads (0 without it): every output tile of this chip once
+    traffic += static_cast<double>(in.block_m) * in.block_n * in.addcmul_dram_bytes_per_tile;
     const double dram = traffic / (kCostDramGbps * 1e3);
     const double transport = kCostHandoffUs * C * (in.G - 1) * cores / in.L;
     return kCostFloorUs + std::max({compute, dram, transport});
@@ -560,12 +573,18 @@ uint32_t staging_tiles(const Plan& plan) {
 namespace {
 
 Plan solve_plan_uncached(const PlanInputs& in) {
-    if (auto unchunked = plan_if_fits(in)) {
-        return std::move(*unchunked);  // whatever fits unchunked keeps its plan
+    // A fused epilogue (bias / addcmul) takes L1 an unchunked plan may only fit by shrinking its K-block to a few
+    // tiles; there the unchunked plan competes with the chunked ones on cost. Without an epilogue the policy is the
+    // op's original one (and so is every plan): whatever fits unchunked keeps its plan.
+    const bool epilogue = in.addcmul_a_tile_bytes != 0 || in.bias_tile_bytes != 0;
+    if (!epilogue) {
+        if (auto unchunked = plan_if_fits(in)) {
+            return std::move(*unchunked);
+        }
     }
     std::optional<std::pair<double, Plan>> best;
     for (const auto& [n_m, n_n] : chunk_candidates(in.block_m, in.block_n, in.scatter_dim)) {
-        if (n_m * n_n == 1) {
+        if (n_m * n_n == 1 && !epilogue) {
             continue;
         }
         std::optional<Plan> cand;
@@ -610,7 +629,12 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.tW,
         in.scatter_dim,
         in.budget,
-        in.staging_floor);
+        in.staging_floor,
+        in.addcmul_a_tile_bytes,
+        in.addcmul_b_tile_bytes,
+        in.addcmul_dram_bytes_per_tile,
+        in.addcmul_b_bcast,
+        in.bias_tile_bytes);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
     const std::lock_guard<std::mutex> lock(solved_mutex);

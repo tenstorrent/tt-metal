@@ -226,4 +226,56 @@ enum : uint32_t {
 };
 }  // namespace port_sender_rt
 
+// ---------------------------------------------------------------------------------------------------------------
+// Fused bias and addcmul epilogue: out = addcmul_a + scalar * (sum_g (A[g] @ W[g] + bias[g]), scattered) * addcmul_b,
+// the operation of minimal_matmul_strided_reduce_scatter_async. Everything below exists only in a program that uses
+// them (reader and compute get the MRS_BIAS / MRS_ADDCMUL defines): a program without either has none of these CBs,
+// args or role bits, so its kernels, args and CBs are exactly those of the op without them.
+// ---------------------------------------------------------------------------------------------------------------
+namespace addcmul_cb {
+constexpr uint32_t A =
+    8;  // addcmul_a (residual) tiles of a fin entry, dense in the wave layout (kAddcmulDepth entries)
+constexpr uint32_t B =
+    9;  // addcmul_b (gate) tiles, same layout; a broadcast gate: one row tile per wave column (win_n)
+constexpr uint32_t BIAS = 10;  // bias row tiles, one per wave column, per entry (kBiasDepth entries deep)
+}  // namespace addcmul_cb
+// compute: role word bit (fin entry: apply the epilogue to the final sum)
+namespace role {
+constexpr uint32_t FIN_SHIFT = 9;
+}  // namespace role
+// Compute compile-time args appended at compute_ct::COUNT.
+namespace compute_addcmul_ct {
+enum : uint32_t {
+    CB_A = compute_ct::COUNT,
+    CB_B,
+    B_BCAST,      // addcmul_b is one broadcast row: tile per column, row 0 broadcast by the unpacker
+    HAS_SCALAR,   // scalar != 1.0: an SFPU multiply after the gate multiply
+    SCALAR_BITS,  // fp32 bits of the scalar
+    COUNT
+};
+}  // namespace compute_addcmul_ct
+// Reader compile-time args appended after W's TensorAccessorArgs (before the multicast families' named blocks), then
+// the TensorAccessorArgs of addcmul_a and of addcmul_b.
+namespace reader_addcmul_ct {
+enum : uint32_t {
+    CB_A,
+    CB_B,
+    B_BCAST,
+    A_PAGE_BYTES,  // aligned page sizes of the two tensors (= their CB page sizes)
+    B_PAGE_BYTES,
+    FIN_ENTRY,    // the fin entry's index in a chunk's entry walk (the chip's own block comes last)
+    OUT_N_TILES,  // the output's width in tiles (its page row stride)
+    COUNT
+};
+}  // namespace reader_addcmul_ct
+// Reader compile-time args of the bias, after the addcmul block (MRS_ADDCMUL) or else after W's TensorAccessorArgs;
+// then the bias's TensorAccessorArgs.
+namespace reader_bias_ct {
+enum : uint32_t { CB_BIAS, BIAS_PAGE_BYTES, COUNT };
+}  // namespace reader_bias_ct
+// Reader common runtime args appended at reader_common::COUNT (a bias program has both addcmul slots, 0 without it).
+namespace reader_addcmul_common {
+enum : uint32_t { A_ADDR = reader_common::COUNT, B_ADDR, BIAS_ADDR, COUNT };
+}  // namespace reader_addcmul_common
+
 }  // namespace matmul_reduce_scatter_prefill

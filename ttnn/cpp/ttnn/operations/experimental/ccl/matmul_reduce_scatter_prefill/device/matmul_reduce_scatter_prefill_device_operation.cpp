@@ -105,6 +105,13 @@ void validate_output(const MatmulReduceScatterPrefillParams& attrs, const Matmul
         !shares_memory(output, t.input_tensor) && !shares_memory(output, t.weight),
         "matmul_reduce_scatter_prefill: output_tensor must not share a buffer with input_tensor or weight (in place is "
         "refused)");
+    // the reader reads the epilogue's operands while other entries' output tiles are being written
+    TT_FATAL(
+        !(t.addcmul_a.has_value() && shares_memory(output, *t.addcmul_a)) &&
+            !(t.addcmul_b.has_value() && shares_memory(output, *t.addcmul_b)) &&
+            !(t.bias.has_value() && shares_memory(output, *t.bias)),
+        "matmul_reduce_scatter_prefill: output_tensor must not share a buffer with addcmul_input_tensor1, "
+        "addcmul_input_tensor2 or bias (in place is refused)");
 }
 
 // The staging the call writes: the op's own (allocate_staging) or the caller's staging_tensor. The kernels use it as
@@ -148,11 +155,14 @@ void validate_staging_placement(const MatmulReduceScatterPrefillInputs& t) {
         t.staging.device() == t.input_tensor.device(),
         "matmul_reduce_scatter_prefill: staging_tensor must be on the input_tensor's mesh");
     const bool aliases = shares_memory(t.staging, t.input_tensor) || shares_memory(t.staging, t.weight) ||
-                         (t.output_tensor.has_value() && shares_memory(t.staging, *t.output_tensor));
+                         (t.output_tensor.has_value() && shares_memory(t.staging, *t.output_tensor)) ||
+                         (t.addcmul_a.has_value() && shares_memory(t.staging, *t.addcmul_a)) ||
+                         (t.addcmul_b.has_value() && shares_memory(t.staging, *t.addcmul_b)) ||
+                         (t.bias.has_value() && shares_memory(t.staging, *t.bias));
     TT_FATAL(
         !aliases,
-        "matmul_reduce_scatter_prefill: staging_tensor must not share a buffer with input_tensor, weight or "
-        "output_tensor");
+        "matmul_reduce_scatter_prefill: staging_tensor must not share a buffer with input_tensor, weight, "
+        "output_tensor or the addcmul tensors");
 }
 
 }  // namespace
@@ -235,6 +245,104 @@ uint32_t check_group(const Tensor& input_tensor, const Tensor& weight, int32_t c
     return G;
 }
 
+bool check_addcmul(
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_shape,
+    const std::optional<Tensor>& addcmul_a,
+    const std::optional<Tensor>& addcmul_b) {
+    TT_FATAL(
+        addcmul_a.has_value() == addcmul_b.has_value(),
+        "matmul_reduce_scatter_prefill: addcmul_input_tensor1 and addcmul_input_tensor2 must be given together");
+    if (!addcmul_a.has_value()) {
+        return false;
+    }
+    const uint32_t m_out = output_shape[-2];
+    const uint32_t n_out = output_shape[-1];
+    auto check_one = [&](const Tensor& t, std::string_view what) {
+        TT_FATAL(
+            t.storage_type() == StorageType::DEVICE && t.is_allocated(),
+            "matmul_reduce_scatter_prefill: {} must be an allocated device tensor",
+            what);
+        check_on_full_mesh(t, input_tensor.device(), what);
+        check_interleaved_tile(t, what);
+        const auto& shape = t.logical_shape();
+        bool leading_ones = shape.rank() >= 2 && shape.rank() <= 4;
+        for (int32_t i = 0; i + 2 < static_cast<int32_t>(shape.rank()); ++i) {
+            leading_ones = leading_ones && shape[i] == 1;
+        }
+        TT_FATAL(
+            leading_ones,
+            "matmul_reduce_scatter_prefill: {} must be rank 2-4 with leading dims 1, got {}",
+            what,
+            shape);
+    };
+    const Tensor& a = *addcmul_a;
+    const Tensor& b = *addcmul_b;
+    check_one(a, "addcmul_input_tensor1");
+    check_one(b, "addcmul_input_tensor2");
+    const auto& sa = a.logical_shape();
+    const auto& sb = b.logical_shape();
+    TT_FATAL(
+        sa[-2] == m_out && sa[-1] == n_out,
+        "matmul_reduce_scatter_prefill: addcmul_input_tensor1 must match the output [{}, {}], got {}",
+        m_out,
+        n_out,
+        sa);
+    TT_FATAL(
+        (sb[-2] == m_out || sb[-2] == 1) && sb[-1] == n_out,
+        "matmul_reduce_scatter_prefill: addcmul_input_tensor2 must be the output's shape [{}, {}] or one broadcast row "
+        "[1, {}], got {}",
+        m_out,
+        n_out,
+        n_out,
+        sb);
+    const bool bcast = sb[-2] == 1 && m_out != 1;
+    refuse_unless(
+        is_one_of(a.dtype(), {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32}),
+        "addcmul_input_tensor1 dtype",
+        a.dtype(),
+        "BFLOAT16, BFLOAT8_B, FLOAT32");
+    if (bcast) {
+        // the writer expands the row inside the tile, which a block-float tile (shared exponents) does not allow
+        refuse_unless(
+            is_one_of(b.dtype(), {DataType::BFLOAT16, DataType::FLOAT32}),
+            "addcmul_input_tensor2 (broadcast row) dtype",
+            b.dtype(),
+            "BFLOAT16, FLOAT32");
+    } else {
+        refuse_unless(
+            is_one_of(b.dtype(), {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32}),
+            "addcmul_input_tensor2 dtype",
+            b.dtype(),
+            "BFLOAT16, BFLOAT8_B, FLOAT32");
+    }
+    return bcast;
+}
+
+void check_bias(const Tensor& input_tensor, const Tensor& weight, const std::optional<Tensor>& bias) {
+    if (!bias.has_value()) {
+        return;
+    }
+    const Tensor& t = *bias;
+    TT_FATAL(
+        t.storage_type() == StorageType::DEVICE && t.is_allocated(),
+        "matmul_reduce_scatter_prefill: bias must be an allocated device tensor");
+    check_on_full_mesh(t, input_tensor.device(), "bias");
+    check_interleaved_tile(t, "bias");
+    const auto& shape = t.logical_shape();
+    bool leading_ones = shape.rank() >= 2 && shape.rank() <= 4;
+    for (int32_t i = 0; i + 2 < static_cast<int32_t>(shape.rank()); ++i) {
+        leading_ones = leading_ones && shape[i] == 1;
+    }
+    TT_FATAL(
+        leading_ones && shape[-2] == 1 && shape[-1] == weight.logical_shape()[-1],
+        "matmul_reduce_scatter_prefill: bias must be [1, N={}] (rank 2-4, leading dims 1), got {}",
+        weight.logical_shape()[-1],
+        shape);
+    refuse_unless(
+        is_one_of(t.dtype(), {DataType::BFLOAT16, DataType::FLOAT32}), "bias dtype", t.dtype(), "BFLOAT16, FLOAT32");
+}
+
 MatmulReduceScatterPrefillDeviceOperation::program_factory_t
 MatmulReduceScatterPrefillDeviceOperation::select_program_factory(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& /*tensor_args*/) {
@@ -256,6 +364,16 @@ void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_miss(
     validate_staging(attrs, t);
     validate_staging_placement(t);
     validate_output(attrs, t);
+    const bool bcast =
+        check_addcmul(t.input_tensor, compute_output_specs(attrs, t).logical_shape(), t.addcmul_a, t.addcmul_b);
+    TT_FATAL(
+        attrs.addcmul_scalar.has_value() == t.addcmul_a.has_value() &&
+            (!t.addcmul_a.has_value() || bcast == attrs.addcmul_b_bcast),
+        "matmul_reduce_scatter_prefill: the addcmul attributes do not match the addcmul tensors");
+    check_bias(t.input_tensor, t.weight, t.bias);
+    TT_FATAL(
+        (attrs.plan_inputs.bias_tile_bytes != 0) == t.bias.has_value(),
+        "matmul_reduce_scatter_prefill: the plan does not match the bias tensor");
 }
 
 void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_hit(
@@ -317,14 +435,22 @@ Tensor matmul_reduce_scatter_prefill(
     const Tensor& weight,
     const std::optional<Tensor>& output_tensor,
     const Tensor& staging,
-    const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams&
-        params) {
+    const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams& params,
+    const std::optional<Tensor>& addcmul_a,
+    const std::optional<Tensor>& addcmul_b,
+    const std::optional<Tensor>& bias) {
     using OperationType =
         ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         params,
         OperationType::tensor_args_t{
-            .input_tensor = input_tensor, .weight = weight, .output_tensor = output_tensor, .staging = staging});
+            .input_tensor = input_tensor,
+            .weight = weight,
+            .output_tensor = output_tensor,
+            .staging = staging,
+            .addcmul_a = addcmul_a,
+            .addcmul_b = addcmul_b,
+            .bias = bias});
 }
 
 }  // namespace ttnn::prim

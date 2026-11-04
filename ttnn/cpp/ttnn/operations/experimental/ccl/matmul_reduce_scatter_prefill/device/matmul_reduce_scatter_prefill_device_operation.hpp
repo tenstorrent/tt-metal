@@ -59,6 +59,21 @@ void check_operands(
 // extent that splits into G tile blocks (TT_FATAL otherwise). scatter_dim is canonical. Returns G.
 uint32_t check_group(const Tensor& input_tensor, const Tensor& weight, int32_t cluster_axis, int32_t scatter_dim);
 
+// The fused addcmul epilogue's operands (TT_FATAL otherwise): both or neither; on the input's mesh, stored on every
+// device; DRAM or L1 interleaved default 32x32 tiles; addcmul_a (bfloat16, bfloat8_b or float32) shaped like the
+// output; addcmul_b (bfloat16, bfloat8_b or float32) shaped like the output, or one broadcast row [.., 1, N_out]
+// (bfloat16 or float32); leading dims 1. Returns whether addcmul_b is the broadcast row (false without addcmul).
+bool check_addcmul(
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_shape,
+    const std::optional<Tensor>& addcmul_a,
+    const std::optional<Tensor>& addcmul_b);
+
+// The fused bias (TT_FATAL otherwise): [.., 1, N] (N = W's), bfloat16 or float32, on the input's mesh and stored on
+// every device, DRAM or L1 interleaved default 32x32 tiles, leading dims 1. Each device's bias is added to its own
+// partial, so the reduce-scatter sums them (a matmul bias before a reduce-scatter).
+void check_bias(const Tensor& input_tensor, const Tensor& weight, const std::optional<Tensor>& bias);
+
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill
 
 namespace ttnn::prim {
@@ -68,6 +83,9 @@ Tensor matmul_reduce_scatter_prefill(
     const Tensor& weight,
     const std::optional<Tensor>& output_tensor,
     const Tensor& staging,
-    const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams& params);
+    const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams& params,
+    const std::optional<Tensor>& addcmul_a = std::nullopt,
+    const std::optional<Tensor>& addcmul_b = std::nullopt,
+    const std::optional<Tensor>& bias = std::nullopt);
 
 }  // namespace ttnn::prim
