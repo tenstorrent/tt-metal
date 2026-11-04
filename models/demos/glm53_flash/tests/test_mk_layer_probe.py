@@ -106,8 +106,17 @@ def _build_layer(mesh_device, cfg, ocfg, source, kind: str):
     pytest.skip(f"layer {LAYER} is {kind}: the DSA layer program is phase 0 step 4")
 
 
+# the stack's kernel binaries need a kernel-config ring above the default 69 KB: the ring is the L1 below the
+# allocatable region, so the device opens with the reference's smaller worker_l1_size (1,264,512)
+WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1264512"))
+
+
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB << 20)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [mesh_device_params(*MESH, trace_region_size=TRACE_MB << 20, worker_l1_size=WORKER_L1)],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_mk_layer_probe(mesh_device):
     snapshot = default_snapshot_dir()
