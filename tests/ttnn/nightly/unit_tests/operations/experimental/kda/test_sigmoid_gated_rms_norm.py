@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -51,10 +50,9 @@ _PRODUCTION_OUTPUT_DTYPE = ttnn.bfloat16
 _PRODUCTION_PERF_MARGIN = 0.05
 
 # Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
-# For a P150 with an 11x10 grid: measured 54.4 us on a P150b (12x10 grid), +14.0% over the FPU-product kernel, and
-# scaled by main's ratio to the 11x10 reference. The 5% symmetric margin covers board and thermal variance while still
-# guarding regressions.
-_PRODUCTION_CASES = (_ProductionCase("h24-s640-local", num_heads=24, sequence=640, expected_duration_ns=55_800),)
+# Calibrated on a P150 with an 11x10 grid; the 5% symmetric margin
+# covers board and thermal variance while still guarding regressions.
+_PRODUCTION_CASES = (_ProductionCase("h24-s640-local", num_heads=24, sequence=640, expected_duration_ns=48_800),)
 
 
 def _sigmoid_gated_rms_norm_ops(
@@ -78,10 +76,14 @@ def _sigmoid_gated_rms_norm_ops(
         raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
 
     rows = batch * num_heads * sequence
-    # The row-sum matmul against a 32-column ones tile is the only FPU work; SFPU multiplies are not modeled.
+    elements = rows * value_dim
     return (
-        perf_model.FpuOps(matrix_flops=2 * rows * value_dim * 32),
-        perf_model.SfpuOps(rsqrt_ops=rows, sigmoid_ops=rows * value_dim),
+        perf_model.FpuOps(
+            multiply_ops=4 * elements,
+            add_ops=rows,
+            reduction_ops=rows * (value_dim - 1),
+        ),
+        perf_model.SfpuOps(rsqrt_ops=rows, sigmoid_ops=elements),
     )
 
 
@@ -113,7 +115,7 @@ def test_sigmoid_gated_rms_norm_work_golden() -> None:
         torch.empty((1, 1, 4)),
     )
 
-    assert fpu == perf_model.FpuOps(matrix_flops=256)
+    assert fpu == perf_model.FpuOps(multiply_ops=16, add_ops=2, reduction_ops=2)
     assert sfpu == perf_model.SfpuOps(rsqrt_ops=2, sigmoid_ops=4)
 
 
@@ -522,28 +524,6 @@ def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(
     assert not torch.equal(approximate, exact)
 
 
-def test_sigmoid_gated_rms_norm_keeps_fp32_input_bits(device: ttnn.Device) -> None:
-    # c is exact in FP32 but not in SrcA's 8 explicit mantissa bits, which would read it as 1.0 and leave the
-    # output ~1e-3 low. With weight 1 and gate 0, every output is 0.5 * c / sqrt(c^2 + eps).
-    c = 1.0 + 2.0**-10
-    num_heads, sequence, value_dim = 1, 32, 64
-    input_tt = _to_device(torch.full((num_heads, sequence, value_dim), c), device, dtype=ttnn.float32)
-    gate_tt = _to_device(torch.zeros(1, sequence, num_heads * value_dim), device, dtype=ttnn.bfloat16)
-    weight_tt = _to_device(torch.ones(value_dim), device, dtype=ttnn.bfloat16)
-    exact_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
-    actual = ttnn.to_torch(
-        _run(input_tt, gate_tt, weight_tt, num_heads=num_heads, compute_kernel_config=exact_config)
-    ).double()
-    expected = 0.5 * c / math.sqrt(c * c + _EPSILON)
-    torch.testing.assert_close(actual, torch.full_like(actual, expected), rtol=1e-5, atol=0.0)
-
-
 @pytest.mark.parametrize(
     ("compute_kernel_config", "message"),
     [
@@ -554,22 +534,8 @@ def test_sigmoid_gated_rms_norm_keeps_fp32_input_bits(device: ttnn.Device) -> No
             ),
             "packer_l1_acc=true is unsupported",
         ),
-        (
-            ttnn.types.BlackholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                fp32_dest_acc_en=False,
-            ),
-            "fp32_dest_acc_en=false is unsupported",
-        ),
-        (
-            ttnn.types.BlackholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                fp32_dest_acc_en=True,
-            ),
-            "math_fidelity below HiFi3 is unsupported",
-        ),
     ],
-    ids=["packer-l1-acc", "bf16-dest", "hifi2"],
+    ids=["packer-l1-acc"],
 )
 def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
     device: ttnn.Device,

@@ -60,15 +60,6 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
         !attrs.compute_kernel_config.packer_l1_acc,
         "sigmoid_gated_rms_norm: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
         "through L1");
-    TT_FATAL(
-        attrs.compute_kernel_config.fp32_dest_acc_en,
-        "sigmoid_gated_rms_norm: fp32_dest_acc_en=false is unsupported because the normalization products are formed "
-        "in FP32 DST");
-    const MathFidelity math_fidelity = attrs.compute_kernel_config.math_fidelity;
-    TT_FATAL(
-        math_fidelity == MathFidelity::HiFi3 || math_fidelity == MathFidelity::HiFi4,
-        "sigmoid_gated_rms_norm: math_fidelity below HiFi3 is unsupported because the row-sum matmul needs SrcB's "
-        "full TF32 mantissa");
 
     const auto& input_shape = in.input.logical_shape();
     const auto& gate_shape = in.gate.logical_shape();
@@ -120,8 +111,12 @@ SigmoidGatedRmsNormOperation::create_op_performance_model(
     using namespace kda_performance_model;
 
     const double rows = static_cast<double>(attrs.batch) * attrs.num_heads * attrs.sequence;
-    // The row-sum matmul is the only FPU work; the elementwise products run on the SFPU and are not modeled.
-    const KdaFpuWork work{.fpu_matrix_flops = 2.0 * rows * attrs.value_dim * tt::constants::TILE_WIDTH};
+    const double elements = rows * attrs.value_dim;
+    const KdaFpuWork work{
+        .fpu_multiply_ops = 4.0 * elements,
+        .fpu_add_ops = rows,
+        .fpu_reduction_ops = rows * (attrs.value_dim - 1.0),
+    };
     const std::array<const Tensor*, 3> inputs = {&in.input, &in.gate, &in.weight};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
