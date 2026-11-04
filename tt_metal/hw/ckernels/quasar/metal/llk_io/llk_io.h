@@ -7,6 +7,17 @@
 
 #include "internal/circular_buffer_interface.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
+#include "llk_assert.h"
+
+// The posted / acked tile counts are 16 bits wide; mask off the rest of the word when reading them.
+constexpr std::uint32_t DFB_TILE_COUNTER_COUNT_MASK = 0xFFFFu;
+
+// Unpack and pack only work on a DFB this thread itself consumes / produces; on any other DFB the cursor
+// never moves and nothing waits for tiles.
+#define LLK_DFB_ASSERT_MY_CONSUMER(intf, op) \
+    LLK_ASSERT(((intf).tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) != 0, op ": this TRISC does not consume the DFB")
+#define LLK_DFB_ASSERT_MY_PRODUCER(intf, op) \
+    LLK_ASSERT(((intf).tensix_trisc_mask & DFB_TRISC_MY_PRODUCER_ROLE) != 0, op ": this TRISC does not produce the DFB")
 
 #if DFB_TRISC_HAS_INTERFACE
 // Whether an op on this side is split over all of this hart's tile counters (one whole-block op

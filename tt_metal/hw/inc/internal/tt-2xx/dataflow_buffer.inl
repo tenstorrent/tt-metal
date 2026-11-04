@@ -361,15 +361,17 @@ inline uint16_t DataflowBuffer<Pap, Cap>::get_consumer_share() const {
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
+#if DFB_TRISC_CAN_PRODUCE
+    if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_PRODUCER_ROLE) == 0) {
+        return;  // another TRISC produces for this DFB
+    }
+#endif
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     ASSERT(num_entries == get_producer_share() || !share_strict);
 #if DFB_TRISC_CAN_PRODUCE
-    if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_PRODUCER_ROLE) == 0) {
-        return;  // another TRISC produces for this DFB
-    }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_for_free_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
@@ -424,14 +426,16 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
+#if DFB_TRISC_CAN_CONSUME
+    if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) == 0) {
+        return;  // another TRISC consumes for this DFB
+    }
+#endif
     WAYPOINT("WFW");
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     ASSERT(num_entries == get_consumer_share() || !share_strict);
 #if DFB_TRISC_CAN_CONSUME
-    if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) == 0) {
-        return;  // another TRISC consumes for this DFB
-    }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
@@ -502,6 +506,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
     return 0;
 #elif DFB_TRISC_CAN_PRODUCE
     {
+        ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_PRODUCER_ROLE) != 0);
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.wr_entry_idx);
     }
@@ -520,6 +525,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
     return 0;
 #elif DFB_TRISC_CAN_CONSUME
     {
+        ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) != 0);
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
     }
@@ -538,7 +544,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) 
     uint32_t address = 0;
 #if defined(UCK_CHLKC_UNPACK)
     {
-        ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_ROLE_CONSUMER_T3) == 0);
+        ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) != 0);
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         // Linear (front + tile_index * stride), no wrap. Safe because wait_front(n) must
         // not straddle slot.limit; tile_index is in [0, n).
@@ -567,7 +573,7 @@ T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t elemen
     T value = T{};
 #if defined(UCK_CHLKC_UNPACK)
     {
-        ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_ROLE_CONSUMER_T3) == 0);
+        ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) != 0);
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         // Same linear addressing as get_tile_address: the wait_front window does not wrap.
         const uint32_t base_address =
