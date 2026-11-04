@@ -224,12 +224,12 @@ def transport_mesh_program(
             semaphores=semaphores,
         )
         backward = [
-            ttnn.setup_fabric_connection(node, geometry.nodes[rank - 1], i, seed, cores[i]) if rank > 0 else []
+            ttnn.setup_fabric_connection(mesh, node, geometry.nodes[rank - 1], i, seed, cores[i]) if rank > 0 else []
             for i in range(links)
         ]
         forward = [
             (
-                ttnn.setup_fabric_connection(node, geometry.nodes[rank + 1], i, seed, cores[i])
+                ttnn.setup_fabric_connection(mesh, node, geometry.nodes[rank + 1], i, seed, cores[i])
                 if rank + 1 < TP_SIZE
                 else []
             )
