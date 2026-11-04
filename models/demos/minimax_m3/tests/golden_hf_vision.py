@@ -46,7 +46,7 @@ from safetensors.torch import save_file
 # tests/test_vision_accuracy.py imports IMAGES from this module without needing them.
 
 REPO = Path(__file__).resolve().parents[4]
-LLAMA_PROMPTS = "models/tt_transformers/demo/sample_prompts/llama_models"
+LLAMA_PROMPTS = "models/ttt_compat/demo/sample_prompts/llama_models"
 # The test's images, in the order it runs them: repo path, and the side of the top-left square kept (None: the whole
 # image), with their patch grids. The first four make 2304 patches (576 vision tokens, whole tiles): on the device,
 # pasta and perf_report (48x48) had the lowest tower and the lowest final PCC of six real images at 672x672, ocr_image
