@@ -13,6 +13,7 @@ namespace tt::tt_metal::allocator {
 
 std::vector<AddressRange> coalesce(std::vector<AddressRange> ranges) {
     std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    // TODO: Merge in place within `ranges` instead of allocating a separate result.
     std::vector<AddressRange> coalesced;
     coalesced.reserve(ranges.size());
     for (const auto& range : ranges) {
