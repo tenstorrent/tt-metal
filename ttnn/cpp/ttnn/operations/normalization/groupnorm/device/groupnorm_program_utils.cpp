@@ -240,6 +240,12 @@ bool groupnorm_legacy_rm_prefer_composite_for_perf(
     return num_cores <= kGroupnormLegacyRmMinCoresForOnChip || imbalanced;
 }
 
+bool groupnorm_use_fp32_sfpu_normalizer(
+    bool use_welford, bool fp32_dest_acc_en, tt::DataFormat in_data_format, tt::DataFormat cb_data_format) {
+    return use_welford && fp32_dest_acc_en &&
+           (in_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Float32);
+}
+
 bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width) {
     const bool supported_arch = arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
     return use_welford && supported_arch && fp32_dest_acc_en && tile_width == tt::constants::TILE_WIDTH;

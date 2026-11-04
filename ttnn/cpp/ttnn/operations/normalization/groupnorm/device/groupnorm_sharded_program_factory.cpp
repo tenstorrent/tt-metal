@@ -793,15 +793,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // Register c_29/c_31 as UnpackToDestFp32 aliases of the input CBs so transpose_tile can consume
     // them during statistics and the fused SFPU normalizer can consume them during finalization.
     // The primary c_0/c_1 indices retain the default unpack mode for the non-FP32 FPU fallback.
-    // c_20/c_21 similarly alias the mean and inverse-standard-deviation state consumed by the
-    // fused finalizer; no intermediate (x - mean) CB is required on that path.
     const bool welford_fp32_alias = use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
-    // Use the SFPU normalizer on the Welford path whenever DEST and the intermediate CBs are fp32, not only for
-    // fp32 input (#29960). Mean and rstd read through SrcA are truncated to TF32, so to keep their full fp32
-    // precision they must be unpacked straight to DEST instead. This covers fp32 input and bf16 input with fp32
-    // intermediates. With bf16 input, the input tensor needs no fp32 alias because bf16 is exact in TF32.
     const bool fp32_sfpu_normalizer =
-        welford_fp32_alias || (use_welford && fp32_dest_acc_en && cb_data_format == tt::DataFormat::Float32);
+        groupnorm_use_fp32_sfpu_normalizer(use_welford, fp32_dest_acc_en, in_data_format, cb_data_format);
     constexpr uint32_t ex_global_fp32_alias_index = tt::CBIndex::c_20;
     constexpr uint32_t ex2pe_fp32_alias_index = tt::CBIndex::c_21;
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
@@ -812,12 +806,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_31)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    // EXPERIMENT (#29960): c_20/c_21 alias the mean and rstd CBs, and the SFPU normalizer reads them from there.
-    // Without UnpackToDestFp32 they are unpacked through SrcA and truncated to TF32, losing the fp32 precision
-    // the normalizer exists to keep. So they follow fp32_sfpu_normalizer, which covers fp32 input and bf16 input
-    // with fp32 intermediates. The welford_fp32_alias block above is fp32 input only, but in the bf16 input case
-    // the SFPU normalizer still needs to read them as fp32, hence this additional check.
-    // The input aliases (c_29/c_31) stay in the welford_fp32_alias block because a bf16 input tensor is exact in TF32.
+    // c_20/c_21 alias the mean and rstd state consumed by the fused SFPU normalizer; no intermediate (x - mean) CB
+    // is required on that path. Through SrcA they would be truncated to TF32, so they unpack to DEST whenever the
+    // normalizer runs, which includes bf16 input with fp32 intermediates. The input aliases above stay fp32-input
+    // only: a bf16 input is exact in TF32.
     if (fp32_sfpu_normalizer) {
         unpack_to_dest_mode[ex_global_fp32_alias_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[ex2pe_fp32_alias_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;

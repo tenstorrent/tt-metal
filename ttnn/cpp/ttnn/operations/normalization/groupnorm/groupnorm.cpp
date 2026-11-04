@@ -421,7 +421,7 @@ Tensor group_norm(
     // The fp32 intermediates (group statistics and partials) only survive if DEST is fp32 too; a user config can
     // turn it off.
     TT_FATAL(
-        !bf16_fp32_intermediates || std::get<2>(get_compute_kernel_config_args(arch, kernel_config_val)),
+        !bf16_fp32_intermediates || kernel_config_val.fp32_dest_acc_en,
         "group_norm: fp32_intermediates=True requires fp32_dest_acc_en=true in compute_kernel_config.");
 
     const bool core_grid_auto_selected = !core_grid.has_value();

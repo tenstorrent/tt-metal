@@ -130,7 +130,7 @@ GroupNormInterleavedPlan GroupNormDeviceOperation::select_interleaved_plan(
             .repack = reader_repack_output ? repack_size : 0,
             .x = intermediate_tile_size,
             .xmm = 2 * intermediate_tile_size,
-            .xmm3 = block_tiles * intermediate_tile_size,
+            .xmm3 = block_tiles * output_tile_size,
             .partial_stats = partial_stats_size,
             .global_stats = global_stats_size,
             .normalisation_stats = normalisation_stats_size,

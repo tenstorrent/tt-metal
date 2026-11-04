@@ -55,6 +55,12 @@ inline bool group_norm_core_owns_pad_tile(uint32_t m_index, uint32_t num_cores_p
 // reconfig_data_format calls. When all are bf16 those calls are no-ops and the kernel skips them.
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats);
 
+// The Welford path normalizes on the SFPU, reading mean and rstd unpacked straight to DEST, whenever DEST and its
+// input or intermediate CBs are fp32. Through SrcA they would be truncated to TF32. This includes bf16 input with
+// fp32 intermediates (#29960); that input needs no fp32 alias of its own, since bf16 is exact in TF32.
+bool groupnorm_use_fp32_sfpu_normalizer(
+    bool use_welford, bool fp32_dest_acc_en, tt::DataFormat in_data_format, tt::DataFormat cb_data_format);
+
 // The SFPU local statistics combiner is shared by Wormhole and Blackhole. Quasar does not support
 // the two-pass GroupNorm path.
 bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width);

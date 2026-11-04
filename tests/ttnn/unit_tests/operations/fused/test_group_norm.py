@@ -20,6 +20,9 @@ TEST_PADDING_VALUE = -42
 
 # How far above the bf16 rounding floor the fp32_intermediates=True error may be (#29960).
 FP32_INTERMEDIATES_ERR_FLOOR_FACTOR = 1.5
+# Mean abs error bound for FLOAT32 input with groups narrower than a tile: between the fixed error and the error
+# when SrcB truncated those groups to bf16 (#29960).
+FP32_INPUT_NARROW_GROUPS_MAX_ERR = 1.2e-3
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK = [{"l1_small_size": 47000}]
@@ -2697,7 +2700,7 @@ def _fp32_intermediates_kernel_config(device, fp32_dest_acc_en=True):
 #   - "no_mcast": interleaved TILE input on an 8x4 grid; with N=8 every virtual row is filled, which selects the
 #     no-mcast factory.
 #   - "sharded": block-sharded input on an 8x8 grid, in sharded_layout (the output keeps the same layout).
-# weight and bias are length-C tensors, passed together. num_out_blocks only applies to the interleaved paths.
+# weight and bias are length-C tensors; bias needs weight. num_out_blocks only applies to the interleaved paths.
 def _run_group_norm_welford(
     device,
     x,
@@ -2721,17 +2724,17 @@ def _run_group_norm_welford(
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
         tt_input = ttnn.interleaved_to_sharded(tt_input, memory_config, keep_l1_aligned=True)
-        gamma, beta = None, None
-        if weight is not None:
-            gamma, beta = (
-                ttnn.from_torch(
-                    ttnn.create_group_norm_weight_bias_rm(t, C, grid.y),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=device,
-                )
-                for t in (weight, bias)
+        gamma, beta = (
+            None
+            if t is None
+            else ttnn.from_torch(
+                ttnn.create_group_norm_weight_bias_rm(t, C, grid.y),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
             )
+            for t in (weight, bias)
+        )
         tt_output = ttnn.group_norm(
             tt_input,
             num_groups=G,
@@ -2752,9 +2755,10 @@ def _run_group_norm_welford(
         tt_input = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
         gamma, beta, input_mask = None, None, None
         if weight is not None:
-            [gamma, beta], input_mask = ttnn.dram_group_norm_params_from_torch(
-                [weight, bias], C, G, device, core_grid=grid, return_mask=True
+            params, input_mask = ttnn.dram_group_norm_params_from_torch(
+                [t for t in (weight, bias) if t is not None], C, G, device, core_grid=grid, return_mask=True
             )
+            gamma, beta = params[0], (params[1] if bias is not None else None)
         tt_output = ttnn.group_norm(
             tt_input,
             num_groups=G,
@@ -2774,15 +2778,17 @@ def _run_group_norm_welford(
 
 # Helper: runs a BFLOAT16 x with bf16 and with fp32 intermediates, and checks that fp32 intermediates give a lower
 # error than bf16 ones and stay within FP32_INTERMEDIATES_ERR_FLOOR_FACTOR of the bf16 rounding of the exact result.
-# x is drawn from 3 * randn + offset and rounded to bf16. affine adds a random bf16 weight and bias.
+# x is drawn from 3 * randn + offset and rounded to bf16. affine=True adds a random bf16 weight and bias;
+# affine="weight_only" adds only the weight.
 def _check_fp32_intermediates_accuracy(device, path, N, HW, C, G, offset, affine=False, **run_kwargs):
     torch.manual_seed(0)
-    # Unit variance would put rstd near 1.0, which bf16 holds exactly, so bf16 intermediates can lose almost nothing
-    # (seen with 4 groups of 1024x256). A std of 3 puts rstd near 1/3, where bf16 rounding of rstd costs accuracy.
+    # Unit variance would put rstd near 1.0, which bf16 holds exactly, so bf16 intermediates can lose almost nothing.
+    # A std of 3 puts rstd near 1/3, where bf16 rounding of rstd costs accuracy.
     x = (3.0 * torch.randn(N, 1, HW, C) + offset).bfloat16().float()
     weight, bias = None, None
     if affine:
         weight = torch.rand(C).bfloat16().float()
+    if affine is True:
         bias = torch.rand(C).bfloat16().float()
     ref = torch.nn.functional.group_norm(
         x.double().permute(0, 3, 1, 2),
@@ -2816,11 +2822,13 @@ def _check_fp32_intermediates_accuracy(device, path, N, HW, C, G, offset, affine
 #   - wide_groups: 8 channel tiles per group, more than the 4-tile fp32 DEST subblock, so one group's statistics
 #     take several DEST acquires.
 #   - straddle: 24 channels per group, so groups straddle tile boundaries and use per-group masks.
+#   - out_blocks: the per-core height is processed in several out blocks (3 of 4 tile rows is an uneven split).
+#   - affine: a bf16 weight and bias are applied to the fp32 normalized values; weight_only takes its own output
+#     pack.
+#   - tile: sharded TILE input and output instead of ROW_MAJOR.
+#   - multi_batch: two batches per core, so the second batch starts with the unpacker still set for fp32 cb_x.
 # no_mcast (16 channels per group) and straddle put several groups in one tile. Every group after the first is
 # added into cb_x through SrcB, which once truncated it to bf16; those cases catch that.
-#   - out_blocks: the per-core height is processed in several out blocks (3 of 4 tile rows is an uneven split).
-#   - affine: a bf16 weight and bias are applied to the fp32 normalized values.
-#   - tile: sharded TILE input and output instead of ROW_MAJOR.
 @pytest.mark.parametrize("offset", [0.0, 16.0], ids=["mean0", "mean16"])
 @pytest.mark.parametrize(
     "path, N, HW, C, G, affine, num_out_blocks, sharded_layout",
@@ -2835,8 +2843,11 @@ def _check_fp32_intermediates_accuracy(device, path, N, HW, C, G, offset, affine
         ("no_mcast", 8, 128, 512, 32, False, 2, None),
         ("mcast", 1, 1024, 1024, 32, True, None, None),
         ("no_mcast", 8, 128, 512, 32, True, None, None),
+        ("mcast", 1, 1024, 1024, 32, "weight_only", None, None),
         ("sharded", 1, 1024, 1024, 32, True, None, ttnn.ROW_MAJOR_LAYOUT),
         ("sharded", 1, 1024, 1024, 32, False, None, ttnn.TILE_LAYOUT),
+        ("no_mcast", 16, 64, 512, 32, False, None, None),
+        ("sharded", 16, 64, 1024, 32, False, None, ttnn.ROW_MAJOR_LAYOUT),
     ],
     ids=[
         "mcast",
@@ -2849,8 +2860,11 @@ def _check_fp32_intermediates_accuracy(device, path, N, HW, C, G, offset, affine
         "no_mcast-out_blocks",
         "mcast-affine",
         "no_mcast-affine",
+        "mcast-weight_only",
         "sharded-affine",
         "sharded-tile",
+        "no_mcast-multi_batch",
+        "sharded-multi_batch",
     ],
 )
 def test_group_norm_fp32_intermediates_bf16_accuracy(
@@ -2877,6 +2891,18 @@ def test_group_norm_fp32_intermediates_noop_for_fp32_input(device, path):
     out_off = _run_group_norm_welford(device, x, 32, path, ttnn.float32, False)
     out_on = _run_group_norm_welford(device, x, 32, path, ttnn.float32, True)
     assert torch.equal(out_on, out_off)
+
+
+# With 16 channels per group, every group after the first in a tile is added into cb_x through SrcB. SrcB once
+# truncated those groups to bf16 for fp32 input too (#29960), so this test ensures their error stays at fp32 level.
+@pytest.mark.parametrize("path", ["mcast", "sharded"])
+def test_group_norm_welford_fp32_input_narrow_groups_accuracy(device, path):
+    torch.manual_seed(0)
+    x = 3.0 * torch.randn(1, 1, 1024, 512) + 16.0
+    ref = torch.nn.functional.group_norm(x.double().permute(0, 3, 1, 2), 32, eps=1e-5).permute(0, 2, 3, 1)
+    out = _run_group_norm_welford(device, x, 32, path, ttnn.float32, False)
+    err = (out - ref).abs().mean().item()
+    assert err < FP32_INPUT_NARROW_GROUPS_MAX_ERR, f"mean abs error {err}"
 
 
 # fp32_intermediates=True with BFLOAT16 input is rejected at host runtime in ttnn.group_norm, before any program is

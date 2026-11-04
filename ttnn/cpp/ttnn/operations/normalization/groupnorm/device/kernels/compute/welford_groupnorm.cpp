@@ -224,14 +224,10 @@ void kernel_main() {
 #else
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
-    // EXPERIMENT (#29960): compute_kernel_hw_startup configures the packer for the input format, but every pack
-    // below targets a CB in the intermediate format (c_8, c_27, c_25, c_24), except the output packs, which switch
-    // to dfb_out and back. So point the packer at the intermediate format here. Without this, bf16 input with fp32
-    // intermediates would pack the first statistics as bf16 into fp32 CBs. The output packs use the two-argument
-    // reconfig, which relies on the packer being on the intermediate format whenever they run. A new pack to a CB
-    // in another format must restore the packer the same way. TT_METAL_LLK_ASSERTS=1 checks the packer registers
-    // against the target CB on every pack_tile. For fp32 input this is a same-format reconfig, and all-bf16
-    // configurations compile it out.
+    // compute_kernel_hw_startup leaves the packer on the input format, but packs below target intermediate CBs
+    // (the output packs switch and restore). Without this, bf16 input with fp32 intermediates would pack the
+    // first statistics as bf16 into fp32 CBs (#29960). Any new pack to a CB in another format must restore the
+    // packer too.
     if constexpr (enable_fp32_reconfig) {
         pack_reconfig_data_format(dfb_ex_partial_id);
     }
@@ -707,8 +703,7 @@ void kernel_main() {
                         if constexpr (do_beta || has_fused_activation) {
                             pack_tile(dst0, dfb_x_id);
                         } else {
-                            // Runs per output tile: the two-argument form skips the reconfig when the formats
-                            // match. See the startup reconfig for why dfb_x is the right "old" operand.
+                            // The packer stays on dfb_x's format between packs (see the startup reconfig).
                             if constexpr (enable_fp32_reconfig) {
                                 pack_reconfig_data_format(dfb_x_id, dfb_out_id);
                             }
@@ -750,8 +745,7 @@ void kernel_main() {
                         if constexpr (has_fused_activation) {
                             pack_tile(dst0, dfb_x_id);
                         } else {
-                            // Runs per output tile: the two-argument form skips the reconfig when the formats
-                            // match. See the startup reconfig for why dfb_x is the right "old" operand.
+                            // The packer stays on dfb_x's format between packs (see the startup reconfig).
                             if constexpr (enable_fp32_reconfig) {
                                 pack_reconfig_data_format(dfb_x_id, dfb_out_id);
                             }
@@ -789,11 +783,7 @@ void kernel_main() {
                         dfb_x.pop_front(1);
                         dfb_out.reserve_back(1);
                         tile_regs_wait();
-                        // Switch the packer from dfb_x's format to dfb_out's for this pack, then restore it. This
-                        // used to be skipped under UNTILIZE_OUT, but there dfb_out is c_30, which takes the input
-                        // format and differs from dfb_x for bf16 input with fp32 intermediates (#29960). Runs per
-                        // output tile: the two-argument form skips the reconfig when the formats match. See the
-                        // startup reconfig for why dfb_x is the right "old" operand. Compiles out for all-bf16.
+                        // The packer stays on dfb_x's format between packs (see the startup reconfig).
                         if constexpr (enable_fp32_reconfig) {
                             pack_reconfig_data_format(dfb_x_id, dfb_out_id);
                         }
