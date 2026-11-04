@@ -682,6 +682,13 @@ class TtMoEGatePrefill(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # The HBAG gather takes its ready/data_valid semaphores here, at construction: the pair MLA's TP gathers
+        # share. Without them the gather program allocates its own pair mid-forward, under live L1 activations,
+        # where it can later sit inside another op's static CB range (#62699).
+        self._hbag_semaphores = {}
+        if _GLUE_GATE_AR_HBAG and mesh_device.shape[config.ccl_config["TP_AXIS"]] > 1:
+            ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
+            self._hbag_semaphores = dict(ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore)
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
         # Memoization of the per-(actual_isl, padding_side, actual_start) padding_config built on HOST.
@@ -962,6 +969,7 @@ class TtMoEGatePrefill(LightweightModule):
                 ),
                 cluster_axis=tp_axis,
                 num_links=self.config.ccl_config["NUM_LINKS"],
+                **self._hbag_semaphores,
             )
             ttnn.deallocate(logits)
             # gathered aliases the persistent buffer: do not free it.
