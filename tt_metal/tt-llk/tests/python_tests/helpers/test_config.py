@@ -409,12 +409,7 @@ class TestConfig:
 
     @staticmethod
     def runs_on_ttsim() -> bool:
-        sim_path = (
-            os.environ.get("TT_METAL_SIMULATOR")
-            or os.environ.get("TT_UMD_SIMULATOR_PATH")
-            or ""
-        )
-        return TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so")
+        return TestConfig.TEST_TARGET.runs_on_ttsim()
 
     @staticmethod
     def counted_zones_address() -> int | None:

@@ -42,6 +42,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
 
+from helpers.target_config import is_ttsim
 from ttsim_error import parse_ttsim_error
 
 # ttsim runs in-process (no SimulationServer). Its init must complete before the
@@ -62,7 +63,7 @@ _HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
-if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+if _SHOULD_RUN_SIMULATOR and is_ttsim(_SIMULATOR_PATH):
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
@@ -583,7 +584,7 @@ def pytest_configure(config):
                     returncode=1,
                 )
 
-            if _SIMULATOR_PATH.endswith(".so"):
+            if is_ttsim(_SIMULATOR_PATH):
                 # ttsim: already initialized at module import above; runs in-process, no server.
                 # --reset-simulator-per-test restarts the SimulationServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
@@ -620,10 +621,9 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens()
             TestConfig.resolve_worker_tensix_location()
 
-        is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
         # WH/BH only: ttsim or silicon. Quasar is skipped inside the helper
         # because ttexalens has no Tensix register description yet.
-        if is_ttsim or not TestConfig.TEST_TARGET.run_simulator:
+        if is_ttsim(_SIMULATOR_PATH) or not TestConfig.TEST_TARGET.run_simulator:
             override_gprs_used_by_tensix_dump()
 
 
