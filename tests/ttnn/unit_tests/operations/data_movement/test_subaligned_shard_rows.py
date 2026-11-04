@@ -92,6 +92,14 @@ def run_permute_nd(device):
     return ttnn.permute(t, [0, 1, 3, 2]), ttnn.to_torch(t).permute(0, 1, 3, 2)
 
 
+def run_permute_nd_height_input(device):
+    # The ND input is HEIGHT sharding ([2, 8] shards of 8-value rows); permute reindexes its ND shard shape
+    # into [8, 2] shards of the output, whose 4-byte rows are split.
+    config = nd_config([1, 1, 2, 8], grid(((0, 0), (1, 0))), ROUND_ROBIN)
+    t = ttnn.from_torch(ramp([1, 1, 4, 8]), layout=RM, device=device, memory_config=config)
+    return ttnn.permute(t, (1, 0, 3, 2), memory_config=t.memory_config()), ttnn.to_torch(t).permute(1, 0, 3, 2)
+
+
 def run_permute_width_l1(device):
     t = ttnn.from_torch(ramp([2, 2, 32, 64]), layout=RM, device=device, memory_config=width_config(L1, 16, [128, 4]))
     return ttnn.permute(t, (2, 0, 1, 3)), ttnn.to_torch(t).permute(2, 0, 1, 3)
@@ -146,6 +154,17 @@ def run_pad_into_width_dram(device):
     return y, torch.nn.functional.pad(x, (0, 4), value=1.0)
 
 
+def run_pad_single_core_width_l1(device):
+    # use_multicore=False: the input moves to interleaved memory, and its padded output, in [2, 16] shards,
+    # must still take a multicore factory.
+    t = ttnn.from_torch(ramp([1, 1, 2, 24]), layout=RM, device=device, memory_config=width_config(L1, 2, [2, 12]))
+    y = ttnn.pad(
+        t, [(0, 0), (0, 0), (0, 0), (0, 8)], 0.0, use_multicore=False, memory_config=width_config(L1, 2, [2, 16])
+    )
+    # The output's shard rows are aligned, so check the input's config instead.
+    return y, torch.nn.functional.pad(ttnn.to_torch(t), (0, 8)), t
+
+
 def run_gather_nd(device):
     config = nd_config([1, 1, 32, 4], grid(((0, 0), (7, 1))), CONTIGUOUS)
     t = ttnn.from_torch(ramp([1, 1, 32, 64]), layout=RM, device=device, memory_config=config)
@@ -180,12 +199,14 @@ def run_fold_nd(device):
         run_slice_nd,
         run_slice_into_preallocated_nd,
         run_permute_nd,
+        run_permute_nd_height_input,
         run_permute_width_l1,
         run_transpose_width_l1,
         run_transpose_width_dram,
         run_permute_into_width_dram,
         run_indexed_fill_width_dram,
         run_pad_into_width_dram,
+        run_pad_single_core_width_l1,
         run_fold_nd,
         run_gather_nd,
     ],
