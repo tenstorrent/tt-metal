@@ -1163,6 +1163,27 @@ def test_register_hub_config_downloads_only_unregistered_names(monkeypatch, tmp_
     }
 
 
+@pytest.mark.parametrize("rollout_mesh", [[1, 1], [1, 2]])
+@pytest.mark.parametrize("trainer_mesh", [[1, 1], [1, 2]])
+@pytest.mark.parametrize("rank", [0, 1])
+def test_init_distributed_training_sets_fabric_on_multi_device_ranks(monkeypatch, rank, trainer_mesh, rollout_mesh):
+    """Only a rank whose own mesh has more than one device enables fabric."""
+    from ttml.trainers.grpo_trainer import distributed
+
+    calls = []
+    monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: True)
+    monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: 2)
+    monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
+    monkeypatch.setattr(ttnn, "set_fabric_config", calls.append)
+    config = _remote_grpo_config()
+    config.remote_rollout.mesh_shape = rollout_mesh
+
+    distributed.init_distributed_training(config, SimpleNamespace(total_devices=lambda: trainer_mesh[1]))
+
+    own_mesh = rollout_mesh if rank == distributed.TTT_RANK else trainer_mesh
+    assert calls == ([ttnn.FabricConfig.FABRIC_2D] if own_mesh[1] > 1 else [])
+
+
 class _RepeatSampler(_EchoSampler):
     """Returns each prompt twice, as its two completions."""
 
