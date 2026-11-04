@@ -218,7 +218,6 @@ extern "C" uint32_t _start1() {
                 WAYPOINT("D");
 
                 wait_subordinates();
-                WATCHER_RING_BUFFER_FLUSH();
 
                 uint32_t go_message_index = mailboxes->go_message_index;
                 mailboxes->go_messages[go_message_index].slot[0].signal = RUN_MSG_DONE;

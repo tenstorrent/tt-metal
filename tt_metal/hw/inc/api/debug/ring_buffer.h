@@ -14,10 +14,7 @@
 // - Quasar Tensix:   MPSC, slot claimed via a NEO cluster semaphore (DM and TRISC caches are not
 //                    coherent, so a RISC-V atomic on an L1 word would not serialize between them)
 // - Quasar dispatch: MPSC, slot claimed via a RISC-V atomic on a cached head (no NEO registers, and
-//                    only DMs, whose caches are coherent). The host sees the head only when it is
-//                    flushed: every watcher_ring_buf_head_flush_interval pushes and when the kernel
-//                    ends. So a dump taken while a kernel runs (e.g. a hang) can show up to
-//                    watcher_ring_buf_head_flush_mask of the newest entries as the oldest.
+//                    only DMs, whose caches are coherent). Each push flushes the head so the host sees it.
 // - Blackhole:       MPSC, slot claimed via a 32-bit RISC-V atomic on the in-mailbox head
 // - Wormhole:        SPSC, no synchronization between RISCs
 
@@ -26,10 +23,6 @@
 #include "risc_common.h"
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
 #include "internal/tt-2xx/quasar/cache.h"
-// The head is flushed once every watcher_ring_buf_head_flush_interval pushes.
-constexpr uint32_t watcher_ring_buf_head_flush_interval = 8;
-constexpr uint32_t watcher_ring_buf_head_flush_mask = watcher_ring_buf_head_flush_interval - 1;
-static_assert((watcher_ring_buf_head_flush_interval & watcher_ring_buf_head_flush_mask) == 0);
 #elif defined(ARCH_QUASAR)
 #include "api/debug/waypoint.h"
 #include "tensix_neo_reg.h"
@@ -70,9 +63,6 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
     // AMOs hang on the uncached alias, so the head is claimed through the cached view.
     uint32_t pos = __atomic_fetch_add(reinterpret_cast<uint32_t*>(MEM_DISPATCH_WATCHER_RING_HEAD), 1, __ATOMIC_RELAXED);
-    if ((pos & watcher_ring_buf_head_flush_mask) == watcher_ring_buf_head_flush_mask) {
-        flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
-    }
 #elif defined(ARCH_QUASAR)
     // A claim past reset_at landed before the rewind, which erases it: wait for the rewind and claim again.
     uint32_t pos;
@@ -98,6 +88,10 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
 
     uint32_t thread_idx = internal_::get_hw_thread_idx();
     __atomic_store_n(&buf->slots[idx].write_id, thread_idx + 1, __ATOMIC_RELEASE);
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    // After the slot writes, so the host never sees a head past an unwritten slot of ours.
+    flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
+#endif
 }
 
 #else  // SPSC ring buffer
@@ -131,20 +125,11 @@ inline __attribute__((always_inline)) void init_ring_buffer() {
 #endif
 }
 
-// Dispatch engine: publishes the claims made since the last periodic flush in push_to_ring_buffer().
-inline __attribute__((always_inline)) void flush_ring_buffer_head() {
-#if defined(COMPILE_FOR_DISPATCH_ENGINE)
-    flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
-#endif
-}
-
 #define WATCHER_RING_BUFFER_PUSH(x) push_to_ring_buffer(x)
 #define WATCHER_RING_BUFFER_INIT() init_ring_buffer()
-#define WATCHER_RING_BUFFER_FLUSH() flush_ring_buffer_head()
 #else  // !defined(WATCHER_ENABLED)
 #define WATCHER_RING_BUFFER_PUSH(x)
 #define WATCHER_RING_BUFFER_INIT()
-#define WATCHER_RING_BUFFER_FLUSH()
 #endif  // defined(WATCHER_ENABLED)
 
 #endif  // KERNEL_BUILD || FW_BUILD

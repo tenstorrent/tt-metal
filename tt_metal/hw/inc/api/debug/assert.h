@@ -114,10 +114,6 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
         flush_l2_cache_range(reinterpret_cast<uintptr_t>(v), sizeof(debug_assert_msg_t));
 #endif
     }
-#if defined(COMPILE_FOR_DISPATCH_ENGINE)
-    // The ring buffer head is otherwise flushed only periodically and at kernel end (ring_buffer.h).
-    flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
-#endif
 
     // Hang, or in the case of erisc, early exit.
 #if defined(COMPILE_FOR_ERISC)
