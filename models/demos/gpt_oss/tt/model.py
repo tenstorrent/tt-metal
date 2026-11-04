@@ -94,7 +94,8 @@ class Model:
     - Compatible with tt_transformers generator interface
     """
 
-    # Generator: re-capture the decode trace at the start of a request when programs were compiled since its capture.
+    # Generator: re-capture a decode trace, over its existing inputs, when programs were compiled since its capture
+    # (checked at the end of every prefill call and before every decode replay; Generator._recapture_stale_decode_traces).
     # The prefill's stock CCL ops (ttnn.all_reduce) create global semaphores held by their program-cache entries; the
     # first prefill of a new length after the capture could place them in the decode trace's scratch region, where
     # every decode replay overwrites them (the next prefill of that length then hangs or decodes garbage).
