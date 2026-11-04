@@ -75,9 +75,7 @@ private:
  */
 template <uint32_t Cta, uint32_t Addr>
 constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token) {
-    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
-        binding_details::data_format_metadata_not_set();
-    }
+    binding_details::assert_dataformat_set(token.llk_metadata_);
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
 
@@ -121,7 +119,7 @@ constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token
 // precondition: The token has format metadata and a supported tile storage size.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_size(const TensorBindingToken<Cta, Addr>& token) {
-    (void)get_dataformat(token);
+    binding_details::assert_dataformat_set(token.llk_metadata_);
     if (token.llk_metadata_.tile_size_bytes == 0) {
         binding_details::tile_size_metadata_not_set();
     }
@@ -201,9 +199,7 @@ private:
 // LLK metadata getters for PerNodeTensorBindingToken, as for TensorBindingToken above.
 template <uint32_t Cta, uint32_t Addr>
 constexpr DataFormat get_dataformat(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
-        binding_details::data_format_metadata_not_set();
-    }
+    binding_details::assert_dataformat_set(token.llk_metadata_);
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
 template <uint32_t Cta, uint32_t Addr>
@@ -227,7 +223,7 @@ constexpr uint8_t get_num_faces_c_dim(const PerNodeTensorBindingToken<Cta, Addr>
 // precondition: The token has format metadata and a supported tile storage size.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_size(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    (void)get_dataformat(token);
+    binding_details::assert_dataformat_set(token.llk_metadata_);
     if (token.llk_metadata_.tile_size_bytes == 0) {
         binding_details::tile_size_metadata_not_set();
     }
