@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %t/codegen.cpp -o %t/codegen.o
+// RUN: %{blackhole_objdump} -drz %t/codegen.o > %t/codegen.dump
+// RUN: %{blackhole_compare_codegen} %t/codegen.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -UENABLE_LLK_ASSERT -c %t/compile_time.cpp -o %t/compile_time.o
+// RUN: %{blackhole_objdump} -d %t/compile_time.o | FileCheck %s
 
+// Compare each runtime HAL function with its adjacent reference_ function.
+// Disable identical-code folding so both bodies are emitted independently.
 // LLK_ASSERT is disabled so runtime paths contain only the issued instructions.
+
+//--- common.h
+#pragma once
 
 #include <cstdint>
 
@@ -15,6 +24,59 @@ namespace move = hal::move;
 
 using GprToMmio = move::Transfer<move::Gpr, move::Mmio>;
 using MmioToGpr = move::Transfer<move::Mmio, move::Gpr>;
+
+//--- codegen.cpp
+#include "common.h"
+
+// TT_OP_ macros join fields with +, which compiles to add where the HAL's |
+// compiles to or, so runtime operands are ORed onto an encoding that holds
+// zero in their fields. RegAddr is the word offset from 0xffb00000:
+// 0xffb11000 is 17408 and 0xffb12000 is 18432.
+
+extern "C" __attribute__((noinline, used)) void gpr_to_mmio_runtime_address(const std::uint32_t byte_address)
+{
+    move::run(GprToMmio {.source = hal::gpr<15>(), .destination = {.addressing = move::MmioAddressing::Immediate, .byte_address = byte_address}});
+}
+
+extern "C" __attribute__((noinline, used)) void reference_gpr_to_mmio_runtime_address(const std::uint32_t byte_address)
+{
+    TT_INSN(TT_OP_STOREREG(15 /*TdmaDataRegIndex*/, 0 /*RegAddr*/) | ((byte_address - 0xffb00000u) >> 2));
+}
+
+extern "C" __attribute__((noinline, used)) void gpr_to_mmio_runtime_addressing(const move::MmioAddressing addressing)
+{
+    move::run(GprToMmio {
+        .source      = hal::gpr<16>(),
+        .destination = {.addressing = addressing, .byte_address = 0xffb11000u, .base = hal::gpr<17>(), .offset = {.gpr = hal::gpr<18>()}},
+    });
+}
+
+extern "C" __attribute__((noinline, used)) void reference_gpr_to_mmio_runtime_addressing(const move::MmioAddressing addressing)
+{
+    TT_INSN(
+        addressing == move::MmioAddressing::Immediate
+            ? TT_OP_STOREREG(16 /*TdmaDataRegIndex*/, 17408 /*RegAddr*/)
+            : TT_OP_STOREIND(
+                  0 /*MemHierSel*/, 1 /*SizeSel*/, 0 /*RegSizeSel*/, 36 /*OffsetIndex*/, 0 /*AutoIncSpec*/, 16 /*DataRegIndex*/, 17 /*AddrRegIndex*/));
+}
+
+extern "C" __attribute__((noinline, used)) void mmio_to_gpr_runtime_wait(const std::uint32_t destination)
+{
+    move::run(MmioToGpr {
+        .source      = {.addressing = move::MmioAddressing::Immediate, .byte_address = 0xffb12000u},
+        .destination = hal::gpr(destination),
+        .completion  = move::Completion::Wait,
+    });
+}
+
+extern "C" __attribute__((noinline, used)) void reference_mmio_to_gpr_runtime_wait(const std::uint32_t destination)
+{
+    TT_INSN(TT_OP_LOADREG(0 /*TdmaDataRegIndex*/, 18432 /*RegAddr*/) | (destination << 18));
+    TTI_STALLWAIT(511 /*stall_res*/, 1 /*wait_res*/);
+}
+
+//--- compile_time.cpp
+#include "common.h"
 
 constexpr GprToMmio store_first {
     .source      = hal::gpr<15>(),
@@ -62,9 +124,9 @@ extern "C" __attribute__((noinline, used)) void gpr_to_mmio_immediate()
 }
 
 // CHECK-LABEL: <gpr_to_mmio_immediate>:
-// CHECK-NEXT: ttstorereg 15,17408
-// CHECK-NEXT: ttstorereg 63,262143
-// CHECK-NEXT: ttstallwait 511,1
+// CHECK-NEXT: ttstorereg 15,17408{{$}}
+// CHECK-NEXT: ttstorereg 63,262143{{$}}
+// CHECK-NEXT: ttstallwait 511,1{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void gpr_to_mmio_indirect()
@@ -74,9 +136,9 @@ extern "C" __attribute__((noinline, used)) void gpr_to_mmio_indirect()
 }
 
 // CHECK-LABEL: <gpr_to_mmio_indirect>:
-// CHECK-NEXT: ttstoreind 0,1,0,37,2,16,17
-// CHECK-NEXT: ttstoreind 0,1,0,4,0,0,1
-// CHECK-NEXT: ttstallwait 511,1
+// CHECK-NEXT: ttstoreind 0,1,0,37,2,16,17{{$}}
+// CHECK-NEXT: ttstoreind 0,1,0,4,0,0,1{{$}}
+// CHECK-NEXT: ttstallwait 511,1{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void mmio_to_gpr()
@@ -86,9 +148,9 @@ extern "C" __attribute__((noinline, used)) void mmio_to_gpr()
 }
 
 // CHECK-LABEL: <mmio_to_gpr>:
-// CHECK-NEXT: ttloadreg 19,262143
-// CHECK-NEXT: ttloadreg 0,17408
-// CHECK-NEXT: ttstallwait 511,1
+// CHECK-NEXT: ttloadreg 19,262143{{$}}
+// CHECK-NEXT: ttloadreg 0,17408{{$}}
+// CHECK-NEXT: ttstallwait 511,1{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void mmio_issue_encoded_operations()
@@ -99,80 +161,7 @@ extern "C" __attribute__((noinline, used)) void mmio_issue_encoded_operations()
 }
 
 // CHECK-LABEL: <mmio_issue_encoded_operations>:
-// CHECK-NEXT: ttstorereg 15,17408
-// CHECK-NEXT: ttstoreind 0,1,0,37,2,16,17
-// CHECK-NEXT: ttloadreg 19,262143
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void gpr_to_mmio_runtime_address(const std::uint32_t byte_address)
-{
-    move::run(GprToMmio {.source = hal::gpr<15>(), .destination = {.addressing = move::MmioAddressing::Immediate, .byte_address = byte_address}});
-}
-
-// CHECK-LABEL: <gpr_to_mmio_runtime_address>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0x500
-// CHECK-NEXT: add a0,a0,[[R0]]
-// CHECK-NEXT: srli a0,a0,0x2
-// CHECK-NEXT: lui [[R1:a[0-7]]],0x673c0
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: or a0,a0,[[R1]]
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a0,0([[R0]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void gpr_to_mmio_runtime_addressing(const move::MmioAddressing addressing)
-{
-    move::run(GprToMmio {
-        .source      = hal::gpr<16>(),
-        .destination = {.addressing = addressing, .byte_address = 0xffb11000u, .base = hal::gpr<17>(), .offset = {.gpr = hal::gpr<18>()}},
-    });
-}
-
-// CHECK-LABEL: <gpr_to_mmio_runtime_addressing>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0x66490
-// CHECK-NEXT: li [[R1:a[0-7]]],1
-// CHECK-NEXT: addi [[R0]],[[R0]],1041
-// CHECK-NEXT: bne a0,[[R1]],{{[0-9a-f]+}}
-// CHECK-NEXT: R_RISCV_BRANCH
-// CHECK-NEXT: lui [[R0]],0x67404
-// CHECK-NEXT: addi [[R0]],[[R0]],1024
-// CHECK-EMPTY:
-// CHECK-NEXT: <.L{{[0-9]+}}>:
-// CHECK-NEXT: lui [[R1]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: mv [[R1]],[[R1]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw [[R0]],0([[R1]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void mmio_to_gpr_runtime_wait(const std::uint32_t destination)
-{
-    move::run(MmioToGpr {
-        .source      = {.addressing = move::MmioAddressing::Immediate, .byte_address = 0xffb12000u},
-        .destination = hal::gpr(destination),
-        .completion  = move::Completion::Wait,
-    });
-}
-
-// CHECK-LABEL: <mmio_to_gpr_runtime_wait>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0x68005
-// CHECK-NEXT: addi [[R1:a[0-7]]],[[R0]],-2048
-// CHECK-NEXT: slli a0,a0,0x12
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: or a0,a0,[[R1]]
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: lui [[R1]],0xa2ff8
-// CHECK-NEXT: sw a0,0([[R0]])
-// CHECK-NEXT: addi [[R1]],[[R1]],1
-// CHECK-NEXT: sw [[R1]],0([[R0]])
+// CHECK-NEXT: ttstorereg 15,17408{{$}}
+// CHECK-NEXT: ttstoreind 0,1,0,37,2,16,17{{$}}
+// CHECK-NEXT: ttloadreg 19,262143{{$}}
 // CHECK-NEXT: ret
