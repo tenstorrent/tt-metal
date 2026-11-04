@@ -19,7 +19,6 @@
 from itertools import product
 
 import pytest
-import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -35,7 +34,6 @@ from helpers.llk_params import (
     EltwiseBinaryReuseDestType,
     StochasticRounding,
     Transpose,
-    format_dict,
 )
 from helpers.param_config import (
     generate_params,
@@ -63,7 +61,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
@@ -282,7 +280,7 @@ def test_unpack_A_sdpa(
 
     # Identity datacopy defines every lane of the tile, so validate the full
     # tile against the golden with the output-format tolerance.
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
