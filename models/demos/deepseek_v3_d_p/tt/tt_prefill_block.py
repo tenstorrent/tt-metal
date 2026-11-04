@@ -384,6 +384,7 @@ class TtPrefillBlock(LightweightModule):
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
             tp_shard_kv=tp_shard_kv,
+            use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
         if kv_only:

@@ -351,6 +351,7 @@ class ttMLA:
         llama4_scale_cache: Optional[dict] = None,
         sparse_mla_overlap_profile: Optional[str] = None,
         tp_shard_kv: Optional[bool] = None,
+        use_fused_rmsnorm: bool = False,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -652,6 +653,8 @@ class ttMLA:
             and not kv_only
             and not self._merge_qkv_a
             and self._llama4_beta is None
+            # Same switch as the block's fused norms: USE_FUSED_PREFILL_RMSNORM in the model config, BH, chunked.
+            and use_fused_rmsnorm
         )
         if self._q_distnorm:
             self._q_a_norm_weight_tp = self._tp_shard_norm_weight(self.q_a_layernorm_weight, self.q_lora_rank)
