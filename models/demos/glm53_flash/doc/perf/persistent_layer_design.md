@@ -120,3 +120,27 @@ four cores; the exchange core spun in its write barrier). `grid_mcast_rects` der
 from `worker_core_from_logical_core`, and the kernels loop over them (`n_rects, (x0, y0, x1, y1, num_dests,
 loopback) x n` runtime args; the loopback variant only for the rect holding the sender). Every later grid-wide
 multicast (the weight-prefetch ring's releases, the layer loop's phase barriers) must use the same rects.
+
+### Finding (2026-11-04 06:56): the program's launch config is exposed
+
+Layer-4 profile (device 0), fabric knobs vs the persistent block:
+
+| op | three programs | persistent |
+|---|---|---|
+| MoE block device time | 56.0 + 215.3 + 37.9 = 309.2 us | 305.4 us |
+| op-to-op gap before the block | 0 + 0 + 0 | 20 us |
+| MoE all-reduce after the block | 24.4 us | 40.9 us (cross-chip skew lands here) |
+| layer total (device + gaps) | 775.7 + 67 = 843 us | 786.2 + 79 = 865 us |
+
+The block itself is 4 us faster than the three programs, but its launch config (per-core runtime args of ~115 cores,
+28 kernels, 20+ CBs, 7 semaphores) is written by the dispatcher while the PREVIOUS program runs, and the previous
+program here is the 12 us router top-k: ~20 us of the write is exposed. The three-program flow hid the expert
+program's config behind the 56 us gather. Consequences for the design:
+- an isolated persistent block only pays off when the op before it is longer than its config write (or when the
+  block is replayed back-to-back with another long program);
+- the full persistent layer hides its config behind the previous layer's program (~700 us): the exposure vanishes
+  only at that end state, so intermediate steps must be judged by device time + skew, not by the step alone;
+- the cross-chip skew of the block (the reduce waits for the slowest row) moves into the next all-reduce: a
+  persistent layer must keep the rows in lock-step (the exchanges already do) and should fold the all-reduce in.
+Next: step 2 (resident x: no x_g write / read), then fold the router top-k and the shared expert (two always-active
+"experts" with weight 1) and the MoE all-reduce into the block so the preceding op is the 52 us MHC post-mix.
