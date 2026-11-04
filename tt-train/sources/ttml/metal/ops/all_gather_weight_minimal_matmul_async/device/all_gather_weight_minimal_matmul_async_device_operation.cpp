@@ -27,8 +27,7 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
 
     const auto& pwb = tensor_args.persistent_weight_buffer;
     constexpr std::string_view kOp = "all_gather_weight_minimal_matmul_async";
-    const DeviceTensorRequirements req{
-        .dtypes = {DataType::BFLOAT16, DataType::FLOAT32}, .memory_layout = std::nullopt};
+    const DeviceTensorRequirements req{.dtypes = {DataType::BFLOAT16}, .memory_layout = std::nullopt};
     check_device_tensor(x, kOp, "input", req);
     check_device_tensor(w, kOp, "weight", req);
     check_device_tensor(pwb, kOp, "persistent_weight_buffer", req);
@@ -115,6 +114,15 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
         attrs.num_buffers_per_channel >= 1 && attrs.num_buffers_per_channel <= 255,
         "num_buffers_per_channel must be in [1, 255], got {}",
         attrs.num_buffers_per_channel);
+    const auto& mesh_shape = x.device()->shape();
+    uint32_t non_unit_dims = 0;
+    for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+        non_unit_dims += mesh_shape[i] > 1 ? 1 : 0;
+    }
+    TT_FATAL(
+        attrs.cluster_axis.has_value() || non_unit_dims <= 1,
+        "cluster_axis must be set on a multi-dimensional mesh ({}): it names the axis the weight is gathered over",
+        mesh_shape);
     TT_FATAL(
         attrs.topology != ttnn::ccl::Topology::Ring ||
             (attrs.cluster_axis.has_value() && ttnn::ccl::is_axis_wrap_wired(*x.device(), attrs.cluster_axis.value())),

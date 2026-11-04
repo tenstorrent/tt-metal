@@ -367,8 +367,6 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, NarrowStripes4D) {
             SCOPED_TRACE(
                 testing::Message() << "K=" << s.K << " N=" << s.N << " links=" << num_links
                                    << " workers=" << num_workers);
-            std::printf("NarrowStripes4D K=%u N=%u links=%u workers=%u\n", s.K, s.N, num_links, num_workers);
-            std::fflush(stdout);
             run_fabric_gather(p, x, w, num_links, num_workers, true, ttnn::ccl::Topology::Ring, std::nullopt);
         }
     }
@@ -393,9 +391,6 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, TinyShapes) {
                     SCOPED_TRACE(
                         testing::Message() << "K=" << K << " N=" << N << " links=" << num_links
                                            << " workers=" << num_workers << " ring=" << ring);
-                    std::printf(
-                        "TinyShapes K=%u N=%u links=%u workers=%u ring=%d\n", K, N, num_links, num_workers, ring);
-                    std::fflush(stdout);
                     run_fabric_gather(p, x, w, num_links, num_workers, true, topology, std::nullopt);
                 }
             }

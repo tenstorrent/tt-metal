@@ -140,9 +140,9 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     const uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
 
-    uint32_t M_block_tiles = 8;
-    uint32_t K_block_tiles = 8;
-    uint32_t N_block_tiles = 8;
+    uint32_t M_block_tiles = kDefaultBlockTiles;
+    uint32_t K_block_tiles = kDefaultBlockTiles;
+    uint32_t N_block_tiles = kDefaultBlockTiles;
     uint32_t subblock_h = 4;
     uint32_t subblock_w = 1;
     if (config.has_value()) {
@@ -449,7 +449,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         mesh_coordinate, forward_coord, backward_coord, device);
 
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device);
+    const size_t channel_buffer_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device);
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t tiles_per_packet = std::max<uint32_t>(1, std::min<uint32_t>(4, packet_size_bytes / in1_tile_size));
     constexpr uint32_t kSendPacketsPerBatch = 8;
     constexpr uint32_t kSendCbPackets = 2 * kSendPacketsPerBatch;
@@ -518,7 +519,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 *device,
                 static_cast<uint8_t>(active_workers.size()),
                 static_cast<uint8_t>(operation_attributes.num_buffers_per_channel),
-                packet_size_bytes,
+                channel_buffer_bytes,
                 mux_base_l1_address,
                 mux_l1_floor_address);
             tt::tt_fabric::add_fabric_mux_v2_to_program(

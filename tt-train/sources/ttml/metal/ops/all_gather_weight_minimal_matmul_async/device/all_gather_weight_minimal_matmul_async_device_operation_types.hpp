@@ -15,7 +15,11 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
+
 using ttnn::experimental::prim::MinimalMatmulConfig;
+
+inline constexpr uint32_t kDefaultBlockTiles = 8;
+
 struct AllGatherWeightMinimalMatmulAsyncParams {
     std::optional<MinimalMatmulConfig> config;
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
