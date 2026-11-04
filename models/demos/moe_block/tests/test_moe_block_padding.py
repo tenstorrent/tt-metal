@@ -14,6 +14,7 @@ token's embedding, so all of them pick the same experts). With (actual_start, ac
   * the padding tokens' combined rows are zero - exactly the host model's padding rows, so every chip's real count is
     the model's - and the routing planner counted no row for them (each expert's count = the real tokens' picks);
   * traced: one capture replayed with other (start, end) (device words) matches the eager forward.
+Each runs twice: the planner's head, and the head with router iterations forced (head_router_iterations 2).
 
 MOE_PAD_CHUNK: the chunk (1280; 2560 fits too, 5120 not on the LoudBox's grid).
 test_padding_perf (TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1, TT_METAL_PROFILER_CPP_POST_PROCESS=1):
@@ -79,8 +80,10 @@ def mesh():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.fixture(scope="module")
-def setup(mesh):
+# 0: the planner's head (the router stage in one go here); 2: forced router iterations (the router stage once a group of
+# row chunks, as the planner picks where the one-go router doesn't fit, e.g. Kimi-K3 at chunk >= 4096 on a 4x4 stage)
+@pytest.fixture(scope="module", params=[0, 2], ids=["router_once", "router_iters"])
+def setup(mesh, request):
     mb = ttnn.experimental.moe_block
     fw = _fw()
     act = mb.ExpertActivation(kind=mb.ExpertActivationKind.ClampedSilu, limit=10.0)
@@ -93,6 +96,7 @@ def setup(mesh):
     dtypes = mb.MoEDtypes()
     cfg = mb.MoEBlockConfig(chunk_tokens=CHUNK, num_links=2, persist_l1_small=True)
     cfg.combine_snap = SNAP
+    cfg.head_router_iterations = request.param
     res = mb.MoEBlockResources(mesh, dims, cfg, dtypes)
     block = MoEBlock(mesh, res, dtypes=dtypes, accumulators=ACC, activation=fw.ACTS["silu"])
     g = torch.Generator().manual_seed(3)
@@ -123,7 +127,7 @@ def setup(mesh):
     block.mb = cap
     yield dict(
         mesh=mesh, mb=mb, block=block, weights=weights, base=base, pad_row=pad_row, cap=cap, EPC=EPC, N=N,
-        distinct=distinct,
+        distinct=distinct, router_iters=request.param,
     )  # fmt: skip
     experts.close()
     res.release()
@@ -445,6 +449,8 @@ def _device_us(s, rows, span, calls=15):
 def test_padding_perf(setup):
     if os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
         pytest.skip("needs TT_METAL_DEVICE_PROFILER=1 (+ MID_RUN_DUMP, CPP_POST_PROCESS)")
+    if setup["router_iters"]:
+        pytest.skip("perf of the planner's head only")
     s = setup
     names = ["head", "dispatch", "experts+combine", "tail"]
 
