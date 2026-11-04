@@ -485,6 +485,7 @@ TEST_F(UnitMeshFixture, AliasDFBAddressEquality1Sx1S) {
 
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t id_a = program.impl().get_dfb_handle("dfb_a");
@@ -711,13 +712,14 @@ TEST_F(UnitMeshFixture, AliasDFBAllocSecondarySkipped) {
     const auto cfg_b = make_1sx1s_config(256, 16);
     const auto cfg_c = make_1sx1s_config(512, 4);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const uint32_t id_a = dfb::CreateDataflowBuffer(program, core, cfg_a);
     const uint32_t id_b = dfb::CreateDataflowBuffer(program, core, cfg_b);
     const uint32_t id_c = dfb::CreateDataflowBuffer(program, core, cfg_c);
 
     program.impl().set_dfb_alias(id_a, id_b);
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
@@ -741,7 +743,7 @@ TEST_F(UnitMeshFixture, AliasDFBAlloc3Way) {
     const auto cfg_b = make_1sx1s_config(256,  16);
     const auto cfg_c = make_1sx1s_config(1024, 4);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const uint32_t id_a = dfb::CreateDataflowBuffer(program, core, cfg_a);
     const uint32_t id_b = dfb::CreateDataflowBuffer(program, core, cfg_b);
     const uint32_t id_c = dfb::CreateDataflowBuffer(program, core, cfg_c);
@@ -749,6 +751,7 @@ TEST_F(UnitMeshFixture, AliasDFBAlloc3Way) {
     program.impl().set_dfb_alias(id_a, id_b);
     program.impl().set_dfb_alias(id_a, id_c);
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
@@ -773,13 +776,14 @@ TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
     const auto cfg_b = make_1sx1s_config(256, 16);  // total 4096 (secondary)
     const auto cfg_c = make_1sx1s_config(512, 4);   // total 2048 (trailing, non-aliased)
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const uint32_t id_a = dfb::CreateDataflowBuffer(program, core, cfg_a);
     const uint32_t id_b = dfb::CreateDataflowBuffer(program, core, cfg_b);
     const uint32_t id_c = dfb::CreateDataflowBuffer(program, core, cfg_c);
     program.impl().set_dfb_alias(id_a, id_b);
 
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a0 = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
@@ -794,6 +798,7 @@ TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
         {.dfb_id = id_b, .entry_size = 1024u, .num_entries = 8u},  // 8192
     };
     EXPECT_NO_THROW(program.impl().apply_dfb_size_overrides(overrides));
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     auto dfb_a = program.impl().get_dataflow_buffer(id_a);
@@ -819,6 +824,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
 
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     auto rtas = [&]() {

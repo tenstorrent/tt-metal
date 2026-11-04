@@ -60,12 +60,11 @@ SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_out
     return output_tensor;
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor, which optional tensors are
+// passed). It is custom only to skip the canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t SoftmaxDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    return tt::tt_metal::operation::hash_operation<SoftmaxDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
+    return tt::tt_metal::operation::hash_operation<SoftmaxDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::softmax::device

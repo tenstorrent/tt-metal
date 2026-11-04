@@ -12,7 +12,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
@@ -95,7 +95,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
         "Shard shapes must be multiple of TILE_HEIGHT ");
 
     const std::uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
 
     const std::uint32_t h_blk = std::min(Ht, 8u);
     // w_blk must divide Wt. The reader streams b tiles through the small c_1 ring buffer

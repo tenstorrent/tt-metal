@@ -15,9 +15,14 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    compute_constants,
+    extract_mesh_config,
+    moe_transport_arg,
+    routed_expert_combine_overlap_arg,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
@@ -122,6 +127,7 @@ class TtPrefillBlock(LightweightModule):
                 not in (None, getattr(model_cfg, "EMB_SIZE", None)),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                gate_bias_centered=gate_bias_centered(model_cfg),
             ):
                 return False
 
@@ -234,6 +240,7 @@ class TtPrefillBlock(LightweightModule):
                 routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
                 latent_weights=state_dict.get("latent_weights"),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+                gate_bias_centered=gate_bias_centered(model_cfg),
             )
         else:
             # Use static method (no device copy!)
@@ -510,6 +517,13 @@ class TtPrefillBlock(LightweightModule):
             # Same source as the block's attn_norm and ffn_norm, so the three cannot disagree.
             rms_norm_eps=config.rms_norm_eps,
             max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
+            # Only configs that opt in (Kimi K2.7, GLM 5.3, Mistral Small 4) overlap the routed expert with
+            # combine_fabric2d.
+            overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
+            # Likewise only configs that opt in (Kimi K2.7, GLM 5.3) run dispatch_fabric2d / combine_fabric2d.
+            moe_transport=moe_transport_arg(model_cfg),
+            combine_fwd_reduction=getattr(model_cfg, "COMBINE_FWD_REDUCTION", None),
+            dispatch_fwd_vc_pages=getattr(model_cfg, "DISPATCH_FWD_VC_PAGES", None),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
@@ -531,6 +545,7 @@ class TtPrefillBlock(LightweightModule):
             # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
+            gate_bias_centered=gate_bias_centered(model_cfg),
             # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
             gate_hash_table=state_dict.get("hash_table"),
             gate_fallback_mode=gate_fallback_mode,
@@ -593,6 +608,7 @@ class TtPrefillBlock(LightweightModule):
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
         ack_layer_idx: Optional[int] = None,
+        ack_alias_layer_ids: tuple = (),
         force_kv_only: bool = False,
     ):
         """
@@ -617,6 +633,8 @@ class TtPrefillBlock(LightweightModule):
                 d2h_service path does not cover.
             ack_layer_idx: global layer id this block acks under, overriding its own. MTP replays one
                 block per level, so each level needs a distinct id on the host-callback path.
+            ack_alias_layer_ids: global layer ids acked right after this block's own, for table rows
+                that alias its KV (decode MTP levels past the ones prefill computes).
             on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
                 residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
                 matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
@@ -702,6 +720,7 @@ class TtPrefillBlock(LightweightModule):
             on_layer_complete=on_layer_complete,
             trace_controller=getattr(self, "_trace_controller", None),
             tp_axis=self.mla.tp_shard_kv_axis,
+            alias_layer_ids=ack_alias_layer_ids,
         )
 
         if kv_only:
@@ -774,7 +793,7 @@ class TtPrefillBlock(LightweightModule):
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
     ) -> ttnn.Tensor:
-        """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE.
+        """MoE FFN path: 4D TILE → 3D TILE → MoE → 3D TILE → 4D TILE.
 
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""
