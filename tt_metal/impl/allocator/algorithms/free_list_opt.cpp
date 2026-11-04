@@ -8,8 +8,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <cstdint>
-#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>

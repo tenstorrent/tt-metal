@@ -17,10 +17,12 @@ namespace ttnn::experimental {
 // How a V2 caller's reference points index into the (level, point) grid.
 //
 //   Level:  reference_points is (B, Q, L, 2), one point per feature level.
-//           r(l, p) = l. Used by DINO-family deformable decoders.
+//           r(l, p) = l. Used by DINO-family deformable decoders, and by BEVFormer
+//           temporal attention with an ego shift (its BEV maps are the levels).
 //   Pillar: reference_points is (B, Q, Z, 2), one point per z-anchor, with the
 //           point axis laid out as (P / Z, Z). r(l, p) = p % Z. Used by
-//           BEVFormer spatial/temporal attention, where Z is num_points_in_pillar.
+//           BEVFormer spatial attention, where Z is num_points_in_pillar, and by
+//           its temporal attention without a shift (Z == 1).
 //
 // With L == 1 / Z == 1 the two coincide.
 enum class MSDAReferenceMode : uint8_t {
@@ -44,6 +46,9 @@ enum class MSDAReferenceMode : uint8_t {
 //                    or (B, Q, H, L*P*2)     packed (one DRAM page per (b,q,h);
 //                                            8x less padding and L*P fewer NoC
 //                                            reads per sample — prefer it)
+//                    or (B, Q, H*L*P*2)      heads-packed (one page per (b,q); head h at
+//                                            byte offset h * L*P*2 * sizeof(bf16), which
+//                                            must be a multiple of the buffer's alignment)
 //   attention_weights   (B, Q, H, L, P)      canonical
 //                    or (B, Q, H, L*P)       packed
 //   output              (B, Q, H*D)

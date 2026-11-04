@@ -23,7 +23,8 @@ time is in:
     nothing else. Four variants:
 
     * ``packed_multi_dram`` -- packed value/offsets/attn, one call covering all
-      levels, with ``value`` and output in DRAM.
+      levels, with ``value`` and output in DRAM. The offsets are the module's:
+      heads-packed when each head's fill whole alignment units of the buffer.
     * ``packed_multi_l1`` -- the same, with ``value`` moved to L1 interleaved
       before the measured region (the op's output follows it into L1). This is
       the placement ``auto`` picks when L1 fits.
@@ -138,27 +139,16 @@ def _tt_model(device, config, tt_parameters, spatial_shapes):
 def _packed_operands(model, tt_query, tt_value, tt_reference_points):
     """The op's four inputs, in the packed ROW_MAJOR forms the module produces.
 
-    This is the projection/softmax prefix of ``TTMSDeformableAttention.forward``
-    lifted out so it runs before the signpost. Keeping it identical to the
-    module matters: the packed shapes are what make the reader's byte-offset
-    addressing legal, so a different prefix would measure a different op.
+    This is the projection/softmax prefix of ``TTMSDeformableAttention.forward``,
+    run before the signpost through the module's own ``sampling_operands``: the
+    packed shapes are what make the reader's byte-offset addressing legal, so a
+    different prefix would measure a different op.
     """
-    bs, num_queries, _ = tt_query.shape
 
     value = ttnn.to_layout(tt_value, ttnn.TILE_LAYOUT)
     value = ttnn.linear(value, model.params.value_proj.weight, bias=model.params.value_proj.bias)
 
-    query = ttnn.to_layout(tt_query, ttnn.TILE_LAYOUT)
-
-    attn = ttnn.linear(query, model.params.attention_weights.weight, bias=model.params.attention_weights.bias)
-    attn = ttnn.reshape(attn, (bs, num_queries, model.num_heads, model.num_levels * model.num_points))
-    attn = ttnn.softmax(attn, dim=-1)
-
-    offsets = ttnn.linear(
-        query, model.params.sampling_offsets.weight, bias=getattr(model.params.sampling_offsets, "bias", None)
-    )
-    offsets = ttnn.to_layout(offsets, ttnn.ROW_MAJOR_LAYOUT)
-    offsets = ttnn.reshape(offsets, (bs, num_queries, model.num_heads, model.num_levels * model.num_points * 2))
+    offsets, attn = model.sampling_operands(ttnn.to_layout(tt_query, ttnn.TILE_LAYOUT))
 
     value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT)
     attn = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
@@ -192,7 +182,7 @@ def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
     sum computes the same thing as one multi-level call.
     """
     value_t = ttnn.to_torch(value)
-    offsets_t = ttnn.to_torch(offsets)
+    offsets_t = ttnn.to_torch(offsets).reshape(*list(offsets.shape)[:2], model.num_heads, -1)
     attn_t = ttnn.to_torch(attn)
 
     p = model.num_points
