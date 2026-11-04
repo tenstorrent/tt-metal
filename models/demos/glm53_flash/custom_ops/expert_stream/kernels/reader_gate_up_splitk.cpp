@@ -92,8 +92,9 @@ void kernel_main() {
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
 #endif
     constexpr uint32_t src_step = tile_bytes;
+    constexpr uint32_t PKT_TILES = 8;  // 8 x 1088 B = 8704 B <= the NOC burst
+    static_assert(PKT_TILES * tile_bytes <= 8704, "a packet of 8 bfp8 tiles");
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
-    noc_async_read_one_packet_set_state<true>(w_base, tile_bytes, vc);
     constexpr uint32_t num_buffers = 3;
     constexpr uint32_t extra_in_flight = 1;
     cb_reserve_back(cb_w, KS_MAX * (extra_in_flight + 1));
@@ -119,10 +120,18 @@ void kernel_main() {
 #else
             uint32_t src = expert_base + c * col_bytes + k0 * src_step;
 #endif
+            // the slice is contiguous: at most two packets per column (8 tiles = 8704 B fits a NOC burst, then the
+            // rest)
             noc_async_read_set_trid(trid);
-            for (uint32_t p = 0; p < ks; ++p) {
-                noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write + p * tile_bytes, trid);
-                src += src_step;
+            {
+                const uint32_t t1 = ks < PKT_TILES ? ks : PKT_TILES;
+                noc_async_read_one_packet_set_state<true>(w_base, t1 * tile_bytes, vc);
+                noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
+                if (ks > PKT_TILES) {
+                    noc_async_read_one_packet_set_state<true>(w_base, (ks - PKT_TILES) * tile_bytes, vc);
+                    noc_async_read_one_packet_with_state_with_trid(
+                        w_base, src + PKT_TILES * tile_bytes, l1_write + PKT_TILES * tile_bytes, trid);
+                }
             }
             l1_write += slot_bytes;
             ++issued;
