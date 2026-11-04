@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "internal/llk_metadata.h"
+#include "internal/token_with_llk_metadata.h"
 
 // Forward declaration only: the token grants Scratchpad<T> access to its members, but nothing
 // in this header needs the definition. Defined in api/scratchpad.h.
@@ -32,7 +32,7 @@ class Scratchpad;
 // See api/scratchpad.h for the Scratchpad class this token constructs.
 //
 
-class ScratchpadBindingToken {
+class ScratchpadBindingToken : public binding_details::TokenWithLLKMetadata {
 public:
     // Construct a Scratchpad from the offset and size supplied by the host.
     //
@@ -45,22 +45,14 @@ public:
     // See "Entry format metadata" in ScratchpadSpec.
     constexpr ScratchpadBindingToken(
         uint32_t crta_offset, uint32_t size_in_bytes, binding_details::LLKMetadata llk) noexcept :
-        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_metadata_(llk) {}
+        TokenWithLLKMetadata(llk), crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
 private:
-    friend constexpr DataFormat get_dataformat(const ScratchpadBindingToken& token);
-    friend constexpr uint32_t get_tile_size(const ScratchpadBindingToken& token);
-    friend constexpr uint8_t get_face_r_dim(const ScratchpadBindingToken& token);
-    friend constexpr uint8_t get_face_c_dim(const ScratchpadBindingToken& token);
-    friend constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken& token);
-    friend constexpr uint8_t get_num_faces_c_dim(const ScratchpadBindingToken& token);
-
     template <typename T>
     friend class Scratchpad;
 
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
-    binding_details::LLKMetadata llk_metadata_{};
 };
 
 /**
@@ -73,8 +65,7 @@ private:
  * non-empty value on the host. Missing metadata fails constant evaluation regardless of device assertion settings.
  */
 constexpr DataFormat get_dataformat(const ScratchpadBindingToken& token) {
-    binding_details::assert_dataformat_set(token.llk_metadata_);
-    return static_cast<DataFormat>(token.llk_metadata_.format);
+    return get_dataformat(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -83,7 +74,9 @@ constexpr DataFormat get_dataformat(const ScratchpadBindingToken& token) {
  *
  * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
  */
-constexpr uint8_t get_face_r_dim(const ScratchpadBindingToken& token) { return token.llk_metadata_.face_r_dim; }
+constexpr uint8_t get_face_r_dim(const ScratchpadBindingToken& token) {
+    return get_face_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
+}
 
 /**
  * Extract the face width (in elements) associated with a `ScratchpadBindingToken`.
@@ -91,7 +84,9 @@ constexpr uint8_t get_face_r_dim(const ScratchpadBindingToken& token) { return t
  *
  * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
  */
-constexpr uint8_t get_face_c_dim(const ScratchpadBindingToken& token) { return token.llk_metadata_.face_c_dim; }
+constexpr uint8_t get_face_c_dim(const ScratchpadBindingToken& token) {
+    return get_face_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
+}
 
 /**
  * Extract the number of faces along the tile's row dimension associated with a `ScratchpadBindingToken`.
@@ -100,7 +95,7 @@ constexpr uint8_t get_face_c_dim(const ScratchpadBindingToken& token) { return t
  * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
  */
 constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken& token) {
-    return token.llk_metadata_.num_faces_r_dim;
+    return get_num_faces_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -110,41 +105,41 @@ constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken& token) {
  * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
  */
 constexpr uint8_t get_num_faces_c_dim(const ScratchpadBindingToken& token) {
-    return token.llk_metadata_.num_faces_c_dim;
+    return get_num_faces_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile storage size in bytes.
 // precondition: The token has format metadata and a supported tile storage size.
 constexpr uint32_t get_tile_size(const ScratchpadBindingToken& token) {
-    binding_details::assert_dataformat_set(token.llk_metadata_);
-    if (token.llk_metadata_.tile_size_bytes == 0) {
-        binding_details::tile_size_metadata_not_set();
-    }
-    return token.llk_metadata_.tile_size_bytes;
+    return get_tile_size(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile height in elements.
 constexpr uint32_t get_tile_r_dim(const ScratchpadBindingToken& token) {
-    return get_face_r_dim(token) * get_num_faces_r_dim(token);
+    return get_tile_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile width in elements.
 constexpr uint32_t get_tile_c_dim(const ScratchpadBindingToken& token) {
-    return get_face_c_dim(token) * get_num_faces_c_dim(token);
+    return get_tile_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the number of elements in a tile.
 constexpr uint32_t get_tile_hw(const ScratchpadBindingToken& token) {
-    return get_tile_r_dim(token) * get_tile_c_dim(token);
+    return get_tile_hw(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the total number of faces in a tile.
 constexpr uint32_t get_tile_num_faces(const ScratchpadBindingToken& token) {
-    return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
+    return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns whether the tile height is less than 32 elements.
-constexpr bool get_partial_face(const ScratchpadBindingToken& token) { return get_tile_r_dim(token) < 32; }
+constexpr bool get_partial_face(const ScratchpadBindingToken& token) {
+    return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
+}
 
 // Returns whether the tile width is less than 32 elements.
-constexpr bool get_narrow_tile(const ScratchpadBindingToken& token) { return get_tile_c_dim(token) < 32; }
+constexpr bool get_narrow_tile(const ScratchpadBindingToken& token) {
+    return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
+}

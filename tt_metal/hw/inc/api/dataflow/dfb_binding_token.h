@@ -8,7 +8,7 @@
 
 #include "api/dataflow/dfb_access.h"
 #include "internal/debug/node_range.h"
-#include "internal/llk_metadata.h"
+#include "internal/token_with_llk_metadata.h"
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -33,7 +33,7 @@
 // `DataflowBuffer dfb(dfb::name)`. A plain `DFBBindingToken t{id}` is <UNKNOWN, UNKNOWN>; a
 // function parameter must spell `DFBBindingToken<P, C>` (or take the id).
 template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
-struct DFBBindingToken {
+struct DFBBindingToken : public binding_details::TokenWithLLKMetadata {
     // node_ranges: Watcher builds only, the rectangles the DFB exists on, so multicasts into it can be checked against
     // them. Either nullptr with num_node_ranges 0, or num_node_ranges ranges that outlive the token; the generated
     // bindings header passes a constexpr array.
@@ -53,7 +53,7 @@ struct DFBBindingToken {
         binding_details::LLKMetadata llk,
         const DebugNodeRange* node_ranges = nullptr,
         uint32_t num_node_ranges = 0) noexcept :
-        id_(id), llk_metadata_(llk), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
+        TokenWithLLKMetadata(llk), id_(id), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -69,21 +69,7 @@ struct DFBBindingToken {
     constexpr uint32_t num_node_ranges() const noexcept { return num_node_ranges_; }
 
 private:
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr DataFormat get_dataformat(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint32_t get_tile_size(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint8_t get_face_r_dim(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint8_t get_face_c_dim(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken<P, C>& token);
-
     uint16_t id_;
-    binding_details::LLKMetadata llk_metadata_{};
     const DebugNodeRange* node_ranges_ = nullptr;
     uint32_t num_node_ranges_ = 0;
 };
@@ -99,8 +85,7 @@ private:
  */
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr DataFormat get_dataformat(const DFBBindingToken<P, C>& token) {
-    binding_details::assert_dataformat_set(token.llk_metadata_);
-    return static_cast<DataFormat>(token.llk_metadata_.format);
+    return get_dataformat(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -111,7 +96,7 @@ constexpr DataFormat get_dataformat(const DFBBindingToken<P, C>& token) {
  */
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint8_t get_face_r_dim(const DFBBindingToken<P, C>& token) {
-    return token.llk_metadata_.face_r_dim;
+    return get_face_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -122,7 +107,7 @@ constexpr uint8_t get_face_r_dim(const DFBBindingToken<P, C>& token) {
  */
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint8_t get_face_c_dim(const DFBBindingToken<P, C>& token) {
-    return token.llk_metadata_.face_c_dim;
+    return get_face_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -133,7 +118,7 @@ constexpr uint8_t get_face_c_dim(const DFBBindingToken<P, C>& token) {
  */
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken<P, C>& token) {
-    return token.llk_metadata_.num_faces_r_dim;
+    return get_num_faces_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -144,54 +129,50 @@ constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken<P, C>& token) {
  */
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken<P, C>& token) {
-    return token.llk_metadata_.num_faces_c_dim;
+    return get_num_faces_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile storage size in bytes.
 // precondition: The token has format metadata and a supported tile storage size.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint32_t get_tile_size(const DFBBindingToken<P, C>& token) {
-    binding_details::assert_dataformat_set(token.llk_metadata_);
-    if (token.llk_metadata_.tile_size_bytes == 0) {
-        binding_details::tile_size_metadata_not_set();
-    }
-    return token.llk_metadata_.tile_size_bytes;
+    return get_tile_size(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile height in elements.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint32_t get_tile_r_dim(const DFBBindingToken<P, C>& token) {
-    return get_face_r_dim(token) * get_num_faces_r_dim(token);
+    return get_tile_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile width in elements.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint32_t get_tile_c_dim(const DFBBindingToken<P, C>& token) {
-    return get_face_c_dim(token) * get_num_faces_c_dim(token);
+    return get_tile_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the number of elements in a tile.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint32_t get_tile_hw(const DFBBindingToken<P, C>& token) {
-    return get_tile_r_dim(token) * get_tile_c_dim(token);
+    return get_tile_hw(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the total number of faces in a tile.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint32_t get_tile_num_faces(const DFBBindingToken<P, C>& token) {
-    return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
+    return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns whether the tile height is less than 32 elements.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr bool get_partial_face(const DFBBindingToken<P, C>& token) {
-    return get_tile_r_dim(token) < 32;
+    return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns whether the tile width is less than 32 elements.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr bool get_narrow_tile(const DFBBindingToken<P, C>& token) {
-    return get_tile_c_dim(token) < 32;
+    return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Compile-time handle for a CrossNode/PrefetcherPipe *relay* local DFB binding.

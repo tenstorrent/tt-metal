@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "internal/llk_metadata.h"
+#include "internal/token_with_llk_metadata.h"
 #include "api/tensor/tensor_accessor_args.h"
 
 namespace tensor_accessor {
@@ -41,7 +41,7 @@ namespace tensor_accessor {
 // TensorAccessorArgs nominally supports.
 //
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-struct TensorBindingToken {
+struct TensorBindingToken : public binding_details::TokenWithLLKMetadata {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
@@ -49,23 +49,7 @@ struct TensorBindingToken {
     // Construct a TensorBindingToken with LLK metadata.
     // Read these metadata with get_dataformat(token) / get_face_r_dim(token) / ...,
     // or construct an operand with LLKOperandFrom<token>.
-    explicit constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
-
-private:
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint32_t get_tile_size(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_face_r_dim(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_face_c_dim(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token);
-
-    binding_details::LLKMetadata llk_metadata_;
+    explicit constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : TokenWithLLKMetadata(llk) {}
 };
 
 /**
@@ -75,8 +59,7 @@ private:
  */
 template <uint32_t Cta, uint32_t Addr>
 constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token) {
-    binding_details::assert_dataformat_set(token.llk_metadata_);
-    return static_cast<DataFormat>(token.llk_metadata_.format);
+    return get_dataformat(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -85,7 +68,7 @@ constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token) 
  */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_face_r_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.face_r_dim;
+    return get_face_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -94,7 +77,7 @@ constexpr uint8_t get_face_r_dim(const TensorBindingToken<Cta, Addr>& token) {
  */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_face_c_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.face_c_dim;
+    return get_face_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -103,7 +86,7 @@ constexpr uint8_t get_face_c_dim(const TensorBindingToken<Cta, Addr>& token) {
  */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.num_faces_r_dim;
+    return get_num_faces_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 /**
@@ -112,54 +95,50 @@ constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken<Cta, Addr>& token
  */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.num_faces_c_dim;
+    return get_num_faces_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile storage size in bytes.
 // precondition: The token has format metadata and a supported tile storage size.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_size(const TensorBindingToken<Cta, Addr>& token) {
-    binding_details::assert_dataformat_set(token.llk_metadata_);
-    if (token.llk_metadata_.tile_size_bytes == 0) {
-        binding_details::tile_size_metadata_not_set();
-    }
-    return token.llk_metadata_.tile_size_bytes;
+    return get_tile_size(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile height in elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_r_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return get_face_r_dim(token) * get_num_faces_r_dim(token);
+    return get_tile_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile width in elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_c_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return get_face_c_dim(token) * get_num_faces_c_dim(token);
+    return get_tile_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the number of elements in a tile.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_hw(const TensorBindingToken<Cta, Addr>& token) {
-    return get_tile_r_dim(token) * get_tile_c_dim(token);
+    return get_tile_hw(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the total number of faces in a tile.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_num_faces(const TensorBindingToken<Cta, Addr>& token) {
-    return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
+    return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns whether the tile height is less than 32 elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr bool get_partial_face(const TensorBindingToken<Cta, Addr>& token) {
-    return get_tile_r_dim(token) < 32;
+    return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns whether the tile width is less than 32 elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr bool get_narrow_tile(const TensorBindingToken<Cta, Addr>& token) {
-    return get_tile_c_dim(token) < 32;
+    return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // PerNodeTensorBindingToken: the binding token for a per-node tensor.
@@ -172,98 +151,78 @@ constexpr bool get_narrow_tile(const TensorBindingToken<Cta, Addr>& token) {
 //  auto a = LocalTensorAccessor<T>(tensor::my_host_declared_accessor_name); // OK
 //  auto b = TensorAccessor(tensor::my_host_declared_accessor_name);         // compile error
 template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
-struct PerNodeTensorBindingToken {
+struct PerNodeTensorBindingToken : public binding_details::TokenWithLLKMetadata {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};
     static constexpr uint32_t addr_rta_offset = ADDR_RTA_OFFSET;  // in bytes
 
-    explicit constexpr PerNodeTensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
-
-private:
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr DataFormat get_dataformat(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint32_t get_tile_size(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_face_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_face_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_num_faces_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_num_faces_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
-
-    binding_details::LLKMetadata llk_metadata_;
+    explicit constexpr PerNodeTensorBindingToken(binding_details::LLKMetadata llk) noexcept :
+        TokenWithLLKMetadata(llk) {}
 };
 
 // LLK metadata getters for PerNodeTensorBindingToken, as for TensorBindingToken above.
 template <uint32_t Cta, uint32_t Addr>
 constexpr DataFormat get_dataformat(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    binding_details::assert_dataformat_set(token.llk_metadata_);
-    return static_cast<DataFormat>(token.llk_metadata_.format);
+    return get_dataformat(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_face_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.face_r_dim;
+    return get_face_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_face_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.face_c_dim;
+    return get_face_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_num_faces_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.num_faces_r_dim;
+    return get_num_faces_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_num_faces_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.num_faces_c_dim;
+    return get_num_faces_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile storage size in bytes.
 // precondition: The token has format metadata and a supported tile storage size.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_size(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    binding_details::assert_dataformat_set(token.llk_metadata_);
-    if (token.llk_metadata_.tile_size_bytes == 0) {
-        binding_details::tile_size_metadata_not_set();
-    }
-    return token.llk_metadata_.tile_size_bytes;
+    return get_tile_size(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile height in elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return get_face_r_dim(token) * get_num_faces_r_dim(token);
+    return get_tile_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the tile width in elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return get_face_c_dim(token) * get_num_faces_c_dim(token);
+    return get_tile_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the number of elements in a tile.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_hw(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return get_tile_r_dim(token) * get_tile_c_dim(token);
+    return get_tile_hw(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns the total number of faces in a tile.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_num_faces(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
+    return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns whether the tile height is less than 32 elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr bool get_partial_face(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return get_tile_r_dim(token) < 32;
+    return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // Returns whether the tile width is less than 32 elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr bool get_narrow_tile(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return get_tile_c_dim(token) < 32;
+    return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
 // NullTensorBindingToken: the "this name is not bound" result of a binding lookup.
