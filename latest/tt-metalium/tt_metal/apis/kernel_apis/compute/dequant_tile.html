@@ -313,11 +313,12 @@
 </dt>
 <dd>
 <p>Initialize the sfpu with the zero point argument of the de-quantization Op. To be called once at beginning of a kernel.</p>
+<p>zero_point is passed as an fp32 bit pattern. It is precomputed by the caller as -z_in, where z_in is the input zero point.</p>
 <p>Return value: None</p>
 <p></p>
 <div class="tt-api-param-list colwidths-auto docutils container">
 <p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">zero_point  </span><span class="tt-api-param-desc">The zero point of the de-quantization Op  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">zero_point  </span><span class="tt-api-param-desc">-z_in, as an fp32 bit pattern  </span></p>
 </div>
 
 </dd>
