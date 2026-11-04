@@ -30,7 +30,8 @@ import os
 import torch
 
 import ttnn
-from models.autoports.zai_org_glm_5_3_flash.tt.fabric_stream import (  # reserved fabric semaphore ids, FAB_SEM_BASE
+from models.autoports.zai_org_glm_5_3_flash.tt.fabric_stream import (  # reserved fabric sem ids
+    FAB_SEM_BASE,
     fabric_connect,
 )
 
