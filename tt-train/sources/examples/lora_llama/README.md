@@ -20,32 +20,41 @@ python3 ./sources/examples/lora_llama/train_lora_llama.py --batch 8 --steps 200
 
 ```bash
 python3 ./sources/examples/lora_llama/train_lora_llama.py \
-    -m ./configs/model_configs/tinyllama.yaml \
+    -m ./configs/model_configs/tinyllama_bpe.yaml \
     --pretrained TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
     --batch 8 --steps 200
 ```
 
-### Multi-device DDP (8 devices)
+The architecture and vocabulary come from the checkpoint's `config.json`. The YAML then only
+sets training-time knobs: `max_sequence_length`, `runner_type` and `dropout_prob`.
 
-DDP requires a mesh graph descriptor (MGD) file with ring topology on the DDP axis.
-The script validates that the MGD topology matches the requested mesh shape `[1, ddp]`
-and that the DDP axis uses `RING`. You can adjust the validation in the script if
-a different topology is needed.
+Loading fails, rather than silently cropping or padding a weight, if a tensor in the checkpoint
+does not have the shape its `config.json` implies. It also fails if the tokenizer has more tokens
+than the checkpoint has embedding rows.
 
-For a Wormhole Loud Box (T3K, 8 devices):
+Under tensor parallelism the token embedding is vocab-sharded, pretrained or not: it is the only
+layout tied embeddings (e.g. Llama 3.2 1B) can load into.
+
+### Multiple devices
+
+`--mesh_shape` sets the device mesh, and `--dp_axis` / `--tp_axis` pick which of its axes
+data parallelism and tensor parallelism run over. For example, DDP over the 8 devices of a
+Wormhole Loud Box (T3K):
 
 ```bash
 export TT_MESH_GRAPH_DESC_PATH=/path/to/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto
 
 python3 ./sources/examples/lora_llama/train_lora_llama.py \
-    -m ./configs/model_configs/tinyllama.yaml \
+    -m ./configs/model_configs/tinyllama_bpe.yaml \
     --pretrained TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
-    --ddp 8 --batch 8 --steps 200
+    --mesh_shape 1,8 --dp_axis 1 --batch 8 --steps 200
 ```
+
+Tensor parallelism over two devices is `--mesh_shape 1,2 --tp_axis 1`.
 
 ## Model config example
 
-`configs/model_configs/tinyllama.yaml`:
+`configs/model_configs/tinyllama_bpe.yaml`:
 
 ```yaml
 transformer_config:
@@ -57,22 +66,25 @@ transformer_config:
   num_blocks: 22
   vocab_size: 32000
   max_sequence_length: 2048
-  runner_type: memory_efficient
+  runner_type: default
   theta: 10000.0
   weight_tying: "disabled"
 ```
 
-Without `-m`, a small 6-layer model is used by default.
+Without `-m`, a small 6-layer model is used by default. With `--pretrained`, the architecture
+fields above (including `vocab_size`) are ignored in favour of the checkpoint's `config.json`.
 
 ## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-m`, `--model_config` | None | Path to model config YAML |
-| `--pretrained` | None | HuggingFace repo ID or local path to `.safetensors` weights |
-| `--batch` | 1 | Global batch size (must be divisible by `--ddp`) |
+| `--pretrained` | None | HuggingFace repo ID, or a local directory with its `.safetensors` weights, `config.json` and tokenizer files; decides the architecture |
+| `--batch` | 1 | Global batch size (must be divisible by the DP axis size) |
 | `--steps` | 500 | Number of training steps |
-| `--ddp` | 1 | Number of devices for distributed data parallel |
+| `--mesh_shape` | `1,1` | Device mesh shape, as comma-separated integers |
+| `--dp_axis` | -1 | Index of the data-parallel axis in `--mesh_shape` (-1: no DP) |
+| `--tp_axis` | -1 | Index of the tensor-parallel axis in `--mesh_shape` (-1: no TP) |
 | `--resume` | None | Path to a LoRA checkpoint `.safetensors` to resume from |
 | `--save_every` | 0 | Save LoRA checkpoint every N steps (0 = disabled) |
 | `--save_dir` | `checkpoints/` | Directory for LoRA checkpoints |

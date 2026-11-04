@@ -43,7 +43,7 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     const auto& packed = tensor_args.packed;
 
     auto* const device = packed.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     const tt::DataFormat data_format = datatype_to_dataformat_converter(packed.dtype());
     const uint32_t tile_size_bytes = tt::tile_size(data_format);
