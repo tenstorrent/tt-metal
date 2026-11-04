@@ -3,10 +3,8 @@
 
 """Turn a gate verdict into a Slack payload, ready for ``chat.postMessage``."""
 
-import argparse
 import csv
 import html
-import json
 import os
 import re
 import shlex
@@ -266,94 +264,3 @@ def regression_body(rows, ctx, annotate=None):
         f"```{_repro_command(rows, ctx.get('arch'), ctx.get('baseline_sha'))}```",
     ]
     return lines
-
-
-def _emit_outputs(**values):
-    path = os.environ.get("GITHUB_OUTPUT")
-    if not path:
-        return
-    with open(path, "a") as fh:
-        for key, value in values.items():
-            fh.write(f"{key}={value}\n")
-
-
-def main(argv=None):
-    ap = argparse.ArgumentParser(description="Build the gate's Slack payload.")
-    ap.add_argument("--verdict", required=True, help="the gate's verdict-<arch>.json")
-    ap.add_argument("--regressions", help="path to <stem>.regressions.csv")
-    ap.add_argument("--channel", required=True, help="Slack channel id")
-    ap.add_argument("--pr-number", default="?")
-    ap.add_argument("--pr-url", default="")
-    ap.add_argument("--pr-title", default="")
-    ap.add_argument("--author", default="")
-    ap.add_argument("--run-url", default="")
-    ap.add_argument(
-        "--report-url", default="", help="this job's summary on the run page"
-    )
-    ap.add_argument("--artifact-url", default="", help="the uploaded gate report")
-    ap.add_argument("--commit", default="")
-    ap.add_argument(
-        "--trigger", default="nightly", help="what started a run with no PR"
-    )
-    ap.add_argument(
-        "--post-pass",
-        default="true",
-        help="false: post nothing when the gate passes; regressions and skips still post",
-    )
-    ap.add_argument(
-        "--part-out",
-        help="also write the verdict as JSON, for gate_slack_combine.py",
-    )
-    ap.add_argument("--out", default="slack_payload.json")
-    a = ap.parse_args(argv)
-
-    try:
-        with open(a.verdict) as fh:
-            v = json.load(fh)
-    except (OSError, ValueError):
-        v = None
-    status, ctx = from_verdict(v)
-    rows = read_regressions(a.regressions) if status == "regressed" else []
-
-    should_post = status != "clean" or a.post_pass.strip().lower() != "false"
-
-    ctx.update(
-        pr_number=a.pr_number,
-        pr_url=a.pr_url,
-        pr_title=a.pr_title,
-        author=a.author,
-        commit=a.commit,
-        run_url=a.run_url,
-        report_url=a.report_url,
-        artifact_url=a.artifact_url,
-        trigger=a.trigger,
-    )
-    text = build_text(status, rows, ctx)
-
-    if a.part_out:
-        with open(a.part_out, "w") as fh:
-            json.dump(
-                {
-                    "status": status,
-                    "should_post": should_post,
-                    "rows": rows,
-                    "ctx": ctx,
-                },
-                fh,
-            )
-
-    with open(a.out, "w") as fh:
-        json.dump({"channel": a.channel, "text": text}, fh)
-
-    _emit_outputs(
-        status=status,
-        should_post=str(should_post).lower(),
-        regression_count=len(rows),
-    )
-    print(f"verdict={status} regressions={len(rows)} should_post={should_post}")
-    print(text)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

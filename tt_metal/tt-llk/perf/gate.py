@@ -9,6 +9,7 @@
     gate.py baseline --gate nightly --arch wormhole  (read the policy's baseline from the warehouse)
     gate.py policy --gate merge --arch wormhole  (the compare arguments, for stage 2 in a leg)
     gate.py arches --gate merge --stage2         (the arches that run stage 2)
+    gate.py render --gate merge --reports DIR [--comment PR] [--slack]  (one PR comment, one Slack post)
 
 verdict-<arch>.json is the only thing the later steps read: the PR comment, Slack and the job result.
 """
@@ -336,6 +337,183 @@ def compare(a):
     return 0
 
 
+COMMENT_MARKER = "<!-- llk-perf-gate -->"
+
+
+def _gh(*args, data=None):
+    out = subprocess.run(
+        ["gh", "api", *args], input=data, capture_output=True, text=True, check=True
+    )
+    return out.stdout
+
+
+def _queue_pr():
+    """The PR a merge-queue ref (gh-readonly-queue/main/pr-123-<sha>) carries, or {}."""
+    m = re.search(
+        r"gh-readonly-queue/[^/]+/pr-(\d+)-", os.environ.get("GITHUB_REF", "")
+    )
+    if not m:
+        return {}
+    repo = os.environ["GITHUB_REPOSITORY"]
+    try:
+        pr = json.loads(_gh(f"repos/{repo}/pulls/{m.group(1)}"))
+    except (subprocess.CalledProcessError, ValueError):
+        pr = {}
+    return {
+        "pr_number": m.group(1),
+        "pr_url": f"https://github.com/{repo}/pull/{m.group(1)}",
+        "pr_title": pr.get("title", ""),
+        "author": (pr.get("user") or {}).get("login", ""),
+    }
+
+
+def _reports(directory, gate):
+    """{arch: (verdict or None, its report directory)} for every arch of ``gate``."""
+    found = {}
+    for path in glob.glob(f"{directory}/**/verdict-*.json", recursive=True):
+        v = _read_json(path)
+        if v:
+            found[v["arch"]] = (v, Path(path).parent)
+    arches = yaml.safe_load(POLICY.read_text())["gates"][gate]["arches"]
+    return {arch: found.get(arch, (None, None)) for arch in arches}
+
+
+def _comment(reports, directory):
+    """The PR comment: each arch's report, then its stage 2, all rendered from the files."""
+    parts = [COMMENT_MARKER]
+    for arch, (v, d) in reports.items():
+        report = d / "perf_gate_report.md" if d else None
+        if report and report.exists():
+            parts.append(report.read_text().strip())
+        else:
+            status, reason = (
+                (v["status"], v["reason"])
+                if v
+                else ("no verdict", "Its gate job wrote no verdict.")
+            )
+            parts.append(
+                f"# Perf compare — LLK perf — {arch.capitalize()}\n\n**{status}**: {reason}"
+            )
+        for stage2 in glob.glob(f"{directory}/**/stage2-{arch}.md", recursive=True):
+            parts.append(Path(stage2).read_text().strip())
+    return "\n\n".join(parts) + "\n"
+
+
+def _post_comment(pr, body):
+    repo = os.environ["GITHUB_REPOSITORY"]
+    comments = json.loads(
+        _gh("--paginate", "--slurp", f"repos/{repo}/issues/{pr}/comments?per_page=100")
+    )
+    mine = [
+        c
+        for page in comments
+        for c in page
+        if c["user"]["type"] == "Bot" and c["body"].startswith(COMMENT_MARKER)
+    ]
+    payload = json.dumps({"body": body})
+    if mine:
+        _gh(
+            "-X",
+            "PATCH",
+            f"repos/{repo}/issues/comments/{mine[0]['id']}",
+            "--input",
+            "-",
+            data=payload,
+        )
+    else:
+        _gh(
+            "-X",
+            "POST",
+            f"repos/{repo}/issues/{pr}/comments",
+            "--input",
+            "-",
+            data=payload,
+        )
+
+
+def _slack(reports, ctx, post_pass):
+    """``(should_post, text)``: one post for every arch, with how a regressed point moved on the others."""
+    import gate_slack_combine as combine
+    import gate_slack_notify as notify
+
+    parts, points = [], {}
+    for arch, (v, d) in reports.items():
+        status, arch_ctx = notify.from_verdict(v)
+        arch_ctx = {
+            **ctx,
+            "arch": arch,
+            **{k: x for k, x in arch_ctx.items() if x != ""},
+        }
+        rows = (
+            notify.read_regressions(str(d / "perf_gate_report.regressions.csv"))
+            if d and status == "regressed"
+            else []
+        )
+        if d:
+            points[arch] = str(d / "perf_gate_report.points.csv")
+        parts.append(
+            {
+                "status": status,
+                "rows": rows,
+                "ctx": arch_ctx,
+                "should_post": status != "clean" or post_pass,
+            }
+        )
+    return any(p["should_post"] for p in parts), combine.build_text(parts, points)
+
+
+def _post_slack(channel, text):
+    import urllib.request
+
+    request = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage",
+        data=json.dumps({"channel": channel, "text": text}).encode(),
+        headers={
+            "Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}",
+            "Content-type": "application/json; charset=utf-8",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        answer = json.load(response)
+    if not answer.get("ok"):
+        raise SystemExit(f"::error::Slack rejected the gate post: {answer}")
+
+
+def render_cmd(a):
+    """The PR comment, the Slack post and the step summary, from the verdicts and reports only."""
+    reports = _reports(a.reports, a.gate)
+    body = _comment(reports, a.reports)
+    Path(a.out_dir, "comment.md").write_text(body)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as fh:
+            fh.write(body)
+    if a.comment:
+        _post_comment(a.comment, body)
+        print(f"Commented on PR #{a.comment}.")
+
+    run = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{os.environ.get('GITHUB_REPOSITORY', '')}"
+    run += f"/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
+    ctx = {
+        "run_url": run,
+        "report_url": f"{run}#summary",
+        "commit": os.environ.get("GITHUB_SHA", ""),
+        "trigger": a.trigger,
+    }
+    ctx.update(_queue_pr())
+    should_post, text = _slack(reports, ctx, a.post_pass)
+    Path(a.out_dir, "slack.txt").write_text(text + "\n")
+    print(text)
+    if a.slack and should_post:
+        channel = os.environ.get("SLACK_CHANNEL_ID", "")
+        if not channel:
+            print("SLACK_CHANNEL_ID is unset; nothing is posted.")
+            return 0
+        _post_slack(channel, text)
+        print("Posted to Slack.")
+    return 0
+
+
 def complete_cmd(a):
     reason = complete(a.dir, a.arch)
     print(f"::error::{reason}" if reason else f"Every {a.arch} leg ran its whole plan.")
@@ -357,6 +535,9 @@ def verdict_cmd(a):
             fh.write(report.read_text())
     status, reason = v["status"], v["reason"]
     level = "error" if v["fails"] else "warning"
+    # The nightly health check reads this line from the job log.
+    slack_status = {"regression": "regressed", "pass": "clean"}.get(status, "skipped")
+    print(f"verdict={slack_status} regressions={v['counts']['regressions']}")
     if status == "pass":
         print(f"✅ {v['arch']}: no regressions ({v['counts']['points']} points)")
     elif status == "regression":
@@ -494,6 +675,26 @@ def main(argv=None):
     m.add_argument("--dir", required=True)
     m.add_argument("--arch", required=True)
     m.set_defaults(func=complete_cmd)
+
+    n = sub.add_parser(
+        "render", help="the PR comment and the Slack post, from the verdicts"
+    )
+    n.add_argument("--gate", required=True)
+    n.add_argument(
+        "--reports",
+        required=True,
+        help="directory holding every arch's verdict and report",
+    )
+    n.add_argument(
+        "--comment", default="", help="post or update the comment on this PR"
+    )
+    n.add_argument("--slack", action="store_true", help="post to SLACK_CHANNEL_ID")
+    n.add_argument(
+        "--post-pass", action="store_true", help="also post when every arch passed"
+    )
+    n.add_argument("--trigger", default="nightly", help="what started a run with no PR")
+    n.add_argument("--out-dir", default=".")
+    n.set_defaults(func=render_cmd)
 
     v = sub.add_parser("verdict", help="exit 1 when the verdict fails the job")
     v.add_argument("path")

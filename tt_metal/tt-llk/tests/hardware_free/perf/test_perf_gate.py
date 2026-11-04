@@ -334,3 +334,83 @@ def test_replay_names_the_points_that_stopped_running(tmp_path):
         "were not measured now, in perf_sfpu_ema"
         in (tmp_path / "perf_gate_report.md").read_text()
     )
+
+
+def _render(tmp_path, *extra):
+    argv = ["render", "--gate", "merge", "--reports", str(tmp_path / "reports")]
+    assert gate.main(argv + ["--out-dir", str(tmp_path), *extra]) == 0
+    return (tmp_path / "comment.md").read_text(), (tmp_path / "slack.txt").read_text()
+
+
+def _report(tmp_path, arch, **kw):
+    """One arch's compare, in the directory its artifact downloads to."""
+    run = tmp_path / arch
+    _run(run, arch=arch, **kw)
+    reports = tmp_path / "reports" / f"llk-perf-gate-report-{arch}"
+    reports.mkdir(parents=True)
+    for f in run.glob("perf_gate_report*"):
+        f.rename(reports / f.name)
+    (run / f"verdict-{arch}.json").rename(reports / f"verdict-{arch}.json")
+
+
+def test_render_one_comment_for_both_arches(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    _report(tmp_path, "blackhole")
+    _report(tmp_path, "wormhole", current=(1300, 2000))
+    comment, slack = _render(tmp_path)
+    assert comment.startswith(gate.COMMENT_MARKER)
+    assert (
+        "Blackhole: ✅ no regressions" in comment
+        and "Wormhole: ❌ REGRESSIONS FOUND" in comment
+    )
+    assert "regression on wormhole" in slack.splitlines()[0]
+    assert "_Threshold: a point regresses when it is slower by more than 13%" in slack
+
+
+def test_render_an_arch_without_a_verdict_is_a_skip(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    _report(tmp_path, "blackhole")
+    comment, slack = _render(tmp_path)
+    assert "Wormhole\n\n**no verdict**" in comment
+    assert "SKIPPED" in slack.splitlines()[0] and "wrote no verdict" in slack
+
+
+def test_render_adds_the_pr_gate_stage2_section(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    _report(tmp_path, "blackhole")
+    stage2 = tmp_path / "reports" / "llk-perf-gate-stage2-blackhole"
+    stage2.mkdir()
+    (stage2 / "stage2-blackhole.md").write_text("## Stage 2 — Blackhole\n")
+    comment, _ = _render(tmp_path)
+    assert comment.index("Blackhole: ✅") < comment.index("## Stage 2 — Blackhole")
+
+
+def test_render_posts_only_what_needs_action(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    posted = []
+    monkeypatch.setattr(gate, "_post_slack", lambda channel, text: posted.append(text))
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C0TEST")
+    _report(tmp_path, "blackhole")
+    _report(tmp_path, "wormhole")
+    _render(tmp_path, "--slack")
+    assert posted == []
+    _render(tmp_path, "--slack", "--post-pass")
+    assert len(posted) == 1 and "passed" in posted[0]
+
+
+def test_render_escapes_a_broadcast_in_a_config_value(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    _report(tmp_path, "blackhole", current=(1300, 2000))
+    regressions = next((tmp_path / "reports").rglob("perf_gate_report.regressions.csv"))
+    regressions.write_text(regressions.read_text().replace("HiFi0", "<!channel> HiFi0"))
+    _, slack = _render(tmp_path)
+    assert "<!channel>" not in slack and "@channel" in slack
+
+
+def test_verdict_prints_the_line_the_health_check_reads(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = tmp_path / "verdict-blackhole.json"
+    v = {"arch": "blackhole", "status": "pass", "reason": "", "fails": False}
+    path.write_text(json.dumps({**v, "counts": {"points": 3, "regressions": 0}}))
+    gate.main(["verdict", str(path)])
+    assert "verdict=clean regressions=0" in capsys.readouterr().out

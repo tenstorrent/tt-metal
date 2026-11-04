@@ -63,23 +63,11 @@ on:
         required: false
         default: ""
         type: string
-      slack_on_pass:
-        description: "Mark a pass as worth posting in the Slack part the caller posts"
-        required: false
-        default: true
-        type: boolean
-      pr_number:
-        description: >-
-          The PR the compared runs came from, when there is no pull_request
-          event to read it from. Labels the report only.
-        required: false
-        type: string
 
 permissions:
   actions: read
   contents: read
   checks: write
-  pull-requests: write
 
 env:
   LLK_PATH: tt_metal/tt-llk
@@ -238,34 +226,6 @@ jobs:
             --current-sha "$CURRENT_SHA" --current-label "$CURRENT_LABEL"
           cat perf_gate_report.md 2>/dev/null || true
 
-      - name: Comment on PR
-        if: >-
-          ${{ !cancelled() && github.event_name == 'pull_request'
-          && hashFiles('perf_gate_report.md') != '' }}
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          ARCH: ${{ inputs.arch }}
-        with:
-          script: |
-            const fs = require('fs');
-            if (!fs.existsSync('perf_gate_report.md')) {
-              core.warning('The comparison wrote no report; nothing to post.');
-              return;
-            }
-            const marker = `<!-- llk-perf-gate:${process.env.ARCH} -->`;
-            const body = `${marker}\n${fs.readFileSync('perf_gate_report.md', 'utf8')}`;
-            const { owner, repo } = context.repo;
-            const issue_number = context.issue.number;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number, per_page: 100,
-            });
-            const mine = comments.find(
-              (c) => c.user.type === 'Bot' && c.body.startsWith(marker));
-            if (mine) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
-            }
       - name: Upload the gate report
         id: report
         if: always()
@@ -277,69 +237,6 @@ jobs:
             perf_gate_report.md
             perf_gate_report.points.csv
             perf_gate_report.regressions.csv
-          if-no-files-found: ignore
-
-      - name: Build the Slack payload
-        id: slack
-        # Not after a cancel: a person or a newer push stopped the run on purpose.
-        if: ${{ !cancelled() }}
-        env:
-          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '?' }}
-          PR_URL: >-
-            ${{ github.event.pull_request.html_url
-                || (inputs.pr_number
-                    && format('{0}/{1}/pull/{2}', github.server_url, github.repository, inputs.pr_number))
-                || '' }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          ARCH: ${{ inputs.arch }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          # The merge gate run has many jobs; the anchor scrolls to this job's summary.
-          REPORT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#summary-${{ job.check_run_id }}
-          ARTIFACT_URL: ${{ steps.report.outputs.artifact-url }}
-          COMMIT_SHA: ${{ github.sha }}
-          TRIGGER: >-
-            ${{ github.event_name == 'schedule' && 'nightly'
-                || github.event_name == 'workflow_dispatch' && format('manual run on {0}', github.ref_name)
-                || github.event_name }}
-          SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
-            PR_NUMBER="${BASH_REMATCH[1]}"
-            PR_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
-            PR_TITLE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .title) || PR_TITLE=""
-            PR_AUTHOR=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .user.login) || PR_AUTHOR=""
-          fi
-
-          python3 "${LLK_PATH}/perf/gate_slack_notify.py" \
-            --verdict "verdict-${ARCH}.json" \
-            --regressions perf_gate_report.regressions.csv \
-            --channel "${SLACK_CHANNEL_ID:-unset}" \
-            --pr-number "$PR_NUMBER" \
-            --pr-url "$PR_URL" \
-            --pr-title "$PR_TITLE" \
-            --author "$PR_AUTHOR" \
-            --run-url "$RUN_URL" \
-            --report-url "$REPORT_URL" \
-            --artifact-url "$ARTIFACT_URL" \
-            --commit "$COMMIT_SHA" \
-            --trigger "$TRIGGER" \
-            --post-pass "$SLACK_ON_PASS" \
-            --part-out slack_part.json \
-            --out slack_payload.json && exit 0
-
-          echo "::error::The gate could not build its Slack notification."
-          echo "should_post=false" >> $GITHUB_OUTPUT
-
-      # The caller can post one message for all arches from these (gate_slack_combine.py).
-      - name: Upload the Slack part
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
-        with:
-          name: llk-perf-gate-slack-${{ inputs.arch }}
-          path: slack_part.json
           if-no-files-found: ignore
 
       - name: Gate verdict

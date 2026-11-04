@@ -690,13 +690,10 @@ jobs:
       stage2_baseline_artifact: llk-perf-stage2-baseline
       # gate_policy.yaml decides whether a regression blocks. A measurement that did not complete,
       # a missing baseline or a comparison that did not finish fails the job, and blocks the merge.
-      # llk-perf-merge-gate-notify posts one message for both arches.
-      slack_on_pass: false
     secrets: inherit
 
   # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
-  # One message for both arches; a regression on one also shows the same points on the other.
-  # A manual Merge Gate run on a dev branch does not post.
+  # One message for both arches, rendered from their verdict files. A manual run on a dev branch does not post.
   llk-perf-merge-gate-notify:
     name: LLK perf merge gate (Slack)
     needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate]
@@ -713,84 +710,17 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
-      # One download per arch, each into a directory named after it. A pattern
-      # download puts a single match straight into the path, with no directory
-      # per artifact, so when one arch lost its job the other arch's verdict was
-      # not found either and the gate reported both as skipped. Naming the
-      # artifact makes the layout the same whether one arch wrote or both did.
-      - name: Download the blackhole verdict
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - run: pip install -c tt_metal/tt-llk/perf/constraints.txt pandas pyyaml
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: llk-perf-gate-slack-blackhole
-          path: parts/blackhole
-      - name: Download the wormhole verdict
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: llk-perf-gate-slack-wormhole
-          path: parts/wormhole
-      - name: Download the blackhole report
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: llk-perf-gate-report-blackhole
-          path: reports/blackhole
-      - name: Download the wormhole report
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: llk-perf-gate-report-wormhole
-          path: reports/wormhole
-      - name: Build the Slack payload
-        id: slack
-        env:
-          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
-        run: |
-          ARGS=()
-          for arch in blackhole wormhole; do
-            part="parts/${arch}/slack_part.json"
-            points="reports/${arch}/perf_gate_report.points.csv"
-            if [ -f "$part" ]; then
-              ARGS+=(--part "$part")
-              echo "${arch}: verdict found"
-            else
-              echo "${arch}: no verdict; the gate reports it as skipped"
-            fi
-            if [ -f "$points" ]; then
-              ARGS+=(--points "${arch}=${points}")
-            fi
-          done
-          python3 tt_metal/tt-llk/perf/gate_slack_combine.py "${ARGS[@]}" \
-            --expect blackhole,wormhole \
-            --gate-name "LLK perf merge gate" \
-            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --channel "${SLACK_CHANNEL_ID:-unset}" \
-            --out slack_payload.json && exit 0
-          echo "::error::The gate could not build its Slack notification."
-          echo "should_post=false" >> "$GITHUB_OUTPUT"
-      - name: Notify Slack
-        if: steps.slack.outputs.should_post == 'true'
+          pattern: llk-perf-gate-report-*
+          path: reports
+      - name: Post to Slack
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
-        run: |
-          if [ -z "$SLACK_CHANNEL_ID" ]; then
-            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
-            exit 0
-          fi
-          if [ -z "$SLACK_BOT_TOKEN" ]; then
-            echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
-            exit 1
-          fi
-          RESPONSE=$(curl -sS --retry 3 -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H "Content-type: application/json; charset=utf-8" \
-            --data @slack_payload.json)
-          case "$RESPONSE" in
-            *'"ok":true'*) echo "Posted the gate verdict to Slack." ;;
-            *) echo "::error::Slack rejected the gate notification: ${RESPONSE}"; exit 1 ;;
-          esac
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tt_metal/tt-llk/perf/gate.py render --gate merge --reports reports --slack --trigger "merge queue"
 
   # ===========================================================================
   # Team: ttsim

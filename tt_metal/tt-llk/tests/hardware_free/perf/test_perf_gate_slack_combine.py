@@ -4,14 +4,12 @@
 """Tests for the one-post-for-all-arches Slack combiner (lives in tt_metal/tt-llk/perf)."""
 
 import csv
-import json
 import pathlib
 import sys
 
 _PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
-from gate_slack_combine import build_text, main, threshold_for
-from gate_slack_notify import main as notify_main
+from gate_slack_combine import build_text, threshold_for
 
 _ROW = {
     "marker": "TILE_LOOP",
@@ -91,77 +89,3 @@ def test_a_module_threshold_overrides_the_arch_threshold():
     ctx = _ctx("wormhole")
     assert threshold_for(ctx, "perf_matmul") == 0.25
     assert threshold_for(ctx, "perf_eltwise_unary_sfpu") == 0.13
-
-
-def _run(tmp_path, monkeypatch, parts, *extra):
-    output = tmp_path / "out.txt"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    args = []
-    for i, part in enumerate(parts):
-        path = tmp_path / f"part{i}.json"
-        path.write_text(json.dumps(part))
-        args += ["--part", str(path)]
-    out = tmp_path / "payload.json"
-    main([*args, *extra, "--channel", "C0TEST", "--out", str(out)])
-    return json.loads(out.read_text())["text"], output.read_text()
-
-
-def test_two_passes_do_not_post(tmp_path, monkeypatch):
-    parts = [_part("blackhole", "clean"), _part("wormhole", "clean")]
-    _, output = _run(tmp_path, monkeypatch, parts, "--expect", "blackhole,wormhole")
-    assert "should_post=false" in output
-
-
-def test_an_arch_with_no_part_is_a_skip(tmp_path, monkeypatch):
-    parts = [_part("blackhole", "clean")]
-    text, output = _run(tmp_path, monkeypatch, parts, "--expect", "blackhole,wormhole")
-    assert "should_post=true" in output
-    assert "SKIPPED" in text.splitlines()[0]
-    assert "*Wormhole* · L1_TO_L1: :warning: *SKIPPED.*" in text
-
-
-def test_no_part_at_all_still_posts_a_skip(tmp_path, monkeypatch):
-    out = tmp_path / "payload.json"
-    output = tmp_path / "out.txt"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    main(["--expect", "blackhole", "--channel", "C", "--out", str(out)])
-    assert "should_post=true" in output.read_text()
-    assert "*Blackhole*" in json.loads(out.read_text())["text"]
-
-
-def test_the_merge_gate_post_states_the_rule_of_a_regressed_arch(tmp_path, monkeypatch):
-    regressions = tmp_path / "regressions.csv"
-    with open(regressions, "w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(_ROW))
-        writer.writeheader()
-        writer.writerow(_ROW)
-    verdict = tmp_path / "verdict-wormhole.json"
-    policy = {
-        "title": "LLK perf merge gate",
-        "speed_of_light": False,
-        "threshold": 0.025,
-        "min_cycles": 30,
-        "modules": {"perf_matmul": 0.25},
-        "run_types": ["L1_TO_L1"],
-    }
-    verdict.write_text(
-        json.dumps(
-            {"arch": "wormhole", "status": "regression", "reason": "", "policy": policy}
-        )
-    )
-    part = tmp_path / "part.json"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "notify.txt"))
-    notify_main(
-        [
-            *("--verdict", str(verdict), "--regressions", str(regressions)),
-            *("--part-out", str(part)),
-            *("--channel", "C0TEST", "--out", str(tmp_path / "notify.json")),
-        ]
-    )
-    parts = [json.loads(part.read_text())]
-    text, _ = _run(tmp_path, monkeypatch, parts, "--expect", "blackhole,wormhole")
-    assert text.count("Threshold:") == 1
-    assert (
-        ": :rotating_light: regression\n_Threshold: a point regresses when it is "
-        "slower by more than 2.5% and by more than 30 cycles, except perf_matmul 25%._"
-    ) in text
