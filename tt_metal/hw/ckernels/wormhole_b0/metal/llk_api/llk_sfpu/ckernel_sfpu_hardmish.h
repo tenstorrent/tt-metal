@@ -50,8 +50,28 @@ inline void hardmish_init() {
  * @note Call @ref hardmish_init after any other SFPU init that writes vConstFloatPrgm0 or ADDR_MOD_6;
  *       this reads 0.5 from vConstFloatPrgm0 and advances Dest through ADDR_MOD_6.
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+bool bf16_dest_hardmish();
+template <int ITERATIONS>
+void calculate_hardmish_bf16();
+void init_hardmish_bf16();
+// Whether BF16 DEST runs the generated hardmish kernel as one call over the whole tile.
+inline constexpr bool hardmish_bf16_whole_tile = true;
+// Sets up the generated BF16 hardmish kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void hardmish_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_hardmish_bf16();
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void hardmish() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_hardmish()) {
+            calculate_hardmish_bf16<ITERATIONS>();
+            return;
+        }
+    }
     static_assert(ITERATIONS % 2 == 0, "hardmish processes two rows per iteration");
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS / 2; d++) {
@@ -75,3 +95,5 @@ inline void hardmish() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#include "ckernel_sfpu_hardmish_bf16.h"
