@@ -20,8 +20,8 @@ Description:
       - Includes current Op Id/Name/Params, previous Op (Prev Op Id/Name/Params), and device/core coverage:
           - Device Cnt / Core Cnt: total unique devices/cores running this Op Id
           - Devices / Cores: enumerated lists (may be truncated with "..." for readability)
-          - CT Args: one line per kernel the op runs, with its compile-time args
-            (see kernel_args_provider)
+          - CT Args / Common RT Args: one line per kernel the op runs, with its compile-time args and
+            its common runtime args (see kernel_args_provider)
 
     Companion scripts:
       - `dump_op_window` - context table of ops with id near the currently-running set.
@@ -38,7 +38,7 @@ Owner:
 
 from dataclasses import dataclass
 
-from kernel_args_provider import get_compile_time_args, serialize_kernel_args
+from kernel_args_provider import run as get_kernel_args_provider, KernelArgsProvider, serialize_kernel_args
 from operation_param_parser import ParameterParser
 from operation_provider import (
     run as get_operation_provider,
@@ -55,7 +55,7 @@ from ttexalens.context import Context
 
 
 script_config = ScriptConfig(
-    depends=["operation_provider"],
+    depends=["operation_provider", "kernel_args_provider"],
     priority=ScriptPriority.HIGH,
 )
 
@@ -78,10 +78,20 @@ class RunningOperationSummary:
     devices: list[str] = triage_field("Devices", collection_serializer(", "))
     cores: list[str] = triage_field("Cores", collection_serializer("\n"))
     compile_time_args: list[str] = triage_field("CT Args", collection_serializer("\n"))
+    common_runtime_args: list[str] = triage_field("Common RT Args", collection_serializer("\n"))
 
 
-def _to_summary(agg: RunningOperationAggregation, full_cores: bool) -> RunningOperationSummary:
+def _to_summary(
+    agg: RunningOperationAggregation, full_cores: bool, kernel_args_provider: KernelArgsProvider
+) -> RunningOperationSummary:
     devices = sorted(agg.device_labels)
+
+    compile_time_args = []
+    common_runtime_args = []
+    for _, kernel in sorted(agg.kernels.items()):
+        kernel_args = kernel_args_provider.get_cached_kernel_args(kernel.risc_location)
+        compile_time_args.append(f"{kernel.name}: {serialize_kernel_args(kernel_args.compile_time_args)}")
+        common_runtime_args.append(f"{kernel.name}: {serialize_kernel_args(kernel_args.common_runtime_args)}")
 
     unique_cores = sorted(agg.core_locations)
     cores_to_display = (
@@ -116,10 +126,8 @@ def _to_summary(agg: RunningOperationAggregation, full_cores: bool) -> RunningOp
         core_count=len(agg.core_locations),
         devices=devices,
         cores=cores_to_display,
-        compile_time_args=[
-            f"{kernel.name}: {serialize_kernel_args(get_compile_time_args(kernel))}"
-            for _, kernel in sorted(agg.kernels.items())
-        ],
+        compile_time_args=compile_time_args,
+        common_runtime_args=common_runtime_args,
     )
 
 
@@ -131,7 +139,11 @@ def run(args, context: Context):
     if not bundle.aggregations:
         return None
 
-    return [_to_summary(bundle.aggregations[hid], full_cores) for hid in sorted(bundle.aggregations.keys())]
+    kernel_args_provider = get_kernel_args_provider(args, context)
+    return [
+        _to_summary(bundle.aggregations[hid], full_cores, kernel_args_provider)
+        for hid in sorted(bundle.aggregations.keys())
+    ]
 
 
 if __name__ == "__main__":

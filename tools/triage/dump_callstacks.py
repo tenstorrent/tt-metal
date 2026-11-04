@@ -19,8 +19,8 @@ Description:
     With --full-callstack, local variable values shown as "?" could not be read (e.g. optimized out).
 
     With -v, CT Args, RT Args and Common RT Args show the arguments of the kernel on each RISC, with
-    the values it uses now (see kernel_args_provider). Each is a list in word order, in hex, with
-    name=value for a word that has a name.
+    the values it uses now (see kernel_args_provider). Each is a list in word order, in hex, as
+    name=value, or [i]=value for word i when it has no name.
 
     Color output is automatically enabled when stdout is a TTY (terminal) and can be overridden
     with TT_TRIAGE_COLOR environment variable (0=disable, 1=enable).

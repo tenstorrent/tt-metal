@@ -718,6 +718,11 @@ class TestTriage:
                 "writer_1_tile: tensor::out[0]=0x2, tensor::out[1]=0x800, ct_marker=0x5678" in op.compile_time_args
                 for op in matching
             ), f"Writer compile-time args missing. Got: {[op.compile_time_args for op in matching]}"
+            assert any(
+                re.fullmatch(r"writer_1_tile: incremented_semaphore=0x[0-9a-f]+, tensor::out=0x[0-9a-f]+", line)
+                for op in matching
+                for line in op.common_runtime_args
+            ), f"Writer common runtime args missing. Got: {[op.common_runtime_args for op in matching]}"
 
     def test_dump_semaphores(self):
         result = self.run_triage_script("dump_semaphores.py")

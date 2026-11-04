@@ -19,7 +19,7 @@ Description:
     asserts enabled, each list is shifted by one word.
 
     Each value carries the name metal gives it: Metal 2.0 arg names, tensor::<accessor> and
-    scratch::<accessor> slots. Other values are known by position only.
+    scratch::<accessor> slots. Other values show their word index, as [i].
     A RISC not enabled by the launch, or running a kernel Inspector does not know, has no args (None).
 
 Owner:
@@ -33,7 +33,7 @@ from rich.markup import escape
 
 from configuration_provider import run as get_configuration_provider
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from inspector_capnp import KernelData, RuntimeArgs
+from inspector_capnp import RuntimeArgs
 from triage import ScriptConfig, run_script, triage_field, triage_singleton
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
@@ -52,10 +52,12 @@ class KernelArg:
 
 
 def serialize_kernel_args(args: list[KernelArg] | None) -> str:
-    """Values in word order, in hex, as name=value when the word has a name."""
+    """Values in word order, in hex, as name=value, or [i]=value for word i when it has no name."""
     if args is None:
         return "N/A"
-    return ", ".join(f"{escape(arg.name)}={arg.value:#x}" if arg.name else f"{arg.value:#x}" for arg in args)
+    return ", ".join(
+        f"{escape(arg.name)}={arg.value:#x}" if arg.name else f"[{i}]={arg.value:#x}" for i, arg in enumerate(args)
+    )
 
 
 @dataclass
@@ -63,10 +65,6 @@ class KernelArgsData:
     compile_time_args: list[KernelArg] | None = triage_field("CT Args", serialize_kernel_args, verbose=1)
     runtime_args: list[KernelArg] | None = triage_field("RT Args", serialize_kernel_args, verbose=1)
     common_runtime_args: list[KernelArg] | None = triage_field("Common RT Args", serialize_kernel_args, verbose=1)
-
-
-def get_compile_time_args(kernel: KernelData) -> list[KernelArg]:
-    return [KernelArg(arg.name or None, arg.value) for arg in kernel.compileTimeArgs]
 
 
 class KernelArgsProvider:
@@ -86,7 +84,7 @@ class KernelArgsProvider:
         location = risc_location.location
         base = core.kernel_config_base + self.count_word_bytes
         return KernelArgsData(
-            compile_time_args=get_compile_time_args(kernel),
+            compile_time_args=[KernelArg(arg.name or None, arg.value) for arg in kernel.compileTimeArgs],
             runtime_args=self._read_args(location, base + core.rta_offset, kernel.runtimeArgs),
             common_runtime_args=self._read_args(location, base + core.crta_offset, kernel.commonRuntimeArgs),
         )
