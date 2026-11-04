@@ -12,13 +12,11 @@
 #include <cstdlib>
 #include <exception>
 #include <functional>
-#include <map>
 #include <optional>
 #include <random>
 #include <string>
 #include <tuple>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -34,7 +32,6 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/buffers/semaphore.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>

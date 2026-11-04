@@ -18,8 +18,6 @@
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
-#include "mesh_device.hpp"
-#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 

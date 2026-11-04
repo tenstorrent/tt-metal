@@ -16,7 +16,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
-#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <array>
