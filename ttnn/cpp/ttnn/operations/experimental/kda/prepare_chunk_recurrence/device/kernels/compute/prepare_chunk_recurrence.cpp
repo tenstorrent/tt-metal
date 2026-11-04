@@ -331,7 +331,8 @@ KDA_PREP_HELPER void multiply_by_column_then(DFB0& a, DFB1& col, DFB2& b, DFB3& 
 }
 
 // out_i = (a_i[1,Kt] @ b_i[1,Kt]^T) * mask, one tile per item: each product stays in DST and moves to SrcB, the exact
-// mask to SrcA (HiFi4 multiplies 10 explicit mantissa bits of SrcB, 8 of SrcA, so the FP32 data takes the wider
+// mask to SrcA (at HiFi4 the multiplier takes one more mantissa bit of SrcB than of SrcA, per the fidelity-phase
+// model in tests/ttnn/nightly/unit_tests/operations/matmul/numeric_tolerances.py, so the FP32 data takes the wider
 // input). A destination acquire holds up to max_dst_tiles items' products.
 template <uint32_t Kt, typename DFB0, typename DFB1, typename DFB2, typename DFB3>
 KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3& o, uint32_t items) {
@@ -426,7 +427,7 @@ KDA_ITEMS_HELPER void matmul_items(DFB0& a, DFB1& b, DFB2& o, uint32_t n, uint32
 //            (I-N)^-1 = (I+M3)(I+M3^2)B.
 // Eight matmuls in total, two fewer than a single 8-row Horner series over the same input.
 // Each block mask holds -1 on its level's strictly lower entries, so N1, L2 and L3 are each one exact product with
-// the raw Akk; the mask is the first operand (SrcA) and the FP32 Akk the second (SrcB, the wider multiplier input).
+// the raw Akk; the mask is the first operand (SrcA) and the FP32 Akk the second (SrcB; see matmul_transposed_masked).
 // Each stage runs over all n independent items, item i's tile at the front of its buffers + i.
 template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4, typename DFB5, typename DFB6>
 __attribute__((noinline)) void invert_items(
@@ -689,9 +690,7 @@ KDA_PREP_HELPER void prepare_gate_factors(
     // The sum-broadcast matrix carries half the gate scale, so this is the anchor G_last/2, replicated.
     matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, /*a_shared=*/true, g, anchor_g, items);
 
-    // exp(G-anchor) and its precise reciprocal exp(anchor-G), the exponent formed in DST by the centered mask (s/2 on
-    // and below the diagonal, -s/2 above), and the row exponential exp(G_last/2). The anchor has its own buffer, so
-    // centered_decay can be packed while the anchor is still read. The anchor stays for prepare_final_decay.
+    // exp(G-anchor), exp(anchor-G) and exp(G_last/2); see gate_exponentials. The anchor stays for prepare_final_decay.
     gate_exponentials(centered_mask, g, anchor_g, centered_decay, centered_inverse_decay, anchor_decay, key_tiles);
     g.pop_front(key_tiles);
 }

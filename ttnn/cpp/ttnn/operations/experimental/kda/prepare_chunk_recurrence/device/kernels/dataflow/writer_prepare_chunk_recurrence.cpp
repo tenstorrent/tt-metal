@@ -18,14 +18,14 @@
 constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
 constexpr uint32_t fp32_minus_one_bits = __builtin_bit_cast(uint32_t, -1.0F);
 
-// Fill one tile of `ones` with `ones_bits`, and one tile of `tril` with `tril_bits` on and below the diagonal and
+// Fill one tile of `ones` with `ones_bits`, and one tile of `split` with `lower_bits` on and below the diagonal and
 // `upper_bits` above it. A face row seeded in L1 is replicated with local NoC reads: down its face, and the first face
 // across the tile.
 // One out-of-line copy serves both fills; it runs once per program, and a copy per value overflows the kernel config
 // buffer.
 template <typename DFB0, typename DFB1>
-__attribute__((noinline)) void fill_ones_and_tril(
-    DFB0& ones, uint32_t ones_bits, DFB1& tril, uint32_t tril_bits, uint32_t upper_bits) {
+__attribute__((noinline)) void fill_ones_and_split(
+    DFB0& ones, uint32_t ones_bits, DFB1& split, uint32_t lower_bits, uint32_t upper_bits) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t face_elements = tt::constants::FACE_HW;
@@ -37,7 +37,7 @@ __attribute__((noinline)) void fill_ones_and_tril(
     constexpr uint32_t lower_left_face = faces_per_tile_row;
     constexpr uint32_t bottom_right_face = faces_per_tile_row + 1;
 
-    tril.reserve_back(1);
+    split.reserve_back(1);
     ones.reserve_back(1);
     Noc noc;
     UnicastEndpoint self;
@@ -58,29 +58,29 @@ __attribute__((noinline)) void fill_ones_and_tril(
     };
 
     fill_face(ones, 0, ones_bits);
-    fill_face(tril, 0, upper_bits);
+    fill_face(split, 0, upper_bits);
     noc.async_read_barrier();
     const auto ones_source = local(ones.get_write_ptr());
     for (uint32_t face = 1; face < faces_per_tile; ++face) {
         noc.async_read(self, ones, face_bytes, ones_source, {.offset_bytes = face * face_bytes});
     }
     noc.async_read(
-        self, tril, face_bytes, local(tril.get_write_ptr()), {.offset_bytes = upper_right_face * face_bytes});
+        self, split, face_bytes, local(split.get_write_ptr()), {.offset_bytes = upper_right_face * face_bytes});
     noc.async_read_barrier();
-    // The upper-right face holds upper_bits only and the lower-left face tril_bits only; the diagonal faces take
-    // tril_bits on and below their diagonal, the first filled in place and copied to the last.
-    fill_face(tril, lower_left_face, tril_bits);
-    auto* tril_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tril.get_write_ptr());
+    // The upper-right face holds upper_bits only and the lower-left face lower_bits only; the diagonal faces take
+    // lower_bits on and below their diagonal, the first filled in place and copied to the last.
+    fill_face(split, lower_left_face, lower_bits);
+    auto* split_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(split.get_write_ptr());
     for (uint32_t row = 0; row < face_height; ++row) {
         for (uint32_t column = 0; column <= row; ++column) {
-            tril_tile[row * face_width + column] = tril_bits;
+            split_tile[row * face_width + column] = lower_bits;
         }
     }
     noc.async_read_barrier();
     noc.async_read(
-        self, tril, face_bytes, local(tril.get_write_ptr()), {.offset_bytes = bottom_right_face * face_bytes});
+        self, split, face_bytes, local(split.get_write_ptr()), {.offset_bytes = bottom_right_face * face_bytes});
     noc.async_read_barrier();
-    tril.push_back(1);
+    split.push_back(1);
     ones.push_back(1);
 }
 
@@ -152,7 +152,7 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
     // the HiFi4 product of BF16 g and s/2 is exact in FP32). The centered matrix holds s/2 on and below the diagonal
     // and -s/2 above it, so one matmul yields G - G_last/2; the sum-broadcast matmul yields the anchor G_last/2.
     {
-        static_assert(Ct == 1, "fill_ones_and_tril fills one tile per chunk matrix");
+        static_assert(Ct == 1, "fill_ones_and_split fills one tile per chunk matrix");
         DataflowBuffer eye(dfb::eye);
         DataflowBuffer tril(dfb::tril);
         DataflowBuffer ones(dfb::ones);
@@ -160,9 +160,9 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
         DataflowBuffer gate_ones(dfb::gate_ones);
         DataflowBuffer block_masks(dfb::block_masks);
         constexpr uint32_t fp32_sign_bit = 0x80000000U;
-        fill_ones_and_tril(
+        fill_ones_and_split(
             gate_ones, GATE_HALF_SCALE_BITS, gate_centered, GATE_HALF_SCALE_BITS, GATE_HALF_SCALE_BITS ^ fp32_sign_bit);
-        fill_ones_and_tril(ones, fp32_one_bits, tril, fp32_one_bits, /*upper_bits=*/0);
+        fill_ones_and_split(ones, fp32_one_bits, tril, fp32_one_bits, /*upper_bits=*/0);
         fill_inverse_constants(eye, block_masks);
     }
     DataflowBuffer control(dfb::chronology_writer);
