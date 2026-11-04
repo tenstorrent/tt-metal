@@ -15,7 +15,7 @@ import numpy as np
 import torch
 from torchvision.transforms.v2 import functional as tvF
 
-from models.demos.minimax_m3.vision import format
+from models.demos.minimax_m3.vision import format as media_format
 
 PATCH_SIZE = 14
 MERGE_SIZE = 2
@@ -63,7 +63,7 @@ class MiniMaxM3Media:
         self.hidden = hf_config["text_config"]["hidden_size"]
         self.placeholder_token_ids = {"image": hf_config["image_token_index"]}
         assert hf_config["vision_config"]["patch_size"] == PATCH_SIZE, hf_config["vision_config"]
-        self._stub = None
+        self._stub = False
 
     def prepare(self, kind: str, media: np.ndarray) -> M3Image:
         if kind != "image":
@@ -71,7 +71,7 @@ class MiniMaxM3Media:
         if media.dtype != np.uint8 or media.ndim != 3 or media.shape[2] != 4 or 0 in media.shape:
             raise ValueError(f"expected a non-empty uint8 RGBA [height, width, 4], got {media.dtype} {media.shape}")
         h, w = smart_resize(*media.shape[:2])
-        rgb = torch.from_numpy(np.ascontiguousarray(media[..., :3])).permute(2, 0, 1)
+        rgb = torch.from_numpy(media).permute(2, 0, 1)[:3]
         resized = tvF.resize(rgb, [h, w], interpolation=tvF.InterpolationMode.BICUBIC, antialias=True)
         return M3Image(resized.permute(1, 2, 0).contiguous().numpy(), h // FACTOR, w // FACTOR)
 
@@ -79,7 +79,7 @@ class MiniMaxM3Media:
         return [(IMAGE_START, 1), (self.placeholder_token_ids["image"], item.n_tokens), (IMAGE_END, 1)]
 
     def value_size(self, item: M3Image) -> int:
-        return format.value_size(item.n_tokens, self.hidden)
+        return media_format.value_size(item.n_tokens, self.hidden)
 
     def load(self, weights_path: str, options: dict) -> None:
         if not options.get("stub_embeddings"):
@@ -89,11 +89,12 @@ class MiniMaxM3Media:
     def encode(self, items: list[M3Image], out: list[memoryview]) -> None:
         assert self._stub, "encode before load"
         for item, buf in zip(items, out, strict=True):
-            h = format.Header(item.grid_h, item.grid_w, item.n_tokens, self.hidden)
-            format.write_header(buf, h)
-            seed = int.from_bytes(hashlib.sha256(item.pixels.tobytes()).digest()[:8], "little")
+            h = media_format.Header(item.grid_h, item.grid_w, item.n_tokens, self.hidden)
+            media_format.write_header(buf, h)
+            digest = hashlib.sha256(np.asarray(item.pixels.shape).tobytes() + item.pixels.tobytes()).digest()
+            seed = int.from_bytes(digest[:8], "little")
             rows = torch.randn(item.n_tokens, self.hidden, generator=torch.Generator().manual_seed(seed)) * 0.02
-            format.embeddings(buf, h)[:] = rows.to(torch.bfloat16).view(torch.int16).numpy().view(np.uint16)
+            media_format.embeddings(buf, h)[:] = rows.to(torch.bfloat16).view(torch.int16).numpy().view(np.uint16)
 
     def close(self) -> None:
-        self._stub = None
+        self._stub = False

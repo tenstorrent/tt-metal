@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 import torch
 
-from models.demos.minimax_m3.vision import format
-from models.demos.minimax_m3.vision.media import IMAGE_END, IMAGE_START, MiniMaxM3Media
+from models.demos.minimax_m3.vision import format as media_format
+from models.demos.minimax_m3.vision.media import IMAGE_END, IMAGE_START, M3Image, MiniMaxM3Media
 
 CONFIG = {"image_token_index": 200025, "text_config": {"hidden_size": 64}, "vision_config": {"patch_size": 14}}
 
@@ -21,10 +21,10 @@ def rgba(h, w, seed=0):
 
 @pytest.mark.parametrize("hw", [(672, 896), (560, 756), (30, 30), (4000, 3000), (28, 5000), (1, 150)])
 def test_prepare_matches_hf(hw):
-    hf = pytest.importorskip("transformers.models.minimax_m3_vl.image_processing_minimax_m3_vl")
     from PIL import Image
+    from transformers.models.minimax_m3_vl.image_processing_minimax_m3_vl import MiniMaxM3VLImageProcessor
 
-    proc = hf.MiniMaxM3VLImageProcessor()
+    proc = MiniMaxM3VLImageProcessor()
     media = MiniMaxM3Media(CONFIG)
     image = rgba(*hw)
     item = media.prepare("image", image)
@@ -62,24 +62,32 @@ def test_stub_encode_writes_a_value_prefill_reads(expect_error):
     media.encode([item], bufs[:1])
     media.encode([item], bufs[1:])
 
-    h = format.read_header(bufs[0])
-    assert h == format.Header(item.grid_h, item.grid_w, item.n_tokens, 64)
+    h = media_format.read_header(bufs[0])
+    assert h == media_format.Header(item.grid_h, item.grid_w, item.n_tokens, 64)
     assert bytes(bufs[0]) == bytes(bufs[1])
-    assert format.embeddings(bufs[0], h).any()
+    transposed = M3Image(item.pixels.reshape(item.pixels.shape[1], item.pixels.shape[0], 3), item.grid_w, item.grid_h)
+    other = memoryview(bytearray(media.value_size(transposed)))
+    media.encode([transposed], [other])
+    assert bytes(other[media_format.HEADER_BYTES :]) != bytes(bufs[0][media_format.HEADER_BYTES :])
+    assert media_format.embeddings(bufs[0], h).any()
 
 
 def test_format_rejects_bad_values(expect_error):
-    h = format.Header(2, 3, 6, 64)
-    buf = memoryview(bytearray(format.value_size(6, 64)))
-    format.write_header(buf, h)
-    assert format.read_header(buf) == h
+    h = media_format.Header(2, 3, 6, 64)
+    buf = memoryview(bytearray(media_format.value_size(6, 64)))
+    media_format.write_header(buf, h)
+    assert media_format.read_header(buf) == h
     with expect_error(ValueError, "needs"):
-        format.read_header(buf[:-2])
+        media_format.read_header(buf[:-2])
     buf[8:12] = (5).to_bytes(4, "little")
     with expect_error(ValueError, "grid_h"):
-        format.read_header(buf)
+        media_format.read_header(buf)
     with expect_error(ValueError, "no embeddings"):
-        format.read_header(memoryview(bytearray(format.HEADER_BYTES)))
+        media_format.read_header(memoryview(bytearray(media_format.HEADER_BYTES)))
+    buf[8:12] = (6).to_bytes(4, "little")
+    buf[40] = 1
+    with expect_error(ValueError, "reserved"):
+        media_format.read_header(buf)
 
 
 def test_image_pickles_out_of_band():
