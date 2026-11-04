@@ -19,7 +19,6 @@
 #include <limits>
 #include <map>
 #include <numeric>
-#include <optional>
 #include <set>
 #include <memory>
 #include <string>
@@ -28,6 +27,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>

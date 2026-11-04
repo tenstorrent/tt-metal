@@ -443,7 +443,8 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
             receiver_worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+            # The sender forwards the activation's record, MTP word included.
+            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
         )
@@ -481,7 +482,7 @@ def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
     idx_in.release_fabric_links()
     t0 = time.perf_counter()
     indices, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        idx_in, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES
+        idx_in, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
     ttnn.deallocate(metadata_msg)
     logger.info(f"[pp] RECV-d2d-idx [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
@@ -1146,10 +1147,11 @@ def main() -> None:
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
-    logger.info(
+    print(
         f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} layers=[{first_layer_idx}, "
         f"{first_layer_idx + num_my_layers}) is_first={is_first_rank} is_last={is_last_rank} "
-        f"chunk_size={CHUNK_SIZE} forward_chunks={FORWARD_CHUNKS} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}"
+        f"chunk_size={CHUNK_SIZE} forward_chunks={FORWARD_CHUNKS} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}",
+        flush=True,
     )
 
     mesh_device = open_mesh_device(

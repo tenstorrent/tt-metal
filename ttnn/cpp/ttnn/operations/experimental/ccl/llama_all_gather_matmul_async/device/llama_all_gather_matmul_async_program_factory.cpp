@@ -441,13 +441,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         if (forward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device, sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
         }
         writer_rt_args.push_back(backward_fabric_node_id.has_value());
         if (backward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device, sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
         }
 
         ttnn::experimental::ccl::emplace_runtime_args_with_buffers(

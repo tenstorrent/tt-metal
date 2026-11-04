@@ -24,6 +24,7 @@
 #include <ranges>
 #include <span>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "random_parallel.hpp"
@@ -449,6 +450,14 @@ void generate_uniform_simd_bfloat16(std::span<bfloat16> output, uint32_t seed, a
 // ============================================================================
 // Drop-in Replacement API
 // ============================================================================
+
+// True when the functions below have a SIMD fast path for elements of type T drawn from the distribution dist_factory()
+// returns. They leave seq unwritten for any other pair, such as an integer distribution.
+template <typename T, typename DistGenFunc>
+inline constexpr bool has_simd_fast_path =
+    (std::same_as<T, float> || std::same_as<T, bfloat16>) &&
+    (std::same_as<std::invoke_result_t<DistGenFunc&>, std::uniform_real_distribution<float>> ||
+     std::same_as<std::invoke_result_t<DistGenFunc&>, std::normal_distribution<float>>);
 
 // Sequential generate - matches original random.hpp API
 template <typename T, typename DistGenFunc>

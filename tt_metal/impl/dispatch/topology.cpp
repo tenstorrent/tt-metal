@@ -26,7 +26,6 @@
 #include "kernel_config/fd_kernel.hpp"
 #include "program/program_impl.hpp"
 #include "program.hpp"
-#include <tt_stl/span.hpp>
 #include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
 #include <tt-umd/types/core_coordinates.hpp>

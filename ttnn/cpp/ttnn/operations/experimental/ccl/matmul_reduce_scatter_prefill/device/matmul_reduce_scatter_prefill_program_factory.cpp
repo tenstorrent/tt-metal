@@ -859,7 +859,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
             const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, src_node, peer_node);
             TT_FATAL(l < links.size(), "matmul_reduce_scatter_prefill: link {} of chip {} is not usable", l, p);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                src_node, peer_node, links[l], desc, pcore, ps_rt, tt::CoreType::WORKER);
+                *mesh, src_node, peer_node, links[l], desc, pcore, ps_rt, tt::CoreType::WORKER);
             port_sender.runtime_args.emplace_back(pcore, std::move(ps_rt));
         }
     }
