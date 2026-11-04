@@ -843,7 +843,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
  * rows against those blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only for
  * another chain member is drained. A slot's state is created by its first step, at whichever piece (or pooled entry)
  * that falls; a chunk that keeps no block in the whole op gets a zero output. Dropped blocks are pooled by the column
- * bias of the pooled chunks that follow the local pieces on the pass's first active ring iteration: one full-width
+ * bias of the pooled chunks that follow the local pieces on the pass's last active ring iteration: one full-width
  * step per resident chunk of the head, each with its own bias row (pushed by the reader in Q-chunk order after the
  * pooled K/V entry).
  *
@@ -1315,7 +1315,7 @@ void sdpa_ring_resident(
         }
     }
 
-    // Pooled chunks (pooled route only, on the pass's first active ring iteration): full-width steps over the head's
+    // Pooled chunks (pooled route only, on the pass's last active ring iteration): full-width steps over the head's
     // resident chunks in groups of the scratch capacity, each member with its own bias row (the reader pushes them in
     // Q-chunk order after the pooled K/V entry; the step consumes them one at a time).
     if constexpr (pooled_route) {

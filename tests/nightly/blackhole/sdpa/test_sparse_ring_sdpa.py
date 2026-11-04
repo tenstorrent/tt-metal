@@ -516,11 +516,29 @@ def _mode(pooled):
     return "pooled" if pooled else "kept-only"
 
 
+# PCC ignores a scale error: the output is also fitted as scale x reference, and the scale must be this close to 1.
+SCALE_TOL = 0.01
+
+
+def _fit_scale(ref, out):
+    keep = ~torch.isnan(ref)
+    r, o = ref[keep].double(), out[keep].double()
+    return (o @ r / (r @ r)).item()
+
+
+def _check_scale(tag, r):
+    scale = _fit_scale(r["ref"], r["sparse"])
+    logger.info(f"[{tag}] fitted scale vs reference {scale:.5f}")
+    assert abs(scale - 1) < SCALE_TOL, f"{tag}: output is {scale:.5f} x the reference"
+
+
 def _check(tag, r, density, *, dense_min, ref_min):
     p_dense = _pcc(r["dense"], r["sparse"]) if r["dense"] is not None else float("nan")
     p_ref = _pcc(r["ref"], r["sparse"]) if r["ref"] is not None else float("nan")
     logger.info(f"[{tag}] block density {density:.3f}: pcc vs dense {p_dense:.5f}, vs reference {p_ref:.5f}")
     assert torch.isfinite(r["sparse"]).all(), f"{tag}: non-finite output"
+    if r["ref"] is not None:
+        _check_scale(tag, r)
     if dense_min is not None:
         assert p_dense > dense_min, f"{tag}: pcc vs dense {p_dense:.5f}"
     if ref_min is not None:
@@ -548,6 +566,7 @@ def _check_vs_dense_floor(tag, r, density):
     p_ref = _pcc(r["ref"], r["sparse"])
     p_floor = _pcc(r["dense_ref"], r["dense"])
     logger.info(f"[{tag}] block density {density:.3f}: pcc vs reference {p_ref:.5f}, dense vs exact {p_floor:.5f}")
+    _check_scale(tag, r)
     blocks, dense_blocks = _block_pccs(r["ref"], r["sparse"]), _block_pccs(r["dense_ref"], r["dense"])
     if blocks:
         med = blocks[len(blocks) // 2][0]
