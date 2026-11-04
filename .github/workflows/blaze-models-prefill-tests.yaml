@@ -247,11 +247,31 @@ jobs:
           if [ -n "$id" ]; then
             echo "url=${run_url}/artifacts/${id}" >> "$GITHUB_OUTPUT"
           fi
+      - name: Plot chunk_time@ISL
+        id: plot
+        continue-on-error: true
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/plot-venv"
+          "${RUNNER_TEMP}/plot-venv/bin/pip" install --quiet matplotlib
+          "${RUNNER_TEMP}/plot-venv/bin/python" models/demos/common/prefill/runners/ci/plot_chunk_time.py \
+            --metrics-dir perf_metrics --model "${{ matrix.model }}" -o "${{ matrix.model }}_chunk_time.png"
+          if [ -f "${{ matrix.model }}_chunk_time.png" ]; then
+            echo "png=${{ matrix.model }}_chunk_time.png" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload chunk_time@ISL plot
+        id: chunk-time
+        if: ${{ steps.plot.outputs.png }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          path: ${{ steps.plot.outputs.png }}
+          archive: false
       - name: Report scaling
         run: |
           python3 models/demos/common/prefill/runners/ci/scaling_summary.py \
             --metrics-dir perf_metrics --model "${{ matrix.model }}" ${{ matrix.sc4_only && '--sc4-only' || '' }} \
-            ${{ steps.gantt.outputs.url && format('--gantt-url {0}', steps.gantt.outputs.url) || '' }}
+            ${{ steps.gantt.outputs.url && format('--gantt-url {0}', steps.gantt.outputs.url) || '' }} \
+            ${{ steps.chunk-time.outputs.artifact-url && format('--chunk-time-url {0}', steps.chunk-time.outputs.artifact-url) || '' }}
 
   ai-run-summary:
     name: "AI Run Summary"
