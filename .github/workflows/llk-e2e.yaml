@@ -37,6 +37,16 @@ on:
         required: false
         type: string
         default: '["blackhole", "wormhole"]'
+      merged:
+        description: 'Optional extra side: "true" runs the functional modules on the head merged onto main_sha (needs main_sha)'
+        required: false
+        type: string
+        default: ""
+      patch:
+        description: "Optional extra side (a mutant): gzip+base64 of a unified diff against the head, functional modules only"
+        required: false
+        type: string
+        default: ""
       tag:
         description: "Run name tag (auto/ci finds its run by it)"
         required: false
@@ -101,6 +111,8 @@ jobs:
           BASE_SHA: ${{ inputs.base_sha }}
           HEAD_SHA: ${{ inputs.head_sha }}
           MAIN_SHA: ${{ inputs.main_sha }}
+          MERGED: ${{ inputs.merged }}
+          PATCH_B64: ${{ inputs.patch }}
         run: bash probe/review-probe/run.sh
       - name: Upload results
         if: always()
