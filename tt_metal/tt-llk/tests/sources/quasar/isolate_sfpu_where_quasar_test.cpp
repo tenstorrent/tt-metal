@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             dispatch_sfpu_srcs_op<WhereSrcs>(
                 unpack_S_dst,

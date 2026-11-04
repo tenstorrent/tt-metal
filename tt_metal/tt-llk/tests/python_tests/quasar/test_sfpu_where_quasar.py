@@ -224,7 +224,7 @@ def test_sfpu_where_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
     mask = _processed_face_mask(vector_mode, num_faces)
     assert passed_test(
-        golden_tensor[mask], res_tensor[mask], formats.output_format
+        golden_tensor[mask], res_tensor[mask], formats.output_format, max_ulp=0
     ), "Assert against golden failed"
 
 
@@ -317,5 +317,5 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, vector_mode):
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
     mask = _processed_face_mask(vector_mode, num_faces)
     assert passed_test(
-        golden_tensor[mask], res_tensor[mask], formats.output_format
+        golden_tensor[mask], res_tensor[mask], formats.output_format, max_ulp=0
     ), "Assert against golden failed"

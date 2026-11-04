@@ -12,10 +12,8 @@ from quasar.test_isolate_sfpu_where_quasar import (
 )
 from quasar.test_sfpu_where_quasar import PERF_SFPU_WHERE_TEST_CASES
 
-# Only TRISC3 does work in this kernel, so only the run types it measures are meaningful.
-PERF_RUN_TYPES_ISOLATE_SFPU = [
-    [PerfRunType.L1_TO_L1, PerfRunType.SFPU_ISOLATE],
-]
+# Only TRISC3 does work in this kernel; L1_TO_L1 already covers it.
+PERF_RUN_TYPES_ISOLATE_SFPU = [[PerfRunType.L1_TO_L1]]
 
 
 @pytest.mark.perf

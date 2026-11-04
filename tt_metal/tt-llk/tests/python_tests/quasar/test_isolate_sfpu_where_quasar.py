@@ -158,4 +158,4 @@ def test_isolate_sfpu_where_quasar(
     res_from_L1 = configuration.run().result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format, max_ulp=0)
