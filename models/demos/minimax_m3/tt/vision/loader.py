@@ -23,14 +23,18 @@ from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, Mini
 from models.demos.minimax_m3.utils.checkpoint import is_aux_key, plain_key
 
 _WANT = ("vision_tower.", "multi_modal_projector.", "patch_merge_mlp.")
+_MERGE_PREFIX = "patch_merge_mlp."
+_TOWER_PREFIX = "vision_tower.vision_model."
+# Name prefixes of the checkpoint's own (transformers 4.52.4) vision tensors: the ones _remap renames.
+CHECKPOINT_PREFIXES = (_TOWER_PREFIX, _MERGE_PREFIX)
 
 
 def _remap(key: str) -> str:
     """Checkpoint (transformers 4.52.4) key -> v5.12 model key layout."""
-    if key.startswith("patch_merge_mlp."):
-        return "multi_modal_projector.merge_" + key[len("patch_merge_mlp.") :]
-    if key.startswith("vision_tower.vision_model."):
-        rest = key[len("vision_tower.vision_model.") :]
+    if key.startswith(_MERGE_PREFIX):
+        return "multi_modal_projector.merge_" + key[len(_MERGE_PREFIX) :]
+    if key.startswith(_TOWER_PREFIX):
+        rest = key[len(_TOWER_PREFIX) :]
         rest = rest.replace("embeddings.patch_embedding", "embeddings.proj")
         rest = rest.replace("encoder.layers.", "layers.")
         return "vision_tower." + rest

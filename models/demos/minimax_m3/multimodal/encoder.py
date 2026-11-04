@@ -54,13 +54,10 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, num_tokens
-from models.demos.minimax_m3.tt.vision.loader import load_vision_state_dict
+from models.demos.minimax_m3.tt.vision.loader import CHECKPOINT_PREFIXES, load_vision_state_dict
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.preprocess import NUM_CHANNELS, PATCH_SIZE, TEMPORAL_PATCH_SIZE, patch_rows
 
-# Name prefixes of the checkpoint's own (transformers 4.52.4) vision tensors: those that loader._remap renames, which
-# this list must follow.
-_CHECKPOINT_PREFIXES = ("vision_tower.vision_model.", "patch_merge_mlp.")
 # Name prefixes of the weights that MiniMaxM3VisionEncoder.load_hf_state_dict loads, or rejects as having no place in
 # the reference.
 _VISION_PREFIXES = ("vision_tower.", "multi_modal_projector.")
@@ -129,7 +126,7 @@ class TtMiniMaxM3VisionEncoder(LightweightModule):
         """
         super().__init__()
         self.config = _checked_config(mesh_device, config)
-        stored = sorted(key for key in state_dict if key.startswith(_CHECKPOINT_PREFIXES))
+        stored = sorted(key for key in state_dict if key.startswith(CHECKPOINT_PREFIXES))
         if stored:
             raise ValueError(
                 f"state_dict has {len(stored)} weights under the checkpoint's own names, such as {stored[0]}: read"
