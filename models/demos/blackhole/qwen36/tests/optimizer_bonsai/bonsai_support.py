@@ -66,6 +66,11 @@ def build_model(device, n_layers=None):
         from models.demos.blackhole.bonsai2.tt.gdn_prefill.chunk_prep import install
 
         install(device)
+    if os.environ.get("BONSAI_GDN_FWD") == "1":
+        # GatedDeltaNet chunked prefill without the head relayouts (bonsai2/tt/gdn_prefill/forward.py).
+        from models.demos.blackhole.bonsai2.tt.gdn_prefill.forward import prepare
+
+        prepare(model)
     if os.environ.get("BONSAI_TERNARY_MLP") == "1":
         # One-token decode MLPs in Bonsai's own ternary weights, read from the GGUF (bonsai2/tt/ternary/mlp.py).
         # Packed on the host here; swapped in for the dense gate/up/down after the prefill (after_prefill).

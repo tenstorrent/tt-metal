@@ -7,11 +7,108 @@ token-major mode), which L2-normalises q and k and maps each value head to its k
 re-tilizes q, k and v first. Everything else follows the shared mega-fused path op for op."""
 
 import os
+import struct
+
+import torch
 
 import ttnn
 from models.demos.blackhole.bonsai2.tt.gdn_prefill import chunk_prep
 
 C = 128
+KERNELS = "models/demos/blackhole/bonsai2/tt/gdn_prefill/kernels/"
+
+
+def _f32_bits(v):
+    return struct.unpack("<I", struct.pack("<f", float(v)))[0]
+
+
+class OutputFinish:
+    """Scan output o [H, T, 128] fp32 and z [1, T, H * 128] bf16 -> o / rms(o) * w * silu(z) as [1, T, H * 128] bf16,
+    token-major (kernels/fin_*.cpp): replaces the shared path's untilize, permute, re-tilize, gated RMSNorm and
+    reshapes. (Its +-1e4 clips are left out: they only act on overflowing values.)"""
+
+    def __init__(self, device, norm_w, eps):
+        w = torch.as_tensor(norm_w, dtype=torch.float32).reshape(-1)
+        tiles = []
+        for d in range(4):
+            t = torch.zeros(32, 32)
+            t[0] = w[32 * d : 32 * d + 32]
+            tiles.append(t)
+        tiles.append(torch.ones(32, 32))
+        self.consts = ttnn.from_torch(torch.cat(tiles, 0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        self.eps, self.device = eps, device
+
+    def __call__(self, o_bh, z, T):
+        """o_bh: the scan output, [H, T / 128, 128, 128] (tiles in the same order as [H, T, 128])."""
+        device = self.device
+        H = list(o_bh.shape)[0]
+        Tt, Wt = T // 32, H * 4
+        items = H * Tt
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, T, H * 128]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        grid = device.compute_with_storage_grid_size()
+        ncores = min(grid.x * grid.y, items)
+        crs = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(c % grid.x, c // grid.x), ttnn.CoreCoord(c % grid.x, c // grid.x))
+                for c in range(ncores)
+            ]
+        )
+        span = [items, ncores, grid.x]
+        rd_ct = []
+        for t in (o_bh, z, self.consts):
+            rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+
+        def cbd(i, fmt, page, pages):
+            return ttnn.CBDescriptor(
+                total_size=page * pages,
+                core_ranges=crs,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=page)],
+            )
+
+        f32, bf = ttnn.float32, ttnn.bfloat16
+        program = ttnn.ProgramDescriptor(
+            kernels=[
+                ttnn.KernelDescriptor(
+                    kernel_source=KERNELS + "fin_reader.cpp",
+                    core_ranges=crs,
+                    compile_time_args=rd_ct,
+                    common_runtime_args=[o_bh.buffer_address(), z.buffer_address(), self.consts.buffer_address()]
+                    + span
+                    + [Tt, Wt],
+                    config=ttnn.ReaderConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=KERNELS + "fin_writer.cpp",
+                    core_ranges=crs,
+                    compile_time_args=ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                    common_runtime_args=[out.buffer_address()] + span + [Tt, Wt],
+                    config=ttnn.WriterConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=KERNELS + "fin_compute.cpp",
+                    core_ranges=crs,
+                    compile_time_args=[],
+                    common_runtime_args=span + [_f32_bits(1.0 / 128), _f32_bits(self.eps)],
+                    config=ttnn.ComputeConfigDescriptor(
+                        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True
+                    ),
+                ),
+            ],
+            semaphores=[],
+            cbs=[
+                cbd(0, f32, 4096, 8),
+                cbd(1, bf, 2048, 8),
+                cbd(2, f32, 4096, 5),
+                cbd(3, f32, 4096, 4),
+                cbd(4, f32, 4096, 1),
+                cbd(5, f32, 4096, 4),
+                cbd(16, bf, 2048, 8),
+            ],
+        )
+        ttnn.generic_op([o_bh, z, self.consts, out], program)
+        return out
 
 
 def supported(gdn, x, valid_len):
@@ -40,10 +137,7 @@ def _to_bht(t, B, T, H):
 def gdn_chunk_forward(gdn, x, linear_shim):
     """x [1, T, dim] -> the layer output; updates gdn.recurrent_state and gdn.fused_conv_state in place.
     linear_shim: the qwen36 prefill ttnn shim (its linear() adds the swept in_proj / out_proj program configs)."""
-    from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import (
-        _causal_conv1d_fir,
-        rms_norm_gated_ttnn,
-    )
+    from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 
     w = gdn.weights
     B, T = list(x.shape)[0], list(x.shape)[1]
@@ -102,15 +196,14 @@ def gdn_chunk_forward(gdn, x, linear_shim):
     for t in prep:
         ttnn.deallocate(t)
 
-    # o [BH, T, V] -> [B, T, H, V], as the shared adapter
-    o = ttnn.to_layout(o_bh, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-    o = ttnn.reshape(o, [B, H, T, V])
-    o = ttnn.permute(o, (0, 2, 1, 3))
-    o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    gate = ttnn.reshape(gate_raw, [B, T, H, V])
-    o = rms_norm_gated_ttnn(o, gate, w.o_norm_weight, eps=gdn.norm_eps, memory_config=None)
-    o = ttnn.clip(o, min=-1e4, max=1e4)
-    o = ttnn.reshape(o, [B, T, H * V])
+    # o [BH, T, V] -> o / rms(o) * w * silu(z), token-major [1, T, H * V]
+    fin = getattr(gdn, "_bonsai_finish", None)
+    if fin is None:
+        norm_w = ttnn.to_torch(w.o_norm_weight).float().reshape(-1)[:V]
+        fin = gdn._bonsai_finish = OutputFinish(device, norm_w, gdn.norm_eps)
+    o = fin(o_bh, gate_raw, T)
+    ttnn.deallocate(o_bh)
+    ttnn.deallocate(gate_raw)
     out = linear_shim.linear(o, w.o_proj_weight, memory_config=None, compute_kernel_config=ckc)
 
     new_state = ttnn.typecast(ttnn.reshape(final_state, [B, H, K, V]), ttnn.bfloat16)
@@ -121,3 +214,17 @@ def gdn_chunk_forward(gdn, x, linear_shim):
     ttnn.copy(new_conv, gdn.fused_conv_state)
     ttnn.deallocate(new_conv)
     return out
+
+
+def prepare(model):
+    """Build every GDN layer's OutputFinish and the chunk preprocessing now: their constant tiles are host writes,
+    which a trace capture would not replay."""
+    device = model.mesh_device
+    if "device" not in chunk_prep._PREP:
+        chunk_prep._PREP["device"] = chunk_prep.ChunkPrep(device)
+    for layer in model.layers:
+        if layer.is_full_attention:
+            continue
+        gdn = layer.attention
+        norm_w = ttnn.to_torch(gdn.weights.o_norm_weight).float().reshape(-1)[: gdn.head_v_dim]
+        gdn._bonsai_finish = OutputFinish(device, norm_w, gdn.norm_eps)
