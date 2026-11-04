@@ -63,3 +63,20 @@ def test_unpadded_token_pick_matches_padded(mesh_device, device_params, dtype, m
                 natural_defect.append((rows, r, int(fast[r]), int(padv[r])))
     assert not planted_fail, f"wrong index on planted data (rows, path, wrong rows): {planted_fail}"
     assert not natural_defect, f"paths disagree on non-tied values (rows, row, unpadded, padded): {natural_defect}"
+
+
+@pytest.mark.parametrize("rows", [1, 4], ids=["drafter", "verify"])
+@pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
+def test_token_pick_of_l1_logits(mesh_device, device_params, rows, monkeypatch):
+    """Logits in L1 (GEMMA4_ASSISTANT_LOGITS_L1) give the same index as the host argmax."""
+    g = torch.Generator().manual_seed(11 + rows)
+    t = -torch.rand(1, 1, rows, VOCAB, generator=g) * 0.5 - 0.5
+    for r in range(rows):
+        t[0, 0, r, (r * 104729 + 13) % VOCAB] = 1.0
+    t = t.bfloat16().float()
+    src = ttnn.from_torch(
+        t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    got = _pick(mesh_device, monkeypatch, src, rows, False)
+    src.deallocate(True)
+    assert torch.equal(got, t[0, 0].argmax(dim=-1))

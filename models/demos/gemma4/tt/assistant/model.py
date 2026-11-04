@@ -191,6 +191,13 @@ class Gemma4AssistantModel:
         if self._lm_head_out_block_w is not None and tp > 1:
             raise ValueError(f"GEMMA4_ASSISTANT_LM_HEAD_OUT_BLOCK_W supports a single chip only (tp={tp})")
         self._lm_head_cfg = None
+        # GEMMA4_ASSISTANT_LOGITS_L1=1 (opt-in): write the lm_head's logits (one tile row of the full vocab, 16 MiB in
+        # bf16) to L1 instead of DRAM. It needs the explicit lm_head config: for an L1 output ttnn's automatic config
+        # falls back to the plain multi-core matmul (no packer L1 accumulation), which changes the logits; the explicit
+        # 1D config keeps the DRAM path's matmul and logits.
+        self._logits_l1 = os.environ.get("GEMMA4_ASSISTANT_LOGITS_L1", "0") == "1"
+        if self._logits_l1 and self._lm_head_out_block_w is None:
+            raise ValueError("GEMMA4_ASSISTANT_LOGITS_L1=1 needs GEMMA4_ASSISTANT_LM_HEAD_OUT_BLOCK_W")
 
     def _lm_head_configs(self, x):
         """(program_config, compute_kernel_config) of the lm_head call: (None, None) = ttnn's automatic config."""
@@ -326,7 +333,13 @@ class Gemma4AssistantModel:
         logits = None
         if return_logits:
             pc, ckc = self._lm_head_configs(normed)
-            logits = ttnn.linear(normed, self.lm_head, program_config=pc, compute_kernel_config=ckc)
+            logits = ttnn.linear(
+                normed,
+                self.lm_head,
+                program_config=pc,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG if self._logits_l1 else None,
+            )
             if gather_logits and self.mesh_config is not None and self.mesh_config.tp > 1:
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
