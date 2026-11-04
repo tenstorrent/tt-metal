@@ -8,6 +8,13 @@ on:
       - "main"
   merge_group:
 
+concurrency:
+  # PRs: one run per PR number, so a new push cancels the previous run.
+  # Everything else (merge queue, workflow_call from Merge Gate, dispatch): run_id, so it never cancels.
+  # Use a fixed prefix, not github.workflow: under workflow_call that resolves to the caller's name.
+  group: static-checks-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   find-changed-files:
     runs-on: ubuntu-latest
