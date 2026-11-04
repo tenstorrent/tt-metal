@@ -118,10 +118,45 @@ def test_mk_stack_probe(mesh_device):
         states2 = [tp.attn.allocate_state(B) for tp in tps]
         xr = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()  # the stack's input (replicated)
         cur = tps[0].replicated(xr.reshape(1, 1, T, 4 * H).contiguous(), ttnn.float32)
+        details = None
         for tp, st in zip(tps, states2):
-            s1, out, _, _ = tp(cur, st.C, active, st.S, t=T)
+            s1, out, details, _ = tp(cur, st.C, active, st.S, t=T)
             ttnn.synchronize_device(mesh_device)
             cur = out
+        # the last layer's named intermediates (the layer program's details dict) vs the stack's shared pool tensors
+        # of the same shape / dtype: the best-matching pool tensor per name (which sub-result the stack gets wrong)
+        shared = list(getattr(stack, "shared", []))
+        pool = []
+        for i, st_ in enumerate(shared):
+            try:
+                pool.append(
+                    (i, tuple(st_.shape), str(st_.dtype), ttnn.to_torch(ttnn.get_device_tensors(st_)[0]).float())
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        if isinstance(details, dict):
+            for name, v in details.items():
+                if not hasattr(v, "shape") or not hasattr(v, "dtype"):
+                    continue
+                try:
+                    ref = ttnn.to_torch(ttnn.get_device_tensors(v)[0]).float()
+                except Exception:  # noqa: BLE001
+                    continue
+                cands = [(i, t) for i, shp, dt, t in pool if shp == tuple(v.shape) and dt == str(v.dtype)]
+                best = None
+                for i, t in cands:
+                    a_, b_ = t.reshape(-1).nan_to_num(0, 1e9, -1e9), ref.reshape(-1).nan_to_num(0, 1e9, -1e9)
+                    pc = (
+                        float(torch.corrcoef(torch.stack([a_, b_]))[0, 1])
+                        if a_.numel() > 1 and a_.std() > 0 and b_.std() > 0
+                        else float("nan")
+                    )
+                    md = float((a_ - b_).abs().max())
+                    if best is None or (pc == pc and (best[1] != best[1] or pc > best[1])):
+                        best = (i, pc, md)
+                logger.info(
+                    f"MK_STACK_NAMED: {name} {tuple(v.shape)} {v.dtype}: best pool match {best} of {len(cands)} candidates"
+                )
         o_seq = ttnn.to_torch(ttnn.get_device_tensors(cur)[0]).float().reshape(T, 4, H)
         o_stk = res_stack.reshape(-1, H)[: 4 * T].reshape(T, 4, H) if res_stack.numel() >= 4 * T * H else res_stack
         a, b = o_stk.reshape(-1), o_seq.reshape(-1)
