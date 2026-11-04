@@ -53,16 +53,15 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #include "eth_l1_address_map.h"
 #include "device_print_mem.h"
 
-#if defined(COMPILE_FOR_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
+// Every Quasar Ethernet core is a Keraunos CCE, linked or not: one mailbox, read through the uncached alias.
 #define GET_MAILBOX_ADDRESS_DEV(x) \
     (&(((mailboxes_t tt_l1_ptr*)(MEM_IERISC_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
 #define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
-#else
+#elif defined(COMPILE_FOR_ERISC)
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
+#elif defined(COMPILE_FOR_IDLE_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
-#endif
 #elif defined(COMPILE_FOR_DRISC)
 #if defined(ARCH_QUASAR)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_DRISC_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
