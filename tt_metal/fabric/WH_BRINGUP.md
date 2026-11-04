@@ -66,7 +66,7 @@ Study documents referenced below (MAINLINE_PLAN.md, TEST_PLAN.md, V4_SIZE.md, V4
   - `read_txq_status` / `txq_busy` (`rc:159-163`) read STATUS bit `ETH_TXQ_STATUS_CMD_ONGOING_BIT`. That is the
     Blackhole (BH-55) form.
   - Wormhole's `eth_txq_is_busy` tests `ETH_TXQ_CMD != 0` (`tunneling.h:73-75`).
-  - Used on every send (`rs:545`, `rs:566`) and in the receiver's grouped read under first-level acks (`rr:748`). It
+  - Used on every send (`rs:545`, `rs:566`) and in the receiver pass's first reads under first-level acks (`rr:748`). It
     needs §4's per-arch API.
 - **Keepalive.** The host sets it on Blackhole only, so Wormhole gets 0 and `set_keepalive` is a no-op (`ri:114`).
   Accept-ahead is written on Wormhole as main does.
