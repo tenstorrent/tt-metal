@@ -1,0 +1,3 @@
+# TorrentCI chain-image build: the Dockerfile copies nothing from its context.
+*
+!Dockerfile.torrentci-ci-build
