@@ -45,6 +45,7 @@ constexpr TensorShape TENSOR_SHAPE_FR16_NF1x1 = {16, MAX_FACE_C_DIM, 1, 1}; ///<
 constexpr TensorShape TENSOR_SHAPE_FR16_NF1x2 = {16, MAX_FACE_C_DIM, 1, 2}; ///< 16x32
 constexpr TensorShape TENSOR_SHAPE_FR16_NF2x1 = {16, MAX_FACE_C_DIM, 2, 1}; ///< 32x16
 constexpr TensorShape TENSOR_SHAPE_FR16_NF2x2 = DEFAULT_TENSOR_SHAPE;       ///< 32x32
+constexpr TensorShape TENSOR_SHAPE_FR16_NF4x1 = {16, MAX_FACE_C_DIM, 4, 1}; ///< 64x16 (untilize dest-init stacks 4 faces along R)
 
 constexpr bool tensor_shape_eq(const TensorShape& lhs, const TensorShape& rhs)
 {
@@ -118,7 +119,7 @@ inline bool is_tensor_shape_covered_default_inline_(const TensorShape& tensor_sh
     LLK_VALIDATE_TENSOR_SHAPE_WITH_DEFAULT_CHECKER_(::ckernel::coverage::is_unpack_tensor_shape_covered, fn_name, ts)
 #define LLK_VALIDATE_TENSOR_SHAPE_MATH(fn_name, ts) \
     LLK_VALIDATE_TENSOR_SHAPE_WITH_DEFAULT_CHECKER_(::ckernel::coverage::is_math_tensor_shape_covered, fn_name, ts)
-#define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn_name, ts)   LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_pack_tensor_shape_covered, fn_name, ts)
+#define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn_name, ts) LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_pack_tensor_shape_covered, fn_name, ts)
 
 #else
 

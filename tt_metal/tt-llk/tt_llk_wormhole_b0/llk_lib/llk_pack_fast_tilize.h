@@ -245,7 +245,11 @@ inline void _llk_pack_fast_tilize_uninit_(
     // for some reason short inits avoid the packer init (probably since it is usually the same)
     // but that means calling it here with reasonable defaults is needed
     // it just initializes the address mods and mop
-    _llk_pack_init_<PackMode::Default, false /* zero_output */>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
+    // Narrow tiles (num_faces_c_dim == 1) cannot be expressed through the legacy
+    // (face_r_dim, num_faces) mapping, so build the shape with an explicit face grid.
+    const ckernel::TensorShape tensor_shape = narrow_tile ? ckernel::make_tensor_shape(face_r_dim, ckernel::MAX_FACE_C_DIM, num_faces, 1)
+                                                          : ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */>(pack_dst_format, tensor_shape, partial_face);
 }
 
 /**
