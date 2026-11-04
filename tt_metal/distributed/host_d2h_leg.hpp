@@ -13,7 +13,6 @@
 
 #include "tt_metal/distributed/host_tasks.hpp"
 #include "hostdevcommon/uva_frame.h"
-#include "hostdevcommon/uva.h"
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;

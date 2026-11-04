@@ -11,7 +11,6 @@
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
-#include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
@@ -40,6 +39,7 @@ namespace inspector {
 class Data;
 }
 
+class BuildEnvManager;
 class ContextDescriptor;
 class DataCollector;
 class DeviceManager;
@@ -150,6 +150,8 @@ public:
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
+
+    BuildEnvManager& build_env_manager() { return *build_env_manager_; }
 
     void initialize_device_manager(
         const std::vector<ChipId>& device_ids,
@@ -277,6 +279,10 @@ private:
     tt::tt_metal::MetalEnv* env_;
     bool env_owned_ = false;
     ContextId context_id_;
+
+    // Declared before the other components so it is destroyed after them: their teardown may still read build envs.
+    // Not reset by teardown(); build envs persist across re-initialization of this context.
+    std::unique_ptr<BuildEnvManager> build_env_manager_;
 
     std::unique_ptr<internal::ServiceCoreManager> service_core_manager_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;

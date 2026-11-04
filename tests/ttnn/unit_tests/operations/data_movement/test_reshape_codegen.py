@@ -87,6 +87,14 @@ _PATHS = [
     # Sliced segment map: 4 output tiles on a grid of 21 or more cores, each reading 32 source tiles, so every output
     # tile is cut into ranges written by different cores.
     ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    # Row-major stick program: dividing widths.
+    ("rm_split", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    # Row-major stick program, non-aligned: 6 B source sticks repacked by RISC copies, merged 8 to one and split back.
+    ("rm_merge_nonaligned", [5120, 3], [640, 24], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_split_nonaligned", [640, 24], [5120, 3], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    # Row-major slab program: widths that do not divide, and dividing widths whose stick program does not fit L1.
+    ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_slab_dividing", [2, 409600], [4, 204800], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
 
@@ -105,11 +113,15 @@ def test_reshape_codegen_bit_exact(device, path, in_shape, out_shape, dtype, lay
     _check_bit_exact(device, in_shape, out_shape, dtype, layout, mem, mem)
 
 
-_KEYED = [p for p in _PATHS if p[0] in ("tile_rows", "tile_mapped_fp32", "tile_mapped_sliced")]
+_KEYED = [p for p in _PATHS if p[0] in ("tile_rows", "tile_mapped_fp32", "tile_mapped_sliced", "rm_split")]
 
 
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
+    _check_sub_core_grids(device, in_shape, out_shape, dtype, layout)
+
+
+def _check_sub_core_grids(device, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=_SUB_CORE_GRIDS)
@@ -121,8 +133,12 @@ def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype
     assert device.num_program_cache_entries() == entries
 
 
+# The slab and non-aligned programs size reads and scratch by each side's alignment, which differs between DRAM and L1.
+_PLACED = _KEYED + [p for p in _PATHS if p[0] in ("rm_arbitrary_bf16", "rm_merge_nonaligned", "rm_split_nonaligned")]
+
+
 @pytest.mark.parametrize("in_mem,out_mem", [(_DRAM, _L1), (_L1, _DRAM)], ids=["dram_to_l1", "l1_to_dram"])
-@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _PLACED, ids=[p[0] for p in _PLACED])
 def test_reshape_codegen_mixed_placement(device, path, in_shape, out_shape, dtype, layout, in_mem, out_mem):
     _check_bit_exact(device, in_shape, out_shape, dtype, layout, in_mem, out_mem)
 
@@ -163,9 +179,22 @@ def _check_edge_shape(device, in_shape, out_shape, dtype):
     _assert_bits(padded, codegen.cpu().to_torch_with_padded_shape(), dtype)
 
 
-# (id, in shape, out shape, dtype, layout, expected route). Demotion is decided by the TILE program routing takes:
-# tile rows where it beats native, the segment map on widths that are not multiples of 32. Row-major runs native.
+def _rm_aligned_pair(piece_bytes, merge, sticks=512):
+    # bf16 sticks of `piece_bytes` and twice that, both alignment multiples: a merge goes short to long, a split back.
+    short, long = [sticks, piece_bytes // 2], [sticks // 2, piece_bytes]
+    return (short, long) if merge else (long, short)
+
+
+# (id, in shape, out shape, dtype, layout, expected route). Row-major demotion is decided by stick sizes
+# (rm_native_faster) and taken only where native and the stick program fit the static L1 window; the row-major
+# cases sit on either side of its aligned-DRAM rule, which demotes merges from a 256 B piece on Blackhole and a 2 KB
+# piece on Wormhole and never splits; "native_bh" is native on Blackhole only. TILE demotion is decided by the TILE
+# program routing takes: tile rows where it beats native, the segment map on widths that are not multiples of 32.
 _ROUTES = [
+    ("rm_split_piece_256", *_rm_aligned_pair(256, merge=False), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    ("rm_merge_piece_128", *_rm_aligned_pair(128, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    ("rm_merge_piece_256", *_rm_aligned_pair(256, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native_bh"),
+    ("rm_merge_piece_2048", *_rm_aligned_pair(2048, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
     # Head split: batching cuts source reads 32x.
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # 4-head merge: the cut is only 4x, but each output tile reads 24 fewer padded source tiles.
@@ -175,7 +204,6 @@ _ROUTES = [
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 takes the segment map.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
-    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
 ]
 
 
@@ -185,6 +213,8 @@ def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layou
 
 
 def _check_routing(device, in_shape, out_shape, dtype, layout, route):
+    if route == "native_bh":
+        route = "codegen" if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else "native"
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     expected_leg = _force_codegen if route == "codegen" else _force_native
@@ -198,6 +228,10 @@ def _check_routing(device, in_shape, out_shape, dtype, layout, route):
 
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
+    _check_cache_hit_new_addresses(device, in_shape, out_shape, dtype, layout)
+
+
+def _check_cache_hit_new_addresses(device, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     first = _force_codegen(x, out_shape, memory_config=_DRAM)
@@ -348,9 +382,52 @@ def test_reshape_codegen_falls_back_to_segment_map_when_no_tile_row_plan_fits_l1
         ttnn.deallocate(hog)
 
 
+_RM_ABOVE_NATIVE_FLOOR = [
+    # Merging 4 B sticks into 30004 B ones takes two 30 KB CB pages in the stick program and a window region of over
+    # 64 KiB in the slab program, while native's single kernel needs about 30 KB.
+    ("merge_30004", lambda n: ([60008, 1], [8, 7501]), ttnn.float32),
+    # 6 B sticks do not divide 8 KiB ones, so only the slab program applies: a slab of up to 4 KiB spans one window
+    # per 6 B source stick, over 54 KiB per core, while native needs under 9 KiB.
+    ("slab_6_to_8192", lambda n: ([n * 4096, 3], [n * 3, 4096]), ttnn.bfloat16),
+]
+
+
+@pytest.mark.parametrize("case,shapes,dtype", _RM_ABOVE_NATIVE_FLOOR, ids=[c[0] for c in _RM_ABOVE_NATIVE_FLOOR])
+def test_reshape_codegen_rm_routes_native_when_no_program_fits_l1(device, expect_error, case, shapes, dtype):
+    # The smallest row-major program needs more L1 than native's, so auto runs native and keeps running with 48 KiB
+    # free, while the forced entry refuses.
+    grid = device.compute_with_storage_grid_size()
+    in_shape, out_shape = shapes(grid.x * grid.y)
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    hog = _l1_hog_leaving(device, 48 * 1024)
+    try:
+        # Native's program hash leaves out its staging ring depth, so a program cached with more L1 free would not fit.
+        device.clear_program_cache()
+        _assert_bits(expected, ttnn.to_torch(_force_native(x, out_shape, memory_config=_DRAM)), dtype)
+        entries = device.num_program_cache_entries()
+        _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries, "auto did not run native"
+        with expect_error(RuntimeError, "no row-major program fits"):
+            _force_codegen(x, out_shape, memory_config=_DRAM)
+    finally:
+        ttnn.deallocate(hog)
+
+
+def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
+    # Splitting 4096 16 B sticks into 2 B ones on one core wants a 65,536-page ring of 16 B pages, one more than the
+    # 16-bit CB page counters hold, though 1 MiB fits L1; the plan must shrink the ring instead.
+    in_shape, out_shape, dtype = [4096, 8], [4096, 8, 1], ttnn.bfloat16
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+
+
 _OUT_OF_SCOPE = [
     ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
 

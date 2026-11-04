@@ -261,7 +261,7 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
         // here it appends fabric routing args and adds kernel defines to the
         // writer descriptor at writer_kernel_index.
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
-            sender_fabric_node_id, dst_nodes, {link}, desc, writer_kernel_index, core, writer_rt_args);
+            *mesh_device, sender_fabric_node_id, dst_nodes, {link}, desc, writer_kernel_index, core, writer_rt_args);
 
         // Convert to the variant arg list and substitute the output Buffer*
         // at the first position so the fast cache-hit path patches it.

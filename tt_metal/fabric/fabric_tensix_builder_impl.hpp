@@ -4,18 +4,15 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <optional>
+#include <cstdint>
 #include <vector>
 #include <memory>
-#include <unordered_map>
 #include <array>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "llrt/core_descriptor.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "core_coord.hpp"
 
