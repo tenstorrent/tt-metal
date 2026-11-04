@@ -20,13 +20,7 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.tt_dit.pipelines.events import (
-    PipelineEventCallback,
-    SectionEnd,
-    SectionStart,
-    event_section,
-    null_callback,
-)
+from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, event_section, null_callback
 
 from ...models.transformers.transformer_flux2 import Flux2Transformer
 from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
