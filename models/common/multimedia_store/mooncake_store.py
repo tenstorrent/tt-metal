@@ -100,10 +100,13 @@ class MediaEmbeddingStoreConfig:
         missing = [_ENV_PREFIX + n for n in ("SEGMENT", "METADATA") if get(n) is None]
         if missing:
             raise ValueError(f"{_ENV_PREFIX}MASTER is set, so {' and '.join(missing)} must be set too")
+        segment_bytes = parse_bytes(get("BYTES", _DEFAULT_SEGMENT_BYTES))
+        if segment_bytes == 0:  # a store with no memory would send every image written for this host elsewhere
+            raise ValueError(f"{_ENV_PREFIX}BYTES must be more than 0")
         return cls(
             master=master,
             segment=get("SEGMENT"),
-            segment_bytes=parse_bytes(get("BYTES", _DEFAULT_SEGMENT_BYTES)),
+            segment_bytes=segment_bytes,
             metadata=get("METADATA"),
             protocol=get("PROTOCOL", "rdma"),
             device=get("DEVICE", ""),
@@ -236,9 +239,10 @@ class MooncakeEmbeddingReader:
         first request that fails, failing the whole batch, and ValueError for a range outside its value.
 
         A value in this host's segment comes back in place. The lookup gives this client a lease on the object: for
-        the master's --default_kv_lease_ttl (10 s by default) after the call, the master refuses to remove or evict
-        it. After the lease it stays only while the writer's soft pin holds it (with allow_evict_soft_pinned_objects
-        =false, the master does not evict it) and nothing removes it, so copy what you need before the lease ends.
+        the master's --default_kv_lease_ttl after the call (Mooncake's default is 10 s; deployments set it shorter),
+        the master refuses to remove or evict it. After the lease it stays only while the writer's soft pin holds it
+        (with allow_evict_soft_pinned_objects=false, the master does not evict it) and nothing removes it, so copy
+        what you need before the lease ends.
 
         A value in another host's segment comes back as a view into this reader's read buffer, valid until the next
         fetch on this reader overwrites it. Callers copy the rows out (to device staging) before fetching again."""
