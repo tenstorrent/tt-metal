@@ -72,6 +72,9 @@ uint32_t channel_semaphore_count(uint32_t ring_extent);
 struct CollectorTarget {
     tt::tt_metal::CoreCoord logical;
     uint32_t counts_addr = 0;
+    // The L1 slots this chip's routed expert writes its last tile-rows to (adaptive_chunk::l1_home_plan), two words
+    // each: NOC x | y << 16, then the address. Empty when there are none.
+    std::vector<uint32_t> l1_homes;
 };
 
 // The workload CombineFabric2dProgramFactory builds, laid out over `l1`, with each chip's collector recorded in

@@ -301,6 +301,13 @@ void kernel_main() {
     for (uint32_t k = 0; k < experts_per_chip; ++k) {
         walk_pos[walk_order[k]] = static_cast<uint8_t>(k);
     }
+#ifdef URE_L1H_SLOTS
+    // Combine's L1 slots for this chip's last tile-rows (adaptive_chunk::l1_home_plan), two compile-time words
+    // each from URE_L1H_CT_BASE: the core's NOC x | y << 16, then the slot's address.
+    uint16_t l1h_first[adaptive_chunk::kMaxPredictedExperts];
+    uint16_t l1h_rows[adaptive_chunk::kMaxPredictedExperts];
+    adaptive_chunk::l1_home_plan(local_counts, walk_order, experts_per_chip, URE_L1H_SLOTS, l1h_first, l1h_rows);
+#endif
     // The experts this core runs, from the same planner replay as the loop below.
     uint32_t runs_mask = 0;
     for (uint32_t pass = 0; pass < num_passes; ++pass) {
@@ -622,7 +629,25 @@ void kernel_main() {
                                 // write rather than corrupt DRAM, since ASSERT is a
                                 // no-op there).
                                 ASSERT(dst_row < dst_M_tiles);
-                                if (dst_row < dst_M_tiles) {
+#ifdef URE_L1H_SLOTS
+                                // A row kept in L1 goes to its slot instead; the expert-done report's write
+                                // barrier covers it as it does the DRAM writes.
+                                const bool in_l1 = row < l1h_rows[local_expert_id];
+                                if (in_l1) {
+                                    const uint32_t w = URE_L1H_CT_BASE + 2 * (l1h_first[local_expert_id] + row);
+                                    const uint32_t xy = kernel_compile_time_args[w];
+                                    noc_async_write(
+                                        cb_out_buf.get_read_ptr() + subblock_tile_offset,
+                                        get_noc_addr(
+                                            xy & 0xFFFF,
+                                            xy >> 16,
+                                            kernel_compile_time_args[w + 1] + col * out_tile_bytes),
+                                        out_tile_bytes);
+                                }
+#else
+                                constexpr bool in_l1 = false;
+#endif
+                                if (!in_l1 && dst_row < dst_M_tiles) {
                                     const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
                                     noc.async_write(
                                         cb_out_buf,

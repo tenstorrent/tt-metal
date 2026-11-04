@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <memory>
 #include <optional>
 
@@ -163,6 +164,29 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
             const uint32_t extent = cf::ring_extent(combine_args);
             append_far_run(
                 re, t.expert_offsets->buffer(), (cf::my_dg_index(combine_args, coord) + extent / 2) % extent);
+        }
+        if (!collector.l1_homes.empty()) {
+            // The writers keep the tile-rows combine takes last in combine's L1 slots, which no kernel of theirs may
+            // sit on.
+            std::set<tt::tt_metal::CoreCoord> homes;
+            for (std::size_t w = 0; w < collector.l1_homes.size(); w += 2) {
+                homes.insert(tt::tt_metal::CoreCoord{collector.l1_homes[w] & 0xFFFF, collector.l1_homes[w] >> 16});
+            }
+            for (auto& kernel : re.kernels) {
+                for (const auto& range : kernel.core_ranges.ranges()) {
+                    for (const auto& core : range) {
+                        TT_FATAL(
+                            !homes.contains(combine_args.device->worker_core_from_logical_core(core)),
+                            "hybrid routed expert: an L1 slot for the routed expert's output sits on its own core");
+                    }
+                }
+                if (kernel.kernel_source.ends_with("unified_routed_expert_ffn_writer.cpp")) {
+                    kernel.defines.emplace_back("URE_L1H_CT_BASE", std::to_string(kernel.compile_time_args.size()));
+                    kernel.defines.emplace_back("URE_L1H_SLOTS", std::to_string(collector.l1_homes.size() / 2));
+                    kernel.compile_time_args.insert(
+                        kernel.compile_time_args.end(), collector.l1_homes.begin(), collector.l1_homes.end());
+                }
+            }
         }
         program.descriptor = tt::tt_metal::merge_program_descriptors({program.descriptor, re});
     }

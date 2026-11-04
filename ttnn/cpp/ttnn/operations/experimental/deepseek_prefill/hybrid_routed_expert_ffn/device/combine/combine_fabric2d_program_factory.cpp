@@ -498,6 +498,83 @@ ReaderUntilizers untilizers_for_stream(
     return r;
 }
 
+// L1 slots for the routed expert's last tile-rows, one whole tile-row each: what the untilizer cores leave above their
+// control tables and, without an arena, the cells of this chip no kernel of the overlapped program runs on. Not the
+// stream or collector cores: their reader and sender are what combine waits on, and traffic into them slows it. Only
+// for the wave-planned walk, whose predicted order both sides plan the slots from. Appended to the untilizers'
+// compile-time arguments here and returned for the writers.
+//
+// At most kMaxL1Homes: more slots reach the experts the routed expert writes while its hot experts still run, and on a
+// chip whose routed expert is the long pole those remote writes cost it more than the DRAM traffic they save.
+constexpr uint32_t kMaxL1Homes = 64;
+
+std::vector<uint32_t> plan_l1_homes(
+    const CombineFabric2dParams& args,
+    const CombineFabric2dInputs& tensor_args,
+    const L1Layout& l1,
+    uint32_t sem_floor,
+    const tt::tt_metal::Buffer* arena,
+    tt::tt_metal::ProgramDescriptor& desc) {
+    if (!args.predicted_walk) {
+        return {};
+    }
+    auto* mesh = args.device;
+    const uint32_t row_bytes = tiles_per_token_row(tensor_args) * tile_size_bytes(tensor_args);
+    std::set<tt::tt_metal::CoreCoord> used;
+    std::set<tt::tt_metal::CoreCoord> untilizers;
+    for (const auto& kernel : desc.kernels) {
+        const bool untilizer = kernel.kernel_source.ends_with("dataflow/untilizer_combine_fabric2d.cpp");
+        for (const auto& range : kernel.core_ranges.ranges()) {
+            for (const auto& core : range) {
+                used.insert(core);
+                if (untilizer) {
+                    untilizers.insert(core);
+                }
+            }
+        }
+    }
+    for (const auto& core : args.routed_expert_cores) {
+        used.insert(core);
+    }
+    std::vector<uint32_t> homes;
+    const auto add = [&](const tt::tt_metal::CoreCoord& logical, uint32_t lo, uint32_t hi) {
+        const auto noc = mesh->worker_core_from_logical_core(logical);
+        for (uint32_t a = align_l1(lo); a + row_bytes <= hi && homes.size() < 2 * kMaxL1Homes;
+             a = align_l1(a + row_bytes)) {
+            homes.push_back(static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16));
+            homes.push_back(a);
+        }
+    };
+    const uint32_t control_end = l1.unt_control + control_region_bytes(args, tensor_args);
+    for (const auto& core : untilizers) {
+        add(core, control_end, sem_floor);
+    }
+    // Free cells only without an arena: over one, what lies outside this program's cores is not ours to say.
+    if (arena == nullptr) {
+        const auto grid = mesh->compute_with_storage_grid_size();
+        for (std::size_t y = 0; y < grid.y; y++) {
+            for (std::size_t x = 0; x < grid.x; x++) {
+                const tt::tt_metal::CoreCoord core{x, y};
+                if (!used.contains(core)) {
+                    add(core, l1_base(mesh, arena), sem_floor);
+                }
+            }
+        }
+    }
+    const uint32_t slots = static_cast<uint32_t>(homes.size() / 2);
+    if (slots == 0) {
+        return {};
+    }
+    for (auto& kernel : desc.kernels) {
+        if (kernel.kernel_source.ends_with("dataflow/untilizer_combine_fabric2d.cpp")) {
+            kernel.defines.emplace_back("CMBF2D_L1H_CT_BASE", std::to_string(kernel.compile_time_args.size()));
+            kernel.defines.emplace_back("CMBF2D_L1H_SLOTS", std::to_string(slots));
+            kernel.compile_time_args.insert(kernel.compile_time_args.end(), homes.begin(), homes.end());
+        }
+    }
+    return homes;
+}
+
 tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const CombineFabric2dParams& args,
     const CombineFabric2dInputs& tensor_args,
@@ -836,7 +913,20 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
                  sems,
                  l1_resources.arena)});
         if (collectors != nullptr) {
-            (*collectors)[coord] = CollectorTarget{placement.at(coord).collector.value(), l1.collector_counts};
+            const uint32_t sem_floor = l1_resources.arena != nullptr
+                                           ? l1_base(mesh_device, l1_resources.arena) +
+                                                 static_cast<uint32_t>(l1_resources.arena->aligned_size_per_bank())
+                                           : sems.lowest_address();
+            (*collectors)[coord] = CollectorTarget{
+                placement.at(coord).collector.value(),
+                l1.collector_counts,
+                plan_l1_homes(
+                    operation_attributes,
+                    tensor_args,
+                    l1,
+                    sem_floor,
+                    l1_resources.arena,
+                    workload_descriptor.programs.back().descriptor)};
         }
     }
     return workload_descriptor;

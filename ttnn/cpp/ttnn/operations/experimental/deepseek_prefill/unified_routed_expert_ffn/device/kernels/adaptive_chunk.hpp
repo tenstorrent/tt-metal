@@ -497,4 +497,24 @@ inline void predicted_order(
     }
 }
 
+// L1 HOMES (overlapped with combine). The output tile-rows combine is predicted to take last are kept in L1 slots on
+// combine-side cores instead of DRAM, so the tail reads them core to core and the routed expert neither writes nor
+// combine reads them through DRAM. Slots go to the experts from the last in `order` back, each expert's rows from its
+// first, until they run out. The writers and the untilizers both build this from the raw counts and the same
+// predicted order, so a tile-row's slot needs no exchange: expert e's row r is in slot first[e] + r when r < rows[e],
+// and in DRAM otherwise.
+template <uint32_t N>
+inline void l1_home_plan(
+    const uint32_t (&counts)[N], const uint8_t* order, uint32_t n, uint32_t slots, uint16_t* first, uint16_t* rows) {
+    uint32_t left = slots;
+    for (uint32_t k = n; k-- > 0;) {
+        const uint32_t e = order[k];
+        const uint32_t want = (counts[e] + 31) / 32;
+        const uint32_t take = want < left ? want : left;
+        first[e] = static_cast<uint16_t>(slots - left);
+        rows[e] = static_cast<uint16_t>(take);
+        left -= take;
+    }
+}
+
 }  // namespace adaptive_chunk

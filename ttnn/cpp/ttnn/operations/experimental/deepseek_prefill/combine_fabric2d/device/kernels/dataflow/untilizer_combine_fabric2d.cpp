@@ -221,8 +221,36 @@ void kernel_main() {
     const auto on_step = [](uint32_t step) { return step; };
 #endif
 
+#ifdef CMBF2D_L1H_SLOTS
+    // The routed expert keeps this chip's last tile-rows in L1 slots (adaptive_chunk::l1_home_plan): the same plan
+    // its writers build, from the same counts and predicted order. Slots are two compile-time words each from
+    // CMBF2D_L1H_CT_BASE, NOC x | y << 16 and the address.
+    uint16_t l1h_first[adaptive_chunk::kMaxPredictedExperts];
+    uint16_t l1h_rows[adaptive_chunk::kMaxPredictedExperts];
+    {
+        uint32_t counts[adaptive_chunk::kMaxPredictedExperts];
+        uint8_t order[adaptive_chunk::kMaxPredictedExperts];
+        for (uint32_t local = 0; local < ct.experts_per_chip; local++) {
+            counts[local] = ctl.counts[ctl.expert_id(ct.my_dg_index, local)];
+        }
+        for (uint32_t step = 0; step < ct.experts_per_chip; step++) {
+            order[step] = static_cast<uint8_t>(
+                ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step));
+        }
+        adaptive_chunk::l1_home_plan(counts, order, ct.experts_per_chip, CMBF2D_L1H_SLOTS, l1h_first, l1h_rows);
+    }
+    uint32_t cur_local = 0;
+    const auto on_step_l1h = [&](uint32_t position) -> uint32_t {
+        const uint32_t step = on_step(position);
+        cur_local = ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
+        return step;
+    };
+#else
+    const auto& on_step_l1h = on_step;
+#endif
+
     Ring ring;
-    walk_my_batches(ctl, on_step, [&](uint32_t b, const ::cmbf2d::GroupWalk& walk) {
+    walk_my_batches(ctl, on_step_l1h, [&](uint32_t b, const ::cmbf2d::GroupWalk& walk) {
         while (ring.full()) {
             ring.reclaim_one();
         }
@@ -252,11 +280,27 @@ void kernel_main() {
 #endif
         CircularBuffer cb_in(::cmbf2d::UNT_CB_IN);
         const uint32_t first_tile = walk.tile_row_of(b) * ct.tiles_per_row;
+#ifdef CMBF2D_L1H_SLOTS
+        // A tile-row the routed expert kept in L1 is read from its slot, whichever core holds it.
+        const uint32_t home_row =
+            walk.tile_row_of(b) - ctl.region[ctl.expert_id(ct.my_dg_index, cur_local)] / ::cmbf2d::UNT_BATCH_ROWS;
+        const bool in_l1 = home_row < l1h_rows[cur_local];
+        const uint32_t home_w = CMBF2D_L1H_CT_BASE + 2 * (in_l1 ? l1h_first[cur_local] + home_row : 0);
+        const uint32_t home_xy = kernel_compile_time_args[home_w];
+        const uint64_t home = get_noc_addr(home_xy & 0xFFFF, home_xy >> 16, kernel_compile_time_args[home_w + 1]);
+#endif
         for (uint32_t t = 0; t < ct.tiles_per_row; t += ct.block_tiles) {
             cb_in.reserve_back(ct.block_tiles);
             const uint32_t dst = cb_in.get_write_ptr();
-            for (uint32_t j = 0; j < ct.block_tiles; j++) {
-                noc_async_read(dram.in.get_noc_addr(first_tile + t + j), dst + j * ct.tile_bytes, ct.tile_bytes);
+#ifdef CMBF2D_L1H_SLOTS
+            if (in_l1) {
+                noc_async_read(home + t * ct.tile_bytes, dst, ct.block_tiles * ct.tile_bytes);
+            } else
+#endif
+            {
+                for (uint32_t j = 0; j < ct.block_tiles; j++) {
+                    noc_async_read(dram.in.get_noc_addr(first_tile + t + j), dst + j * ct.tile_bytes, ct.tile_bytes);
+                }
             }
             noc_async_read_barrier();
             cb_in.push_back(ct.block_tiles);
