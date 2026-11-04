@@ -1199,7 +1199,7 @@ def init_kvpe_cache(
         # assert_full_mesh_stripe_order refuses such a gather at sp_axis=1: mla's full-mesh KVPE gather calls
         # it, and MiniMax's index_k read calls it behind its two-leg (TP then SP) route, which it takes at
         # sp_axis=1. The GLM index cache needs no guard: its only full-mesh consumer is ring_indexer_score_dsa,
-        # which orders by physical coordinates. Relabeling the cache to match is a follow-up.
+        # which orders by physical coordinates.
         kvpe_cache.update_tensor_topology(row_major_seq_topology)
         return kvpe_cache
 
