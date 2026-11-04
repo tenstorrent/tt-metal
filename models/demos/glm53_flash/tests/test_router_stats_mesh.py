@@ -92,11 +92,13 @@ def test_router_stats(mesh_device):
         expert_down_dtype=EXPERT_DOWN_DTYPE,
     )
     # the hook: every MoE layer's router records its prefill top-k ids per row slab (column 0 of every row)
-    routers = {
-        i: lay.mlp.router
-        for i, lay in zip(layers, model.layers)
-        if isinstance(getattr(lay.mlp, "router", None), TtRouter)
-    }
+    # the mesh model's layers are FunctionalDecoder wrappers: the MoE sublayer is ``.layer.mlp`` (TtMoE, ``.router``)
+    routers = {}
+    for i, lay in zip(layers, model.layers):
+        mlp = getattr(getattr(lay, "layer", lay), "mlp", None)
+        router = getattr(mlp, "router", None)
+        if isinstance(router, TtRouter):
+            routers[i] = router
     logger.info(f"router hook on {len(routers)} MoE layers: {sorted(routers)}")
     records: dict[int, list[torch.Tensor]] = {i: [] for i in routers}
     chunk_tokens = [0]
