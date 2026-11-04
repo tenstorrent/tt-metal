@@ -210,26 +210,44 @@ def test_var_std_reject_off_default_tile(device, reduce_op, tile_shape, expect_e
 
 
 @pytest.mark.parametrize(
-    "reduce_op",
+    "shape, reduce_op",
     [
-        lambda t: ttnn.sum(t, dim=-1),
-        lambda t: ttnn.mean(t, dim=-2),
-        lambda t: ttnn.max(t, dim=-1),
-        lambda t: ttnn.argmax(t, dim=-1),
-        lambda t: ttnn.topk(t, 32, dim=-1),
-        lambda t: ttnn.cumsum(t, dim=0),
+        ((2, 1, 32, 64), lambda t: ttnn.sum(t, dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.mean(t, dim=-2)),
+        ((2, 1, 32, 64), lambda t: ttnn.max(t, dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.argmax(t, dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.topk(t, 32, dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.cumsum(t, dim=0)),
+        ((1, 1, 48, 80), lambda t: ttnn.sum(t, dim=-1)),
+        ((1, 1, 48, 80), lambda t: ttnn.max(t, dim=-1)),
+        ((1, 1, 48, 80), lambda t: ttnn.topk(t, 8, dim=-1)),
+        ((2, 3, 32, 64), lambda t: ttnn.sum(t, dim=1)),
     ],
-    ids=["sum", "mean", "max", "argmax", "topk", "cumsum"],
+    ids=[
+        "sum",
+        "mean",
+        "max",
+        "argmax",
+        "topk",
+        "cumsum",
+        "sum_unaligned",
+        "max_unaligned",
+        "topk_unaligned",
+        "sum_nc",
+    ],
 )
-@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (8, 32)])
-def test_reduce_reject_off_default_tile(device, reduce_op, tile_shape, expect_error):
+@pytest.mark.parametrize("tile_shape", [(32, 32), (16, 32), (32, 16), (8, 32)])
+def test_reduce_reject_off_default_tile(device, shape, reduce_op, tile_shape, expect_error):
     input_tensor = ttnn.from_torch(
-        torch.randn((2, 1, 32, 64), dtype=torch.bfloat16),
+        torch.randn(shape, dtype=torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
         tile=ttnn.Tile(tile_shape),
         device=device,
     )
 
+    if tile_shape == (32, 32):
+        reduce_op(input_tensor)
+        return
     with expect_error(RuntimeError, "TILE input requires tile shape 32x32"):
         reduce_op(input_tensor)
 

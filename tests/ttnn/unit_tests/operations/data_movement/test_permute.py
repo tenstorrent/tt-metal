@@ -824,24 +824,39 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
 
 
 @pytest.mark.parametrize(
-    "op",
+    "shape, op",
     [
-        lambda t: ttnn.transpose(t, -2, -1),
-        lambda t: ttnn.transpose(t, 0, 1),
-        lambda t: ttnn.permute(t, (0, 1, 3, 2)),
-        lambda t: ttnn.concat([t, t], dim=-1),
-        lambda t: ttnn.reshape(t, (1, 1, 32, 128)),
+        ((2, 1, 32, 64), lambda t: ttnn.transpose(t, -2, -1)),
+        ((2, 1, 32, 64), lambda t: ttnn.transpose(t, 0, 1)),
+        ((2, 1, 32, 64), lambda t: ttnn.permute(t, (0, 1, 3, 2))),
+        ((2, 1, 32, 64), lambda t: ttnn.permute(t, (0, 2, 3, 1))),
+        ((2, 1, 32, 64), lambda t: ttnn.concat([t, t], dim=-1)),
+        ((1, 1, 48, 64), lambda t: ttnn.concat([t, t], dim=-2)),
+        ((1, 1, 64, 48), lambda t: ttnn.concat([t, t], dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.reshape(t, (1, 1, 32, 128))),
     ],
-    ids=["transpose_hw", "transpose_nc", "permute", "concat", "reshape"],
+    ids=[
+        "transpose_hw",
+        "transpose_nc",
+        "permute_swap_hw",
+        "permute_nhwc",
+        "concat",
+        "concat_padded_h",
+        "concat_padded_w",
+        "reshape",
+    ],
 )
-@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (8, 32)])
-def test_data_movement_reject_off_default_tile(device, op, tile_shape, expect_error):
+@pytest.mark.parametrize("tile_shape", [(32, 32), (16, 32), (32, 16), (8, 32)])
+def test_data_movement_reject_off_default_tile(device, shape, op, tile_shape, expect_error):
     input_tensor = ttnn.from_torch(
-        torch.randn((2, 1, 32, 64), dtype=torch.bfloat16),
+        torch.randn(shape, dtype=torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
         tile=ttnn.Tile(tile_shape),
         device=device,
     )
 
+    if tile_shape == (32, 32):
+        op(input_tensor)
+        return
     with expect_error(RuntimeError, "TILE input requires tile shape 32x32"):
         op(input_tensor)
