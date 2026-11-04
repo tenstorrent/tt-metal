@@ -31,9 +31,8 @@ class DeepSeekV4FlashConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 6
-    # Pages one MoE forwarding channel holds -- see DeepSeekV3Config.MOE_FWD_VC_PAGES for what it trades and how
-    # it is picked.
-    # 48 costs dispatch 6.0% and combine 9.7% on hot_expert. Dispatch 17 MB a chip, combine 12 MB.
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
     MOE_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     # V4 drops V3's expert-group routing: a single group means the gate collapses to a plain top-k.

@@ -41,9 +41,8 @@ class GLM53Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Pages one MoE forwarding channel holds -- see DeepSeekV3Config.MOE_FWD_VC_PAGES for what it trades and how
-    # it is picked.
-    # 64 costs combine 5.3% on hot_expert. Dispatch 30 MB a chip, combine 23 MB.
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
     MOE_FWD_VC_PAGES = 80
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
