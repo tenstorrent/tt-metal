@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Configuration of the prefill runner's media embedding store, from PREFILL_MEDIA_STORE_*. Kept apart from the
-reader so a runner can check whether the store is on without importing Mooncake."""
+"""Configuration of the prefill runner's media embedding store, from PREFILL_MEDIA_STORE_* and MEDIA_STORE_KEY_ENCODING.
+Kept apart from the reader so a runner can check whether the store is on without importing Mooncake."""
 
 import os
 import re
@@ -11,6 +11,22 @@ from typing import Mapping, Optional
 
 ENV_PREFIX = "PREFILL_MEDIA_STORE_"
 _DEFAULT_SEGMENT_BYTES = "1G"
+
+KEY_ENCODING_ENV = "MEDIA_STORE_KEY_ENCODING"
+"""How a media key becomes its Mooncake key. The encoder service, which writes each value, and the prefill runner, which
+reads it, each convert keys this way themselves, so both must see the same value:
+
+- unset or empty: the media key is an ASCII str and is its own store key;
+- ``hex``: the media key is bytes (e.g. a 32-byte SHA-256) and its store key is the lowercase hex of those bytes."""
+KEY_ENCODINGS = ("", "hex")
+
+
+def key_encoding_from_env(environ: Mapping[str, str] = os.environ) -> str:
+    """MEDIA_STORE_KEY_ENCODING: '' (unset) or 'hex'."""
+    encoding = environ.get(KEY_ENCODING_ENV, "").strip()
+    if encoding not in KEY_ENCODINGS:
+        raise ValueError(f"{KEY_ENCODING_ENV}={encoding!r}: want 'hex' or unset")
+    return encoding
 
 
 def parse_bytes(text: str) -> int:
@@ -36,6 +52,8 @@ class MediaEmbeddingStoreConfig:
     protocol: str = "rdma"
     device: str = ""
     """RDMA device(s), e.g. 'rocep201s0f0'; empty lets Mooncake pick."""
+    key_encoding: str = ""
+    """How media keys become store keys (KEY_ENCODING_ENV), from MEDIA_STORE_KEY_ENCODING."""
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> Optional["MediaEmbeddingStoreConfig"]:
@@ -47,6 +65,7 @@ class MediaEmbeddingStoreConfig:
         PREFILL_MEDIA_STORE_METADATA  metadata server, e.g. http://<master host>:<port>/metadata (required)
         PREFILL_MEDIA_STORE_PROTOCOL  rdma (default) or tcp
         PREFILL_MEDIA_STORE_DEVICE    RDMA device(s) (default: Mooncake's choice)
+        MEDIA_STORE_KEY_ENCODING      'hex' for bytes media keys (default: ASCII str keys); shared with the encoder
         """
 
         def get(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -68,4 +87,5 @@ class MediaEmbeddingStoreConfig:
             metadata=get("METADATA"),
             protocol=get("PROTOCOL", "rdma"),
             device=get("DEVICE", ""),
+            key_encoding=key_encoding_from_env(environ),
         )

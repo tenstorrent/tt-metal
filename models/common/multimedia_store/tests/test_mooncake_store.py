@@ -6,6 +6,7 @@ wheel (models/common/multimedia_store/requirements.txt); the same paths against 
 test_mooncake_store_integration.py."""
 
 import ctypes
+import hashlib
 import sys
 from types import SimpleNamespace
 
@@ -103,11 +104,30 @@ def setup():
     return client, reader, local, remote
 
 
-def test_key_must_be_ascii(setup):
+def test_key_must_be_ascii(setup, expect_error):
     _, reader, _, _ = setup
     for bad in ("media-\u00e9", b"media-1"):
-        with pytest.raises(ValueError, match="not an ASCII str"):
+        with expect_error(ValueError, "not an ASCII str"):
             reader.fetch(bad)
+
+
+def test_bytes_keys_are_read_under_their_hex(setup, expect_error):
+    """With MEDIA_STORE_KEY_ENCODING=hex the caller passes the encoder's raw 32-byte media key, and the reader looks
+    up its lowercase hex, the key the encoder wrote under."""
+    client, _, local, remote = setup
+    reader = MooncakeEmbeddingReader(client, ME, key_encoding="hex")
+    here, there, absent = (hashlib.sha256(bytes([i])).digest() for i in range(3))
+    client.put(here.hex(), ME, local)
+    client.put(there.hex(), OTHER, remote)
+    got = reader.fetch_batch([FetchRequest(here, 0, 16), FetchRequest(there, 8, 16), FetchRequest(here)])
+    assert [bytes(v) for v in got] == [local[:16].tobytes(), remote[8:24].tobytes(), local.tobytes()]
+    assert reader.size(there) == remote.nbytes
+    with expect_error(Missing, absent.hex()):
+        reader.fetch(absent)
+    with expect_error(ValueError, "is not bytes"):
+        reader.fetch(here.hex())  # the hex itself is not a media key in this mode
+    with expect_error(ValueError, "unknown media key encoding"):
+        MooncakeEmbeddingReader(client, ME, key_encoding="base64")
 
 
 def test_local_value_is_read_in_place_with_one_lookup(setup):
@@ -153,17 +173,17 @@ def test_batch_mixes_local_and_remote_in_one_lookup(setup):
     assert (s["local_hits"], s["remote_hits"], s["fetch_calls"]) == (3, 3, 1)
 
 
-def test_one_missing_key_fails_the_batch(setup):
+def test_one_missing_key_fails_the_batch(setup, expect_error):
     _, reader, _, _ = setup
-    with pytest.raises(Missing):
+    with expect_error(Missing, _key(9)):
         reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(9)), FetchRequest(_key(2))])
     s = reader.stats.snapshot()
     assert (s["misses"], s["hits"]) == (1, 0)
 
 
-def test_range_outside_value(setup):
+def test_range_outside_value(setup, expect_error):
     _, reader, local, _ = setup
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "outside the"):
         reader.fetch_batch([FetchRequest(_key(1), local.nbytes - 1, 2)])
 
 
@@ -181,44 +201,44 @@ def test_read_buffer_starts_empty_and_grows_on_demand(setup):
     assert grown >= big.nbytes and list(client.registered.values()) == [grown]  # the old buffer was unregistered
 
 
-def test_missing_key(setup):
+def test_missing_key(setup, expect_error):
     _, reader, _, _ = setup
     for read in (reader.fetch, reader.size):
-        with pytest.raises(Missing):
+        with expect_error(Missing, _key(9)):
             read(_key(9))
-    with pytest.raises(KeyError):  # Missing is a KeyError, not a store failure
+    with expect_error(KeyError, _key(9)):  # Missing is a KeyError, not a store failure
         reader.fetch(_key(9))
     s = reader.stats.snapshot()
     assert (s["misses"], s["hits"], s["errors"]) == (2, 0, 0)  # size() is a lookup, not a fetch
 
 
-def test_unfinished_put_reads_as_missing(setup):
+def test_unfinished_put_reads_as_missing(setup, expect_error):
     client, reader, local, _ = setup
     client.put(_key(4), ME, local, status="PROCESSING")
-    with pytest.raises(Missing):
+    with expect_error(Missing, "not a complete memory replica"):
         reader.fetch(_key(4))
 
 
-def test_replicated_value_is_unavailable(setup):
+def test_replicated_value_is_unavailable(setup, expect_error):
     client, reader, local, _ = setup
     client.put(_key(5), ME, local, replicas=2)
-    with pytest.raises(StoreUnavailable, match="2 replicas"):
+    with expect_error(StoreUnavailable, "2 replicas"):
         reader.fetch(_key(5))
 
 
-def test_unreachable_master_is_unavailable(setup):
+def test_unreachable_master_is_unavailable(setup, expect_error):
     client, reader, _, _ = setup
     client.master_up = False
-    with pytest.raises(StoreUnavailable):
+    with expect_error(StoreUnavailable, "unreachable"):
         reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(2))])
     assert reader.stats.snapshot()["errors"] == 1
 
 
-def test_closed_reader_is_unavailable(setup):
+def test_closed_reader_is_unavailable(setup, expect_error):
     _, reader, _, _ = setup
     reader.close()
     for read in (reader.fetch, reader.size):
-        with pytest.raises(StoreUnavailable, match="closed"):
+        with expect_error(StoreUnavailable, "closed"):
             read(_key(1))
 
 
@@ -239,9 +259,9 @@ def test_plain_tuples_and_an_empty_batch(setup):
 
 
 @pytest.mark.parametrize("rc", [-800, -900], ids=["peer_gone", "master_gone"])
-def test_failed_remote_read_is_unavailable(setup, rc):
+def test_failed_remote_read_is_unavailable(setup, rc, expect_error):
     """The codes Mooncake returns when the host holding the value, or the master, has died."""
     client, reader, _, _ = setup
     client.get_into_ranges = lambda *args: [[[rc]]]
-    with pytest.raises(StoreUnavailable, match=f"read {rc} of"):
+    with expect_error(StoreUnavailable, f"read {rc} of"):
         reader.fetch_batch([FetchRequest(_key(1), 0, 8), FetchRequest(_key(2), 0, 8)])

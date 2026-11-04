@@ -9,6 +9,7 @@ allow_evict_soft_pinned_objects=false):
 - ``store``: this runner's store (MooncakeEmbeddingReader.open, segment 127.0.0.1:<port>);
 - ``other``: another prefill host's store (segment 127.0.0.2:<port>, a second loopback address);
 - ``puller``: a host in pull mode, with no store (segment 127.0.0.4:<port>);
+- ``hex_reader``: a pull-mode host whose media keys are bytes, read under their hex (MEDIA_STORE_KEY_ENCODING=hex);
 - ``writer``: the encoder service stand-in, with no segment, writing with put_from, a soft pin and preferred_segment.
 
 Runs on Linux, after ``uv pip install -r models/common/multimedia_store/requirements.txt`` (the CI job does this);
@@ -17,6 +18,8 @@ env that cannot start the store shows up. Skipped on other platforms. Kept out o
 broad CI job does not install Mooncake.
 """
 
+import dataclasses
+import hashlib
 import os
 import re
 import shutil
@@ -114,13 +117,15 @@ def cluster(tmp_path_factory):
     store = MooncakeEmbeddingReader.open(config("127.0.0.1", 64 << 20))
     other = MooncakeEmbeddingReader.open(config("127.0.0.2", 64 << 20))
     puller = MooncakeEmbeddingReader.open(config("127.0.0.4", 0))  # pull mode: no store on this host
+    hex_reader = MooncakeEmbeddingReader.open(dataclasses.replace(config("127.0.0.5", 0), key_encoding="hex"))
     w = config("127.0.0.3", 0)
     writer = mooncake_store.MooncakeDistributedStore()
     assert writer.setup(w.segment, w.metadata, 0, 16 << 20, w.protocol, "", w.master) == 0
     try:
-        yield SimpleCluster(store, other, writer, metrics, puller)
+        yield SimpleCluster(store, other, writer, metrics, puller, hex_reader)
     finally:
         writer.close()
+        hex_reader.close()
         puller.close()
         other.close()
         store.close()
@@ -130,16 +135,19 @@ def cluster(tmp_path_factory):
 
 
 class SimpleCluster:
-    def __init__(self, store, other, writer, metrics_port, puller):
-        self.store, self.other, self.writer, self.puller = store, other, writer, puller
+    def __init__(self, store, other, writer, metrics_port, puller, hex_reader):
+        self.store, self.other, self.writer, self.puller, self.hex_reader = store, other, writer, puller, hex_reader
         self.metrics_port = metrics_port
         self._buffers = []
         self._n = 0
 
-    def put(self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True) -> tuple[str, np.ndarray]:
-        """The encoder service's write: put_from a registered buffer into segment, soft-pinned. Returns (key, value)."""
+    def put(
+        self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True, media_key: str = ""
+    ) -> tuple[str, np.ndarray]:
+        """The encoder service's write: put_from a registered buffer into segment, soft-pinned, under media_key (a
+        store key; default a fresh one). Returns (key, value)."""
         self._n += 1
-        media_key = f"test-media-key-{self._n}"
+        media_key = media_key or f"test-media-key-{self._n}"
         value = np.random.default_rng(self._n).integers(0, 256, nbytes, dtype=np.uint8)
         assert self.writer.register_buffer(value.ctypes.data, nbytes) == 0
         self._buffers.append(value)
@@ -210,20 +218,20 @@ def test_range_read(cluster, where):
     assert [bytes(v) for v in got] == [w.tobytes() for w in want]
 
 
-def test_missing_key(cluster):
+def test_missing_key(cluster, expect_error):
     absent = "no-such-media-key"
     before = cluster.store.stats.snapshot()
-    with pytest.raises(Missing):
+    with expect_error(Missing, absent):
         cluster.store.fetch(absent)
-    with pytest.raises(Missing):
+    with expect_error(Missing, absent):
         cluster.store.fetch_batch([FetchRequest(absent, 0, 64)])
-    with pytest.raises(Missing):
+    with expect_error(Missing, absent):
         cluster.store.size(absent)
     after = cluster.store.stats.snapshot()
     assert after["misses"] == before["misses"] + 2 and after["errors"] == before["errors"]
 
 
-def test_batch_of_several_requests(cluster):
+def test_batch_of_several_requests(cluster, expect_error):
     """A forward's batch: ranges of values on this host and another in one lookup at the master and one batched read
     from the other host. One missing key fails the whole batch."""
     here = [cluster.put(cluster.store.segment) for _ in range(3)]
@@ -239,7 +247,7 @@ def test_batch_of_several_requests(cluster):
     lookups = cluster.master_lookups()
     cluster.store.fetch_batch([FetchRequest(k) for k, _ in here])  # all on this host: in place
     assert cluster.master_lookups() - lookups == 1
-    with pytest.raises(Missing):
+    with expect_error(Missing, "absent-media-key"):
         cluster.store.fetch_batch(requests + [FetchRequest("absent-media-key")])
 
 
@@ -277,3 +285,19 @@ def test_pull_mode_reads_everything_from_the_host_that_holds_it(cluster):
     assert bytes(rows) == value[64 : 64 + 4096].tobytes()
     after = cluster.puller.stats.snapshot()
     assert after["remote_hits"] == before["remote_hits"] + 2 and after["local_hits"] == before["local_hits"]
+
+
+@pytest.mark.parametrize("where", ["this_host", "other_host"])
+def test_bytes_media_key_is_read_under_its_hex(cluster, where, expect_error):
+    """The encoder service returns a 32-byte media key and, with MEDIA_STORE_KEY_ENCODING=hex, writes under its
+    lowercase hex; a runner with the same setting reads with the raw bytes."""
+    segment = cluster.store.segment if where == "this_host" else cluster.other.segment
+    media_key = hashlib.sha256(where.encode()).digest()
+    store_key, value = cluster.put(segment, media_key=media_key.hex())
+    assert cluster.placed_on(store_key) == segment
+    assert bytes(cluster.hex_reader.fetch(media_key)) == value.tobytes()
+    (rows,) = cluster.hex_reader.fetch_batch([FetchRequest(media_key, 64, 4096)])
+    assert bytes(rows) == value[64 : 64 + 4096].tobytes()
+    never_written = hashlib.sha256(b"never written").digest()
+    with expect_error(Missing, never_written.hex()):
+        cluster.hex_reader.fetch(never_written)

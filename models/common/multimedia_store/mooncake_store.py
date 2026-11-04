@@ -14,11 +14,12 @@
 - Push or pull: with a segment (PREFILL_MEDIA_STORE_BYTES > 0) writers put values on this host; with none (0) this
   host keeps nothing and reads every value from the host that holds it.
 - A missing key raises ``Missing`` and any other store failure ``StoreUnavailable``; in a batch, the first failing
-  request fails the whole batch. A malformed call (a key that is not ASCII, a range outside the value) raises
+  request fails the whole batch. A malformed call (a key of the wrong type, a range outside the value) raises
   ``ValueError``.
 - ``stats`` counts hits, misses, errors, bytes read, fetch latency and the read buffer's size.
 
-Media keys are ASCII strings, stored as they are. ``MooncakeEmbeddingReader.open(config)`` starts the store from a
+Media keys are ASCII strings, stored as they are, or with MEDIA_STORE_KEY_ENCODING=hex, bytes stored under their
+lowercase hex. ``MooncakeEmbeddingReader.open(config)`` starts the store from a
 ``MediaEmbeddingStoreConfig`` (config.py), read from the ``PREFILL_MEDIA_STORE_*`` variables.
 """
 
@@ -29,25 +30,29 @@ import ctypes
 import threading
 import time
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence
+from typing import Mapping, Optional, Sequence, Union
 
 import numpy as np
 from loguru import logger
 from mooncake.store import MooncakeDistributedStore
 
-from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
+from models.common.multimedia_store.config import KEY_ENCODING_ENV, KEY_ENCODINGS, MediaEmbeddingStoreConfig
 from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
 
 # Mooncake ErrorCode the reader tells apart from other failures (mooncake-store/include/types.h).
 OBJECT_NOT_FOUND = -704
 
 
-def _check_key(media_key: str) -> str:
-    # Mooncake's batched lookup (batch_get_replica_desc) returns its results keyed by str, decoding each stored key
-    # as UTF-8: a key that isn't text makes it raise UnicodeDecodeError, and a bytes key would never match a str
-    # result and so read as Missing. An ASCII str is stored and returned as the same bytes.
+def _store_key(media_key: Union[str, bytes], encoding: str) -> str:
+    """The Mooncake key for a media key (config.KEY_ENCODING_ENV). Store keys are ASCII because Mooncake's batched
+    lookup (batch_get_replica_desc) returns its results keyed by str, decoding each key as UTF-8: a raw digest is almost
+    never valid UTF-8 and makes the lookup raise UnicodeDecodeError, though Mooncake's other calls accept it."""
+    if encoding == "hex":
+        if not isinstance(media_key, bytes):
+            raise ValueError(f"media key {media_key!r} is not bytes ({KEY_ENCODING_ENV}=hex)")
+        return media_key.hex()
     if not isinstance(media_key, str) or not media_key.isascii():
-        raise ValueError(f"media key {media_key!r} is not an ASCII str")
+        raise ValueError(f"media key {media_key!r} is not an ASCII str (set {KEY_ENCODING_ENV}=hex for bytes keys)")
     return media_key
 
 
@@ -114,10 +119,14 @@ class MooncakeEmbeddingReader:
     ``open(config)`` starts the client and mounts the segment; tests may pass an already set up client to the
     constructor. Not tied to a model: values are opaque bytes."""
 
-    def __init__(self, client, segment: str):
+    def __init__(self, client, segment: str, key_encoding: str = ""):
         self._client = client
         self.segment = segment
         """This host's segment name, the preferred_segment writers use."""
+        self.key_encoding = key_encoding
+        """How media keys become store keys (config.KEY_ENCODING_ENV)."""
+        if key_encoding not in KEY_ENCODINGS:
+            raise ValueError(f"unknown media key encoding {key_encoding!r}, want one of {KEY_ENCODINGS}")
         self.stats = MediaEmbeddingReaderStats()
         self._read_lock = threading.Lock()
         self._read_buffer = np.empty(0, dtype=np.uint8)  # registered on the first read from another host
@@ -142,12 +151,13 @@ class MooncakeEmbeddingReader:
             client.close()
             raise StoreUnavailable(f"Mooncake master {config.master} is unreachable")
         segment = client.get_hostname()
-        reader = cls(client, segment)
+        reader = cls(client, segment, config.key_encoding)
         atexit.register(reader.close)
         mode = "push" if config.segment_bytes else "pull"
         logger.info(
             f"[media_embedding_reader] {mode} mode: segment={segment} master={config.master} "
-            f"bytes={config.segment_bytes} protocol={config.protocol} ready in {time.perf_counter() - t0:.1f} s"
+            f"bytes={config.segment_bytes} protocol={config.protocol} keys={config.key_encoding or 'ascii'} "
+            f"ready in {time.perf_counter() - t0:.1f} s"
         )
         return reader
 
@@ -158,13 +168,14 @@ class MooncakeEmbeddingReader:
         logger.info(f"[media_embedding_reader] closing segment {self.segment}: {self.stats.snapshot()}")
         self._client.close()
 
-    def fetch(self, media_key: str) -> memoryview:
+    def fetch(self, media_key: Union[str, bytes]) -> memoryview:
         """The whole value stored under media_key, as fetch_batch returns it. Raises Missing or StoreUnavailable."""
         return self.fetch_batch([FetchRequest(media_key)])[0]
 
-    def size(self, media_key: str) -> int:
+    def size(self, media_key: Union[str, bytes]) -> int:
         """Bytes stored under media_key. Raises Missing or StoreUnavailable."""
-        return self._locate([_check_key(media_key)])[media_key].size
+        key = _store_key(media_key, self.key_encoding)
+        return self._locate([key])[key].size
 
     def fetch_batch(self, requests: Sequence[FetchRequest]) -> list[memoryview]:
         """The bytes of each (media_key, offset, length) request, in order. Raises Missing or StoreUnavailable for the
@@ -183,18 +194,19 @@ class MooncakeEmbeddingReader:
         t0 = time.perf_counter()
         requests = [FetchRequest(*r) for r in requests]
         try:
-            located = self._locate(list(dict.fromkeys(_check_key(r.media_key) for r in requests)))
+            keys = [_store_key(r.media_key, self.key_encoding) for r in requests]
+            located = self._locate(list(dict.fromkeys(keys)))
             results: list[Optional[memoryview]] = [None] * len(requests)
-            remote = []  # (request index, key, offset, length)
-            for i, r in enumerate(requests):
-                value = located[r.media_key]
+            remote = []  # (request index, store key, offset, length)
+            for i, (r, key) in enumerate(zip(requests, keys)):
+                value = located[key]
                 length = value.size - r.offset if r.length == -1 else r.length
                 if r.offset < 0 or length < 0 or r.offset + length > value.size:
-                    raise ValueError(f"range ({r.offset}, {r.length}) outside the {value.size} B value {r.media_key!r}")
+                    raise ValueError(f"range ({r.offset}, {r.length}) outside the {value.size} B value {key!r}")
                 if value.local_address is not None:
                     results[i] = _view_at(value.local_address + r.offset, length)
                 else:
-                    remote.append((i, r.media_key, r.offset, length))
+                    remote.append((i, key, r.offset, length))
             if remote:
                 self._read_remote(remote, results)
         except (Missing, StoreUnavailable) as e:
