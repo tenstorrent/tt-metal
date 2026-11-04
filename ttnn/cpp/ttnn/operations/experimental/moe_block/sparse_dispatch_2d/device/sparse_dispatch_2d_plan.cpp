@@ -71,7 +71,6 @@ CbSizes cb_sizes(
         .meta = 2 * group * META_PAGE,
         .plan = plan_bytes,
         .stage = 3 * 2 * manifest_batch * 16,
-        .dbg = DBG_BYTES,
         .manifest = ml.total_entries * 16,
     };
 }

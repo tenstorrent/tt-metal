@@ -19,20 +19,13 @@ namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d {
 // route ([1, 1, 1, RW * S] uint32) holds their route words. Each row lands in the same slot of every chip its route
 // word names; xbuf is returned (filled in place).
 //  group: rows a reader -> sender hand-off (default: 8 if 2 W <= 7168, else 2); manifest_batch: manifest entries a
-//  stream batch; pack: rows a fabric packet (default: 2 when two rows fit the payload); debug / spin_limit: a
-//  [8 N, 16] uint32 DRAM tensor receiving each reader's state when it idles past spin_limit polls.
+//  stream batch; pack: rows a fabric packet (default: 2 when two rows fit the payload).
 Tensor sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,
     MoEBlockResources& resources,
     std::optional<uint32_t> group = std::nullopt,
     uint32_t manifest_batch = 16,
-    std::optional<uint32_t> pack = std::nullopt,
-    const std::optional<Tensor>& debug = std::nullopt,
-    uint32_t spin_limit = 0);
-
-// Creates the op's persistent resources (the port cores' semaphore words) now: call before any per-call allocation
-// (and before freeze()).
-void ensure_sparse_dispatch_2d_resources(MoEBlockResources& resources);
+    std::optional<uint32_t> pack = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d

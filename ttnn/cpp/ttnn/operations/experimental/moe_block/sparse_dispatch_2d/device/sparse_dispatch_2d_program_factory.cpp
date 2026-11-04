@@ -59,9 +59,9 @@ tt::tt_metal::CBDescriptor cb(uint8_t index, uint32_t size, tt::DataFormat fmt, 
     };
 }
 
-// The buffers the runtime args address, by source (address_patches.hpp); without debug its args take route's.
-std::array<tt::tt_metal::Buffer*, 4> sources_of(const SparseDispatch2dInputs& t) {
-    return {t.xbuf.buffer(), t.route.buffer(), t.sems.buffer(), t.debug.has_value() ? t.debug->buffer() : nullptr};
+// The buffers the runtime args address, by source (address_patches.hpp).
+std::array<tt::tt_metal::Buffer*, 3> sources_of(const SparseDispatch2dInputs& t) {
+    return {t.xbuf.buffer(), t.route.buffer(), t.sems.buffer()};
 }
 
 // Every chip's program descriptor.
@@ -79,7 +79,6 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
     Buffer* out_buf = t.xbuf.buffer();
     Buffer* plan_buf = t.route.buffer();
     Buffer* sems_buf = t.sems.buffer();
-    Buffer* dbg_buf = t.debug.has_value() ? t.debug->buffer() : plan_buf;  // (never written without spin_limit)
     const uint32_t row_bytes = out_buf->aligned_page_size();
     const uint32_t plan_bytes = plan_buf->aligned_page_size();
     const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, S);
@@ -88,12 +87,11 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
     const auto defines = common_defines(topo, S);
     const tt::DataFormat row_fmt = tt::tt_metal::datatype_to_dataformat_converter(t.xbuf.dtype());
 
-    // compile-time args: the manifest CB, then the phases' (see the kernel headers)
+    // compile-time args: the manifest CB, then the kernels' own (see the kernels)
     KernelDescriptor::CompileTimeArgs reader_ct = {
-        CB_MANIFEST, CB_ROWS, CB_META, CB_PLAN, row_bytes, args.group, plan_bytes, CB_DBG};
+        CB_MANIFEST, CB_ROWS, CB_META, CB_PLAN, row_bytes, args.group, plan_bytes};
     tt::tt_metal::TensorAccessorArgs(out_buf).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(dbg_buf).append_to(reader_ct);
     KernelDescriptor::CompileTimeArgs sender_ct = {
         CB_MANIFEST, CB_ROWS, CB_META, CB_STAGE, row_bytes, args.group, args.manifest_batch, args.pack};
     tt::tt_metal::TensorAccessorArgs(out_buf).append_to(sender_ct);
@@ -142,7 +140,6 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
         });
         desc.cbs.push_back(cb(CB_PLAN, sizes.plan, tt::DataFormat::UInt32, port_set));
         desc.cbs.push_back(cb(CB_STAGE, sizes.stage, tt::DataFormat::UInt32, port_set));
-        desc.cbs.push_back(cb(CB_DBG, sizes.dbg, tt::DataFormat::UInt32, port_set));
 
         KernelDescriptor reader;
         reader.kernel_source = std::string(KERNEL_DIR) + "sparse_dispatch_2d_port_reader.cpp";
@@ -172,8 +169,6 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
             rd.push_back(plan_buf);
             rd.push_back(sems_buf);
             rd.append({ring_offs, w.ring_mask, chip.r, chip.c, static_cast<uint32_t>(d), li});
-            rd.push_back(dbg_buf);
-            rd.append({port_index(topo, chip, d, li), args.spin_limit});
             reader.emplace_runtime_args(core, rd);
 
             const ChipCoord peer = port.peer;

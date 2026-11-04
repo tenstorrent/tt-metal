@@ -22,7 +22,7 @@ struct SparseDispatch2dDeviceOperation {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<SparseDispatch2dProgramFactory>;
 
-    // Structure only: plan_key, placement, the hashed attributes and the tensor specs. No buffer address.
+    // Structure only: plan_key, the hashed attributes and the tensor specs. No buffer address.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -40,7 +40,6 @@ Tensor moe_block_sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,
     const Tensor& sems,
-    const std::optional<Tensor>& debug,
     const ttnn::operations::experimental::moe_block::sparse_dispatch_2d::SparseDispatch2dParams& params);
 
 }  // namespace ttnn::prim

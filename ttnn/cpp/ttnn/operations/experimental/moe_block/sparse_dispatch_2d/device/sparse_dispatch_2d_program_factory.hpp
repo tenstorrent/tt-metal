@@ -12,7 +12,7 @@
 namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d {
 
 // One program a chip (its ports differ): per port core a reader (RISCV_1, NoC0) and a sender (RISCV_0, NoC1, the
-// port's fabric link). Every address in the runtime args is a tensor's base (xbuf, route, sems, debug); a cache hit
+// port's fabric link). Every address in the runtime args is a tensor's base (xbuf, route, sems); a cache hit
 // rewrites a tensor's arguments only when its address moved (address_patches.hpp). Nothing else is hash-excluded.
 struct SparseDispatch2dProgramFactory {
     struct shared_variables_t {

@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The sparse 2D dispatch's shared kernel constants and span helpers (sparse_all_gather_2d._COMMON on
-// mstaletovic/moe-trim). The mesh constants come in as defines (the reference's text substitutions):
+// The sparse 2D dispatch's shared kernel constants and span helpers. The mesh constants come in as defines:
 //   SA_R, SA_C            mesh rows / columns
 //   SA_S                  own rows a chip
 //   SA_GMAX               (C - 1) + (R - 1) - 1: the last END generation

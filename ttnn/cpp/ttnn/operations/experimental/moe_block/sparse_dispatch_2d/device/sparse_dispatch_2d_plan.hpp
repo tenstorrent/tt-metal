@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host math of the sparse 2D dispatch that is not shared with the other ops (sparse_all_gather_2d on
-// mstaletovic/moe-trim): each port's input rings and output streams (_wiring), and the program geometry (CB sizes,
-// the row group / packing defaults). Device-free; test_sparse_dispatch_2d_host.py compares it with the Python.
+// Host math of the sparse 2D dispatch that is not shared with the other ops: each port's input rings and output
+// streams (wiring), and the program geometry (CB sizes, the row group / packing defaults). Device-free.
 
 #pragma once
 
@@ -16,12 +15,11 @@
 
 namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d {
 
-// CB indices of the port cores (the reference's CB_ROWS .. CB_DBG, then the manifest, which is listed first so it
-// sits at the program's CB base: the same address on every port core of every chip).
-inline constexpr uint32_t CB_ROWS = 0, CB_META = 1, CB_PLAN = 2, CB_STAGE = 3, CB_DBG = 4, CB_MANIFEST = 5;
+// CB indices of the port cores (the manifest is listed first so it sits at the program's CB base: the same address on
+// every port core of every chip).
+inline constexpr uint32_t CB_ROWS = 0, CB_META = 1, CB_PLAN = 2, CB_STAGE = 3, CB_MANIFEST = 5;
 inline constexpr uint32_t META_PAGE = 16;
 inline constexpr uint32_t SEM_WORDS = 16;  // per port core: 4 semaphore words, 16 B apart
-inline constexpr uint32_t DBG_BYTES = 64;  // debug record a port
 
 struct StreamWiring {
     uint32_t on = 0;          // 0 off, 1 on, 2 terminal (END(GMAX) only)
@@ -40,15 +38,10 @@ struct PortWiring {
 };
 PortWiring wiring(const MeshPlan& plan, ChipCoord chip, Dir d);
 
-// The reference's port index of the debug record: (r * C + c) * 8 + dir * 2 + link index.
-inline uint32_t port_index(const MeshTopology& topo, ChipCoord chip, Dir d, uint32_t link_index) {
-    return topo.index(chip) * 8 + static_cast<uint32_t>(d) * 2 + link_index;
-}
-
 // GMAX: the last END generation, (C - 1) + (R - 1) - 1.
 inline uint32_t gmax(const MeshTopology& topo) { return (topo.C - 1) + (topo.R - 1) - 1; }
 
-// The MoE exchange's row group (tt_k3_token_split_moe.dispatch): 8 rows while 2 x width <= 7168, else 2 (the CBs of
+// The MoE exchange's row group: 8 rows while 2 x width <= 7168, else 2 (the CBs of
 // 2 x group rows stay small for wide rows).
 inline uint32_t default_group(uint32_t width) { return 2 * width <= 7168 ? 8 : 2; }
 // Rows a fabric packet: 2 when two rows fit the payload.
@@ -58,8 +51,8 @@ inline uint32_t default_pack(uint32_t row_bytes, size_t max_payload_bytes) {
 
 // CB sizes in bytes on every port core (sparse_all_gather_2d's descriptor).
 struct CbSizes {
-    uint32_t rows = 0, meta = 0, plan = 0, stage = 0, dbg = 0, manifest = 0;
-    uint32_t total() const { return rows + meta + plan + stage + dbg + manifest; }
+    uint32_t rows = 0, meta = 0, plan = 0, stage = 0, manifest = 0;
+    uint32_t total() const { return rows + meta + plan + stage + manifest; }
 };
 CbSizes cb_sizes(
     const MeshTopology& topo,

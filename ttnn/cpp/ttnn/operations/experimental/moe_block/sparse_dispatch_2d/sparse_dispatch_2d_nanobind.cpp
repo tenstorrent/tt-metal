@@ -40,9 +40,6 @@ void bind_sparse_dispatch_2d(nb::module_& mod) {
                 group: rows a reader-to-sender hand-off; default 8 when 2 * W <= 7168, else 2.
                 manifest_batch: manifest entries a stream sends at once (default 16).
                 pack: rows a fabric packet (1 or 2); default 2 when two rows fit the fabric payload.
-                debug: [8 * N, 16] uint32 DRAM tensor: with spin_limit, each port reader writes its state there
-                    (row (r * C + c) * 8 + dir * 2 + link) when it idles past spin_limit polls.
-                spin_limit: debug only (0: never give up).
 
             Returns:
                 xbuf.
@@ -54,15 +51,7 @@ void bind_sparse_dispatch_2d(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("group") = nb::none(),
         nb::arg("manifest_batch") = 16,
-        nb::arg("pack") = nb::none(),
-        nb::arg("debug") = nb::none(),
-        nb::arg("spin_limit") = 0);
-
-    mod.def(
-        "ensure_sparse_dispatch_2d_resources",
-        &ensure_sparse_dispatch_2d_resources,
-        nb::arg("resources"),
-        "Create sparse_dispatch_2d's persistent semaphore words now (before per-call allocations and freeze()).");
+        nb::arg("pack") = nb::none());
 
     mod.def(
         "sparse_dispatch_2d_wiring",

@@ -93,7 +93,6 @@ WIDTHS = [3584, 6144]  # K3's latent, GLM-5.3's emb_dim
 )
 def test_dispatch(mesh_device, width):
     resources = _resources(mesh_device, width)
-    mb.ensure_sparse_dispatch_2d_resources(resources)
     S, per_chip, model = _inputs(mesh_device, resources, width, seed=1234)
     xbuf, route = _to_device(per_chip, mesh_device)
     out = mb.sparse_dispatch_2d(xbuf, route, resources)

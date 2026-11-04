@@ -33,15 +33,12 @@ ttsl::hash::hash_t SparseDispatch2dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& t) {
     return tt::tt_metal::operation::hash_operation<SparseDispatch2dDeviceOperation>(
         args.plan_key,
-        args.placement,
         args.group,
         args.manifest_batch,
         args.pack,
-        args.spin_limit,
         t.xbuf.tensor_spec(),
         t.route.tensor_spec(),
-        t.sems.tensor_spec(),
-        t.debug.has_value() ? std::optional<tt::tt_metal::TensorSpec>(t.debug->tensor_spec()) : std::nullopt);
+        t.sems.tensor_spec());
 }
 
 void SparseDispatch2dDeviceOperation::validate_on_program_cache_miss(
@@ -115,14 +112,6 @@ void SparseDispatch2dDeviceOperation::validate_on_program_cache_miss(
             "sparse_dispatch_2d: port core {} has no semaphore words",
             core.str());
     }
-    if (t.debug.has_value()) {
-        validate_dram_row_major(*t.debug, "debug");
-        TT_FATAL(
-            t.debug->buffer()->aligned_page_size() >= DBG_BYTES && t.debug->buffer()->num_pages() >= 8 * N,
-            "sparse_dispatch_2d: debug needs {} pages of >= {} B (one a port index)",
-            8 * N,
-            DBG_BYTES);
-    }
 }
 
 void SparseDispatch2dDeviceOperation::validate_on_program_cache_hit(
@@ -153,11 +142,10 @@ Tensor moe_block_sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,
     const Tensor& sems,
-    const std::optional<Tensor>& debug,
     const ttnn::operations::experimental::moe_block::sparse_dispatch_2d::SparseDispatch2dParams& params) {
     using namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d;
     return ttnn::device_operation::launch<SparseDispatch2dDeviceOperation>(
-        params, SparseDispatch2dInputs{.xbuf = xbuf, .route = route, .sems = sems, .debug = debug});
+        params, SparseDispatch2dInputs{.xbuf = xbuf, .route = route, .sems = sems});
 }
 
 }  // namespace ttnn::prim
