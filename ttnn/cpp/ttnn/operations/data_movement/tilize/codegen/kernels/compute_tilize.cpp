@@ -6,7 +6,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
@@ -16,24 +16,22 @@ void kernel_main() {
 
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
 
-    CircularBuffer cb_in_exp(cb_in);
-    CircularBuffer cb_out_exp(cb_out);
-
     compute_kernel_hw_startup(cb_in, cb_out);
     // tilize_init leaves the Src zero-substitution flag alone; copy_init sets it to preserve, so a bf16 -0.0 or
     // subnormal passes the SrcA-to-DEST move bit-exact instead of flushing to +0.
     copy_init(cb_in);
-    tilize_init(cb_in, chunk_Wt, cb_out);
 
-    for (uint32_t b = 0; b < num_tile_rows; ++b) {
-        for (uint32_t c = 0; c < num_col_chunks; ++c) {
-            cb_in_exp.wait_front(chunk_Wt);
-            cb_out_exp.reserve_back(chunk_Wt);
-
-            tilize_block(cb_in, chunk_Wt, cb_out);
-
-            cb_out_exp.push_back(chunk_Wt);
-            cb_in_exp.pop_front(chunk_Wt);
-        }
-    }
+    // Same mode choice as the native kernel: fast tilize for bf16 (the math thread otherwise bounds L1-resident
+    // inputs), the exact path for fp32, which fast tilize would truncate to tf32.
+    constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<cb_in>()
+                                   ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
+                                   : compute_kernel_lib::tilize_config::Fp32Mode::Fast;
+    compute_kernel_lib::tilize<
+        chunk_Wt,
+        cb_in,
+        cb_out,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+        fp32_mode>(num_tile_rows * num_col_chunks);
 }

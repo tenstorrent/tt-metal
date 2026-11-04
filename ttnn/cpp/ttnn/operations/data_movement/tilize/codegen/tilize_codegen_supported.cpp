@@ -47,6 +47,9 @@ constexpr uint32_t kMinColumnBlocks = 2;
 constexpr uint32_t kCompactReaderMaxWt = 8;
 // Tiles per writer batch on a core that holds at most one tile row.
 constexpr uint32_t kBatchedWriteTiles = 4;
+// Smallest chunk worth double buffering; below it a single-buffered whole row is kept, since a block width with no
+// mid-sized divisor would otherwise run as many one- or two-tile chunks.
+constexpr uint32_t kMinPipelinedChunkTiles = 8;
 // A column split needs at least this many tiles per row to amortize its extra reader geometry.
 constexpr uint32_t kColumn2DMinWt = 3;
 // Few-row DRAM split: narrowest column block, in bytes per stick, one core reads.
@@ -170,23 +173,24 @@ std::optional<TilizeCodegenPlan> plan_for_budget(const Geometry& g, uint64_t usa
         return depth * chunk * g.in_tile_bytes + out_depth_tiles * g.out_tile_bytes +
                (g.convert ? chunk * g.in_tile_bytes : 0);
     };
-    auto fits = [&](uint64_t chunk, uint64_t depth) { return cb_bytes(chunk, depth, depth * chunk) <= budget; };
+    // Largest chunk (a divisor of the block width) whose CBs fit at the given depth, or 0 if none does.
+    const uint64_t per_tile =
+        static_cast<uint64_t>(g.in_tile_bytes) + g.out_tile_bytes + (g.convert ? g.in_tile_bytes : 0);
+    auto largest_chunk = [&](uint32_t depth) -> uint32_t {
+        const uint64_t max_chunk = std::min<uint64_t>(budget / (per_tile * depth), g.block_wt);
+        return max_chunk == 0 ? 0 : largest_divisor_at_most(g.block_wt, static_cast<uint32_t>(max_chunk));
+    };
 
-    uint32_t chunk_wt = g.block_wt;
+    // Double buffering lets the reader fill one chunk while the writer drains the other; a single-buffered whole
+    // row serializes them and leaves the writer as the long pole on wide rows. A single-buffered row is kept only
+    // when no double-buffered chunk of useful size fits.
+    uint32_t chunk_wt = largest_chunk(kDoubleBuffered);
     uint32_t depth = kDoubleBuffered;
-    if (!fits(g.block_wt, kDoubleBuffered)) {
-        if (fits(g.block_wt, kSingleBuffered)) {
-            depth = kSingleBuffered;
-        } else {
-            const uint64_t per_tile =
-                static_cast<uint64_t>(g.in_tile_bytes) + g.out_tile_bytes + (g.convert ? g.in_tile_bytes : 0);
-            const uint64_t max_chunk = budget / per_tile;
-            if (max_chunk == 0) {
-                return std::nullopt;
-            }
-            chunk_wt =
-                largest_divisor_at_most(g.block_wt, static_cast<uint32_t>(std::min<uint64_t>(max_chunk, g.block_wt)));
-            depth = fits(chunk_wt, kDoubleBuffered) ? kDoubleBuffered : kSingleBuffered;
+    if (chunk_wt < std::min(g.block_wt, kMinPipelinedChunkTiles)) {
+        chunk_wt = largest_chunk(kSingleBuffered);
+        depth = kSingleBuffered;
+        if (chunk_wt == 0) {
+            return std::nullopt;
         }
     }
     const uint32_t num_col_chunks = g.block_wt / chunk_wt;
