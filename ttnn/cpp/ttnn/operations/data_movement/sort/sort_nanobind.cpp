@@ -70,7 +70,7 @@ void bind_sort_operation(nb::module_& mod) {
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED (L1)
+            - Sharded: HEIGHT_SHARDED and WIDTH_SHARDED in DRAM and L1; BLOCK_SHARDED in L1 only
     )doc";
 
     ttnn::bind_function<"sort">(
