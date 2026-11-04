@@ -231,10 +231,10 @@ class Qwen36MLP:
                 program_config=_gu_pc(ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
                 compute_kernel_config=ckc,
                 memory_config=mc,
-                dtype=gu_dtype,
+                dtype=ttnn.bfloat8_b,
             )
             w3_out = ttnn.linear(
-                x, w.w3, program_config=_gu_pc(None), compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype
+                x, w.w3, program_config=_gu_pc(None), compute_kernel_config=ckc, memory_config=mc, dtype=ttnn.bfloat8_b
             )
         else:
             w1_out = ttnn.linear(
