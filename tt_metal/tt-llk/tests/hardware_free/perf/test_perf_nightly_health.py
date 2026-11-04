@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import datetime as dt
+import json
 import pathlib
 import sys
 
@@ -152,12 +153,16 @@ def test_only_the_last_nightly_to_finish_sends():
 def test_gate_result_reads_the_lines_the_gate_really_prints(
     tmp_path, capsys, monkeypatch
 ):
-    report = tmp_path / "report.md"
-    report.write_text("ok")
-    have = tmp_path / "have_baseline.txt"
-    have.write_text("true")
+    verdict = tmp_path / "verdict.json"
+    policy = {"title": "t", "speed_of_light": True, "threshold": 0.02}
+    policy.update(min_cycles=30, modules={}, run_types=["L1_TO_L1"])
+    verdict.write_text(
+        json.dumps(
+            {"arch": "blackhole", "status": "pass", "reason": "", "policy": policy}
+        )
+    )
     gate_slack_notify.main(
-        ["--channel", "C", "--report", str(report), "--have-baseline", str(have)]
+        ["--channel", "C", "--verdict", str(verdict)]
         + ["--out", str(tmp_path / "payload.json")]
     )
     run = {"run_id": "baseline-20260929-1-blackhole", "commit_sha": "6d88aa4fe5b4a049"}

@@ -12,9 +12,9 @@ sys.path.insert(0, str(_PERF))
 from gate_slack_notify import (
     _describe,
     build_text,
+    from_verdict,
     main,
     read_regressions,
-    verdict,
 )
 
 _CTX = {
@@ -51,28 +51,65 @@ def _write_regressions(tmp_path, rows):
     return path
 
 
+def _verdict(status, reason="", **baseline):
+    """A verdict-<arch>.json as gate.py writes it."""
+    return {
+        "schema": 1,
+        "gate": "merge",
+        "arch": "blackhole",
+        "status": status,
+        "reason": reason,
+        "policy": {
+            "title": "LLK perf merge gate",
+            "speed_of_light": False,
+            "threshold": 0.02,
+            "min_cycles": 30,
+            "modules": {"perf_matmul": 0.25},
+            "run_types": ["L1_TO_L1"],
+        },
+        "baseline": {"commit_sha": "abc1234", **baseline},
+    }
+
+
+def _write_verdict(tmp_path, v):
+    path = tmp_path / "verdict.json"
+    path.write_text(json.dumps(v))
+    return path
+
+
 def test_regression_is_reported():
-    assert (
-        verdict(exit_code=1, have_baseline=True, report_written=True)[0] == "regressed"
-    )
+    assert from_verdict(_verdict("regression"))[0] == "regressed"
 
 
-def test_pass_needs_a_baseline_and_a_report():
-    assert verdict(exit_code=0, have_baseline=True, report_written=True)[0] == "clean"
+def test_pass_is_clean():
+    assert from_verdict(_verdict("pass"))[0] == "clean"
 
 
-def test_no_baseline_is_skipped_not_clean():
-    """A gate with nothing to compare against did not pass. It did not run."""
-    status, reason = verdict(exit_code=0, have_baseline=False, report_written=True)
-    assert status == "skipped"
-    assert "baseline" in reason
+def test_every_other_status_is_skipped_not_clean():
+    """A gate that compared nothing did not pass. It did not run."""
+    for status in ("incomplete", "no-baseline", "no-compare"):
+        got, ctx = from_verdict(_verdict(status, "No baseline was found."))
+        assert got == "skipped" and ctx["reason"] == "No baseline was found."
 
 
-def test_missing_report_is_skipped_not_clean():
+def test_no_verdict_is_skipped_not_clean():
     """The silent-pass trap."""
-    status, reason = verdict(exit_code=0, have_baseline=True, report_written=False)
-    assert status == "skipped"
-    assert "did not run" in reason
+    status, ctx = from_verdict(None)
+    assert status == "skipped" and "no verdict" in ctx["reason"]
+
+
+def test_the_context_comes_from_the_policy():
+    _, ctx = from_verdict(_verdict("pass"))
+    assert ctx["gate_name"] == "LLK perf merge gate"
+    assert ctx["module_thresholds"] == "perf_matmul=0.25"
+    assert ctx["run_types"] == "L1_TO_L1" and ctx["baseline_sha"] == "abc1234"
+
+
+def test_a_stale_baseline_is_a_note():
+    _, ctx = from_verdict(
+        _verdict("pass", stale=True, expected_commit="def5678", run_ts="2026-11-04")
+    )
+    assert ctx["note"].startswith("Stale baseline: none at def5678 yet")
 
 
 def test_regression_message_names_the_author_and_the_pr():
@@ -131,8 +168,6 @@ def test_payload_escapes_a_config_value_that_holds_a_quote(tmp_path, monkeypatch
     """A sweep value must never be able to break the request body."""
     row = dict(_ROW, math_fidelity='HiFi4 "quoted", and\nnewline')
     regressions = _write_regressions(tmp_path, [row])
-    have_baseline = tmp_path / "have_baseline.txt"
-    have_baseline.write_text("true")
     out = tmp_path / "payload.json"
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out.txt"))
 
@@ -140,12 +175,8 @@ def test_payload_escapes_a_config_value_that_holds_a_quote(tmp_path, monkeypatch
         [
             "--regressions",
             str(regressions),
-            "--report",
-            str(regressions),
-            "--have-baseline",
-            str(have_baseline),
-            "--exit-code",
-            "1",
+            "--verdict",
+            str(_write_verdict(tmp_path, _verdict("regression"))),
             "--channel",
             "C0TEST",
             "--out",
@@ -158,17 +189,15 @@ def test_payload_escapes_a_config_value_that_holds_a_quote(tmp_path, monkeypatch
     assert "newline" in payload["text"]
 
 
-def test_have_baseline_absent_reads_as_no_baseline(tmp_path, monkeypatch):
+def test_a_missing_verdict_posts_a_skip(tmp_path, monkeypatch):
     out = tmp_path / "payload.json"
     output = tmp_path / "out.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
 
     main(
         [
-            "--have-baseline",
-            str(tmp_path / "does_not_exist.txt"),
-            "--exit-code",
-            "0",
+            "--verdict",
+            str(tmp_path / "does_not_exist.json"),
             "--channel",
             "C0TEST",
             "--out",
@@ -181,19 +210,13 @@ def test_have_baseline_absent_reads_as_no_baseline(tmp_path, monkeypatch):
 
 
 def test_clean_run_posts_too(tmp_path, monkeypatch):
-    have_baseline = tmp_path / "have_baseline.txt"
-    have_baseline.write_text("true")
     output = tmp_path / "out.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
 
     main(
         [
-            "--have-baseline",
-            str(have_baseline),
-            "--report",
-            str(have_baseline),
-            "--exit-code",
-            "0",
+            "--verdict",
+            str(_write_verdict(tmp_path, _verdict("pass"))),
             "--channel",
             "C0TEST",
             "--out",
@@ -209,51 +232,10 @@ def test_missing_regressions_file_reads_as_no_rows(tmp_path):
     assert read_regressions(str(tmp_path / "nope.csv")) == []
 
 
-def test_an_unfinished_comparison_is_a_skip_not_a_regression():
-    status, reason = verdict(
-        exit_code=137,
-        have_baseline=True,
-        report_written=True,
-        comparison_finished=False,
-    )
-    assert status == "skipped"
-    assert "did not finish" in reason
-
-
-def test_a_failed_measurement_is_a_skip_not_a_pass():
-    status, reason = verdict(
-        exit_code=0, have_baseline=True, report_written=True, measure_failed=True
-    )
-    assert status == "skipped"
-    assert "did not complete" in reason
-
-
-def test_a_failed_measurement_names_the_leg():
-    leg = "A blackhole measuring leg did not complete: 2/2: cancelled after 10 min."
-    status, reason = verdict(
-        exit_code=0,
-        have_baseline=True,
-        report_written=True,
-        measure_failed=True,
-        measure_reason=leg,
-    )
-    assert status == "skipped"
-    assert reason.startswith(leg)
-
-
 def test_a_skip_names_the_arch():
     for ctx in (_CTX, {**_CTX, "arch": "wormhole"}):
         text = build_text("skipped", [], ctx)
         assert f"{ctx['arch']} · L1_TO_L1" in text.splitlines()[1]
-
-
-def test_a_cancelled_measurement_is_a_skip_not_a_pass():
-    from gate_slack_notify import _measure_complete
-
-    assert _measure_complete("success,skipped")
-    assert _measure_complete("")
-    assert not _measure_complete("success,cancelled")
-    assert not _measure_complete("failure")
 
 
 def test_one_change_on_many_points_is_one_finding():
@@ -288,19 +270,10 @@ def test_a_run_without_a_pr_names_what_started_it():
     assert "(nightly)" in build_text("skipped", [], {**_CTX, "pr_number": ""})
 
 
-def _post(tmp_path, monkeypatch, exit_code, have_baseline="true", *extra):
-    flag = tmp_path / "have_baseline.txt"
-    flag.write_text(have_baseline)
+def _post(tmp_path, monkeypatch, status, *extra):
     output = tmp_path / "out.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    args = [
-        "--have-baseline",
-        str(flag),
-        "--report",
-        str(flag),
-        "--exit-code",
-        exit_code,
-    ]
+    args = ["--verdict", str(_write_verdict(tmp_path, _verdict(status)))]
     main(
         args + ["--channel", "C0TEST", "--out", str(tmp_path / "payload.json"), *extra]
     )
@@ -308,14 +281,14 @@ def _post(tmp_path, monkeypatch, exit_code, have_baseline="true", *extra):
 
 
 def test_post_pass_false_keeps_a_pass_out_of_slack(tmp_path, monkeypatch):
-    out = _post(tmp_path, monkeypatch, "0", "true", "--post-pass", "false")
+    out = _post(tmp_path, monkeypatch, "pass", "--post-pass", "false")
     assert "status=clean" in out and "should_post=false" in out
 
 
 def test_post_pass_false_still_posts_a_regression_and_a_skip(tmp_path, monkeypatch):
     assert "should_post=true" in _post(
-        tmp_path, monkeypatch, "1", "true", "--post-pass", "false"
+        tmp_path, monkeypatch, "regression", "--post-pass", "false"
     )
     assert "should_post=true" in _post(
-        tmp_path, monkeypatch, "0", "false", "--post-pass", "false"
+        tmp_path, monkeypatch, "no-baseline", "--post-pass", "false"
     )

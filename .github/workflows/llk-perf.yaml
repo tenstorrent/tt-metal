@@ -81,25 +81,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: blackhole
-            threshold: 0.02
-            run_types: L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE
-          - arch: wormhole
-            threshold: 0.03
-            module_thresholds: perf_matmul=0.10,perf_math_matmul=0.10
-            run_types: L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE
+        arch: [blackhole, wormhole]
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
+      gate: nightly_sol
       arch: ${{ matrix.arch }}
-      baseline_pipeline: baseline
-      speed_of_light: "true"
-      run_types: ${{ matrix.run_types }}
-      threshold: ${{ matrix.threshold }}
-      min_cycles: 30
-      module_thresholds: ${{ matrix.module_thresholds }}
       measure_result: ${{ needs.llk-perf-tests.result }}
-      fail_on_regression: false
     secrets: inherit
 
   llk-perf-summary:
