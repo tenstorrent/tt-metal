@@ -195,3 +195,29 @@ def get_ttnn_torch_dtype(ttnn_dtype: ttnn.DataType) -> torch.dtype:
 
 def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan")):
     return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=pad_value)
+
+
+def merge_gate_subset(cases, keep, ids=None):
+    """Return parametrize values, with merge_gate on the tuples in keep.
+
+    cases is an iterable of argument tuples. keep is those tuples; wrap a single tuple in a list.
+    ids is an optional list aligned with cases, or a callable from the case tuple to its pytest id.
+    """
+    chosen = {tuple(case) for case in keep}
+
+    params = []
+    for index, case in enumerate(cases):
+        case = tuple(case)
+        if ids is None:
+            param_id = None
+        elif callable(ids):
+            param_id = ids(case)
+        else:
+            param_id = ids[index]
+        kwargs = {}
+        if case in chosen:
+            kwargs["marks"] = pytest.mark.merge_gate
+        if param_id is not None:
+            kwargs["id"] = param_id
+        params.append(pytest.param(*case, **kwargs) if kwargs else case)
+    return params

@@ -9,6 +9,7 @@ import torch
 
 import ttnn
 
+from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 import os
@@ -58,15 +59,15 @@ _RMS_ROW_MAJOR_MERGE_GATE = (ttnn.MathFidelity.HiFi2, False, True, True)
 @pytest.mark.parametrize("w", [32, 4096])
 @pytest.mark.parametrize(
     "math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc",
-    [
-        pytest.param(*values, marks=pytest.mark.merge_gate) if values == _RMS_ROW_MAJOR_MERGE_GATE else values
-        for values in product(
+    merge_gate_subset(
+        product(
             [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2],
             [True, False],
             [True, False],
             [True, False],
-        )
-    ],
+        ),
+        keep=[_RMS_ROW_MAJOR_MERGE_GATE],
+    ),
 )
 def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc):
     torch.manual_seed(0)
