@@ -158,6 +158,9 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             return _recurrent_forward_impl(gdn, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
         finally:
             _gdn_mod.ttnn = _orig_ttnn
+    if mode == "recurrent" and getattr(getattr(gdn, "ternary", None), "step", None) is not None:
+        # Bonsai: the whole one-token layer in its own ops (models/demos/blackhole/bonsai2/tt/ternary/gdn.py).
+        return gdn.ternary.decode(x, gdn, gdn.compute_kernel_config_decode)
     if mode == "recurrent":
         _orig_ttnn = _gdn_mod.ttnn
         _gdn_mod.ttnn = _DecodeOProjTtnn(gdn.weights.o_proj_weight, gdn)

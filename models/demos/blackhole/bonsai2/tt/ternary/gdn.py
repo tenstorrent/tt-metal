@@ -9,8 +9,10 @@ rows and the z rows are reordered on the host, as Alejandro's converter does. ou
 converter kept ssm_out as is (its column-reorder candidate scored lower against the base model; conversion report)."""
 
 import numpy as np
+import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.gdn_step.gdn_step import GDNStep
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import TernaryDecodeLinear3, pack_records_inline
 from models.demos.blackhole.bonsai2.tt.ternary.rotate import DecodeRotation
 
@@ -58,13 +60,14 @@ def out_chunk_src(gguf) -> np.ndarray:
 
 
 class TernaryGDN:
-    def __init__(self, device, packed, rot_in: DecodeRotation, rot_out: DecodeRotation, ab_w):
+    def __init__(self, device, packed, rot_in: DecodeRotation, rot_out: DecodeRotation, ab_w, step=None):
         rec, ppr, K, N, split = packed["qkvz"]
         self.qkvz = TernaryDecodeLinear3.from_packed(device, rec, ppr, K, N)
         self.split = split
         rec, ppr, K, N = packed["out"]
         self.out = TernaryDecodeLinear3.from_packed(device, rec, ppr, K, N)
         self.rot_in, self.rot_out = rot_in, rot_out
+        self.step = step  # GDNStep (tt/gdn_step): conv + gates + state update + gated norm in one op
         # a and b (48 each, dense) in one 5120 x 96 matmul: the default config ran each on 2 cores at 113 us;
         # 3 cores with in0_block_w=8 take 21 us (tests/test_ab_bench.py).
         self.ab_w = ab_w
@@ -95,6 +98,21 @@ class TernaryGDN:
         ttnn.deallocate(ab)
         return qkv, a, b, z
 
+    def decode(self, x, gdn, compute_kernel_config=None):
+        """The whole one-token GDN layer: in_proj, the fused step (conv, gates, state update, gated norm; updates
+        gdn's conv and recurrent state in place), out_proj. x [1, 1, 5120] -> [1, 1, 5120]."""
+        lead = tuple(list(x.shape)[:-1])
+        xr = self.rot_in(x)
+        qkv, z = self.qkvz(xr, lead=lead, split=self.split)
+        ttnn.deallocate(xr)
+        ab = ttnn.linear(x, self.ab_w, compute_kernel_config=compute_kernel_config, program_config=self.ab_pc)
+        o = self.step(qkv, ab, z, gdn.fused_conv_state, gdn.recurrent_state)
+        for t in (qkv, z, ab):
+            ttnn.deallocate(t)
+        y = self.out_proj(o)
+        ttnn.deallocate(o)
+        return y
+
     def out_proj(self, o):
         lead = tuple(list(o.shape)[:-1])
         orr = self.rot_out(o)
@@ -113,6 +131,18 @@ class MegaSplit:
     def __getitem__(self, key):
         start = key[-1].start or 0
         return self.parts[self.starts.index(start)]
+
+
+def make_gdn_step(gdn, nk, hk) -> GDNStep:
+    """The layer's fused one-token step, from the weights the dense path already holds on the device."""
+    w = gdn.weights
+    assert w.fused_conv_bias_dev is None, "GDN conv bias is not supported by the fused step"
+    taps = torch.cat([ttnn.to_torch(t).float().reshape(1, -1) for t in w.fused_conv_weight_taps], 0)
+    nv = gdn.num_v_heads
+    dt_bias = ttnn.to_torch(w.dt_bias).float().reshape(-1)[:nv]
+    a_neg = ttnn.to_torch(w.A_neg).float().reshape(-1)[:nv]
+    norm_w = ttnn.to_torch(w.o_norm_weight).float().reshape(-1)[: gdn.head_v_dim]
+    return GDNStep(gdn.device, taps, dt_bias, a_neg, norm_w, nk, hk, gdn.head_v_dim, eps_o=gdn.norm_eps)
 
 
 def swap_in_ternary_gdn(model, gguf, cache_dir=None) -> None:
@@ -143,4 +173,4 @@ def swap_in_ternary_gdn(model, gguf, cache_dir=None) -> None:
         for t in (w.mega_fused_weight, w.o_proj_weight, w.qkv_proj_weight, w.g_proj_weight):
             if t is not None:
                 ttnn.deallocate(t)
-        gdn.ternary = TernaryGDN(device, packed, rot_in, rot_out, w.ab_proj_weight)
+        gdn.ternary = TernaryGDN(device, packed, rot_in, rot_out, w.ab_proj_weight, step=make_gdn_step(gdn, nk, hk))
