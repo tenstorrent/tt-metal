@@ -111,6 +111,53 @@ template <
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
+FORCE_INLINE void SenderPipeImpl<
+    NOC_ID,
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    SENDER_MCAST_MODE,
+    MAX_RECTS>::send_payload(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+#pragma GCC unroll 3
+    for (uint32_t i = 0; i < MAX_RECTS; ++i) {
+        if (i >= args_.num_rectangles) {
+            break;
+        }
+        const auto& rectangle = args_.rectangles[i];
+        if (rectangle.sender_mcast_mode == SenderMcastMode::LocalCopy) {
+            if (src_l1 != dst_l1) {
+                local_copy_(src_l1, dst_l1, size);
+            }
+            continue;
+        }
+        const auto& r = rectangle.bounds;  // Already in routing order, prepared by the host.
+        UnicastEndpoint src_ep;
+        MulticastEndpoint dst_ep;
+        const typename noc_traits_t<UnicastEndpoint>::src_args_type src_args{.addr = src_l1};
+        const typename noc_traits_t<MulticastEndpoint>::dst_args_mcast_type dst_args{r.sx, r.sy, r.ex, r.ey, dst_l1};
+        // Unlinked: the chunk may be followed by a gap while the next one is produced; the publishing send()'s own
+        // linked payload + signal pair comes after it in issue order.
+        if (rectangle.sender_mcast_mode == SenderMcastMode::MulticastIncludeSource && src_l1 != dst_l1) {
+            noc_.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                src_ep, dst_ep, size, rectangle.loopback_count, src_args, dst_args, false);
+        } else {
+            noc_.async_write_multicast<NocOptions::DEFAULT>(
+                src_ep, dst_ep, size, rectangle.remote_count, src_args, dst_args, false);
+        }
+    }
+}
+
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    SenderMcastMode SENDER_MCAST_MODE,
+    uint32_t MAX_RECTS>
 template <SenderMcastMode RECTANGLE_MCAST_MODE>
 FORCE_INLINE void SenderPipeImpl<
     NOC_ID,

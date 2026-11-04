@@ -1,0 +1,2366 @@
+{
+  "summary": {
+    "total": 180,
+    "supported_pass": 68,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 56,
+    "supported_other": 0,
+    "xfail_expected": 56,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 0
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op_loose[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op_loose[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op_loose[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=ln_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[inf-2-500]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[inf-8-500]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[inf-3-400]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[nan-2-500]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[nan-8-500]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[nan-3-400]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[3e+37-2-500]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[3e+37-8-500]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_regression.py::test_padding_rows_are_zero_for_non_finite_inputs[3e+37-3-400]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "ln_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=model_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      }
+    ],
+    "supported_skipped": [
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=l1-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "l1",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=new-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_qkv_rotary_heads/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_buffer=dram-output_mode=preallocated-placement=op_layout-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "output_buffer": "dram",
+          "output_mode": "preallocated",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      }
+    ]
+  }
+}

@@ -209,7 +209,8 @@ ALWI void matmul_block(
     const uint32_t row_group_tiles = shape.out_subblock_h * out_row_width;
 
     for (uint32_t b = 0; b < shape.batch; b++) {
-        bool enable_reload = false;
+        // reload_on_first_k_block: partials from a previous call sit in interm (see MatmulBlockShape).
+        bool enable_reload = shape.reload_on_first_k_block;
 
         for (uint32_t block = 0; block < shape.num_k_blocks; block++) {
             const bool last_out = block == (shape.num_k_blocks - 1);
@@ -338,6 +339,10 @@ ALWI void matmul_block(
                             copy_block(interm_cb_id, 0, 0, out_num_tiles);
                             interm_buf.pop_front(out_num_tiles);
                         }
+                        // Opt-in post-reload hook: copies from interm-format CBs ride the reload's datacopy config.
+                        if constexpr (has_post_reload_hook_v<PostComputeFn>) {
+                            post_compute.post_reload(out_num_tiles);
+                        }
                         // The interm reload above left SrcA holding interm's format; matmul wants SrcA = in1
                         // (matmul maps in0 -> SrcB, in1 -> SrcA). This pair is exactly what the removed
                         // mm_block_init_short_with_dt(in0, in1, old_in1 = interm, ...) expanded to.
@@ -394,7 +399,9 @@ ALWI void matmul_block(
                         // Pack-side sync: apply_activation_from_pack does SFPU on the packer
                         // thread with its own math/pack wait + dest-offset flip + STALLWAIT,
                         // REPLACING tile_regs_wait. With NONE, use the standard 4-phase wait.
-                        if constexpr (Activation::activation != KernelActivation::NONE) {
+                        if constexpr (is_custom_pack_activation_v<Activation>) {
+                            Activation::apply_from_pack(out_num_tiles);
+                        } else if constexpr (Activation::activation != KernelActivation::NONE) {
                             apply_activation_from_pack<
                                 Activation::activation,
                                 Activation::param0,

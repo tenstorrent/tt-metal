@@ -91,6 +91,14 @@ public:
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
     FORCE_INLINE void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
+    // ===== DATA without a signal (a payload chunk a later send() of the same round publishes) =====
+    // Multicast a payload with no readiness wait and no ready signal. The next send() (or send_signal()) on this
+    // pipe publishes it: same NoC and command buffer, issued earlier, so it lands first. Lets a sender stream a
+    // round's block chunk by chunk as each chunk becomes available. Because nothing waits for receiver readiness,
+    // the caller must guarantee the landing region is already free on every receiver (e.g. a ring that is still
+    // empty), and must keep src_l1 intact until the publishing send() returns.
+    FORCE_INLINE void send_payload(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
+
     // ===== CONTROL channel (a signal with no data block) =====
     // Handle receiver readiness when enabled, then broadcast a control signal.
     // Flag sends `value`; Counter records one event. Pairs with ReceiverPipe::receive_signal(round).

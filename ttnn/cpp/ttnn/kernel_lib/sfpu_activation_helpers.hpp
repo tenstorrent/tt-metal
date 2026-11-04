@@ -12,6 +12,8 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "internal/risc_attribs.h"
 
+#include <type_traits>
+
 // KernelActivation is the host/device shared enum; kept at global scope so kernels
 // can reference it unqualified.
 using ttnn::operations::matmul::KernelActivation;
@@ -151,6 +153,22 @@ struct ActivationApplyHelper {
         }
     }
 };
+
+// Custom packer-thread functor for the Activation slot of matmul_block. A type that declares
+//     static constexpr bool custom_pack_apply = true;
+//     static void apply_from_pack(uint32_t out_subblock_num_tiles);
+// is called where apply_activation_from_pack would be, and REPLACES tile_regs_wait() just like it: it must do
+// the MATH_PACK semaphore wait, the packer dest-offset flip, its SFPU work on DEST[0..n) of the committed half,
+// and the final STALLWAIT(STALL_PACK, WAIT_SFPU) before returning (see apply_activation_from_pack below).
+// Use it for packer-thread SFPU maps the KernelActivation enum cannot name (e.g. a multi-tile map such as a
+// rotary pair rotation). Its SFPU init is the caller's boot-time job, as for ActivationInitHelper::init().
+template <typename A, typename = void>
+struct is_custom_pack_activation : std::false_type {};
+template <typename A>
+struct is_custom_pack_activation<A, std::void_t<decltype(A::custom_pack_apply)>>
+    : std::bool_constant<A::custom_pack_apply> {};
+template <typename A>
+inline constexpr bool is_custom_pack_activation_v = is_custom_pack_activation<A>::value;
 
 // Bulk packer-thread activation. Wraps the math/pack semaphore wait, packer
 // dest-offset flip, per-tile apply loop, and final SFPU stall — replaces a

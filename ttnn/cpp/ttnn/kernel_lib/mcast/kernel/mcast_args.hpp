@@ -64,6 +64,7 @@ static constexpr bool always_false_for_metadata = false;
 struct InactiveSenderPipe {
     template <SourceL1Guard = SourceL1Guard::Guard>
     FORCE_INLINE void send(uint32_t, uint32_t, uint32_t) {}
+    FORCE_INLINE void send_payload(uint32_t, uint32_t, uint32_t) {}
     template <SourceL1Guard = SourceL1Guard::Guard>
     FORCE_INLINE void send_signal(uint32_t = VALID) {}
 };

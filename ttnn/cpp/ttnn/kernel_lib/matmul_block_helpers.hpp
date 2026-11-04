@@ -157,6 +157,15 @@ struct MatmulBlockShape {
     // the writer drops the padded output columns.
     uint32_t last_in1_subblock_w_valid = 0;
 
+    // Optional: the interm buffer already holds this block's accumulated partials from a PREVIOUS
+    // matmul_block call, so the FIRST K-block of this call reloads them into DST (as a later K-block
+    // normally does). false = inert (no reload before block 0). Use to run the K loop in phases with
+    // different subblock shapes: phase 1 = LastBlockTarget::Interm (partials left pushed in interm),
+    // phase 2 = this flag + LastBlockTarget::Out. The partials' layout must be what this call's reload
+    // reads: TileRowMajor + packer_l1_acc (row-grouped, absolute column offsets — any subblock width
+    // in either phase), or SubblockMajor with the SAME subblock shape in both phases.
+    bool reload_on_first_k_block = false;
+
     static constexpr MatmulBlockShape of(
         uint32_t in0_num_subblocks,
         uint32_t in1_num_subblocks,
@@ -174,6 +183,21 @@ struct MatmulBlockShape {
 struct NoPostCompute {
     ALWI void operator()(uint32_t /* out_subblock_num_tiles */) const {}
 };
+
+// Optional second PostComputeFn entry point, opt-in by trait: a PostComputeFn that declares
+// `static constexpr bool post_reload_hook = true;` and a member `post_reload(uint32_t out_subblock_num_tiles)`
+// is ALSO called on the MATH thread right after every partials reload into DST[0..n) and BEFORE the helper
+// switches SrcA back to in1 and re-inits the matmul. At that point the unpacker / math are configured for a
+// datacopy from interm_buf (copy_init(interm_buf), SrcA in interm's format), so the hook may copy_tile from any
+// CB of the SAME data format and tile shape as interm_buf into DST slots >= n with no init or reconfig of its
+// own — e.g. per-subblock operands of a later post-compute step. It must leave that datacopy state as it found
+// it. With packer_l1_acc and LastBlockTarget::Out the reload (hence the hook) runs on the last K-block only.
+template <typename F, typename = void>
+struct has_post_reload_hook : std::false_type {};
+template <typename F>
+struct has_post_reload_hook<F, std::void_t<decltype(F::post_reload_hook)>> : std::bool_constant<F::post_reload_hook> {};
+template <typename F>
+inline constexpr bool has_post_reload_hook_v = has_post_reload_hook<F>::value;
 
 // No-op pre-K-block functor (default). Called at the start of each K-block before the
 // input waits; receives (block, num_k_blocks, is_last). Use for per-K-block preprocessing
@@ -282,7 +306,8 @@ struct NoIn1BaseOffset {
  *   init_mode          Short / None / ShortAfterPreKBlock — see InitMode.
  *   in0_policy,        per-operand input lifecycle — see InputPolicy (NoWaitNoPop is in1-only).
  *   in1_policy
- *   PostComputeFn      per-subblock hook on the MATH thread, last K-block, before pack.
+ *   PostComputeFn      per-subblock hook on the MATH thread, last K-block, before pack (optionally also
+ *                      after each partials reload — see has_post_reload_hook).
  *   PreKBlockFn        per-K-block hook before the input waits (see the restore contract).
  *   PostKBlockFn       per-K-block hook after the input pops and the L1_ACC drain.
  *   untilize_block_ct_dim  block_ct_dim for OutWithUntilize (= out_subblock_num_tiles);
@@ -298,6 +323,8 @@ struct NoIn1BaseOffset {
  *                      allowed with Interm. Build from the sfpu_activation_helpers.hpp
  *                      aliases, or ActivationOp<type,p0,p1,p2> for host-driven kinds. The
  *                      helper does not issue ActivationInitHelper::init() — boot-time, caller's.
+ *                      A custom packer functor (custom_pack_apply = true + static
+ *                      apply_from_pack(n); see is_custom_pack_activation) is accepted too.
  *   reconfig           which data-format reconfigs to issue — see DataFormatReconfig.
  *
  * ── Runtime parameters ───────────────────────────────────────────────────────
