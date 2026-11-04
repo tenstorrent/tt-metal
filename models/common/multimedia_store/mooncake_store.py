@@ -11,6 +11,8 @@
   value's length.
 - A value in this host's segment comes back in place, read-only. A value in another host's segment is read into this
   reader's registered read buffer, which grows on demand, and comes back as a read-only view into it.
+- Push or pull: with a segment (PREFILL_MEDIA_STORE_BYTES > 0) writers put values on this host; with none (0) this
+  host keeps nothing and reads every value from the host that holds it.
 - A missing key raises ``Missing`` and any other store failure ``StoreUnavailable``; in a batch, the first failing
   request fails the whole batch. A malformed call (a key that is not ASCII, a range outside the value) raises
   ``ValueError``.
@@ -69,7 +71,8 @@ class MediaEmbeddingStoreConfig:
     """This host's segment name, 'host:port', which writers pass as preferred_segment. A bare 'host' gets a port
     Mooncake picks, so the full name is known only once the store starts (MooncakeEmbeddingReader.segment)."""
     segment_bytes: int
-    """Host memory this host gives the store."""
+    """Host memory this host gives the store. More than 0 is push mode: writers put values here, read in place. 0 is
+    pull mode: this host holds nothing and reads every value from the host that does, such as the encoder's."""
     metadata: str
     """Mooncake metadata server."""
     protocol: str = "rdma"
@@ -82,7 +85,7 @@ class MediaEmbeddingStoreConfig:
 
         PREFILL_MEDIA_STORE_MASTER    master address, host:port (turns the store on)
         PREFILL_MEDIA_STORE_SEGMENT   this host's address, host:port or host (required)
-        PREFILL_MEDIA_STORE_BYTES     segment size (default 1G)
+        PREFILL_MEDIA_STORE_BYTES     segment size (default 1G); 0 for pull mode, with no store on this host
         PREFILL_MEDIA_STORE_METADATA  metadata server, e.g. http://<master host>:<port>/metadata (required)
         PREFILL_MEDIA_STORE_PROTOCOL  rdma (default) or tcp
         PREFILL_MEDIA_STORE_DEVICE    RDMA device(s) (default: Mooncake's choice)
@@ -100,13 +103,10 @@ class MediaEmbeddingStoreConfig:
         missing = [_ENV_PREFIX + n for n in ("SEGMENT", "METADATA") if get(n) is None]
         if missing:
             raise ValueError(f"{_ENV_PREFIX}MASTER is set, so {' and '.join(missing)} must be set too")
-        segment_bytes = parse_bytes(get("BYTES", _DEFAULT_SEGMENT_BYTES))
-        if segment_bytes == 0:  # a store with no memory would send every image written for this host elsewhere
-            raise ValueError(f"{_ENV_PREFIX}BYTES must be more than 0")
         return cls(
             master=master,
             segment=get("SEGMENT"),
-            segment_bytes=segment_bytes,
+            segment_bytes=parse_bytes(get("BYTES", _DEFAULT_SEGMENT_BYTES)),
             metadata=get("METADATA"),
             protocol=get("PROTOCOL", "rdma"),
             device=get("DEVICE", ""),
@@ -213,9 +213,10 @@ class MooncakeEmbeddingReader:
         segment = client.get_hostname()
         reader = cls(client, segment)
         atexit.register(reader.close)
+        mode = "push" if config.segment_bytes else "pull"
         logger.info(
-            f"[media_embedding_reader] segment={segment} master={config.master} bytes={config.segment_bytes} "
-            f"protocol={config.protocol} ready in {time.perf_counter() - t0:.1f} s"
+            f"[media_embedding_reader] {mode} mode: segment={segment} master={config.master} "
+            f"bytes={config.segment_bytes} protocol={config.protocol} ready in {time.perf_counter() - t0:.1f} s"
         )
         return reader
 

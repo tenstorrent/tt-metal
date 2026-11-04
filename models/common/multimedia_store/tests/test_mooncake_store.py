@@ -132,15 +132,14 @@ def test_config_from_env():
     assert (c.metadata, c.protocol) == ("http://10.0.0.9:9000/metadata", "rdma")
 
 
-def test_config_rejects_an_empty_store():
+def test_config_pull_mode_has_no_store():
     env = {
         "PREFILL_MEDIA_STORE_MASTER": "10.0.0.9:50051",
         "PREFILL_MEDIA_STORE_SEGMENT": ME,
         "PREFILL_MEDIA_STORE_METADATA": "http://10.0.0.9:9000/metadata",
-        "PREFILL_MEDIA_STORE_BYTES": "0G",
+        "PREFILL_MEDIA_STORE_BYTES": "0",
     }
-    with pytest.raises(ValueError, match="BYTES must be more than 0"):
-        MediaEmbeddingStoreConfig.from_env(env)
+    assert MediaEmbeddingStoreConfig.from_env(env).segment_bytes == 0
 
 
 def test_config_needs_segment_and_metadata():

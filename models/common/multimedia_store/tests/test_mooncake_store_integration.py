@@ -8,6 +8,7 @@ allow_evict_soft_pinned_objects=false):
 
 - ``store``: this runner's store (MooncakeEmbeddingReader.open, segment 127.0.0.1:<port>);
 - ``other``: another prefill host's store (segment 127.0.0.2:<port>, a second loopback address);
+- ``puller``: a host in pull mode, with no store (segment 127.0.0.4:<port>);
 - ``writer``: the encoder service stand-in, with no segment, writing with put_from, a soft pin and preferred_segment.
 
 Runs on Linux, after ``uv pip install -r models/common/multimedia_store/requirements.txt`` (the CI job does this);
@@ -110,13 +111,15 @@ def cluster(tmp_path_factory):
 
     store = MooncakeEmbeddingReader.open(config("127.0.0.1", 64 << 20))
     other = MooncakeEmbeddingReader.open(config("127.0.0.2", 64 << 20))
+    puller = MooncakeEmbeddingReader.open(config("127.0.0.4", 0))  # pull mode: no store on this host
     w = config("127.0.0.3", 0)
     writer = mooncake_store.MooncakeDistributedStore()
     assert writer.setup(w.segment, w.metadata, 0, 16 << 20, w.protocol, "", w.master) == 0
     try:
-        yield SimpleCluster(store, other, writer, metrics)
+        yield SimpleCluster(store, other, writer, metrics, puller)
     finally:
         writer.close()
+        puller.close()
         other.close()
         store.close()
         master.terminate()
@@ -125,8 +128,8 @@ def cluster(tmp_path_factory):
 
 
 class SimpleCluster:
-    def __init__(self, store, other, writer, metrics_port):
-        self.store, self.other, self.writer = store, other, writer
+    def __init__(self, store, other, writer, metrics_port, puller):
+        self.store, self.other, self.writer, self.puller = store, other, writer, puller
         self.metrics_port = metrics_port
         self._buffers = []
         self._n = 0
@@ -260,3 +263,15 @@ def test_value_read_in_place_is_leased(cluster):
     assert cluster.writer.remove(read) != 0
     assert bytes(view) == value.tobytes()
     assert cluster.writer.remove(unread) == 0  # nothing looked it up, so nothing holds it
+
+
+def test_pull_mode_reads_everything_from_the_host_that_holds_it(cluster):
+    """A host with no store (PREFILL_MEDIA_STORE_BYTES=0) reads each value, and its ranges, from the host holding it,
+    here standing in for the encoder's store."""
+    media_key, value = cluster.put(cluster.other.segment)
+    before = cluster.puller.stats.snapshot()
+    assert bytes(cluster.puller.fetch(media_key)) == value.tobytes()
+    (rows,) = cluster.puller.fetch_batch([FetchRequest(media_key, 64, 4096)])
+    assert bytes(rows) == value[64 : 64 + 4096].tobytes()
+    after = cluster.puller.stats.snapshot()
+    assert after["remote_hits"] == before["remote_hits"] + 2 and after["local_hits"] == before["local_hits"]
