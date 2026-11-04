@@ -9,6 +9,10 @@
 // SFPLOADMACRO per SFPU row loads, multiplies and stores the row. The packer adds the pass into the fp32 accumulator
 // tile (r, c) in L1 (L1 accumulation; the first group overwrites). After the block every accumulator goes out as bf16
 // (GLU_PAIRS: up * silu(gate) per (gate, up) column pair).
+// FPU / SFPU overlap (m >= 2): the rows go in two halves, A = rows [0, h) and B = [h, m). The pack thread's SFPU scales
+// half A of kb j while the math thread's FPU computes half B of kb j, and half B of kb j during half A of kb j + 1.
+// Semaphore FPU_SFPU (math -> pack): a half's matmuls are done; S2F (pack -> math): a half is scaled. With m = 1 the
+// math thread scales after the matmuls.
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
@@ -24,7 +28,7 @@ constexpr uint32_t cb_out = tt::CBIndex::c_16;
 constexpr uint32_t cb_acc = tt::CBIndex::c_24;  // fp32 accumulators
 constexpr uint32_t cb_res = tt::CBIndex::c_4;   // RESIDUAL: tiles added to the outputs
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace ckernel::sfpu {
 // P[r] (DEST tiles r < m) *= the column's ratios, one instruction per SFPU row (SFPU row q of a tile is face q / 8,
 // column parity q % 2; scales.py). Templates k = 0..3: LReg[16] = LREG(4 + k) * VD + 0 (the 4 ratio vectors in
@@ -53,11 +57,11 @@ inline void t2_macro_init() {
 }
 #define T2_ROW(q) \
     TTI_SFPLOADMACRO(((2 * (((q) >> 3) & 1) + ((q) & 1)) << 2), sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_6, 0)
-inline void scale_macro(uint32_t z, uint32_t m) {
+inline void scale_macro(uint32_t z, uint32_t m, uint32_t r0 = 0) {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     // column z of the unit: hi vectors v = 0..3 at SFPU rows 8 z + v of DEST tile 7, lo vectors at 8 z + 4 + v
-    const uint32_t sa = 7 * 64 + 16 * z;
+    const uint32_t sa = (7 - r0) * 64 + 16 * z;  // relative to the dest base (DEST tile r0)
     TT_SFPLOAD(p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 0);
     TT_SFPLOAD(p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 2);
     TT_SFPLOAD(p_sfpu::LREG6, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 4);
@@ -133,6 +137,32 @@ ALWI void scale_col(uint32_t z, uint32_t m) {
 #endif
 }
 
+constexpr uint32_t S2F = ckernel::semaphore::UNPACK_MATH_DONE;  // not used by this kernel's LLK calls
+// the math thread's wait on S2F must also hold the SEMGET after it (a sync instruction): with STALL_MATH alone the
+// SEMGET runs at once on a zero semaphore, the count runs ahead, and the FPU adds into rows the SFPU is still scaling
+ALWI void s2f_take() {
+    MATH((TTI_SEMWAIT(p_stall::STALL_MATH | p_stall::STALL_SYNC, semaphore::t6_sem(S2F), p_stall::STALL_ON_ZERO)));
+    MATH((t6_semaphore_get(S2F)));
+}
+// pack thread: once the math thread posts FPU_SFPU, DEST tiles r0 .. r0 + cnt - 1 *= the ratios of kb j; then S2F
+// (except after the pass's last kb: the next pass starts from the packed, cleared DEST)
+ALWI void pk_scale_half(uint32_t j, uint32_t r0, uint32_t cnt, bool signal) {
+#ifdef TRISC_PACK
+    t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU);
+    // this thread's SFPU dest base: DEST tile r0 (full-sync DEST); set once its previous pass is done
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, r0 * 64 + ckernel::packer::get_packer_dest_offset());
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+#ifndef T2_NOSCALE
+    ckernel::sfpu::scale_macro(j, cnt, r0);
+#endif
+    t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU);
+    if (signal) {
+        t6_semaphore_post<p_stall::WAIT_SFPU>(S2F);
+    }
+#endif
+}
+
 ALWI void ternary_srca() {
     // the decode records' ternary tiles: Bfp2_b codes with no exponent section; the unpacker forces exponent 127
     UNPACK(({
@@ -167,6 +197,15 @@ void kernel_main() {
         return;
     }
     compute_kernel_hw_startup(cb_w, cb_x, cb_acc);  // SrcA = in1 (weights), SrcB = in0 (x')
+    const bool split = m >= 2;
+    const uint32_t h = (m + 1) / 2;
+    // matmul_block_init's rt fixes the operand reuse (reuse_a = ct >= rt, ct = 1): the pass starts with rt = m, so a
+    // half whose reuse differs (1 row, with m > 1: m = 2, 3) re-inits before each half
+    const bool reinit = h < 2 || m - h < 2;
+    // both handshake semaphores start at 0 (the pack thread consumes FPU_SFPU and produces S2F; it gets here long
+    // before the math thread's first post, which waits on the first weights)
+    PACK((t6_semaphore_init(semaphore::FPU_SFPU, 0, 15)));
+    PACK((t6_semaphore_init(S2F, 0, 15)));
     for (uint32_t blk = 0; blk < nblk; ++blk) {
         const uint32_t c0 = blk * NBLK;
         const uint32_t nb = n_count > c0 ? (n_count - c0 < NBLK ? n_count - c0 : NBLK) : 0;
@@ -177,7 +216,13 @@ void kernel_main() {
             }
             continue;
         }
-        MATH((ckernel::sfpu::t2_macro_init()));
+        // the SFPU macro setup on the scaling thread (after the previous block's GLU, which uses the SFPU too)
+        if (split) {
+            silu_tile_init_pack();  // the pack thread's SFPU setup (config register, address modes)
+            PACK((ckernel::sfpu::t2_macro_init()));
+        } else {
+            MATH((ckernel::sfpu::t2_macro_init()));
+        }
         cb_reserve_back(cb_acc, ACC);
         pack_reconfig_data_format(cb_acc);
         for (uint32_t g = 0; g < KB; g += KPC) {
@@ -194,6 +239,38 @@ void kernel_main() {
                 matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
                 ternary_srca();
                 for (uint32_t j = 0; j < KPC; ++j) {
+                    if (split) {
+                        if (j > 0) {
+                            s2f_take();  // half A of kb j - 1 is scaled
+                        }
+#ifndef T2_NOMM
+                        if (reinit) {
+                            matmul_block_init(cb_x, cb_w, 0, 1, h, 4 * KPC);
+                            ternary_srca();
+                        }
+                        for (uint32_t i = 0; i < 4; ++i) {
+                            matmul_block(cb_x, cb_w, j * 4 + i, (c * KPC + j) * 4 + i, 0, 0, 1, h, 4 * KPC);
+                        }
+#endif
+                        MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+                        if (j > 0) {
+                            s2f_take();  // half B of kb j - 1 is scaled
+                        }
+#ifndef T2_NOMM
+                        if (reinit) {
+                            matmul_block_init(cb_x, cb_w, 0, 1, m - h, 4 * KPC);
+                            ternary_srca();
+                        }
+                        for (uint32_t i = 0; i < 4; ++i) {
+                            matmul_block(
+                                cb_x, cb_w, h * 4 * KPC + j * 4 + i, (c * KPC + j) * 4 + i, h, 0, 1, m - h, 4 * KPC);
+                        }
+#endif
+                        MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+                        pk_scale_half(j, 0, h, j + 1 < KPC);
+                        pk_scale_half(j, h, m - h, j + 1 < KPC);
+                        continue;
+                    }
                     if (j > 0) {  // the SFPU pass of kb j - 1 finishes before the matmuls add into DEST again
                         MATH((TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU)));
                     }
@@ -208,6 +285,7 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+                PACK((TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU)));  // the pack thread's SFPU passes first
                 if (c == 0 && g < 2 * KPC) {  // the block's first group overwrites the accumulators, later ones add
                     pack_reconfig_l1_acc(g > 0 ? 1 : 0);
                 }
