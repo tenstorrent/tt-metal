@@ -13,7 +13,6 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import (
     comp_pcc,
     is_blackhole,
-    is_wormhole_b0,
     skip_for_slow_dispatch,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
@@ -197,10 +196,6 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
     assert_with_pcc(output, optional_output_tensor, 0.999)
 
 
-@pytest.mark.skipif(
-    not is_wormhole_b0(),
-    reason="Blackhole LLK still keeps the throttled matmul MOP on tiny tiles at throttle 4/5 with HiFi",
-)
 @pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4])

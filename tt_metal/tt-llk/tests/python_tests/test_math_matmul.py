@@ -5,7 +5,6 @@ from itertools import chain, product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
@@ -111,10 +110,11 @@ def representative_tiny_tile_combinations():
 
 TINY_TILES_THROTTLE_COMBINATIONS = representative_tiny_tile_combinations()
 
-# Throttle level standing in for 1-3, where the throttled MOP covers every fidelity phase.
+# Tiny tiles take the unthrottled MOP fallback at both levels below, so neither runs a throttled
+# MOP on them; TINY_TILE_HIGH_THROTTLE runs throttled only in the full-tile odd-reuse cases.
+# Throttle level standing in for 1-3.
 TINY_TILE_LOW_THROTTLE = 1
-# Throttle level standing in for 4-5, where the throttled MOP covers one fidelity phase and the
-# execute path drives the phases. MM_THROTTLE_MAX in tt_metal/hw/inc/api/compute/matmul.h is 5.
+# Throttle level standing in for 4-5. MM_THROTTLE_MAX in tt_metal/hw/inc/api/compute/matmul.h is 5.
 TINY_TILE_HIGH_THROTTLE = 5
 
 
@@ -241,10 +241,6 @@ def test_math_matmul(
     run_math_matmul(math_fidelity, matmul_config, throttle)
 
 
-@pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.WORMHOLE,
-    reason="Blackhole _llk_math_matmul_init_ still keeps the throttled MOP on tiny tiles at throttle 4/5 with HiFi",
-)
 @pytest.mark.parametrize(
     "math_fidelity,matmul_config,throttle", tiny_tile_high_throttle_params()
 )
