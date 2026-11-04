@@ -301,13 +301,13 @@ def build_attention(
             tt_ccl=get_tt_ccl(mesh_device),
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            # (with the MoE block - K3's default MoE - the output projection stays unfused: the fused one's persistent L1
-            # staging, shared by every KDA layer, leaves the block's fused head 1137 KB of the 1199 KB it needs)
+            # (with the MoE block - K3's default MoE - the fused output projection allocates its L1 staging per call: a
+            # persistent one, shared by every KDA layer, leaves the block's fused head 1137 KB of the 1199 KB it needs)
             program_config=dataclasses.replace(
                 kimi_k3_program_config(
                     active_seq_len_local=seq_len // tuple(mesh_device.shape)[sp_axis], tp_ccl_topology=tp_topology
                 ),
-                fused_output_reduce_scatter=not moe_block_enabled("KimiK3Config"),
+                fused_output_persistent_staging=not moe_block_enabled("KimiK3Config"),
             ),
             active_seq_len=seq_len,
         ),
