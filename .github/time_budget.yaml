@@ -195,7 +195,7 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 395
+    bh_sc4: 380
     bh_sc1: 120
     bh_sc1_high_power: 210
 
