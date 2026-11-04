@@ -213,22 +213,16 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
         if (!autograd::any_requires_grad(a, b)) {
             return;
         }
+        // A frozen operand may be broadcast: add_grad drops its grad, so its shape does not matter.
         if ((a->get_requires_grad() && was_broadcasted(a, out->get_grad())) ||
             (b->get_requires_grad() && was_broadcasted(b, out->get_grad()))) {
             throw std::runtime_error("Broadcasting is not supported in the backward pass of operator/");
         }
-        auto res = ttnn::div_bw(
-            out->get_grad(),
-            a->get_value(),
-            b->get_value(),
-            /* rounding_mode */ std::nullopt,
-            /* are_required_outputs */ {a->get_requires_grad(), b->get_requires_grad()});
-        if (res[0].has_value()) {
-            a->add_grad(res[0].value());
-        }
-        if (res[1].has_value()) {
-            b->add_grad(res[1].value());
-        }
+        // Both grads are requested even when one input is frozen: div_bw fuses into a single kernel only when it
+        // computes both, and add_grad drops the frozen input's grad.
+        auto res = ttnn::div_bw(out->get_grad(), a->get_value(), b->get_value());
+        a->add_grad(res[0].value());
+        b->add_grad(res[1].value());
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
 

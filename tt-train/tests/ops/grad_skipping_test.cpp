@@ -166,10 +166,9 @@ using BinaryOp = std::function<TensorPtr(const TensorPtr&, const TensorPtr&)>;
 const std::vector<uint32_t> kActivation{2U, 1U, 32U, 64U};
 const std::vector<uint32_t> kFeatureRow{1U, 1U, 1U, 64U};
 
-OpUnderTest binary(
-    BinaryOp op, const std::vector<uint32_t>& a_shape, const std::vector<uint32_t>& b_shape, float b_lo = -1.F) {
+OpUnderTest binary(BinaryOp op, const std::vector<uint32_t>& a_shape, const std::vector<uint32_t>& b_shape) {
     return OpUnderTest{
-        .inputs = {{uniform(a_shape, -1.F, 1.F, 1U)}, {uniform(b_shape, b_lo, b_lo + 2.F, 2U)}},
+        .inputs = {{uniform(a_shape, -1.F, 1.F, 1U)}, {uniform(b_shape, -1.F, 1.F, 2U)}},
         .forward = [op](const std::vector<TensorPtr>& in) { return op(in[0], in[1]); }};
 }
 
@@ -268,9 +267,6 @@ TensorPtr sub_op(const TensorPtr& a, const TensorPtr& b) {
 }
 TensorPtr mul_op(const TensorPtr& a, const TensorPtr& b) {
     return ttml::ops::mul(a, b);
-}
-TensorPtr div_op(const TensorPtr& a, const TensorPtr& b) {
-    return ttml::ops::div(a, b);
 }
 
 }  // namespace
@@ -382,17 +378,6 @@ INSTANTIATE_TEST_SUITE_P(
             .make = [] { return binary(mul_op, kActivation, kFeatureRow); },
             .frozen = {1},
             .skips = {{kBinary, 1}, {kMorehSum, 2}}},
-        // b in [1, 3) keeps 1 / b well away from overflow. a: grad * reciprocal(b). b: -grad * (a * 1/b) * 1/b.
-        GradSkipCase{
-            .name = "Div_FrozenA",
-            .make = [] { return binary(div_op, kActivation, kActivation, 1.F); },
-            .frozen = {0},
-            .skips = {{kUnary, 1}, {kBinary, 1}}},
-        GradSkipCase{
-            .name = "Div_FrozenB",
-            .make = [] { return binary(div_op, kActivation, kActivation, 1.F); },
-            .frozen = {1},
-            .skips = {{kUnary, 2}, {kBinary, 3}}},
         // The dtensor chain; normalized_tensor is still recomputed for dgamma.
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenTensor",
