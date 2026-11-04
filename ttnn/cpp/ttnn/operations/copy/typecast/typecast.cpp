@@ -5,9 +5,35 @@
 #include "typecast.hpp"
 #include "ttnn/operations/copy/typecast/device/typecast_device_op.hpp"
 #include "ttnn/operations/core/core.hpp"  // for to_dtype
-#include "ttnn/tensor/tensor_utils.hpp"   // for is_cpu_tensor
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"  // for is_cpu_tensor
+
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::copy::detail {
+
+namespace {
+
+// A BFLOAT8_B / BFLOAT4_B pack derives one shared exponent per 16-lane block (one face row) of
+// the tile it packs. When the logical width is not a multiple of that block, the implicit width
+// padding shares the last 16-lane block with real lanes, so stale padding (an inf left by
+// reciprocal/rsqrt/log of zeroed padding, or any large value) collapses those real lanes.
+bool needs_zeroed_tile_padding(const Tensor& input_tensor, const DataType& output_dtype) {
+    if (input_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    if (output_dtype != DataType::BFLOAT8_B && output_dtype != DataType::BFLOAT4_B) {
+        return false;
+    }
+    const DataType input_dtype = input_tensor.dtype();
+    if (input_dtype != DataType::BFLOAT16 && input_dtype != DataType::FLOAT32) {
+        return false;
+    }
+    return input_tensor.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0;
+}
+
+}  // namespace
 
 inline Tensor typecast_impl(
     const Tensor& input_tensor,
@@ -30,6 +56,14 @@ inline Tensor typecast_impl(
 
     // Device tensor path
     DataType input_dtype = input_tensor.dtype();
+    // Zero the implicit tile padding before packing to a block-float format: the pack reads whole
+    // 16-lane blocks, padding included. The fill writes in place, so it must run on a copy to keep
+    // the caller's tensor untouched. Block-aligned widths take the direct path unchanged.
+    Tensor typecast_input = input_tensor;
+    if (needs_zeroed_tile_padding(input_tensor, output_dtype)) {
+        typecast_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
+        typecast_input = ttnn::fill_implicit_tile_padding(typecast_input, 0.0f);
+    }
     bool preserve_fp32_precision =
         (input_dtype == DataType::FLOAT32) or
         (is_8_bit_int(output_dtype) and (input_dtype == DataType::BFLOAT16 or input_dtype == DataType::BFLOAT8_B or
@@ -44,7 +78,7 @@ inline Tensor typecast_impl(
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
     return ttnn::prim::typecast(
-        input_tensor,
+        typecast_input,
         output_dtype,
         output_memory_config,
         fp32_dest_acc_en,
