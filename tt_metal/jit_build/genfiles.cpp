@@ -242,9 +242,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             uint8_t prefetcher_pipe_id,
             const std::optional<LLKMetadata>& metadata,
             uint8_t pap,
-            uint8_t cap) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap});
-        });
+            uint8_t cap) { dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap}); });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
@@ -1210,6 +1208,11 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#endif\n\n";
 
     out << "#if defined(UCK_CHLKC_PACK)\n"
+           "#include \"llk_defs.h\"\n";
+    emit_math_scalar_descriptors(out, desc);
+    out << "#endif\n\n";
+
+    out << "#if defined(UCK_CHLKC_ISOLATE_SFPU)\n"
            "#include \"llk_defs.h\"\n";
     emit_math_scalar_descriptors(out, desc);
     out << "#endif\n\n";

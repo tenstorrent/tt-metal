@@ -2,14 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Example: exp on Dest through the SFPU op-type compute API (api/compute/experimental/sfpu.h).
+// Example: exp on Dest through the SFPU op-type compute API. UNPACK copies a block into Dest, MATH runs exp in
+// place on each tile, PACK writes the block out.
 //
-// The usual three-thread pipeline: UNPACK copies each block of tiles from the input DFB into Dest,
-// MATH runs exp in place on every Dest tile, PACK writes the block to the output DFB. Only the two
-// SFPU lines differ from a kernel written with exp_tile_init / exp_tile; they compile to the same
-// instructions.
-//
-// Compile-time args: 0 = input DFB id, 1 = output DFB id, 2 = tiles per block, 3 = number of blocks.
+// Compile-time args: 0 = input DFB id, 1 = output DFB id, 2 = tiles per block, 3 = number of blocks,
+// 4 = DataFormat of the tiles in Dest.
 
 #include <cstdint>
 
@@ -26,13 +23,14 @@ void kernel_main() {
     constexpr std::uint32_t out_id = get_compile_time_arg_val(1);
     constexpr std::uint32_t tiles_per_block = get_compile_time_arg_val(2);
     constexpr std::uint32_t num_blocks = get_compile_time_arg_val(3);
+    constexpr DataFormat dest_format = static_cast<DataFormat>(get_compile_time_arg_val(4));
 
     DataflowBuffer dfb_in(static_cast<std::uint16_t>(in_id));
     DataflowBuffer dfb_out(static_cast<std::uint16_t>(out_id));
 
     compute_kernel_hw_startup(in_id, out_id);
     copy_init(in_id);
-    sfpu_init<op::Exp, SfpuReg::Dest>();  // once; APPROX and DST_ACCUM_MODE are the kernel's constants
+    sfpu_init<op::Exp, SfpuReg::Dest, dest_format>();
 
     for (std::uint32_t block = 0; block < num_blocks; ++block) {
         tile_regs_acquire();
@@ -40,7 +38,7 @@ void kernel_main() {
 
         copy_block(in_id, /* start_in_tile_index */ 0, /* start_dst_tile_index */ 0, tiles_per_block);
         for (std::uint32_t tile = 0; tile < tiles_per_block; ++tile) {
-            sfpu_tile<op::Exp, SfpuReg::Dest>(tile);  // exp(Dest[tile]) in place, MATH thread
+            sfpu_tile<op::Exp, SfpuReg::Dest, dest_format>(tile);  // exp(Dest[tile]) in place
         }
 
         tile_regs_commit();

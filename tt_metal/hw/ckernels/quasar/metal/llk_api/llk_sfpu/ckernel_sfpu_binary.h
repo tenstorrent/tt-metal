@@ -22,8 +22,8 @@ namespace sfpu {
 /** @brief Dest float ADD op type; rounds to bf16 (RNE) on store when the Dest is 16-bit and NearestEven is set. */
 template <
     bool EN_32BIT_DEST,
-    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
-    sfpi::DataLayout LAYOUT = dest_float_layout<EN_32BIT_DEST>,
+    DstRoundingMode dst_rounding_mode,
+    sfpi::DataLayout LAYOUT,
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 using AddDest = DestBinary<
@@ -43,8 +43,7 @@ using AddDest = DestBinary<
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (ADD, SUB, MUL or DIV)
- * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB). For ADD it also
- *         selects the explicit F32 SFPLOAD/SFPSTORE layout (see dest_float_layout); SUB/MUL/DIV stay HW-implied.
+ * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB)
  * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB results (no-op if is_fp32_dest_acc_en).
  *         DIV ignores this and always rounds RNE, to match BH semantics.
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
@@ -66,12 +65,8 @@ inline void calculate_sfpu_binary(
         dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB,
         "NearestEven rounding parameter is currently supported for ADD and SUB only");
     if constexpr (BINOP == BinaryOp::ADD) {
-        AddDest<
-            is_fp32_dest_acc_en,
-            dst_rounding_mode,
-            dest_float_layout<is_fp32_dest_acc_en>,
-            ITERATIONS,
-            TILE_SHAPE>::calculate(dst_index_in0, dst_index_in1, dst_index_out);
+        AddDest<is_fp32_dest_acc_en, dst_rounding_mode, sfpi::DataLayout::Default, ITERATIONS, TILE_SHAPE>::calculate(
+            dst_index_in0, dst_index_in1, dst_index_out);
         return;
     }
     constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <type_traits>
 
 #include "ckernel_sfpu_operand.h"
 #include "ckernel_trisc_common.h"
@@ -15,9 +14,7 @@
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
-// Dest op types: the Dest twin of ckernel_sfpu_srcs.h. An op supplies calculate() and optionally
-// init_op(); the base supplies init() and run(). The macro-path free functions (calculate_exponential, ...)
-// stay and share one body with these types.
+// Dest op types, the Dest twin of ckernel_sfpu_srcs.h: an op supplies calculate() and optionally init_op().
 
 namespace ckernel {
 namespace sfpu {
@@ -44,9 +41,23 @@ inline void check_vector_mode([[maybe_unused]] const VectorMode vector_mode) {
 
 }  // namespace detail
 
-/** @brief Explicit F32 on a 32-bit Dest, HW-implied on a 16-bit one: all an entry without a CB (exp_tile) can know. */
-template <bool EN_32BIT_DEST>
-constexpr sfpi::DataLayout dest_float_layout = EN_32BIT_DEST ? sfpi::DataLayout::F32 : sfpi::DataLayout::Default;
+/**
+ * @brief SFPLOAD/SFPSTORE layout of a Dest holding tiles of @p FAMILY. A 32-bit Dest is F32 whatever the family;
+ *        Int32 is always explicit I32; a 16-bit Dest follows the family. There is no implied fallback.
+ */
+template <DataFormat FAMILY, bool EN_32BIT_DEST>
+constexpr sfpi::DataLayout dest_layout() {
+    if constexpr (FAMILY == DataFormat::Int32) {
+        return sfpi::DataLayout::I32;
+    } else if constexpr (EN_32BIT_DEST) {
+        return sfpi::DataLayout::F32;
+    } else if constexpr (FAMILY == DataFormat::Float16) {
+        return sfpi::DataLayout::F16a;
+    } else {
+        static_assert(FAMILY == DataFormat::Float16_b, "a 16-bit Dest holds Float16 or Float16_b tiles");
+        return sfpi::DataLayout::F16b;
+    }
+}
 
 /** @brief CRTP base for unary Dest ops; Op supplies calculate() and optionally init_op(). */
 template <typename Op>
@@ -58,7 +69,7 @@ struct SfpuDestUnaryOp {
         Op::init_op();
     }
 
-    /** @brief Run Op on one Dest tile; vector_mode selects the faces, as the SFPU_UNARY_CALL macro does. */
+    /** @brief Run Op on one Dest tile; vector_mode selects the faces. */
     template <trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
     static void run(const std::uint32_t dst_index, const VectorMode vector_mode = VectorMode::RC) {
         detail::check_dest_index<SLOT>(dst_index);
@@ -95,9 +106,9 @@ struct SfpuDestBinaryOp {
 /**
  * @brief Generic unary Dest op: ITERATIONS SFPI passes of MATH over one face, in place.
  *
- * @tparam LAYOUT: SFPLOAD/SFPSTORE format; Default lets the HW derive it from the ALU config.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format; the caller names it, there is no default.
  */
-template <typename MATH, sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default, int ITERATIONS = SFPU_ITERATIONS>
+template <typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS>
 struct DestUnary : SfpuDestUnaryOp<DestUnary<MATH, LAYOUT, ITERATIONS>> {
     static void calculate() {
         using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, typename MATH::value_type>>;
@@ -112,12 +123,13 @@ struct DestUnary : SfpuDestUnaryOp<DestUnary<MATH, LAYOUT, ITERATIONS>> {
 /**
  * @brief Generic binary Dest op: out = MATH(in0, in1) over one face of each tile.
  *
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format; the caller names it, there is no default.
  * @tparam OUT: Store policy of the output (rounding lives here, see DestBf16RneFormat).
  * @tparam TILE_SHAPE: Dest tile shape the indices are measured in; pass the same shape to run<>().
  */
 template <
     typename MATH,
-    sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default,
+    sfpi::DataLayout LAYOUT,
     typename OUT = SfpiFormat<LAYOUT, typename MATH::value_type>,
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
@@ -139,32 +151,6 @@ struct DestBinary : SfpuDestBinaryOp<DestBinary<MATH, LAYOUT, OUT, ITERATIONS, T
         }
     }
 };
-
-/** @brief A DataLayout as a type, so a lambda can take it and use it as a template argument. */
-template <sfpi::DataLayout L>
-using layout_c = std::integral_constant<sfpi::DataLayout, L>;
-
-/**
- * @brief Call fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest.
- *
- * Callers invoke this per tile; with a runtime family the switch is not folded, so a 16-bit Dest instantiates fn
- * for F16a, F16b and Default.
- *
- * The harness' Dest family (sfpu_src / math format) stays Float16_b under dest_acc, so EN_32BIT_DEST decides
- * first. Only a 16-bit Dest looks at the family: F16a, F16b, else HW-implied.
- */
-template <bool EN_32BIT_DEST, typename Fn>
-inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn) {
-    if constexpr (EN_32BIT_DEST) {
-        fn(layout_c<sfpi::DataLayout::F32>{});
-    } else {
-        switch (family) {
-            case DataFormat::Float16: fn(layout_c<sfpi::DataLayout::F16a>{}); break;
-            case DataFormat::Float16_b: fn(layout_c<sfpi::DataLayout::F16b>{}); break;
-            default: fn(layout_c<sfpi::DataLayout::Default>{}); break;
-        }
-    }
-}
 
 }  // namespace sfpu
 }  // namespace ckernel

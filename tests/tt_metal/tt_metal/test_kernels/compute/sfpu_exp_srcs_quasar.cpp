@@ -16,7 +16,7 @@
 //
 // Compile-time args: 0 = input L1 address (16-byte units), 1 = output L1 address (16-byte units),
 // 2 = number of tiles, 3 = L1 data format of both regions, 4 = SrcS register format
-// (Float16, Float16_b, Float32 or Int32; equal to the L1 format for the common case).
+// (Float16, Float16_b or Float32; equal to the L1 format for the common case).
 
 #include <cstdint>
 

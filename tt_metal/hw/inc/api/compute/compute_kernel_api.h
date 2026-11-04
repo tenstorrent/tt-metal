@@ -299,7 +299,7 @@ ALWI void square_tile(uint32_t idst) {
         vec_mode));
 #else
     static_assert(vec_mode == VectorMode::RC && iterations == 8, "Quasar square_tile computes whole tiles only");
-    MATH((sfpu::SquareDest<>::run(idst)));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
 #endif
 }
 
@@ -310,7 +310,7 @@ ALWI void square_tile_init() {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(square));
 #else
-    MATH((sfpu::SquareDest<>::init()));
+    MATH(SFPU_UNARY_INIT(square, sfpu::init_square));
 #endif
 }
 
