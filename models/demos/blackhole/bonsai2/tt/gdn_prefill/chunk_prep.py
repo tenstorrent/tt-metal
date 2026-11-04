@@ -41,12 +41,15 @@ class ChunkPrep:
         self.consts = ttnn.from_torch(torch.cat(consts, 0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         self.device = device
 
-    def __call__(self, q, k, v, beta, g, alpha):
+    def __call__(self, q, k, v, beta, g, alpha, token_major=None):
         """q (scaled), k, v [BH, T, 128], beta [BH, T, 1], g [BH, T]: fp32 TILE, T a multiple of 128.
         -> L_unit, v_beta_sc, k_bd_sc, intra, q_decay, k_decay_t [BH, NC, 128, 128], dl_exp [BH, NC, 1, 1],
         L_inv [BH, NC, 128, 32]."""
         device = self.device
-        BH, T = list(q.shape)[0], list(q.shape)[1]
+        BH, T = list(beta.shape)[0], list(beta.shape)[1]
+        # token_major: q, k, v are one bf16 [1, T, W] tensor (the conv output); dict(Wt, rf, q_off, k_off, v_off,
+        # eps, scale): tile-column offsets, value heads per key head, the q/k L2-norm eps and q's scale.
+        tm = token_major
         NC = T // C
         items = BH * NC
 
@@ -62,8 +65,12 @@ class ChunkPrep:
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
         ins = [q, k, v, beta, g, self.consts]
         rd_c = [t.buffer_address() for t in ins] + [items, ncores, grid.x, NC, T // 32]
+        if tm:
+            rd_c += [tm["Wt"], tm["rf"], tm["q_off"], tm["k_off"], tm["v_off"]]
         wr_c = [t.buffer_address() for t in outs] + [items, ncores, grid.x]
         cp_c = [items, ncores, grid.x, _f32_bits(alpha)]
+        cp_c += [_f32_bits(tm["eps"]), _f32_bits(tm["scale"])] if tm else [0, 0]
+        dm = [("TOKEN_MAJOR", "1")] if tm else []
         rd_ct = [8]
         for t in ins:
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -71,15 +78,20 @@ class ChunkPrep:
         for t in outs:
             wr_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         pages = {0: 16, 1: 16, 2: 8, 3: 4, 4: 4, 5: 8, 6: 4, 7: 4, 8: 4, 9: 4, 10: 4, 11: 4, 12: 10, 13: 16}
-        pages.update({14: 16, 15: 10, 16: 8, 18: 4, 19: 4, 20: 4, 21: 4, 23: 4, 24: 8, 25: 1, 26: 4, 27: 1})
-        cbs = [
-            ttnn.CBDescriptor(
-                total_size=4096 * p,
+        pages.update({14: 16, 15: 10, 16: 4, 18: 4, 19: 4, 20: 4, 21: 4, 23: 4, 24: 8, 25: 1, 26: 4, 27: 1})
+        if tm:
+            pages.update({17: 1, 28: 16, 29: 16})
+        bf16_in = {0, 1, 2} if tm else set()
+
+        def cbd(i, p):
+            fmt, size = (ttnn.bfloat16, 2048) if i in bf16_in else (ttnn.float32, 4096)
+            return ttnn.CBDescriptor(
+                total_size=size * p,
                 core_ranges=crs,
-                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.float32, page_size=4096)],
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=size)],
             )
-            for i, p in pages.items()
-        ]
+
+        cbs = [cbd(i, p) for i, p in pages.items()]
         program = ttnn.ProgramDescriptor(
             kernels=[
                 ttnn.KernelDescriptor(
@@ -87,6 +99,7 @@ class ChunkPrep:
                     core_ranges=crs,
                     compile_time_args=rd_ct,
                     common_runtime_args=rd_c,
+                    defines=dm,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -101,6 +114,7 @@ class ChunkPrep:
                     core_ranges=crs,
                     compile_time_args=[],
                     common_runtime_args=cp_c,
+                    defines=dm,
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,

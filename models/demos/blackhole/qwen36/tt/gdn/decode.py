@@ -7,6 +7,8 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 `gdn.cfg`, mirrored scalar attrs + runtime state from `gdn`. Every ttnn op,
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
+import os
+
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet as _gdn_mod
 import ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
@@ -151,6 +153,12 @@ class _PrefillInProjTtnn:
 
 
 def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
+    if mode == "chunk" and os.environ.get("BONSAI_GDN_FWD") == "1":
+        # Bonsai: chunked prefill without the q/k/v head relayouts (models/demos/blackhole/bonsai2/tt/gdn_prefill).
+        from models.demos.blackhole.bonsai2.tt.gdn_prefill.forward import gdn_chunk_forward, supported
+
+        if supported(gdn, x, valid_len) and (chunk_size or gdn.long_prefill_chunk_size) == 128:
+            return gdn_chunk_forward(gdn, x, _PrefillInProjTtnn())
     if mode == "chunk":
         _orig_ttnn = _gdn_mod.ttnn
         _gdn_mod.ttnn = _PrefillInProjTtnn()

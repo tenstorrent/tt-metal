@@ -19,6 +19,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/clamp.h"
@@ -38,6 +40,16 @@ constexpr uint32_t cb_kd = cb_kb;  // k * beta is done by then
 constexpr uint32_t TRIU = 0, ONES = 1, TRIL = 2, STRIL = 3, EYE = 4, E31 = 5, ZERO = 6, STRIU = 7;
 constexpr uint32_t NEG20 = 0xC1A00000u, ZERO_F = 0u, ONE_F = 0x3F800000u;
 constexpr auto TO_A = EltwiseBinaryReuseDestType::DEST_TO_SRCA;
+constexpr uint32_t cb_qn = 28, cb_kn = 29, cb_inv = 17;
+#ifdef TOKEN_MAJOR
+// q, k, v arrive bf16 (the conv output, token-major); q and k are L2-normalised here into fp32 cb_qn / cb_kn.
+constexpr uint32_t CQ = cb_qn, CK = cb_kn;
+#else
+constexpr uint32_t CQ = cb_q, CK = cb_k;
+#endif
+// Inputs and work buffers can differ in format (bf16 / fp32): every op group reconfigures its sources.
+ALWI void fmt(uint32_t a, uint32_t b) { reconfig_data_format(a, b); }
+ALWI void fmt_mm(uint32_t in0, uint32_t in1) { reconfig_data_format<SrcOrder::Reverse>(in0, in1); }
 
 ALWI uint32_t lidx(uint32_t i, uint32_t j) { return i * (i + 1) / 2 + j; }  // lower-triangle tile (i >= j)
 
@@ -69,6 +81,7 @@ ALWI void clip_exp(uint32_t d) {
 }
 ALWI void zero_out() {  // one zero tile to cb_out
     tile_regs_acquire();
+    fmt(cb_c, cb_c);
     copy_init(cb_c);
     copy_tile(cb_c, ZERO, 0);
     put(cb_out, 1);
@@ -81,6 +94,8 @@ void kernel_main() {
     core_span(
         get_common_arg_val<uint32_t>(0), get_common_arg_val<uint32_t>(1), get_common_arg_val<uint32_t>(2), 1, first, n);
     const uint32_t alpha = get_common_arg_val<uint32_t>(3);
+    const uint32_t eps_l2 = get_common_arg_val<uint32_t>(4);   // TOKEN_MAJOR only
+    const uint32_t q_scale = get_common_arg_val<uint32_t>(5);  // TOKEN_MAJOR only
     constexpr uint32_t NCONST = 8;
 
     compute_kernel_hw_startup(cb_q, cb_k, cb_out);
@@ -91,11 +106,55 @@ void kernel_main() {
         cb_wait_front(cb_b, 4);
         cb_wait_front(cb_k, 16);
         cb_wait_front(cb_q, 16);
+#ifdef TOKEN_MAJOR
+        // L2 norm of every q and k row (128 wide = 4 tiles): inv = rsqrt(sum x^2 + eps) (q also * K^-1/2), x * inv.
+        for (uint32_t which = 0; which < 2; ++which) {
+            const uint32_t src = which == 0 ? cb_q : cb_k, dst = which == 0 ? cb_qn : cb_kn;
+            for (uint32_t i = 0; i < 4; ++i) {
+                tile_regs_acquire();
+                fmt(src, src);
+                mul_init(src, src);
+                for (uint32_t d = 0; d < 4; ++d) {
+                    mul_tiles(src, src, i * 4 + d, i * 4 + d, d);
+                }
+                put(cb_tmp, 4);
+                cb_wait_front(cb_tmp, 4);
+                tile_regs_acquire();
+                fmt_mm(cb_tmp, cb_c);
+                matmul_init(cb_tmp, cb_c);
+                for (uint32_t d = 0; d < 4; ++d) {
+                    matmul_tiles(cb_tmp, cb_c, d, ONES, 0);
+                }
+                binop_with_scalar_tile_init();
+                add_unary_tile(0, eps_l2);
+                rsqrt_tile_init();
+                rsqrt_tile(0);
+                if (which == 0) {
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(0, q_scale);
+                }
+                put(cb_inv, 1);
+                cb_pop_front(cb_tmp, 4);
+                cb_wait_front(cb_inv, 1);
+                tile_regs_acquire();
+                fmt(src, cb_inv);
+                mul_bcast_cols_init(src, cb_inv);
+                for (uint32_t d = 0; d < 4; ++d) {
+                    mul_tiles_bcast_cols(src, cb_inv, i * 4 + d, 0, d);
+                }
+                put(dst, 4);
+                cb_pop_front(cb_inv, 1);
+            }
+        }
+        cb_wait_front(cb_qn, 16);
+        cb_wait_front(cb_kn, 16);
+#endif
 
         // No prefix sum is ever subtracted from another: the FPU rounds fp32 inputs to tf32, and decay_i - decay_j of
         // two sums near -1000 lost the result (6% error on real decays). Every difference is its own partial sum.
         // gcol_t = g_t^T (column tiles); GB_t = gcol_t across columns; BD_t = GB_t * STRIL
         tile_regs_acquire();
+        fmt(cb_g, cb_g);
         transpose_init(cb_g);
         for (uint32_t t = 0; t < 4; ++t) {
             transpose_tile(cb_g, t, t);
@@ -103,6 +162,7 @@ void kernel_main() {
         put(cb_gcol, 4);
         cb_wait_front(cb_gcol, 4);
         tile_regs_acquire();
+        fmt(cb_gcol, cb_gcol);
         unary_bcast_init<BroadcastType::COL>(cb_gcol);
         for (uint32_t t = 0; t < 4; ++t) {
             unary_bcast<BroadcastType::COL>(cb_gcol, t, t);
@@ -111,6 +171,7 @@ void kernel_main() {
         put(cb_gb, 4);
         cb_wait_front(cb_gb, 4);
         tile_regs_acquire();
+        fmt(cb_gb, cb_c);
         mul_init(cb_gb, cb_c);
         for (uint32_t t = 0; t < 4; ++t) {
             mul_tiles(cb_gb, cb_c, t, STRIL, t);
@@ -119,6 +180,7 @@ void kernel_main() {
         cb_wait_front(cb_bd, 4);
         // dcol_i = sum_{t<i} ONES @ gcol_t + TRIL @ gcol_i (prefix sums, column form); sfull = sum of all g
         tile_regs_acquire();
+        fmt_mm(cb_c, cb_gcol);
         matmul_init(cb_c, cb_gcol);
         for (uint32_t i = 0; i < 4; ++i) {
             for (uint32_t t = 0; t < i; ++t) {
@@ -129,6 +191,7 @@ void kernel_main() {
         put(cb_dcol, 4);
         cb_wait_front(cb_dcol, 4);
         tile_regs_acquire();
+        fmt_mm(cb_c, cb_gcol);
         matmul_init(cb_c, cb_gcol);
         for (uint32_t t = 0; t < 4; ++t) {
             matmul_tiles(cb_c, cb_gcol, ONES, t, 0);
@@ -137,6 +200,7 @@ void kernel_main() {
         cb_wait_front(cb_sfull, 1);
         // dexp
         tile_regs_acquire();
+        fmt(cb_dcol, cb_dcol);
         copy_init(cb_dcol);
         for (uint32_t i = 0; i < 4; ++i) {
             copy_tile(cb_dcol, i, i);
@@ -147,6 +211,7 @@ void kernel_main() {
         put(cb_dexp, 4);
         // kdf_i = exp(clip(sum of g after each row)) = exp(clip(STRIU @ gcol_i + sum_{t>i} ONES @ gcol_t))
         tile_regs_acquire();
+        fmt_mm(cb_c, cb_gcol);
         matmul_init(cb_c, cb_gcol);
         for (uint32_t i = 0; i < 4; ++i) {
             matmul_tiles(cb_c, cb_gcol, STRIU, i, i);
@@ -164,9 +229,11 @@ void kernel_main() {
         for (uint32_t i = 0; i < 4; ++i) {
             for (uint32_t j = 0; j <= i; ++j) {
                 tile_regs_acquire();
+                fmt_mm(cb_c, cb_bd);
                 matmul_init(cb_c, cb_bd);
                 matmul_tiles(cb_c, cb_bd, i == j ? TRIL : ONES, j, 0);
                 if (i > j) {
+                    fmt_mm(cb_c, cb_gb);
                     matmul_init(cb_c, cb_gb);
                     for (uint32_t t = j + 1; t <= i; ++t) {
                         matmul_tiles(cb_c, cb_gb, t == i ? TRIL : ONES, t, 0);
@@ -174,6 +241,7 @@ void kernel_main() {
                 }
                 clip_exp(0);
                 if (i == j) {
+                    fmt(cb_c, cb_c);
                     mul_reuse_dest_init<TO_A>(cb_c);
                     mul_reuse_dest_tiles<TO_A>(cb_c, TRIL, 0);
                 }
@@ -190,20 +258,22 @@ void kernel_main() {
         // kb = k * beta (row scale); kt = k^T
         for (uint32_t h = 0; h < 2; ++h) {
             tile_regs_acquire();
-            mul_bcast_cols_init(cb_k, cb_b);
+            fmt(CK, cb_b);
+            mul_bcast_cols_init(CK, cb_b);
             for (uint32_t x = 0; x < 8; ++x) {
                 const uint32_t idx = h * 8 + x;
-                mul_tiles_bcast_cols(cb_k, cb_b, idx, idx / 4, x);
+                mul_tiles_bcast_cols(CK, cb_b, idx, idx / 4, x);
             }
             put(cb_kb, 8);
         }
         cb_wait_front(cb_kb, 16);
         for (uint32_t h = 0; h < 2; ++h) {
             tile_regs_acquire();
-            transpose_init(cb_k);
+            fmt(CK, CK);
+            transpose_init(CK);
             for (uint32_t x = 0; x < 8; ++x) {
                 const uint32_t idx = h * 8 + x, t = idx / 4, j = idx % 4;  // kt tile (t, j) = (k tile (j, t))^T
-                transpose_tile(cb_k, j * 4 + t, x);
+                transpose_tile(CK, j * 4 + t, x);
             }
             put(cb_kt, 8);
         }
@@ -213,10 +283,12 @@ void kernel_main() {
         for (uint32_t i = 0; i < 4; ++i) {
             for (uint32_t j = 0; j <= i; ++j) {
                 tile_regs_acquire();
+                fmt_mm(cb_kb, cb_kt);
                 matmul_init(cb_kb, cb_kt);
                 for (uint32_t t = 0; t < 4; ++t) {
                     matmul_tiles(cb_kb, cb_kt, i * 4 + t, t * 4 + j, 0);
                 }
+                fmt(cb_lm, cb_lm);
                 mul_reuse_dest_init<TO_A>(cb_lm);
                 mul_reuse_dest_tiles<TO_A>(cb_lm, lidx(i, j), 0);
                 tile_regs_commit();
@@ -230,6 +302,7 @@ void kernel_main() {
         cb_pop_front(cb_kb, 16);
         // s_i (all columns) = (M_ii * EYE) @ ONES; D_inv = 1 / (1 + alpha s)
         tile_regs_acquire();
+        fmt(cb_m, cb_c);
         mul_init(cb_m, cb_c);
         for (uint32_t i = 0; i < 4; ++i) {
             mul_tiles(cb_m, cb_c, lidx(i, i), EYE, i);
@@ -237,6 +310,7 @@ void kernel_main() {
         put(cb_tmp, 4);
         cb_wait_front(cb_tmp, 4);
         tile_regs_acquire();
+        fmt_mm(cb_tmp, cb_c);
         matmul_init(cb_tmp, cb_c);
         for (uint32_t i = 0; i < 4; ++i) {
             matmul_tiles(cb_tmp, cb_c, i, ONES, i);
@@ -262,13 +336,16 @@ void kernel_main() {
                     continue;
                 }
                 tile_regs_acquire();
+                fmt(cb_m, cb_dinv);
                 mul_bcast_cols_init(cb_m, cb_dinv);
                 mul_tiles_bcast_cols(cb_m, cb_dinv, lidx(i, j), i, 0);
                 if (i == j) {
                     mul_tiles_bcast_cols(cb_m, cb_dinv, lidx(i, j), i, 1);
+                    fmt(cb_c, cb_c);
                     mul_reuse_dest_init<TO_A>(cb_c);
                     mul_reuse_dest_tiles<TO_A>(cb_c, STRIL, 0);
                     mul_reuse_dest_tiles<TO_A>(cb_c, STRIL, 1);
+                    fmt(cb_c, cb_c);
                     add_reuse_dest_init<TO_A>(cb_c);
                     add_reuse_dest_tiles<TO_A>(cb_c, EYE, 0);
                 }
@@ -287,6 +364,7 @@ void kernel_main() {
         cb_pop_front(cb_m, 10);
         // w1 = beta * D_inv, w2 = w1 * dexp (column vectors)
         tile_regs_acquire();
+        fmt(cb_b, cb_dinv);
         mul_init(cb_b, cb_dinv);
         for (uint32_t i = 0; i < 4; ++i) {
             mul_tiles(cb_b, cb_dinv, i, i, i);
@@ -295,6 +373,7 @@ void kernel_main() {
         cb_wait_front(cb_w1, 4);
         cb_wait_front(cb_dexp, 4);
         tile_regs_acquire();
+        fmt(cb_w1, cb_dexp);
         mul_init(cb_w1, cb_dexp);
         for (uint32_t i = 0; i < 4; ++i) {
             mul_tiles(cb_w1, cb_dexp, i, i, i);
@@ -305,6 +384,7 @@ void kernel_main() {
         for (uint32_t h = 0; h < 2; ++h) {  // v arrives in two halves of 8 tiles
             cb_wait_front(cb_v, 8);
             tile_regs_acquire();
+            fmt(cb_v, cb_w1);
             mul_bcast_cols_init(cb_v, cb_w1);
             for (uint32_t x = 0; x < 8; ++x) {
                 mul_tiles_bcast_cols(cb_v, cb_w1, x, (h * 8 + x) / 4, x);
@@ -314,10 +394,11 @@ void kernel_main() {
         }
         for (uint32_t h = 0; h < 2; ++h) {
             tile_regs_acquire();
-            mul_bcast_cols_init(cb_k, cb_w2);
+            fmt(CK, cb_w2);
+            mul_bcast_cols_init(CK, cb_w2);
             for (uint32_t x = 0; x < 8; ++x) {
                 const uint32_t idx = h * 8 + x;
-                mul_tiles_bcast_cols(cb_k, cb_w2, idx, idx / 4, x);
+                mul_tiles_bcast_cols(CK, cb_w2, idx, idx / 4, x);
             }
             put(cb_out, 8);
         }
@@ -329,10 +410,12 @@ void kernel_main() {
                     continue;
                 }
                 tile_regs_acquire();
-                matmul_init(cb_q, cb_kt);
+                fmt_mm(CQ, cb_kt);
+                matmul_init(CQ, cb_kt);
                 for (uint32_t t = 0; t < 4; ++t) {
-                    matmul_tiles(cb_q, cb_kt, i * 4 + t, t * 4 + j, 0);
+                    matmul_tiles(CQ, cb_kt, i * 4 + t, t * 4 + j, 0);
                 }
+                fmt(cb_lm, cb_lm);
                 mul_reuse_dest_init<TO_A>(cb_lm);
                 mul_reuse_dest_tiles<TO_A>(cb_lm, lidx(i, j), 0);
                 put(cb_out, 1);
@@ -341,10 +424,11 @@ void kernel_main() {
         // q_decay = q * dexp
         for (uint32_t h = 0; h < 2; ++h) {
             tile_regs_acquire();
-            mul_bcast_cols_init(cb_q, cb_dexp);
+            fmt(CQ, cb_dexp);
+            mul_bcast_cols_init(CQ, cb_dexp);
             for (uint32_t x = 0; x < 8; ++x) {
                 const uint32_t idx = h * 8 + x;
-                mul_tiles_bcast_cols(cb_q, cb_dexp, idx, idx / 4, x);
+                mul_tiles_bcast_cols(CQ, cb_dexp, idx, idx / 4, x);
             }
             put(cb_out, 8);
         }
@@ -352,16 +436,18 @@ void kernel_main() {
         cb_wait_front(cb_kdf, 4);
         for (uint32_t h = 0; h < 2; ++h) {
             tile_regs_acquire();
-            mul_bcast_cols_init(cb_k, cb_kdf);
+            fmt(CK, cb_kdf);
+            mul_bcast_cols_init(CK, cb_kdf);
             for (uint32_t x = 0; x < 8; ++x) {
                 const uint32_t idx = h * 8 + x;
-                mul_tiles_bcast_cols(cb_k, cb_kdf, idx, idx / 4, x);
+                mul_tiles_bcast_cols(CK, cb_kdf, idx, idx / 4, x);
             }
             put(cb_kd, 8);
         }
         cb_wait_front(cb_kd, 16);
         for (uint32_t h = 0; h < 2; ++h) {
             tile_regs_acquire();
+            fmt(cb_kd, cb_kd);
             transpose_init(cb_kd);
             for (uint32_t x = 0; x < 8; ++x) {
                 const uint32_t o = h * 8 + x, t = o / 4, i = o % 4;
@@ -372,6 +458,7 @@ void kernel_main() {
         cb_pop_front(cb_kd, 16);
         // dl_exp
         tile_regs_acquire();
+        fmt(cb_sfull, cb_sfull);
         copy_init(cb_sfull);
         copy_tile(cb_sfull, 0, 0);
         clip_exp(0);
@@ -381,6 +468,7 @@ void kernel_main() {
         // -1, N^16 reaches ~1e8 and the product cancels it (289x error on real layer-0 inputs).
         cb_wait_front(cb_sl, 4);
         tile_regs_acquire();
+        fmt(cb_sl, cb_sl);
         copy_init(cb_sl);
         for (uint32_t b = 0; b < 4; ++b) {
             copy_tile(cb_sl, b, b);
@@ -392,6 +480,7 @@ void kernel_main() {
         put(cb_p, 4);  // -N per block
         cb_wait_front(cb_p, 4);
         tile_regs_acquire();
+        fmt(cb_c, cb_c);
         copy_init(cb_c);
         for (uint32_t b = 0; b < 4; ++b) {
             copy_tile(cb_c, EYE, b);
@@ -400,10 +489,12 @@ void kernel_main() {
         for (uint32_t step = 0; step < 31; ++step) {
             cb_wait_front(cb_r, 4);
             tile_regs_acquire();
+            fmt(cb_c, cb_c);
             copy_init(cb_c);
             for (uint32_t b = 0; b < 4; ++b) {
                 copy_tile(cb_c, EYE, b);
             }
+            fmt_mm(cb_p, cb_r);
             matmul_init(cb_p, cb_r);
             for (uint32_t b = 0; b < 4; ++b) {
                 matmul_tiles(cb_p, cb_r, b, b, b);  // += (-N_b) @ R_b
@@ -427,5 +518,9 @@ void kernel_main() {
         cb_pop_front(cb_b, 4);
         cb_pop_front(cb_k, 16);
         cb_pop_front(cb_q, 16);
+#ifdef TOKEN_MAJOR
+        cb_pop_front(cb_qn, 16);
+        cb_pop_front(cb_kn, 16);
+#endif
     }
 }

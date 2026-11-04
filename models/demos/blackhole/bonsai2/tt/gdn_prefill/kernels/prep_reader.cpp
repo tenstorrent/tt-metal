@@ -29,9 +29,19 @@ void kernel_main() {
     constexpr auto g_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     constexpr auto c_args = TensorAccessorArgs<g_args.next_compile_time_args_offset()>();
     constexpr uint32_t TB = 4096;  // fp32 tile
-    const auto qs = TensorAccessor(q_args, q_addr, TB);
-    const auto ks = TensorAccessor(k_args, k_addr, TB);
-    const auto vs = TensorAccessor(v_args, v_addr, TB);
+#ifdef TOKEN_MAJOR
+    // q, k, v: one bf16 [1, T, Wt * 32] tensor (the conv output, token-major): q at tile column Q_OFF + kh * 4,
+    // k at K_OFF + kh * 4 (key head kh = bh / RF), v at V_OFF + bh * 4.
+    constexpr uint32_t XB = 2048;
+    const uint32_t Wt = get_common_arg_val<uint32_t>(11), RF = get_common_arg_val<uint32_t>(12);
+    const uint32_t Q_OFF = get_common_arg_val<uint32_t>(13), K_OFF = get_common_arg_val<uint32_t>(14);
+    const uint32_t V_OFF = get_common_arg_val<uint32_t>(15);
+#else
+    constexpr uint32_t XB = TB;
+#endif
+    const auto qs = TensorAccessor(q_args, q_addr, XB);
+    const auto ks = TensorAccessor(k_args, k_addr, XB);
+    const auto vs = TensorAccessor(v_args, v_addr, XB);
     const auto bs = TensorAccessor(b_args, b_addr, TB);
     const auto gs = TensorAccessor(g_args, g_addr, TB);
     const auto cs = TensorAccessor(c_args, c_addr, TB);
@@ -69,9 +79,15 @@ void kernel_main() {
         cb_reserve_back(cb_k, 16);
         for (uint32_t i = 0; i < 4; ++i) {
             for (uint32_t d = 0; d < 4; ++d) {
-                const uint32_t t = (row0 + i) * 4 + d, o = (i * 4 + d) * TB;
-                noc_async_read(qs.get_noc_addr(t), get_write_ptr(cb_q) + o, TB);
-                noc_async_read(ks.get_noc_addr(t), get_write_ptr(cb_k) + o, TB);
+#ifdef TOKEN_MAJOR
+                const uint32_t kh = bh / RF, r = (4 * c + i) * Wt;
+                const uint32_t tq = r + Q_OFF + kh * 4 + d, tk = r + K_OFF + kh * 4 + d;
+#else
+                const uint32_t tq = (row0 + i) * 4 + d, tk = tq;
+#endif
+                const uint32_t o = (i * 4 + d) * XB;
+                noc_async_read(qs.get_noc_addr(tq), get_write_ptr(cb_q) + o, XB);
+                noc_async_read(ks.get_noc_addr(tk), get_write_ptr(cb_k) + o, XB);
             }
         }
         noc_async_read_barrier();
@@ -83,7 +99,12 @@ void kernel_main() {
             cb_reserve_back(cb_v, 8);
             for (uint32_t x = 0; x < 8; ++x) {
                 const uint32_t i = (h * 8 + x) / 4, d = (h * 8 + x) % 4;
-                noc_async_read(vs.get_noc_addr((row0 + i) * 4 + d), get_write_ptr(cb_v) + x * TB, TB);
+#ifdef TOKEN_MAJOR
+                const uint32_t tv = (4 * c + i) * Wt + V_OFF + bh * 4 + d;
+#else
+                const uint32_t tv = (row0 + i) * 4 + d;
+#endif
+                noc_async_read(vs.get_noc_addr(tv), get_write_ptr(cb_v) + x * XB, XB);
             }
             noc_async_read_barrier();
             cb_push_back(cb_v, 8);
