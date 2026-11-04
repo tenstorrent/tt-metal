@@ -34,21 +34,12 @@ class LinearQuantConfig:
     fp32_dest_acc: bool = True
 
 
-@dataclass(frozen=True)
-class SDPAQuantConfig:
-    """Precision config for ring SDPA (self-attention)."""
-
-    input_dtype: ttnn.DataType | None = None  # None = no cast
-    math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
-    fp32_dest_acc: bool = False
-
-
 @dataclass
 class QuantConfig:
     """Per-component quantization and compute precision configuration.
 
-    Each transformer block has 7 linear layers and 1 ring SDPA (self-attention).
-    Cross-attention SDPA stays at default settings.
+    Each transformer block has 7 linear layers. SDPA runs the attention's named recipe
+    (``sdpa_precision``; see models/tt_dit/utils/sdpa_recipe.py).
     """
 
     # Self-attention projections
@@ -64,9 +55,6 @@ class QuantConfig:
     ffn_ff1: LinearQuantConfig = field(default_factory=LinearQuantConfig)
     ffn_ff2: LinearQuantConfig = field(default_factory=LinearQuantConfig)
 
-    # Ring SDPA (self-attention only; cross-attention stays default)
-    ring_sdpa: SDPAQuantConfig = field(default_factory=SDPAQuantConfig)
-
     @staticmethod
     def default() -> QuantConfig:
         """All bfloat16, HiFi2 -- matches current baseline."""
@@ -79,7 +67,6 @@ class QuantConfig:
             cross_attn_out=lc,
             ffn_ff1=lc,
             ffn_ff2=lc,
-            ring_sdpa=SDPAQuantConfig(),
         )
 
     @staticmethod
@@ -94,14 +81,12 @@ class QuantConfig:
             cross_attn_out=lc,
             ffn_ff1=lc,
             ffn_ff2=lc,
-            ring_sdpa=SDPAQuantConfig(),
         )
 
     @staticmethod
     def all_lofi() -> QuantConfig:
         """All compute LoFi, rest default."""
         lc = LinearQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi)
-        sc = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi)
         return QuantConfig(
             self_attn_qkv=lc,
             self_attn_out=lc,
@@ -110,12 +95,11 @@ class QuantConfig:
             cross_attn_out=lc,
             ffn_ff1=lc,
             ffn_ff2=lc,
-            ring_sdpa=sc,
         )
 
     @staticmethod
     def all_bf8_lofi() -> QuantConfig:
-        """All weights + activations bfloat8_b, LoFi compute, SDPA bf8 HiFi2.
+        """All weights + activations bfloat8_b, LoFi compute.
 
         self_attn_out keeps bf16 weights because the fused matmul+addcmul kernel
         (dit_minimal_matmul_addcmul_fused) requires ternary inputs (residual,
@@ -134,11 +118,6 @@ class QuantConfig:
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc=False,
         )
-        sc = SDPAQuantConfig(
-            input_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc=False,
-        )
         return QuantConfig(
             self_attn_qkv=lc,
             self_attn_out=lc_out,
@@ -147,7 +126,6 @@ class QuantConfig:
             cross_attn_out=lc,
             ffn_ff1=lc,
             ffn_ff2=lc,
-            ring_sdpa=sc,
         )
 
 
@@ -171,15 +149,6 @@ def _make_linear_compute_config(arch, lc: LinearQuantConfig):
         math_approx_mode=False,
         fp32_dest_acc_en=lc.fp32_dest_acc,
         packer_l1_acc=True,
-    )
-
-
-def _make_sdpa_compute_config(arch, sc: SDPAQuantConfig):
-    return ttnn.init_device_compute_kernel_config(
-        arch,
-        math_fidelity=sc.math_fidelity,
-        math_approx_mode=False,
-        fp32_dest_acc_en=sc.fp32_dest_acc,
     )
 
 
@@ -218,7 +187,6 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     - Cross-attn matmuls: block.attn2.mm_compute_kernel_config
     - Cross-attn output: block.attn2.to_out.compute_config
     - FFN: block.ff_compute_kernel_config
-    - Ring SDPA: block.attn1.sdpa_compute_kernel_config
     """
     arch = model.mesh_device.arch()
     n_blocks = len(model.blocks)
@@ -248,11 +216,6 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         # FFN block-level compute config
         block.ff_compute_kernel_config = _make_linear_compute_config(arch, config.ffn_ff1)
 
-        # Ring SDPA config (self-attention only)
-        block.attn1.sdpa_compute_kernel_config = _make_sdpa_compute_config(arch, config.ring_sdpa)
-        if config.ring_sdpa.input_dtype is not None:
-            block.attn1._sdpa_input_dtype = config.ring_sdpa.input_dtype
-
     # Log summary
     weight_dtypes = set()
     for lc in [
@@ -279,10 +242,6 @@ def apply_quant_config(model, config: QuantConfig) -> None:
 
     logger.info(f"  Weight dtypes: {weight_dtypes}")
     logger.info(f"  Math fidelities: {fidelities}")
-    logger.info(
-        f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
-        f"fidelity={config.ring_sdpa.math_fidelity}, fp32_acc={config.ring_sdpa.fp32_dest_acc}"
-    )
 
 
 def set_quant_config(pipeline, config: QuantConfig) -> None:

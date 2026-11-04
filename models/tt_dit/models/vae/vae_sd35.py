@@ -231,6 +231,9 @@ class UpDecoderBlock2D(Module):
 
 # TODO: Add support for coll and row parallel linear. Fuse qkv computation
 class Attention(Module):
+    # Named SDPA recipe of the single-head attention, as for the other VAEs: BALANCED (FP32 state).
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
     def __init__(
         self,
         *,
@@ -319,7 +322,10 @@ class Attention(Module):
         k = self.reorder_for_attention(k, b, self.num_heads, head_dim)
         v = self.reorder_for_attention(v, b, self.num_heads, head_dim)
 
-        x = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
+        # Single-head attention with head dim 512: the named recipe chooses the chunks.
+        x = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, precision=self.sdpa_precision_default
+        )
         x = ttnn.reshape(ttnn.permute(x, (0, 2, 1, 3)), (b, h, w, inner_dim))
 
         for to_out in self.to_out:

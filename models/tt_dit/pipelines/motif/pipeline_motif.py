@@ -127,6 +127,8 @@ class MotifPipeline(PipelineAPIMixin):
         height: int = 1024,
         cfg_enabled: bool = True,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> MotifPipeline:
         config = MotifPipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -135,9 +137,16 @@ class MotifPipeline(PipelineAPIMixin):
             height=height,
             cfg_enabled=cfg_enabled,
         )
-        return cls(device=mesh_device, config=config)
+        return cls(device=mesh_device, config=config, sdpa_precision=sdpa_precision, sdpa_kv_dtype=sdpa_kv_dtype)
 
-    def __init__(self, *, device: ttnn.MeshDevice, config: MotifPipelineConfig) -> None:
+    def __init__(
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        config: MotifPipelineConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
+    ) -> None:
         self._cfg_parallel = config.dit_parallel_config.cfg_parallel.factor != 1
         self._sp_axis = config.dit_parallel_config.sequence_parallel.mesh_axis
         self._encoder_tp = config.encoder_parallel_config.tensor_parallel
@@ -168,6 +177,8 @@ class MotifPipeline(PipelineAPIMixin):
                 latents_width=config.width // _VAE_SCALE_FACTOR,
                 parallel_config=config.dit_parallel_config,
                 ccl_manager=m,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for m in self._ccl_managers
         ]

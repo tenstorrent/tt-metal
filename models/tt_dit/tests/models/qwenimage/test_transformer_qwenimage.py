@@ -189,9 +189,10 @@ BOUNDS_2511 = (0.99, 0.35)
 @pytest.mark.parametrize(
     ("latents_size", "image_latents_size", "padded_spatial_seq_len", "pcc", "relative_rmse"),
     # Qwen-Image-Edit: the torch model itself in bfloat16 reaches a PCC of 99.89 % (1024) and
-    # 99.62 % (mixed) against float32 on these inputs; the device 99.82 % and 99.61 %.
+    # 99.62 % (mixed) against float32 on these inputs; the device 99.82 % and 99.61 %. With the STANDARD
+    # SDPA recipe the device measures 99.76 % / 7.5 % (1024) on 2x2, the legacy kernel 99.81 % / 6.9 %.
     [
-        pytest.param((128, 128), (128, 128), 8192, 0.998, 0.07, id="1024"),
+        pytest.param((128, 128), (128, 128), 8192, 0.997, 0.08, id="1024"),
         # The input image is wider than the output, so it sets where the prompt positions start.
         pytest.param((96, 128), (80, 144), 6144, 0.995, 0.12, id="mixed"),
     ],

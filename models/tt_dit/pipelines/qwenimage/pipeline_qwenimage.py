@@ -333,15 +333,24 @@ class QwenImagePipeline(PipelineAPIMixin):
         mesh_device: ttnn.MeshDevice,
         cfg_enabled: bool = True,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> QwenImagePipeline:
         config = QwenImagePipelineConfig.default(
             mesh_shape=mesh_device.shape,
             cfg_enabled=cfg_enabled,
             checkpoint_name=checkpoint_name,
         )
-        return cls(device=mesh_device, config=config)
+        return cls(device=mesh_device, config=config, sdpa_precision=sdpa_precision, sdpa_kv_dtype=sdpa_kv_dtype)
 
-    def __init__(self, *, device: ttnn.MeshDevice, config: QwenImagePipelineConfig) -> None:
+    def __init__(
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        config: QwenImagePipelineConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
+    ) -> None:
         self._parallel_config = config.dit_parallel_config
         self._sp_axis = config.dit_parallel_config.sequence_parallel.mesh_axis
         self._cfg_parallel = config.dit_parallel_config.cfg_parallel.factor != 1
@@ -417,7 +426,13 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         logger.info("creating transformers...")
         self._transformers = [
-            self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
+            self._checkpoint.build(
+                ccl_manager=m,
+                parallel_config=config.dit_parallel_config,
+                is_fsdp=False,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
+            )
             for m in self._ccl_managers
         ]
 

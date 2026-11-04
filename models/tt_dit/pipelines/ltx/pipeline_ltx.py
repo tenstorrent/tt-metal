@@ -49,10 +49,11 @@ from ...utils.video import Audio
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
 # Default DiT-linear quant preset. Empty selects the bf16 baseline (the default); set
-# LTX_QUANT=all_bf8_lofi to opt into the shipped bf8 1080p tier (its perf/VBench floors are calibrated
-# against it), or LTX_QUANT=all_bf4_lofi for the bf4 probe tier (measurement only — bf4 activations
-# destroy quality). _resolve_quant_config resolves this once and threads the tag into the transformer
-# cache name, so a quantized cache stays separate from the baseline.
+# LTX_QUANT=all_bf8_lofi to opt into the bf8 tier (bf8 weights and linear activations; no CI perf or VBench
+# gate runs it), or LTX_QUANT=all_bf4_lofi for the bf4 probe tier (measurement only — bf4 activations
+# destroy quality). Neither changes SDPA: pass sdpa_precision / sdpa_kv_dtype for that. _resolve_quant_config
+# resolves this once and threads the tag into the transformer cache name, so a quantized cache stays
+# separate from the baseline.
 LTX_QUANT_DEFAULT = ""
 
 DEFAULT_NEGATIVE_PROMPT = (
@@ -240,6 +241,8 @@ class LTXPipeline:
         lora_enabled: bool = False,
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
@@ -274,6 +277,8 @@ class LTXPipeline:
         # Linears (weight.data += A@B), not the host-fuse+reload path used by
         # extra_transformer_variants.
         self.lora_enabled = lora_enabled
+        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = sdpa_kv_dtype
         # How many registered adapters keep their A/B factors resident on device
         # (per-Linear LRU). Larger = fewer host re-uploads on swap and after each
         # dynamic_load page-in, at the cost of holding that many rank-sized factor
@@ -538,6 +543,8 @@ class LTXPipeline:
             image_conditioning=bool(self.vae is not None and self.vae.encoder_blocks and self._image_conditioning),
             quant_config=getattr(self, "_quant_config", None),
             lora_enabled=self.lora_enabled,
+            sdpa_precision=getattr(self, "sdpa_precision", None),
+            sdpa_kv_dtype=getattr(self, "sdpa_kv_dtype", None),
         )
 
     def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
@@ -1219,6 +1226,7 @@ class LTXPipeline:
                     skip_cross_attn=skip_ca,
                     skip_self_attn_blocks=skip_sa_blocks,
                     audio_attn_mask=tt_attn_mask,
+                    audio_attn_kv_len=audio_N_real,
                     audio_padding_mask=tt_pad_mask_sp,
                     audio_padding_mask_full=tt_pad_mask_full,
                     video_padding_mask=tt_v_pad_mask_sp,

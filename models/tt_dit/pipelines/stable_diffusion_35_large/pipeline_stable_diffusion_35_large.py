@@ -128,6 +128,8 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         cfg_enabled: bool = True,
         max_t5_sequence_length: int = 256,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> StableDiffusion3Pipeline:
         config = StableDiffusion3PipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -137,13 +139,15 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
             max_t5_sequence_length=max_t5_sequence_length,
             checkpoint_name=checkpoint_name,
         )
-        return cls(device=mesh_device, config=config)
+        return cls(device=mesh_device, config=config, sdpa_precision=sdpa_precision, sdpa_kv_dtype=sdpa_kv_dtype)
 
     def __init__(
         self,
         *,
         device: ttnn.MeshDevice,
         config: StableDiffusion3PipelineConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         self._mesh_device = device
         self.dit_parallel_config = config.dit_parallel_config
@@ -186,7 +190,13 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
 
         checkpoint = SD35Checkpoint(checkpoint_name)
         self.transformers = [
-            checkpoint.build(ccl_manager=mgr, parallel_config=self.dit_parallel_config) for mgr in self.ccl_managers
+            checkpoint.build(
+                ccl_manager=mgr,
+                parallel_config=self.dit_parallel_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
+            )
+            for mgr in self.ccl_managers
         ]
         self.synchronize_devices()
 
