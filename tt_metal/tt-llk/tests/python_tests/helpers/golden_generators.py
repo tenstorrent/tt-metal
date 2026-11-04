@@ -3635,14 +3635,33 @@ class UnarySFPUGolden:
         )
 
     def _i1_bessel(self, x):
-        # Modified Bessel I1; the kernel poly approx is valid on |x| <= ~3.75. Same torch
-        # limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. I1 stays
-        # outside SPECIALS_READY_OPS because the kernel saturates a non-finite input.
+        # Generated from activations/i1.json and torch 2.11's recorded results: torch's own result at its
+        # special inputs, the exact i1(x) elsewhere, evaluated at
+        # 320 bits and rounded once onto Dest's grid. The golden this replaces disagreed with torch on
+        # 13 of the 65,536 BF16 inputs.
         if math.isnan(x):
-            return x
+            return self._infinite(math.nan)
         if math.isinf(x):
-            return math.copysign(self.handle_infinite_numbers(math.inf), x)
-        return self._torch_unary(x, torch.special.i1)
+            return self._infinite(math.nan) if x > 0 else self._infinite(math.nan)
+        if x == 0.0:
+            return (
+                self._infinite(0.0)
+                if math.copysign(1.0, x) > 0
+                else self._infinite(0.0)
+            )
+        fast = None
+        bits = struct.unpack("<I", struct.pack("<f", x))[0]
+        if bits & 0xFFFF == 0 and struct.unpack("<f", struct.pack("<f", x))[0] == x:
+            try:
+                fast = self._bf16_table("torch.special.i1(x)")[bits >> 16]
+            except (ArithmeticError, ValueError):
+                fast = None
+        rounded = self._round_fast(fast, 1.9571240437549286e-14)
+        if rounded is not None:
+            return self._infinite(rounded)
+        with mpmath.workprec(320):
+            x = mpmath.mpf(x)
+            return self._infinite(self._round_once_to_dest(mpmath.besseli(1, x)))
 
     def _sign(self, x):
         # Matches calculate_sign: -1 for x<0, 0 for x==0, +1 otherwise.
