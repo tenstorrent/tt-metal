@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sub_int.h"
@@ -37,7 +36,7 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void sub_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for sub_int. Supported data formats are: Int32, UInt32, UInt16");
@@ -77,7 +76,7 @@ ALWI void sub_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t o
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void rsub_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for rsub_int. Supported data formats are: Int32, UInt32, UInt16");

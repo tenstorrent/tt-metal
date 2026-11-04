@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logical_not.h"
@@ -30,7 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat DATA_FORMAT>
-ALWI void logical_not_tile(std::uint32_t idst) {
+ALWI void logical_not_tile(uint32_t idst) {
     static_assert(
         DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||
             DATA_FORMAT == DataFormat::Int32 || is_uint32_format(DATA_FORMAT) || DATA_FORMAT == DataFormat::UInt16 ||

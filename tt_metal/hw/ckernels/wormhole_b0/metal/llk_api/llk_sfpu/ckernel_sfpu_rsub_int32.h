@@ -8,18 +8,16 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include <type_traits>
-#include <cstdint>
 #include "sfpu/ckernel_sfpu_load_config.h"
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
-inline void calculate_rsub_int(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
     // Each Dest tile is 64 rows; sfpi dst_reg[] indexes in stride units (SFP_DESTREG_STRIDE == 2),
     // so 64 raw rows == 32 sfpi stride units.
-    constexpr std::uint32_t dst_tile_size = 32;
+    constexpr uint dst_tile_size = 32;
 
     // Reverse subtract: out = in1 - in0. sfpi's `b - a` lowers to the same SFPIADD that 2's-complements
     // the subtrahend, matching the original TTI_SFPIADD(..., 2SCOMP_LREG_DST). The load/store DataLayout
@@ -41,7 +39,7 @@ inline void calculate_rsub_int(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-void calculate_rsub_scalar_int32(std::uint32_t scalar) {
+void calculate_rsub_scalar_int32(uint32_t scalar) {
     // out = scalar - x. The immediate is materialized once (loop-invariant) outside the loop.
     sfpi::vInt scalar_vec = static_cast<int>(scalar);
     for (int d = 0; d < ITERATIONS; d++) {

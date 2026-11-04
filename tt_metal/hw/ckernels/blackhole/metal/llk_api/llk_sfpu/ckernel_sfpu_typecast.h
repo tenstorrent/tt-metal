@@ -26,7 +26,7 @@ constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 
 // SFPSTORE mode that swaps the high and low 16 bits before writing, so a value computed in the low 16 bits
 // lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
-constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = static_cast<std::uint32_t>(InstrModLoadStore::LO16);
+constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 
 // -128.0f as the upper 16 bits
 constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;

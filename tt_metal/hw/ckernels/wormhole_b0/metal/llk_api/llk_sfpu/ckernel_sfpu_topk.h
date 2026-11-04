@@ -41,8 +41,8 @@ constexpr bool TOPK_UINT16_IN_FP32_DEST = true;
 constexpr bool TOPK_UINT16_IN_FP32_DEST = false;
 #endif
 
-// SFPSTORE LO16 mode (9): swaps 16-bit halves so the packer sees UInt16 in 32-bit DEST.
-constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = static_cast<std::uint32_t>(InstrModLoadStore::LO16);
+// SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16): low→high 16-bit so packer sees UInt16 in 32-bit DEST.
+constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 
 // Low half of a 32-bit DEST word: the u16 datum under #50215 garbage, the u16 index half of a
 // fused [bf16|u16] key, and the fused tie-complement operand.

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <type_traits>
-#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -28,7 +27,7 @@ template <
     InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32,
     int ITERATIONS = 8>
 inline void calculate_sfpu_binary_bitwise(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
         INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::UINT16,
         "INSTRUCTION_MODE must be one of: INT32, UINT16.");

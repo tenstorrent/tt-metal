@@ -175,7 +175,6 @@ enum class InstrModLoadStore
     INT8          = 5,
     UINT16        = 6, // load/store the 16-bit Dest view (Dst16b)
     HI16          = 7,
-    LO16          = 9, // load as UINT16; store writes 32-bit Dest (Dst32b) with the 16-bit halves swapped
     INT32_2S_COMP = 12,
     INT8_2S_COMP  = 13,
     LO16_ONLY     = 14,

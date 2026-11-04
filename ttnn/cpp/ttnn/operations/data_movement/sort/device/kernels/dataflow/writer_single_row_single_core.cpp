@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -25,22 +24,22 @@ Writer:
 */
 void kernel_main() {
     // Runtime args
-    const std::uint32_t core_loop_count = get_arg(args::core_loop_count);
+    const uint32_t core_loop_count = get_arg(args::core_loop_count);
 
     // Compile time args
-    constexpr std::uint32_t Wt = get_arg(args::Wt);
-    constexpr std::uint32_t Ht = get_arg(args::Ht);
-    constexpr std::uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
-    constexpr std::uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
-    constexpr std::uint32_t compute_with_storage_grid_size_y = get_arg(args::compute_with_storage_grid_size_y);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
+    constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
+    constexpr uint32_t compute_with_storage_grid_size_y = get_arg(args::compute_with_storage_grid_size_y);
 
     // is_32_bit_data - true when fp32_dest_acc_en is enabled (float32 input or
     // uint32 index). Both TILE and ROW_MAJOR paths must generate uint32 index tiles
     // when the sort kernel runs in 32-bit DEST mode.
     constexpr bool is_32_bit_data = get_arg(args::is_32_bit_data) == 1;
-    constexpr std::uint32_t W_value_bytes = get_arg(args::W_value_bytes);
+    constexpr uint32_t W_value_bytes = get_arg(args::W_value_bytes);
 
-    constexpr std::uint32_t one_tile = 1;
+    constexpr uint32_t one_tile = 1;
 
     // TensorAccessor handles both interleaved and sharded buffers natively.
     // For TILE layout: one "page" = one tile.
@@ -50,7 +49,7 @@ void kernel_main() {
     Noc noc;
 #ifndef IS_ROW_MAJOR
     DataflowBuffer value_tensor_dfb(dfb::value_tensor);
-    const std::uint32_t value_tensor_tile_size = value_tensor_dfb.get_tile_size();
+    const uint32_t value_tensor_tile_size = value_tensor_dfb.get_tile_size();
 #ifdef IS_UINT16_FP32_MODE
     // IS_UINT16_FP32_MODE: input was UInt16 but compute writes sorted values as
     // Float32 (into dfb::value_tensor) so pack_tile does not bf16-truncate the
@@ -58,38 +57,38 @@ void kernel_main() {
     // via a 1-tile UInt16 staging DFB before DMA'ing to DRAM.  Only bound when
     // this mode is on, so bf16/fp32/uint32 sorts pay nothing extra.
     DataflowBuffer uint16_conv_dfb(dfb::uint16_conv);
-    const std::uint32_t uint16_conv_tile_size = uint16_conv_dfb.get_tile_size();
-    constexpr std::uint32_t ELEMENTS_PER_TILE = 1024;  // 32 × 32
+    const uint32_t uint16_conv_tile_size = uint16_conv_dfb.get_tile_size();
+    constexpr uint32_t ELEMENTS_PER_TILE = 1024;  // 32 × 32
 #endif
 
-    for (std::uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
-        const std::uint32_t h = core_loop * total_number_of_cores +
-                                get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+    for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
+        const uint32_t h = core_loop * total_number_of_cores +
+                           get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
         // Generate index tiles into the index DFB (consumed by compute)
-        for (std::uint32_t w = 0; w < Wt; w++) {
+        for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {
-                dataflow_kernel_lib::generate_index_tile<std::uint32_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
             } else {
-                dataflow_kernel_lib::generate_index_tile<std::uint16_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
             }
         }
 
 #ifdef IS_UINT16_FP32_MODE
-        for (std::uint32_t w = 0; w < Wt; w++) {
+        for (uint32_t w = 0; w < Wt; w++) {
             value_tensor_dfb.wait_front(one_tile);
             uint16_conv_dfb.reserve_back(one_tile);
 
-            volatile tt_l1_ptr std::uint32_t* fp32_ptr =
-                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(value_tensor_dfb.get_read_ptr());
-            volatile tt_l1_ptr std::uint16_t* u16_ptr =
-                reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(uint16_conv_dfb.get_write_ptr());
+            volatile tt_l1_ptr uint32_t* fp32_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(value_tensor_dfb.get_read_ptr());
+            volatile tt_l1_ptr uint16_t* u16_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(uint16_conv_dfb.get_write_ptr());
 
-            for (std::uint32_t i = 0; i < ELEMENTS_PER_TILE; i++) {
-                const std::uint32_t fp32_bits = fp32_ptr[i];
+            for (uint32_t i = 0; i < ELEMENTS_PER_TILE; i++) {
+                const uint32_t fp32_bits = fp32_ptr[i];
                 float fval;
                 __builtin_memcpy(&fval, &fp32_bits, sizeof(fval));
-                u16_ptr[i] = static_cast<std::uint16_t>(static_cast<std::uint32_t>(fval));
+                u16_ptr[i] = static_cast<uint16_t>(static_cast<uint32_t>(fval));
             }
             __sync_synchronize();
 
@@ -108,7 +107,7 @@ void kernel_main() {
         }
 #else
         // Write sorted value tiles from value_tensor_dfb → DRAM
-        for (std::uint32_t w = 0; w < Wt; w++) {
+        for (uint32_t w = 0; w < Wt; w++) {
             value_tensor_dfb.wait_front(one_tile);
             noc.async_write(
                 value_tensor_dfb,
@@ -143,40 +142,40 @@ void kernel_main() {
     DataflowBuffer rm_uint16_output_stage_dfb(dfb::rm_uint16_output_stage);
 #endif
 
-    constexpr std::uint32_t TILE_H = 32;  // TILE_HEIGHT
+    constexpr uint32_t TILE_H = 32;  // TILE_HEIGHT
 
-    for (std::uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
-        const std::uint32_t h = core_loop * total_number_of_cores +
-                                get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+    for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
+        const uint32_t h = core_loop * total_number_of_cores +
+                           get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
         // Generate Wt index tiles (TILE / integer format) into the index DFB.
         // The topk LLK reads indices via UINT16 (uint16) or INT32 (uint32) mode, so
         // the index DFB must contain raw unsigned integers, not floating-point values.
-        for (std::uint32_t w = 0; w < Wt; w++) {
+        for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {
-                dataflow_kernel_lib::generate_index_tile<std::uint32_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
             } else {
-                dataflow_kernel_lib::generate_index_tile<std::uint16_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
             }
         }
 
         // Drain 32 sorted RM value rows from rm_value_output_dfb → DRAM
-        const std::uint32_t row_base = h * TILE_H;
-        for (std::uint32_t row = 0; row < TILE_H; row++) {
+        const uint32_t row_base = h * TILE_H;
+        for (uint32_t row = 0; row < TILE_H; row++) {
             rm_value_output_dfb.wait_front(one_tile);
 #ifdef IS_UINT16_FP32_MODE
             rm_uint16_output_stage_dfb.reserve_back(one_tile);
 
-            const std::uint32_t elements_per_row = W_value_bytes / sizeof(std::uint16_t);
-            volatile tt_l1_ptr std::uint32_t* fp32_ptr =
-                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(rm_value_output_dfb.get_read_ptr());
-            volatile tt_l1_ptr std::uint16_t* u16_ptr =
-                reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(rm_uint16_output_stage_dfb.get_write_ptr());
-            for (std::uint32_t i = 0; i < elements_per_row; i++) {
-                const std::uint32_t fp32_bits = fp32_ptr[i];
+            const uint32_t elements_per_row = W_value_bytes / sizeof(uint16_t);
+            volatile tt_l1_ptr uint32_t* fp32_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rm_value_output_dfb.get_read_ptr());
+            volatile tt_l1_ptr uint16_t* u16_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rm_uint16_output_stage_dfb.get_write_ptr());
+            for (uint32_t i = 0; i < elements_per_row; i++) {
+                const uint32_t fp32_bits = fp32_ptr[i];
                 float fval;
                 __builtin_memcpy(&fval, &fp32_bits, sizeof(fval));
-                u16_ptr[i] = static_cast<std::uint16_t>(static_cast<std::uint32_t>(fval));
+                u16_ptr[i] = static_cast<uint16_t>(static_cast<uint32_t>(fval));
             }
             __sync_synchronize();
             rm_value_output_dfb.pop_front(one_tile);

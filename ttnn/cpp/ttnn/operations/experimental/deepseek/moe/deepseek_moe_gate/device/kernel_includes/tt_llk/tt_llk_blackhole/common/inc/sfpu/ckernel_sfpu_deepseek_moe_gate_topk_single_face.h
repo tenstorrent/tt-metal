@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
@@ -17,11 +16,11 @@
 namespace ckernel {
 namespace sfpu {
 
-constexpr std::uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
-constexpr std::uint32_t scores_offset = 0;
-constexpr std::uint32_t indices_offset = scores_offset + dst_tile_offset;
-constexpr std::uint32_t bias_offset = indices_offset + dst_tile_offset;
-constexpr std::uint32_t interm_offset = bias_offset + dst_tile_offset;
+constexpr uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
+constexpr uint32_t scores_offset = 0;
+constexpr uint32_t indices_offset = scores_offset + dst_tile_offset;
+constexpr uint32_t bias_offset = indices_offset + dst_tile_offset;
+constexpr uint32_t interm_offset = bias_offset + dst_tile_offset;
 
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load16_single_face() {
@@ -39,7 +38,7 @@ inline void bitonic_topk_load16_single_face() {
     TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_offset + 12);
 }
 
-template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>
+template <bool is_fp32_dest_acc_en, uint32_t offset = 0>
 inline void bitonic_topk_load16_concat_indices_single_face() {
     // Load 16 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, bias_offset + 0 + offset);
@@ -394,7 +393,7 @@ inline void _deepseek_moe_gate_sort_top4_groups() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _deepseek_moe_gate_top8(std::uint32_t eps, std::uint32_t scale) {
+inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
     constexpr bool idir = false;  // Sort descending order
 
     // Combine and sort 4 groups of 8 values to 2 groups of 8 values

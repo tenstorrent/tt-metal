@@ -14,7 +14,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <cstdint>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
@@ -40,7 +39,7 @@ const KernelSpecName SAMPLING_COMPUTE{"compute"};
 
 // The writer runs one instance per user, each baking its own core index as a compile-time argument, so
 // it needs a KernelSpec (and a single-node WorkUnitSpec) per running core.
-KernelSpecName sampling_writer_name(std::uint32_t core_index) {
+KernelSpecName sampling_writer_name(uint32_t core_index) {
     return KernelSpecName{"writer_" + std::to_string(core_index)};
 }
 
@@ -86,7 +85,7 @@ const TensorParamName SAMPLING_K_TENSOR{"k"};
 const TensorParamName SAMPLING_P_TENSOR{"p"};
 
 DataflowBufferSpec make_dfb(
-    const DFBSpecName& unique_id, std::uint32_t entry_size, std::uint32_t num_entries, tt::DataFormat data_format) {
+    const DFBSpecName& unique_id, uint32_t entry_size, uint32_t num_entries, tt::DataFormat data_format) {
     return DataflowBufferSpec{
         .unique_id = unique_id,
         .entry_size = entry_size,
@@ -111,7 +110,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     const auto& seed = operation_attributes.seed;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    std::uint32_t random_seed = 0;
+    uint32_t random_seed = 0;
 
     const auto& device = input_values_tensor.device();
 
@@ -135,22 +134,22 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     tt::DataFormat index_dfb_data_format = use_32bit_index ? tt::DataFormat::Int32 : tt::DataFormat::UInt16;
     tt::DataFormat temp_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(temp.dtype());
 
-    std::uint32_t input_values_tile_size = tile_size(input_values_dfb_data_format);
-    std::uint32_t index_tile_size = tile_size(index_dfb_data_format);
+    uint32_t input_values_tile_size = tile_size(input_values_dfb_data_format);
+    uint32_t index_tile_size = tile_size(index_dfb_data_format);
 
     const auto& output_mesh = output_tensor.mesh_tensor();
 
     auto input_shape = input_values_tensor.logical_shape();
-    const std::uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();
-    const std::uint32_t tile_width = input_values_tensor.tensor_spec().tile().get_width();
+    const uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input_values_tensor.tensor_spec().tile().get_width();
     // `num_users` is the logical user count (rows in dim 2) in the range [1, 32]; validation
     // guarantees N == C == 1, so it is just input_shape[2]. The data still occupies a single padded
     // row-tile (Ht == 1) and only `num_users` cores run. Decoupling num_cores from Ht*tile_height is
     // what lets <32 users work: the old `(.../tile_height)` would integer-divide to Ht == 0 (and
     // num_cores == 0) for fewer than tile_height users.
-    const std::uint32_t num_users = input_shape[2];
-    std::uint32_t Ht = (num_users + tile_height - 1) / tile_height;  // == 1 for 1..32 users
-    std::uint32_t Wt = input_shape[3] / tile_width;
+    const uint32_t num_users = input_shape[2];
+    uint32_t Ht = (num_users + tile_height - 1) / tile_height;  // == 1 for 1..32 users
+    uint32_t Wt = input_shape[3] / tile_width;
     auto num_cores = num_users;
 
     auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
@@ -187,34 +186,34 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     }
 
     // for streaming in input
-    std::uint32_t num_dfb_unit = 2;
-    std::uint32_t dfb_in_units = 2 * num_dfb_unit;
+    uint32_t num_dfb_unit = 2;
+    uint32_t dfb_in_units = 2 * num_dfb_unit;
 
     // Reduce scaler format — MAX and SUM share it even though they need separate buffers
     tt::DataFormat scalar_df =
         (input_values_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    std::uint32_t scale_tiles = 1;
-    std::uint32_t scalar_tile_size = tile_size(scalar_df);
+    uint32_t scale_tiles = 1;
+    uint32_t scalar_tile_size = tile_size(scalar_df);
 
-    std::uint32_t num_out_tiles = Ht;
+    uint32_t num_out_tiles = Ht;
 
     // random number
-    const std::uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
+    const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
 
     // final indices
-    std::uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();  // 4 for int32
-    std::uint32_t aligned_final_indices_rm_unit_size = Wt * tile_width * final_indices_rm_unit_size;
+    uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();  // 4 for int32
+    uint32_t aligned_final_indices_rm_unit_size = Wt * tile_width * final_indices_rm_unit_size;
 
     // Output sampling indices
-    std::uint32_t output_unit_size = output_mesh.element_size();
-    std::uint32_t aligned_out0_unit_size = Ht * tile_height * output_unit_size;
+    uint32_t output_unit_size = output_mesh.element_size();
+    uint32_t aligned_out0_unit_size = Ht * tile_height * output_unit_size;
 
     // k, p and temp entries span all the cores, so that no core issues an unaligned NOC read
-    const std::uint32_t uint32_bytes = 4;
-    const std::uint32_t bf16_bytes = 2;
-    std::uint32_t k_chunk_size = num_cores * uint32_bytes;
-    std::uint32_t p_chunk_size = num_cores * bf16_bytes;
-    std::uint32_t temp_chunk_size = num_cores * bf16_bytes;
+    const uint32_t uint32_bytes = 4;
+    const uint32_t bf16_bytes = 2;
+    uint32_t k_chunk_size = num_cores * uint32_bytes;
+    uint32_t p_chunk_size = num_cores * bf16_bytes;
+    uint32_t temp_chunk_size = num_cores * bf16_bytes;
 
     Group<DataflowBufferSpec> dataflow_buffers{
         // Two tiles are loaded in for sampling_local_sort at a time, and we double buffer to avoid
@@ -279,7 +278,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"Wt", Wt},
              {"input_indices_page_size", aligned_final_indices_rm_unit_size},
              {"tile_height", tile_height},
-             {"use_32bit_index", static_cast<std::uint32_t>(use_32bit_index)},
+             {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
              {"num_users", num_users}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -400,10 +399,10 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         .compile_time_args =
             {{"Ht", Ht},
              {"Wt", Wt},
-             {"logWt", static_cast<std::uint32_t>(std::log2(Wt))},
+             {"logWt", static_cast<uint32_t>(std::log2(Wt))},
              {"seed", random_seed},
              {"tile_width", tile_width},
-             {"stable_sort", static_cast<std::uint32_t>(stable_sort)}},
+             {"stable_sort", static_cast<uint32_t>(stable_sort)}},
         .hw_config = ComputeHardwareConfig{compute_config},
     };
 
@@ -411,7 +410,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // compile-time argument, so each core gets its own KernelSpec rather than one shared spec.
     // `output`, `k` and `p` are writer-private scratchpads: `k` and `p` are NOC-read staging it then
     // indexes by core, and `output` is a plain SRAM window it fills and sends.
-    auto make_writer = [&](std::uint32_t core_index) {
+    auto make_writer = [&](uint32_t core_index) {
         return KernelSpec{
             .unique_id = sampling_writer_name(core_index),
             .source = SAMPLING_WRITER_SOURCE,
@@ -493,7 +492,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  {"core_id", core_index},
                  {"ids_per_batch", tile_width},
                  {"num_cores", num_cores},
-                 {"use_32bit_index", static_cast<std::uint32_t>(use_32bit_index)},
+                 {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
                  {"num_users", num_users}},
             .hw_config = ttnn::create_writer_datamovement_config(),
         };
@@ -511,7 +510,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     Group<WorkUnitSpec> work_units;
     work_units.reserve(cores.size());
 
-    for (std::uint32_t i = 0; i < cores.size(); ++i) {
+    for (uint32_t i = 0; i < cores.size(); ++i) {
         KernelSpecName writer_name = sampling_writer_name(i);
         kernels.push_back(make_writer(i));
         work_units.push_back(WorkUnitSpec{

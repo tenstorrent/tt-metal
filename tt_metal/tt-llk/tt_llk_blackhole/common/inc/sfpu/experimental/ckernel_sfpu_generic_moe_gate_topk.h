@@ -378,7 +378,7 @@ inline void _generic_moe_gate_copy_biased_scores_()
 
 // generate_indices fills DST[1] with the position identity [0..N-1] before sorting. Set it false when the
 // caller has already loaded DST[1] with its own mapping (e.g. bit-15-flagged SRAM slots) via
-// copy_tile(input_indices, 0, 1): the sort's LREG4-7 UINT16 load then reads those values verbatim and the
+// copy_tile(input_indices, 0, 1): the sort's LREG4-7 LO16_ONLY load then reads those values verbatim and the
 // paired sort carries them through to out_indices.
 template <
     bool normalize,

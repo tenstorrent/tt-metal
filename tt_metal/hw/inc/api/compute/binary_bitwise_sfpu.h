@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_binary_bitwise.h"
@@ -47,7 +46,7 @@ constexpr InstrModLoadStore bitwise_instr_mode() {
 }  // namespace detail
 
 template <DataFormat data_format>
-ALWI void bitwise_and_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+ALWI void bitwise_and_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -61,7 +60,7 @@ ALWI void bitwise_and_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std:
 }
 
 template <DataFormat data_format>
-ALWI void bitwise_or_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+ALWI void bitwise_or_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -75,7 +74,7 @@ ALWI void bitwise_or_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::
 }
 
 template <DataFormat data_format>
-ALWI void bitwise_xor_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,

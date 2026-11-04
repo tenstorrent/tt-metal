@@ -2146,7 +2146,8 @@ SFPLOAD:
                          INT32_COMP    4'b1100
                          INT8          4'b0101
                          INT8_COMP     4'b1101
-                         LO16          4'b0110
+                         UINT16        4'b0110
+                         LO16          4'b1001
                          LO16_ONLY     4'b1110
                          HI16          4'b0111
                          HI16_ONLY     4'b1111"

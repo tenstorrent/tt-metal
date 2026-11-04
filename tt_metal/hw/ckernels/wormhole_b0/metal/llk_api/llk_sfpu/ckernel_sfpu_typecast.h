@@ -29,7 +29,7 @@ constexpr std::uint32_t UINT16_BIT_WIDTH = 16;
 
 // SFPSTORE mode that swaps the high and low 16 bits before writing, so a value computed in the low 16 bits
 // lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
-constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = static_cast<std::uint32_t>(InstrModLoadStore::LO16);
+constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 
 // -128.0f as the upper 16 bits
 constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
@@ -560,10 +560,6 @@ inline void calculate_typecast_uint16_to_uint32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint16() {
-    // Kept as a plain loop (no SFPLOADMACRO): the historical macro used a UINT16-load 2-macro
-    // pipeline on a different bit layout and computes a different result, so it is not
-    // equivalent and is not restored here. See #46751.
-    //
     // Saturation: x >= 2^16 exactly when clz(x) < 16 (SFPLZ returns 32 for x == 0, and reads
     // bit 31 as data), so those lanes are overwritten with 0xFFFF and the rest keep x, whose
     // high half is already zero. The LO16 store (SFPSTORE mode 9) swaps the 16-bit halves, so
@@ -967,8 +963,7 @@ inline void init_typecast_int32_to_uint16() {
     }
 
     // Misc: {
-    //   StoreMod0: SFPSTORE_MODE_SWAP_HI_LO16 (swap hi/lo 16 before write; changed from the
-    //              historical UINT16 to match the plain loop's swap-hi-lo16 store),
+    //   StoreMod0: SFPSTORE_MODE_SWAP_HI_LO16 (swap hi/lo 16 before write),
     //   UsesLoadMod0ForStore: {0},
     //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
     // }
