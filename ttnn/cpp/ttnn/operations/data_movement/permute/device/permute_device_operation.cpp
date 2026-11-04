@@ -13,6 +13,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
@@ -164,6 +165,15 @@ PermuteDeviceOperation::create_op_performance_model(
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
+}
+
+std::vector<tt::tt_metal::TensorTopology> PermuteDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    auto topology = permuted_tensor_topology(tensor_args.input_tensor.tensor_topology(), attributes.dims);
+    if (!topology.has_value()) {
+        return {};
+    }
+    return {std::move(*topology)};
 }
 
 PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_output_tensors(

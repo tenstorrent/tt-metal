@@ -484,4 +484,10 @@ bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, u
 
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
+// The mesh label of a tensor whose dim i is dim dims[i] of a tensor labelled `topology` (a permute or transpose
+// output): each Shard follows its tensor dim and keeps its spelling, a negative dim staying negative. nullopt when no
+// Shard moves, which leaves the operation launch()'s default label, its input's.
+std::optional<tt::tt_metal::TensorTopology> permuted_tensor_topology(
+    const tt::tt_metal::TensorTopology& topology, const ttsl::SmallVector<uint32_t>& dims);
+
 }  // namespace ttnn::operations::data_movement
