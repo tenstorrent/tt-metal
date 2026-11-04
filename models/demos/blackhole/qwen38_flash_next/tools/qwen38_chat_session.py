@@ -100,6 +100,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_prefill_driver import
     Qwen38ChunkPrefill,
     Qwen38PrefillResult,
     alignment_steps,
+    mtp_prefill_plan,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
@@ -258,6 +259,11 @@ MTP_LONG_CHUNK_EXTENSION_BYTES_PER_BANK = 15_339_392 - 15_313_792
 # page of 4,096 bytes) and, after the first slice, one UINT32 ``[1,1,1,1]`` position offset (one 32-byte DRAM page).
 MTP_SLAB_TOKEN_TILE_BYTES = 32 * 32 * 4
 MTP_SLAB_OFFSET_PAGE_BYTES = 32
+# Each slice also owns QSA kept buffers (BF16 TILE, 2,048-byte pages interleaved over the banks): kept KV
+# [1,1,128,2*256] (64 pages) and kept raw keys [1,1,128,128] (16 pages) = 163,840 bytes per slice per device, so a
+# slice's padded-tail hand-off is not overwritten by the slices after it.
+MTP_SLAB_KEPT_STATE_TILE_PAGES = (LONG_CHUNK_ROWS // 32) * (2 * 256 // 32) + (LONG_CHUNK_ROWS // 32) * (128 // 32)
+MTP_SLAB_KEPT_STATE_PAGE_BYTES = 32 * 32 * 2
 
 
 def mtp_slab_form_bytes_per_bank(slab_rows: int) -> int:
@@ -266,7 +272,8 @@ def mtp_slab_form_bytes_per_bank(slab_rows: int) -> int:
     if not is_slab_rows(slab_rows):
         raise ValueError(f"slab_rows must be a slab row count, got {slab_rows!r}")
     slices = slab_rows // LONG_CHUNK_ROWS
-    return slices * MTP_SLAB_TOKEN_TILE_BYTES + (slices - 1) * MTP_SLAB_OFFSET_PAGE_BYTES
+    kept_states = -(-MTP_SLAB_KEPT_STATE_TILE_PAGES // RESIDENT_DRAM_BANKS) * MTP_SLAB_KEPT_STATE_PAGE_BYTES
+    return slices * (MTP_SLAB_TOKEN_TILE_BYTES + kept_states) + (slices - 1) * MTP_SLAB_OFFSET_PAGE_BYTES
 
 
 RESIDENT_DRAM_BANKS = 8
@@ -3657,9 +3664,16 @@ class Qwen38TracedChain:
             synchronize()
             marker("after-chat-mtp-warm-pass")
 
-        def warm_padded_hand_off(tail_state: Any, real_rows: int) -> None:
+        # An MTP chain pads its last pass only under the MTP cost plan.
+        warm_padded = chain_mtp is None or mtp_prefill_plan() == "cost"
+
+        def warm_padded_hand_off(tail_state: Any, real_rows: int, twin: Any = None) -> None:
             model.write_chunk_pad(tail_state, real_rows)
             model.finish_prefill(state, chunk_state, real_rows, tail=(tail_state, real_rows))
+            if twin is not None:
+                chain_mtp.chunk_extension.finish_chunk(
+                    model, prefilled=real_rows, tail=(tail_state, real_rows), long=twin
+                )
             synchronize()
 
         if slab_rows is not None:
@@ -3683,10 +3697,10 @@ class Qwen38TracedChain:
             actual = state.position.read()
             if actual != slab_rows:
                 raise Qwen38ChatChainError(f"warm slab position counter {actual} vs expected {slab_rows}")
-            if chain_mtp is None:
-                # The padded slab's hand-off (a plain chain's cost plan): the kept-tile copies and the PLE history rows
+            if warm_padded:
+                # The padded slab's hand-off (the cost plan): the kept-tile copies and the PLE history rows
                 # are eager programs, compiled here; the next warm block resets the generic state this leaves behind.
-                warm_padded_hand_off(slab_state, slab_rows - 5)
+                warm_padded_hand_off(slab_state, slab_rows - 5, slab_extension)
             marker("after-chat-slab-warm-pass")
         if long_chunks:
             # One eager 128-row chunk from the reset state: its programs compile here, before the miss guard (with
@@ -3709,8 +3723,8 @@ class Qwen38TracedChain:
             actual = state.position.read()
             if actual != LONG_CHUNK_ROWS:
                 raise Qwen38ChatChainError(f"warm long chunk position counter {actual} vs expected {LONG_CHUNK_ROWS}")
-            if chain_mtp is None:
-                warm_padded_hand_off(long_chunk_state, LONG_CHUNK_ROWS - 5)  # the padded 128-row chunk's, as the slab's
+            if warm_padded:
+                warm_padded_hand_off(long_chunk_state, LONG_CHUNK_ROWS - 5, long_chunk_extension)  # as the slab's
             marker("after-chat-long-chunk-warm-pass")
         if chunked_prefill:
             # One eager chunk from the reset state (the chunk body's programs compile here) and both hand-off

@@ -16,7 +16,7 @@ remainder is cheaper as one padded pass than as many small ones).  At most one p
 the real ones are :data:`CHUNK_PAD_TOKEN_ID`, a 32-row chunk takes its real row count as the accept scalar ``r - 1``, a
 128-row chunk or slab as the host-written pad inputs (``write_chunk_pad``: beta and g of the pad rows zero, the GDN conv
 history from the real rows), and the hand-off takes the carries from the real rows (``finish_prefill(tail=...)``).
-``QWEN38_PREFILL_PLAN=legacy`` (or an MTP-drafting chain, whose chunk extensions have no padded 128-row form) plans as
+``QWEN38_PREFILL_PLAN=legacy`` (or an MTP-drafting chain under ``QWEN38_MTP_PREFILL_PLAN=legacy``) plans as
 before: ``N // S`` slabs, ``M // 128`` long chunks of the remainder ``M``, ``M // 32`` full 32-row chunks and, if ``M % 32
 = r > 0``, one padded 32-row chunk; ``finish_prefill`` from the 32-row state.  The host work of
 chunk i + 1 (``prepare_chunk_inputs``: the n-gram lookups from the running context and the row packing; then
@@ -72,6 +72,8 @@ CHUNK_PAD_TOKEN_ID = 0
 CHUNK_EVENT_INTERVAL = 4
 
 PLAN_ENV = "QWEN38_PREFILL_PLAN"
+# The plan of a chain with MTP chunk extensions; ``legacy`` stays selectable.
+MTP_PLAN_ENV = "QWEN38_MTP_PREFILL_PLAN"
 PLAN_COST, PLAN_LEGACY = "cost", "legacy"
 PLANS = (PLAN_COST, PLAN_LEGACY)
 # Device time of one pass of each form in ms, blocking replay, 4x Blackhole QuietBox 2 (P3a-1, 2026-10-25): a pass costs
@@ -117,6 +119,20 @@ def prefill_plan(environ: Mapping[str, str] | None = None) -> str:
         return PLAN_COST
     if value not in PLANS:
         raise ValueError(f"{PLAN_ENV} must be one of {PLANS}, got {raw!r}")
+    return value
+
+
+def mtp_prefill_plan(environ: Mapping[str, str] | None = None) -> str:
+    """The plan of a chain with MTP chunk extensions from ``QWEN38_MTP_PREFILL_PLAN``: ``cost`` (the default) or
+    ``legacy``; any other value is refused by name."""
+
+    environ = os.environ if environ is None else environ
+    raw = environ.get(MTP_PLAN_ENV)
+    value = "" if raw is None else raw.strip().lower()
+    if value == "":
+        return PLAN_COST
+    if value not in PLANS:
+        raise ValueError(f"{MTP_PLAN_ENV} must be one of {PLANS}, got {raw!r}")
     return value
 
 
@@ -335,8 +351,9 @@ class Qwen38ChunkPrefill:
         self.mtp = mtp
         self.long_mtp = long_mtp
         # The plan mode (``QWEN38_PREFILL_PLAN`` unless given) and the per-form cost table the cost plan reads.  A chain with
-        # MTP chunk extensions keeps the legacy plan: their 128-row and slab forms have no padded pass.
+        # MTP chunk extensions plans by legacy only when ``QWEN38_MTP_PREFILL_PLAN=legacy`` asks for it.
         self.plan = prefill_plan() if plan is None else plan
+        self.mtp_plan = mtp_prefill_plan() if mtp is not None else PLAN_COST
         self.pass_costs = PASS_COST_MS if pass_costs is None else pass_costs
 
     def _form_rows(self, kind: str) -> int:
@@ -346,7 +363,7 @@ class Qwen38ChunkPrefill:
         """The passes of a ``count``-row head from ``position`` and the name of the plan that made them."""
 
         long_chunks = self.long_chunk_state is not None
-        if self.plan == PLAN_COST and self.mtp is None:
+        if self.plan == PLAN_COST and self.mtp_plan == PLAN_COST:
             return (
                 plan_cover(
                     count,
@@ -614,12 +631,13 @@ class Qwen38ChunkPrefill:
                 self.model.upload_chunk_inputs(chunk_state, prepared)
                 extension = self._extension(kind)
                 if extension is not None:
-                    # The extension of the chunk's form takes the chunk's rows one position ahead (a long chunk and a
-                    # slab are always full; the padded 32-row tail pads its MTP tokens too).
+                    # The extension of the chunk's form takes the chunk's rows one position ahead; a padded pass pads
+                    # its MTP tokens too.
                     if kind == "slab":
+                        ahead = following[start : start + self.slab_rows]
                         extension.write_slab_tokens(
                             self.model,
-                            following[start : start + self.slab_rows],
+                            ahead + [self.pad_token_id] * (self.slab_rows - len(ahead)),
                             features=features_ahead(start, self.slab_rows),
                         )
                     else:
@@ -696,7 +714,11 @@ class Qwen38ChunkPrefill:
                 **({} if tail is None else {"tail": tail}),
             )
             if self.mtp is not None:
-                self.mtp.finish_chunk(self.model, prefilled=position)
+                self.mtp.finish_chunk(
+                    self.model,
+                    prefilled=position,
+                    **({} if tail is None else {"tail": tail, "long": self.long_mtp}),
+                )
             ttnn.synchronize_device(self.mesh)
             handoff_ms = (time.perf_counter_ns() - handoff_started_ns) / 1_000_000
         timing = Qwen38PrefillTiming(

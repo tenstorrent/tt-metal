@@ -416,12 +416,15 @@ def test_a_padded_32_row_tail_after_full_passes_keeps_its_accept_scalar(harness)
     assert harness.log[-2][3] is None  # the 32-row state hands over as it always did
 
 
-def test_the_legacy_plan_and_a_chain_with_mtp_extensions_plan_as_before(harness) -> None:
+def test_the_legacy_plan_and_a_chain_with_mtp_extensions_under_the_legacy_knob_plan_as_before(
+    harness, monkeypatch
+) -> None:
+    monkeypatch.setenv("QWEN38_MTP_PREFILL_PLAN", "legacy")
     legacy = harness.make("legacy").run(_tokens(100), start_position=0, ple_context=None)
     assert legacy.timing.plan == "legacy" and (legacy.timing.long_chunks, legacy.timing.chunks) == (0, 4)
     assert legacy.timing.padded_pass == "short" and legacy.timing.padded_real_rows == 4
     assert not [entry for entry in harness.log if entry[0] == "pad"]
-    # an MTP chain keeps the legacy plan whatever the knob says: its extensions have no padded 128-row or slab form
+    # an MTP chain under QWEN38_MTP_PREFILL_PLAN=legacy keeps the legacy plan whatever QWEN38_PREFILL_PLAN says
     harness.log.clear()
 
     class Extension:
@@ -446,6 +449,35 @@ def test_the_legacy_plan_and_a_chain_with_mtp_extensions_plan_as_before(harness)
     result = mtp_driver.run(_tokens(100), start_position=0, ple_context=None, following_token=5)
     assert result.timing.plan == "legacy (mtp)" and (result.timing.long_chunks, result.timing.chunks) == (0, 4)
     assert not [entry for entry in harness.log if entry[0] == "pad"]
+
+
+def test_the_mtp_cost_plan_pads_the_slab_tokens_and_hands_the_tail_to_the_mtp_twin(harness, monkeypatch) -> None:
+    monkeypatch.setenv("QWEN38_MTP_PREFILL_PLAN", "cost")
+    seen = {}
+
+    class Extension:
+        rows = 32
+        slab_rows = 0
+
+        def reset_chunk(self):
+            pass
+
+        def write_tokens(self, model, tokens, features=None):
+            pass
+
+        def write_slab_tokens(self, model, tokens, features=None):
+            seen["slab_tokens"] = len(tokens)
+
+        def finish_chunk(self, model, *, prefilled, tail=None, long=None):
+            seen["finish"] = (prefilled, tail is not None and tail[1], long)
+
+    long_extension = Extension()
+    long_extension.rows, long_extension.slab_rows = 128, SLAB
+    result = harness.make("cost", mtp=Extension(), long_mtp=long_extension).run(
+        _tokens(1000), start_position=0, ple_context=None, following_token=5
+    )
+    assert result.timing.plan == "cost" and result.timing.padded_pass == "slab"
+    assert seen["slab_tokens"] == SLAB and seen["finish"] == (1000, 1000, long_extension)
 
 
 def test_a_stop_before_the_padded_pass_hands_over_from_the_32_row_state_without_a_tail(harness) -> None:

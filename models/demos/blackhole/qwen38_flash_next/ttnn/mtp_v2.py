@@ -3646,6 +3646,10 @@ class Qwen38TTNNMTPChunkExtension:
     slab_feature_rows: tuple = ()  # one feature-rows buffer per 128-row slice (the slab form's ``feature_rows``)
     slab_position_offsets: tuple = ()
     qsa_chunk_constants: Any = None
+    # One layer chunk state per slice of the slab form, sharing the twin's MoE and differing only in the QSA kept
+    # buffers: a padded slab's hand-off needs the kept rows of the slice that holds the last real row, which the
+    # slices after it would overwrite if they all wrote the twin's own.
+    slab_layer_states: tuple = ()
 
     @classmethod
     def allocate(
@@ -3688,6 +3692,7 @@ class Qwen38TTNNMTPChunkExtension:
             local_combine_output=chunk_state.local_combine_output,
         )
         allocated: list[Any] = []
+        allocated_states: list[Any] = []
         try:
             token_row = model.model_io.embedding.upload_token_rows(rows)
             allocated.append(token_row)
@@ -3696,8 +3701,13 @@ class Qwen38TTNNMTPChunkExtension:
             slab_token_rows: list[Any] = []
             slab_feature_rows: list[Any] = []
             slab_position_offsets: list[Any] = []
+            slab_layer_states: list[Any] = []
             if slab_rows is not None:
                 for index in range(slab_rows // LONG_CHUNK_ROWS):
+                    slice_attention = verify.alignment.layer.attention.allocate_chunk_state(LONG_CHUNK_ROWS)
+                    slice_state = replace(layer_chunk_state, attention=slice_attention)
+                    slab_layer_states.append(slice_state)
+                    allocated_states.append(slice_state)
                     slab_token_rows.append(model.model_io.embedding.upload_token_rows(LONG_CHUNK_ROWS))
                     allocated.append(slab_token_rows[-1])
                     slab_feature_rows.append(model._allocate_chunk_feature_rows(LONG_CHUNK_ROWS))
@@ -3715,6 +3725,8 @@ class Qwen38TTNNMTPChunkExtension:
                         allocated.append(offset)
         except BaseException:
             _deallocate(*allocated)
+            for state in allocated_states:
+                verify.alignment.layer.attention.release_chunk_state(state.attention)
             verify.alignment.layer.release_chunk_state(layer_chunk_state)
             raise
         return cls(
@@ -3728,6 +3740,7 @@ class Qwen38TTNNMTPChunkExtension:
             slab_feature_rows=tuple(slab_feature_rows),
             slab_position_offsets=tuple(slab_position_offsets),
             qsa_chunk_constants=chunk_state.qsa_chunk_constants if slab_rows is not None else None,
+            slab_layer_states=tuple(slab_layer_states),
         )
 
     def release(self) -> None:
@@ -3739,6 +3752,12 @@ class Qwen38TTNNMTPChunkExtension:
                 ("MTP slab token rows", lambda: _deallocate(*self.slab_token_rows)),
                 ("MTP slab feature rows", lambda: _deallocate(*(rows.tensor for rows in self.slab_feature_rows))),
                 ("MTP slab position offsets", lambda: _deallocate(*self.slab_position_offsets)),
+                (
+                    "MTP slab slice kept buffers",
+                    lambda: [
+                        self.alignment.layer.attention.release_chunk_state(s.attention) for s in self.slab_layer_states
+                    ],
+                ),
                 ("MTP layer chunk state", lambda: self.alignment.layer.release_chunk_state(self.layer_chunk_state)),
             ],
         )
@@ -3852,6 +3871,7 @@ class Qwen38TTNNMTPChunkExtension:
                 selectors=None,
                 token_row=self.slab_token_rows[index],
                 feature_rows=self.slab_feature_rows[index],
+                layer_chunk_state=self.slab_layer_states[index],
             )
             qsa_chunk.deallocate()
             rope_slice.deallocate()
@@ -3870,14 +3890,15 @@ class Qwen38TTNNMTPChunkExtension:
         selectors,
         token_row=None,
         feature_rows=None,
+        layer_chunk_state=None,
     ):
         """The MTP layer's rows at the chunk's positions: the token rows' embedding plus their vision feature rows
         (the image lanes embed the zero sentinel and take the tower's row; the text lanes' -0.0 leaves them bitwise),
         mixed with the chunk's layer-47 residual rows (not consumed), through the layer's chunk body on the MTP generic
         and chunk states.  The roots are ``[1,4,rows,640]`` and the embedding ``[1,1,rows,640]`` for this extension's
         ``rows``; ``selectors`` is the chunk's (the 32-row form's accept selectors, None at 128 rows), as the backbone's
-        layers receive it.  ``token_row`` and ``feature_rows`` (the slab form) name the slice's tiles instead of this
-        extension's own."""
+        layers receive it.  ``token_row``, ``feature_rows`` and ``layer_chunk_state`` (the slab form) name the slice's tiles
+        and kept buffers instead of this extension's own."""
 
         residual_shape = (1, RESIDUAL_BRANCHES, self.rows, LOCAL_HIDDEN_SIZE)
         embedding_shape = (1, 1, self.rows, LOCAL_HIDDEN_SIZE)
@@ -3899,7 +3920,7 @@ class Qwen38TTNNMTPChunkExtension:
         out = self.alignment.layer.forward_chunk_generic(
             mixed,
             self.alignment.generic_state,
-            self.layer_chunk_state,
+            self.layer_chunk_state if layer_chunk_state is None else layer_chunk_state,
             prepared_ple_rows=None,
             rope_rows=rope_rows,
             qsa_chunk=qsa_chunk,
@@ -3908,12 +3929,35 @@ class Qwen38TTNNMTPChunkExtension:
         )
         _deallocate(out)
 
-    def finish_chunk(self, model: Qwen38TTNNTextModel, *, prefilled: int) -> None:
+    def finish_chunk(
+        self,
+        model: Qwen38TTNNTextModel,
+        *,
+        prefilled: int,
+        tail: tuple[Any, int] | None = None,
+        long: "Qwen38TTNNMTPChunkExtension | None" = None,
+    ) -> None:
         """The MTP layer's hand-off after the last chunk (the model's ``finish_prefill`` form for one layer): the
-        32-row twin's, whatever chunk forms the prefill ran."""
+        32-row twin's, whatever chunk forms the prefill ran.  ``tail`` is the backbone's ``(chunk state, real rows)``
+        of a last pass that was a padded 128-row chunk or slab; the kept rows the hand-off reads then come from the
+        ``long`` twin's state of that pass (for a slab, the slice that holds the last real row), as the backbone's
+        ``hand_off_padded_tail`` takes them from its own."""
 
         if self.rows != CHUNK_ROWS:
             raise ValueError(f"the MTP hand-off reads the {CHUNK_ROWS}-row chunk extension, got {self.rows} rows")
+        if tail is not None:
+            tail_state, real_rows = tail
+            if long is None or long.rows != LONG_CHUNK_ROWS or long.alignment is not self.alignment:
+                raise ValueError("a padded tail hands over from this chain's 128-row MTP twin (long=)")
+            if int(tail_state.rows) == LONG_CHUNK_ROWS:
+                source, slice_rows = long.layer_chunk_state, real_rows
+            elif long.slab_rows == int(tail_state.rows):
+                first_slice = (real_rows - 1) // LONG_CHUNK_ROWS
+                source, slice_rows = long.slab_layer_states[first_slice], real_rows - first_slice * LONG_CHUNK_ROWS
+            else:
+                raise ValueError(f"the MTP twin has no {tail_state.rows}-row form")
+            if slice_rows < LONG_CHUNK_ROWS:  # a full last slice ends on a tile boundary: no kept row is read
+                self.alignment.layer.hand_off_padded_tail(self.layer_chunk_state, source, real_rows=slice_rows)
         ring_select = ttnn.from_torch(
             qsa_module.chunk_handoff_ring_select_rows(prefilled),
             dtype=ttnn.bfloat16,

@@ -662,16 +662,16 @@ def test_admission_carries_the_slab_form_term(expect_error, monkeypatch) -> None
 
     monkeypatch.setattr(session_module, "packed_bf4_bytes_per_device", lambda *, ring_size: (80 << 20, 40 << 20))
     assert session_module.MTP_SLAB_TOKEN_TILE_BYTES == 4_096 and session_module.MTP_SLAB_OFFSET_PAGE_BYTES == 32
-    assert session_module.mtp_slab_form_bytes_per_bank(2048) == 16 * 4_096 + 15 * 32 == 66_016
+    assert session_module.mtp_slab_form_bytes_per_bank(2048) == 16 * (4_096 + 20_480) + 15 * 32 == 393_696
     states = session_module.MTP_STATES_BEYOND_QSA_STATE_BYTES_PER_BANK_BY_MOE_ROWS[5]
     extension = session_module.MTP_LONG_CHUNK_EXTENSION_BYTES_PER_BANK
     for context in (32768, 65536):
         long = session_module.mtp_capacity_admission(context, drafts=4, long_chunks=True)
         slab = session_module.mtp_capacity_admission(context, drafts=4, long_chunks=True, slab_rows=2048)
         assert (long["mtp_slab_form_bytes_per_bank"], long["slab_rows"]) == (0, None)
-        assert (slab["mtp_slab_form_bytes_per_bank"], slab["slab_rows"]) == (66_016, 2048)
-        assert slab["mtp_growth_remainders_bytes_per_bank"]["long_chunk_extension"] == extension + 66_016
-        delta = _with_margin(states + extension + 66_016) - _with_margin(states + extension)
+        assert (slab["mtp_slab_form_bytes_per_bank"], slab["slab_rows"]) == (393_696, 2048)
+        assert slab["mtp_growth_remainders_bytes_per_bank"]["long_chunk_extension"] == extension + 393_696
+        delta = _with_margin(states + extension + 393_696) - _with_margin(states + extension)
         assert slab["required_free_bytes_per_bank"] - long["required_free_bytes_per_bank"] == delta
         assert slab["free_bytes_per_bank_after_captures"] == long["free_bytes_per_bank_after_captures"]
         assert slab["fits"], context
