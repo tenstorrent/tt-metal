@@ -288,3 +288,14 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   `--ci-mode` subset = 10 of 198 questions): exact match 0.90, the same 9 / 10 the frozen tip's release run scored on
   that subset. No regression at the CI sample count; the full 198-question run follows as the arbiter before the
   defaults flip.
+* 04:30 **persistent program, step 1 built** (branch `arg/glm53_persistent`, worktree `wt_persist`, commit
+  e6e52769e4c): `custom_ops/moe_persistent` = the MoE block's three programs as ONE program per chip: the row gather
+  on the 10 cores the expert placement leaves idle, a multicast release into the 112 expert cores' semaphores once
+  the gathered tiles are written, the fused gate|up + down kernels unchanged (wait hooks at their start), the down
+  cores counting their written output tiles on the combine workers, and the row combine on the same 10 cores. The
+  data still crosses the gathered / expert-output tensors; the gain is two launches and their fills (~25-35 us per
+  layer) and, more importantly, the phase-chaining pattern (program semaphores + a multicast release + completion
+  counters) every further phase of the persistent layer reuses. Model knob `GLM53_MOE_PERSIST=1`; its chain gate
+  (`gate84_B4_persist`) must reproduce the all-fabric run's ids bit for bit (the same math, one program less two).
+  Next phases: the gathered rows multicast straight into the expert cores' L1 (no x_g tensor), then the attention
+  half (pre-block -> qkv -> KDA recurrence -> o-proj -> all-reduce -> post-mix) on the same pattern.
