@@ -6,6 +6,11 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <string>
+#include <variant>
+#include <initializer_list>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -135,6 +140,26 @@ uint32_t add_semaphore_descriptor(
     const tt::tt_metal::CoreRangeSet& cores,
     uint32_t initial_value = 0,
     tt::CoreType core_type = tt::CoreType::WORKER);
+size_t add_kernel_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const std::string& kernel_source,
+    const tt::tt_metal::CoreRangeSet& cores,
+    const std::variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig>& config);
+
+// The slots in `buffer_slots` become buffer bindings; their values in `args` are placeholders.
+void emplace_runtime_args_with_buffers(
+    tt::tt_metal::KernelDescriptor& kernel,
+    const tt::tt_metal::CoreCoord& core,
+    const std::vector<uint32_t>& args,
+    std::initializer_list<std::pair<size_t, tt::tt_metal::Buffer*>> buffer_slots);
+void set_runtime_arg_on_all_cores(
+    tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel, size_t slot, uint32_t value);
+tt::tt_metal::CBDescriptor make_cb_descriptor(
+    const tt::tt_metal::CircularBufferConfig& config,
+    const tt::tt_metal::CoreRangeSet& cores,
+    const tt::tt_metal::MeshTensor* tensor = nullptr,
+    tt::tt_metal::Buffer* buffer = nullptr,
+    const tt::tt_metal::experimental::GlobalCircularBuffer* global_cb = nullptr);
 
 enum class MatmulFusedOpSignalerType {
     ALL_GATHER,
@@ -217,6 +242,12 @@ struct MatmulFusedOpSignaler {
     void init_llama_rs_cores_mm(
         const tt::tt_metal::CoreRangeSet& matmul_cores,
         tt::tt_metal::Program& program,
+        const tt::tt_metal::distributed::MeshDevice* device,
+        int privilaged_index = 0);
+    void init_llama_rs_cores_rs(const tt::tt_metal::CoreRangeSet& rs_cores, tt::tt_metal::ProgramDescriptor& desc);
+    void init_llama_rs_cores_mm(
+        const tt::tt_metal::CoreRangeSet& matmul_cores,
+        tt::tt_metal::ProgramDescriptor& desc,
         const tt::tt_metal::distributed::MeshDevice* device,
         int privilaged_index = 0);
     // Get the rt values

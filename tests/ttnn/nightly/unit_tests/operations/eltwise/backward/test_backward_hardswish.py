@@ -31,19 +31,11 @@ def test_bw_hardswish(input_shapes, device):
     assert comp_pass
 
 
-# Exhaustive BF16 accuracy of ttnn.hardswish_bw.
+# Exhaustive BF16 accuracy of ttnn.hardswish_bw: every BF16 bit pattern with each gradient in HARDSWISH_BW_GRADS.
 #
-# Every BF16 bit pattern is paired with each gradient in GRADS. The reference is torch autograd
-# of torch.nn.functional.hardswish(x) in float64, rounded once to BF16 with subnormal results flushed to zero.
-# The SFPU may read a subnormal operand as zero, so torch is evaluated both at the operands and at
-# the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
-# path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
-# the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
-# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
-# pure ULP error against torch and the lanes of another class, for the output and for the
-# composite's on the same operands.
-# At a NaN input the output is grad, as the composite this program replaces returns; torch returns NaN.
+# The SFPU may read a subnormal operand as zero, so an output may match torch at the operands or at the
+# operands with subnormals flushed; the pack stores NaN as +inf and -0 as +0, so classes compare as stored.
+# Declared lanes, as the composite this program replaces computes them unless noted: at a NaN input, grad.
 HARDSWISH_BW_GRADS = [
     "1",
     "-1",
@@ -56,6 +48,7 @@ HARDSWISH_BW_GRADS = [
     "inf",
     "-inf",
     "nan",
+    "-nan",
     "1.1754943508222875e-38",
     "-1.1754943508222875e-38",
     "3.3895313892515355e+38",
@@ -72,6 +65,9 @@ def _hardswish_bw_grad_like(x, grad):
     if grad.startswith("random"):
         generator = torch.Generator().manual_seed(int(grad.removeprefix("random")))
         return torch.randn(x.shape, generator=generator).to(torch.bfloat16)
+    if grad == "-nan":
+        # torch.full rounds every NaN to 0x7FC0: the sign-set NaN, 0xFFC0, is written by its bits.
+        return torch.full(x.shape, -64, dtype=torch.int16).view(torch.bfloat16)
     return torch.full(x.shape, float(grad), dtype=torch.bfloat16)
 
 
@@ -286,9 +282,8 @@ def _hardswish_bw_placements(shape):
     ],
 )
 def test_hardswish_bw_runs_the_fused_program_only_where_it_applies(call, device):
-    """BF16 operands of one shape in tiles, interleaved or sharded in L1 or DRAM, with one placement or
-    an output config run the fused program and match torch; every other call keeps the composite,
-    which broadcasts and takes any layout, placement and dtype."""
+    """BF16 tiles of one shape, interleaved or sharded in L1 or DRAM, with one placement or an output config, run
+    the fused program and match torch; every other call keeps the composite."""
     shape = (1, 2, 64, 128)
     generator = torch.Generator().manual_seed(0)
     x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)
@@ -297,7 +292,6 @@ def test_hardswish_bw_runs_the_fused_program_only_where_it_applies(call, device)
     layouts = {"row_major": (ttnn.ROW_MAJOR_LAYOUT,) * 2, "mixed_layouts": (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT)}
     grad_layout, input_layout = layouts.get(call, (ttnn.TILE_LAYOUT,) * 2)
     placements = _hardswish_bw_placements(shape)
-    shard = placements["height_sharded"][0]
     grad_memory, input_memory, output_memory = placements.get(
         call, (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None)
     )
@@ -329,7 +323,7 @@ def test_hardswish_bw_runs_the_fused_program_only_where_it_applies(call, device)
     assert error is None, error
     expected = _hardswish_bw_torch_gradient(g, x)
     assert_with_pcc(expected, ttnn.to_torch(result).float(), 0.999)
-    if call != "interleaved_tiles" and call in HARDSWISH_BW_FUSED_CALLS:
+    if call != "interleaved_tiles":
         # A layout moves tiles, not arithmetic: the result is where the call asks for it, and is the
         # interleaved call's bit for bit, so the exhaustive test's accuracy holds in every layout.
         placement = tt_x.memory_config()
