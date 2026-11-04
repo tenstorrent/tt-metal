@@ -2,11 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --check-prefix=OPS
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %t/codegen.cpp -o %t/codegen.o
+// RUN: %{blackhole_objdump} -drz %t/codegen.o > %t/codegen.dump
+// RUN: %{blackhole_compare_codegen} %t/codegen.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -UENABLE_LLK_ASSERT -c %t/compile_time.cpp -o %t/compile_time.o
+// RUN: %{blackhole_objdump} -d %t/compile_time.o | FileCheck %s
 
+// Compare each runtime HAL function with its adjacent reference_ function.
+// Disable identical-code folding so both bodies are emitted independently.
 // LLK_ASSERT is disabled so runtime paths contain only the issued instructions.
+
+// THCON mover 0 words: 88 = source, 89 = destination, 90 = size | direction 3 << 30.
+
+//--- common.h
+#pragma once
 
 #include <cstdint>
 
@@ -16,7 +26,40 @@ namespace move = hal::move;
 
 using L1ToL1 = move::Transfer<move::L1, move::L1>;
 
-// THCON mover 0 words: 88 = source, 89 = destination, 90 = size | direction 3 << 30.
+//--- codegen.cpp
+#include "common.h"
+
+extern "C" __attribute__((noinline, used)) void l1_to_l1_runtime(
+    const std::uint32_t source, const std::uint32_t destination, const std::uint32_t size, const move::Completion completion)
+{
+    move::run(L1ToL1 {.source = {.block = source}, .destination = {.block = destination}, .size = {.value = size}, .completion = completion});
+}
+
+extern "C" __attribute__((noinline, used)) void reference_l1_to_l1_runtime(
+    const std::uint32_t source, const std::uint32_t destination, const std::uint32_t size, const move::Completion completion)
+{
+    TT_RMWCIB0(0xff /*Mask*/, source & 0xffu, 88 /*CfgRegAddr*/);
+    TT_RMWCIB1(0xff /*Mask*/, (source >> 8) & 0xffu, 88 /*CfgRegAddr*/);
+    TT_RMWCIB2(0xff /*Mask*/, (source >> 16) & 0xffu, 88 /*CfgRegAddr*/);
+    TT_RMWCIB3(0xff /*Mask*/, source >> 24, 88 /*CfgRegAddr*/);
+    TT_RMWCIB0(0xff /*Mask*/, destination & 0xffu, 89 /*CfgRegAddr*/);
+    TT_RMWCIB1(0xff /*Mask*/, (destination >> 8) & 0xffu, 89 /*CfgRegAddr*/);
+    TT_RMWCIB2(0xff /*Mask*/, (destination >> 16) & 0xffu, 89 /*CfgRegAddr*/);
+    TT_RMWCIB3(0xff /*Mask*/, destination >> 24, 89 /*CfgRegAddr*/);
+    const std::uint32_t size_direction = size | (3u << 30);
+    TT_RMWCIB0(0xff /*Mask*/, size_direction & 0xffu, 90 /*CfgRegAddr*/);
+    TT_RMWCIB1(0xff /*Mask*/, (size_direction >> 8) & 0xffu, 90 /*CfgRegAddr*/);
+    TT_RMWCIB2(0xff /*Mask*/, (size_direction >> 16) & 0xffu, 90 /*CfgRegAddr*/);
+    TT_RMWCIB3(0xff /*Mask*/, size_direction >> 24, 90 /*CfgRegAddr*/);
+    TTI_XMOV(0 /*Mov_block_selection*/, 0 /*Last*/);
+    if (completion == move::Completion::Wait)
+    {
+        TTI_STALLWAIT(511 /*stall_res*/, 512 /*wait_res*/);
+    }
+}
+
+//--- compile_time.cpp
+#include "common.h"
 
 constexpr L1ToL1 copy {
     .source      = {.block = 0x10000},
@@ -37,19 +80,19 @@ extern "C" __attribute__((noinline, used)) void l1_to_l1_issue_only()
 }
 
 // CHECK-LABEL: <l1_to_l1_issue_only>:
-// CHECK-NEXT: ttrmwcib0 255,0,88
-// CHECK-NEXT: ttrmwcib1 255,0,88
-// CHECK-NEXT: ttrmwcib2 255,1,88
-// CHECK-NEXT: ttrmwcib3 255,0,88
-// CHECK-NEXT: ttrmwcib0 255,0,89
-// CHECK-NEXT: ttrmwcib1 255,0,89
-// CHECK-NEXT: ttrmwcib2 255,0,89
-// CHECK-NEXT: ttrmwcib3 255,0,89
-// CHECK-NEXT: ttrmwcib0 255,0,90
-// CHECK-NEXT: ttrmwcib1 255,128,90
-// CHECK-NEXT: ttrmwcib2 255,0,90
-// CHECK-NEXT: ttrmwcib3 255,192,90
-// CHECK-NEXT: ttxmov 0,0
+// CHECK-NEXT: ttrmwcib0 255,0,88{{$}}
+// CHECK-NEXT: ttrmwcib1 255,0,88{{$}}
+// CHECK-NEXT: ttrmwcib2 255,1,88{{$}}
+// CHECK-NEXT: ttrmwcib3 255,0,88{{$}}
+// CHECK-NEXT: ttrmwcib0 255,0,89{{$}}
+// CHECK-NEXT: ttrmwcib1 255,0,89{{$}}
+// CHECK-NEXT: ttrmwcib2 255,0,89{{$}}
+// CHECK-NEXT: ttrmwcib3 255,0,89{{$}}
+// CHECK-NEXT: ttrmwcib0 255,0,90{{$}}
+// CHECK-NEXT: ttrmwcib1 255,128,90{{$}}
+// CHECK-NEXT: ttrmwcib2 255,0,90{{$}}
+// CHECK-NEXT: ttrmwcib3 255,192,90{{$}}
+// CHECK-NEXT: ttxmov 0,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void l1_to_l1_wait()
@@ -58,52 +101,18 @@ extern "C" __attribute__((noinline, used)) void l1_to_l1_wait()
 }
 
 // CHECK-LABEL: <l1_to_l1_wait>:
-// CHECK-NEXT: ttrmwcib0 255,0,88
-// CHECK-NEXT: ttrmwcib1 255,1,88
-// CHECK-NEXT: ttrmwcib2 255,0,88
-// CHECK-NEXT: ttrmwcib3 255,0,88
-// CHECK-NEXT: ttrmwcib0 255,0,89
-// CHECK-NEXT: ttrmwcib1 255,2,89
-// CHECK-NEXT: ttrmwcib2 255,0,89
-// CHECK-NEXT: ttrmwcib3 255,0,89
-// CHECK-NEXT: ttrmwcib0 255,16,90
-// CHECK-NEXT: ttrmwcib1 255,0,90
-// CHECK-NEXT: ttrmwcib2 255,0,90
-// CHECK-NEXT: ttrmwcib3 255,192,90
-// CHECK-NEXT: ttxmov 0,0
-// CHECK-NEXT: ttstallwait 511,512
+// CHECK-NEXT: ttrmwcib0 255,0,88{{$}}
+// CHECK-NEXT: ttrmwcib1 255,1,88{{$}}
+// CHECK-NEXT: ttrmwcib2 255,0,88{{$}}
+// CHECK-NEXT: ttrmwcib3 255,0,88{{$}}
+// CHECK-NEXT: ttrmwcib0 255,0,89{{$}}
+// CHECK-NEXT: ttrmwcib1 255,2,89{{$}}
+// CHECK-NEXT: ttrmwcib2 255,0,89{{$}}
+// CHECK-NEXT: ttrmwcib3 255,0,89{{$}}
+// CHECK-NEXT: ttrmwcib0 255,16,90{{$}}
+// CHECK-NEXT: ttrmwcib1 255,0,90{{$}}
+// CHECK-NEXT: ttrmwcib2 255,0,90{{$}}
+// CHECK-NEXT: ttrmwcib3 255,192,90{{$}}
+// CHECK-NEXT: ttxmov 0,0{{$}}
+// CHECK-NEXT: ttstallwait 511,512{{$}}
 // CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void l1_to_l1_runtime(
-    const std::uint32_t source, const std::uint32_t destination, const std::uint32_t size, const move::Completion completion)
-{
-    move::run(L1ToL1 {.source = {.block = source}, .destination = {.block = destination}, .size = {.value = size}, .completion = completion});
-}
-
-// Runtime words are split into RMWCIB byte lanes: twelve instruction-buffer
-// writes, then XMOV, then the MoverIdle wait only for Completion::Wait.
-// CHECK-LABEL: <l1_to_l1_runtime>:
-// CHECK-COUNT-12: sw {{[at][0-7]}},0({{[at][0-7]}})
-// CHECK-NEXT: lui [[R0:a[0-7]]],0x40000
-// CHECK-NEXT: sw [[R0]],0([[BUF:a[0-7]]])
-// CHECK-NEXT: li [[R0]],1
-// CHECK-NEXT: beq a3,[[R0]],{{[0-9a-f]+}}
-// CHECK-NEXT: R_RISCV_BRANCH
-// CHECK-NEXT: ret
-// CHECK-EMPTY:
-// CHECK-NEXT: <.L{{[0-9]+}}>:
-// CHECK-NEXT: lui [[R0]],0xa2ff8
-// CHECK-NEXT: addi [[R0]],[[R0]],512
-// CHECK-NEXT: sw [[R0]],0([[BUF]])
-// CHECK-NEXT: ret
-
-// The RMWCIB0..3 opcode bases for words 88..90, and direction 3 merged into word 90.
-// OPS-LABEL: <l1_to_l1_runtime>:
-// OPS-DAG: lui [[CIB0:[at][0-7]]],0xb3ff0
-// OPS-DAG: lui [[CIB1:[at][0-7]]],0xb4ff0
-// OPS-DAG: lui [[CIB2:[at][0-7]]],0xb5ff0
-// OPS-DAG: lui [[CIB3:[at][0-7]]],0xb6ff0
-// OPS-DAG: addi {{[at][0-7]}},[[CIB0]],88
-// OPS-DAG: addi {{[at][0-7]}},[[CIB3]],89
-// OPS-DAG: addi {{[at][0-7]}},[[CIB2]],90
-// OPS-DAG: lui {{[at][0-7]}},0xc0000
