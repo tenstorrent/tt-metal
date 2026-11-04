@@ -288,6 +288,9 @@ inline void _llk_packer_set_math_semaphore_()
  *
  * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
  * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
+ * @note Call after the section's last PACR and before both the get(s) that release the bank and
+ *       @ref _update_dest_register_offset_: the half it clears is the one the packer's current offset selects, and it
+ *       releases nothing itself.
  */
 template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_pack_dest_section_clear_()
