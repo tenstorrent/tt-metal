@@ -262,3 +262,14 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   30, fabric gather 58, experts 198, fabric combine 64, shared 33. The fused decode-state block that exists behind
   `GLM53_DSA_DECODE_STATE=1` (29 + 8 ops -> 1 + 2) measured -0.7 ms per step on 2026-11-03 but moved the decode chain
   (pcc 0.847 vs 0.860 at S = 16); its decode gate runs after the combine diagnostics.
+* 01:50 **the combine's chain drift, resolved to the metric**: with the fabric gather + combine, the S = 32 decode
+  chain pcc is 0.826 (0.878 with the composite combine) and the ids diverge from position 6 -- yet (a) the op is exact
+  in isolation, with fresh data per replay and in the gather -> scale -> combine -> add -> all-reduce sequence under
+  one trace, (b) the same chain run EAGERLY reproduces 0.826341 and the same ids (not trace-specific), and (c) across
+  all 1386 calls of that eager chain the fabric combine is within 1 bf16 ulp of the composite computed on the same
+  input (max 1.4 % of |ref|, none over 0.1). The S = 32 chain through the KDA recurrence amplifies ulp-level
+  perturbations: the fabric all-reduce alone moved the same metric to 0.913 (+0.035), the combine to 0.826 (-0.05);
+  the prefill chain (0.9547) does not move. Rounding-moving changes are therefore judged by the per-call agreement
+  (this check), the prefill chain and the served evals; the S = 32 metric's noise band is measured next with the
+  composite's own alternative summation (`gate84_B4_ccl`). The device rounds the sums to nearest (unit diagnostic:
+  95 % of elements equal the round-to-nearest fp32 sum, the rest differ by summation order).
