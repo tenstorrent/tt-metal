@@ -401,6 +401,7 @@ def test_gelu_pytorch_tanh_maps_to_gelu_tanh(key):
     [
         ((1, 2), 4096, False, Mode.PREFILL, False),  # default: dim 4096 gathers the full width for the prefill norm
         ((1, 2), 4096, True, Mode.PREFILL, True),  # opted in
+        ((1, 2), 4096, True, "prefill", True),  # string modes (Transformer.process_hidden_states_after_prefill_trace)
         ((1, 2), 4096, True, Mode.DECODE, False),  # decode is unchanged
         ((1, 1), 4096, True, Mode.PREFILL, False),  # nothing to distribute on one device
         ((1, 2), 5120, False, Mode.PREFILL, True),  # dim > 4096 always distributes it
