@@ -18,11 +18,11 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
-# Kimi-K3's sc4 and sc1 are 4x4 stages, two per galaxy (its manifest's layout); the _8x4 configs keep
-# the one-stage-per-galaxy layout for hand comparisons and are in no CI leg.
+# Kimi-K3's and GLM-5.3's sc4 and sc1 are 4x4 stages, two per galaxy (their manifests' layout); the _8x4
+# configs keep the one-stage-per-galaxy layout for hand comparisons and GLM-5.3's MTP variants.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
-  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
+  kimi_k3|glm53)       MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -118,8 +118,34 @@ case "${MODEL}" in
       # Same 1M request and tail window as the trunk golden above, so the MTP compare reuses its window.
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
       PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
-      [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+      [ "${SCALE}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
     fi
+    case "${CONFIG}" in
+      sc4|sc1)
+        # The manifest (the MTP variants' too) describes a 4x4 stage: SP=4 on mesh axis 1, 2560-token chunks (640 tokens per chip,
+        # GLM's 8x4 per-chip load), TP-deduped KV and the slots that layout fits. Its 1064960 window is a
+        # multiple of the deduped cache's 16 x 256 = 4096-token bank quantum and of the chunk. Two ranks per
+        # galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two (all 78 layers) for sc1.
+        CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
+        PP_4X4_HOSTS=1
+        [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
+        PP_RANKS=$((2 * PP_4X4_HOSTS))
+        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+        # non-empty on every host before launch.
+        GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
+        PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
+        RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
+        ;;
+      *_8x4)
+        # One 8x4 stage per galaxy, SP=8 on axis 0, 5120-token chunks, at the 54 slots that layout fits
+        # (the MTP variants keep their manifest's slots). Exported to runner and producer, ahead of the
+        # manifest.
+        if [ "${MTP}" -eq 0 ] && [ "${SCALE}" = sc4 ]; then : "${PREFILL_NUM_USERS:=54}"; export PREFILL_NUM_USERS; fi
+        LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
+        RUNNER_ENV+=" ${LAYOUT_8X4}"
+        PRODUCER_ENV+=" ${LAYOUT_8X4}"
+        ;;
+    esac
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -279,6 +305,10 @@ export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 PRODUCER_LOG="${MR_DIR}/producer.log"
+# Written by the rank-crash watchdog: the rank logs that showed a traceback.
+CRASH_FLAG="${MR_DIR}/rank_crashed"
+# Written by the stall watchdog: when it fired and what it collected.
+STALL_FLAG="${MR_DIR}/stalled"
 
 SUMMARY_DONE=0
 emit_summary() {
@@ -293,6 +323,9 @@ emit_summary() {
 }
 
 cleanup() {
+  for pid in ${WATCHDOG_PID:-} ${STALL_WATCHDOG_PID:-}; do
+    kill "${pid}" 2>/dev/null || true
+  done
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     kill -- "-${RUNNER_PID}" 2>/dev/null || true
     timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
@@ -313,9 +346,20 @@ cleanup() {
       || echo "no drafter PCC lines -- were the dflash_* configs in the table?"
   fi
   mkdir -p "${EVIDENCE_DIR}"
-  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}"; do
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}" "${CRASH_FLAG}" "${STALL_FLAG}"; do
     [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
   done
+  # A failed request leaves the Inspector's dump (written on a dispatch timeout) on each host's
+  # local disk; pull it onto the shared evidence dir so the upload carries it.
+  if [ -n "${RUNNER_PID:-}" ] && [ "${PROD_RC:-1}" != 0 ]; then
+    IFS=, read -r -a INSPECT_HOSTS <<< "${RESOLVED_HOSTS}"
+    timeout 120 "${MPIRUN}" -np "${#INSPECT_HOSTS[@]}" --host "$(printf '%s:1,' "${INSPECT_HOSTS[@]}" | sed 's/,$//')" \
+      --map-by slot --bind-to none --allow-run-as-root \
+      bash -lc "src='${TT_METAL_HOME}/generated/inspector'; \
+        [ -d \"\${src}\" ] || exit 0; \
+        dst='${EVIDENCE_DIR}/inspector/'\$(hostname); mkdir -p \"\${dst}\" && cp -r \"\${src}/.\" \"\${dst}/\"" \
+      || echo "inspector collection failed (non-fatal)"
+  fi
   if [ -d "${RANKLOGS}" ]; then
     echo "==================== ranklog tails ===================="
     find "${RANKLOGS}" -type f | sort | while read -r f; do
@@ -440,6 +484,35 @@ setsid python3 "${TTRUN_PY}" \
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
 
+# A rank that dies leaves its peers blocked on it: mpirun waits for every rank, and a rank whose
+# device timed out can hang in teardown and never exit (run 40947298596 sat two hours after rank 1's
+# dispatch timeout until the job timeout killed the container, so the EXIT trap never copied the
+# rank logs). On the first uncaught exception in any rank or producer (the marker runner_utils'
+# install_crash_diagnostics prints; a handled exception's traceback does not count), give the other ranks a
+# grace period to write theirs, then stop both launches, killing a runner still alive 10 s after SIGTERM, as
+# cleanup() does; the script then fails through the EXIT trap as usual.
+RANK_CRASH_GRACE_SECS="${RANK_CRASH_GRACE_SECS:-60}"
+(
+  while kill -0 "${RUNNER_PID}" 2>/dev/null; do
+    CRASHED=$(find "${RANKLOGS}" -type f \( -name stderr -o -name '*.err' \) \
+      -exec grep -l -F "PREFILL_UNCAUGHT_EXCEPTION" {} + 2>/dev/null || true)
+    if [ -n "${CRASHED}" ]; then
+      printf '%s\n' "${CRASHED}" > "${CRASH_FLAG}"
+      echo "a rank crashed: ${CRASHED//$'\n'/ }; stopping all ranks in ${RANK_CRASH_GRACE_SECS}s" >&2
+      sleep "${RANK_CRASH_GRACE_SECS}"
+      kill -- "-${RUNNER_PID}" 2>/dev/null || true
+      timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
+      # The producer may not have launched yet; keep stopping it until the EXIT trap stops us.
+      while :; do
+        pkill -f -- "--output-filename ${RANKLOGS}/producer" 2>/dev/null || true
+        sleep 10
+      done
+    fi
+    sleep 10
+  done
+) &
+WATCHDOG_PID=$!
+
 # Bounds mesh bringup + weight load + warmup compile, not the chunk loop -- the table is published
 # once the runner starts serving. Scales with model depth, so it is sized for the deepest model on
 # the rig: Kimi-K3 at 93 layers over 4 ranks measured 42.6 min from step start to _serve_request
@@ -451,12 +524,11 @@ TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
 WAITED=0
 while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
   [ -f "${TABLE_PATH}" ] && break
-  kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
-  if [ -n "${VARIANT}" ] && [ $((WAITED % 60)) -eq 0 ] && [ "${WAITED}" -gt 0 ]; then
-    CRASHED=$(find "${RANKLOGS}" -type f -name '*.err' 2>/dev/null \
-      -exec grep -l -F "Traceback (most recent call last)" {} + 2>/dev/null || true)
-    [ -z "${CRASHED}" ] || { echo "a rank crashed ${WAITED}s in, before the KV table was published: ${CRASHED}"; exit 1; }
-  fi
+  kill -0 "${RUNNER_PID}" 2>/dev/null || {
+    echo "runner exited before publishing the KV table"
+    [ -f "${CRASH_FLAG}" ] && echo "a rank crashed: $(tr '\n' ' ' < "${CRASH_FLAG}")"
+    wait "${RUNNER_PID}"; exit 1;
+  }
   sleep 5
   WAITED=$((WAITED + 5))
 done
@@ -508,6 +580,65 @@ PY
     bash -lc "cd '${TT_METAL_HOME}'; export PYTHONPATH='${TT_METAL_HOME}'; exec python3 '${CHECK_PY}' '${TABLE_PATH}'"
 fi
 
+if [ -f "${CRASH_FLAG}" ]; then
+  echo "a rank crashed before the producer launched; tracebacks in: $(tr '\n' ' ' < "${CRASH_FLAG}")" >&2
+  exit 1
+fi
+
+# A hang that raises nothing -- no traceback for the crash watchdog, no op timeout -- otherwise runs to
+# the job timeout, which kills the container before the EXIT trap uploads a single rank log (run
+# 41537414509: all 8 GLM 4x4 ranks went silent in the first warmup chunk for two hours). Once the
+# request starts, the producer logs a push per chunk and the ranks keep writing, so no log growth for
+# PREFILL_STALL_SECS means the run is stuck. Then, before stopping it: every runner and producer prints
+# its Python stacks (faulthandler on SIGUSR1) into its rank log, and tt-triage dumps each host's devices
+# into TRIAGE_OUTPUT_DIR, which the job uploads. 0 disables it. Keep stall + triage under the leg's timeout.
+STALL_SECS="${PREFILL_STALL_SECS:-600}"
+STALL_TRIAGE_SECS="${PREFILL_STALL_TRIAGE_SECS:-600}"
+if [ "${STALL_SECS}" -gt 0 ]; then
+  (
+    # find fails until both paths exist, which pipefail and set -e would make fatal here.
+    log_bytes() { { find "${RANKLOGS}" "${PRODUCER_LOG}" -type f -printf '%s\n' 2>/dev/null || true; } | awk '{n += $1} END {print n + 0}'; }
+    on_hosts() {
+      IFS=, read -r -a STALL_HOSTS <<< "${RESOLVED_HOSTS}"
+      "${MPIRUN}" -np "${#STALL_HOSTS[@]}" --host "$(printf '%s:1,' "${STALL_HOSTS[@]}" | sed 's/,$//')" \
+        --map-by slot --bind-to none --tag-output --allow-run-as-root bash -lc "$1"
+    }
+    last=$(log_bytes)
+    since=$(date +%s)
+    while kill -0 "${RUNNER_PID}" 2>/dev/null; do
+      sleep 30
+      now=$(log_bytes)
+      if [ "${now}" != "${last}" ]; then
+        last=${now}
+        since=$(date +%s)
+        continue
+      fi
+      idle=$(($(date +%s) - since))
+      [ "${idle}" -ge "${STALL_SECS}" ] || continue
+      echo "STALL: no rank or producer log output for ${idle}s; collecting stacks and tt-triage, then stopping the run" >&2
+      echo "no log output for ${idle}s at $(date -u +%FT%TZ)" > "${STALL_FLAG}"
+      # Anchored on the interpreter, so the mpirun / bash wrappers whose command lines name the module
+      # are not signalled (SIGUSR1 would kill them).
+      on_hosts "pkill -USR1 -f '^python3 -m models.demos.common.prefill.runners.prefill_(runner|producer)' || true" \
+        || echo "stack dump signal failed (non-fatal)" >&2
+      sleep 15
+      on_hosts "D='${TRIAGE_OUTPUT_DIR:-${PREFILL_SUMMARIES}/triage}'/\$(hostname); mkdir -p \"\${D}\"; \
+        echo '${RUN_NAME}/${CONFIG} stall watchdog' > \"\${D}/job_info.txt\"; \
+        timeout ${STALL_TRIAGE_SECS} /opt/venv/bin/python3 '${TT_METAL_HOME}/tools/tt-triage.py' --disable-progress \
+          --triage-summary-path=\"\${D}/triage_summary.txt\" > \"\${D}/triage_output.txt\" 2>&1; \
+        echo \"tt-triage rc=\$? -> \${D}\"" \
+        || echo "tt-triage collection failed (non-fatal)" >&2
+      echo "stacks in the rank logs; tt-triage in ${TRIAGE_OUTPUT_DIR:-${PREFILL_SUMMARIES}/triage}" >> "${STALL_FLAG}"
+      kill -- "-${RUNNER_PID}" 2>/dev/null || true
+      while :; do
+        pkill -f -- "--output-filename ${RANKLOGS}/producer" 2>/dev/null || true
+        sleep 10
+      done
+    done
+  ) &
+  STALL_WATCHDOG_PID=$!
+fi
+
 set +e
 "${MPIRUN}" \
   --host "${HOSTS}" "${PRODUCER_PLACEMENT[@]}" --bind-to none --tag-output --allow-run-as-root \
@@ -535,6 +666,15 @@ set +e
     exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
+
+if [ -f "${STALL_FLAG}" ]; then
+  echo "stopped by the stall watchdog (producer rc=${PROD_RC}): $(tr '\n' ' ' < "${STALL_FLAG}")" >&2
+  exit 1
+fi
+if [ "${PROD_RC}" -ne 0 ] && [ -f "${CRASH_FLAG}" ]; then
+  echo "stopped after a rank crashed (producer rc=${PROD_RC}); tracebacks in: $(tr '\n' ' ' < "${CRASH_FLAG}")" >&2
+  exit 1
+fi
 
 if [ "${DFLASH}" = 1 ] && [ "${PROD_RC}" -eq 0 ] && ! grep -q "min_dflash_pcc=" "${PRODUCER_LOG}"; then
   echo "no rank reported a drafter KV PCC: the dflash caches were never checked" >&2

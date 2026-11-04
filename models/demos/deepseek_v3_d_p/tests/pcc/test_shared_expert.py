@@ -64,7 +64,12 @@ def shared_expert_sub_device(mesh_device):
     [
         # Every case runs the one prefill ISL, so the matmul program configs come out shaped the
         # way prefill builds them.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK27Config.EMB_SIZE, KimiK27Config.MOE_INTERMEDIATE_SIZE, ACTIVATION_SILU),
+        (
+            PREFILL_CHUNK_TOKENS_PER_CHIP,
+            KimiK27Config.EMB_SIZE,
+            KimiK27Config.MOE_INTERMEDIATE_SIZE,
+            ACTIVATION_SILU,
+        ),
         # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
         # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
         # the shared intermediate coincided and 6144 was never exercised here.

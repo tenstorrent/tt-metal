@@ -1926,15 +1926,23 @@
 
 # ===== Disaggregated prefill -- keep adjacent; trunk, DSpark and MTP entries each share a launcher =====
 
-# 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads GLM-5.3,
+# 4-galaxy (SC4) disaggregated prefill: an 8-rank background runner opens the meshes, loads GLM-5.3,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
 # reads it back and PCCs it against the golden KV cache.
 # A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
+# 8 stages of [4,4], SP on mesh axis 1: two ranks per galaxy, one per tray half, bound by tt-run
+# discovery along the hosts' cabled ring. The stage shape, 2560-token chunks (640 tokens per chip, as on
+# 8x4), the KV deduped over SP*TP, tracing and the slot count all come from the glm53 manifest.
+# run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) on every host first.
+# 55 slots at the 1M window: in the per-stage capacity probe (two stages per Galaxy via
+# PREFILL_PP_LAYER_OFFSET, a full 1M request at each N), stages 6-7, the tightest 10-layer pair, fit 55
+# traced and ran out of memory at 56; stages 0-1 fit at least 60 (PR #62125).
 # GLM-5.3 owns TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over
-# its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
+# its 21 `full` layers), and the pipeline split is layer-aware (snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC4"
+# run_multirank_pcc.sh's sc4_8x4 keeps the 4 stages of 8x4 for hand comparisons; no trunk leg runs it.
+- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1948,9 +1956,8 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
-      # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
-      # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
+      # Run 41223739729 (2026-10-31): 14 min for the job, with 408 chunks of 2560 and eight ranks loading
+      # their slices of the 4x4 cache from Weka at once. 60 keeps over 4x of that, as on 8x4.
       timeout: 60
       tier: 1
       release_ready: true
@@ -1991,8 +1998,9 @@
 
 # 4-galaxy (SC4) GLM-5.3 MTP KV share prefill KV accuracy and throughput: prefill computes MTP level 1 and
 # publishes its KV for all 4 of decode's MTP levels. Shares a launcher with the SC1 entry below. MTP is gated
-# against its own tail-trace golden, not the manifest golden the entries above use.
-- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, SC4"
+# against its own tail-trace golden, not the manifest golden the entries above use. 8 stages of [4,4], as
+# the trunk entry.
+- name: "(GLM-5.3-744B) MTP KV share prefill 8x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2015,8 +2023,10 @@
   sp_config: sc4
 
 
-
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
+# Single-galaxy rung of the trunk launcher: all 78 layers as two [4,4] stages, one per tray half, bound
+# by tt-run discovery on the intragalaxy descriptor, at one slot. The same 1M request as SC4, so the
+# scaling summary compares like for like.
+- name: "(GLM-5.3-744B) disaggregated prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2038,9 +2048,10 @@
 
 
 # Single-galaxy (SC1) GLM-5.3 MTP KV share prefill KV accuracy and throughput, same launcher as the SC4 entry
-# above and the control for it: one rank skips the D2D union-id transport, so a failure here is MTP prefill
-# itself. Runs the same 1M request as SC4, so the scaling summary has an SC1 baseline at every probe.
-- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
+# above and the control for it: both stages share one galaxy, so a failure here is not the cross-galaxy
+# hop. Runs the same 1M request as SC4, so the scaling summary has an SC1 baseline at every probe. Two
+# [4,4] stages, one per tray half, as the trunk SC1 entry.
+- name: "(GLM-5.3-744B) MTP KV share prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2048,7 +2059,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    echo "===== [1/2] (GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, runner ====="
+    echo "===== [1/2] (GLM-5.3-744B) MTP KV share prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, runner ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant mtp_kv_share || exit $?
     echo "===== [2/2] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
     (
