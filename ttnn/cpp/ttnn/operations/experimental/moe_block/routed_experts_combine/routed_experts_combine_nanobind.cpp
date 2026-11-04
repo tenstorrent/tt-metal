@@ -192,6 +192,39 @@ void bind_routed_experts_combine(nb::module_& mod) {
         },
         "The combine's credit policy: (CRED_THR, CRED_IDLE, CRED_AGE).");
     mod.def(
+        "routed_experts_combine_l1_plan",
+        [](MoEBlockResources& resources,
+           uint32_t max_tokens_per_expert,
+           uint32_t activation,
+           const flat_routed_expert::FlatLayoutOptions& layout,
+           const CombineConfig& combine,
+           uint32_t dispatch_group,
+           uint32_t head_port_cb) {
+            const auto l1 = plan_routed_experts_combine_l1(
+                resources, max_tokens_per_expert, activation, layout, combine, dispatch_group, head_port_cb);
+            nb::dict d;
+            d["layout"] = l1.flat.layout;
+            d["static_bytes"] = l1.static_bytes;
+            d["arena_bytes"] = l1.arena_bytes;
+            d["A"] = l1.plan->A;
+            d["D"] = l1.plan->D;
+            d["QP"] = l1.plan->QP;
+            d["QL"] = l1.plan->QL;
+            d["acc_on_ports"] = l1.plan->fused;
+            return d;
+        },
+        nb::arg("resources"),
+        nb::kw_only(),
+        nb::arg("max_tokens_per_expert"),
+        nb::arg("activation"),
+        nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
+        nb::arg("combine") = CombineConfig{},
+        nb::arg("dispatch_group"),
+        nb::arg("head_port_cb") = 0,
+        "Host-only what-if: the combine's L1 plan at a dispatch group as a dict (the flat layout fitted into its "
+        "arena, "
+        "static CB bytes, arena bytes, accumulators A, landing depth D, QP, QL, acc_on_ports).");
+    mod.def(
         "routed_experts_combine_static_cb_bytes",
         &routed_experts_combine_static_cb_bytes,
         nb::arg("resources"),

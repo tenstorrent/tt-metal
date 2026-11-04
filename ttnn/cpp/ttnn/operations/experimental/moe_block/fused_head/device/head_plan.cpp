@@ -290,8 +290,8 @@ std::string degradation(const HeadPlanned& chosen, const std::optional<HeadPlann
 
 using namespace head_plan_detail;
 
-ArenaMax arena_max_of(int64_t l1_free, uint32_t payload) {
-    return [l1_free, payload](uint32_t kb) { return arena_cap_of(l1_free, kb, payload); };
+ArenaMax arena_max_of(int64_t l1_free, uint32_t payload, int64_t cb_floor) {
+    return [l1_free, payload, cb_floor](uint32_t kb) { return arena_cap_of(l1_free, kb, payload, cb_floor); };
 }
 
 ArenaMax arena_max_fixed(int64_t bytes) {
@@ -609,7 +609,8 @@ std::string shape_checks(const HeadShape& shape) {
 }
 
 HeadFit head_plan_fit(const HeadShape& shape, const HeadFitOptions& options) {
-    return head_plan_fit(shape, arena_max_of(options.l1_free.value_or(kL1Free - kL1Margin), shape.payload), options);
+    return head_plan_fit(
+        shape, arena_max_of(options.l1_free.value_or(kL1Free - kL1Margin), shape.payload, options.cb_floor), options);
 }
 
 HeadFit head_plan_fit(const HeadShape& shape, const ArenaMax& arena_max, const HeadFitOptions& options) {

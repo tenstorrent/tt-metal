@@ -25,7 +25,7 @@ from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights
 
 R, C = 8, 4
 CHUNK = 5120
-ACCUMULATORS = 11  # (the combine planner's count for GLM-5.3 at 8x4, chunk 5120)
+ACCUMULATORS = 11  # (what the combine planner gives GLM-5.3 at 8x4, chunk 5120: the block derives it)
 CALLS = 20
 REPO = Path(__file__).resolve().parents[4]
 MOCK = "blackhole_galaxy" in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", "")
@@ -80,11 +80,12 @@ def test_moe_block_smoke(mesh):
         mesh, dims, mb.MoEBlockConfig(chunk_tokens=CHUNK, num_links=2, persist_l1_small=True), dtypes
     )
     try:
-        block = MoEBlock(mesh, res, dtypes=dtypes, accumulators=ACCUMULATORS, activation=fw.ACTS["silu"])
+        block = MoEBlock(mesh, res, dtypes=dtypes, activation=fw.ACTS["silu"])
+        assert block.accumulators == ACCUMULATORS, f"the combine planner's accumulators {block.accumulators}"
         host = lambda *s: ttnn.from_torch(torch.zeros(*s), dtype=ttnn.float32)
         head_w = mb.prepare_fused_head_weights(
             host(Is, H), host(Is, H), host(H, Is), None, host(E, H), host(E),
-            resources=res, dtypes=dtypes, accumulators=ACCUMULATORS,
+            resources=res, dtypes=dtypes, accumulators=block.accumulators,
         )  # fmt: skip
         EPC = E // N
         gids = [list(range(c * EPC, (c + 1) * EPC)) for c in range(N)]

@@ -18,8 +18,12 @@ namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d {
 // Every chip's own S rows sit at slots (r * C + c) * S + t of xbuf ([1, 1, N * S, W] ROW_MAJOR, DRAM interleaved);
 // route ([1, 1, 1, RW * S] uint32) holds their route words. Each row lands in the same slot of every chip its route
 // word names; xbuf is returned (filled in place).
-//  group: rows a reader -> sender hand-off (default: 8 if 2 W <= 7168, else 2); manifest_batch: manifest entries a
+//  group: rows a reader -> sender hand-off (default: dispatch_group(resources)); manifest_batch: manifest entries a
 //  stream batch; pack: rows a fabric packet (default: 2 when two rows fit the payload).
+// The row group the dispatch takes by default: the block's L1 plan's (BlockL1Plan.dispatch_group), else the largest
+// supported (kGroups).
+uint32_t dispatch_group(const MoEBlockResources& resources);
+
 Tensor sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,

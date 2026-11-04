@@ -41,9 +41,10 @@ PortWiring wiring(const MeshPlan& plan, ChipCoord chip, Dir d);
 // GMAX: the last END generation, (C - 1) + (R - 1) - 1.
 inline uint32_t gmax(const MeshTopology& topo) { return (topo.C - 1) + (topo.R - 1) - 1; }
 
-// The MoE exchange's row group: 8 rows while 2 x width <= 7168, else 2 (the CBs of
-// 2 x group rows stay small for wide rows).
-inline uint32_t default_group(uint32_t width) { return 2 * width <= 7168 ? 8 : 2; }
+// The row groups the dispatch supports (rows a reader -> sender hand-off; its port cores hold 2 x group rows). In the
+// MoE block the block's L1 plan picks one (BlockL1Plan.dispatch_group: the largest that leaves the block's plan as
+// the smallest does); on its own the dispatch takes the largest.
+inline constexpr std::array<uint32_t, 3> kGroups = {2, 4, 8};
 // Rows a fabric packet: 2 when two rows fit the payload.
 inline uint32_t default_pack(uint32_t row_bytes, size_t max_payload_bytes) {
     return 2 * static_cast<size_t>(row_bytes) <= max_payload_bytes ? 2 : 1;

@@ -51,6 +51,7 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         c.w_dtype,
         c.ordered,
         c.l1_free,
+        c.cb_floor,
         args.x.tensor_spec(),
         args.w.tensor_spec(),
         args.w_router.tensor_spec(),

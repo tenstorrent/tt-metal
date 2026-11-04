@@ -52,8 +52,9 @@ inline constexpr uint32_t kDestTiles = 8;          // se_engine3.dest_tiles()
 
 // x_gather3.port_cb_bytes: a port core's static packet CB at K step kb.
 int64_t port_cb_bytes(uint32_t kb, uint32_t payload, uint32_t group = 4);
-// se_engine3.arena_cap_of: L1 the arena may take from a free-L1 figure.
-int64_t arena_cap_of(int64_t l1_free, uint32_t kb, uint32_t payload);
+// se_engine3.arena_cap_of: L1 the arena may take from a free-L1 figure, above the head's own port CBs and cb_floor
+// bytes of other static CBs (the MoE block's programs that run in the same arena after the head).
+int64_t arena_cap_of(int64_t l1_free, uint32_t kb, uint32_t payload, int64_t cb_floor = 0);
 
 // lin2d.column_split
 std::vector<uint32_t> column_split(uint32_t n, uint32_t parts, uint32_t unit);

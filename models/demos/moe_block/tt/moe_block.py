@@ -37,7 +37,8 @@ class MoEBlockWeights:
 
 class MoEBlock:
     """One MoE block on ``mesh_device``. ``resources``: the block's MoEBlockResources on it; ``dtypes``: MoEDtypes;
-    ``accumulators``: the combine's accumulator count (the head's routing planner is planned for it);
+    ``accumulators``: the combine's accumulator count (the head's routing planner is planned for it); None: what the
+    combine planner gives (moe_block_plan, which also picks the dispatch's row group);
     ``max_tokens_per_expert`` / ``activation``: the flat routed experts' capacity and activation (gate_up_compute
     SE_ACT);
     ``layout`` / ``combine``: FlatLayoutOptions / CombineConfig (combine.n_acc is set to ``accumulators``).
@@ -50,8 +51,8 @@ class MoEBlock:
         resources,
         *,
         dtypes,
-        accumulators: int,
         activation: int,
+        accumulators: Optional[int] = None,
         max_tokens_per_expert: Optional[int] = None,
         layout=None,
         combine=None,
@@ -63,23 +64,32 @@ class MoEBlock:
         # l1_small_size that holds them: l1_small_bytes after the first call.)
         assert resources.config.persist_l1_small, "MoEBlock: create its resources with persist_l1_small=True"
         self.mb, self.mesh_device, self.resources, self.dtypes = mb, mesh_device, resources, dtypes
-        self.accumulators, self.l1_free = accumulators, l1_free
+        self.l1_free = l1_free
         chunk = resources.config.chunk_tokens
         if max_tokens_per_expert is None:  # (an expert sees each token at most once; the flat op is built for >= 256)
             max_tokens_per_expert = max(chunk, 256)
         if layout is None:
             layout = mb.FlatLayoutOptions()
         self.combine = combine if combine is not None else mb.CombineConfig()
-        self.combine.n_acc = accumulators
         self.expert_kw = dict(
             max_tokens_per_expert=max_tokens_per_expert,
             activation=activation,
             layout=layout,
             combine=self.combine,
         )
+        # (the block's plan, once per resources: the combine's accumulators and the dispatch's row group, which the
+        # ops take by default from then on)
+        self.plan = mb.moe_block_plan(
+            resources, dtypes=dtypes, accumulators=accumulators, l1_free=l1_free, **self.expert_kw
+        )
+        self.accumulators = self.plan.accumulators
+        self.combine.n_acc = self.accumulators
+        logger.info(
+            f"MoEBlock: accumulators {self.accumulators}, dispatch group {self.plan.l1.dispatch_group} ({self.plan.note})"
+        )
         # (plans the head and the combine once; every forward allocates this spec at the same L1 address)
         self.arena_spec = mb.moe_block_arena_spec(
-            resources, dtypes=dtypes, accumulators=accumulators, l1_free=l1_free, **self.expert_kw
+            resources, dtypes=dtypes, accumulators=self.accumulators, l1_free=l1_free, **self.expert_kw
         )
         self.exchange_spec = (
             None  # (the dispatch + combine's arena when the head's does not fit: the first call sets it)
@@ -88,13 +98,14 @@ class MoEBlock:
         self.chunk_words = None  # (a padded chunk's scalars given as ints: two persistent device words, rewritten)
         # (the head planner's DRAM fallback - a shape whose resident layouts do not fit the head's L1: x gathered over
         # TP into DRAM ahead of the head, which reloads it a row chunk at a time; the plan the op runs, same l1_free)
-        fit = mb.plan_fused_head(resources, dtypes, accumulators, l1_free)
+        fit = mb.plan_fused_head(resources, dtypes, self.accumulators, l1_free)
         self.x_dram = bool(fit.ok and len(fit.planned) and fit.planned[0].lay.xdram)
 
     def _one_arena_fits(self) -> bool:
-        """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers
-        (allocated top-down in the largest free L1 block, it reaches from the block's top down by its size), else two:
-        the head's, then the exchange's (planned above them). The real fix is those CBs in the arena."""
+        """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers -
+        the flat experts', the dispatch's and the fused head's ports' (allocated top-down in the largest free L1 block,
+        it reaches from the block's top down by its size), else two: the head's, then the exchange's (planned above
+        them). The real fix is those CBs in the arena."""
         free = int(ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
         kw = self.expert_kw
         static = self.mb.routed_experts_combine_static_cb_bytes(

@@ -105,11 +105,12 @@ struct HeadFit {
 
 // The arena cap a K step allows.
 using ArenaMax = std::function<int64_t(uint32_t kb)>;
-ArenaMax arena_max_of(int64_t l1_free, uint32_t payload);
+ArenaMax arena_max_of(int64_t l1_free, uint32_t payload, int64_t cb_floor = 0);
 ArenaMax arena_max_fixed(int64_t bytes);
 
 struct HeadFitOptions {
     std::optional<int64_t> l1_free;  // free L1 a core at the head's build (default kL1Free - kL1Margin)
+    int64_t cb_floor = 0;  // other programs' static CBs under the arena (arena_cap_of: the MoE block's flat + dispatch)
     bool largest = true;   // on an L1 refusal, also the largest rows a mesh row that fit
     bool explain = true;   // the unconstrained pick and the L1 note
     bool fallback = true;  // MoEBlockConfig.head_dram_fallback

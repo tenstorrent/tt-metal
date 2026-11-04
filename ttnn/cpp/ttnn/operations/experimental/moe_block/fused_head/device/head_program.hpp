@@ -66,6 +66,7 @@ struct HeadProgramConfig {
     bool ordered = true;                    // MoEBlockConfig.deterministic
     uint32_t handoff_bytes = 16;            // MoEBlockConfig.handoff_bytes()
     int64_t l1_free = kL1Free - kL1Margin;  // the free L1 the plan assumed (the engine sizes its arena under its cap)
+    int64_t cb_floor = 0;                   // the other static CBs under the arena the plan assumed (arena_cap_of)
 
     bool operator==(const HeadProgramConfig&) const = default;
 };

@@ -18,6 +18,22 @@ class MeshDevice;
 
 namespace ttnn::operations::experimental::moe_block {
 
+class MoEBlockResources;
+
+// The block's L1 plan (block/moe_block_arena.hpp moe_block_plan), kept in the resources under kBlockL1Plan: what the
+// block's ops read when they run as one block around a shared arena. Absent: an op on its own.
+struct BlockL1Plan {
+    uint32_t dispatch_group = 0;  // the dispatch's row group
+    // the static CBs of the block's programs that run in the arena after the head (the flat experts, the dispatch):
+    // the head's arena stays above them
+    uint32_t head_cb_floor = 0;
+    // the head's own static CBs (its ports' packet CB): the combine's arena stays above them
+    uint32_t head_port_cb = 0;
+};
+inline constexpr const char* kBlockL1Plan = "moe_block/l1";
+// The resources' block L1 plan, or nullptr.
+const BlockL1Plan* block_l1_plan(const MoEBlockResources& resources);
+
 // L1 the block takes after an op is planned (the fused tail's kKeptLater).
 inline constexpr uint32_t kL1KeptLater = 44 * 1024;
 

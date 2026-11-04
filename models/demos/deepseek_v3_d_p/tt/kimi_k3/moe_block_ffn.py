@@ -52,7 +52,8 @@ class MoEBlockFfnOptions:
         bit-identical in any landing order); None: no snap.
     words_slab_bytes: the persistent words' packed L1_SMALL slab, bytes a core (0: a tensor a word set); None: the
         MoEBlockConfig default.
-    accumulators: the combine's accumulator count; None: the model's (GLM-5.3 11, Kimi-K3 15).
+    accumulators: the combine's accumulator count; None: what the combine planner gives (GLM-5.3 / Kimi-K3 at 8x4
+        chunk 5120: 11 / 15).
     gather_experts: a layer's routed-expert sources go to DRAM this many local experts at a time while their faces are
         gathered into the flat layout (all of them next to the laid-out weights held a K3 layer twice: 65 MB a bank)."""
 
@@ -257,13 +258,11 @@ class TtK3MoEBlockFfn:
             dtypes = mb.MoEDtypes()
             t0 = time.time()
             res = mb.MoEBlockResources(self.mesh, self.dims, cfg, dtypes)
-            # (the combine's accumulators at 8x4, chunk 5120: GLM-5.3 11, Kimi-K3 15)
-            acc = opts.accumulators or (11 if self.dims.latent_dim is None else 15)
             block = MoEBlock(
                 self.mesh,
                 res,
                 dtypes=dtypes,
-                accumulators=acc,
+                accumulators=opts.accumulators,  # (None: the combine planner's)
                 max_tokens_per_expert=max(chunk, 256),
                 activation=flat_weights_module().ACTS[self.act],
                 # (the flat plan's own choices: the gate/up read pieces from its weight block's bytes, the sub-blocks

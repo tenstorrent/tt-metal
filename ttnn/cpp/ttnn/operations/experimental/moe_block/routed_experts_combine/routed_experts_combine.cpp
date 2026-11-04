@@ -9,10 +9,12 @@
 #include <tt_stl/assert.hpp>
 
 #include "device/routed_experts_combine_device_operation.hpp"
+#include "ttnn/operations/experimental/moe_block/common/l1_budget.hpp"
 #include "ttnn/operations/experimental/moe_block/common/moe_block_resources.hpp"
 #include "ttnn/operations/experimental/moe_block/flat_routed_expert/device/flat_program.hpp"
 #include "ttnn/operations/experimental/moe_block/flat_routed_expert/flat_routed_expert.hpp"
 #include "ttnn/operations/experimental/moe_block/sparse_dispatch_2d/device/sparse_dispatch_2d_plan.hpp"
+#include "ttnn/operations/experimental/moe_block/sparse_dispatch_2d/sparse_dispatch_2d.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
@@ -62,48 +64,91 @@ fre::FlatRoutedExpertConfig base_flat_config(
     return cfg;
 }
 
-// L1 a core the block's own programs that run while its arena is allocated (the dispatch, the flat experts + the
-// combine) take for their static circular buffers: the larger of the flat program's and the dispatch's (its manifest
-// rings and CBs on the port cores).
-uint32_t static_cb_bytes(MoEBlockResources& res, const fre::FlatRoutedExpertPlan& fp) {
+// L1 a core the static circular buffers of the flat program and the dispatch (its manifest rings and CBs on the port
+// cores, at this row group) take: the larger.
+uint32_t static_cb_bytes(MoEBlockResources& res, const fre::FlatRoutedExpertPlan& fp, uint32_t group) {
     const auto& topo = res.topology();
     const uint32_t N = topo.num_chips(), S = res.config().chunk_tokens / N, W = res.dims().routed_width();
     const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, S);
     return std::max(
-        align64(fp.static_l1_bytes),
-        align64(ml.total_entries * 16ull) + dispatch_static_cb_bytes(N, S, W, sparse_dispatch_2d::default_group(W)));
+        align64(fp.static_l1_bytes), align64(ml.total_entries * 16ull) + dispatch_static_cb_bytes(N, S, W, group));
 }
 
-// The flat expert's config for the combine's arena and that arena's bytes a core: the caller's layout when its plan
-// fits the arena the combine gets (the largest free L1 block less what stays below it, or combine.arena_bytes), else
-// the layout with that arena as its budget (the flat plan fits it: FlatLayoutOptions.arena_bytes) - a smaller plan
-// leaves the arena at least as large, so the fitted plan still fits.
-struct FlatFit {
-    fre::FlatRoutedExpertConfig cfg;
-    uint32_t arena_bytes = 0;
-};
-FlatFit fit_flat(
+// The cells the flat plan leaves (k3 combine_cells), row-major.
+std::vector<CoreCoord> free_cells(MoEBlockResources& res, const fre::FlatRoutedExpertPlan& fp) {
+    const auto grid = res.mesh_device().compute_with_storage_grid_size();
+    const auto taken = fp.arena_cores();
+    std::vector<CoreCoord> out;
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            if (std::none_of(taken.begin(), taken.end(), [&](const CoreCoord& c) { return c.x == x && c.y == y; })) {
+                out.emplace_back(x, y);
+            }
+        }
+    }
+    return out;
+}
+
+// The block's L1 plan's group and head ports when the resources hold one, else the dispatch's own default and none.
+std::pair<uint32_t, uint32_t> block_group_and_head_port(const MoEBlockResources& res) {
+    const BlockL1Plan* l1 = block_l1_plan(res);
+    return {sparse_dispatch_2d::dispatch_group(res), l1 ? l1->head_port_cb : 0u};
+}
+
+}  // namespace routed_experts_combine_detail
+
+CombineL1Plan plan_routed_experts_combine_l1(
     MoEBlockResources& res,
     uint32_t m,
     uint32_t activation,
-    const fre::FlatLayoutOptions& layout,
-    const CombineConfig& combine) {
+    const flat_routed_expert::FlatLayoutOptions& layout,
+    const CombineConfig& combine,
+    uint32_t group,
+    uint32_t head_port_cb) {
+    using namespace routed_experts_combine_detail;
     auto& mesh = res.mesh_device();
-    FlatFit f{base_flat_config(res, m, activation, layout), combine.arena_bytes};
+    const auto& cfg = res.config();
+    const uint32_t N = res.topology().num_chips();
+    TT_FATAL(cfg.chunk_tokens % N == 0, "routed_experts_combine: chunk {} over {} chips", cfg.chunk_tokens, N);
+    // The flat expert as the caller gave it when its plan fits the arena the combine gets, else with that arena as
+    // its budget (FlatLayoutOptions.arena_bytes: the flat plan fits it) - a smaller plan leaves the arena at least as
+    // large, so the fitted plan still fits.
+    CombineL1Plan out;
+    out.flat = base_flat_config(res, m, activation, layout);
+    out.arena_bytes = combine.arena_bytes;
+    std::shared_ptr<const flat_routed_expert::FlatRoutedExpertPlan> fp;
     for (uint32_t i = 0; i < 4; ++i) {
-        const auto fp = fre::flat_routed_expert_plan(mesh, f.cfg);
-        if (combine.arena_bytes == 0) {
-            const uint32_t reserve = exchange_arena_reserve(static_cb_bytes(res, *fp));
+        fp = fre::flat_routed_expert_plan(mesh, out.flat);
+        out.static_bytes = static_cb_bytes(res, *fp, group);
+        if (combine.arena_bytes == 0) {  // (the largest free L1 block less what stays below the arena)
+            const uint32_t reserve = exchange_arena_reserve(std::max(out.static_bytes, head_port_cb));
             const auto stats = mesh.allocator()->get_statistics(tt::tt_metal::BufferType::L1);
-            f.arena_bytes = exchange_arena_bytes(static_cast<uint32_t>(stats.largest_free_block_bytes), reserve);
+            out.arena_bytes = exchange_arena_bytes(static_cast<uint32_t>(stats.largest_free_block_bytes), reserve);
         }
-        if (fp->arena_tiles * 2048 <= f.arena_bytes || layout.arena_bytes > 0) {
-            return f;  // (a caller's own budget is kept: make_state checks it against the arena)
+        if (fp->arena_tiles * 2048 <= out.arena_bytes || layout.arena_bytes > 0) {
+            break;  // (a caller's own budget is kept: checked below)
         }
-        f.cfg.layout.arena_bytes = static_cast<int32_t>(f.arena_bytes);
+        out.flat.layout.arena_bytes = static_cast<int32_t>(out.arena_bytes);
     }
-    return f;
+    TT_FATAL(
+        out.arena_bytes >= fp->arena_tiles * 2048,
+        "routed_experts_combine: the arena {} KB < the flat expert's {} KB",
+        out.arena_bytes >> 10,
+        (fp->arena_tiles * 2048) >> 10);
+    out.cells = free_cells(res, *fp);
+    CombinePlanInputs in;
+    in.S = cfg.chunk_tokens / N;
+    in.W = res.dims().routed_width();
+    in.cells = out.cells;
+    in.n_acc = combine.n_acc;
+    in.mode = combine.mode;
+    in.depth = combine.depth;
+    in.arena_bytes = out.arena_bytes;
+    out.plan = make_combine_plan(mesh, res, in);
+    return out;
 }
+
+namespace routed_experts_combine_detail {
 
 CombineState make_state(
     MoEBlockResources& res,
@@ -113,47 +158,24 @@ CombineState make_state(
     const CombineConfig& combine,
     uint32_t rows_cap) {
     auto& mesh = res.mesh_device();
-    const auto& cfg = res.config();
-    const auto& topo = res.topology();
-    const uint32_t N = topo.num_chips();
-    TT_FATAL(cfg.chunk_tokens % N == 0, "routed_experts_combine: chunk {} over {} chips", cfg.chunk_tokens, N);
+    const uint32_t N = res.topology().num_chips();
     CombineState s;
     s.combine = combine;
     s.layout = layout;
-    const FlatFit fit = fit_flat(res, m, activation, layout, combine);
-    s.flat_config = fit.cfg;
+    // (in the block: its L1 plan's dispatch group and the head's ports below the shared arena)
+    const auto [group, head_port] = block_group_and_head_port(res);
+    const CombineL1Plan l1 = plan_routed_experts_combine_l1(res, m, activation, layout, combine, group, head_port);
+    s.flat_config = l1.flat;
     s.flat = fre::ensure_flat_routed_expert_resources(res, s.flat_config);
     s.flat_config = fre::with_combine_overlap(s.flat_config, *s.flat.plan, true);
-    const auto& fp = *s.flat.plan;
-    // the cells the flat plan leaves (k3 combine_cells), its y writers
-    const auto grid = mesh.compute_with_storage_grid_size();
-    const auto taken = fp.arena_cores();
-    for (uint32_t y = 0; y < grid.y; ++y) {
-        for (uint32_t x = 0; x < grid.x; ++x) {
-            if (std::none_of(taken.begin(), taken.end(), [&](const CoreCoord& c) { return c.x == x && c.y == y; })) {
-                s.cells.emplace_back(x, y);
-            }
-        }
-    }
-    s.handoff.writers = fre::flat_y_writers(fp);
-
-    CombinePlanInputs in;
-    in.S = cfg.chunk_tokens / N;
-    in.W = res.dims().routed_width();
-    in.cells = s.cells;
-    in.n_acc = combine.n_acc;
-    in.mode = combine.mode;
-    in.depth = combine.depth;
-    in.arena_bytes = fit.arena_bytes;  // (the largest free L1 block less what stays below it, or the caller's)
-    TT_FATAL(
-        in.arena_bytes >= fp.arena_tiles * 2048,
-        "routed_experts_combine: the arena {} KB < the flat expert's {} KB",
-        in.arena_bytes >> 10,
-        (fp.arena_tiles * 2048) >> 10);
-    s.plan = make_combine_plan(mesh, res, in);
+    s.cells = l1.cells;
+    s.handoff.writers = fre::flat_y_writers(*s.flat.plan);
+    s.plan = l1.plan;
+    const uint32_t S = s.plan->S, W = s.plan->W;
 
     // the call's arena: every worker core, the combine's bytes then the writers' words (rows of 64 B)
-    const uint32_t rows = in.arena_bytes / 64 + kWriterWordsRows;
+    const auto grid = mesh.compute_with_storage_grid_size();
+    const uint32_t rows = l1.arena_bytes / 64 + kWriterWordsRows;
     const CoreRangeSet all(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
     s.arena_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({static_cast<uint32_t>(grid.x * grid.y) * rows, 32}),
@@ -169,10 +191,10 @@ CombineState make_state(
         "routed_experts_combine/hcache",
         rm_spec(ttnn::Shape({8, hcache_page_bytes(N) / 4}), DataType::UINT32, DRAM_MEMORY_CONFIG));
     s.out = res.persistent_tensor(
-        "routed_experts_combine/out", rm_spec(ttnn::Shape({1, 1, in.S, in.W}), DataType::BFLOAT16, DRAM_MEMORY_CONFIG));
+        "routed_experts_combine/out", rm_spec(ttnn::Shape({1, 1, S, W}), DataType::BFLOAT16, DRAM_MEMORY_CONFIG));
     s.rows_cap = rows_cap;
     s.y = res.persistent_tensor(
-        "routed_experts_combine/y", rm_spec(ttnn::Shape({rows_cap, in.W}), DataType::BFLOAT16, DRAM_MEMORY_CONFIG));
+        "routed_experts_combine/y", rm_spec(ttnn::Shape({rows_cap, W}), DataType::BFLOAT16, DRAM_MEMORY_CONFIG));
     if (s.plan->perchip) {
         const auto& lut16 = s.plan->lut;
         std::vector<uint32_t> words((lut16.size() + 1) / 2, 0);
@@ -212,8 +234,10 @@ uint32_t routed_experts_combine_static_cb_bytes(
     uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout) {
     using namespace routed_experts_combine_detail;
-    const auto fit = fit_flat(resources, max_tokens_per_expert, activation, layout, CombineConfig{});
-    return static_cb_bytes(resources, *fre::flat_routed_expert_plan(resources.mesh_device(), fit.cfg));
+    const auto [group, head_port] = block_group_and_head_port(resources);
+    const auto l1 = plan_routed_experts_combine_l1(
+        resources, max_tokens_per_expert, activation, layout, CombineConfig{}, group, head_port);
+    return std::max(l1.static_bytes, head_port);
 }
 
 tt::tt_metal::TensorSpec routed_experts_combine_arena_spec(

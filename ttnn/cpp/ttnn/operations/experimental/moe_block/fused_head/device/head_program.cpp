@@ -636,7 +636,7 @@ std::shared_ptr<const HeadModel> make_head_model(
     if (lay.on_engine) {
         ea.router = std::make_pair(sh.E / 32, sh.H / G / 32);
     }
-    ea.arena_max = arena_cap_of(config.l1_free, lay.KB, sh.payload);
+    ea.arena_max = arena_cap_of(config.l1_free, lay.KB, sh.payload, config.cb_floor);
     ea.w_dtype = sh.w_dtype;
     ea.xring = lay.xdram ? 2 : 0;
     h.eng.emplace(ea);

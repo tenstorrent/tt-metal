@@ -9,6 +9,7 @@
 
 #include "device/sparse_dispatch_2d_device_operation.hpp"
 #include "device/sparse_dispatch_2d_plan.hpp"
+#include "ttnn/operations/experimental/moe_block/common/l1_budget.hpp"
 
 namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d {
 
@@ -41,6 +42,11 @@ const State& state_of(MoEBlockResources& resources) {
 
 }  // namespace sparse_dispatch_2d_detail
 
+uint32_t dispatch_group(const MoEBlockResources& resources) {
+    const BlockL1Plan* l1 = block_l1_plan(resources);
+    return l1 ? l1->dispatch_group : kGroups.back();
+}
+
 Tensor sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,
@@ -50,11 +56,10 @@ Tensor sparse_dispatch_2d(
     std::optional<uint32_t> pack) {
     using namespace sparse_dispatch_2d_detail;
     const State& state = state_of(resources);
-    const uint32_t width = xbuf.logical_shape()[-1];
     const uint32_t row_bytes = xbuf.buffer()->aligned_page_size();
     const SparseDispatch2dParams params{
         .plan_key = resources.plan_key(),
-        .group = group.value_or(default_group(width)),
+        .group = group.value_or(dispatch_group(resources)),
         .manifest_batch = manifest_batch,
         .pack = pack.value_or(default_pack(row_bytes, resources.fabric_max_payload_bytes())),
         .ports = state.ports,

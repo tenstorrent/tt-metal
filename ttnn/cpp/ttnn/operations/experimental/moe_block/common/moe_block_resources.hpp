@@ -103,6 +103,12 @@ public:
     const T& plan(const std::string& name, F&& make) {
         return *plan_ptr<T>(name, std::forward<F>(make));
     }
+    // A plan made earlier under `name`, or nullptr (an op reading what another op of the block planned).
+    template <typename T>
+    const T* find_plan(const std::string& name) const {
+        auto it = plans_.find(name);
+        return it == plans_.end() ? nullptr : std::any_cast<std::shared_ptr<const T>>(it->second).get();
+    }
     // The same plan as a shared pointer, for an op that keeps it past the resources' release() (e.g. in a cached
     // program's shared variables).
     template <typename T, typename F>

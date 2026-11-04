@@ -11,6 +11,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
+#include "ttnn/operations/experimental/moe_block/common/l1_budget.hpp"
 #include "ttnn/operations/experimental/moe_block/common/mesh_routing.hpp"
 #include "ttnn/operations/experimental/moe_block/common/moe_block_config.hpp"
 #include "ttnn/operations/experimental/moe_block/common/moe_block_resources.hpp"
@@ -97,10 +98,27 @@ int64_t fused_head_l1_free(MoEBlockResources& resources, std::optional<int64_t> 
         "fused_head/l1_free", [&] { return fused_head_l1_detail::measured_free_l1(resources.mesh_device()); });
 }
 
+namespace fused_head_l1_detail {
+// The other static CBs under the head's arena: the caller's, else the block's L1 plan's.
+int64_t cb_floor_of(const MoEBlockResources& resources, std::optional<int64_t> cb_floor) {
+    if (cb_floor) {
+        return *cb_floor;
+    }
+    const BlockL1Plan* l1 = block_l1_plan(resources);
+    return l1 ? int64_t(l1->head_cb_floor) : 0;
+}
+}  // namespace fused_head_l1_detail
+
 const HeadFit& plan_fused_head(
-    MoEBlockResources& resources, const MoEDtypes& dtypes, uint32_t accumulators, std::optional<int64_t> l1_free) {
+    MoEBlockResources& resources,
+    const MoEDtypes& dtypes,
+    uint32_t accumulators,
+    std::optional<int64_t> l1_free,
+    std::optional<int64_t> cb_floor) {
     const int64_t l1 = fused_head_l1_free(resources, l1_free);
-    const std::string name = "fused_head/plan/A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) + "/w" +
+    const int64_t floor = fused_head_l1_detail::cb_floor_of(resources, cb_floor);
+    const std::string name = "fused_head/plan/A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) +
+                             "/floor_" + std::to_string(floor) + "/w" +
                              std::to_string(static_cast<int>(dtypes.shared_weights));
     return resources.plan<HeadFit>(name, [&] {
         HeadFit f;
@@ -119,6 +137,7 @@ const HeadFit& plan_fused_head(
             dtypes.shared_weights);
         HeadFitOptions o;
         o.l1_free = l1;
+        o.cb_floor = floor;
         o.fallback = resources.config().head_dram_fallback;
         return head_plan_fit(shape, o);
     });
@@ -136,9 +155,9 @@ TensorSpec dram_spec(uint32_t rows, uint32_t cols, DataType dt, Layout layout) {
         tt::tt_metal::TensorLayout(dt, tt::tt_metal::PageConfig(layout), ttnn::DRAM_MEMORY_CONFIG));
 }
 
-std::string key_of(uint32_t accumulators, int64_t l1, DataType w) {
-    return "A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) + "/w" +
-           std::to_string(static_cast<int>(w));
+std::string key_of(uint32_t accumulators, int64_t l1, int64_t floor, DataType w) {
+    return "A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) + "/floor_" + std::to_string(floor) +
+           "/w" + std::to_string(static_cast<int>(w));
 }
 
 // The head's persistent tensors (its outputs and the routing exchange's), in an inputs template.
@@ -220,9 +239,10 @@ const FusedHeadSetup& setup_fused_head(
     MoEBlockResources& resources, const MoEDtypes& dtypes, uint32_t accumulators, std::optional<int64_t> l1_free) {
     using namespace fused_head_entry_detail;
     const int64_t l1 = fused_head_l1_free(resources, l1_free);
-    const std::string key = key_of(accumulators, l1, dtypes.shared_weights);
+    const int64_t floor = fused_head_l1_detail::cb_floor_of(resources, std::nullopt);
+    const std::string key = key_of(accumulators, l1, floor, dtypes.shared_weights);
     return resources.plan<FusedHeadSetup>("fused_head/setup/" + key, [&] {
-        const HeadFit& fit = plan_fused_head(resources, dtypes, accumulators, l1);
+        const HeadFit& fit = plan_fused_head(resources, dtypes, accumulators, l1, floor);
         TT_FATAL(fit.ok, "fused_head: the head does not fit: {}", fit.why);
         const auto& dims = resources.dims();
         const auto& cfg = resources.config();
@@ -247,6 +267,7 @@ const FusedHeadSetup& setup_fused_head(
         pc.ordered = cfg.deterministic;
         pc.handoff_bytes = cfg.handoff_bytes();
         pc.l1_free = l1;
+        pc.cb_floor = floor;
         setup.model = make_head_model(mesh, pc, resources.port_luts());
         for (const auto& spec : head_words(*setup.model)) {
             const auto& t = resources.persistent_words("fused_head/" + key + "/" + spec.name, spec.cores, spec.words);

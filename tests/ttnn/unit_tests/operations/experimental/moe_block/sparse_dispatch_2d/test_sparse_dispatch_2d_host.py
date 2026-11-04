@@ -54,7 +54,7 @@ def test_streams_land_in_inputs():
 
 
 def test_defaults():
-    # (tt_k3_token_split_moe.dispatch: 8 rows a group while 2 W <= 7168, else 2; pack 2 when two rows fit a packet)
-    assert mb.sparse_dispatch_2d_defaults(3584, 7168, 7232) == (8, 1)
-    assert mb.sparse_dispatch_2d_defaults(6144, 12288, 12352) == (2, 1)
-    assert mb.sparse_dispatch_2d_defaults(2048, 4096, 8192) == (8, 2)
+    # (on its own: 8 rows a group - in the MoE block its L1 plan picks the group; pack 2 when two rows fit a packet)
+    assert mb.sparse_dispatch_2d_defaults(7168, 7232) == (8, 1)
+    assert mb.sparse_dispatch_2d_defaults(12288, 12352) == (8, 1)
+    assert mb.sparse_dispatch_2d_defaults(4096, 8192) == (8, 2)

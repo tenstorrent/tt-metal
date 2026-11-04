@@ -10,7 +10,13 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
+#include "moe_block_resources.hpp"
+
 namespace ttnn::operations::experimental::moe_block {
+
+const BlockL1Plan* block_l1_plan(const MoEBlockResources& resources) {
+    return resources.find_plan<BlockL1Plan>(kBlockL1Plan);
+}
 
 uint32_t free_cb_l1_bytes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t margin_bytes, uint32_t cap_bytes) {

@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "block/moe_block_arena.hpp"
 #include "common/common_nanobind.hpp"
@@ -28,6 +29,43 @@ void bind_moe_block(nb::module_& experimental) {
     flat_routed_expert::bind_flat_routed_expert(mod);
     routed_experts_combine::bind_routed_experts_combine(mod);
     fused_tail::bind_fused_tail(mod);
+
+    nb::class_<BlockL1Plan>(mod, "BlockL1Plan", "The block's L1 plan (moe_block_plan).")
+        .def_ro("dispatch_group", &BlockL1Plan::dispatch_group)
+        .def_ro("head_cb_floor", &BlockL1Plan::head_cb_floor)
+        .def_ro("head_port_cb", &BlockL1Plan::head_port_cb);
+    nb::class_<MoEBlockPlan>(mod, "MoEBlockPlan", "The block's plan (moe_block_plan).")
+        .def_ro("accumulators", &MoEBlockPlan::accumulators)
+        .def_ro("l1", &MoEBlockPlan::l1)
+        .def_ro("note", &MoEBlockPlan::note);
+    mod.def(
+        "moe_block_plan",
+        [](MoEBlockResources& resources,
+           const MoEDtypes& dtypes,
+           std::optional<uint32_t> accumulators,
+           uint32_t max_tokens_per_expert,
+           uint32_t activation,
+           const flat_routed_expert::FlatLayoutOptions& layout,
+           const routed_experts_combine::CombineConfig& combine,
+           std::optional<int64_t> l1_free) {
+            return moe_block_plan(
+                resources, dtypes, accumulators, max_tokens_per_expert, activation, layout, combine, l1_free);
+        },
+        nb::arg("resources"),
+        nb::kw_only(),
+        nb::arg("dtypes"),
+        nb::arg("accumulators") = nb::none(),
+        nb::arg("max_tokens_per_expert"),
+        nb::arg("activation"),
+        nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
+        nb::arg("combine") = routed_experts_combine::CombineConfig{},
+        nb::arg("l1_free") = nb::none(),
+        R"doc(
+        The block's plan, made once per resources (before its arena spec and its ops): the combine's accumulators
+        (accumulators, else what the combine planner gives) and the dispatch's row group (the largest supported group
+        that leaves the block's plan as the smallest group does), which the block's ops then take by default.
+        Arguments as moe_block_arena_spec's.
+        )doc");
 
     mod.def(
         "moe_block_arena_spec",

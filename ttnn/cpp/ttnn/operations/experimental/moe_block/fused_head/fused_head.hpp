@@ -54,12 +54,14 @@ int64_t fused_head_l1_free(MoEBlockResources& resources, std::optional<int64_t> 
 
 // The fused head's whole host plan on the block's resources, computed once and kept in the resources
 // ("fused_head/plan/..."): model_checks, then head_plan_fit with config.head_dram_fallback, at
-// fused_head_l1_free(resources, l1_free) - the plan the op runs.
+// fused_head_l1_free(resources, l1_free) - the plan the op runs. cb_floor: the other static CBs under the head's arena
+// (default: the block's L1 plan's head_cb_floor when the resources hold one, else 0).
 const HeadFit& plan_fused_head(
     MoEBlockResources& resources,
     const MoEDtypes& dtypes,
     uint32_t accumulators,
-    std::optional<int64_t> l1_free = std::nullopt);
+    std::optional<int64_t> l1_free = std::nullopt,
+    std::optional<int64_t> cb_floor = std::nullopt);
 
 // The head's outputs (the resources' persistent tensors, rewritten every call).
 struct FusedHeadOutputs {

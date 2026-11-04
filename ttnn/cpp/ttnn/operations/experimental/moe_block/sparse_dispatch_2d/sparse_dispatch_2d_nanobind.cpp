@@ -37,7 +37,7 @@ void bind_sparse_dispatch_2d(nb::module_& mod) {
                 resources: the block's MoEBlockResources (port cores, semaphore words, plan key).
 
             Keyword Args:
-                group: rows a reader-to-sender hand-off; default 8 when 2 * W <= 7168, else 2.
+                group: rows a reader-to-sender hand-off; default the block's L1 plan's (moe_block_plan), else 8.
                 manifest_batch: manifest entries a stream sends at once (default 16).
                 pack: rows a fabric packet (1 or 2); default 2 when two rows fit the fabric payload.
 
@@ -87,13 +87,17 @@ void bind_sparse_dispatch_2d(nb::module_& mod) {
 
     mod.def(
         "sparse_dispatch_2d_defaults",
-        [](uint32_t width, uint32_t row_bytes, size_t max_payload_bytes) {
-            return nb::make_tuple(default_group(width), default_pack(row_bytes, max_payload_bytes));
+        [](uint32_t row_bytes, size_t max_payload_bytes) {
+            return nb::make_tuple(kGroups.back(), default_pack(row_bytes, max_payload_bytes));
         },
-        nb::arg("width"),
         nb::arg("row_bytes"),
         nb::arg("max_payload_bytes"),
-        "Host-only: (group, pack) the op picks for rows of `width` elements, `row_bytes` a page.");
+        "Host-only: (group, pack) the op picks on its own (no block L1 plan) for rows of `row_bytes` a page.");
+    mod.def(
+        "sparse_dispatch_2d_group",
+        &dispatch_group,
+        nb::arg("resources"),
+        "The row group the dispatch takes by default on these resources (the block's L1 plan's, else 8).");
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d
