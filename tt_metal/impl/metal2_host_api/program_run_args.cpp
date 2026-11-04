@@ -140,16 +140,30 @@ static void report_tensor_arg_mismatch(
     const TensorSpec& expected_spec,
     const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
+        // Checked in two parts, because the alignment is the one component of tensor_layout that
+        // relax_tensor_alignment frees.
+        const TensorLayout& runtime_layout = runtime_spec.tensor_layout();
+        const TensorLayout& expected_layout = expected_spec.tensor_layout();
         TT_FATAL(
-            runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
+            runtime_layout.get_data_type() == expected_layout.get_data_type() &&
+                runtime_layout.get_page_config() == expected_layout.get_page_config() &&
+                runtime_layout.get_memory_config() == expected_layout.get_memory_config(),
             "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-            "binding's "
-            "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
-            "page_config, memory_config, and alignment must still match exactly.",
+            "binding's declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
+            "page_config, and memory_config must still match exactly.",
             param_name);
+        if (!relaxation.relax_tensor_alignment) {
+            TT_FATAL(
+                runtime_layout.get_alignment() == expected_layout.get_alignment(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
+                "declares {}. dynamic_tensor_shape lets the shape values vary, but the tensor must still be padded to "
+                "the declared alignment. Set relax_tensor_alignment as well if it must not.",
+                param_name,
+                runtime_layout.get_alignment(),
+                expected_layout.get_alignment());
+        }
         // The rank is the one shape term dynamic_tensor_shape still pins, and relax_logical_rank
-        // frees it. When it is set, tensor_layout above is the whole match, so there is nothing
-        // further to report and the trailing TT_THROW handles the rejection.
+        // frees it.
         if (!relaxation.relax_logical_rank) {
             TT_FATAL(
                 runtime_spec.logical_shape().rank() == expected_spec.logical_shape().rank(),
@@ -246,9 +260,13 @@ static void report_tensor_arg_mismatch(
 //       - match_page_size=true (with dynamic_tensor_shape): as above, plus the page size must
 //         match. A TIGHTENING rather than a relaxation -- it declares that the width is constant
 //         even though the shape varies, so the accessor can keep the page size compile-time.
-//     relax_logical_rank is inert unless dynamic_tensor_shape is also set; the load-bearing field
-//     set for every combination is derived in one place, by pertinent_fields()
-//     (tensor_spec_relaxations.cpp), which both this validation and the relaxation-aware hash use.
+//       - relax_tensor_alignment=true (with dynamic_tensor_shape): tensor_layout() need not match on its
+//         alignment, so a tensor padded differently from the declared one is accepted. Composes
+//         with the two flags above.
+//     relax_logical_rank and relax_tensor_alignment are inert unless dynamic_tensor_shape is also set;
+//     the load-bearing field set for every combination is derived in one place, by
+//     pertinent_fields() (tensor_spec_relaxations.cpp), which both this validation and the
+//     relaxation-aware hash use.
 //     See the field doc comments in tensor_spec_relaxations.hpp for the full contracts.
 //   - When require_all is true: every declared TensorParameter must be set.
 //   - When require_all is false (partial update): any TensorParameter may be omitted; its

@@ -501,5 +501,104 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_DynamicWinsWhenBothSet) 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
 
+// ============================================================================
+// relax_tensor_alignment Run-Params Tests (Gen1 / WH)
+// ============================================================================
+// A TILE TensorParameter declared at the default {32, 32} alignment, bound to an over-padded tensor
+// of the same logical shape: alignment {64, 64}, as TensorLayout::fromPaddedShape gives a legacy
+// tensor padded past the next tile boundary.
+
+TensorParameter MakeTileTensorParameter(const TensorSpecRelaxations& relaxations) {
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto layout = tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory_config);
+    return TensorParameter{
+        .unique_id = TensorParamName{"input_tensor"},
+        .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 30, 30}, layout),
+        .relaxations = relaxations,
+    };
+}
+
+tt::tt_metal::TensorSpec MakeOverpaddedTileSpec(tt::tt_metal::Shape shape) {
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto layout = tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+        memory_config,
+        tt::tt_metal::Alignment{64, 64});
+    return tt::tt_metal::TensorSpec(std::move(shape), layout);
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_AlignmentMismatchFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeTileTensorParameter(TensorSpecRelaxations{.dynamic_tensor_shape = true});
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor =
+        MeshTensor::allocate_on_device(*mesh_device_, MakeOverpaddedTileSpec(binding.spec.logical_shape()));
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "TensorLayout has Alignment([64, 64]) where the binding declares Alignment([32, 32])")));
+}
+
+// The same bind that CPU_DynamicTensorShape_AlignmentMismatchFails rejects is ACCEPTED once
+// relax_tensor_alignment is added.
+TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorAlignment_AlignmentMismatchAccepted) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding =
+        MakeTileTensorParameter(TensorSpecRelaxations{.dynamic_tensor_shape = true, .relax_tensor_alignment = true});
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor =
+        MeshTensor::allocate_on_device(*mesh_device_, MakeOverpaddedTileSpec(binding.spec.logical_shape()));
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+}
+
+// With the alignment relaxed, a rejection on another term must be reported as that term. This tensor
+// differs in both alignment and rank, so only the rank is at fault.
+TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorAlignment_RankMismatchReportedAsRank) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding =
+        MakeTileTensorParameter(TensorSpecRelaxations{.dynamic_tensor_shape = true, .relax_tensor_alignment = true});
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor =
+        MeshTensor::allocate_on_device(*mesh_device_, MakeOverpaddedTileSpec(tt::tt_metal::Shape{1, 30, 30}));
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("logical_shape rank (3) differs from the declared rank (4)")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
