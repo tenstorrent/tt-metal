@@ -8,6 +8,7 @@ from itertools import product
 
 import pytest
 import torch
+from conftest import wormhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import (
@@ -1259,13 +1260,8 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
-# The six comparison-to-zero ops. On Wormhole calculate_comp (ckernel_sfpu_comp.h) answers
-# them with integer interval tests on the FP32 bits SFPLOAD hands the SFPU, so a slip in
-# one of its constants shows only on a pattern at an interval end: both zeros (-0.0 is
-# INT_MIN), the denormals beside them (INT_MIN + 1 and 1), both infinities and the NaNs
-# just past them, the largest NaN payloads (INT_MAX and -1, where a subtraction wraps) and
-# quiet NaNs of both signs. The edge sweep sends +-0, +-inf and one +NaN, a random sweep
-# none of these, so they are listed here as raw bits and fed to every lane in turn.
+# calculate_comp answers these with integer interval tests on the raw bits, so the
+# patterns at each interval end (+-0, denormals, +-inf, NaN payloads) are fed exactly.
 _COMPARE_ZERO_OPS = [
     MathOperation.EqualZero,
     MathOperation.NotEqualZero,
@@ -1288,30 +1284,35 @@ _COMPARE_ZERO_FP32_BITS = (
     0x7FC00000, 0xFFC00000,  # quiet NaNs
     0x7FFFFFFF, 0xFFFFFFFF,  # largest NaN payloads: INT_MAX and -1
 )
-# fmt: on
 
-_FP32_BITS_PER_BF16 = 16
+# The same 20 classes in bf16. A period of 20 on 16-lane face rows varies every row.
+_COMPARE_ZERO_BF16_BITS = (
+    0x0000, 0x8000,  # +0, -0
+    0x0001, 0x8001,  # smallest denormals
+    0x007F, 0x807F,  # largest denormals
+    0x0080, 0x8080,  # smallest normals
+    0x3F80, 0xBF80,  # +-1
+    0x7F7F, 0xFF7F,  # largest finite
+    0x7F80, 0xFF80,  # +-inf
+    0x7F81, 0xFF81,  # the NaNs next to +-inf
+    0x7FC0, 0xFFC0,  # quiet NaNs
+    0x7FFF, 0xFFFF,  # largest NaN payloads
+)
+# fmt: on
 
 
 def _compare_zero_bit_stimulus(input_format, num_elements):
-    """The patterns of _COMPARE_ZERO_FP32_BITS in *input_format*, repeated over every lane.
-
-    A bf16 input takes each pattern's top half, which is what SFPLOAD widens a bf16 datum
-    back to. The bf16 host packer quietens a signalling NaN (0x7F81 lands as 0x7FC1),
-    which keeps its sign and class; the exact NaN-next-to-inf patterns need the Float32
-    pipeline."""
+    """The pattern list for *input_format*, repeated over every lane."""
     if input_format == DataFormat.Float32:
-        bits = torch.tensor(_COMPARE_ZERO_FP32_BITS, dtype=torch.int64)
-        values = bits.to(torch.int32).view(torch.float32)
+        bits = torch.tensor(_COMPARE_ZERO_FP32_BITS, dtype=torch.int64).to(torch.int32)
+        values = bits.view(torch.float32)
     else:
-        top_halves = dict.fromkeys(
-            b >> _FP32_BITS_PER_BF16 for b in _COMPARE_ZERO_FP32_BITS
-        )
-        bits = torch.tensor(list(top_halves), dtype=torch.int32).to(torch.int16)
+        bits = torch.tensor(_COMPARE_ZERO_BF16_BITS, dtype=torch.int32).to(torch.int16)
         values = bits.view(torch.bfloat16)
     return values.repeat(num_elements // values.numel() + 1)[:num_elements]
 
 
+@wormhole_only
 @parametrize(
     formats=[
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
@@ -1319,29 +1320,20 @@ def _compare_zero_bit_stimulus(input_format, num_elements):
     ],
     mathop=_COMPARE_ZERO_OPS,
     dest_acc=lambda formats: [dest_acc_for(formats.input_format)],
-    input_dimensions=[[64, 64]],
 )
 def test_eltwise_unary_sfpu_compare_zero_bit_patterns(
     formats: InputOutputFormat,
     mathop: MathOperation,
     dest_acc: DestAccumulation,
-    input_dimensions: list[int],
 ):
-    """Each comparison-to-zero op against IEEE on the interval-end bit patterns, exactly.
-
-    Two Dest widths: Float32 at dest_acc=Yes unpacks the words straight into a 32-bit Dest,
-    and Float16_b at dest_acc=No reaches a 16-bit Dest through SrcA. A Float32 input at
-    dest_acc=No would be narrowed on the way, and a bf16 input at dest_acc=Yes hands the
-    SFPU a NaN as an infinity (see _ISINF_ISNAN_BF16_DEST_UNSUPPORTED), so neither tests
-    the kernel. The SrcA path hands the SFPU a denormal as zero (as on main), so the
-    golden sees the flushed value there; the denormal patterns themselves reach the kernel
-    on the Float32 pipeline. Wormhole only: Blackhole's calculate_comp is a separate
-    kernel and these expectations were measured on Wormhole."""
-    if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE:
-        pytest.skip(reason="raw-bit predicates of the Wormhole calculate_comp")
-
+    """Each comparison-to-zero op against IEEE, exactly, on a 32-bit Dest (Float32)
+    and a 16-bit Dest (Float16_b via SrcA: denormals flush, in the golden too)."""
+    input_dimensions = [64, 64]
     num_elements = input_dimensions[0] * input_dimensions[1]
     src_A = _compare_zero_bit_stimulus(formats.input_format, num_elements)
+    input_bits = src_A.view(
+        torch.int16 if src_A.dtype == torch.bfloat16 else torch.int32
+    )
     delivered = src_A
     if not unpacks_to_dest(formats.input_format, dest_acc):
         tiny = torch.finfo(src_A.dtype).tiny
@@ -1363,16 +1355,15 @@ def test_eltwise_unary_sfpu_compare_zero_bit_patterns(
         mathop=mathop,
         fast_mode=FastMode.No,
         input_dimensions=input_dimensions,
-        src_A=src_A,
+        # raw words: the bf16 host packer would rewrite every NaN payload to 0x7FC0/0xFFC0
+        src_A=input_bits.numpy().tobytes(),
+        src_B=torch.zeros_like(src_A),
         check_golden=False,
     )
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch.float32)
     assert res_tensor.shape == golden.shape, "Result and golden differ in length"
     mismatch = torch.nonzero(res_tensor != golden).flatten()
-    input_bits = src_A.view(
-        torch.int16 if src_A.dtype == torch.bfloat16 else torch.int32
-    )
     bits_mask = (1 << (8 * src_A.element_size())) - 1
     assert mismatch.numel() == 0, (
         f"{mismatch.numel()} of {golden.numel()} lanes differ from IEEE; first: "

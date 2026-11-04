@@ -72,14 +72,16 @@ inline void not_equal_zero_init() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
-    // Raw TTI because sfpi 7.90 cannot express this sequence: lz() hardwires SFPLZ to
+    // Raw TTI because sfpi 7.93 cannot express this sequence: lz() hardwires SFPLZ to
     // CC_NONE, so it cannot set the predicate; SFPCOMPC is only emitted as part of v_else;
     // and the integer view of a DEFAULT-mode load needs an impl_ pun (.mode<I32>() turns
     // the load into a 32-bit Dest read, which differs on a 16-bit Dest). The predicates
     // below are integer tests on the bits of the FP32 LREG image that SFPLOAD DEFAULT
     // produces (for a 16-bit Dest, the datum widened to FP32), so no SFPSETSGN is needed:
-    //  - eqz/nez: SFPLZ NOSGN|CC_EQ0 sets the flag where (v & 0x7FFFFFFF) == 0, i.e. |v| == 0,
-    //    so ±0 compare equal to zero and every NaN compares non-zero, in one instruction.
+    //  - eqz/nez: SFPLZ NOSGN|CC_NE0 enables the lanes where (v & 0x7FFFFFFF) != 0, i.e. |v| != 0,
+    //    so ±0 compare equal to zero and every NaN compares non-zero, in one instruction. The
+    //    zero answer is the default store, the non-zero answer goes to the enabled lanes (not
+    //    NOSGN|CC_EQ0, which sets the CC_COMP bit: ttsim v1.15.1 rejects that mode).
     //  - ltz/gtz: two SFPIADD half-plane tests on the bits viewed as a signed int32.
     //    ltz <=> (v - 1 < 0) AND (-inf - v >= 0): the first test keeps [INT_MIN+1, 0] (drops
     //    -0 = INT_MIN, keeps +0), the second keeps v <= 0xFF800000, so the intersection is
@@ -113,19 +115,19 @@ inline void calculate_comp() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(V, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 
-        // eqz: default 0, set 1 where |v| == 0
+        // eqz: default 1, set 0 where |v| != 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-            TTI_SFPLZ(/*imm12_math*/ 0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_EQ0);
-            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPLZ(0 /*imm12_math*/, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
             TTI_SFPENCC(0, 0, 0, 0);
         }
 
-        // nez: default 1, set 0 where |v| == 0
+        // nez: default 0, set 1 where |v| != 0
         if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
-            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-            TTI_SFPLZ(/*imm12_math*/ 0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_EQ0);
-            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPLZ(0 /*imm12_math*/, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
             TTI_SFPENCC(0, 0, 0, 0);
         }
 
@@ -152,8 +154,8 @@ inline void calculate_comp() {
             TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPIADD(IMM12_ZERO, V, TMP, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
             TTI_SFPIADD(0, INF, V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-            TTI_SFPCOMPC(/*imm12_math*/ 0, /*lreg_c*/ 0, /*lreg_dest*/ 0, /*instr_mod1*/ 0);
-            TTI_SFPLZ(/*imm12_math*/ 0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
+            TTI_SFPCOMPC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
+            TTI_SFPLZ(0 /*imm12_math*/, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
             TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
             TTI_SFPENCC(0, 0, 0, 0);
         }
@@ -163,8 +165,8 @@ inline void calculate_comp() {
             TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPIADD(IMM12_ZERO, V, TMP, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
             TTI_SFPIADD(0, INF, V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-            TTI_SFPCOMPC(/*imm12_math*/ 0, /*lreg_c*/ 0, /*lreg_dest*/ 0, /*instr_mod1*/ 0);
-            TTI_SFPLZ(/*imm12_math*/ 0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
+            TTI_SFPCOMPC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
+            TTI_SFPLZ(0 /*imm12_math*/, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
             TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
             TTI_SFPENCC(0, 0, 0, 0);
         }
