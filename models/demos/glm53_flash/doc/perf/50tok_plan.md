@@ -400,3 +400,7 @@ DP discovery on the Galaxy's columns, one rank served, then four.
 - 2026-11-04 07:46 down-split A/B (`GLM53_STREAM_DOWN_READERS=4`, 32 down cores): 8 users 33.01 vs 32.95 ms, 32 users
   37.38 vs 37.69 / 37.34 ms, ids identical both: neutral. The expert phase's per-expert chain is not the down cores'
   W2 bytes; the zone profile (`tracy_zones_t1`) breaks the gate|up side down next.
+- 2026-11-04 07:50 `tracy_l4_b1_fab_dr4` per chip: the experts op spans 152-195 us (2 down readers) vs 138-203 (4)
+  across the 32 chips at 8 users; the row reduce absorbs the skew (experts + reduce ~210 us on every chip) and the
+  slowest chip sets the step. The per-chip spread (+-25 us for ~15 +-3 active experts) is itself a target: the block
+  must balance the expert work across the readers, not only speed it up.
