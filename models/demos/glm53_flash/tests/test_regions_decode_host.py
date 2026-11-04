@@ -291,7 +291,8 @@ def test_op_plumbing():
     computes, the appended tail [h_tiles, banks] / [banks] on the down writers, the units refusal, the io lists
     with the regions lists first (today's order kept)."""
     assert 'REGIONS_DEFINE = ("REGIONS_SRC", "1")' in OP_SRC
-    assert OP_SRC.count("reader_common=src.gate_up_addrs if src is not None else None") == 2
+    # the gate|up stream, the dispatch gate|up and the split-K gate|up descriptors all take the regions source
+    assert OP_SRC.count("reader_common=src.gate_up_addrs if src is not None else None") == 3
     # the three down programs: the stream op, the cols-form and the experts-form (E3) dispatch ops
     assert OP_SRC.count("reader_common=src.down_addrs if src is not None else None") == 3
     assert OP_SRC.count("compute_defines=[REGIONS_DEFINE] if src is not None else ()") == 3
