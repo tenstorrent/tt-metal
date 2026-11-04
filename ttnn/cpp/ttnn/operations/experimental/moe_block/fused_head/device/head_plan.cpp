@@ -28,14 +28,8 @@ namespace head_plan_detail {
 constexpr uint32_t kPortGroup = 4;     // x_gather3: a port sender's packet group
 constexpr uint32_t kHeaders = 12;      // fabric packet headers a RISC
 constexpr uint32_t kRouterArgs = 341;  // router_stream's per-core runtime-arg bound
-constexpr double kTie = 0.03;
 constexpr double kInf = std::numeric_limits<double>::infinity();
-
-// fused_head.router_placement's rates
-constexpr double kRtrRate = 1.3e12;
-constexpr double kSeRate = 1.18e12;
-constexpr double kEngOverhead = 3.0;
-constexpr double kChainUs = 150.0;
+constexpr double kEngOverhead = 3.0;  // the logits on the matmul cores: their matmul's cost over the router cores'
 
 using head_math::al64;
 using head_math::ceil_div;
@@ -292,40 +286,6 @@ std::string degradation(const HeadPlanned& chosen, const std::optional<HeadPlann
            fmt_fixed(chosen.t - free->t, 0) + " us, +" + fmt_fixed(100 * (chosen.t / free->t - 1), 0) + "%)";
 }
 
-// head_plan.legacy: the fit-first rule.
-std::optional<HeadPlanned> legacy(const HeadShape& shape, const ArenaMax& arena_max) {
-    std::vector<std::array<uint32_t, 3>> lays;
-    const uint32_t GX = engine_width(shape);
-    for (const auto& l : head_layouts(shape)) {
-        if (router_cells(shape, l[0], GX) != Cells::Rows) {
-            lays.push_back(l);
-        }
-    }
-    if (lays.empty()) {
-        return std::nullopt;
-    }
-    const auto [GY0, MT0, NCH0] = lays[0];
-    const bool on0 = router_on_engine(shape.E, shape.H, shape.I, shape.G, shape.rows, shape.latent, GX, GY0, MT0, NCH0);
-    std::vector<std::pair<std::array<uint32_t, 3>, bool>> tries;
-    if (on0) {
-        tries.emplace_back(lays[0], true);
-    }
-    for (const auto& l : lays) {
-        tries.emplace_back(l, false);
-    }
-    for (const auto& [l, on] : tries) {
-        for (uint32_t kb : k_steps(shape)) {
-            HeadLayout lay{.GY = l[0], .MT = l[1], .NCH = l[2], .KB = kb, .on_engine = on, .GX = GX};
-            auto sized = head_size(shape, lay, arena_max(kb));
-            if (sized.eng) {
-                auto [t, parts] = head_cost(shape, lay, *sized.eng);
-                return HeadPlanned{lay, sized.arena, sized.sizes, t, parts, "fit-first"};
-            }
-        }
-    }
-    return std::nullopt;
-}
-
 }  // namespace head_plan_detail
 
 using namespace head_plan_detail;
@@ -345,28 +305,6 @@ uint32_t router_rect(uint32_t nrt, uint32_t cols, uint32_t rows) {
         }
     }
     return 0;
-}
-
-bool router_on_engine(
-    uint32_t E,
-    uint32_t H,
-    uint32_t I,
-    uint32_t G,
-    uint32_t rows,
-    std::optional<uint32_t> latent,
-    uint32_t GX,
-    uint32_t GY,
-    uint32_t MT,
-    uint32_t NCH) {
-    HEAD_PLAN_NO_FP_CONTRACT
-    const double t_rc = double(int64_t(2) * 32 * E * H) / kRtrRate * 1e6;
-    const int64_t etc = ceil_div(E / 32, GX);
-    const double t_eng =
-        kEngOverhead * 2 * double(int64_t(MT) * NCH * 32) * double(etc * 32) * double(H / G) / kRtrRate * 1e6;
-    const int64_t flops = int64_t(2) * rows * H * 3 * I + (latent ? int64_t(2) * rows * H * int64_t(*latent) / G : 0);
-    const double t_se = double(flops) / double(GX * GY) / kSeRate * 1e6;
-    const double rc = std::max(t_se, t_rc + kChainUs), eng = std::max(t_se + t_eng, t_eng + kChainUs);
-    return eng < rc;
 }
 
 uint32_t engine_width(const HeadShape& shape) {
@@ -566,12 +504,9 @@ std::vector<HeadPlanned> head_plan_layouts(
     const uint32_t GXe = engine_width(shape);
     for (const auto& [GY, MT, NCH] : head_layouts(shape)) {
         for (uint32_t kb : k_steps(shape)) {
-            const bool pref =
-                router_on_engine(shape.E, shape.H, shape.I, shape.G, shape.rows, shape.latent, GXe, GY, MT, NCH);
-            std::vector<HeadPlanned> got;
+            // (both router placements - the logits on the matmul cores or on router cores - scored by the cost model)
             const Cells cells = router_cells(shape, GY, GXe);
-            const std::vector<bool> ons = pref ? std::vector<bool>{true, false} : std::vector<bool>{false, true};
-            for (bool on : ons) {
+            for (bool on : {false, true}) {
                 if (cells == Cells::Rows && !on && !xdram) {
                     continue;
                 }
@@ -601,49 +536,13 @@ std::vector<HeadPlanned> head_plan_layouts(
                     continue;
                 }
                 auto [t, parts] = head_cost(shape, lay, *sized.eng);
-                got.push_back(HeadPlanned{lay, sized.arena, sized.sizes, t, parts, ""});
-                if (pref) {
-                    break;
-                }
-            }
-            for (auto& g : got) {
-                out.push_back(std::move(g));
+                out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, t, parts, ""});
             }
         }
     }
     std::stable_sort(out.begin(), out.end(), [](const HeadPlanned& a, const HeadPlanned& b) {
         return std::make_pair(a.t, -int64_t(a.lay.KB)) < std::make_pair(b.t, -int64_t(b.lay.KB));
     });
-    // (inside kTie of the best the model does not separate layouts: there the fewest row chunks, then the layout the
-    // fit-first rule took, then the prediction)
-    if (!out.empty() && !xdram) {
-        auto old = legacy(shape, arena_max);
-        std::vector<const HeadPlanned*> pool;
-        for (const auto& p : out) {
-            pool.push_back(&p);
-        }
-        if (old) {
-            pool.push_back(&*old);
-        }
-        double best = kInf;
-        for (const auto* p : pool) {
-            best = std::min(best, p->t);
-        }
-        const HeadPlanned* pick = nullptr;
-        auto key = [&](const HeadPlanned* p) { return std::make_tuple(p->lay.NCH, old ? p != &*old : true, p->t); };
-        for (const auto* p : pool) {
-            if (p->t <= best * (1 + kTie) && (!pick || key(p) < key(pick))) {
-                pick = p;
-            }
-        }
-        std::vector<HeadPlanned> res{*pick};
-        for (const auto& p : out) {
-            if (p.lay != pick->lay) {
-                res.push_back(p);
-            }
-        }
-        out = std::move(res);
-    }
     return out;
 }
 

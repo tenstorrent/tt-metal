@@ -138,18 +138,6 @@ std::pair<double, Parts> head_cost(
 std::vector<HeadPlanned> head_plan_layouts(
     const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit = false, bool xdram = false);
 
-// fused_head.router_placement: (the logits on the matmul cores?, estimates).
-bool router_on_engine(
-    uint32_t E,
-    uint32_t H,
-    uint32_t I,
-    uint32_t G,
-    uint32_t rows,
-    std::optional<uint32_t> latent,
-    uint32_t GX,
-    uint32_t GY,
-    uint32_t MT,
-    uint32_t NCH);
 // fused_head.router_rect: the columns of a rectangle of nrt router cores in `rows` free rows of `cols` cells, or 0.
 uint32_t router_rect(uint32_t nrt, uint32_t cols, uint32_t rows);
 
