@@ -40,10 +40,10 @@ def _make_input(shape, dtype):
 
 
 def _reference(host, **kwargs):
-    # Native's int32 conversion emits float bit patterns with junk low bits, so it is no golden
-    # there. Truncation toward zero in float64 (exact for bf16/fp32), +/-Inf and out-of-range
-    # values clamp to the int32 limits, NaN saturates by its sign
-    # bit (+NaN -> INT32_MAX, -NaN -> INT32_MIN), as the device does.
+    # Codegen's int32 conversion, which forced codegen legs check against; auto keeps a conversion
+    # on native, whose result differs. Truncation toward zero in float64 (exact for bf16/fp32),
+    # +/-Inf and out-of-range values clamp to the int32 limits, NaN saturates by its sign bit
+    # (+NaN -> INT32_MAX, -NaN -> INT32_MIN).
     dtype = kwargs.get("dtype")
     if dtype is None or host.dtype == torch.int32:
         return None
@@ -117,17 +117,9 @@ def _codegen_draw(earlier, shape, kwargs, dtype, layout, device, placement):
 
 
 _CACHE_HIT = [
-    (
-        [1, 1, 32, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
     ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
 ]
 _CACHE_HIT_IDS = [
-    "[1, 1, 32, 32]|dtype=DataType.INT32&memory_config=BufferType.DRAM|bfloat16|row_major",
     "[32, 32]@L1|memory_config=BufferType.DRAM|int32|row_major",
 ]
 
@@ -312,8 +304,8 @@ def test_tilize_force_codegen_raises_out_of_scope(device, case, expect_error):
         _force_codegen(xt, **kwargs)
 
 
-# One tile row wide enough to split across cores (Column2D), with and without the dtype conversion; the generated
-# legs above run on the cases in _CACHE_HIT, so these reuse their bodies.
+# One tile row wide enough to split across cores (Column2D); the generated legs above run on the cases in
+# _CACHE_HIT, so these reuse their bodies.
 _CACHE_HIT_COLUMN2D = [
     (
         [1, 1, 32, 1024],
@@ -322,15 +314,8 @@ _CACHE_HIT_COLUMN2D = [
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     ),
-    (
-        [1, 1, 32, 1024],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
 ]
-_CACHE_HIT_COLUMN2D_IDS = ["column2d_bfloat16", "column2d_bfloat16_to_int32"]
+_CACHE_HIT_COLUMN2D_IDS = ["column2d_bfloat16"]
 
 
 @pytest.mark.parametrize("shape,kwargs,dtype,layout,placement", _CACHE_HIT_COLUMN2D, ids=_CACHE_HIT_COLUMN2D_IDS)
@@ -341,6 +326,30 @@ def test_tilize_codegen_column2d_auto_routes_to_codegen(device, shape, kwargs, d
 @pytest.mark.parametrize("shape,kwargs,dtype,layout,placement", _CACHE_HIT_COLUMN2D, ids=_CACHE_HIT_COLUMN2D_IDS)
 def test_tilize_codegen_column2d_program_cache_hit(device, shape, kwargs, dtype, layout, placement):
     test_tilize_codegen_program_cache_hit(device, shape, kwargs, dtype, layout, placement)
+
+
+# Auto keeps a dtype conversion on native, so ttnn.tilize returns native's conversion whatever the live L1;
+# the forced codegen entry still converts, with its own semantics.
+_CONVERSION_SHAPES = {
+    "row": [1, 1, 2 * 32, 32],
+    "column2d": [1, 1, 32, 1024],
+    "multi_row": [1, 1, 8 * 32, 8 * 32],
+}
+
+
+@pytest.mark.parametrize("shape", list(_CONVERSION_SHAPES.values()), ids=list(_CONVERSION_SHAPES))
+def test_tilize_auto_keeps_conversion_on_native(device, shape):
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32}
+    torch.manual_seed(0)
+    host = _make_input(shape, ttnn.bfloat16)
+    xt = ttnn.from_torch(
+        host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    device.clear_program_cache()
+    golden, out, added = _native_route(device, xt, **kwargs)
+    assert added == 0, "auto built a new program for a dtype conversion; expected native's cached program"
+    assert_equal(golden, ttnn.to_torch(out))
+    assert_equal(_reference(host, **kwargs), ttnn.to_torch(_force_codegen(xt, **kwargs)))
 
 
 # --- Live-L1 CB plan ---
@@ -371,8 +380,8 @@ def _pin_l1_headroom(device, headroom_bytes):
 # The output stays in DRAM: an L1 output of this shape would not fit under the pin.
 @pytest.mark.parametrize(
     "kwargs",
-    [{"memory_config": ttnn.DRAM_MEMORY_CONFIG}, {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32}],
-    ids=["bfloat16", "bfloat16_to_int32"],
+    [{"memory_config": ttnn.DRAM_MEMORY_CONFIG}],
+    ids=["bfloat16"],
 )
 def test_tilize_codegen_cb_plan_follows_live_l1(device, kwargs):
     grid = device.compute_with_storage_grid_size()
@@ -411,7 +420,7 @@ def test_tilize_codegen_cb_plan_follows_live_l1(device, kwargs):
 
 # --- Small cases stay on codegen ---
 # Nothing is demoted: the smallest in-scope inputs (one tile column, one or two tile rows, integer or
-# bf16, with or without a dtype conversion) route to codegen under auto.
+# bf16) route to codegen under auto.
 _SMALL_CASES = [
     # shape, input dtype, tilize kwargs, id
     ([1, 1, 32, 32], ttnn.int32, {}, "wt1_1_tile_row"),
@@ -419,7 +428,6 @@ _SMALL_CASES = [
     ([2, 1, 32, 32], ttnn.uint16, {}, "wt1_2_tile_rows_from_batch"),
     ([1, 1, 2 * 32, 32], ttnn.uint32, {}, "wt1_2_tile_rows_uint32"),
     ([1, 1, 2 * 32, 32], ttnn.bfloat16, {}, "wt1_2_tile_rows_bf16"),
-    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {"dtype": ttnn.int32}, "wt1_2_tile_rows_to_int32"),
 ]
 
 

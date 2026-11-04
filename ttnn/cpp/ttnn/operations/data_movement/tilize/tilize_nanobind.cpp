@@ -23,9 +23,8 @@ void bind_tilize(nb::module_& mod) {
         UINT32, UINT16, UINT8 or FP8_E4M3 data type.
 
         Output tensor will be on TT accelerator device, in TILE layout, with the input's data type unless `dtype`
-        is given. A BFLOAT16 to INT32 conversion is not guaranteed to give the same result on every call: depending
-        on free L1 it either truncates toward zero and saturates at the INT32 limits, or uses a conversion that is
-        not exact.
+        is given. An FP8_E4M3 input defaults to a FLOAT32 output and requires a floating-point output other than
+        FP8_E4M3, and its padded width must span more than one tile.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
