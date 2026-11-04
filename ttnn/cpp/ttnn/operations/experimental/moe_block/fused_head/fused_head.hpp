@@ -48,8 +48,8 @@ HeadShape head_shape_of(
     tt::tt_metal::DataType shared_weights = tt::tt_metal::DataType::BFLOAT8_B);
 
 // The free L1 a core the head plans on: l1_free, else the one measured at the block's first head (the L1 under the
-// lowest occupied address then, less what the block keeps after planning, at most kL1Free - kL1Margin), kept in the
-// resources so every later plan of the block uses the same figure.
+// lowest occupied address then, less kL1Margin), kept in the resources so every later plan of the block uses the same
+// figure.
 int64_t fused_head_l1_free(MoEBlockResources& resources, std::optional<int64_t> l1_free = std::nullopt);
 
 // The fused head's whole host plan on the block's resources, computed once and kept in the resources

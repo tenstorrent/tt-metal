@@ -64,7 +64,7 @@ HeadShape head_shape_of(
     s.fold = dims.router.fold;
     s.links = config.num_links;
     s.ring = topology.wrap_x;
-    s.grid = {std::min<uint32_t>(12, grid[0]), grid[1]};
+    s.grid = grid;
     s.R = topology.R;
     s.sp_ring = topology.wrap_y;
     s.payload = payload;
@@ -78,13 +78,15 @@ HeadShape head_shape_of(
 namespace fused_head_l1_detail {
 
 // The free L1 a core the head plans on when none is given: the L1 from the allocator's base up to the
-// lowest occupied address now, less what the block keeps after planning (the head's own words among it),
-// at most the planner's host figure, less its margin.
+// lowest occupied address now (with nothing allocated, the top of the allocator's L1 bank), less the planner's margin
+// (what the block allocates in L1 after planning: 128 B a bank with its persistent words in L1_SMALL).
 int64_t measured_free_l1(const tt::tt_metal::distributed::MeshDevice& mesh) {
-    constexpr int64_t kBeforeHead = 56 * 1024;
-    const int64_t base = int64_t(mesh.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
-    const int64_t top = int64_t(mesh.lowest_occupied_compute_l1_address().value_or(base + mesh.l1_size_per_core()));
-    return std::min(kL1Free, top - base - kBeforeHead) - kL1Margin;
+    const auto& alloc = *mesh.allocator();
+    const int64_t base = int64_t(alloc.get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    const int64_t bank = int64_t(alloc.get_bank_size(tt::tt_metal::BufferType::L1));
+    const int64_t top =
+        std::min<int64_t>(base + bank, int64_t(mesh.lowest_occupied_compute_l1_address().value_or(base + bank)));
+    return top - base - kL1Margin;
 }
 
 }  // namespace fused_head_l1_detail
@@ -156,8 +158,8 @@ TensorSpec dram_spec(uint32_t rows, uint32_t cols, DataType dt, Layout layout) {
 }
 
 std::string key_of(uint32_t accumulators, int64_t l1, int64_t floor, DataType w) {
-    return "A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) + "/floor_" + std::to_string(floor) +
-           "/w" + std::to_string(static_cast<int>(w));
+    return "A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) + "/floor_" + std::to_string(floor) + "/w" +
+           std::to_string(static_cast<int>(w));
 }
 
 // The head's persistent tensors (its outputs and the routing exchange's), in an inputs template.

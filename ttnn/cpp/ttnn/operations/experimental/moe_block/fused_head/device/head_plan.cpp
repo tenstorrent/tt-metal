@@ -559,6 +559,10 @@ std::string shape_checks(const HeadShape& shape) {
     if (G > 8) {
         return "TP " + s(G) + " > 8: the routing / combine port tables (a mesh with TP <= 8)";
     }
+    if (shape.grid[0] < 2 || shape.grid[0] > 12) {
+        return "a " + s(shape.grid[0]) + "-column compute grid: the head is at most 11 matmul-core columns and the " +
+               "movers' column (2 to 12 columns)";
+    }
     if (shape.links != 1 && shape.links != 2) {
         return s(shape.links) + " links: 1 or 2 (a port per direction and link)";
     }

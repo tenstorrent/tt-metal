@@ -66,8 +66,8 @@ fit), `free` (the cost model's pick with unlimited L1) and `note` (what L1 force
 grid / fabric payload and caches the answer in the resources, so a program-cache hit never re-plans.
 
 `l1_free` is the free L1 a core the head plans on: by default measured once at the block's first head (the L1 under
-the lowest occupied address, less what the block keeps after planning), at most the planner's host figure
-(`kL1Free - kL1Margin`).
+the lowest occupied address, less the planner's margin `kL1Margin`); `kL1Free - kL1Margin` only for host-only plans
+(no device).
 
 ## Kernels
 

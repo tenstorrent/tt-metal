@@ -22,8 +22,12 @@
 
 namespace ttnn::operations::experimental::moe_block::fused_head {
 
+// Host-only defaults (a shape planned without a device): a Galaxy chip's compute grid and free L1. A block plans on
+// its device's grid and measured free L1 (fused_head_l1_free).
 inline constexpr std::array<uint32_t, 2> kHeadGrid = {12, 10};  // head_plan.GRID
 inline constexpr int64_t kL1Free = 1383 * 1024;                 // head_plan.L1_FREE
+// L1 the block allocates after the head is planned (its own words: 128 B a bank in L1 with the persistent words in
+// L1_SMALL, ~4.3 KB without) and the allocator's alignment
 inline constexpr int64_t kL1Margin = 8 * 1024;                  // head_plan.L1_MARGIN
 inline constexpr int64_t kUnlimited = int64_t(1) << 40;         // head_plan.UNLIMITED
 
