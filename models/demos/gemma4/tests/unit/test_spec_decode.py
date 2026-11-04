@@ -3979,7 +3979,7 @@ def test_serving_record_draws_match_the_device_sampler(mesh_device, device_param
 
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 1), {}, id="1x1")],
+    [pytest.param((1, 1), {"trace_region_size": 200_000_000}, id="1x1")],
     indirect=True,
 )
 def test_sampled_verify_top1_tiebreak_matches_the_plain_sampler(mesh_device, device_params, reset_seeds):
@@ -3997,7 +3997,7 @@ def test_sampled_verify_top1_tiebreak_matches_the_plain_sampler(mesh_device, dev
         assert getattr(spec_sampling, name) == getattr(plain_sampling, name)
     torch.manual_seed(0)
     R, W = 32, 64
-    values = torch.randn(1, 1, R, W).to(torch.bfloat16)
+    values = (torch.rand(1, 1, R, W) * 2.0 - 1.0).to(torch.bfloat16)  # in [-1, 1): 3.0 below is the strict maximum
     values[0, 0, :16, 5] = 3.0  # rows 0-15: the maximum at three candidate columns
     values[0, 0, :16, 20] = 3.0
     values[0, 0, :16, 41] = 3.0
