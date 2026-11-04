@@ -84,6 +84,16 @@ class HFSource(WeightSource):
                 del self.raw[old]
             for key in [k for k in self.cache if k[0] != layer_idx]:
                 del self.cache[key]
+            # return the previous layer's ~14 GB of expert tensors to the OS now (the host RSS otherwise climbs
+            # ~4 GB per built layer through the allocator's retained blocks)
+            import ctypes
+            import gc
+
+            gc.collect()
+            try:
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except OSError:
+                pass
             self.raw[layer_idx] = load_layer_raw(self.snapshot, layer_idx, self.headers)
         return self.raw[layer_idx]
 
