@@ -61,6 +61,11 @@ def build_model(device, n_layers=None):
     print(f"BONSAI_MODEL_LOAD_S={time.time() - t0:.1f} layers={model.args.n_layers}", flush=True)
     kv_cache_shape = [NUM_BLOCKS, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    if os.environ.get("BONSAI_GDN_PREP") == "1":
+        # GatedDeltaNet chunked prefill: the scan kernel's preprocessing in one op (bonsai2/tt/gdn_prefill).
+        from models.demos.blackhole.bonsai2.tt.gdn_prefill.chunk_prep import install
+
+        install(device)
     if os.environ.get("BONSAI_TERNARY_MLP") == "1":
         # One-token decode MLPs in Bonsai's own ternary weights, read from the GGUF (bonsai2/tt/ternary/mlp.py).
         # Packed on the host here; swapped in for the dense gate/up/down after the prefill (after_prefill).
