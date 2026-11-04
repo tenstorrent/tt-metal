@@ -198,6 +198,14 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
     return decorator
 
 
+# A 1x4 ring submesh does not come up on a 32-device Galaxy: the fabric router sync times out when the mesh opens, and
+# every later test of the session errors on the broken fabric. Tests pinned to [(1, 4)] skip there (before the mesh
+# fixture opens anything) and run on QuietBox 2 / LoudBox.
+skip_1x4_on_galaxy = pytest.mark.skipif(
+    ttnn.get_num_devices() > 8, reason="a 1x4 ring submesh does not come up on a Galaxy; runs on QuietBox 2 / LoudBox"
+)
+
+
 def parametrize_batch_seq(configs=None, ids=None):
     """Universal batch/seq parametrization"""
     configs = configs or [(1, 1), (1, 32)]
@@ -213,6 +221,28 @@ def parametrize_batch_seq(configs=None, ids=None):
 def parametrize_weights(use_real=False):
     """Universal weight parametrization"""
     return pytest.mark.parametrize("use_real_weights", [use_real], ids=["real" if use_real else "random"])
+
+
+def real_checkpoint_path(model_path=None):
+    """Directory of the HF checkpoint (with model.safetensors.index.json) that HF_MODEL names, or None when only a config
+    is available (CI's unit tests set HF_MODEL to models/demos/gpt_oss/configs/<model>). A hub id resolves to its local
+    snapshot when it is downloaded; nothing is fetched."""
+    from pathlib import Path
+
+    path = model_path or os.getenv("HF_MODEL")
+    if not path:
+        return None
+    if (Path(path) / "model.safetensors.index.json").is_file():
+        return str(path)
+    if Path(path).exists():
+        return None
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot = snapshot_download(path, local_files_only=True)
+    except Exception:
+        return None
+    return snapshot if (Path(snapshot) / "model.safetensors.index.json").is_file() else None
 
 
 # Test helper functions

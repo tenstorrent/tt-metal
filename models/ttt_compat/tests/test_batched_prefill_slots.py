@@ -264,6 +264,64 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(
         assert not hasattr(generator, "_slots_prefilled_since_decode")
 
 
+@pytest.mark.parametrize("batch,group", [(4, 2), (6, 4), (32, 16)])
+def test_grouped_prefill_gives_each_group_its_own_layer_pages(monkeypatch, batch, group):
+    """A grouped batched prefill (model opt-in batched_prefill_group_size) slices page_table per group; the
+    per-layer tables must follow, or every later group writes its K/V into the first group's pages."""
+    from models.tt_transformers.tt import generator as generator_module
+
+    monkeypatch.setattr(generator_module.ttnn, "reshape", torch.reshape)
+    monkeypatch.setattr(generator_module.ttnn, "to_layout", lambda tensor, *args, **kwargs: tensor)
+    generator = object.__new__(Generator)
+    generator.data_parallel = 1
+    generator.model_args = [
+        SimpleNamespace(
+            max_batch_size=32,
+            max_prefill_chunk_size=32768,
+            vocab_size=1,
+            can_enable_trace=lambda *args: False,
+            batched_prefill_group_size=lambda padded_len, batch_size: group if group < batch_size else None,
+        )
+    ]
+    generator.model = [
+        SimpleNamespace(
+            process_logits_after_prefill_trace=lambda hidden, last: hidden[:, :, last : last + 1],
+            process_output_prefill=lambda logits, **kwargs: logits.reshape(1, 1),
+        )
+    ]
+    generator._will_row_shard_prefill = lambda *args: False
+    observed = []
+
+    def forward(tokens, **kwargs):
+        observed.append(kwargs)
+        return tokens.float().unsqueeze(-1)
+
+    generator.prefill_forward_single_user_text = forward
+    prompt_len = 100  # two 64-token blocks per request
+    tokens = torch.arange(batch).unsqueeze(1).repeat(1, prompt_len)
+    pages = torch.tensor([[10 * r + 1, 10 * r + 2, 999] for r in range(batch)], dtype=torch.int32)
+    sliding = torch.tensor([[1000 + r, 2000 + r, 999] for r in range(batch)], dtype=torch.int32)
+    cache = [[(SimpleNamespace(shape=(1000, 1, 64, 128)), None)] * 3]
+    output = generator._prefill_forward_text_impl(
+        tokens,
+        page_table=pages,
+        kv_cache=cache,
+        prompt_lens=[prompt_len] * batch,
+        enable_trace=False,
+        warmup_prefill=False,
+        page_tables_per_layer=[pages, sliding, pages],
+    )
+    assert output.flatten().tolist() == list(range(batch))
+    assert len(observed) == -(-batch // group)
+    for g, args in enumerate(observed):
+        requests = list(range(g * group, min(g * group + group, batch)))
+        full, window, shared = args["page_tables_per_layer"]
+        assert shared is full  # layers sharing a host table still share one prepared table
+        assert full[: len(requests), :2].tolist() == [[10 * r + 1, 10 * r + 2] for r in requests]
+        assert window[: len(requests), :2].tolist() == [[1000 + r, 2000 + r] for r in requests]
+        assert 999 not in full and 999 not in window
+
+
 def test_single_user_forward_passes_explicit_layer_tables():
     generator = object.__new__(Generator)
     generator.data_parallel = 1

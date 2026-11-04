@@ -97,7 +97,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     bool skip_compute,
     bool skip_in0_mcast,
     bool skip_write_back,
-    bool row_broadcast_bias) {
+    bool row_broadcast_bias,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     using namespace tt;
 
     ttsl::optional_reference<const tt::tt_metal::MeshTensor> bias;
@@ -149,7 +150,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         }
     } else {
         reader_assignments =
-            get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores);
+            get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores, coord);
     }
     uint32_t num_dram_banks = reader_assignments.size() / workers_per_bank;
 
@@ -1294,7 +1295,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const tt::tt_metal::Tile& output_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
-    tt::DataFormat output_data_format) {
+    tt::DataFormat output_data_format,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     const auto arch = device.arch();
     // Blackhole: both data-movement RISCs read the weight. Wormhole: one NOC_0 stream (a second stream
     // over NOC_1 from the same core lowers the bank's bandwidth there).
@@ -1318,8 +1320,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         "num_workers_per_dram_bank: the weight shard must hold the whole K ({} rows), got {}",
         Kt * in1_tile.get_tile_shape()[0],
         in1_shard_spec.shape[0]);
-    const auto anchors = device.get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
-    const uint32_t num_dram_banks = anchors.size();
+    const uint32_t num_dram_banks =
+        device.get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0, coord).size();
     TT_FATAL(
         in1_shard_spec.grid.num_cores() == num_dram_banks,
         "num_workers_per_dram_bank: the weight must be width-sharded over all {} DRAM banks, got {} shards",
@@ -1369,8 +1371,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         P);
 
     // Cores and work items: wi = ((bank * CM + cm) * CN + cn) * CK + kidx; role = wi + 1 (0 = idle).
-    const auto cores =
-        dram_sharded_helpers::get_dram_bank_adjacent_workers(device, tt::tt_metal::NOC::NOC_0, CM * CN * CK, num_banks);
+    const auto cores = dram_sharded_helpers::get_dram_bank_adjacent_workers(
+        device, tt::tt_metal::NOC::NOC_0, CM * CN * CK, num_banks, coord);
     const auto grid = device.compute_with_storage_grid_size();
     std::vector<uint32_t> role(grid.x * grid.y, 0);
     std::vector<CoreCoord> work_cores;
@@ -1726,11 +1728,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
 
 }  // namespace reuse_dram_sharded_optimized_helpers
 
-ttnn::device_operation::ProgramArtifacts
-MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts(
+namespace {
+ttnn::device_operation::ProgramArtifacts create_dram_sharded_artifacts(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
@@ -1868,7 +1871,8 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
             output_tile,
             in0_data_format,
             in1_data_format,
-            output_data_format);
+            output_data_format,
+            coord);
     }
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
@@ -1907,7 +1911,106 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
         skip_compute,
         skip_in0_mcast,
         skip_write_back,
-        row_broadcast_bias);
+        row_broadcast_bias,
+        coord);
+}
+}  // namespace
+
+namespace {
+// Whether every chip of the workload gets the same reader placement (one chip, a mesh of identically harvested
+// chips): one program then serves them all. The primary readers (each bank's NOC-optimal worker, on both NoCs) must
+// agree. With several readers per bank on the multicast pipeline so must the secondary ones: those are picked by
+// each chip's own NoC hop distances, which can differ between chips whose primary readers agree (compare_secondary).
+// The multi-core pipeline's cores depend only on the primary readers.
+bool same_dram_bank_workers(
+    tt::tt_metal::distributed::MeshDevice& device,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    bool compare_secondary,
+    uint32_t workers_per_bank,
+    const CoreRangeSet& input_storage_cores) {
+    const auto coords = tensor_coords.coords();
+    if (coords.empty()) {
+        return true;
+    }
+    for (const auto noc : {tt::tt_metal::NOC::NOC_0, tt::tt_metal::NOC::NOC_1}) {
+        const auto reference = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coords.front());
+        for (const auto& coord : coords) {
+            if (device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) != reference) {
+                return false;
+            }
+        }
+    }
+    if (compare_secondary && workers_per_bank > 1 && device.arch() != tt::ARCH::QUASAR) {
+        const tt::tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+        const auto readers = [&](const tt::tt_metal::distributed::MeshCoordinate& coord) {
+            std::vector<CoreCoord> cores;
+            for (const auto& reader : dram_sharded_helpers::get_dram_bank_reader_assignments(
+                     device, in1_noc, workers_per_bank, input_storage_cores, coord)) {
+                cores.push_back(reader.worker_core);
+            }
+            return cores;
+        };
+        const auto reference = readers(coords.front());
+        for (const auto& coord : coords) {
+            if (readers(coord) != reference) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+}  // namespace
+
+// A chip's best reader for a DRAM bank is the first unharvested worker column east of the bank, and logical columns
+// skip harvested ones, so on a mesh of differently harvested chips one placement for the whole mesh puts some chips'
+// readers west of their banks, where NOC0 brings the bank's data the long way round the row. There each chip gets its
+// own program with its own placement; a workload whose chips agree keeps one program per range, placed for those
+// chips.
+ttnn::device_operation::MeshWorkloadArtifacts
+MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_artifacts(
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+    const auto& a = tensor_args.input_tensors.at(0);
+    auto& device = *a.device();
+    const auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
+        operation_attributes.program_config.value());
+    // the multi-core pipeline places its cores from the primary readers only (the same predicate the factory uses)
+    const bool multicore = dram_sharded_helpers::use_dram_sharded_multicore(
+        program_config.use_multicore_pipeline,
+        program_config.num_workers_per_dram_bank,
+        tensor_args.optional_input_tensors.at(0).has_value(),
+        program_config.fused_activation.has_value(),
+        operation_attributes.untilize_out,
+        a.tensor_spec().tile(),
+        tensor_args.input_tensors.at(1).tensor_spec().tile(),
+        a.logical_shape()[-1],
+        a.memory_config().buffer_type(),
+        tensor_return_value.at(0).memory_config());
+    if (same_dram_bank_workers(
+            device, tensor_coords, !multicore, program_config.num_workers_per_dram_bank, a.shard_spec().value().grid)) {
+        for (const auto& range : tensor_coords.ranges()) {
+            const auto& coord = range.start_coord();
+            auto shared = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, coord);
+            artifacts.programs.push_back({
+                .range = range,
+                .spec = std::move(shared.spec),
+                .run_params = std::move(shared.run_params),
+            });
+        }
+        return artifacts;
+    }
+    for (const auto& coord : tensor_coords.coords()) {
+        auto per_coord = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, coord);
+        artifacts.programs.push_back({
+            .range = ttnn::MeshCoordinateRange(coord),
+            .spec = std::move(per_coord.spec),
+            .run_params = std::move(per_coord.run_params),
+        });
+    }
+    return artifacts;
 }
 
 }  // namespace ttnn::prim

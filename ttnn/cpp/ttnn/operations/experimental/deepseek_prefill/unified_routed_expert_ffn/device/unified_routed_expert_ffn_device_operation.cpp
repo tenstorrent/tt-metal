@@ -123,10 +123,18 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     // m_tiles is this expert's M (grid/chunk/CB sizing). x may be a shared
     // buffer spanning many experts, so its allocated M only bounds m_tiles from
-    // above — the reader/writer index into x at the region offset.
+    // above — the reader/writer index into x at the region offset. With
+    // x_row_index, x is the token-ordered input and the expert rows live in the
+    // output's index space, so the output's M bounds m_tiles instead (an expert's
+    // capacity can exceed the token count).
     TT_FATAL(op.m_tiles > 0, "m_tiles must be > 0");
+    const uint32_t capacity_rows = op.x_indexed ? t.output.padded_shape()[-2] : x_shape[-2];
     TT_FATAL(
-        op.m_tiles <= x_shape[-2] / TILE, "m_tiles ({}) must be <= x M in tiles ({})", op.m_tiles, x_shape[-2] / TILE);
+        op.m_tiles <= capacity_rows / TILE,
+        "m_tiles ({}) must be <= the buffer capacity in tiles ({}, from {})",
+        op.m_tiles,
+        capacity_rows / TILE,
+        op.x_indexed ? "the output" : "x");
 
     // Every expert's gate/up/down tensor shares x's storage / layout / memory
     // contract AND must be identical in shape/dtype to expert 0 (the program is
@@ -253,7 +261,31 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     {
         const auto& out = t.output;
         TT_FATAL(out.storage_type() == ttnn::StorageType::DEVICE, "output must be on device");
-        TT_FATAL(out.layout() == tt::tt_metal::Layout::TILE, "output must be TILE layout");
+        TT_FATAL(
+            op.output_row_major == (out.layout() == tt::tt_metal::Layout::ROW_MAJOR),
+            "op.output_row_major ({}) must match the output layout ({})",
+            op.output_row_major,
+            out.layout());
+        if (op.output_row_major) {
+            // The writer stores each core's untilized [32, per_core_N_d * 32] block as 32 row segments into a
+            // separate bf16 buffer; reading x and writing the output in place is impossible across layouts.
+            TT_FATAL(op.x_is_row_major, "a ROW_MAJOR output needs a ROW_MAJOR x");
+            TT_FATAL(out.dtype() == tt::tt_metal::DataType::BFLOAT16, "a ROW_MAJOR output must be BFLOAT16");
+            TT_FATAL(
+                out.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+                "a ROW_MAJOR output needs a tile-aligned row width, got {}",
+                out.logical_shape()[-1]);
+        } else {
+            TT_FATAL(out.layout() == tt::tt_metal::Layout::TILE, "output must be TILE layout");
+            TT_FATAL(
+                op.zero_output_row == std::numeric_limits<uint32_t>::max(), "zero_output_row needs a ROW_MAJOR output");
+        }
+        TT_FATAL(
+            op.zero_output_row == std::numeric_limits<uint32_t>::max() ||
+                op.zero_output_row < static_cast<uint32_t>(out.logical_shape()[-2]),
+            "zero_output_row ({}) is outside the output's {} rows",
+            op.zero_output_row,
+            out.logical_shape()[-2]);
         TT_FATAL(is_dram_interleaved(out), "output must be DRAM-interleaved");
         // Output dtype must match x EXCEPT in row-major mode: there x is bf16
         // ROW_MAJOR but the tilized output is bf8_b TILE (for downstream
@@ -288,7 +320,38 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         }
         constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
         TT_FATAL(out_shape[-2] % TILE_H == 0, "output M ({}) must be tile-aligned", out_shape[-2]);
-        TT_FATAL(out_shape[-2] >= x_shape[-2], "output M ({}) must be >= x M ({})", out_shape[-2], x_shape[-2]);
+        // Without x_row_index buffer row r reads x row r; with it, x is the token-ordered input and the output can
+        // have fewer rows than x (x_row_index covers every output row, checked below).
+        TT_FATAL(
+            op.x_indexed || out_shape[-2] >= x_shape[-2],
+            "output M ({}) must be >= x M ({}) when x is not indexed",
+            out_shape[-2],
+            x_shape[-2]);
+    }
+
+    TT_FATAL(
+        op.x_indexed == t.x_row_index.has_value(),
+        "op.x_indexed ({}) must match the presence of x_row_index ({})",
+        op.x_indexed,
+        t.x_row_index.has_value());
+    if (op.x_indexed) {
+        const auto& idx = *t.x_row_index;
+        TT_FATAL(op.x_is_row_major, "x_row_index needs a ROW_MAJOR x");
+        TT_FATAL(idx.storage_type() == ttnn::StorageType::DEVICE, "x_row_index must be on device");
+        TT_FATAL(idx.dtype() == tt::tt_metal::DataType::UINT32, "x_row_index must be UINT32, got {}", idx.dtype());
+        TT_FATAL(idx.layout() == tt::tt_metal::Layout::ROW_MAJOR, "x_row_index must be ROW_MAJOR");
+        TT_FATAL(is_dram_interleaved(idx), "x_row_index must be DRAM-interleaved");
+        // The reader reads sub-ranges of page 0 only, so the whole vector must be one page.
+        const auto& ishape = idx.logical_shape();
+        TT_FATAL(
+            static_cast<uint64_t>(ishape[-1]) == ishape.volume(),
+            "x_row_index must be a single row (leading dims 1), got shape {}",
+            ishape);
+        TT_FATAL(
+            static_cast<uint32_t>(ishape[-1]) >= static_cast<uint32_t>(t.output.padded_shape()[-2]),
+            "x_row_index length ({}) must cover every output row ({})",
+            ishape[-1],
+            t.output.padded_shape()[-2]);
     }
 
     // Optional per-local-expert expert biases (gpt-oss). All-or-none: the three
@@ -396,9 +459,18 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_biases,
     const std::vector<ttnn::Tensor>& down_biases,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens) {
+    uint32_t max_active_tokens,
+    uint32_t l1_end,
+    const std::optional<ttnn::Tensor>& x_row_index,
+    uint32_t zero_output_row) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
+    // x_row_index's DRAM address on x's chips, so an index tensor on another mesh device reads unrelated memory.
+    if (x_row_index.has_value()) {
+        TT_FATAL(x_row_index->storage_type() == ttnn::StorageType::DEVICE, "x_row_index must be on device");
+        TT_FATAL(x_row_index->device() == x.device(), "x_row_index must be on the same mesh device as x");
+    }
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_tiles = m_tiles,
@@ -408,7 +480,11 @@ ttnn::Tensor unified_routed_expert_moe(
             .fuse_bias = !gate_biases.empty(),
             .compute_kernel_config = compute_kernel_config,
             .min_active_tokens = min_active_tokens,
-            .max_active_tokens = max_active_tokens},
+            .max_active_tokens = max_active_tokens,
+            .l1_end = l1_end,
+            .x_indexed = x_row_index.has_value(),
+            .output_row_major = output.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            .zero_output_row = zero_output_row},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,
@@ -420,7 +496,8 @@ ttnn::Tensor unified_routed_expert_moe(
             .expert_region_offsets = expert_region_offsets,
             .gate_biases = gate_biases,
             .up_biases = up_biases,
-            .down_biases = down_biases});
+            .down_biases = down_biases,
+            .x_row_index = x_row_index});
 }
 
 }  // namespace ttnn::prim

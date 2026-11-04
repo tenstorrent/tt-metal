@@ -25,7 +25,11 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
     const std::optional<std::vector<ttnn::Tensor>>& down_biases,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens) {
+    uint32_t max_active_tokens,
+    uint32_t l1_end,
+    const std::optional<ttnn::Tensor>& x_row_index,
+    bool output_row_major,
+    uint32_t zero_output_row) {
     // Single fused device op across ALL local experts. This builds ONE program
     // whose reader/compute/writer kernels iterate over every local expert.
     TT_FATAL(
@@ -79,11 +83,20 @@ ttnn::Tensor unified_routed_expert_moe(
     //     own region. Left uninitialized (downstream combine reads only written
     //     rows, bounded per expert).
     const bool x_is_row_major = dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR;
+    // x_row_index: dispatched_buffer is the token-ordered input and the output has one row per index entry.
+    ttnn::Shape out_shape = dispatched_buffer.logical_shape();
+    if (x_row_index.has_value()) {
+        TT_FATAL(x_is_row_major, "x_row_index needs a ROW_MAJOR dispatched_buffer");
+        out_shape[-2] = x_row_index->logical_shape()[-1];
+    }
+    //   * output_row_major (row-major input only): the shared output is ROW_MAJOR bf16 instead, for a consumer
+    //     that gathers rows (no untilize of the whole buffer).
+    TT_FATAL(!output_row_major || x_is_row_major, "output_row_major needs a ROW_MAJOR dispatched_buffer");
     const ttnn::Tensor output =
         x_is_row_major ? ttnn::empty(
-                             dispatched_buffer.logical_shape(),
-                             tt::tt_metal::DataType::BFLOAT8_B,
-                             tt::tt_metal::Layout::TILE,
+                             out_shape,
+                             output_row_major ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::BFLOAT8_B,
+                             output_row_major ? tt::tt_metal::Layout::ROW_MAJOR : tt::tt_metal::Layout::TILE,
                              dispatched_buffer.device(),
                              tt::tt_metal::MemoryConfig{
                                  tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM})
@@ -108,7 +121,10 @@ ttnn::Tensor unified_routed_expert_moe(
         up_biases_v,
         down_biases_v,
         min_active_tokens,
-        max_active_tokens);
+        max_active_tokens,
+        l1_end,
+        x_row_index,
+        zero_output_row);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

@@ -27,6 +27,7 @@
 
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
@@ -329,6 +330,21 @@ void py_module(nb::module_& mod) {
               in-use state. Call before closing a mesh that has carved submeshes so the shared
               command queue is idle, otherwise close throws "cq is in use by child submesh".
         )doc")
+        .def(
+            "lowest_occupied_compute_l1_address",
+            [](const MeshDevice& self) { return self.lowest_occupied_compute_l1_address(); },
+            R"doc(
+           Lowest L1 address held by a buffer on the compute cores (all devices of the mesh), or None
+           when no L1 buffer is allocated. Circular buffers of a program must end below it.
+       )doc")
+        .def(
+            "l1_allocator_base",
+            [](const MeshDevice& self) {
+                return self.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+            },
+            R"doc(
+           L1 address where the L1 allocator (and a program's circular buffers) start on the compute cores.
+       )doc")
         .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,

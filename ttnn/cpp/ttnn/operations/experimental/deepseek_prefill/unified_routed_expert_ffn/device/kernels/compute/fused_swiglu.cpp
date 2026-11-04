@@ -59,6 +59,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
+#include "api/compute/pack_untilize.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/assert.h"
 #include "api/debug/kernel_profiler.hpp"
@@ -147,7 +148,11 @@ template <
     // Real (unpadded) K-tiles of the reduction dim. Defaults to the full padded
     // extent (reduce everything); the down phase passes the true count so no
     // padded K position is ever reduced.
-    uint32_t real_k_tiles = num_blocks * in0_block_w>
+    uint32_t real_k_tiles = num_blocks * in0_block_w,
+    // Pack the final block untilized (row-major): each output tile-row leaves as one
+    // [32, N_PER_ROW * 32] row-major block, its subblocks placed side by side by
+    // pack_untilize_dest. The down phase sets it for a ROW_MAJOR output (OUT_ROW_MAJOR).
+    bool untilize_final = false>
 FORCE_INLINE void matmul_phase(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -165,6 +170,9 @@ FORCE_INLINE void matmul_phase(
             out_block_num_tiles,
         "subblock grid must tile the output block exactly");
     static_assert(real_k_tiles <= num_blocks * in0_block_w, "real_k_tiles must not exceed the padded K extent");
+    // pack_untilize_dest places subblock c at column c * out_subblock_w of the row, so the
+    // row must be whole subblocks (the program factory rejects a ragged grid with it).
+    static_assert(!untilize_final || out_subblock_w_tail == out_subblock_w, "untilized pack needs an exact N grid");
     // Adaptive per_core_M: this core's down output is m_subblocks tile-rows this
     // chunk. The partials accumulator shrinks with it; the down WEIGHT block stays
     // full-width (M-independent). Rows past m_subblocks are never written by the
@@ -326,12 +334,22 @@ FORCE_INLINE void matmul_phase(
     copy_init(partials_cb_id);
 #endif
 
+    // Untilized pack: reconfigure the packer for row-major output after the data-format
+    // reconfig above; pack_untilize_uninit below restores tile packing for the next chunk.
+    if constexpr (untilize_final) {
+        pack_untilize_dest_init<out_subblock_w, N_PER_ROW>(final_cb_id);
+    }
+
     // Walk (sb_m, sb_n) rather than a flat subblock count: on a ragged grid the last
     // N-subblock is narrower, so the drain must pop and push exactly what the MAC packed.
     // Tiles still leave in row-major (m, n) order and still total m_subblocks * per_core_N,
     // so the writer's fixed drain contract is unchanged -- only the subblock widths differ.
+    // Untilized, the push unit is one whole tile-row (N_PER_ROW tiles) instead of a subblock.
     uint32_t flat_base = 0;
     for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+        if constexpr (untilize_final) {
+            final_cb.reserve_back(N_PER_ROW);
+        }
         for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
             const uint32_t this_w = (sb_n + 1 == in1_num_subblocks) ? out_subblock_w_tail : out_subblock_w;
             const uint32_t this_tiles = this_w * out_subblock_h;
@@ -356,15 +374,25 @@ FORCE_INLINE void matmul_phase(
                 tile_regs_wait();
             }
 
-            final_cb.reserve_back(this_tiles);
-            for (uint32_t i = 0; i < this_tiles; ++i) {
-                pack_tile(i, final_cb_id);
+            if constexpr (untilize_final) {
+                pack_untilize_dest<out_subblock_w, N_PER_ROW>(final_cb_id, /*block_rt_dim=*/1, /*block_c_index=*/sb_n);
+            } else {
+                final_cb.reserve_back(this_tiles);
+                for (uint32_t i = 0; i < this_tiles; ++i) {
+                    pack_tile(i, final_cb_id);
+                }
+                final_cb.push_back(this_tiles);
             }
-            final_cb.push_back(this_tiles);
 
             tile_regs_release();
             flat_base += this_tiles;
         }
+        if constexpr (untilize_final) {
+            final_cb.push_back(N_PER_ROW);
+        }
+    }
+    if constexpr (untilize_final) {
+        pack_untilize_uninit(final_cb_id);
     }
 
     // Pointer-only drain of the partials tail: slots [EFF_OUT, out_block_num_tiles)
@@ -385,6 +413,11 @@ FORCE_INLINE void matmul_phase(
     // in0_num_subblocks M-rows of in1_num_subblocks subblocks each, and a uniform-width pad
     // would desynchronise its wait_front on a ragged grid.
     for (uint32_t sb_m = EFF_M; sb_m < in0_num_subblocks; ++sb_m) {
+        if constexpr (untilize_final) {
+            final_cb.reserve_back(N_PER_ROW);
+            final_cb.push_back(N_PER_ROW);
+            continue;
+        }
         for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
             const uint32_t pad_tiles =
                 ((sb_n + 1 == in1_num_subblocks) ? out_subblock_w_tail : out_subblock_w) * out_subblock_h;
@@ -882,6 +915,13 @@ FORCE_INLINE void multiply_phase(
 
 }  // namespace
 
+// ROW_MAJOR output (op.output_row_major): the down phase packs cb_out untilized, one tile-row per push.
+#ifdef OUT_ROW_MAJOR
+constexpr bool kOutRowMajor = true;
+#else
+constexpr bool kOutRowMajor = false;
+#endif
+
 void kernel_main() {
     // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
     // highest-gx cores own phantom output columns whose weights were never fetched;
@@ -1158,7 +1198,8 @@ void kernel_main() {
                 /*apply_silu_on_final=*/false,
                 /*out_subblock_w_tail=*/d_out_subblock_w_tail,
                 /*d_per_core_N=*/d_in1_per_core_w,
-                /*real_k_tiles=*/d_K_down_tiles>(
+                /*real_k_tiles=*/d_K_down_tiles,
+                /*untilize_final=*/kOutRowMajor>(
                 cb_in0_down_full,
                 cb_in1_down,
                 cb_partials_d,

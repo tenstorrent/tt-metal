@@ -31,6 +31,11 @@ class AttentionWeights:
     # o_proj bias is applied on the first TP device only (row-parallel).
     wqkv_stream: ttnn.Tensor = None
     o_proj_stream: ttnn.Tensor = None
+    # Prefill o_proj (+ bias) without the CCL tile padding columns, sliced on device from o_proj / o_proj_bias. The
+    # prefill TP sum is one ttnn.all_reduce over the full hidden width, which needs no tile-aligned per-device split,
+    # so the padded columns and the slice that drops them after the all-gather are not needed. None when unpadded.
+    o_proj_prefill: ttnn.Tensor = None
+    o_proj_bias_prefill: ttnn.Tensor = None
 
 
 def load_attention_weights(
@@ -271,6 +276,19 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    o_proj_prefill_tt = o_proj_bias_prefill_tt = None
+    if o_proj_pad_size > 0 and mesh_config.tp > 1 and ttnn.device.is_blackhole(mesh_device):
+        # Blackhole only (measured there; other architectures keep the padded RS + AG path).
+        # The padding columns sit after column hidden_size of every device's [K_local, padded_hidden] shard.
+        w_shape = list(o_proj_tt.shape)
+        o_proj_prefill_tt = ttnn.slice(
+            o_proj_tt, [0] * len(w_shape), w_shape[:-1] + [hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        b_shape = list(o_proj_bias_tt.shape)
+        o_proj_bias_prefill_tt = ttnn.slice(
+            o_proj_bias_tt, [0] * len(b_shape), b_shape[:-1] + [hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
     return AttentionWeights(
         wqkv=wqkv,
         wqkv_bias=wqkv_bias,
@@ -280,4 +298,6 @@ def load_attention_weights(
         sinks=sinks_tt,
         wqkv_stream=wqkv_stream_tt,
         o_proj_stream=o_proj_stream_tt,
+        o_proj_prefill=o_proj_prefill_tt,
+        o_proj_bias_prefill=o_proj_bias_prefill_tt,
     )
