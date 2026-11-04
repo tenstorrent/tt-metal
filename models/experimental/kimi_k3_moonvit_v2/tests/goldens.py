@@ -23,7 +23,8 @@ Two precisions:
   would otherwise change the model, not only the precision.
 - `bf16` (`<grid>-seed<seed>`): the reference as it runs, bf16 with upstream eager attention. Its
   own rounding (bf16 attention probabilities and residual stream) is large where activations are
-  large: at full size, layer 18 has PCC 0.983 against fp32, while the device has 0.99998.
+  large: at full size, layer 18 has PCC 0.983 against fp32, while the device has 0.99998. After
+  the projector it is worse: on a 64x64 image the bf16 model's output has PCC 0.848 against fp32.
 
 Pixels are `random_patches(config, grid, seed)`. The loop is `MoonViT3dEncoder.forward` with every
 block's output kept: each block gets the arguments `forward` gives it (`reference_rope`).
@@ -116,10 +117,11 @@ def use_chunked_attention():
 
 
 def to_fp32(reference):
-    """The reference in fp32 with the bf16 model's RMSNorm eps."""
+    """The reference in fp32 with the bf16 model's RMSNorm eps. Only the norms built with `eps=None`
+    (the encoder's) take it from the dtype; the projector's `post_norm` sets its own (1e-5) and keeps it."""
     reference = reference.float()
     for module in reference.modules():
-        if isinstance(module, torch.nn.RMSNorm):
+        if isinstance(module, torch.nn.RMSNorm) and module.eps is None:
             module.eps = NORM_EPS
     return reference
 
