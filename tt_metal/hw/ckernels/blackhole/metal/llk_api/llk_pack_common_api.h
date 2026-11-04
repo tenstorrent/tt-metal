@@ -26,9 +26,9 @@
  *
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
-inline void llk_pack_wait_fp32_dest_acc() {
+inline void llk_pack_wait_fp32_dest_acc(bool enable) {
     SAN_HOOK(unsupported());
-    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(enable);
 }
 
 /**
@@ -177,6 +177,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
         StateVal<Operand<Exu::Pack>::PartialFace>(false),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
+    LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
