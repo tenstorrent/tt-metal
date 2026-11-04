@@ -8,6 +8,7 @@ from model_tracer.resolve_trace_runner import (
     arch_for,
     check_models,
     hf_model_coverage,
+    is_hub_id,
     resolve_sku,
     weights_mount,
 )
@@ -85,25 +86,82 @@ def test_coverage_reads_hf_model_from_cmd_and_env(tmp_path):
     assert cov == {"meta-llama/Llama-3.2-1B-Instruct": {"wh_n150"}, "Qwen/Qwen3-0.6B": {"bh_p150"}}
 
 
+def test_coverage_reads_multiline_cmd_cleanly(tmp_path):
+    (tmp_path / "a.yaml").write_text(
+        "- name: a\n" "  cmd: |\n" "    export HF_MODEL=org/a\n" "    export X=1\n" "  skus:\n" "    wh_n150: {}\n"
+    )
+    assert hf_model_coverage(tmp_path) == {"org/a": {"wh_n150"}}
+
+
+def test_coverage_credits_per_sku_hf_model_to_that_sku_only(tmp_path):
+    (tmp_path / "a.yaml").write_text(
+        "- name: perf\n"
+        "  cmd: export HF_MODEL={hf_model}\n"
+        "  skus:\n"
+        "    wh_n150: {hf_model: org/small}\n"
+        "    bh_p150: {hf_model: org/big}\n"
+    )
+    assert hf_model_coverage(tmp_path) == {"org/small": {"wh_n150"}, "org/big": {"bh_p150"}}
+
+
+def test_coverage_drops_placeholders_and_shell_expansions(tmp_path):
+    (tmp_path / "a.yaml").write_text(
+        "- name: junk\n"
+        "  cmd: |\n"
+        "    export HF_MODEL={hf_model}\n"
+        "    export HF_MODEL=$(python -c 'print(1)')\n"
+        "    export HF_MODEL=hub-id\n"
+        "    HF_MODEL=local\n"
+        "    HF_MODEL=\n"
+        "  env:\n"
+        "    HF_MODEL: ''\n"
+        "  skus:\n"
+        "    wh_n150: {}\n"
+    )
+    assert hf_model_coverage(tmp_path) == {}
+
+
+@pytest.mark.parametrize("model", ["meta-llama/Llama-3.2-1B-Instruct", "Qwen/Qwen3-0.6B", "org/a.b_c-d"])
+def test_is_hub_id_accepts_org_name(model, tmp_path):
+    assert is_hub_id(model, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["/mnt/MLPerf/x/y", "models/demos/gemma4/configs/gemma-4-E2B-it", "org/name/extra", "single", "-org/name", ""],
+)
+def test_is_hub_id_rejects_paths_and_junk(model, tmp_path):
+    assert not is_hub_id(model, tmp_path)
+
+
+def test_is_hub_id_rejects_existing_repo_dir(tmp_path):
+    (tmp_path / "configs" / "model").mkdir(parents=True)
+    assert not is_hub_id("configs/model", tmp_path)
+    assert is_hub_id("configs/other", tmp_path)
+
+
 COVERAGE = {"meta-llama/Llama-3.2-1B-Instruct": {"wh_n150"}, "Qwen/Qwen3-0.6B": {"bh_p150"}}
 
 
 def test_covered_model_passes():
-    assert check_models(["meta-llama/Llama-3.2-1B-Instruct"], "wh_n150", SKUS, COVERAGE) == ([], [])
+    assert check_models(["meta-llama/Llama-3.2-1B-Instruct"], "wh_n150", SKUS, COVERAGE) == []
 
 
 def test_same_mount_other_sku_warns():
-    errors, warnings = check_models(["Qwen/Qwen3-0.6B"], "bh_loudbox", SKUS, COVERAGE)
-    assert errors == []
+    warnings = check_models(["Qwen/Qwen3-0.6B"], "bh_loudbox", SKUS, COVERAGE)
+    assert len(warnings) == 1
     assert "bh_p150" in warnings[0]
 
 
-def test_uncovered_model_on_offline_cache_fails_and_names_alternatives():
-    errors, _ = check_models(["meta-llama/Llama-3.2-1B-Instruct"], "bh_loudbox", SKUS, COVERAGE)
-    assert len(errors) == 1
-    assert "wh_n150" in errors[0] and "bh_p150_perf" in errors[0]
+def test_uncovered_model_on_offline_cache_warns_and_names_alternatives():
+    warnings = check_models(["meta-llama/Llama-3.2-1B-Instruct"], "bh_loudbox", SKUS, COVERAGE)
+    assert len(warnings) == 1
+    assert "wh_n150" in warnings[0] and "bh_p150_perf" in warnings[0]
 
 
-def test_online_cache_and_local_paths_skip_the_check():
-    assert check_models(["anything/at-all"], "bh_p150_perf", SKUS, COVERAGE) == ([], [])
-    assert check_models(["/mnt/MLPerf/tt_dnn-models/x", ""], "bh_loudbox", SKUS, COVERAGE) == ([], [])
+def test_online_cache_and_local_paths_skip_the_check(tmp_path):
+    assert check_models(["anything/at-all"], "bh_p150_perf", SKUS, COVERAGE) == []
+    assert check_models(["/mnt/MLPerf/tt_dnn-models/x", ""], "bh_loudbox", SKUS, COVERAGE) == []
+    assert check_models(["models/demos/gemma4/configs/gemma-4-E2B-it"], "bh_loudbox", SKUS, COVERAGE) == []
+    (tmp_path / "configs" / "model").mkdir(parents=True)
+    assert check_models(["configs/model"], "bh_loudbox", SKUS, COVERAGE, repo_root=tmp_path) == []

@@ -9,6 +9,9 @@ The trace runs on the same runner pools and weights mounts as the model e2e pipe
 (``.github/sku_config.yaml``), so a model finds its weights wherever CI already runs it.
 Shared caches are read-only and offline, so a model only has weights there if some CI test
 uses it on a SKU with the same mount; per-runner caches download from HF on first use.
+
+The coverage check is advisory: it reads CI test YAML, which can miss how a model reaches
+its weights, so it only warns. The trace step's check against the mounted cache decides.
 """
 
 import argparse
@@ -33,7 +36,13 @@ LABEL_ALIASES = {
 
 ONLINE_MODES = ("local-disk", "lfc")
 
-_HF_MODEL_RE = re.compile(r"""\bHF_MODEL\s*[=:]\s*["']?([^\s"']+)""")
+_HF_MODEL_RE = re.compile(r"""\bHF_MODEL[ \t]*[=:][ \t]*["']?([A-Za-z0-9_.\-/]+)""")
+_HUB_ID_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
+
+
+def is_hub_id(model, repo_root="."):
+    """True for an HF hub id (org/name); False for a local path, absolute or repo-relative."""
+    return bool(_HUB_ID_RE.match(model)) and not (Path(repo_root) / model).is_dir()
 
 
 def resolve_sku(label, skus):
@@ -47,7 +56,9 @@ def resolve_sku(label, skus):
         raise ValueError(f"SKU {sku} has no runs_on in .github/sku_config.yaml")
     # Same rule as .github/scripts/utils/prepare_test_matrix.py. Multihost pools need the worker
     # setup from models-e2e-tests-multihost-impl.yaml, which the trace job does not do.
-    if "allocation" in entry or any(isinstance(label, str) and "exabox-multihost" in label for label in runs_on):
+    if "allocation" in entry or any(
+        isinstance(runner_tag, str) and "exabox-multihost" in runner_tag for runner_tag in runs_on
+    ):
         raise ValueError(f"SKU {sku} is a multihost pool; model tracing supports single-host SKUs only")
     return sku, entry
 
@@ -77,6 +88,25 @@ def weights_mount(mode):
     return "/mnt/MLPerf:/mnt/MLPerf:ro", "1"
 
 
+def _hf_models_in(node):
+    """HF_MODEL values set anywhere in a test entry: shell assignments in strings, env keys."""
+    found = set()
+    if isinstance(node, str):
+        found.update(_HF_MODEL_RE.findall(node))
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("HF_MODEL", "hf_model") and isinstance(value, str):
+                found.add(value.strip())
+            else:
+                found |= _hf_models_in(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _hf_models_in(item)
+    # Template placeholders and shell expansions are not model names; real ones are an
+    # org/name hub id or a path, so both contain a slash.
+    return {m for m in found if "/" in m and m.strip("/") and re.fullmatch(r"[A-Za-z0-9_.\-/]+", m)}
+
+
 def hf_model_coverage(test_yaml_dir):
     """Map each HF_MODEL named by a CI test to the SKUs that run it."""
     coverage = {}
@@ -90,22 +120,26 @@ def hf_model_coverage(test_yaml_dir):
         for entry in entries:
             if not isinstance(entry, dict) or not isinstance(entry.get("skus"), dict):
                 continue
-            text = yaml.safe_dump(entry)
-            for model in set(_HF_MODEL_RE.findall(text)):
+            shared = {k: v for k, v in entry.items() if k != "skus"}
+            for model in _hf_models_in(shared):
                 coverage.setdefault(model, set()).update(entry["skus"])
+            # A per-SKU block can pick its own model, which only that SKU runs.
+            for sku, sku_entry in entry["skus"].items():
+                for model in _hf_models_in(sku_entry):
+                    coverage.setdefault(model, set()).add(sku)
     return coverage
 
 
-def check_models(hf_models, sku, skus, coverage):
-    """Return (errors, warnings) for models whose weights the SKU's cache likely lacks."""
+def check_models(hf_models, sku, skus, coverage, repo_root="."):
+    """Return warnings for hub models whose weights the SKU's cache likely lacks."""
     mode = skus[sku].get("weights-cache-mode", "")
     if mode in ONLINE_MODES:
-        return [], []
+        return []
     mount = weights_mount(mode)[0]
     online = sorted(s for s, e in skus.items() if e.get("weights-cache-mode") in ONLINE_MODES)
-    errors, warnings = [], []
+    warnings = []
     for model in hf_models:
-        if not model or model.startswith("/"):
+        if not model or not is_hub_id(model, repo_root):
             continue
         covered = coverage.get(model, set())
         if sku in covered:
@@ -120,11 +154,11 @@ def check_models(hf_models, sku, skus, coverage):
             )
             continue
         where = f"CI runs it on: {', '.join(sorted(covered))}" if covered else "no CI test uses it"
-        errors.append(
-            f"{model} is not in the {sku} weights cache (read-only, offline; {where}). "
+        warnings.append(
+            f"{model} is likely not in the {sku} weights cache (read-only, offline; {where}). "
             f"Use one of those SKUs, or a SKU that downloads from HF: {', '.join(online)}"
         )
-    return errors, warnings
+    return warnings
 
 
 def main():
@@ -147,11 +181,8 @@ def main():
         return 1
 
     hf_models = [item.get("hf_model", "") for item in json.loads(args.matrix).get("include", [])]
-    errors, warnings = check_models(hf_models, sku, skus, hf_model_coverage(args.test_yaml_dir))
-    for w in warnings:
+    for w in check_models(hf_models, sku, skus, hf_model_coverage(args.test_yaml_dir)):
         print(f"::warning::{w}")
-    for e in errors:
-        print(f"::error::{e}")
 
     outputs = {
         "arch": arch,
@@ -163,8 +194,6 @@ def main():
         "hf_offline": hf_offline,
     }
     print(json.dumps(outputs, indent=2))
-    if errors:
-        return 1
     gh_out = os.environ.get("GITHUB_OUTPUT")
     if gh_out:
         with open(gh_out, "a") as f:

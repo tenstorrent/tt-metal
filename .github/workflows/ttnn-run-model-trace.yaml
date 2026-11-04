@@ -104,9 +104,13 @@ jobs:
               print("::error::models must be a non-empty YAML/JSON list of {test_path, HF_MODEL?, extra_args?, env?} entries")
               sys.exit(1)
 
-          # The job itself depends on these, so a model entry may not override them. HF_HOME stays
-          # overridable because model tests pin their own checkpoint root (e.g. /mnt/MLPerf/huggingface).
-          RESERVED_ENV = {"PATH", "HOME", "PYTHONPATH", "TT_METAL_HOME", "HF_MODEL", "TEST_PATH", "EXTRA_ARGS"}
+          # The job itself depends on these, so a model entry may not override them. HF_HUB_OFFLINE
+          # follows the weights mount, and going online against a read-only mount fails. HF_HOME and
+          # HF_HUB_CACHE stay overridable for tests that read checkpoints from their own root; for hub
+          # lookups HF_HUB_CACHE takes precedence over HF_HOME.
+          RESERVED_ENV = {
+              "PATH", "HOME", "PYTHONPATH", "TT_METAL_HOME", "HF_MODEL", "HF_HUB_OFFLINE", "TEST_PATH", "EXTRA_ARGS"
+          }
           RESERVED_ENV_PREFIXES = ("LD_", "PYTHON", "GITHUB_", "RUNNER_", "TTNN_OPERATION_TRACE")
 
           def env_errors(idx, env):
@@ -228,7 +232,6 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
-        HF_HOME: /mnt/MLPerf/huggingface
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         # Shared read-only caches must stay offline: HF writes metadata on every lookup.
         HF_HUB_OFFLINE: ${{ needs.validate-inputs.outputs.hf-offline }}
@@ -317,22 +320,30 @@ jobs:
 
           # After the per-model env, so a cache override covers both the download and the test.
           if [[ -n "$HF_MODEL" ]]; then
-            if [[ "$HF_MODEL" == /* ]]; then
-              EXPECTED="$HF_MODEL"
-            else
-              EXPECTED="$HF_HUB_CACHE/models--${HF_MODEL//\//--}"
-            fi
-            if [[ "$HF_HUB_OFFLINE" == "0" && "$HF_MODEL" != /* ]]; then
+            # Same rule as is_hub_id in resolve_trace_runner.py: an org/name that is not a
+            # directory in the checkout is a hub id; anything else is a local path.
+            SLASHES="${HF_MODEL//[^\/]/}"
+            if [[ "$HF_MODEL" == /* || -d "$HF_MODEL" || ${#SLASHES} -gt 1 ]]; then
+              if [[ -d "$HF_MODEL" ]]; then
+                echo "Using local weights at $HF_MODEL"
+              else
+                echo "::error::local HF_MODEL path not found: $HF_MODEL"
+                exit 1
+              fi
+            elif [[ "$HF_HUB_OFFLINE" == "0" ]]; then
               # Model code passes local_files_only=True whenever CI=true, so it never downloads
               # by itself; fill the per-runner cache before the test runs.
               echo "Syncing $HF_MODEL into the per-runner cache ($HF_HUB_CACHE)"
               python3 -c 'import os, huggingface_hub as h; print(h.snapshot_download(os.environ["HF_MODEL"]))'
-            elif [[ -d "$EXPECTED" ]]; then
-              echo "Found weights for $HF_MODEL at $EXPECTED"
             else
-              echo "::error::$HF_MODEL is not in the $SKU weights cache ($EXPECTED) and this cache is offline."
-              echo "::error::Pick a SKU whose CI tests use this model, or one whose weights cache downloads from HF."
-              exit 1
+              EXPECTED="$HF_HUB_CACHE/models--${HF_MODEL//\//--}"
+              if [[ -d "$EXPECTED" ]]; then
+                echo "Found weights for $HF_MODEL at $EXPECTED"
+              else
+                echo "::error::$HF_MODEL is not in the $SKU weights cache ($EXPECTED) and this cache is offline."
+                echo "::error::Pick a SKU whose CI tests use this model, or one whose weights cache downloads from HF."
+                exit 1
+              fi
             fi
           fi
 

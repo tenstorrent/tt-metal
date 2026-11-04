@@ -208,8 +208,8 @@ def get_machine_info(tt_smi_snapshot=None):
                 board_type = "Wormhole"
             elif chip.as_bh() is not None:
                 board_type = "Blackhole"
-            # Chip arch not recognised — leave board_type as None so
-            # downstream callers treat machine info as unavailable.
+            # An unrecognised arch leaves board_type as None; tt-smi's arch or board series
+            # fills it in below.
             pyluwen_device_count = len(pci_interfaces)
     except Exception:
         # pyluwen is an optional dependency; on any failure we fall back to tt-smi below.
