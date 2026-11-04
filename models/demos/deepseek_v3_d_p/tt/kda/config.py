@@ -102,12 +102,9 @@ class KDAProgramConfig:
     recurrence: KDARecurrenceProgramConfig = field(default_factory=KDARecurrenceProgramConfig)
     # Ceiling: the effective chunk is the largest TP-local channel divisor no greater than this value.
     qkv_channel_chunk_size: int = 768
-    # Fuse the output projection with the TP reduce-scatter (matmul_reduce_scatter_prefill).
+    # Fuse the output projection with the TP reduce-scatter (matmul_reduce_scatter_prefill). Its L1 staging is
+    # persistent and shared by every KDA layer; a model whose other ops need that L1 (Kimi-K3's MoE block) turns it off.
     fused_output_reduce_scatter: bool = True
-    # The fused op's L1 staging: persistent and shared by every KDA layer, or allocated per call and freed when the call
-    # returns. A model whose other ops need that L1 between the KDA calls (Kimi-K3's MoE block plans its per-call arena
-    # over the L1 left free) keeps it per call.
-    fused_output_persistent_staging: bool = True
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
