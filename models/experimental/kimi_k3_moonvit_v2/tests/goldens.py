@@ -58,6 +58,16 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import random_patches, 
 
 GOLDEN_DIR_ENV = "MOONVIT_GOLDEN_DIR"
 REFERENCE_DIR = Path(__file__).resolve().parents[1] / "reference"
+# The reference files the saved outputs depend on, hashed into `meta.json`. Not the image preprocessing
+# (`kimi_k3_vision_processing.py`, `media_utils.py`): the outputs start from `random_patches`.
+REFERENCE_FILES = (
+    "__init__.py",
+    "checkpoint.py",
+    "configuration_kimi_k3.py",
+    "kimi_k3_vision.py",
+    "modeling_kimi_k3.py",
+    "config.json",
+)
 DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 CHUNK_SIZE = 2048
 # The bf16 model's RMSNorm eps (`nn.RMSNorm(eps=None)` on bf16 input), kept when running in fp32.
@@ -135,7 +145,7 @@ def fingerprint(checkpoint: Path, dtype: str) -> dict:
         "dtype": dtype,
         "attention": attention,
         "checkpoint_index_sha256": sha256([checkpoint / "model.safetensors.index.json"]),
-        "reference_sha256": sha256(sorted(REFERENCE_DIR.glob("*.py")) + [REFERENCE_DIR / "config.json"]),
+        "reference_sha256": sha256([REFERENCE_DIR / name for name in REFERENCE_FILES]),
         "torch": torch.__version__,
     }
 
