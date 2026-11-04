@@ -72,8 +72,6 @@ struct AllReduceEpilogue {
     ttnn::MeshCoordinate coord;
     std::optional<ttnn::MeshCoordinate> forward_coord;
     std::optional<ttnn::MeshCoordinate> backward_coord;
-    uint32_t num_targets_forward;
-    uint32_t num_targets_backward;
     std::vector<uint32_t> forward_mcast_args;  // get_forward_backward_line_mcast_configuration
     std::vector<uint32_t> backward_mcast_args;
 };
@@ -1612,12 +1610,11 @@ ProgramDescriptor build_program_descriptor(
 
     // ---- Fused TP all-reduce (MultiCoreAllReduce only). ----
     // Group 0's down cores -- the output cores -- write their partial into this chip's slot of the
-    // scratch and bump their link's sender; each sender (outside the op's cores) line-multicasts its
-    // cores' slots to every chip of the ring with all_reduce_async's worker_writer; the group-0
+    // scratch and bump their link's sender; each sender (outside the expert grid) line-multicasts its
+    // cores' slots to every chip of the ring (ar_sender.cpp); the group-0
     // writer then waits for all ring_size slots and the group-0 compute sums them into the output.
     const bool fuse_ar = all_reduce != nullptr;
     constexpr uint32_t sem_ar_ready_id = 6;  // senders: one bump per output core of the link
-    constexpr uint32_t sem_ar_mcast_id = 7;  // senders: worker_writer's local reduction semaphore
     constexpr uint32_t cb_ar_scratch = CBIndex::c_19;
     constexpr uint32_t cb_ar_out = CBIndex::c_20;
     constexpr uint32_t cb_ar_src = CBIndex::c_21;
@@ -1633,8 +1630,9 @@ ProgramDescriptor build_program_descriptor(
         ar_cores_per_link = tt::div_up(static_cast<uint32_t>(ar_out_cores.size()), all_reduce->num_links);
         const auto sub_device_cores =
             device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
-        // Senders run no fused-experts kernel: the first free worker cores from the bottom row up, which
-        // starts next to the output cores at x 0-1 and also covers a 12-wide grid with no column to spare.
+        // A sender takes one DM processor: preferably a free worker core, from the bottom row up (which
+        // starts next to the output cores at x 0-1), else a router core, whose RISCV_1 the router leaves
+        // free and whose routing is long done by the time the down projections finish.
         const CoreRangeSet taken = run_router ? all_cores.merge(router_cores) : all_cores;
         for (uint32_t y = grid.y; y-- > 0 && ar_senders.size() < all_reduce->num_links;) {
             for (uint32_t x = 0; x < grid.x && ar_senders.size() < all_reduce->num_links; ++x) {
@@ -1644,14 +1642,17 @@ ProgramDescriptor build_program_descriptor(
                 }
             }
         }
+        if (run_router) {
+            for (uint32_t x = 0; x < num_router_cores && ar_senders.size() < all_reduce->num_links; ++x) {
+                ar_senders.push_back(CoreCoord{x, GRID_Y});
+            }
+        }
         TT_FATAL(
             ar_senders.size() == all_reduce->num_links,
-            "fused_experts: all_reduce needs {} free sender cores outside the {}x{} expert grid{} on a {}x{} grid, "
-            "found {}",
+            "fused_experts: all_reduce needs {} sender cores outside the {}x{} expert grid on a {}x{} grid, found {}",
             all_reduce->num_links,
             GRID_X,
             GRID_Y,
-            run_router ? " and its router row" : "",
             grid.x,
             grid.y,
             ar_senders.size());
@@ -1899,15 +1900,13 @@ ProgramDescriptor build_program_descriptor(
         }
 
         // Before the fabric connections below, which take the first semaphore ids still free on a sender.
-        for (uint32_t s : {sem_ar_ready_id, sem_ar_mcast_id}) {
-            desc.semaphores.push_back(SemaphoreDescriptor{
-                .id = s,
-                .core_type = CoreType::WORKER,
-                .core_ranges = ar_sender_set,
-                .initial_value = 0,
-            });
-        }
-        // worker_writer takes the scratch base from its own cb_ar_scratch, so the senders declare it too.
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sem_ar_ready_id,
+            .core_type = CoreType::WORKER,
+            .core_ranges = ar_sender_set,
+            .initial_value = 0,
+        });
+        // The senders take the scratch base from their own cb_ar_scratch, so they declare it too.
         desc.cbs.push_back(CBDescriptor{
             .total_size = all_reduce->ring_size * shard_pages * out_tile_bytes,
             .core_ranges = ar_out_set.merge(ar_sender_set),
@@ -1952,35 +1951,27 @@ ProgramDescriptor build_program_descriptor(
             }}},
         });
 
-        KernelDescriptor ar_reader;
-        ar_reader.kernel_source = std::string(kKernelDir) + "/dataflow/ar_sender_reader.cpp";
-        ar_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        ar_reader.core_ranges = ar_sender_set;
-        ar_reader.compile_time_args = {cb_ar_src, out_tile_bytes, sem_ar_ready_id};
-        ar_reader.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
-
-        std::vector<uint32_t> ar_writer_ct_args = {
+        std::vector<uint32_t> ar_sender_ct_args = {
             all_reduce->device_index,
             cb_ar_headers,
-            kPacketHeaders,
             cb_ar_src,
+            cb_ar_scratch,
             std::max<uint32_t>(1, tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device) / out_tile_bytes),
             out_tile_bytes,
-            all_reduce->num_targets_forward,
-            all_reduce->num_targets_backward,
+            sem_ar_ready_id,
         };
-        ar_writer_ct_args.insert(
-            ar_writer_ct_args.end(), all_reduce->forward_mcast_args.begin(), all_reduce->forward_mcast_args.end());
-        ar_writer_ct_args.insert(
-            ar_writer_ct_args.end(), all_reduce->backward_mcast_args.begin(), all_reduce->backward_mcast_args.end());
-        KernelDescriptor ar_writer;
-        ar_writer.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/worker_writer.cpp";
-        ar_writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        ar_writer.core_ranges = ar_sender_set;
-        ar_writer.compile_time_args = std::move(ar_writer_ct_args);
-        ar_writer.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
-        ar_writer.common_runtime_args = {all_reduce->out_ready_sem_addr};
+        ar_sender_ct_args.insert(
+            ar_sender_ct_args.end(), all_reduce->forward_mcast_args.begin(), all_reduce->forward_mcast_args.end());
+        ar_sender_ct_args.insert(
+            ar_sender_ct_args.end(), all_reduce->backward_mcast_args.begin(), all_reduce->backward_mcast_args.end());
+        // RISCV_1: the one DM processor a router core leaves free (its router_topk reader is RISCV_0).
+        KernelDescriptor ar_sender;
+        ar_sender.kernel_source = std::string(kKernelDir) + "/dataflow/ar_sender.cpp";
+        ar_sender.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        ar_sender.core_ranges = ar_sender_set;
+        ar_sender.compile_time_args = std::move(ar_sender_ct_args);
+        ar_sender.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        ar_sender.common_runtime_args = {all_reduce->out_ready_sem_addr};
 
         for (uint32_t link = 0; link < all_reduce->num_links; ++link) {
             const uint32_t first = link * ar_cores_per_link;
@@ -1994,35 +1985,8 @@ ProgramDescriptor build_program_descriptor(
                 ys.push_back(noc.y);
             }
             const CoreCoord sender = ar_senders[link];
-            const auto sender_noc = device->worker_core_from_logical_core(sender);
 
-            // This chip's slot of the link's cores: the scratch base plus the slot's offset.
-            KernelDescriptor::RTArgList reader_args;
-            reader_args.push_back(all_reduce->scratch);
-            reader_args.push_back(all_reduce->device_index * shard_pages * out_tile_bytes);
-            reader_args.push_back(shard_pages);
-            reader_args.push_back(count * shard_pages);
-            reader_args.push_back(count);
-            reader_args.append(xs);
-            reader_args.append(ys);
-            ar_reader.emplace_runtime_args(sender, reader_args);
-
-            // worker_writer's layout (width_sharded_all_reduce_program_factory.cpp). It reads the
-            // multicast range list but never multicasts on it, so none is passed.
-            std::vector<uint32_t> fabric_args = {
-                cb_ar_scratch,
-                shard_pages,
-                count * shard_pages,
-                0u,  // first_core_tile_start_offset
-                count,
-                0u,  // num_mcast_cores
-                static_cast<uint32_t>(sender_noc.x),
-                static_cast<uint32_t>(sender_noc.y),
-                all_reduce->ring_size,
-                sem_ar_mcast_id,
-                0u,  // num_mcast_ranges
-                link,
-            };
+            std::vector<uint32_t> fabric_args = {shard_pages, count};
             fabric_args.insert(fabric_args.end(), xs.begin(), xs.end());
             fabric_args.insert(fabric_args.end(), ys.begin(), ys.end());
             fabric_args.push_back(all_reduce->forward_coord.has_value());
@@ -2045,11 +2009,10 @@ ProgramDescriptor build_program_descriptor(
                     sender,
                     fabric_args);
             }
-            ar_writer.runtime_args.emplace_back(
+            ar_sender.runtime_args.emplace_back(
                 sender, KernelDescriptor::CoreRuntimeArgs(fabric_args.begin(), fabric_args.end()));
         }
-        desc.kernels.push_back(std::move(ar_reader));
-        desc.kernels.push_back(std::move(ar_writer));
+        desc.kernels.push_back(std::move(ar_sender));
     }
 
     return desc;
@@ -2127,8 +2090,6 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
             .coord = coord,
             .forward_coord = forward,
             .backward_coord = backward,
-            .num_targets_forward = num_forward,
-            .num_targets_backward = num_backward,
             .forward_mcast_args = {forward_args.begin(), forward_args.end()},
             .backward_mcast_args = {backward_args.begin(), backward_args.end()},
         };
