@@ -17,7 +17,7 @@ extern "C" __attribute__((noinline, used)) void set_one_counter_one_channel()
 }
 
 // CHECK-LABEL: <set_one_counter_one_channel>:
-// CHECK-NEXT: ttsetadc 1,1,1,5
+// CHECK-NEXT: ttsetadc 1,1,1,5{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void set_x_both_channels()
@@ -27,7 +27,7 @@ extern "C" __attribute__((noinline, used)) void set_x_both_channels()
 }
 
 // CHECK-LABEL: <set_x_both_channels>:
-// CHECK-NEXT: ttsetadcxx 4,3,4
+// CHECK-NEXT: ttsetadcxx 4,3,4{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void set_x_channel0_y_channel1()
@@ -38,7 +38,7 @@ extern "C" __attribute__((noinline, used)) void set_x_channel0_y_channel1()
 
 // Write mask 0b1001 selects only Channel0 X and Channel1 Y.
 // CHECK-LABEL: <set_x_channel0_y_channel1>:
-// CHECK-NEXT: ttsetadcxy 2,7,0,0,6,9
+// CHECK-NEXT: ttsetadcxy 2,7,0,0,6,9{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void set_all_counters_two_clients()
@@ -49,8 +49,8 @@ extern "C" __attribute__((noinline, used)) void set_all_counters_two_clients()
 }
 
 // CHECK-LABEL: <set_all_counters_two_clients>:
-// CHECK-NEXT: ttsetadcxy 3,0,0,2,1,3
-// CHECK-NEXT: ttsetadczw 3,0,0,4,3,3
+// CHECK-NEXT: ttsetadcxy 3,0,0,2,1,3{{$}}
+// CHECK-NEXT: ttsetadczw 3,0,0,4,3,3{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void set_z_and_w_single_counters()
@@ -62,8 +62,8 @@ extern "C" __attribute__((noinline, used)) void set_z_and_w_single_counters()
 }
 
 // CHECK-LABEL: <set_z_and_w_single_counters>:
-// CHECK-NEXT: ttsetadc 4,1,3,9
-// CHECK-NEXT: ttsetadczw 4,0,2,0,1,5
+// CHECK-NEXT: ttsetadc 4,1,3,9{{$}}
+// CHECK-NEXT: ttsetadczw 4,0,2,0,1,5{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void increment_xy_and_zw()
@@ -74,8 +74,8 @@ extern "C" __attribute__((noinline, used)) void increment_xy_and_zw()
 }
 
 // CHECK-LABEL: <increment_xy_and_zw>:
-// CHECK-NEXT: ttincadcxy 4,0,0,2,1
-// CHECK-NEXT: ttincadczw 4,4,3,0,0
+// CHECK-NEXT: ttincadcxy 4,0,0,2,1{{$}}
+// CHECK-NEXT: ttincadczw 4,4,3,0,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void advance_and_reset_xy_and_zw()
@@ -85,8 +85,8 @@ extern "C" __attribute__((noinline, used)) void advance_and_reset_xy_and_zw()
 }
 
 // CHECK-LABEL: <advance_and_reset_xy_and_zw>:
-// CHECK-NEXT: ttaddrcrxy 4,0,0,0,1,1
-// CHECK-NEXT: ttaddrcrzw 4,0,0,0,2,1
+// CHECK-NEXT: ttaddrcrxy 4,0,0,0,1,1{{$}}
+// CHECK-NEXT: ttaddrcrzw 4,0,0,0,2,1{{$}}
 // CHECK-NEXT: ret
 
 constexpr auto set_xy =
@@ -118,12 +118,12 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 }
 
 // CHECK-LABEL: <issue_encoded_operations>:
-// CHECK-NEXT: ttsetadcxy 5,3,5,6,7,15
-// CHECK-NEXT: ttincadcxy 5,3,5,6,7
-// CHECK-NEXT: ttaddrcrxy 5,3,5,6,7,15
-// CHECK-NEXT: ttsetadczw 2,6,0,7,0,11
-// CHECK-NEXT: ttincadczw 2,6,0,7,0
-// CHECK-NEXT: ttaddrcrzw 2,6,0,7,0,11
+// CHECK-NEXT: ttsetadcxy 5,3,5,6,7,15{{$}}
+// CHECK-NEXT: ttincadcxy 5,3,5,6,7{{$}}
+// CHECK-NEXT: ttaddrcrxy 5,3,5,6,7,15{{$}}
+// CHECK-NEXT: ttsetadczw 2,6,0,7,0,11{{$}}
+// CHECK-NEXT: ttincadczw 2,6,0,7,0{{$}}
+// CHECK-NEXT: ttaddrcrzw 2,6,0,7,0,11{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void single_x_and_z()
@@ -134,8 +134,8 @@ extern "C" __attribute__((noinline, used)) void single_x_and_z()
 
 // Only one X counter is selected, so SETADCXX would change an unselected counter.
 // CHECK-LABEL: <single_x_and_z>:
-// CHECK-NEXT: ttsetadc 1,0,0,1
-// CHECK-NEXT: ttsetadc 1,0,2,2
+// CHECK-NEXT: ttsetadc 1,0,0,1{{$}}
+// CHECK-NEXT: ttsetadc 1,0,2,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void both_x_channels_and_z()
@@ -146,8 +146,8 @@ extern "C" __attribute__((noinline, used)) void both_x_channels_and_z()
 
 // SETADCXX takes X1 before X0. Z still needs its own instruction.
 // CHECK-LABEL: <both_x_channels_and_z>:
-// CHECK-NEXT: ttsetadcxx 1,20,10
-// CHECK-NEXT: ttsetadc 1,0,2,2
+// CHECK-NEXT: ttsetadcxx 1,20,10{{$}}
+// CHECK-NEXT: ttsetadc 1,0,2,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void prefer_xx_when_instruction_counts_tie()
@@ -159,8 +159,8 @@ extern "C" __attribute__((noinline, used)) void prefer_xx_when_instruction_count
 // Both SETADC(X0) + SETADCXY(Y0,X1) and SETADCXX(X0,X1) + SETADC(Y0) need two
 // instructions. Prefer the dedicated instruction for the two X counters.
 // CHECK-LABEL: <prefer_xx_when_instruction_counts_tie>:
-// CHECK-NEXT: ttsetadcxx 1,3,8
-// CHECK-NEXT: ttsetadc 1,0,1,2
+// CHECK-NEXT: ttsetadcxx 1,3,8{{$}}
+// CHECK-NEXT: ttsetadc 1,0,1,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void keep_packed_xy_when_shorter()
@@ -171,7 +171,7 @@ extern "C" __attribute__((noinline, used)) void keep_packed_xy_when_shorter()
 
 // SETADCXX would need a second instruction for Y0; the packed instruction covers all three.
 // CHECK-LABEL: <keep_packed_xy_when_shorter>:
-// CHECK-NEXT: ttsetadcxy 1,0,3,2,1,7
+// CHECK-NEXT: ttsetadcxy 1,0,3,2,1,7{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void x_exceeds_dual_x_width()
@@ -182,8 +182,8 @@ extern "C" __attribute__((noinline, used)) void x_exceeds_dual_x_width()
 
 // X0 does not fit SETADCXX's ten-bit value, so keep its full-width SETADC write.
 // CHECK-LABEL: <x_exceeds_dual_x_width>:
-// CHECK-NEXT: ttsetadc 1,0,0,1024
-// CHECK-NEXT: ttsetadcxy 1,0,3,2,0,6
+// CHECK-NEXT: ttsetadc 1,0,0,1024{{$}}
+// CHECK-NEXT: ttsetadcxy 1,0,3,2,0,6{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void packed_xy_and_single_z()
@@ -194,8 +194,8 @@ extern "C" __attribute__((noinline, used)) void packed_xy_and_single_z()
 
 // Both X values fit the packed instruction, so updating Y needs no extra instruction.
 // CHECK-LABEL: <packed_xy_and_single_z>:
-// CHECK-NEXT: ttsetadcxy 1,0,7,2,7,7
-// CHECK-NEXT: ttsetadc 1,0,2,2
+// CHECK-NEXT: ttsetadcxy 1,0,7,2,7,7{{$}}
+// CHECK-NEXT: ttsetadc 1,0,2,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void dual_x_and_single_y_z()
@@ -206,9 +206,9 @@ extern "C" __attribute__((noinline, used)) void dual_x_and_single_y_z()
 
 // Both X values fit SETADCXX; Y and Z each need their own instruction.
 // CHECK-LABEL: <dual_x_and_single_y_z>:
-// CHECK-NEXT: ttsetadcxx 1,1023,60
-// CHECK-NEXT: ttsetadc 1,0,1,2
-// CHECK-NEXT: ttsetadc 1,0,2,2
+// CHECK-NEXT: ttsetadcxx 1,1023,60{{$}}
+// CHECK-NEXT: ttsetadc 1,0,1,2{{$}}
+// CHECK-NEXT: ttsetadc 1,0,2,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void wide_x_values_and_single_y_z()
@@ -219,10 +219,10 @@ extern "C" __attribute__((noinline, used)) void wide_x_values_and_single_y_z()
 
 // X1 exceeds SETADCXX's range and neither X fits SETADCXY. Four writes are necessary.
 // CHECK-LABEL: <wide_x_values_and_single_y_z>:
-// CHECK-NEXT: ttsetadc 1,0,0,60
-// CHECK-NEXT: ttsetadc 1,1,0,60000
-// CHECK-NEXT: ttsetadc 1,0,1,2
-// CHECK-NEXT: ttsetadc 1,0,2,2
+// CHECK-NEXT: ttsetadc 1,0,0,60{{$}}
+// CHECK-NEXT: ttsetadc 1,1,0,60000{{$}}
+// CHECK-NEXT: ttsetadc 1,0,1,2{{$}}
+// CHECK-NEXT: ttsetadc 1,0,2,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void wide_x1_and_packed_x0_y()
@@ -233,9 +233,9 @@ extern "C" __attribute__((noinline, used)) void wide_x1_and_packed_x0_y()
 
 // X1 needs SETADC, but X0 and Y0 can still share a packed instruction.
 // CHECK-LABEL: <wide_x1_and_packed_x0_y>:
-// CHECK-NEXT: ttsetadc 1,1,0,60000
-// CHECK-NEXT: ttsetadcxy 1,0,0,2,7,3
-// CHECK-NEXT: ttsetadc 1,0,2,2
+// CHECK-NEXT: ttsetadc 1,1,0,60000{{$}}
+// CHECK-NEXT: ttsetadcxy 1,0,0,2,7,3{{$}}
+// CHECK-NEXT: ttsetadc 1,0,2,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void dual_x_and_packed_y_channels()
@@ -246,8 +246,8 @@ extern "C" __attribute__((noinline, used)) void dual_x_and_packed_y_channels()
 
 // Two full ten-bit X values share SETADCXX. Both Y values, including explicit zero, share SETADCXY.
 // CHECK-LABEL: <dual_x_and_packed_y_channels>:
-// CHECK-NEXT: ttsetadcxx 1,1023,1023
-// CHECK-NEXT: ttsetadcxy 1,7,0,0,0,10
+// CHECK-NEXT: ttsetadcxx 1,1023,1023{{$}}
+// CHECK-NEXT: ttsetadcxy 1,7,0,0,0,10{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void mixed_widths_all_counters()
@@ -259,12 +259,12 @@ extern "C" __attribute__((noinline, used)) void mixed_widths_all_counters()
 
 // Both families mix widths. Prefer XX on the XY tie and preserve explicitly selected zeroes.
 // CHECK-LABEL: <mixed_widths_all_counters>:
-// CHECK-NEXT: ttsetadcxx 5,1023,0
-// CHECK-NEXT: ttsetadc 5,0,1,8
-// CHECK-NEXT: ttsetadc 5,1,1,7
-// CHECK-NEXT: ttsetadc 5,0,3,1024
-// CHECK-NEXT: ttsetadc 5,1,2,8191
-// CHECK-NEXT: ttsetadczw 5,0,0,0,7,9
+// CHECK-NEXT: ttsetadcxx 5,1023,0{{$}}
+// CHECK-NEXT: ttsetadc 5,0,1,8{{$}}
+// CHECK-NEXT: ttsetadc 5,1,1,7{{$}}
+// CHECK-NEXT: ttsetadc 5,0,3,1024{{$}}
+// CHECK-NEXT: ttsetadc 5,1,2,8191{{$}}
+// CHECK-NEXT: ttsetadczw 5,0,0,0,7,9{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void wide_values_all_counters()
@@ -280,12 +280,12 @@ extern "C" __attribute__((noinline, used)) void wide_values_all_counters()
 
 // Every value needs SETADC, reaching the eight-instruction maximum within each dimension's range.
 // CHECK-LABEL: <wide_values_all_counters>:
-// CHECK-NEXT: ttsetadc 1,0,0,65535
-// CHECK-NEXT: ttsetadc 1,0,1,8191
-// CHECK-NEXT: ttsetadc 1,1,0,65531
-// CHECK-NEXT: ttsetadc 1,1,1,8188
-// CHECK-NEXT: ttsetadc 1,0,2,8190
-// CHECK-NEXT: ttsetadc 1,0,3,8189
-// CHECK-NEXT: ttsetadc 1,1,2,8187
-// CHECK-NEXT: ttsetadc 1,1,3,8186
+// CHECK-NEXT: ttsetadc 1,0,0,65535{{$}}
+// CHECK-NEXT: ttsetadc 1,0,1,8191{{$}}
+// CHECK-NEXT: ttsetadc 1,1,0,65531{{$}}
+// CHECK-NEXT: ttsetadc 1,1,1,8188{{$}}
+// CHECK-NEXT: ttsetadc 1,0,2,8190{{$}}
+// CHECK-NEXT: ttsetadc 1,0,3,8189{{$}}
+// CHECK-NEXT: ttsetadc 1,1,2,8187{{$}}
+// CHECK-NEXT: ttsetadc 1,1,3,8186{{$}}
 // CHECK-NEXT: ret
