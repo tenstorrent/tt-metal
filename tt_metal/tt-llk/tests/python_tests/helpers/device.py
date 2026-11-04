@@ -271,28 +271,23 @@ HOST_SIGNAL_MASK = 0xFFFFFF
 
 
 def launch_done_address() -> int | None:
-    """Wormhole and Blackhole silicon: the overlay register BRISC marks a launch done in (None on simulators)."""
+    """Wormhole and Blackhole: the overlay register BRISC marks a launch done in (None on ttsim, which waits on L1)."""
     index = _HOST_SIGNAL_SCRATCH_INDEX.get(get_chip_architecture())
     target = TestTargetConfig._instance
-    if index is None or (target is not None and target.run_simulator):
+    if index is None or (target is not None and target.runs_on_ttsim()):
         return None
     return _NOC_OVERLAY_START_ADDR + index * 4
 
 
 def host_signal_address(slot: int) -> int | None:
     """Quasar emulator and RTL simulator: the cluster control register the TRISC at mailbox word `slot` signals done
-    in. None elsewhere: ttsim keeps the L1 mailboxes, and Wormhole and Blackhole silicon use launch_done_address().
+    in. None elsewhere: ttsim keeps the L1 mailboxes, and Wormhole and Blackhole use launch_done_address().
     """
     if get_chip_architecture() != ChipArchitecture.QUASAR:
         return None
     # The emulator models the cluster control registers; ttsim (a shared library) does not
     target = TestTargetConfig._instance
-    sim = (
-        os.environ.get("TT_METAL_SIMULATOR")
-        or os.environ.get("TT_UMD_SIMULATOR_PATH")
-        or ""
-    )
-    if target is not None and target.run_simulator and sim.endswith(".so"):
+    if target is not None and target.runs_on_ttsim():
         return None
     return _QUASAR_HOST_SIGNAL_BASE + slot * 4
 
