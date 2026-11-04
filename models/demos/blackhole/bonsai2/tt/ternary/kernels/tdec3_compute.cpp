@@ -11,6 +11,7 @@
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/pack.h"
+#include "api/compute/compute_kernel_api.h"  // silu_tile_init
 #include "api/debug/kernel_profiler.hpp"
 
 constexpr uint32_t cb_x = tt::CBIndex::c_0;
@@ -70,8 +71,53 @@ inline void scale_acc_kb32(uint32_t acc, uint32_t p, uint32_t s, uint32_t) {
         sfpi::dst_reg[p * T + OFF[h]] = 0.0f;
     }
 }
-// Comma-free names for the SFPU call macro.
-inline void scale_acc_first(uint32_t a, uint32_t p, uint32_t s, uint32_t o) {
+// GLU pair: DEST tile 0 (up) *= silu(DEST tile 3 (gate)) on face rows 0-3 of faces 0 and 1 (SFPU rows 0, 1, 8, 9:
+// the [1,32] result). Needs silu_tile_init (Prgm0 = 2.0 for the reciprocal).
+inline void glu_row0(uint32_t, uint32_t, uint32_t, uint32_t) {
+    constexpr uint32_t T = 32;
+    constexpr uint32_t OFF[4] = {0, 1, 8, 9};
+#pragma GCC unroll 4
+    for (int h = 0; h < 4; ++h) {
+        sfpi::vFloat g = sfpi::dst_reg[3 * T + OFF[h]];
+        sfpi::vFloat u = sfpi::dst_reg[OFF[h]];
+        sfpi::dst_reg[OFF[h]] = u * g * _sfpu_sigmoid_<true>(g);
+    }
+}
+// Four kbs at once (BATCH4): their products P sit in DEST tiles p..p+3 (custom_mm dst 4..7); their scales are the 4
+// subvectors of one scale row (kbs J0..J0+3, J0 % 4 == 0), so one load + one subvec_transp serves all four.
+template <int J0, bool FIRST>
+inline void scale_acc4(uint32_t acc, uint32_t p, uint32_t s, uint32_t) {
+    constexpr uint32_t T = 32;
+    constexpr uint32_t SB = (J0 < 16 ? 0 : 16) + 2 * ((J0 % 16) / 4);
+    constexpr uint32_t OFF[4] = {0, 1, 8, 9};
+#pragma GCC unroll 4
+    for (int h = 0; h < 4; ++h) {
+        sfpi::vFloat a = sfpi::dst_reg[s * T + SB + OFF[h]];
+        sfpi::vFloat b = 0.0f, c = 0.0f, d = 0.0f;
+        sfpi::subvec_transp(a, b, c, d);
+        sfpi::vFloat sum = sfpi::dst_reg[p * T + OFF[h]] * a;
+        sum = sfpi::dst_reg[(p + 1) * T + OFF[h]] * b + sum;
+        sum = sfpi::dst_reg[(p + 2) * T + OFF[h]] * c + sum;
+        sum = sfpi::dst_reg[(p + 3) * T + OFF[h]] * d + sum;
+        if constexpr (FIRST) {
+            sfpi::dst_reg[acc * T + OFF[h]] = sum;
+        } else {
+            sfpi::dst_reg[acc * T + OFF[h]] = sfpi::dst_reg[acc * T + OFF[h]] + sum;
+        }
+        sfpi::dst_reg[p * T + OFF[h]] = 0.0f;
+        sfpi::dst_reg[(p + 1) * T + OFF[h]] = 0.0f;
+        sfpi::dst_reg[(p + 2) * T + OFF[h]] = 0.0f;
+        sfpi::dst_reg[(p + 3) * T + OFF[h]] = 0.0f;
+    }
+}
+// clang-format off
+#define SCALE4_FNS(J)                                                                                                 \
+    inline void s4_first_##J(uint32_t a, uint32_t p, uint32_t s, uint32_t o) { scale_acc4<J, true>(a, p, s, o); }   \
+    inline void s4_next_##J(uint32_t a, uint32_t p, uint32_t s, uint32_t o) { scale_acc4<J, false>(a, p, s, o); }
+SCALE4_FNS(0) SCALE4_FNS(4) SCALE4_FNS(8) SCALE4_FNS(12) SCALE4_FNS(16) SCALE4_FNS(20) SCALE4_FNS(24) SCALE4_FNS(28)
+    // clang-format on
+    // Comma-free names for the SFPU call macro.
+    inline void scale_acc_first(uint32_t a, uint32_t p, uint32_t s, uint32_t o) {
     calculate_scale_acc<SFPU_ITER, true>(a, p, s, o);
 }
 inline void scale_acc_next(uint32_t a, uint32_t p, uint32_t s, uint32_t o) {
@@ -124,14 +170,14 @@ ALWI void scale_tile_srca() {
     case J:                                                                                 \
         if (first) {                                                                        \
             SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                             \
-                DST_SYNC_MODE, DST_ACCUM_MODE, sr_first_##J, 0, 1, 2, 0, VectorMode::None); \
+                DST_SYNC_MODE, DST_ACCUM_MODE, sr_first_##J, acc, 1, 2, 0, VectorMode::None); \
         } else {                                                                            \
             SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                             \
-                DST_SYNC_MODE, DST_ACCUM_MODE, sr_next_##J, 0, 1, 2, 0, VectorMode::None);  \
+                DST_SYNC_MODE, DST_ACCUM_MODE, sr_next_##J, acc, 1, 2, 0, VectorMode::None);  \
         }                                                                                   \
         break;
 #endif
-ALWI void scale_acc_kb(uint32_t j, bool first) {
+ALWI void scale_acc_kb(uint32_t j, bool first, uint32_t acc = 0) {
 #ifdef TRISC_MATH
     switch (j) {
         SR_CASE(0)
@@ -143,6 +189,24 @@ ALWI void scale_acc_kb(uint32_t j, bool first) {
                 SR_CASE(22) SR_CASE(23) SR_CASE(24) SR_CASE(25) SR_CASE(26) SR_CASE(27) SR_CASE(28) SR_CASE(29)
                     SR_CASE(30) SR_CASE(31) default : break;
     }
+#endif
+}
+// clang-format on
+
+// clang-format off
+#ifdef TRISC_MATH
+#define S4_CASE(J)                                                                                            \
+    case J:                                                                                                   \
+        if (first) {                                                                                          \
+            SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, s4_first_##J, acc, 4, 2, 0, VectorMode::None); \
+        } else {                                                                                              \
+            SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, s4_next_##J, acc, 4, 2, 0, VectorMode::None);  \
+        }                                                                                                     \
+        break;
+#endif
+ALWI void scale_acc_quad(uint32_t j0, bool first, uint32_t acc = 0) {
+#ifdef TRISC_MATH
+    switch (j0) { S4_CASE(0) S4_CASE(4) S4_CASE(8) S4_CASE(12) S4_CASE(16) S4_CASE(20) S4_CASE(24) S4_CASE(28) default: break; }
 #endif
 }
 // clang-format on
@@ -182,7 +246,90 @@ void kernel_main() {
 #endif
     }
 
-#ifdef SCALE_GROUP16
+#if defined(PAGE_SPLIT) && defined(SCALE_GROUP16) && defined(INLINE_SCALES)
+    // The record's 4-KB pages alternate between c_1 (NCRISC) and c_6 (BRISC) by this core's page count q. Every unit
+    // of a record (a 2-KB scale tile, a 1-KB kb of 4 ternary tiles) lies inside one page, so the walk below waits on
+    // a page, takes the units in it at their offset, and pops it when the next unit starts a new page.
+    constexpr uint32_t G = (KB + 31) / 32;
+    constexpr uint32_t PPR = RECORD_PAGES / 16;
+    uint32_t q = 0;
+    for (uint32_t i = 0; i < num_nt; ++i) {
+        uint32_t cur = 0xFFFFFFFFu, cb_w = cb_w0, off = 0;
+        auto at = [&](uint32_t o) -> uint32_t {
+            const uint32_t p = o >> 12;
+            if (p != cur) {
+                if (cur != 0xFFFFFFFFu) {
+                    cb_pop_front(cb_w, 16);
+                    ++q;
+                }
+                cur = p;
+                cb_w = (q & 1) ? cb_w1 : cb_w0;
+                cb_wait_front(cb_w, 16);
+            }
+            return (o & 4095) >> 8;
+        };
+#ifdef GLU_PAIRS
+        // Records come in (gate, up) pairs: gate accumulates in DEST tile 3, up in tile 0, one output per pair.
+        const uint32_t acc = (i & 1) ? 0 : 3;
+        if ((i & 1) == 0) {
+            tile_regs_acquire();
+        }
+#else
+        const uint32_t acc = 0;
+        tile_regs_acquire();
+#endif
+        for (uint32_t g = 0; g < G; ++g) {
+            const uint32_t ts = at(off);
+            copy_init(cb_s);
+            scale_tile_srca();
+            copy_tile(cb_w, ts, 2);
+            off += 2048;
+            const uint32_t nj = (KB - g * 32 < 32) ? (KB - g * 32) : 32;
+            for (uint32_t j = 0; j < nj; ++j) {
+                const uint32_t kb = g * 32 + j;
+                const uint32_t prev = cur;
+                const uint32_t t = at(off);
+                if (j == 0 || cur != prev) {
+                    reconfig_data_format_srca(cb_w);
+                    custom_mm_block_init_short<false, LAYOUT>(cb_x, cb_w, cb_out);
+                    ternary_srca();
+                    addcmul_tile_init();
+                }
+#ifndef SKIP_MM
+                custom_mm_block<LAYOUT, false>(cb_x, cb_w, kb * 4, t, 1, 4);
+#endif
+#ifndef SKIP_SFPU
+                scale_acc_kb(j, kb == 0, acc);
+                MATH((llk_math_custom_mm_init<false, LAYOUT>(cb_x, cb_w, 1)));
+#endif
+                off += 1024;
+            }
+        }
+        cb_pop_front(cb_w, 16);
+        ++q;
+        for (uint32_t p = cur + 1; p < PPR; ++p) {  // the record's padding pages
+            cb_w = (q & 1) ? cb_w1 : cb_w0;
+            cb_wait_front(cb_w, 16);
+            cb_pop_front(cb_w, 16);
+            ++q;
+        }
+#ifdef GLU_PAIRS
+        if ((i & 1) == 0) {
+            continue;
+        }
+        silu_tile_init();
+        MATH((
+            SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, glu_row0, 0, 1, 3, 0, VectorMode::None)));
+#endif
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(cb_out, 1);
+        pack_reconfig_data_format(cb_out);
+        pack_tile(0, cb_out);
+        tile_regs_release();
+        cb_push_back(cb_out, 1);
+    }
+#elif defined(SCALE_GROUP16)
     // Per output tile column: per group of 32 kbs one fp16 scale tile into DEST tile 2 (kb j of the group at tile row
     // j) and one custom_mm setup; per kb custom_mm into DEST tile 1, then acc (tile 0) += P * S on two SFPU
     // rows. Scale tiles: G = ceil(KB / 32) per output tile column.
@@ -212,6 +359,20 @@ void kernel_main() {
                 addcmul_tile_init();
             }
             const uint32_t nj = (KB - g * 32 < 32) ? (KB - g * 32) : 32;
+#ifdef BATCH4
+            // 4 kbs per page: their products into DEST tiles 4..7, then one SFPU pass and one custom_mm re-init.
+            for (uint32_t j = 0; j < nj; j += 4) {
+                const uint32_t kb = g * 32 + j;
+                cb_wait_front(cb_w, 16);
+                for (uint32_t m = 0; m < 4; ++m) {
+                    custom_mm_block<LAYOUT, false>(cb_x, cb_w, (kb + m) * 4, m * 4, 4 + m, 4);
+                }
+                scale_acc_quad(j, kb == 0);
+                MATH((llk_math_custom_mm_init<false, LAYOUT>(cb_x, cb_w, 1)));
+                cb_pop_front(cb_w, 16);
+            }
+            continue;
+#endif
             for (uint32_t j = 0; j < nj; ++j) {
                 const uint32_t kb = g * 32 + j;
                 if ((kb & 3) == 0) {

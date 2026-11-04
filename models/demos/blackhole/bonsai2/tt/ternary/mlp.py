@@ -14,7 +14,12 @@ from pathlib import Path
 import numpy as np
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import TernaryDecodeLinear3, pack_records_inline
+from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import (
+    PAGE_SPLIT,
+    TernaryDecodeLinear3,
+    pack_glu_records,
+    pack_records_inline,
+)
 from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import BonsaiGGUF
 from models.demos.blackhole.bonsai2.tt.ternary.rotate import DecodeRotation
 
@@ -29,11 +34,27 @@ class TernaryMLP:
 
         self.gate, self.up, self.down = (lin(s) for s in STEMS)
         self.rot_in, self.rot_hidden = rotations[self.gate.K], rotations[self.down.K]
+        self.gateup = None
+        if os.environ.get("BONSAI_GLU", "0") == "1" and PAGE_SPLIT:
+            # gate and up in one ternary pass that also applies silu(gate) * up
+            (rg, ppr, K, N), (ru, _, _, _) = packed["ffn_gate"], packed["ffn_up"]
+            self.gateup = TernaryDecodeLinear3.from_packed(device, pack_glu_records(rg, ru, ppr), ppr, K, 2 * N)
+            self.gateup.glu = True
+            for t in (self.gate.w, self.up.w):
+                ttnn.deallocate(t)
 
     def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [..., dim] bf16 TILE, one token (one tile row) -> the same shape."""
         lead = tuple(list(x.shape)[:-1])
         xr = self.rot_in(x)
+        if self.gateup is not None:
+            h = self.gateup(xr, lead=lead)
+            ttnn.deallocate(xr)
+            hr = self.rot_hidden(h)
+            ttnn.deallocate(h)
+            y = self.down(hr, lead=lead)
+            ttnn.deallocate(hr)
+            return y
         g = self.gate(xr, lead=lead)
         u = self.up(xr, lead=lead)
         ttnn.deallocate(xr)

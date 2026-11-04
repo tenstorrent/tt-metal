@@ -22,7 +22,7 @@ def test_tdec3(device, K, N, scale_fp32, sfpu_iter, reinit):
     act = ttnn.from_torch(
         x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
-    y = ttnn.to_torch(lin(act, sfpu_iter=sfpu_iter, sfpu_reinit=reinit)).float()[0]
+    y = ttnn.to_torch(lin(act, sfpu_iter=sfpu_iter, sfpu_reinit=reinit)).float().reshape(-1, N)[0]
     ref = reference(x, t, s)
     rel = ((y - ref).norm() / ref.norm()).item()
     print(
@@ -64,7 +64,7 @@ def test_tdec3_g16(device, K, N):
     act = ttnn.from_torch(
         x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
-    y = ttnn.to_torch(lin(act)).float()[0]
+    y = ttnn.to_torch(lin(act)).float().reshape(-1, N)[0]
     ref = reference(x, t, s)
     rel = ((y - ref).norm() / ref.norm()).item()
     print(f"reinit=g16 K={K} N={N} rel={rel:.5f}")
@@ -106,7 +106,7 @@ def test_tdec3_inl(device, K, N):
     act = ttnn.from_torch(
         x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
-    y = ttnn.to_torch(lin(act)).float()[0]
+    y = ttnn.to_torch(lin(act)).float().reshape(-1, N)[0]
     ref = reference(x, t, s)
     rel = ((y - ref).norm() / ref.norm()).item()
     print(f"reinit=inl K={K} N={N} rel={rel:.5f}")
@@ -122,6 +122,9 @@ BAL = [(17408, 4160), (17408, 5120), (17408, 8320), (6144, 4160), (6144, 5120), 
 
 @pytest.mark.parametrize("K, N", BAL, ids=[f"bk{k}n{n}" for k, n in BAL])
 def test_tdec3_bal(device, K, N):
+    import os
+
+    ed = [(v, "1") for v in os.environ.get("TDEC_DEFINES", "").split(",") if v]
     rng = np.random.default_rng(0)
     t = rng.integers(-1, 2, size=(K, N)).astype(np.int8)
     s = (rng.random((N, K // 128)) * 0.02 + 0.005).astype(np.float16)
@@ -131,6 +134,33 @@ def test_tdec3_bal(device, K, N):
         x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
     for _ in range(10):
-        lin(act)
+        lin(act, extra_defines=ed, dm_defines=[d for d in ed if d[0] == "FAKE_STREAM"])
     ttnn.synchronize_device(device)
     print(f"reinit=bal K={K} N={N}")
+
+
+@pytest.mark.parametrize("K, N", [(1024, 64), (5120, 17408)], ids=["glu_small", "glu_mlp"])
+def test_tdec3_glu(device, K, N):
+    from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import pack_glu_records, pack_records_inline
+
+    rng = np.random.default_rng(0)
+    tg = rng.integers(-1, 2, size=(K, N)).astype(np.int8)
+    tu = rng.integers(-1, 2, size=(K, N)).astype(np.int8)
+    sg = (rng.random((N, K // 128)) * 0.02 + 0.005).astype(np.float16)
+    su = (rng.random((N, K // 128)) * 0.02 + 0.005).astype(np.float16)
+    x = torch.randn(K).bfloat16()
+    rg, ppr = pack_records_inline(tg, sg)
+    ru, _ = pack_records_inline(tu, su)
+    lin = TernaryDecodeLinear3.from_packed(device, pack_glu_records(rg, ru, ppr), ppr, K, 2 * N)
+    lin.glu = True
+    act = ttnn.from_torch(
+        x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    y = ttnn.to_torch(lin(act)).float().reshape(-1, N)[0]
+    ref = torch.nn.functional.silu(reference(x, tg, sg)) * reference(x, tu, su)
+    rel = ((y - ref).norm() / ref.norm()).item()
+    print(f"reinit=glu K={K} N={N} rel={rel:.5f}")
+    for _ in range(10):
+        lin(act)
+    ttnn.synchronize_device(device)
+    assert rel < 0.02, rel

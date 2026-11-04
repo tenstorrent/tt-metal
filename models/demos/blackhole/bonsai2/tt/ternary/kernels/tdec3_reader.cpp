@@ -51,5 +51,9 @@ void kernel_main() {
 #endif
 
     const auto w = TensorAccessor(w_args, w_addr, 4096);
+#ifdef PAGE_SPLIT
+    stream_pages<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0);
+#else
     stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0);
+#endif
 }

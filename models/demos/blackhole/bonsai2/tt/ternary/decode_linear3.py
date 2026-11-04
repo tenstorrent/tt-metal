@@ -8,6 +8,7 @@ core's consecutive pages rotate over the DRAM banks. Scales: s as IEEE fp16, one
 tile column, kb), the 32 columns in order. Compute: kernels/tdec3_compute.cpp.
 """
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -35,6 +36,14 @@ def pack_scales(s_nb: np.ndarray, fp32: bool) -> np.ndarray:
     N, KB = s_nb.shape
     r = np.ascontiguousarray(s_nb.reshape(N // TILE, TILE, KB).transpose(0, 2, 1)).reshape(N // TILE, KB * TILE)
     return r.astype(np.float32) if fp32 else r.view(np.uint16)
+
+
+def pack_glu_records(rec_gate: np.ndarray, rec_up: np.ndarray, ppr: int) -> np.ndarray:
+    """Interleave two inline record sets (same K, N) per output tile: gate tile i, up tile i, ... (GLU_PAIRS)."""
+    nt = rec_gate.shape[0] // ppr
+    g = rec_gate.reshape(nt, ppr * rec_gate.shape[1])
+    u = rec_up.reshape(nt, ppr * rec_up.shape[1])
+    return np.ascontiguousarray(np.stack([g, u], 1).reshape(2 * nt * ppr, rec_gate.shape[1]))
 
 
 def pack_scales_group16(s_nb: np.ndarray) -> np.ndarray:
@@ -79,6 +88,13 @@ def reference(x_rot: torch.Tensor, t_kn: np.ndarray, s_nb: np.ndarray) -> torch.
     return (p * torch.from_numpy(s_nb.astype(np.float32)).T).sum(0)
 
 
+# Both RISCs stream alternate 4-KB pages (inline group16 records). Off: no faster than one RISC per record
+# (17408 x 4160: 68.9 vs 67.6 us; the stream reaches 356 GB/s either way), and the gate/up GLU pairs built on it
+# were slower (162.7 us vs 2 x 75).
+PAGE_SPLIT = os.environ.get("BONSAI_PAGE_SPLIT", "0") == "1"
+BATCH4 = os.environ.get("BONSAI_BATCH4", "1") == "1"  # 4 kbs per SFPU pass: 17408 x 5120 89.7 -> 78.2 us
+
+
 @dataclass
 class TernaryDecodeLinear3:
     K: int
@@ -91,6 +107,7 @@ class TernaryDecodeLinear3:
     group16: bool = False
     inline_scales: bool = False
     ppr: int = 0
+    glu: bool = False
 
     @classmethod
     def from_packed(cls, device, rec: np.ndarray, ppr: int, K: int, N: int, cores=None):
@@ -153,11 +170,24 @@ class TernaryDecodeLinear3:
         c mod 8) -> [32, N] bf16 TILE, row 0 = y."""
         device = x_rot.device()
         K, N = self.K, self.N
+        if getattr(self, "page_split", PAGE_SPLIT) and self.inline_scales and self.group16:
+            # Both RISCs stream alternate 4-KB pages (kernels/tdec_stream.hpp stream_pages).
+            dm_defines = list(dm_defines) + [("PAGE_SPLIT", "1")]
+            extra_defines = list(extra_defines) + [("PAGE_SPLIT", "1")]
+        if BATCH4 and self.inline_scales and self.group16 and K % 512 == 0:
+            # 4 kbs per SFPU pass (kernels/tdec3_compute.cpp scale_acc4)
+            extra_defines = list(extra_defines) + [("BATCH4", "1")]
+        glu = getattr(self, "glu", False)
+        if glu:
+            # (gate, up) record pairs -> silu(gate) * up, one output tile per pair (pack_glu_records).
+            assert dm_defines and ("PAGE_SPLIT", "1") in dm_defines and not split, "GLU needs the page-split path"
+            dm_defines = list(dm_defines) + [("GLU_PAIRS", "1")]
+            extra_defines = list(extra_defines) + [("GLU_PAIRS", "1")]
         Kt, Nt, KB = K // TILE, N // TILE, K // KBLOCK
         ppr = self.ppr if self.inline_scales else Kt * 256 // PAGE_BYTES
         # lead: the output's leading logical dims; any of them tile-pad to one 32-row tile row, so the pages match.
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(list(lead) + [(split or N) * (3 if dbg else 1)]),
+            ttnn.Shape(list(lead) + [(split or (N // 2 if glu else N)) * (3 if dbg else 1)]),
             ttnn.float32 if dbg else ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             device,
@@ -170,11 +200,12 @@ class TernaryDecodeLinear3:
             else None
         )
         grid = device.compute_with_storage_grid_size()
-        cores = min(self.cores, Nt)
-        base, extra = divmod(Nt, cores)
+        unit = 2 if glu else 1  # a core takes whole (gate, up) pairs
+        cores = min(self.cores, Nt // unit)
+        base, extra = divmod(Nt // unit, cores)
         coords, spans, start = [], [], 0
         for c in range(cores):
-            n = base + (1 if c < extra else 0)
+            n = unit * (base + (1 if c < extra else 0))
             coords.append(ttnn.CoreCoord(c % grid.x, c // grid.x))
             spans.append((start, n))
             start += n

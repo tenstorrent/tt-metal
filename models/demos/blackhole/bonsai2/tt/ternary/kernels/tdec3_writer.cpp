@@ -33,16 +33,27 @@ void kernel_main() {
     cb_wait_front(tt::CBIndex::c_2, num_nt * S_PER_NT);
 #endif
     const auto w = TensorAccessor(w_args, w_addr, 4096);
+#ifdef PAGE_SPLIT
+    stream_pages<ppr, NB>(tt::CBIndex::c_6, w, first_nt, num_nt, 1);
+#else
     stream_records<ppr, NB>(tt::CBIndex::c_6, w, first_nt, num_nt, 1);
+#endif
 
     const uint32_t bytes = get_tile_size(cb_out);
     const auto out = TensorAccessor(out_args, out_addr, bytes);
 #if SPLIT_NT > 0
     const auto out2 = TensorAccessor(out2_args, get_arg_val<uint32_t>(5), bytes);
 #endif
+#ifdef GLU_PAIRS
+    // One output tile per (gate, up) record pair.
+    for (uint32_t i = 0; i < num_nt / 2; ++i) {
+        cb_wait_front(cb_out, 1);
+        const uint32_t nt = first_nt / 2 + i;
+#else
     for (uint32_t i = 0; i < num_nt * OUT_PER_NT; ++i) {
         cb_wait_front(cb_out, 1);
         const uint32_t nt = first_nt + i;
+#endif
 #if SPLIT_NT > 0
         const uint64_t dst = nt < SPLIT_NT ? out.get_noc_addr(nt) : out2.get_noc_addr(nt - SPLIT_NT);
 #else
