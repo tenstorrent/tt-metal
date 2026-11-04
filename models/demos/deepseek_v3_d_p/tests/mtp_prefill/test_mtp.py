@@ -31,7 +31,6 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests._reuse import acquire_module
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
 from models.demos.deepseek_v3_d_p.tests.mtp_prefill.conftest import glm53_checkpoint_path
 from models.demos.deepseek_v3_d_p.tests.mtp_prefill.predictor_reference import (
     compute_predictor_reference,
@@ -50,6 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
     MTPSplitChipLookahead,

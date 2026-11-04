@@ -30,7 +30,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe_impl import k3_moe_block_device_params, moe_block_enabled
 from models.common.utility_functions import comp_pcc
 
 # Aliased: the local `attn_res` in this module is the TtAttnRes instance, and the collision is
@@ -55,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.tt.moe_impl import k3_moe_block_device_params, moe_block_enabled
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache

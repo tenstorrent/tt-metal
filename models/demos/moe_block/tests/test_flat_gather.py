@@ -16,13 +16,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.moe_block.tt.flat_gather import (
-    _pages,
-    flat_face_map,
-    flat_weights_module,
-    gather,
-    gather_batches,
-)
+from models.demos.moe_block.tt.flat_gather import _pages, flat_face_map, flat_weights_module, gather, gather_batches
 
 R, C = 8, 4
 H, I, E, NG, CHUNK = 6144, 2048, 8, 256, 5120

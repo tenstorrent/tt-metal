@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
-from models.demos.moe_block.tests.test_moe_block_smoke import R, C, CHUNK, _flat_weights_module, _glm53
+from models.demos.moe_block.tests.test_moe_block_smoke import CHUNK, C, R, _flat_weights_module, _glm53
 from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights
 
 MOCK = "blackhole_galaxy" in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", "")
