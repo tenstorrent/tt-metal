@@ -1035,6 +1035,16 @@ class PerfConfig(TestConfig):
             elf_dir = (
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
+            if (
+                os.environ.get("LLK_SHUFFLE_SEED")
+                and not (elf_dir.parent / ".build_complete").exists()
+            ):
+                # Trial: a shuffled measuring order can ask for a variant id the producer did not build.
+                out = TestConfig.perf_run_dir()
+                out.mkdir(parents=True, exist_ok=True)
+                with open(out / f"shuffle_rebuilt.{os.getpid()}.txt", "a") as f:
+                    f.write(f"{self.test_name} {run_type.name} {self.variant_id}\n")
+                self.build_elfs()
             components = _CODE_SIZE_COMPONENTS.get(run_type)
             # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
             if run_type == PerfRunType.L1_TO_L1 and any(
