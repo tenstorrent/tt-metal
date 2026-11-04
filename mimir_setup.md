@@ -132,5 +132,7 @@ export TT_METAL_EMU_SERVER=<host>:<port>
 export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/tests/soc_descs/<yaml_file>
 ```
 
+`TT_METAL_EMU_SOC_DESC` also takes a comma-separated list: logical chip i gets the i-th descriptor. With a test cluster descriptor in `TT_METAL_MOCK_CLUSTER_DESC_PATH`, this presents one mmk package as several chips, as the Keraunos fabric descriptors in `tests/tt_metal/tt_fabric/keraunos/` do. `TT_METAL_EMU_SERVER` keeps the emulator target when the cluster descriptor is set, and without a server the same variables give a Mock run. The Mimir suites take a single descriptor.
+
 Run Mimir tests from `$TT_METAL_HOME`. A Mimir-only package has no Tensix cores. Set `TT_METAL_SLOW_DISPATCH_MODE=1` to run it; with that variable unset the suite skips. E.g.
 `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_context --gtest_filter=*MimirEmu*`

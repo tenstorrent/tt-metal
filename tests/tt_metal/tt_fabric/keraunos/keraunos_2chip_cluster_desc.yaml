@@ -1,0 +1,38 @@
+# Two Keraunos test chips on one emulated mmk package, joined by the 800G link between HSIO tile 0 (chip A,
+# channel 0 = core 4-0) and HSIO tile 1 (chip B, channel 0 = core 4-1), CCE0 on both ends. Channels index each
+# chip's own SoC descriptor eth list (keraunos_chip_{a,b}_soc_desc.yaml).
+arch:
+  0: quasar
+  1: quasar
+chips:
+  {}
+chip_unique_ids:
+  0: 4919131758592
+  1: 4919131758593
+ethernet_connections:
+  - [{chip: 0, chan: 0}, {chip: 1, chan: 0}]
+ethernet_connections_to_remote_devices:
+  []
+chips_with_mmio:
+  - 0: 0
+  - 1: 1
+harvesting:
+  0:
+    noc_translation: false
+    harvest_mask: 0
+  1:
+    noc_translation: false
+    harvest_mask: 0
+chip_to_boardtype:
+  0: quasar
+  1: quasar
+boards:
+  -
+    - board_id: 4919131758592
+    - board_type: quasar
+    - chips:
+        - 0
+        - 1
+asic_locations:
+  0: 0
+  1: 1
