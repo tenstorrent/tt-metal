@@ -30,6 +30,7 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
+from models.demos.gpt_oss.tt.fused_decode.config import FULL_FIDELITY
 from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
@@ -127,7 +128,7 @@ def prepare_gpt_oss_generator_args(
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             paged_attention_config=paged_attention_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16 if FULL_FIDELITY else ttnn.bfloat8_b,
             state_dict=state_dict,
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,

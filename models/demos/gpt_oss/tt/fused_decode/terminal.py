@@ -23,6 +23,8 @@ straight into the decode token input (tt_out_tok). The candidate ids are exact: 
 the union of the per-core (or per-row) top-32s, and the merges and the greedy pick order ties by the lowest vocab id.
 """
 
+import os
+
 import torch
 from loguru import logger
 
@@ -98,7 +100,11 @@ class DecodeTerminal:
             layouts,
             rows,
             LM_HEAD_DECODE_WEIGHT_DTYPE,
-            _cache_name(tensor_cache_path, f"lm_head.weight_stream_{dt}_vd{self.vd}_b{banks}"),
+            _cache_name(
+                tensor_cache_path,
+                f"lm_head.weight_stream_{dt}_vd{self.vd}_b{banks}"
+                + ("_drnd" if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE") else ""),
+            ),
         )
 
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)

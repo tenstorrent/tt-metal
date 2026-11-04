@@ -33,7 +33,13 @@ from loguru import logger
 
 import ttnn
 
-from .config import DECODE_BOUNDARY_PREFETCH_ALL
+from .config import (
+    DECODE_BOUNDARY_PREFETCH_ALL,
+    DECODE_EXPERT_TAIL_SPLIT,
+    MOE_DECODE_GAIN,
+    QKV_ROPE_EXACT,
+    QKV_ROPE_EXACT_LITE,
+)
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 NBIAS = 4  # residual terms carrying a bias (BFP4: relative error ~ 8^-NBIAS of the 16-value group maximum)
@@ -470,6 +476,13 @@ class _BankStreamOp:
         for c, *_ in self.assignments[1:]:
             self.cores = self.cores.merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c)]))
 
+    def _split_defines(self):
+        """Kernel defines of the exact MXFP4 split streams (TEMP experiment, fused_decode/mxfp4_split.py)."""
+        from .config import DECODE_SPLIT_REST_PKG
+
+        d = [("EXPERT_SPLIT", "1")] + ([("SPLIT_RANKS", str(self.ranks))] if self.ranks is not None else [])
+        return d + ([("SPLIT_REST_PKG", "1")] if DECODE_SPLIT_REST_PKG and self.ranks is not None else [])
+
     def logical_bank(self, bank):
         return (bank + self.rot) % self.banks
 
@@ -503,11 +516,12 @@ class _BankStreamOp:
         compute="matmul",
         compute_rt=None,
         defines=None,
+        reader=None,
     ):
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / f"stream_{name}_reader.cpp"),
+                kernel_source=str(KERNEL_DIR / f"stream_{reader or name}_reader.cpp"),
                 core_ranges=self.cores,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
@@ -529,11 +543,73 @@ class _BankStreamOp:
                 runtime_args=compute_rt if compute_rt is not None else [],
                 defines=defines or [],
                 config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
+                    math_fidelity=_native_fidelity()
+                    if ("W_TRANSPOSED", "1") in (defines or [])
+                    else ttnn.MathFidelity.LoFi,
+                    fp32_dest_acc_en=True,
+                    math_approx_mode=False,
                 ),
             ),
         ]
         return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+
+
+def _separate(ranks):
+    """Whether a split stream with these exact ranks stores its exact and rounded parts apart (GPT_OSS_DECODE_SPLIT_SEPARATE)."""
+    from .config import DECODE_SPLIT_SEPARATE
+
+    return DECODE_SPLIT_SEPARATE and ranks is not None and ranks > 0
+
+
+def _separate_defines(weights, seg_bytes, part4, segs_per_expert):
+    """Reader defines of a separate split stream: where its rounded region starts in a bank (after the exact parts of
+    every segment: bank bytes / segment bytes segments) and the rounded region's expert stride."""
+    bank_bytes = weights.memory_config().shard_spec.shape[0] * weights.memory_config().shard_spec.shape[1]
+    segs = bank_bytes // seg_bytes
+    assert segs * seg_bytes == bank_bytes, f"bank bytes {bank_bytes} are not whole {seg_bytes}-byte segments"
+    return [
+        ("SPLIT_SEPARATE", "1"),
+        ("SPLIT_SEP_BASE", str(segs * (seg_bytes - part4))),
+        ("SPLIT_SEP_STRIDE_R", str(segs_per_expert * part4)),
+    ]
+
+
+def _native_defines():
+    """W_TRANSPOSED, + W_NO_SPLIT_ACC when GPT_OSS_DECODE_SPLIT_NATIVE_SPLIT_ACC=0 (custom_mm accumulates in one DST half)."""
+    import os
+
+    no_split = os.environ.get("GPT_OSS_DECODE_SPLIT_NATIVE_SPLIT_ACC", "1") == "0"
+    # GPT_OSS_DECODE_SPLIT_NATIVE_FOLD=1: split_acc's two accumulators folded in FP32 on the SFPU (W_FP32_FOLD)
+    fold = not no_split and os.environ.get("GPT_OSS_DECODE_SPLIT_NATIVE_FOLD", "0") == "1"
+    return (
+        [("W_TRANSPOSED", "1")]
+        + ([("W_NO_SPLIT_ACC", "1")] if no_split else [])
+        + ([("W_FP32_FOLD", "1")] if fold else [])
+    )
+
+
+def _native_fidelity():
+    """The native round-only streams' math fidelity (GPT_OSS_DECODE_SPLIT_NATIVE_FIDELITY, default LoFi)."""
+    import os
+
+    return getattr(ttnn.MathFidelity, os.environ.get("GPT_OSS_DECODE_SPLIT_NATIVE_FIDELITY", "LoFi"))
+
+
+def _tail_split_defines(pages, tiles):
+    """TEMP experiment (fused_decode.config.DECODE_EXPERT_TAIL_SPLIT): the plain expert streams read and multiply their
+    last column (`pages` NOC packets, `tiles` K tiles) in EXP_TAIL_SUBS sub-blocks (the largest divisor of the pages up
+    to 8: transaction ids 4..11), so compute finishes it soon after its last packet lands."""
+    if not DECODE_EXPERT_TAIL_SPLIT:
+        return []
+    subs = max(d for d in range(1, 9) if pages % d == 0)
+    return [("EXP_TAIL_SUBS", str(subs)), ("EXP_TAIL_TILES", str(tiles // subs))] if subs > 1 else []
+
+
+def _native_round_only(split, ranks):
+    """Whether a decode expert stream of this split spec runs natively (GPT_OSS_DECODE_SPLIT_NATIVE)."""
+    from .config import DECODE_SPLIT_NATIVE, DECODE_SPLIT_ROUND_ONLY
+
+    return split and ranks == 0 and DECODE_SPLIT_ROUND_ONLY and DECODE_SPLIT_NATIVE
 
 
 class ExpertGateUpStream(_BankStreamOp):
@@ -546,7 +622,6 @@ class ExpertGateUpStream(_BankStreamOp):
     ):
         super().__init__(mesh_device, readers, rot=EXPERT_BANK_ROT)
         self.weight_dtype = weight_dtype
-        self.tile_bytes = TILE_BYTES[weight_dtype]
         self.kx = hidden // TILE
         self.kt = self.kx + 1
         self.num_sel = num_sel
@@ -555,22 +630,56 @@ class ExpertGateUpStream(_BankStreamOp):
         assert self.P % readers == 0, f"{self.P} pairs per bank do not split over {readers} readers"
         self.pairs = self.P // readers
         self.limit, self.alpha = swiglu_limit, alpha
-        self.col_bytes = self.kt * self.tile_bytes
+        # TEMP experiment: weight_dtype "split" / "split_r<k>" = exact MXFP4 split streams (fused_decode/mxfp4_split.py);
+        # split_r<k>: only the top-k routed experts read the exact parts, the others a BFP4 rounding stored after them
+        from . import mxfp4_split as ms
+
+        self.split, self.ranks = ms.split_spec(weight_dtype)
+        self.native = _native_round_only(self.split, self.ranks)
+        if self.native:  # a plain bfloat4_b stream of transposed tiles (W_TRANSPOSED)
+            self.split, self.weight_dtype = False, ttnn.bfloat4_b
+        if self.split:
+            self.part4 = self.kt * ms.BFP4_BYTES
+            self.part2 = self.kx * ms.BFP2_BYTES
+            self.page4, self.page2 = ms.page_bytes(self.part4), ms.page_bytes(self.part2)
+            s4, s2 = ms.gate_up_sequences(self.kx)
+            self.meta4, self.meta2 = ms.metadata_words(s4), ms.metadata_words(s2)
+            self.kt4, self.kt2 = len(s4), len(s2)
+            from .config import DECODE_SPLIT_ROUND_ONLY
+
+            self.round_only = DECODE_SPLIT_ROUND_ONLY and self.ranks == 0  # only the rounded parts stored
+            self.separate = _separate(self.ranks)
+            self.col_bytes = (
+                self.part4
+                if self.round_only
+                else self.part4 + self.part2 + (self.part4 if self.ranks is not None else 0)
+            )
+        else:
+            self.tile_bytes = TILE_BYTES[self.weight_dtype]
+            self.col_bytes = self.kt * self.tile_bytes
+            self.page_bytes = _page_bytes(self.kt, self.tile_bytes)
         self.expert_stride = 2 * self.P * self.col_bytes
-        self.page_bytes = _page_bytes(self.kt, self.tile_bytes)
+        if self.split and self.separate:  # the exact region's stride; the rounded region's in _separate_args
+            self.expert_stride = 2 * self.P * (self.part4 + self.part2)
 
     def weight_rows(self, num_experts):
         return num_experts * 2 * self.P * self.kt * TILE
 
-    def __call__(self, x, ids, scores, weights, act):
-        cb_x, cb_w, cb_idx, cb_scr, cb_act = 0, 1, 2, 3, 16
+    def __call__(self, x, ids, scores, weights, act, gain=None):
+        gain = MOE_DECODE_GAIN if gain is None else gain
+        cb_x, cb_w, cb_idx, cb_scr, cb_act, cb_w2 = 0, 1, 2, 3, 16, 4
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, TINY_BYTES, self.kt, tiny=True),
-            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * self.kt),
+            # split: the compressed custom_mm sets the weight formats per tile; the CB format is a placeholder
+            self._cb(cb_w, ttnn.bfloat8_b, self.part4, 3)
+            if self.split
+            else self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * self.kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 64, 1),
             self._cb(cb_act, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
         ]
+        if self.split:
+            cbs.append(self._cb(cb_w2, ttnn.bfloat8_b, self.part2, 3))
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
             reader_rt[core.x][core.y] = [
@@ -578,16 +687,20 @@ class ExpertGateUpStream(_BankStreamOp):
                 ids.buffer_address(),
                 bank,
                 vc,
-                r * 2 * self.pairs * self.col_bytes,
-            ]
+                r * 2 * self.pairs * (self.part4 + self.part2 if self.split and self.separate else self.col_bytes),
+            ] + ([r * 2 * self.pairs * self.part4] if self.split and self.separate else [])
             writer_rt[core.x][core.y] = [
                 x.buffer_address(),
                 act.buffer_address(),
                 self.logical_bank(bank) * self.P + r * self.pairs,
                 scores.buffer_address(),
             ]
-        reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, self.tile_bytes]
-        reader_ct += [self.page_bytes, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        if self.split:
+            reader_ct = [cb_w, cb_w2, cb_idx, 2 * self.pairs, self.num_sel, self.expert_stride, self.part4, self.part2]
+            reader_ct += [self.page4, self.page2, 0, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        else:
+            reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, self.tile_bytes]
+            reader_ct += [self.page_bytes, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [
             cb_x,
             cb_act,
@@ -602,8 +715,21 @@ class ExpertGateUpStream(_BankStreamOp):
         for t in (x, act, scores):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         compute_ct = [cb_x, cb_w, cb_act, self.kt, self.pairs, self.num_sel]
-        compute_ct += [_f32_bits(v) for v in (self.limit, -self.limit, -3.0e38, self.alpha, 1.0 / self.alpha, 1.0)]
-        program = self._program("gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, "gate_up")
+        compute_ct += [_f32_bits(v) for v in (self.limit, -self.limit, -3.0e38, self.alpha, gain / self.alpha, 1.0)]
+        if self.split:
+            compute_ct += [cb_w2, self.kt4, self.kt2, len(self.meta4), len(self.meta2)] + self.meta4 + self.meta2
+            program = self._program(
+                "gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, "gate_up",
+                defines=self._split_defines() + ([("SPLIT_ROUND_ONLY", "1")] if self.round_only else [])
+                + (_separate_defines(weights, self.col_bytes, self.part4, 2 * self.P) if self.separate else []),
+                reader="expert_split",
+            )  # fmt: skip
+        else:
+            program = self._program(
+                "gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, "gate_up",
+                defines=_native_defines() if self.native
+                else (_tail_split_defines(self.col_bytes // self.page_bytes, self.kt) or None),
+            )  # fmt: skip
         return ttnn.generic_op([weights, x, ids, scores, act], program)
 
 
@@ -616,7 +742,6 @@ class ExpertDownStream(_BankStreamOp):
     def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers, weight_dtype=ttnn.bfloat4_b):
         super().__init__(mesh_device, readers, rot=EXPERT_BANK_ROT)
         self.weight_dtype = weight_dtype
-        self.tile_bytes = TILE_BYTES[weight_dtype]
         self.hidden = hidden
         self.num_sel = num_sel
         self.inter_pad = inter_pad
@@ -624,10 +749,49 @@ class ExpertDownStream(_BankStreamOp):
         self.C = columns_per_bank(hidden, self.banks)
         assert self.C % readers == 0, f"{self.C} columns per bank do not split over {readers} readers"
         self.cols = self.C // readers
-        self.seg_bytes = self.seg_tiles * self.tile_bytes
-        # one NOC packet per expert column segment in BFP4 (25 tiles = 14.1 KB at TP 4); BFP8 splits it (5 x 5 tiles)
-        self.page_bytes = _page_bytes(self.seg_tiles, self.tile_bytes)
+        # TEMP experiment: weight_dtype "split" / "split_r<k>" = exact MXFP4 split streams (fused_decode/mxfp4_split.py)
+        from . import mxfp4_split as ms
+
+        self.split, self.ranks = ms.split_spec(weight_dtype)
+        self.native = _native_round_only(self.split, self.ranks)
+        if self.native:  # a plain bfloat4_b stream of transposed tiles (W_TRANSPOSED)
+            self.split, self.weight_dtype = False, ttnn.bfloat4_b
+        if self.split:
+            self.part4 = self.seg_tiles * ms.BFP4_BYTES
+            self.part2 = (self.seg_tiles - 1) * ms.BFP2_BYTES
+            self.page4, self.page2 = ms.page_bytes(self.part4), ms.page_bytes(self.part2)
+            from .config import DECODE_SPLIT_COMPACT, DECODE_SPLIT_REST_PKG
+
+            self.no_bfp2 = self.ranks == 0  # no exact rank: every routed expert reads the rounded part only
+            self.compact = DECODE_SPLIT_COMPACT and not self.no_bfp2
+            self.rest_pkg = DECODE_SPLIT_REST_PKG and self.ranks is not None
+            assert not self.rest_pkg or (
+                self.compact and 0 < self.ranks < num_sel
+            ), "rest-pkg needs compact, 0 < k < k_sel"
+            s4, s2 = ms.down_sequences(self.seg_tiles - 1, num_sel, self.ranks, self.compact)
+            if self.rest_pkg:  # exact BFP4 call over the k exact segments, package-tile call over the others
+                s4 = ms.even_bfp4(self.seg_tiles * self.ranks)
+                s5 = ms.even_bfp4(self.seg_tiles * (num_sel - self.ranks))
+                self.meta5, self.kt5 = ms.metadata_words(s5), len(s5)
+            self.meta4, self.meta2 = ms.metadata_words(s4), ms.metadata_words(s2)
+            self.kt4, self.kt2 = len(s4), len(s2)
+            from .config import DECODE_SPLIT_ROUND_ONLY
+
+            self.round_only = DECODE_SPLIT_ROUND_ONLY and self.no_bfp2  # only the rounded parts stored
+            self.separate = _separate(self.ranks) and not self.rest_pkg
+            self.seg_bytes = (
+                self.part4
+                if self.round_only
+                else self.part4 + self.part2 + (self.part4 if self.ranks is not None else 0)
+            )
+        else:
+            self.tile_bytes = TILE_BYTES[self.weight_dtype]
+            self.seg_bytes = self.seg_tiles * self.tile_bytes
+            # one NOC packet per expert column segment in BFP4 (25 tiles = 14.1 KB at TP 4); BFP8 splits it (5 x 5)
+            self.page_bytes = _page_bytes(self.seg_tiles, self.tile_bytes)
         self.expert_stride = self.C * self.seg_bytes
+        if self.split and self.separate:  # the exact region's stride; the rounded region's in _separate_args
+            self.expert_stride = self.C * (self.part4 + self.part2)
 
     def weight_rows(self, num_experts):
         return num_experts * self.C * self.seg_tiles * TILE
@@ -635,15 +799,28 @@ class ExpertDownStream(_BankStreamOp):
     def __call__(self, act, ids, scores, weights, out, send=None):
         """send = (boundary, site): fuse the boundary all-reduce's fabric send (fused_decode/boundary.py
         sending_program)."""
-        cb_in0, cb_w, cb_idx, cb_scr, cb_out = 0, 1, 2, 3, 16
+        cb_in0, cb_w, cb_idx, cb_scr, cb_out, cb_w2 = 0, 1, 2, 3, 16, 4
         kt = self.num_sel * self.seg_tiles
         cbs = [
             self._cb(cb_in0, ttnn.bfloat16, TINY_BYTES, kt, tiny=True),
-            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * kt),
+            self._cb(
+                cb_w, ttnn.bfloat8_b, (self.ranks if self.split and self.rest_pkg else self.num_sel) * self.part4, 3
+            )
+            if self.split
+            else self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 128, 1),
             self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
         ]
+        if self.split:
+            exact = self.num_sel if self.ranks is None else self.ranks
+            cbs.append(self._cb(cb_w2, ttnn.bfloat8_b, max(exact * self.part2, 64), 3))
+            if self.compact:  # the exact experts' activations without the bias tiles (stream_down_writer.cpp)
+                cbs.append(self._cb(5, ttnn.bfloat16, TINY_BYTES, exact * (self.seg_tiles - 1), tiny=True))
+            if self.rest_pkg:  # the inexact ranks' activations (+ package bias multipliers) and package tiles
+                rest = self.num_sel - exact
+                cbs.append(self._cb(6, ttnn.bfloat16, TINY_BYTES, rest * self.seg_tiles, tiny=True))
+                cbs.append(self._cb(7, ttnn.bfloat8_b, rest * self.part4, 3))
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
             reader_rt[core.x][core.y] = [
@@ -651,16 +828,20 @@ class ExpertDownStream(_BankStreamOp):
                 ids.buffer_address(),
                 bank,
                 vc,
-                r * self.cols * self.seg_bytes,
-            ]
+                r * self.cols * (self.part4 + self.part2 if self.split and self.separate else self.seg_bytes),
+            ] + ([r * self.cols * self.part4] if self.split and self.separate else [])
             writer_rt[core.x][core.y] = [
                 act.buffer_address(),
                 scores.buffer_address(),
                 out.buffer_address(),
                 self.logical_bank(bank) * self.C + r * self.cols,
             ]
-        reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, self.tile_bytes]
-        reader_ct += [self.page_bytes] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        if self.split:
+            reader_ct = [cb_w, cb_w2, cb_idx, self.cols, self.num_sel, self.expert_stride, self.part4, self.part2]
+            reader_ct += [self.page4, self.page2, 1, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        else:
+            reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, self.tile_bytes]
+            reader_ct += [self.page_bytes] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [cb_in0, cb_out, cb_scr, self.seg_tiles, self.num_sel, NBIAS, self.cols, self.hidden // TILE]
         writer_ct += [self.inter_pad * 2]
         for t in (act, scores, out):
@@ -669,7 +850,27 @@ class ExpertDownStream(_BankStreamOp):
         compute_ct = [cb_in0, cb_w, cb_out, kt, self.cols]
 
         def build():
-            return self._program("down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+            if self.split:
+                split_ct = compute_ct + [cb_w2, self.kt4, self.kt2, len(self.meta4), len(self.meta2)]
+                split_ct += self.meta4 + self.meta2
+                defines = self._split_defines() + ([("SPLIT_IN0B", "5")] if self.compact else [])
+                defines += [("SPLIT_NO_BFP2", "1")] if self.no_bfp2 else []
+                defines += [("SPLIT_ROUND_ONLY", "1")] if self.round_only else []
+                defines += _separate_defines(weights, self.seg_bytes, self.part4, self.C) if self.separate else []
+                if self.rest_pkg:
+                    rest = self.num_sel - self.ranks
+                    split_ct += [7, 6, self.kt5, len(self.meta5), rest * self.seg_tiles] + self.meta5
+                    defines += [("SPLIT_W5", "7"), ("SPLIT_IN0R", "6")]
+                return self._program(
+                    "down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, split_ct,
+                    "matmul_split", defines=defines,
+                    reader="expert_split",
+                )  # fmt: skip
+            return self._program(
+                "down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct,
+                defines=_native_defines() if self.native
+                else (_tail_split_defines(self.num_sel * self.seg_bytes // self.page_bytes, kt) or None),
+            )  # fmt: skip
 
         program = send[0].sending_program(build, out, send[1], self.cores) if send else build()
         return ttnn.generic_op([weights, act, ids, scores, out], program)
@@ -715,10 +916,13 @@ class LinearStream(_BankStreamOp):
         rows=1,
         gather_split=False,
         exclude=(),
+        x_repeat=1,
     ):
         """gather_split (x_pages > 0, rows > 1): each core gathers 1 / n of the activation tiles and copies them to the
         other cores (kernels/stream_linear_writer.cpp X_GATHER_SPLIT) instead of every core gathering all of them.
-        exclude: logical cores to leave free (a fused program's other kernels)."""
+        exclude: logical cores to leave free (a fused program's other kernels).
+        x_repeat (x_pages = 0): the activation's k_tiles / x_repeat tiles are read once and repeated x_repeat times
+        along K (kernels/stream_linear_writer.cpp LIN_X_REPEAT), for a weight stored as x_repeat stacked terms."""
         n_tiles = -(-n // TILE)
         banks = mesh_device.dram_grid_size().x
         self.C = -(-n_tiles // banks)
@@ -729,6 +933,8 @@ class LinearStream(_BankStreamOp):
         self.kx = k_tiles
         self.kt = k_tiles + 1
         self.x_pages = 0 if x_pages is None else x_pages
+        assert x_repeat == 1 or (self.x_pages == 0 and k_tiles % x_repeat == 0), "x_repeat: flat source, whole repeats"
+        self.x_repeat = x_repeat
         assert out_mode in (3, 4, 5, 6), f"out_mode {out_mode}"
         self.out_mode = out_mode
         self.out_page_bytes = out_page_bytes
@@ -828,10 +1034,13 @@ class LinearStream(_BankStreamOp):
             # scratch + this core's cache tiles (multi-row: 3 scratch pages, up to two tiles per K / V column)
             kv_pages = 1 + self.cols if M == 1 else 3 + 2 * self.cols
             cbs += [
-                self._cb(cb_y, ttnn.bfloat16, TINY_BYTES * M, 2, tiny=True, rows=M),
-                self._cb(cb_rot, ttnn.bfloat8_b, BFP8_TILE_BYTES, 2),
+                self._cb(cb_y, ttnn.bfloat16, TINY_BYTES * M, 3 if QKV_ROPE_EXACT else 2, tiny=True, rows=M),
+                self._cb(cb_rot, ttnn.bfloat8_b, BFP8_TILE_BYTES, 3 if QKV_ROPE_EXACT else 2),
                 self._cb(cb_cs, ttnn.bfloat16, TINY_BYTES * M, 2 * self.head_tiles, tiny=True, rows=M),
-                self._cb(cb_kv, ttnn.bfloat8_b, BFP8_TILE_BYTES, kv_pages),
+                # K / V cache pages: BFP8_b, or BF16 for BF16 caches (GPT_OSS_KV_BF16=1, one user only)
+                self._cb(cb_kv, ttnn.bfloat16, 2048, kv_pages)
+                if rope_kv.kv_bf16
+                else self._cb(cb_kv, ttnn.bfloat8_b, BFP8_TILE_BYTES, kv_pages),
             ]
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         gs_noc = []
@@ -882,11 +1091,18 @@ class LinearStream(_BankStreamOp):
             compute_rt = ttnn.RuntimeArgs()
             for core, bank, r, vc in self.assignments:
                 compute_rt[core.x][core.y] = self._slot_columns(bank, r, order)
-            defines = [("QKV_ROPE_KV", "1")]
+            defines = (
+                [("QKV_ROPE_KV", "1")]
+                + ([("QKV_ROPE_EXACT", "1")] if QKV_ROPE_EXACT else [])
+                + ([("QKV_ROPE_EXACT_LITE", "1")] if QKV_ROPE_EXACT_LITE else [])
+                + ([("QKV_KV_BF16", "1")] if rope_kv.kv_bf16 else [])
+            )
         if M > 1:
             defines = (defines or []) + [("ROWS", str(M))]
         if self.gather_split:
             defines = (defines or []) + [("X_GATHER_SPLIT", "1")]
+        if self.x_repeat > 1:
+            defines = (defines or []) + [("LIN_X_REPEAT", str(self.x_repeat))]
         b_ = pending.boundary if pending is not None else None
         if b_ is not None and b_.mc:
             defines = (defines or []) + [("BND_WAIT_N", str(b_.H)), ("BND_PH", str(b_.PH))]
@@ -989,6 +1205,7 @@ class QKVRopeCache:
         self.rows_mode = False
         self.paged = page_table is not None
         self.num_kv_heads, self.block_size = k_cache.shape[1], k_cache.shape[2]
+        self.kv_bf16 = k_cache.dtype == ttnn.bfloat16  # TEMP: GPT_OSS_KV_BF16=1 (attention/kv_cache.py)
         # Unpaged: the page-table accessor slot holds the position tensor (never read).
         self.io = [rot, cos, sin, pos, page_table if self.paged else pos, k_cache, v_cache]
 
@@ -1007,6 +1224,7 @@ class QKVRopeCache:
         rows (consecutive); cos_table / sin_table the row-major [.., positions, head_dim] BF16 RoPE tables (one page per
         position, RotarySetup.cos_matrix / sin_matrix)."""
         obj = cls(rot, cos_table, sin_table, pos, page_table, k_cache, v_cache)
+        assert not obj.kv_bf16, "BF16 K / V caches: one-user QKV only (stream_linear_writer.cpp QKV_KV_BF16)"
         obj.rows_mode = True
         return obj
 
@@ -1026,7 +1244,10 @@ def _rope_rotation_tiles(mesh_device):
     from models.tt_transformers.tt.common import get_rot_transformation_mat
 
     t = get_rot_transformation_mat(dhead=TILE).reshape(TILE, TILE).float()
-    rot = torch.cat([torch.eye(TILE), t]).reshape(1, 1, 2 * TILE, TILE)
+    if QKV_ROPE_EXACT:  # [I, T, T]: y_hi @ T + y_lo @ T in one K = 2 matmul (kernels/stream_qkv_rope_compute.cpp)
+        rot = torch.cat([torch.eye(TILE), t, t]).reshape(1, 1, 3 * TILE, TILE)
+    else:
+        rot = torch.cat([torch.eye(TILE), t]).reshape(1, 1, 2 * TILE, TILE)
     return ttnn.from_torch(
         rot,
         dtype=ttnn.bfloat8_b,

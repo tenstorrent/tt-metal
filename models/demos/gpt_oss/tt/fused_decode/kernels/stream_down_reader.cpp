@@ -64,14 +64,43 @@ void kernel_main() {
     uint32_t trid = 1;
     uint32_t trid_to_wait = 1;
 
+#ifdef EXP_TAIL_SUBS
+    // TEMP experiment (fused_decode/config.py DECODE_EXPERT_TAIL_SPLIT): the last column's num_sel * pages_per_seg
+    // pages are read as EXP_TAIL_SUBS sub-blocks of EXP_TAIL_TILES tiles (in page order), each under its own
+    // transaction id (past the ring's 1..num_buffers), and pushed sub-block by sub-block below, so compute multiplies
+    // it while the rest lands (stream_matmul_compute.cpp: same tiles, same order into the same DST tile).
+    constexpr uint32_t tail_subs = EXP_TAIL_SUBS;
+    constexpr uint32_t tail_trid0 = num_buffers + 1;
+    constexpr uint32_t pages_per_sub = num_sel * pages_per_seg / tail_subs;
+    static_assert(pages_per_sub * tail_subs == num_sel * pages_per_seg, "the sub-blocks are whole pages");
+    static_assert(pages_per_sub * page_bytes == EXP_TAIL_TILES * tile_bytes, "EXP_TAIL_TILES tiles per sub-block");
+    static_assert(tail_trid0 + tail_subs - 1 <= NOC_MAX_TRANSACTION_ID, "transaction ids");
+#endif
     for (uint32_t c = 0; c < cols; ++c) {
-        noc_async_read_set_trid(trid);
-        for (uint32_t e = 0; e < num_sel; ++e) {
-            uint32_t src = offsets[e] + c * seg_bytes;
-            for (uint32_t p = 0; p < pages_per_seg; ++p) {
-                noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
-                src += page_bytes;
-                l1_write += page_bytes;
+#ifdef EXP_TAIL_SUBS
+        if (c + 1 == cols) {
+            uint32_t q = 0;  // page index within the column
+            for (uint32_t e = 0; e < num_sel; ++e) {
+                uint32_t src = offsets[e] + c * seg_bytes;
+                for (uint32_t p = 0; p < pages_per_seg; ++p, ++q) {
+                    const uint32_t t = tail_trid0 + q / pages_per_sub;
+                    noc_async_read_set_trid(t);
+                    noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, t);
+                    src += page_bytes;
+                    l1_write += page_bytes;
+                }
+            }
+        } else
+#endif
+        {
+            noc_async_read_set_trid(trid);
+            for (uint32_t e = 0; e < num_sel; ++e) {
+                uint32_t src = offsets[e] + c * seg_bytes;
+                for (uint32_t p = 0; p < pages_per_seg; ++p) {
+                    noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
+                    src += page_bytes;
+                    l1_write += page_bytes;
+                }
             }
         }
         if (free_blocks == num_buffers - extra_in_flight) {
@@ -87,9 +116,18 @@ void kernel_main() {
             l1_write = cb_base;
         }
     }
+#ifdef EXP_TAIL_SUBS
+    // the column left in flight is the last one (extra_in_flight = 1): push it sub-block by sub-block
+    static_assert(extra_in_flight == 1, "the tail is one column");
+    for (uint32_t t = 0; t < tail_subs; ++t) {
+        noc_async_read_barrier_with_trid(tail_trid0 + t);
+        cb_push_back(cb_w, EXP_TAIL_TILES);
+    }
+#else
     for (uint32_t i = 0; i < extra_in_flight; ++i) {
         noc_async_read_barrier_with_trid(trid_to_wait);
         cb_push_back(cb_w, block_tiles);
         trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
     }
+#endif
 }

@@ -40,6 +40,65 @@ void kernel_main() {
 
     constexpr uint32_t page = 2048;
 
+#ifdef BND_EARLY_SUM
+    // TEMP experiment (fused_decode/config.py DECODE_BOUNDARY_EARLY_SUM): phase 1 of the compute (the slot sum +
+    // residual add) reads only cb_res and cb_recv, so they are published first and the RMSNorm inputs (first read in
+    // phase 2 / 3) once they have landed: the gamma DRAM read and the scaler's zero fill (NOC reads of the zero region
+    // instead of 256 stores) run during the semaphore wait and the sum instead of before them. Every CB holds the same
+    // bytes as below.
+    static_assert(page % MEM_ZEROS_SIZE == 0, "the scaler page is whole zero-region reads");
+    uint32_t scaler = 0;
+    if constexpr (do_norm) {
+        const auto s_gamma = TensorAccessor(gamma_args, gamma_addr, tiles * page);
+        cb_reserve_back(cb_gamma, tiles);
+        noc_async_read(s_gamma.get_noc_addr(0), get_write_ptr(cb_gamma), tiles * page);
+        cb_reserve_back(cb_scaler, 1);
+        scaler = get_write_ptr(cb_scaler);
+        const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+        for (uint32_t z = 0; z < page; z += MEM_ZEROS_SIZE) {
+            noc_async_read(zeros, scaler + z, MEM_ZEROS_SIZE);
+        }
+    }
+
+    cb_reserve_back(cb_res, tiles);
+    if constexpr (res_mode == 1) {
+        // entry boundary (first layer, no slots): the embedding row, zero padded; waits for gamma too
+        const auto s_res = TensorAccessor(res_args, res_src_addr, row_bytes);
+        const uint32_t dst = get_write_ptr(cb_res);
+        noc_async_read(s_res.get_noc_addr(0), dst, row_bytes);
+        const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+        for (uint32_t z = row_bytes; z < tiles * page; z += MEM_ZEROS_SIZE) {
+            const uint32_t n = tiles * page - z < MEM_ZEROS_SIZE ? tiles * page - z : MEM_ZEROS_SIZE;
+            noc_async_read(zeros, dst + z, n);
+        }
+        noc_async_read_barrier();
+    }
+    cb_push_back(cb_res, tiles);
+
+    if constexpr (slots > 0) {
+        if constexpr (expected > 0) {
+            DeviceZoneScopedN("BND_R_WAIT");
+            volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+            noc_semaphore_wait_min(sem, expected);
+            noc_semaphore_set(sem, 0);
+        }
+        cb_reserve_back(cb_recv, slots * tiles);
+        cb_push_back(cb_recv, slots * tiles);
+    }
+
+    if constexpr (do_norm) {
+        // Reduce scaler: 1.0 in the first row of each face (on the zeros landed above), then gamma.
+        noc_async_read_barrier();
+        volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scaler);
+        for (uint32_t f = 0; f < 4; ++f) {
+            for (uint32_t i = 0; i < 8; ++i) {
+                s[f * 128 + i] = 0x3F803F80;
+            }
+        }
+        cb_push_back(cb_scaler, 1);
+        cb_push_back(cb_gamma, tiles);
+    }
+#else
     if constexpr (do_norm) {
         const auto s_gamma = TensorAccessor(gamma_args, gamma_addr, tiles * page);
         cb_reserve_back(cb_gamma, tiles);
@@ -91,4 +150,5 @@ void kernel_main() {
         cb_reserve_back(cb_recv, slots * tiles);
         cb_push_back(cb_recv, slots * tiles);
     }
+#endif
 }

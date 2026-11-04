@@ -1,11 +1,24 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from torch import nn
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
+
+# TEMP experiment: GPT_OSS_PREFILL_NORM_FP32=1 gives the (prefill) ttnn.rms_norm FP32 accumulation, HiFi4 and the
+# exact rsqrt; without a compute config the op sums the squares in a BF16 DST and uses approximate math, which
+# underestimates the variance (normed output ~4-5% too large, measured through the layer-PCC campaign).
+PREFILL_NORM_COMPUTE = (
+    ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+    if os.environ.get("GPT_OSS_PREFILL_NORM_FP32") == "1"
+    else None
+)
 
 
 class RMSNorm(nn.Module):
@@ -86,6 +99,7 @@ class RMSNorm(nn.Module):
                 weight=self.tt_weight,
                 epsilon=self.eps,
                 # program_config=program_config,
+                compute_kernel_config=PREFILL_NORM_COMPUTE,
             )
             return tt_output
 

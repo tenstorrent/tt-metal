@@ -6,6 +6,7 @@
 from dataclasses import dataclass
 
 from models.demos.gpt_oss.tt.attention.config import ProgramConfig
+from models.demos.gpt_oss.tt.fused_decode.config import FULL_FIDELITY
 
 
 @dataclass
@@ -38,7 +39,7 @@ class GPTOSSAttentionProgramConfig(ProgramConfig):
     )
 
     # Prefill SDPA (QK^T and PV matmuls) at HiFi2 on Blackhole; decode SDPA stays at math_fidelity (HiFi4).
-    prefill_sdpa_math_fidelity: str | None = "HiFi2"
+    prefill_sdpa_math_fidelity: str | None = None if FULL_FIDELITY else "HiFi2"
 
     # Matmul configs - None = auto-optimize (recommended)
     decode_qkv_cores: tuple[int, int] | None = None

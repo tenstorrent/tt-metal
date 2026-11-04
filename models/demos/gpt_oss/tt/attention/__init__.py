@@ -1,10 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 
 from models.demos.gpt_oss.config import MeshConfig
 
+from ..fused_decode.config import FULL_FIDELITY
 from .config import AttentionConfig, ProgramConfig
 from .decode import decode_forward
 from .kv_cache import get_kv_memory_config, init_kv_cache
@@ -33,7 +36,7 @@ class Attention:
         layer_idx,
         paged_attention_config=None,
         transformation_mats=None,
-        weight_dtype=ttnn.bfloat8_b,
+        weight_dtype=None,
         tensor_cache_path=None,
         create_kv_cache=True,
         fused_decode=False,
@@ -78,7 +81,8 @@ class Attention:
             config=config,
             state_dict=state_dict,
             mesh_config=mesh_config,
-            weight_dtype=weight_dtype,
+            weight_dtype=weight_dtype
+            or (ttnn.bfloat16 if FULL_FIDELITY and os.environ.get("GPT_OSS_FF_DENSE_BF8") != "1" else ttnn.bfloat8_b),
             tensor_cache_path=tensor_cache_path,
             fused_decode=fused_decode,
         )

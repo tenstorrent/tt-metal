@@ -6,6 +6,7 @@ from loguru import logger
 import ttnn
 
 from ..batched_prefill import fill_batch_idx
+from ..fused_decode.config import FULL_FIDELITY
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
     apply_allgather_and_slice,
@@ -90,7 +91,7 @@ def prefill_forward(
     # (DecoderLayer.__call__); a bf8 post-attention residual fails the v4 per-prompt guard. Other paths keep bf16 up to
     # 32K. Both 32K gates use the per-user length seq_len (DecoderLayer.__call__ also divides by batch_size), not the
     # total token count.
-    if seq_len > 32 * 1024 or weights.o_proj_prefill is not None:
+    if not FULL_FIDELITY and (seq_len > 32 * 1024 or weights.o_proj_prefill is not None):
         activation_dtype = ttnn.bfloat8_b
     else:
         activation_dtype = ttnn.bfloat16
@@ -217,9 +218,10 @@ def prefill_forward(
     tt_v.deallocate(True)
 
     # Every o_proj path casts its input to bf8 first; casting here instead is the same per-tile cast.
-    tt_sdpa_out_bf8 = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
-    tt_sdpa_out.deallocate(True)
-    tt_sdpa_out = tt_sdpa_out_bf8
+    if not FULL_FIDELITY:
+        tt_sdpa_out_bf8 = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
+        tt_sdpa_out.deallocate(True)
+        tt_sdpa_out = tt_sdpa_out_bf8
 
     # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
     if batch_size > 1:

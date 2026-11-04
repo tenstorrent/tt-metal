@@ -123,7 +123,7 @@ class FusedVerify:
         self.top_k, self.n_experts = mlp0.router.top_k, mlp0.router.num_experts
         self.router = LinearStream(
             mesh,
-            H // TILE,
+            H // TILE * mlp0.router.x_repeat,
             self.n_experts,
             ROUTER_DECODE_WEIGHT_DTYPE,
             readers=1,
@@ -131,6 +131,7 @@ class FusedVerify:
             out_page_bytes=128,
             heads=(self.top_k, self.n_experts),
             rows=M,
+            x_repeat=mlp0.router.x_repeat,
             # off the DRAM bank rows (the MoE's readers take them, dflash/moe_fused.py)
             exclude=[(x, 9) for x in range(mesh.compute_with_storage_grid_size().x)],
         )

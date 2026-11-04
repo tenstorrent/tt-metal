@@ -89,6 +89,81 @@ inline void topk_softmax(volatile tt_l1_ptr uint16_t* logits, volatile tt_l1_ptr
 }  // namespace router_topk
 
 namespace router_topk {
+// TEMP experiment (fused_decode/config.py DECODE_ROUTER_FAST_TOPK): topk_softmax of the one-row decode router (top-4 of
+// 32 logits) with the same output bytes. The logits are read as 16 words (two BF16 values each, lower id in the low
+// half) and the top-4 kept in registers in one pass of strict-greater insertions in id order (a key equal to a kept one
+// stays behind it: ties to the lower id, as the 4 argmax passes above). The selected logit is the inverse of its key;
+// the softmax is the same Q16 code, and the stage is written as 8 words. Fewer than 4 keys above 0 (only possible with
+// at least 29 logits of bits 0xFFFF, whose key is the passes' "taken" mark 0): topk_softmax itself, whose passes can
+// then pick an already taken id.
+template <uint32_t topk, uint32_t n_logits>
+inline void topk_softmax_fast(volatile tt_l1_ptr uint16_t* logits, volatile tt_l1_ptr uint16_t* stage) {
+    if constexpr (topk != 4 || n_logits != 32) {
+        topk_softmax<topk, n_logits>(logits, stage);
+    } else {
+        volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(logits);
+        uint32_t b0 = 0, b1 = 0, b2 = 0, b3 = 0, i0 = 0, i1 = 0, i2 = 0, i3 = 0;
+        auto ins = [&](uint32_t key, uint32_t id) __attribute__((always_inline)) {
+            if (key > b3) {
+                if (key > b2) {
+                    b3 = b2;
+                    i3 = i2;
+                    if (key > b1) {
+                        b2 = b1;
+                        i2 = i1;
+                        if (key > b0) {
+                            b1 = b0;
+                            i1 = i0;
+                            b0 = key;
+                            i0 = id;
+                        } else {
+                            b1 = key;
+                            i1 = id;
+                        }
+                    } else {
+                        b2 = key;
+                        i2 = id;
+                    }
+                } else {
+                    b3 = key;
+                    i3 = id;
+                }
+            }
+        };
+#pragma GCC unroll 1
+        for (uint32_t q = 0; q < 16; ++q) {  // not unrolled: the 32 inlined insertions cost ~8 KB of writer binary
+            const uint32_t v = words[q];
+            const uint32_t lo = v & 0xFFFF, hi = v >> 16;
+            ins((lo & 0x8000) ? (~lo & 0xFFFF) : (lo | 0x8000), 2 * q);
+            ins((hi & 0x8000) ? (~hi & 0xFFFF) : (hi | 0x8000), 2 * q + 1);
+        }
+        if (b3 == 0) {
+            topk_softmax<topk, n_logits>(logits, stage);
+            return;
+        }
+        auto val = [](uint32_t k) __attribute__((always_inline)) -> int32_t {
+            return bf16_to_q16((k & 0x8000) ? static_cast<uint16_t>(k & 0x7FFF) : static_cast<uint16_t>(~k & 0xFFFF));
+        };
+        const int32_t v0 = val(b0);
+        const uint32_t e0 = exp_q16(v0 - v0);
+        const uint32_t e1 = exp_q16(val(b1) - v0);
+        const uint32_t e2 = exp_q16(val(b2) - v0);
+        const uint32_t e3 = exp_q16(val(b3) - v0);
+        const uint32_t d = (e0 + e1 + e2 + e3) >> 1;
+        volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
+        out[0] = i0 | (i1 << 16);
+        out[1] = i2 | (i3 << 16);
+        out[2] = 0;
+        out[3] = 0;
+        out[4] = q16_to_bf16((e0 << 15) / d) | (static_cast<uint32_t>(q16_to_bf16((e1 << 15) / d)) << 16);
+        out[5] = q16_to_bf16((e2 << 15) / d) | (static_cast<uint32_t>(q16_to_bf16((e3 << 15) / d)) << 16);
+        out[6] = 0;
+        out[7] = 0;
+    }
+}
+}  // namespace router_topk
+
+namespace router_topk {
 // Multi-row router tail (DFlash verify, the fused MoE's router: dflash/moe_fused.py, MOE_EARLY_UNION), in parts so
 // that BRISC and NCRISC split the rows and the union (all the gate|up / down cores need to start) goes out before the
 // softmax weights. words = the [rows, 32] BF16 logits tile (row r: 16 values in face 0 at word 8 r, 16 in face 1 at

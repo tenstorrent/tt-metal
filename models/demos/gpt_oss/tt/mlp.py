@@ -5,6 +5,8 @@
 MoE MLP: Router + Experts with minimal abstraction
 """
 
+import os
+
 import ttnn
 from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
@@ -21,11 +23,14 @@ from .experts_throughput import (
 )
 from .fused_decode.config import (
     DENSE_MOE_TOKENS,
+    FULL_FIDELITY,
     dense_moe_decode_supported,
     fused_decode_supported,
+    moe_decode_gain,
     routed_decode_weights_dtype,
 )
 from .topk import TopKRouter
+from .weight_source import env_path
 
 # dtype of the expert input rows that MLP.prefill_sequence_parallel all-gathers. bf8 measured TTFT 8K -3.3%, 32K -3.0%
 # together with the local-rows router (L11c); bf16 makes the sequence-parallel prefill bit-identical to the
@@ -52,6 +57,24 @@ class MLP:
         # Split state dict
         router_state_dict = substate(state_dict, "router")
         experts_state_dict = substate(state_dict, "experts")
+        # The checkpoint experts, for the decode streams: the exact MXFP4 split (GPT_OSS_DECODE_EXPERTS_SPLIT) needs them;
+        # the bf4 decode streams load their GPTQ-rounded weights themselves (experts/weights.py)
+        decode_experts_state_dict = experts_state_dict
+        experts_cache_name = "experts"
+        # TEMP experiment: GPT_OSS_PREFILL_BF4_ROUNDED=1 gives the prefill experts (dense and routed) the GPTQ-rounded
+        # weights of GPT_OSS_DECODE_BF4_ROUNDED too (else only the decode streams get them); own cache names.
+        rounded = env_path("GPT_OSS_DECODE_BF4_ROUNDED")  # a local directory or hf://... (weight_source.py)
+        # bf8 decode layers (GPT_OSS_ROUTED_DECODE_BF8_LAYERS) keep the exact MXFP4 weights: their bf8 streams hold them
+        if (
+            rounded
+            and os.environ.get("GPT_OSS_PREFILL_BF4_ROUNDED") == "1"
+            and layer_idx is not None
+            and routed_decode_weights_dtype(layer_idx) != ttnn.bfloat8_b
+        ):
+            import torch
+
+            experts_state_dict = {k: v.float() for k, v in torch.load(f"{rounded}/layer_{int(layer_idx)}.pt").items()}
+            experts_cache_name = "experts_r" + os.path.basename(rounded.rstrip("/"))
 
         # Throughput experts rely on all_to_all_dispatch/combine across a mesh axis,
         # which has no meaning on a single device and would require fabric.
@@ -97,7 +120,7 @@ class MLP:
                     state_dict=experts_state_dict,
                     tokens_per_device=tokens_per_device,
                     num_links=ccl_manager.num_links,
-                    tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 )
 
             # DeepSeek prefill config: always created when throughput experts are
@@ -149,7 +172,7 @@ class MLP:
                 weight_dtype=ttnn.bfloat4_b,
                 dispatch_cluster_axis=0,
                 decode_memory_config=ttnn.L1_MEMORY_CONFIG,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 fused_config=fused_config,
@@ -181,11 +204,16 @@ class MLP:
                 ccl_manager=ccl_manager,
                 mesh_config=mesh_config,
                 program_config=program_config,
-                weight_dtype=ttnn.bfloat4_b,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                # TEMP: GPT_OSS_EXPERT_BF16=1 (with GPT_OSS_FULL_FIDELITY=1) holds the MXFP4 experts exactly in bf16
+                weight_dtype=(ttnn.bfloat16 if os.environ.get("GPT_OSS_EXPERT_BF16") == "1" else ttnn.bfloat8_b)
+                if FULL_FIDELITY
+                else ttnn.bfloat4_b,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 indexed_decode=self.indexed_decode,
                 dense_decode_tokens=DENSE_MOE_TOKENS if self.dense_decode else None,
                 decode_weight_dtype=routed_decode_weights_dtype(layer_idx),
+                decode_gain=moe_decode_gain(layer_idx),
+                decode_state_dict=decode_experts_state_dict,
             )
 
         # Routed top-k prefill experts (experts/prefill_routed.py): only the routed (token, expert) pairs are computed,
@@ -205,7 +233,7 @@ class MLP:
                 experts_state_dict,
                 ccl_manager,
                 mesh_config,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 layer_idx=layer_idx,
             )
         # The routed experts may hold the experts in a per-layer calibrated order (device-load balance,

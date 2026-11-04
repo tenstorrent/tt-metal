@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 
 import ttnn
@@ -118,7 +119,7 @@ class ProgramConfig:
     # Compute config
     math_fidelity: str = "HiFi4"
     math_approx_mode: bool = False
-    fp32_dest_acc_en: bool = False
+    fp32_dest_acc_en: bool = os.environ.get("GPT_OSS_SDPA_FP32_ACC", "0") == "1"  # TEMP experiment knob
     packer_l1_acc: bool = False
     # Prefill SDPA math fidelity on Blackhole; None uses math_fidelity (decode SDPA always uses math_fidelity).
     prefill_sdpa_math_fidelity: str | None = None
@@ -244,6 +245,13 @@ class ProgramConfig:
         fidelity = self.math_fidelity
         if self.prefill_sdpa_math_fidelity is not None and ttnn.device.is_blackhole(mesh_device):
             fidelity = self.prefill_sdpa_math_fidelity
+        if os.environ.get("GPT_OSS_SDPA_FP32_ACC") == "1":  # TEMP experiment: FP32 dest overflows L1 at 16K+ prefill
+            return ttnn.WormholeComputeKernelConfig(
+                math_fidelity=getattr(ttnn.MathFidelity, fidelity),
+                math_approx_mode=self.math_approx_mode,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=self.packer_l1_acc,
+            )
         return self.get_compute_kernel_config(fidelity)
 
     def get_prefill_proj_config(self, mesh_device, role: str, x, weight, tp, in0_dtype=None):

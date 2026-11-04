@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -71,6 +72,15 @@ def load_attention_weights(
     padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
     o_proj_pad_size = padded_local_hidden - local_hidden
     o_proj_cache_suffix = f"_padded" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
+    decode_rounded_tag = "_drnd" if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE") else ""
+    # TEMP (layer-PCC campaign): GPT_OSS_KV_SMOOTH changes the q / k weight values (utils/lazy_state_dict.py _kv_smooth),
+    # so their caches get their own names (the scales file + mode) instead of being read stale or overwritten.
+    kv_smooth = os.environ.get("GPT_OSS_KV_SMOOTH", "")
+    kv_smooth_tag = ""
+    if kv_smooth:
+        import hashlib
+
+        kv_smooth_tag = "_kvs" + hashlib.sha1(kv_smooth.encode()).hexdigest()[:8]
 
     if state_dict:
         # Extract projection weights from state dict
@@ -132,6 +142,24 @@ def load_attention_weights(
 
         o_proj_decode = o_proj
         o_proj_bias_decode = o_proj_bias
+        qkv_decode = qkv_cat
+        dec = {n: substate(state_dict, n).get("weight_decode") for n in ("q_proj", "k_proj", "v_proj", "o_proj")}
+        if all(
+            v is not None for v in dec.values()
+        ):  # TEMP experiment GPT_OSS_DENSE_ROUNDED_DECODE (lazy_state_dict.py)
+            parts = [
+                torch.cat(
+                    [
+                        torch.chunk(dec[n], mesh_config.tp, dim=0)[i].transpose(-2, -1)
+                        for n in ("q_proj", "k_proj", "v_proj")
+                    ],
+                    dim=-1,
+                )
+                for i in range(mesh_config.tp)
+            ]
+            qkv_decode = torch.cat(parts, dim=-1).unsqueeze(0).unsqueeze(0)
+            o_proj_decode = dec["o_proj"].transpose(-1, -2)
+            decode_rounded_tag = "_drnd"
         if mesh_config.tp > 1:
             # Row-parallel: the bias is added once, on the first TP device.
             o_proj_bias_decode = torch.cat(
@@ -164,6 +192,7 @@ def load_attention_weights(
         sinks_for_sdpa = None
         o_proj_decode = None
         o_proj_bias_decode = None
+        qkv_decode = None
 
     # Clean mesh mapping using MeshConfig
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
@@ -176,7 +205,7 @@ def load_attention_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{kv_smooth_tag}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -186,7 +215,7 @@ def load_attention_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_bias"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv_bias{kv_smooth_tag}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -230,7 +259,7 @@ def load_attention_weights(
             )
             qkv_layouts = [
                 stream_linear_layout(w[0, 0], b, banks, qkv_order)
-                for w, b in zip(torch.chunk(qkv_cat, tp, -1), torch.chunk(qkv_bias_cat, tp, -1))
+                for w, b in zip(torch.chunk(qkv_decode, tp, -1), torch.chunk(qkv_bias_cat, tp, -1))
             ]
             o_layouts = [
                 stream_linear_layout(w, b, banks)
@@ -243,12 +272,12 @@ def load_attention_weights(
                 layouts,
                 linear_stream_rows(mesh_device, k, n),
                 dtype,
-                get_cache_file_name(tensor_cache_path, f"{name}_stream_b{banks}_nb{NBIAS}"),
+                get_cache_file_name(tensor_cache_path, f"{name}_stream_b{banks}_nb{NBIAS}{decode_rounded_tag}"),
             )
 
         wqkv_stream_tt = stream(
             qkv_layouts,
-            "wqkv_kvfirst" if QKV_FUSED_ROPE_KV else "wqkv",
+            ("wqkv_kvfirst" if QKV_FUSED_ROPE_KV else "wqkv") + kv_smooth_tag,
             hidden_size,
             local_qkv,
             QKV_DECODE_WEIGHT_DTYPE,

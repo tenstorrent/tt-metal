@@ -24,6 +24,7 @@ import torch
 from safetensors import safe_open
 from transformers.integrations.mxfp4 import convert_moe_packed_tensors
 
+from models.demos.gpt_oss.tt.weight_source import env_path
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 _MXFP4_SUFFIXES = ("_blocks", "_scales")
@@ -74,6 +75,17 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
                     break
             self._key_to_file[key] = filename
         self._mxfp4_keys = {k[: -len("_blocks")] for k in weight_map if k.endswith("_blocks")}
+        # TEMP experiment: GPT_OSS_DENSE_ROUNDED_DECODE = a file of GPTQ-rounded dense weights (dense_gptq.py; q / k in
+        # Meta order); each of its keys is also served as "<key>_decode", which only the fused decode stream copies
+        # read (attention/weights.py, topk.py, model.py LM head), so prefill keeps the checkpoint weights.
+        self._decode_rounded_path = env_path(
+            "GPT_OSS_DENSE_ROUNDED_DECODE"
+        )  # a local file or hf://... (tt/weight_source.py)
+        self._decode_rounded = None
+        if self._decode_rounded_path:
+            self._decode_rounded = torch.load(self._decode_rounded_path, mmap=True)
+            for key in self._decode_rounded:
+                self._key_to_file[f"{key}_decode"] = None
 
     def _handle(self, filename: str):
         handle = self._handles.get(filename)
@@ -83,6 +95,19 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
         return handle
 
     def __getitem__(self, key: str) -> torch.Tensor:
+        # TEMP experiment: GPT_OSS_DENSE_ROUNDED = a file of GPTQ-rounded dense weights (q / k already in Meta order)
+        rounded = os.environ.get("GPT_OSS_DENSE_ROUNDED", "")
+        if rounded:
+            if getattr(self, "_rounded", None) is None:
+                self._rounded = torch.load(rounded)
+            if key in self._rounded:
+                return self._rounded[key]
+        if (
+            self._decode_rounded is not None
+            and key.endswith("_decode")
+            and key[: -len("_decode")] in self._decode_rounded
+        ):
+            return self._kv_smooth(key, self._decode_rounded[key[: -len("_decode")]].clone())  # already Meta order
         filename = self._key_to_file[key]
         handle = self._handle(filename)
         if key in self._mxfp4_keys:
@@ -95,7 +120,33 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
             tensor = tensor.to(torch.bfloat16)
         if self._convert_to_meta_format:
             tensor = convert_hf_qkv_to_meta_format({key: tensor}, self._head_dim)[key]
+            tensor = self._kv_smooth(key, tensor)
         return tensor
+
+    def _kv_smooth(self, key: str, tensor: torch.Tensor) -> torch.Tensor:
+        """TEMP experiment (layer-PCC campaign): GPT_OSS_KV_SMOOTH=<file>[:pow2] (calib_kv_scales.py) scales each kv
+        head's k_proj rows (weight and bias) by its rotary-pair scales s and the q_proj rows of the query heads that read
+        it by 1 / s: Q K^T is unchanged (RoPE rotates each pair, an equal scale on both commutes with it), and the bf8 K
+        cache (one exponent per 16 head_dim values) keeps more precision. Meta order: HF pair (j, j + D / 2) is rows
+        (2 j, 2 j + 1). Use a private weight cache: the cache names do not change."""
+        spec = os.environ.get("GPT_OSS_KV_SMOOTH", "")
+        base = key[: -len("_decode")] if key.endswith("_decode") else key
+        if not spec or not (base.endswith(("q_proj.weight", "q_proj.bias", "k_proj.weight", "k_proj.bias"))):
+            return tensor
+        if getattr(self, "_kv_scales", None) is None:
+            path, _, mode = spec.partition(":")
+            self._kv_scales = torch.load(path)["s_pow2" if mode == "pow2" else "s"]
+        layer = int(base.split(".")[2])
+        s = self._kv_scales[layer].float()  # [kv_heads, D], HF order, s[:, j] == s[:, j + D / 2]
+        D = s.shape[-1]
+        s_meta = s[:, : D // 2].repeat_interleave(2, dim=-1)  # [kv_heads, D] in Meta order
+        rows = tensor.shape[0] // D
+        if ".k_proj." in base:
+            scale = s_meta.reshape(-1)
+        else:
+            scale = (1.0 / s_meta).repeat_interleave(rows // s_meta.shape[0], dim=0).reshape(-1)
+        shape = (-1,) + (1,) * (tensor.dim() - 1)
+        return (tensor.float() * scale.reshape(shape)).to(tensor.dtype)
 
     def __contains__(self, key: object) -> bool:
         return key in self._key_to_file

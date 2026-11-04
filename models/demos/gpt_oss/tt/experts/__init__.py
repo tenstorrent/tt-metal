@@ -60,6 +60,8 @@ class Experts:
         indexed_decode=False,
         dense_decode_tokens=None,
         decode_weight_dtype=None,
+        decode_gain=None,
+        decode_state_dict=None,
     ):
         """
         Initialize expert layers.
@@ -84,6 +86,7 @@ class Experts:
         self.mesh_config = mesh_config
         self.weight_dtype, self.tensor_cache_path = weight_dtype, tensor_cache_path
         self.decode_weight_dtype = decode_weight_dtype or weight_dtype
+        self.decode_gain = decode_gain  # fused decode MoE gain (fused_decode/config.py moe_decode_gain)
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config
@@ -114,7 +117,8 @@ class Experts:
             self.decode_weights = load_decode_expert_weights(
                 mesh_device=mesh_device,
                 config=config,
-                state_dict=state_dict,
+                # decode_state_dict: the checkpoint experts when the prefill ones are substituted (mlp.py)
+                state_dict=state_dict if decode_state_dict is None else decode_state_dict,
                 mesh_config=mesh_config,
                 weight_dtype=self.decode_weight_dtype,
                 tensor_cache_path=tensor_cache_path,
@@ -125,7 +129,8 @@ class Experts:
                 config.num_experts_per_tok,
                 config.swiglu_limit,
                 config.alpha,
-                weight_dtype=self.decode_weight_dtype,
+                weight_dtype=self.decode_weights.gate_up_dtype or self.decode_weight_dtype,
+                down_dtype=self.decode_weights.down_dtype,
             )
 
         self.dense_decode_weights = None
@@ -204,6 +209,7 @@ class Experts:
                 weights=self.decode_weights,
                 stream=self.decode_stream,
                 send=self.ccl_manager.decode_boundary_send(self.config.hidden_size, "moe"),
+                gain=self.decode_gain,
             )
         if is_decode and self.dense_decode_weights is not None:
             partial = decode_forward_dense(

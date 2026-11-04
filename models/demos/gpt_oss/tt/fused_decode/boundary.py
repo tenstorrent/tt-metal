@@ -33,6 +33,7 @@ partial; B produces that partial only from the output of its previous "attn" bou
 use of a site must keep this alternation (no two sends to the same site without an all-device wait in between).
 """
 
+import os
 import struct
 from pathlib import Path
 
@@ -40,7 +41,12 @@ import torch
 
 import ttnn
 
-from .config import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_LINKS, residual_memory_config
+from .config import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_EARLY_SUM, DECODE_BOUNDARY_LINKS, residual_memory_config
+
+# TEMP experiment: GPT_OSS_BOUNDARY_FIDELITY=HiFi3 / HiFi4 for the boundary RMSNorm's multiplies. At HiFi2 the SrcB
+# operand of each multiply keeps hidden + 6 mantissa bits (tech_reports/matrix_engine): the rsqrt factor broadcast over
+# the normed vector, gamma and one side of the squares are truncated toward zero.
+BOUNDARY_MATH_FIDELITY = getattr(ttnn.MathFidelity, os.environ.get("GPT_OSS_BOUNDARY_FIDELITY", "HiFi2"))
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE = ttnn.TILE_SIZE
@@ -468,7 +474,7 @@ class DecodeBoundary:
                     compile_time_args=compute_ct,
                     runtime_args=[],
                     config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, math_approx_mode=False
+                        math_fidelity=BOUNDARY_MATH_FIDELITY, fp32_dest_acc_en=True, math_approx_mode=False
                     ),
                 ),
                 ttnn.KernelDescriptor(
@@ -543,6 +549,8 @@ class DecodeBoundary:
         compute_ct += [_f32_bits(1.0 / self.hidden), _f32_bits(self.eps), 1 if norm else 0, cb_y]
         reader_rt = ttnn.RuntimeArgs()
         reader_rt[self.core.x][self.core.y] = [gamma_t.buffer_address(), sem_addr, residual.buffer_address()]
+        # TEMP experiment (fused_decode.config.DECODE_BOUNDARY_EARLY_SUM): residual + slots published before gamma
+        reader_defines = [("BND_EARLY_SUM", "1")] if DECODE_BOUNDARY_EARLY_SUM else []
 
         def kernels(coord):
             ks = [
@@ -554,6 +562,7 @@ class DecodeBoundary:
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
                     ),
+                    defines=reader_defines,
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNEL_DIR / "boundary_compute.cpp"),
@@ -561,7 +570,7 @@ class DecodeBoundary:
                     compile_time_args=compute_ct,
                     runtime_args=[],
                     config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, math_approx_mode=False
+                        math_fidelity=BOUNDARY_MATH_FIDELITY, fp32_dest_acc_en=True, math_approx_mode=False
                     ),
                 ),
             ]

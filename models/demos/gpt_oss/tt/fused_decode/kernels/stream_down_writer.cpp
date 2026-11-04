@@ -56,17 +56,59 @@ void kernel_main() {
     for (uint32_t e = 0; e < num_sel; ++e) {
         noc_async_read(s_act.get_noc_addr(e), in0 + e * seg_tiles * tiny_bytes, act_row_bytes);
     }
+#ifdef SPLIT_IN0B
+    // TEMP experiment (exact MXFP4 split): the exact routed experts' activations again, without the bias multiplier
+    // tiles, for the BFP2 call (no zero tiles stepping over them: each bfp2 <-> zero switch stalls the unpacker)
+#ifdef SPLIT_RANKS
+    constexpr uint32_t n_exact = SPLIT_RANKS;
+#else
+    constexpr uint32_t n_exact = num_sel;
+#endif
+    cb_reserve_back(SPLIT_IN0B, n_exact * (seg_tiles - 1));
+    const uint32_t in0b = get_write_ptr(SPLIT_IN0B);
+    for (uint32_t e = 0; e < n_exact; ++e) {
+        noc_async_read(s_act.get_noc_addr(e), in0b + e * (seg_tiles - 1) * tiny_bytes, act_row_bytes);
+    }
+#endif
+#ifdef SPLIT_IN0R
+    // TEMP experiment (exact MXFP4 split, inexact ranks on the package's bfloat4_b tiles): those experts' activations
+    // + a bias multiplier tile in the package layout (w_e in the first nbias entries), read by the package-tile call
+    constexpr uint32_t n_rest = num_sel - n_exact;
+    cb_reserve_back(SPLIT_IN0R, n_rest * seg_tiles);
+    const uint32_t in0r = get_write_ptr(SPLIT_IN0R);
+    for (uint32_t e = n_exact; e < num_sel; ++e) {
+        noc_async_read(s_act.get_noc_addr(e), in0r + (e - n_exact) * seg_tiles * tiny_bytes, act_row_bytes);
+    }
+#endif
     noc_async_read_barrier();
+#ifdef SPLIT_IN0B
+    cb_push_back(SPLIT_IN0B, n_exact * (seg_tiles - 1));
+#endif
     volatile tt_l1_ptr uint16_t* scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr);
     for (uint32_t e = 0; e < num_sel; ++e) {
         volatile tt_l1_ptr uint16_t* aug =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in0 + (e * seg_tiles + seg_tiles - 1) * tiny_bytes);
         const uint16_t w = scores[e];
         for (uint32_t i = 0; i < 32; ++i) {
+#if defined(EXPERT_SPLIT) || defined(W_TRANSPOSED)
+            aug[i] = (i == 0 || i == 16) ? w : 0;  // the split streams' two bias terms (mxfp4_split.py)
+#else
             aug[i] = i < nbias ? w : 0;
+#endif
         }
     }
     cb_push_back(cb_in0, num_sel * seg_tiles);
+#ifdef SPLIT_IN0R
+    for (uint32_t e = n_exact; e < num_sel; ++e) {
+        volatile tt_l1_ptr uint16_t* aug = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+            in0r + ((e - n_exact) * seg_tiles + seg_tiles - 1) * tiny_bytes);
+        const uint16_t w = scores[e];
+        for (uint32_t i = 0; i < 32; ++i) {
+            aug[i] = i < nbias ? w : 0;
+        }
+    }
+    cb_push_back(SPLIT_IN0R, n_rest * seg_tiles);
+#endif
 
     for (uint32_t c = 0; c < cols; ++c) {
         cb_wait_front(cb_out, 1);

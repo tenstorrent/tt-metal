@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
@@ -12,6 +14,8 @@ from .batched_prefill import gather_users
 from .fused_decode.boundary import PendingBoundary
 from .fused_decode.config import DECODE_BOUNDARY_FUSE_CONSUMER
 from .mlp import MLP
+
+PREFILL_RESIDUAL_BF16 = os.environ.get("GPT_OSS_PREFILL_RESIDUAL_BF16") == "1"
 from .rms_norm import RMSNorm
 
 
@@ -383,7 +387,20 @@ class DecoderLayer:
         hidden_states_post_norm.deallocate(True)
 
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
-        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+        if (
+            PREFILL_RESIDUAL_BF16
+            and not is_decode
+            and user_seqlen <= 32 * 1024
+            and hidden_states.dtype == ttnn.bfloat8_b
+        ):
+            # TEMP experiment (GPT_OSS_PREFILL_RESIDUAL_BF16=1): the post-MoE residual in bf16 too, as the
+            # post-attention add above (a bf8 residual shares one exponent per 16 channels across gpt-oss's
+            # large-magnitude channels)
+            moe_out = hidden_states
+            hidden_states = ttnn.add(residual, moe_out, dtype=ttnn.bfloat16)
+            moe_out.deallocate(True)
+        else:
+            hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
 
         return hidden_states
