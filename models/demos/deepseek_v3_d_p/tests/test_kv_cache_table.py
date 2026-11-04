@@ -676,8 +676,9 @@ def test_dflash_kv_cache_stage_layout_equivalence(mesh_device, seq_len, num_user
 
 # sp x tp -- GLM-5.3 KV-dedup (TP-sharded) chunk address table. Same shape as test_kimi_kv_cache_mock
 # above: build the block-cyclic cache on the host, build the table over it, read every 32-token chunk
-# back. Only the sharding differs -- linear chip L = s*tp + t owns tokens [c*5120 + L*(5120/(sp*tp)), +),
-# so each device holds a DISTINCT sub-slice instead of a whole row replicated across its tp columns.
+# back. Only the sharding differs -- linear chip L = s*tp + t owns tokens [c*C + L*(C/(sp*tp)), +) for a
+# C-token chunk, so each device holds a DISTINCT sub-slice instead of a whole row replicated across its tp
+# columns. C is the block-cyclic period: the production 5,120 and a smaller 2,048-token chunk.
 @pytest.mark.parametrize(
     "mesh_device",
     [(2, 4), (8, 4)],
@@ -701,6 +702,7 @@ def test_dflash_kv_cache_stage_layout_equivalence(mesh_device, seq_len, num_user
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
 @pytest.mark.parametrize("compacted_layers", [False, True], ids=["dense_layers", "compacted_layers"])
+@pytest.mark.parametrize("chunk_tokens", [PREFILL_CHUNK_TOKENS, 2048], ids=["c5120", "c2048"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM-5.3 DSA / TP-dedup is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm53_tp_sharded_kv_cache_mock(
@@ -709,6 +711,7 @@ def test_glm53_tp_sharded_kv_cache_mock(
     num_users,
     num_layers,
     compacted_layers,
+    chunk_tokens,
     device_params,
 ):
     sp_axis, tp_axis = 0, 1
@@ -719,10 +722,11 @@ def test_glm53_tp_sharded_kv_cache_mock(
     kvpe_cache_head_dim = 576  # qk_rope_head_dim(64) + kv_lora_rank(512); same for Kimi and DeepSeek
     num_kvpe_cache_layers = num_users * num_layers
 
-    chunk_tokens = PREFILL_CHUNK_TOKENS
-    tokens_per_chunk_per_device = chunk_tokens // linear_factor  # 160 on sp=8/tp=4 (vs 640 SP-only)
+    if seq_len % chunk_tokens:
+        pytest.skip(f"seq_len {seq_len} is not whole {chunk_tokens}-token chunks")
+    tokens_per_chunk_per_device = chunk_tokens // linear_factor  # 160 for 5k chunks on sp=8/tp=4
     num_seq_chunks = seq_len // chunk_tokens
-    assert chunk_tokens % linear_factor == 0, f"5k chunk must divide evenly across sp*tp={linear_factor}"
+    assert chunk_tokens % linear_factor == 0, f"{chunk_tokens} chunk must divide evenly across sp*tp={linear_factor}"
     assert tokens_per_chunk_per_device % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0
 
     torch.manual_seed(42)
@@ -796,6 +800,7 @@ def test_glm53_tp_sharded_kv_cache_mock(
         num_users=num_users,
         tp_axis=tp_axis,
         layer_rows=layer_rows,
+        chunk_size_global=chunk_tokens,
     )
 
     reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(

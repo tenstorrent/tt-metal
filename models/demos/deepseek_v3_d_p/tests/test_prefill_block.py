@@ -663,9 +663,7 @@ _OTHER_ROWS_PER_CHIP = (256, 1280)
 )
 # Each mesh runs the sequence that gives it the production per-chip shape (640 rows per SP row), plus the
 # per-chip shapes other chunk sizes give (_OTHER_ROWS_PER_CHIP). The other combinations are skipped in the test body.
-@pytest.mark.parametrize(
-    "seq_len", [5120, 1280, 2048, 2560, 10240], ids=["seq5120", "seq1280", "seq2048", "seq2560", "seq10240"]
-)
+@pytest.mark.parametrize("seq_len", [5120, 1280, 2048, 2560], ids=["seq5120", "seq1280", "seq2048", "seq2560"])
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).

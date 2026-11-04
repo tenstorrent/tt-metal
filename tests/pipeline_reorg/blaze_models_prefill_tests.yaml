@@ -278,7 +278,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "torus-xy" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_runner_kv_cache_table -k "torus-xy and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_kv_cache_table -k "torus-xy-8x4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_tp_sharded_kv_cache_mock -k "8x4 and line and seq5k" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_tp_sharded_kv_cache_mock -k "8x4 and line and ((seq5k and c5120) or (seq10k and c2048))" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
     '

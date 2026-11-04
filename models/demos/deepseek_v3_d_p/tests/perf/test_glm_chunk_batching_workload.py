@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Smaller prefill chunks plus packed forwards vs today's big chunks, on one workload: real tokens per second.
+Smaller prefill chunks plus packed forwards vs 5K chunks, on one workload: real tokens per second.
 
-The question behind smaller chunks / N users per forward vs today's 8x4 / 5K / 1 user: a short request padded
+The question behind smaller chunks / N users per forward vs 8x4 / 5K / 1 user: a short request padded
 up to a big chunk wastes compute, a small chunk wastes less but runs the MoE on fewer tokens per call,
 and packing several users' chunks into one forward wins that back.
 
@@ -13,7 +13,7 @@ Workload: USERS users, each with history tokens of KV already prefilled (filled 
 same runtime), then one new request each (PRODUCTION_REQUEST_LENGTHS). The timed phase prefills every
 new request, traced, in the configuration's forwards (cK-fF: K-token chunks, F chunks per forward).
 
-  galaxy 8x4   c5120-f1 (today's production shape), c5120-f2 / f4 (packing alone, same padding),
+  galaxy 8x4   c5120-f1 (the production shape), c5120-f2 / f4 (packing alone, same padding),
                c2048-f1 / f2 / f4 (smaller chunk on the same mesh; 2,560 would be 80 rows per TP rank, not
                whole tiles, which the indexer refuses)
   LoudBox 2x4  everything at half scale (history, requests and chunks): c2560-f1, c1280-f1 / f2 / f4. A
@@ -25,7 +25,7 @@ has its own gate). Record only, no gate: logs GLM_WORKLOAD lines.
 
 Control: every config saves each user's KVPE and indexer-K rows (natural order: the last history chunk and
 the new request) to GLM_WORKLOAD_KV_DIR, and test_glm_chunk_batching_workload_kv_agree (host only, run it
-after the four configs) requires the packed configs to match c1280-f1 exactly and c2560-f1 to match closely.
+after the configs) requires each packed config to match one chunk per forward at its own chunk size closely.
 """
 
 import copy
@@ -304,15 +304,14 @@ def test_glm_chunk_batching_workload(
     )
 
 
-# Host only: compares what the configs above saved, each against its mesh's small-chunk, one-chunk-per-forward
-# config. Packing changes only the MoE's batch (and with it which routed-expert kernel runs); on the LoudBox
+# Host only: compares what each packed config above saved against one chunk per forward at the same chunk
+# size on the same mesh. Packing changes only the MoE's batch (and with it which routed-expert kernel runs); on the LoudBox
 # the KV drifts from layer 7 on, to 0.985 at layer 9, the same for every user and position, as flipped top-8
-# choices under the synthetic router would. Only configs at the reference's chunk size are compared: a
-# different chunk size changes which tokens share each MoE call, and past the first MoE layer the KV then
-# drifts far more (galaxy 8x4, c5120-f1 vs c2048-f1: PCC 0.88 / 0.76 / 0.68 at layers 1 / 2 / 3, job 169534).
+# choices under the synthetic router would. Different chunk sizes are not compared: a different chunk size
+# changes which tokens share each MoE call, and past the first MoE layer the KV then drifts far more (galaxy
+# 8x4, c5120-f1 vs c2048-f1: PCC 0.88 / 0.76 / 0.68 at layers 1 / 2 / 3).
 # test_sparse_mla_chunk_size_vs_reference checks chunk size on its own, without the MoE.
 _KV_PCC = 0.98
-_KV_REFERENCE = {"galaxy-8x4": (2048, 1), "loudbox-fabric2d-2x4": (1280, 1)}
 
 
 @pytest.mark.parametrize(
@@ -321,12 +320,12 @@ _KV_REFERENCE = {"galaxy-8x4": (2048, 1), "loudbox-fabric2d-2x4": (1280, 1)}
         pytest.param(mesh_id, config, id=f"{mesh_id}-c{config[0]}-f{config[1]}")
         for mesh_id, (_, _, _, _, _, configs) in _MESHES.items()
         for config in configs
-        if config != _KV_REFERENCE[mesh_id] and config[0] == _KV_REFERENCE[mesh_id][0]
+        if config[1] > 1 and (config[0], 1) in configs
     ],
 )
 def test_glm_chunk_batching_workload_kv_agree(mesh, other):
     mesh_shape = _MESHES[mesh][0]
-    reference = _KV_REFERENCE[mesh]
+    reference = (other[0], 1)
     paths = [_kv_path(mesh_shape, *config) for config in (reference, other)]
     missing = [p for p in paths if not os.path.exists(p)]
     if missing:
