@@ -5,9 +5,10 @@
 """``fused_experts`` with its TP all-reduce fused in, against the same op followed by
 ``width_sharded_all_reduce``.
 
-Each chip of a 1xR line gets its own token row, so the per-chip partials differ and the sum is
-non-trivial. The fused output must match the two-op path on every chip (within bf16 rounding of one
-sum) and be bit-identical across the chips of the ring.
+Each chip gets its own token row, so the per-chip partials differ and the sum is non-trivial. TP4
+reduces a 1x4 line on a 1D fabric; TP12 reduces both axes of a 3x4 mesh in one pass on a 2D fabric,
+against one ``width_sharded_all_reduce`` per axis. The fused output must match the separate path on
+every chip (within bf16 rounding of the sums) and be bit-identical across the chips.
 """
 
 import pytest
@@ -26,16 +27,24 @@ DOWN_CORES = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCo
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params, submesh_shape, axes",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, (1, 4), (1,)),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}, (3, 4), (1, 0)),
+    ],
+    ids=("tp4", "tp12"),
+    indirect=["device_params"],
+)
 @pytest.mark.parametrize(
     "hidden, intermediate",
     [(4096, 512), (5120, 576)],
-    ids=("v4_tp4", "v41_tp4"),
+    ids=("v4", "v41"),
 )
 @pytest.mark.parametrize("num_links", (1, 2), ids=lambda n: f"links{n}")
 @pytest.mark.parametrize("iterations", (3,))
-def test_fused_experts_all_reduce(mesh_device, hidden, intermediate, num_links, iterations):
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+def test_fused_experts_all_reduce(mesh_device, submesh_shape, axes, hidden, intermediate, num_links, iterations):
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape), ttnn.MeshCoordinate(0, 0))
     ring = submesh.get_num_devices()
     grid = submesh.compute_with_storage_grid_size()
     grid_y = 8 if (intermediate // TILE) % 16 == 0 else 9
@@ -103,11 +112,12 @@ def test_fused_experts_all_reduce(mesh_device, hidden, intermediate, num_links, 
         return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)).float().reshape(ring, hidden)
 
     partial = run()
-    expected = per_chip(
-        ttnn.experimental.deepseek.width_sharded_all_reduce(
-            partial, cluster_axis=1, num_links=num_links, topology=ttnn.Topology.Linear
+    reduced = partial
+    for axis in axes:
+        reduced = ttnn.experimental.deepseek.width_sharded_all_reduce(
+            reduced, cluster_axis=axis, num_links=num_links, topology=ttnn.Topology.Linear
         )
-    )
+    expected = per_chip(reduced)
     partials = per_chip(partial)
     # Each bf16 add rounds to the ulp of the partials' scale, so near-zero sums are only that close.
     atol = 2 * ring * partials.abs().max().item() * 2**-8
@@ -115,7 +125,9 @@ def test_fused_experts_all_reduce(mesh_device, hidden, intermediate, num_links, 
 
     # Several back-to-back calls exercise the semaphore reset and the persistent scratch.
     for i in range(iterations):
-        fused = run(all_reduce_cluster_axis=1, all_reduce_num_links=num_links, all_reduce_topology=ttnn.Topology.Linear)
+        fused = run(
+            all_reduce_cluster_axes=axes, all_reduce_num_links=num_links, all_reduce_topology=ttnn.Topology.Linear
+        )
         assert fused.memory_config() == out_mem
         got = per_chip(fused)
         for chip in range(1, ring):

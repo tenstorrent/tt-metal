@@ -636,9 +636,9 @@ FUSE_SHARED_EXPERT = os.environ.get("DEEPSEEK_V4_FUSE_SHARED_EXPERT", "1") not i
 # expert grid, wherever the gate's weight can be read in place (see :class:`RouterWeights`).
 # ``DEEPSEEK_V4_FUSE_ROUTER=0`` keeps the router as its own ops.
 FUSE_ROUTER = os.environ.get("DEEPSEEK_V4_FUSE_ROUTER", "1") not in ("0", "", "false", "False")
-# All-reduce the TP partial over the first TP axis inside ``fused_experts`` wherever its output is the
-# width-sharded partial (see ``output_memory_config``); TP12's second axis stays a
-# ``width_sharded_all_reduce``. ``DEEPSEEK_V4_FUSE_ALL_REDUCE=0`` leaves both to that op.
+# All-reduce the TP partial over every TP axis inside ``fused_experts`` wherever its output is the
+# width-sharded partial (see ``output_memory_config``); TP12's two axes go in one pass over its 3x4
+# mesh. ``DEEPSEEK_V4_FUSE_ALL_REDUCE=0`` leaves them to ``width_sharded_all_reduce``, one per axis.
 FUSE_ALL_REDUCE = os.environ.get("DEEPSEEK_V4_FUSE_ALL_REDUCE", "1") not in ("0", "", "false", "False")
 # How many cores of that row run the router (the op's kRouterCores): its gate's tile columns are dealt
 # round-robin over them.
@@ -1018,10 +1018,10 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                     ttnn.ShardOrientation.COL_MAJOR,
                 ),
             )
-        # The mesh axes the TP partials are summed over, in order; the op takes the first itself.
+        # The mesh axes the TP partials are summed over, in order.
         self.tp_axes = _tp_cluster_axes(device, tp_size) if tp_size > 1 else ()
-        self.fused_all_reduce_axis = (
-            self.tp_axes[0] if self.output_memory_config is not None and FUSE_ALL_REDUCE else None
+        self.fused_all_reduce_axes = (
+            self.tp_axes if self.tp_axes and self.output_memory_config is not None and FUSE_ALL_REDUCE else None
         )
         self.limit = config.swiglu_limit
         # Applied inside the op on the sparse path, where the weights are derived here
@@ -1207,7 +1207,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                 shared_down_weights=None if shared is None else shared.down,
                 shared_swiglu_limit=None if shared is None else shared.swiglu_limit,
                 memory_config=self.output_memory_config if t == 1 else None,
-                all_reduce_cluster_axis=self.fused_all_reduce_axis if t == 1 else None,
+                all_reduce_cluster_axes=self.fused_all_reduce_axes if t == 1 else None,
                 all_reduce_num_links=2,
                 all_reduce_topology=CCL_TOPOLOGY,
             )  # [1, t, D]
@@ -1482,8 +1482,9 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         if fuse_router and routing.bias is not self.gate.e_score_correction_bias:
             ttnn.deallocate(routing.bias)
         if t == 1 and self.experts.output_memory_config is not None:
-            done = 1 if self.experts.fused_all_reduce_axis is not None else 0
-            for axis in self.experts.tp_axes[done:]:
+            if self.experts.fused_all_reduce_axes is not None:
+                return ttnn.reshape(combined, [b, s, 1, h])
+            for axis in self.experts.tp_axes:
                 partial = combined
                 combined = ttnn.experimental.deepseek.width_sharded_all_reduce(
                     partial, cluster_axis=axis, num_links=2, topology=CCL_TOPOLOGY
