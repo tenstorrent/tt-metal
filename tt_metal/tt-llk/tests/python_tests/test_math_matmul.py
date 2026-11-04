@@ -5,6 +5,7 @@ from itertools import chain, product
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
@@ -110,14 +111,44 @@ def representative_tiny_tile_combinations():
 
 TINY_TILES_THROTTLE_COMBINATIONS = representative_tiny_tile_combinations()
 
-# Throttle level standing in for 1-3, where _llk_math_matmul_init_ takes the unthrottled
-# fallback regardless of fidelity.
+# Throttle level standing in for 1-3, where the throttled MOP covers every fidelity phase.
 TINY_TILE_LOW_THROTTLE = 1
-# Throttle level standing in for 4-5, where the fallback is taken only at LoFi: above level 3
-# the execute path runs the MOP once per fidelity phase, which the unthrottled MOP already
-# does internally, so the LLK keeps high-fidelity matmuls on the throttled path. MM_THROTTLE_MAX
-# in tt_metal/hw/inc/api/compute/matmul.h is 5, so cover 5 rather than 4.
+# Throttle level standing in for 4-5, where the throttled MOP covers one fidelity phase and the
+# execute path drives the phases. MM_THROTTLE_MAX in tt_metal/hw/inc/api/compute/matmul.h is 5.
 TINY_TILE_HIGH_THROTTLE = 5
+
+
+def tiny_tile_high_throttle_params():
+    """Tiny tiles at throttle 4 and 5 with high fidelity: init falls back to the unthrottled MOP,
+    and the execute path must then not drive the fidelity phases itself (#63967)."""
+    by_in0_r_dim = {}
+    for config in TINY_TILES_MATMUL_COMBINATIONS:
+        if (
+            config.formats.input_format == DataFormat.Float16_b
+            and config.formats.output_format == DataFormat.Float16_b
+            and config.dest_acc == DestAccumulation.No
+            and config.dest_sync == DestSync.Half
+        ):
+            by_in0_r_dim.setdefault(config.tile_dimensions.in0_tile_r_dim, []).append(
+                config
+            )
+    params = []
+    for in0_r_dim, configs in sorted(by_in0_r_dim.items()):
+        configs.sort(key=lambda c: c.tile_dimensions.ct_dim)
+        for config in (configs[0], configs[-1]):
+            for fidelity, throttle in product(
+                (MathFidelity.HiFi2, MathFidelity.HiFi4), (4, 5)
+            ):
+                params.append(
+                    pytest.param(
+                        fidelity,
+                        config,
+                        throttle,
+                        id=f"tiny-r{in0_r_dim}-ct{config.tile_dimensions.ct_dim}-{fidelity.name}-throttle{throttle}",
+                    )
+                )
+    return params
+
 
 # One run per tile (LoFi and HiFi4 at throttle 0) and one run per fidelity phase (HiFi4 at 5).
 ODD_REUSE_FIDELITY_THROTTLE = (
@@ -188,12 +219,8 @@ ALL_TEST_PARAMS = list(
                 ALL_MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
             )
         ),
-        # Tiny tiles above level 3, LoFi only: the one case where the fallback depends on
-        # fidelity as well as geometry. HiFi is deliberately absent -- there the LLK keeps the
-        # throttled path, which the geometry cannot serve. Measured on Blackhole: HiFi4 at
-        # throttle 5 on a tiny tile wedges the math thread, with asserts on (some geometries hit
-        # the LLK assert, others time out first) and with asserts off. Adding it here would wedge
-        # the board rather than fail the case.
+        # Tiny tiles above level 3 at LoFi; high fidelity is covered by
+        # test_math_matmul_tiny_tile_high_throttle.
         (
             (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE)
             for combinations in TINY_TILES_THROTTLE_COMBINATIONS
@@ -207,6 +234,29 @@ ALL_TEST_PARAMS = list(
 @pytest.mark.nightly
 @pytest.mark.parametrize("math_fidelity,matmul_config,throttle", ALL_TEST_PARAMS)
 def test_math_matmul(
+    math_fidelity,
+    matmul_config,
+    throttle,
+):
+    run_math_matmul(math_fidelity, matmul_config, throttle)
+
+
+@pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.WORMHOLE,
+    reason="Blackhole _llk_math_matmul_init_ still keeps the throttled MOP on tiny tiles at throttle 4/5 with HiFi",
+)
+@pytest.mark.parametrize(
+    "math_fidelity,matmul_config,throttle", tiny_tile_high_throttle_params()
+)
+def test_math_matmul_tiny_tile_high_throttle(
+    math_fidelity,
+    matmul_config,
+    throttle,
+):
+    run_math_matmul(math_fidelity, matmul_config, throttle)
+
+
+def run_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
