@@ -234,3 +234,13 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   top of the row exchange's -4.4. The first full-fabric chain gate died on a shape mismatch (the combine returned 32
   logical rows where the add with the shared expert wants T): outputs now carry their logical rows; the gate reruns
   (`gate84_B4_fabar`) after the gather-only one.
+* 00:00 **full-fabric chain gate** (`gate84_B4_fabar`: gather + combine + TP all-reduce): **37.69 ms = 26.5 tok/s/u**,
+  849 tok/s aggregate (the gather alone 39.51, the dst base 41.72), prefill untouched (chain pcc 0.954698, first
+  token 44210) -- but the S = 32 decode chain pcc fell to 0.794 (0.878 with the gather alone) and the decode ids
+  diverge from position 8. Found by desk-check: the all-reduce owner assembles `cols * T = 16` rows and left rows
+  16..31 of its block unwritten; in the unit test that L1 held finite leftovers, in the model NaN / Inf garbage, which
+  the selector's zero weights turn into NaN sums (0 x NaN). Fix 9727301310f: every mode zero-fills the rows past the
+  assembled users (the unit test now also replays with fresh inputs per replay to expose stale-staging races). The
+  served smoke (`served_fabric_1m`, all three knobs, 1 M profile: first token vs HF, 4 concurrent greedy x 2, bench
+  128/128 at 32 users) and the isolating gates (combine only / all-reduce only) run on the fixed kernels, then the
+  full gate again (`gate84_B4_fabar_r2`).
