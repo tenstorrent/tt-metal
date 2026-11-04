@@ -60,6 +60,9 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.chunking import plan_chunks, plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    FUSED_ATTENTION_MAX_TILES,
+    FUSED_ATTENTION_MIN_TILES,
+    FusedRotaryTables,
     LayerNormParameters,
     RotaryTables,
     activation_memory_config,
@@ -102,6 +105,8 @@ class TtNomicBertModel(LightweightModule):
         )
         # The activation dtype, so lowering tt_config.activation_dtype moves the tables with it.
         self.rotary_tables = RotaryTables(device, config, dtype=tt_config.activation_dtype)
+        # The generated attention front's own tables (tt.attention), for the passes it covers.
+        self.fused_rotary_tables = FusedRotaryTables(device) if tt_config.fused_attention_front else None
 
     def forward(
         self,
@@ -169,6 +174,10 @@ class TtNomicBertModel(LightweightModule):
                 mask_dtype=self.tt_config.attention_mask_dtype,
             )
         rot_mats = self.rotary_tables(seqlen)
+        fused_tables = None
+        rows = input_ids.shape[0] * -(-seqlen // ttnn.TILE_SIZE)
+        if self.fused_rotary_tables is not None and FUSED_ATTENTION_MIN_TILES <= rows <= FUSED_ATTENTION_MAX_TILES:
+            fused_tables = self.fused_rotary_tables(seqlen)
 
         hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
         normalized, normalized_sharded = layer_norm(
@@ -180,7 +189,9 @@ class TtNomicBertModel(LightweightModule):
             keep_sharded=True,
             consume_input=True,
         )
-        out = self.encoder(normalized, rot_mats, mask, free_input=True, hidden_sharded=normalized_sharded)
+        out = self.encoder(
+            normalized, rot_mats, mask, free_input=True, hidden_sharded=normalized_sharded, fused_tables=fused_tables
+        )
         self.rotary_tables.release(rot_mats)
         if mask is not None:
             ttnn.deallocate(mask)

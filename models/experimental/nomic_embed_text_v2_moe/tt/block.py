@@ -107,6 +107,7 @@ class TtNomicBertBlock(LightweightModule):
         free_input: bool = False,
         x_sharded: ttnn.Tensor | None = None,
         keep_sharded: bool = False,
+        fused_tables=None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the block.
 
@@ -121,12 +122,13 @@ class TtNomicBertBlock(LightweightModule):
             x_sharded: x in the split norms' layout, the previous norm's keep_sharded output, which norm1
                 reads as its residual; freed here.
             keep_sharded: also return the output in that layout, for the next block's norm1.
+            fused_tables: the generated attention front's tables (tt.common.FusedRotaryTables), or None.
 
         Returns:
             ttnn.Tensor: (B, 1, S, H), shape unchanged; with keep_sharded=True, (output, its split-norm
             layout copy or None above the split limit).
         """
-        attn_out = self.attn(x, rot_mats, attn_mask)
+        attn_out = self.attn(x, rot_mats, attn_mask, fused_tables)
         if x_sharded is not None and free_input:
             ttnn.deallocate(x)
         residual = x if x_sharded is None else x_sharded

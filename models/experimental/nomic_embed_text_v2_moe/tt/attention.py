@@ -25,10 +25,13 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    FUSED_ATTENTION_MAX_TILES,
+    FUSED_ATTENTION_MIN_TILES,
     m_tiles,
     rotary_pair_permutation,
     rotary_rotation_matrix,
     sharded_norm_layout,
+    table_tensors,
     to_device,
     transpose_linear_weight,
 )
@@ -387,6 +390,17 @@ class TtNomicBertAttention(LightweightModule):
         )
         qkv_weight, qkv_bias = qkv_weight[rows], qkv_bias[rows]
         self.qkv_weight, self.qkv_bias = weight("Wqkv", OpGroup.QKV, qkv_weight), bias("Wqkv", qkv_bias)
+        # The generated QKV + head split + rotary op takes the checkpoint's Wqkv as it is, unscaled and unpermuted,
+        # in bfloat16, and lays it out its own way (prepare_qkv_weights folds in the q scale).
+        self.qkv_fused = None
+        if tt_config.fused_attention_front:
+            from ttnn.operations.nomic_qkv_rotary_heads import prepare_qkv_weights
+
+            self.qkv_fused = prepare_qkv_weights(
+                state_dict[f"{state_dict_prefix}Wqkv.weight"].to(torch.bfloat16),
+                state_dict[f"{state_dict_prefix}Wqkv.bias"].to(torch.bfloat16),
+                device,
+            )
         # QKV with M <= N runs on grouped_matmul (dense_linear).
         self.qkv_grouped = prepare_grouped_projection(self.qkv_weight, self.qkv_bias, device)
         self.out_weight, self.out_bias = weight("out_proj", OpGroup.ATTN_OUT), bias("out_proj")
@@ -423,32 +437,95 @@ class TtNomicBertAttention(LightweightModule):
         )
         return ttnn.reshape(rotated, (batch, heads, seqlen, head_dim)) if folded else rotated
 
-    def forward(
+    def _takes_fused(self, x: ttnn.Tensor) -> bool:
+        """Whether the generated front reads x as it comes: 32 to 128 tile rows of M in the split norms' layout, the
+        block input's layout there (tt.common.layer_norm keeps it above SMALL_M_TILES)."""
+        if self.qkv_fused is None:
+            return False
+        if not FUSED_ATTENTION_MIN_TILES <= m_tiles(x.shape) <= FUSED_ATTENTION_MAX_TILES:
+            return False
+        layout = sharded_norm_layout(x.shape, self.tt_config.core_grid)
+        return layout is not None and x.memory_config() == layout[0]
+
+    def _fused_heads(
+        self,
+        x: ttnn.Tensor,
+        tables,
+        attn_mask: Optional[ttnn.Tensor],
+        live: tuple[ttnn.Tensor, ...],
+        compute_kernel_config,
+    ):
+        """q, k and v by the generated nomic_qkv_rotary_heads, one dispatch: QKV, the head split, q * 1/8 and
+        rotary, with x read as it comes. Placed by the model's L1 plan as the four-op chain's are, less the QKV
+        output it never writes. None where its circular buffers do not fit below the tensors live beside it, and the
+        chain runs instead.
+
+        Returns (query, key, value, SDPA program config, the heads' memory config, l1 floor or None, 0).
+        """
+        from ttnn.operations.nomic_qkv_rotary_heads import circular_buffer_bytes, nomic_qkv_rotary_heads
+
+        batch, seqlen = x.shape[0], x.shape[-2]
+        cb_bytes = circular_buffer_bytes(tuple(x.shape))
+        floor = l1_floor((x, *live), self.tt_config)
+        head_bank = l1_head_bank_bytes(batch, seqlen, self.num_heads, self.head_dim, self.tt_config.l1_banks)
+        program_config = sdpa_program_config(
+            batch,
+            seqlen,
+            self.num_heads,
+            self.tt_config.core_grid,
+            compute_kernel_config.fp32_dest_acc_en,
+            attn_mask is not None,
+        )
+        heads_memory = ttnn.DRAM_MEMORY_CONFIG
+        dram_config = program_config
+        if self.tt_config.attention_l1:
+            program_config, heads_memory = attention_placement(
+                batch,
+                seqlen,
+                self.num_heads,
+                self.head_dim,
+                self.tt_config.core_grid,
+                compute_kernel_config.fp32_dest_acc_en,
+                None if attn_mask is None else attn_mask.dtype,
+                self.tt_config.l1_cb_bytes - floor,
+                self.tt_config.l1_banks,
+                qkv_bank_bytes=0,
+            )
+        # The op's buffers sit below the heads it writes when those are in L1; where they do not fit there, the
+        # heads go to DRAM, with SDPA's default program.
+        l1_heads = heads_memory.buffer_type == ttnn.BufferType.L1
+        if l1_heads and floor + 3 * head_bank + cb_bytes > self.tt_config.l1_cb_bytes:
+            heads_memory, program_config = ttnn.DRAM_MEMORY_CONFIG, dram_config
+        if floor + cb_bytes > self.tt_config.l1_cb_bytes:
+            return None
+        outputs = None
+        if heads_memory.buffer_type == ttnn.BufferType.L1:
+            head_shape = ttnn.Shape((batch, self.num_heads, seqlen, self.head_dim))
+            value_out, key_out, query_out = (
+                ttnn.allocate_tensor_on_device(head_shape, x.dtype, ttnn.TILE_LAYOUT, x.device(), heads_memory)
+                for _ in range(3)
+            )
+            outputs = [query_out, key_out, value_out]
+        query, key, value = nomic_qkv_rotary_heads(
+            x, self.qkv_fused, tables, memory_config=heads_memory, output_tensors=outputs
+        )
+        return query, key, value, program_config, heads_memory, floor if self.tt_config.attention_l1 else None, 0
+
+    def _chain_heads(
         self,
         x: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        attn_mask: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
-        """Project, rotate, attend and project back.
+        attn_mask: Optional[ttnn.Tensor],
+        live: tuple[ttnn.Tensor, ...],
+        compute_kernel_config,
+    ):
+        """q, k and v by the four-op chain: QKV (dense_linear), nlp_create_qkv_heads, rotary on q and k.
 
-        Every L1 plan here is made below the deepest tensor live in L1 (l1_floor): x, QKV's output,
-        the rotary tables and the mask.
-
-        Args:
-            x: (B, 1, S, H) block input.
-            rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
-            attn_mask: (B, 1, S, S) additive mask from tt.common.additive_attention_mask, or
-                None for no masking.
-
-        Returns:
-            ttnn.Tensor: (B, 1, S, H).
+        Returns (query, key, value, SDPA program config, the heads' memory config, l1 floor or None, QKV's bank).
         """
-        live = (*rot_mats,) if attn_mask is None else (*rot_mats, attn_mask)
         qkv = dense_linear(
             x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config, live=live, grouped=self.qkv_grouped
         )
-
-        compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.SDPA)
         batch, seqlen = x.shape[0], x.shape[-2]
         program_config = sdpa_program_config(
             batch,
@@ -459,10 +536,9 @@ class TtNomicBertAttention(LightweightModule):
             attn_mask is not None,
         )
         heads_memory = ttnn.DRAM_MEMORY_CONFIG
-        head_bank = l1_head_bank_bytes(batch, seqlen, self.num_heads, self.head_dim, self.tt_config.l1_banks)
+        floor, qkv_bank = None, 0
         if self.tt_config.attention_l1:
             floor = l1_floor((x, qkv, *live), self.tt_config)
-            qkv_bank = 0
             if qkv.memory_config().buffer_type == ttnn.BufferType.L1:
                 qkv_bank = l1_bank_bytes(
                     m_tiles(qkv.shape) * qkv.shape[-1] // ttnn.TILE_SIZE, self.tt_config, qkv.dtype
@@ -510,6 +586,45 @@ class TtNomicBertAttention(LightweightModule):
         # pre-rotation tensor is the one thing that owns it.
         ttnn.deallocate(query)
         ttnn.deallocate(key)
+        return rotated_query, rotated_key, value, program_config, heads_memory, floor, qkv_bank
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
+        attn_mask: Optional[ttnn.Tensor] = None,
+        fused_tables=None,
+    ) -> ttnn.Tensor:
+        """Project, rotate, attend and project back.
+
+        Every L1 plan here is made below the deepest tensor live in L1 (l1_floor): x, QKV's output,
+        the rotary tables and the mask.
+
+        With fused_tables (tt.common.FusedRotaryTables) and x in a layout the generated front reads (_takes_fused),
+        q, k and v come from nomic_qkv_rotary_heads in one dispatch (_fused_heads); otherwise from the four-op chain.
+
+        Args:
+            x: (B, 1, S, H) block input.
+            rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
+            attn_mask: (B, 1, S, S) additive mask from tt.common.additive_attention_mask, or
+                None for no masking.
+            fused_tables: nomic_qkv_rotary_heads' tables for at least S, or None for the chain.
+
+        Returns:
+            ttnn.Tensor: (B, 1, S, H).
+        """
+        live = (*rot_mats,) if attn_mask is None else (*rot_mats, attn_mask)
+        compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.SDPA)
+        batch, seqlen = x.shape[0], x.shape[-2]
+        heads = None
+        if fused_tables is not None and self._takes_fused(x):
+            heads = self._fused_heads(
+                x, fused_tables, attn_mask, (*live, *table_tensors(fused_tables)), compute_kernel_config
+            )
+        if heads is None:
+            heads = self._chain_heads(x, rot_mats, attn_mask, live, compute_kernel_config)
+        rotated_query, rotated_key, value, program_config, heads_memory, floor, qkv_bank = heads
+        head_bank = l1_head_bank_bytes(batch, seqlen, self.num_heads, self.head_dim, self.tt_config.l1_banks)
 
         if heads_memory.buffer_type == ttnn.BufferType.L1:
             # SDPA's output goes in the highest gap it fits: at worst right below the deepest tensor now

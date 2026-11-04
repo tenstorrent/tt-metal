@@ -276,6 +276,10 @@ class TtModelConfig:
     dense_fc1_grouped_min_tiles: int = DENSE_FC1_GROUPED_MIN_TILES
     dense_gelu_form: int = DENSE_GELU_FORM
     attention_l1: bool = True  # the head tensors and SDPA's output in L1 where they fit, tt/attention.py
+    # QKV, the head split, q * 1/8 and rotary as one generated op (ttnn.operations.nomic_qkv_rotary_heads) wherever it
+    # takes x as it comes: 32 to 128 tile rows of M in the split norms' layout (tt/attention.py). Off: the four-op
+    # chain (QKV, nlp_create_qkv_heads, two rotary_embedding_llama).
+    fused_attention_front: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     layout: ttnn.Layout = LAYOUT
 

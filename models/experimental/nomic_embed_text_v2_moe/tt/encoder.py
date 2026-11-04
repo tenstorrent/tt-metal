@@ -56,6 +56,7 @@ class TtNomicBertEncoder(LightweightModule):
         attn_mask: Optional[ttnn.Tensor] = None,
         free_input: bool = False,
         hidden_sharded: Optional[ttnn.Tensor] = None,
+        fused_tables=None,
     ) -> ttnn.Tensor:
         """Run every block in order.
 
@@ -67,6 +68,7 @@ class TtNomicBertEncoder(LightweightModule):
                 the caller's.
             hidden_sharded: hidden_states in the split norms' layout (tt.common.layer_norm), handed to
                 the first block, which frees it; each block hands its own to the next.
+            fused_tables: the generated attention front's tables (tt.common.FusedRotaryTables), or None.
 
         Returns:
             ttnn.Tensor: (B, 1, S, H).
@@ -77,9 +79,22 @@ class TtNomicBertEncoder(LightweightModule):
             # the caller's own input only when the caller hands it over.
             free = idx > 0 or free_input
             if idx == last:
-                hidden_states = layer(hidden_states, rot_mats, attn_mask, free_input=free, x_sharded=hidden_sharded)
+                hidden_states = layer(
+                    hidden_states,
+                    rot_mats,
+                    attn_mask,
+                    free_input=free,
+                    x_sharded=hidden_sharded,
+                    fused_tables=fused_tables,
+                )
             else:
                 hidden_states, hidden_sharded = layer(
-                    hidden_states, rot_mats, attn_mask, free_input=free, x_sharded=hidden_sharded, keep_sharded=True
+                    hidden_states,
+                    rot_mats,
+                    attn_mask,
+                    free_input=free,
+                    x_sharded=hidden_sharded,
+                    keep_sharded=True,
+                    fused_tables=fused_tables,
                 )
         return hidden_states

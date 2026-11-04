@@ -41,6 +41,7 @@ two layouts and the data is physically copied.
 
 from __future__ import annotations
 
+import dataclasses
 from functools import cache
 
 import torch
@@ -296,6 +297,53 @@ class RotaryTables:
         if tables is not self.tables:
             for table in tables:
                 ttnn.deallocate(table)
+
+
+def table_tensors(tables) -> tuple[ttnn.Tensor, ...]:
+    """The device tensors of a generated op's prepared object: a tensor, a dataclass holding them (such as
+    nomic_qkv_rotary_heads' RotaryTables), or any nesting of tuples and lists of those."""
+    if isinstance(tables, ttnn.Tensor):
+        return (tables,)
+    if dataclasses.is_dataclass(tables) and not isinstance(tables, type):
+        return tuple(
+            tensor for field in dataclasses.fields(tables) for tensor in table_tensors(getattr(tables, field.name))
+        )
+    if isinstance(tables, (tuple, list)):
+        return tuple(tensor for table in tables for tensor in table_tensors(table))
+    return ()
+
+
+# The generated attention front (ttnn.operations.nomic_qkv_rotary_heads) covers 32 to 128 tile rows of M.
+FUSED_ATTENTION_MIN_TILES, FUSED_ATTENTION_MAX_TILES = 32, 128
+
+
+class FusedRotaryTables:
+    """nomic_qkv_rotary_heads' tables (prepare_rotary_tables, its own format) for the longest sequence seen, kept on
+    the device and shared by the 12 layers: the op takes tables at least as long as S, and zeroes the padding rows of
+    q, k and v itself, so a shorter pass reads the long tables as they are.
+
+    Built before the pass's activations, as RotaryTables are (tt.model): L1 tensors are allocated from the top
+    down, and tables made after the embeddings would sit below the residual stream.
+    """
+
+    def __init__(self, device):
+        self.device = device
+        self.seqlen = None
+        self.tables = None
+
+    def __call__(self, seqlen: int):
+        if self.seqlen is None or seqlen > self.seqlen:
+            self.release()
+            from ttnn.operations.nomic_qkv_rotary_heads import prepare_rotary_tables
+
+            self.tables = prepare_rotary_tables(seqlen, self.device)
+            self.seqlen = seqlen
+        return self.tables
+
+    def release(self) -> None:
+        for tensor in table_tensors(self.tables):
+            ttnn.deallocate(tensor)
+        self.seqlen, self.tables = None, None
 
 
 # Up to this many tile rows of M a layer norm splits the hidden axis over a block-sharded copy, in column-major
