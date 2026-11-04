@@ -26,20 +26,15 @@ _BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose M
 
 # The model's own L1_SMALL use a bank next to the block (its other ops' semaphores and words, allocated before the
 # block's slab), where the model's l1_small_size is not that figure:
-# - Kimi-K3: 1168 B - the K3 L24 test (b08u02, torus XY) held 3008 B before the block's slab, 1840 B of it the fused KDA
-#   output projection's (matmul_reduce_scatter_prefill's 4 semaphores + 110 x 16 B mailbox) - plus those 1840 B once
-#   that op keeps them in L1_SMALL (_KDA_OUTPUT_RS_IN_L1_SMALL: Slavko's matmul_reduce_scatter_prefill fix; layer 0's
-#   KDA then takes them before the block's slab, which still needs all its bytes). KimiK3Config.L1_SMALL_SIZE (4096) is
-#   inherited, not measured, and still floors the mesh open. L1_SMALL is carved from the top of L1 and MLA's chunked
-#   attention (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (5408 clashed by 256 B on the
-#   SC4 DSpark runner, 5888 by 448 B; 5056 passed K3 L24 on b08u02).
+# - Kimi-K3: 1168 B (measured on the K3 L24 test, b08u02, torus XY). KimiK3Config.L1_SMALL_SIZE (4096) is inherited,
+#   not measured, and still floors the mesh open. L1_SMALL is carved from the top of L1 and MLA's chunked attention
+#   (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (5408 clashed by 256 B on the SC4 DSpark
+#   runner, 5888 by 448 B).
 # - GLM-5.3: 1536 B, its runner adapter's l1_small_size (verified on the traced TtMoe path, whose routing's 512 B the
 #   block does not use).
 # Every other model: its l1_small_size.
-_KDA_OUTPUT_RS_IN_L1_SMALL = False
-_KDA_OUTPUT_RS_L1_SMALL = 1840
 _MODEL_L1_SMALL = {
-    "KimiK3Config": 1168 + (_KDA_OUTPUT_RS_L1_SMALL if _KDA_OUTPUT_RS_IN_L1_SMALL else 0),
+    "KimiK3Config": 1168,
     "GLM53Config": 1536,
 }
 _L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
