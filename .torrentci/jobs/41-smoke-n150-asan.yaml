@@ -40,7 +40,9 @@ jobs:
       - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
       - {name: TT_LOGGER_LEVEL, value: warn}
       - {name: TT_METAL_RUNTIME_ROOT, value: /usr/libexec/tt-metalium}
-      - {name: LSAN_OPTIONS, value: suppressions=/usr/share/tt-metalium/lsan.supp}
+      # TEMPORARY diagnostic (torrentci#2352): the guest pins ptrace_scope=3, which
+      # breaks LeakSanitizer's exit check. Revert to suppressions only once #2353 ships.
+      - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp:detect_leaks=0"}
     steps:
       - id: smoke-n150
         kind: shell
