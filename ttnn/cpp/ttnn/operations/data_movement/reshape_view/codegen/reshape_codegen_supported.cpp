@@ -506,7 +506,7 @@ std::optional<LaunchPlan> plan_codegen(
     }
     std::optional<LaunchPlan> lcm;
     if (auto geometry = lcm_tile_geometry(input, logical_output_shape, num_cores)) {
-        LaunchPlan plan{.tile_route = TileRoute::Lcm, .lcm = std::move(geometry)};
+        LaunchPlan plan{.tile_route = TileRoute::Lcm, .lcm = geometry};
         if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan)) {
             lcm = std::move(plan);
         }

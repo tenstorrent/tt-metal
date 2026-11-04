@@ -185,7 +185,9 @@ std::optional<LcmPlan> lcm_tile_geometry(
     plan.wt_out = w_out / tile_w;
     const uint64_t lcm_w = std::lcm<uint64_t, uint64_t>(w_in, w_out);
     const uint64_t ht_in = volume_before_last(in_shape) / tile_h;
-    if (ht_in == 0) {
+    // lcm_w / tile_w is the largest of the narrowed values; refuse it here so fit_lcm never sizes CBs from a wrapped
+    // chunk.
+    if (ht_in == 0 || lcm_w / tile_w > std::numeric_limits<uint32_t>::max()) {
         return std::nullopt;
     }
     plan.in_tile_rows = static_cast<uint32_t>(lcm_w / w_in);
