@@ -84,7 +84,7 @@ class _PrefillInProjTtnn:
                     compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
                     in0_block_w=8,
                     out_subblock_h=1,
-                    out_subblock_w=4,
+                    out_subblock_w=5,
                     out_block_h=7,
                     out_block_w=20,
                     per_core_M=7,
@@ -92,6 +92,14 @@ class _PrefillInProjTtnn:
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=True,
+                )
+                kwargs["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                    dst_full_sync_en=False,
+                    throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
                 )
         elif kwargs.get("program_config") is None and list(b.shape)[-2:] == [6144, 5120]:
             shp = list(a.shape)
