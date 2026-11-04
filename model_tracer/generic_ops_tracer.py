@@ -32,7 +32,6 @@ import logging
 import math
 import os
 import re
-import shlex
 import subprocess
 import sys
 import uuid
@@ -1110,13 +1109,20 @@ def detect_pytest_tests(test_path):
         return False
 
 
-def _tee_command(cmd, output_path):
-    """Bash line that runs cmd with live output, saves it to output_path, and keeps cmd's exit code.
+def _run_and_tee(cmd, cwd=None, env=None):
+    """Run cmd with no shell, echo its combined output live, and return (exit code, output).
 
-    Every argument is shell-quoted, so values like JSON (--sampling_params '{"top_k": 1}') reach
-    the test unchanged.
+    No shell means arguments such as JSON (--sampling_params '{"top_k": 1}') reach the test unchanged.
     """
-    return f"set -o pipefail; {shlex.join(cmd)} 2>&1 | tee {shlex.quote(output_path)}"
+    lines = []
+    with subprocess.Popen(
+        cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
+    ) as proc:
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            lines.append(line)
+    return proc.returncode, "".join(lines)
 
 
 def run_test_with_tracing(
@@ -1182,51 +1188,28 @@ def run_test_with_tracing(
     # Fast mode skips the tracing decorator for performance
     env["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": false}'
 
-    # Run the command with custom environment (always show live output now)
-    # Use a custom command wrapper with tee to capture output while showing it live
-    import re
-    import tempfile
+    returncode, output_text = _run_and_tee(cmd, cwd=BASE_DIR, env=env)
 
-    # Create a temp file to capture output
-    tmp_output_fd, tmp_output_path = tempfile.mkstemp(suffix=".log", text=True)
-    os.close(tmp_output_fd)  # Close fd, we'll open as file
+    # Parse pytest results from output
+    test_stats = {"passed": 0, "failed": 0, "total": 0}
 
-    try:
-        result = subprocess.run(
-            _tee_command(cmd, tmp_output_path), shell=True, executable="/bin/bash", cwd=BASE_DIR, text=True, env=env
-        )
-
-        # Read the captured output to parse test statistics
-        with open(tmp_output_path, "r") as f:
-            output_text = f.read()
-
-        # Parse pytest results from output
-        test_stats = {"passed": 0, "failed": 0, "total": 0}
-
-        # Look for pytest summary line like: "1 failed, 1 passed in X.XXs"
-        summary_match = re.search(r"(\d+)\s+failed.*?(\d+)\s+passed", output_text)
-        if summary_match:
-            test_stats["failed"] = int(summary_match.group(1))
-            test_stats["passed"] = int(summary_match.group(2))
-            test_stats["total"] = test_stats["passed"] + test_stats["failed"]
-        else:
-            # Check for only passed
-            passed_match = re.search(r"(\d+)\s+passed", output_text)
-            if passed_match:
-                test_stats["passed"] = int(passed_match.group(1))
-                test_stats["total"] = test_stats["passed"]
-            # Check for only failed
-            failed_match = re.search(r"(\d+)\s+failed", output_text)
-            if failed_match:
-                test_stats["failed"] = int(failed_match.group(1))
-                test_stats["total"] += test_stats["failed"]
-    finally:
-        # Clean up temp file
-        try:
-            os.remove(tmp_output_path)
-        except OSError:
-            # Best-effort cleanup: ignore failures to remove the temp file
-            pass
+    # Look for pytest summary line like: "1 failed, 1 passed in X.XXs"
+    summary_match = re.search(r"(\d+)\s+failed.*?(\d+)\s+passed", output_text)
+    if summary_match:
+        test_stats["failed"] = int(summary_match.group(1))
+        test_stats["passed"] = int(summary_match.group(2))
+        test_stats["total"] = test_stats["passed"] + test_stats["failed"]
+    else:
+        # Check for only passed
+        passed_match = re.search(r"(\d+)\s+passed", output_text)
+        if passed_match:
+            test_stats["passed"] = int(passed_match.group(1))
+            test_stats["total"] = test_stats["passed"]
+        # Check for only failed
+        failed_match = re.search(r"(\d+)\s+failed", output_text)
+        if failed_match:
+            test_stats["failed"] = int(failed_match.group(1))
+            test_stats["total"] += test_stats["failed"]
 
     # Collect generated JSON files from the unique subdirectory
     json_files = collect_operation_jsons(trace_dir, include_failed=include_failed)
@@ -1279,7 +1262,7 @@ def run_test_with_tracing(
             json.dump(
                 {
                     "test_path": test_path,
-                    "exit_code": result.returncode,
+                    "exit_code": returncode,
                     "passed": test_stats["passed"],
                     "failed": test_stats["failed"],
                     "total": test_stats["total"],
@@ -1291,8 +1274,8 @@ def run_test_with_tracing(
         logger.warning("Failed to write test results sidecar: %s", exc, exc_info=True)
 
     return {
-        "success": result.returncode == 0,
-        "exit_code": result.returncode,
+        "success": returncode == 0,
+        "exit_code": returncode,
         "trace_files": json_files,
         "trace_dir": trace_dir,
         "trace_uid": metadata["trace_uid"],
