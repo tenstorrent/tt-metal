@@ -1,0 +1,30 @@
+[package]
+name = "dsv41_host"
+version = "0.1.0"
+edition = "2021"
+description = "DeepSeek V4.1 host runtime: Engram lookup, trace dispatch and H2D/D2H socket I/O on native threads"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "dsv41_host"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "=0.22.6", features = ["abi3-py310"] }
+libloading = "0.8"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+rayon = "1.10"
+libc = "0.2"
+
+[features]
+default = ["extension-module"]
+# Off for `cargo test`, whose binaries link libpython.
+extension-module = ["pyo3/extension-module"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1

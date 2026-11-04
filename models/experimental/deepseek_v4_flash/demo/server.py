@@ -151,6 +151,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import itertools
 import json
 import os
 import queue
@@ -553,6 +554,9 @@ _REPLAY_RATE_MIN_TOKENS = 64
 # speeds up mid-reply when the causal variant takes over. Averaged over the whole
 # reply that prefix hides the rate the turn actually settled at.
 DECODE_RATE_WINDOW = 64
+# Ended turns the scheduler keeps a record of, for the V4.1 web monitor's history (which keeps its own, longer one).
+_ENDED_TURNS = 256
+_TURN_SERIALS = itertools.count(1)
 
 
 def _make_sampler(temperature, top_p):
@@ -1311,6 +1315,7 @@ class _Turn:
         max_tokens: int,
         rate_window: int = DECODE_RATE_WINDOW,
     ):
+        self.serial = next(_TURN_SERIALS)  # tells turns apart in a monitor, across slots and reuse
         self.user_key = user_key
         self.slot = slot
         self.previous_owner: str | None = None  # who held the slot before this turn (see _Lease)
@@ -1413,6 +1418,25 @@ class _Turn:
         """Tokens per second averaged over the whole reply, for this user alone."""
         seconds = self.decode_seconds
         return len(self.generated) / seconds if seconds > 0 else 0.0
+
+    def record(self, outcome: str) -> dict:
+        """What the web monitor's history keeps of this turn once it has ended (``outcome``: ``stop``,
+        ``length``, ``tool_calls``, ``stopped`` or ``error``). Raw counts and seconds; it works out the rates."""
+        return {
+            "serial": self.serial,
+            "user": self.user_key,
+            "slot": self.slot,
+            "outcome": outcome,
+            "ended": time.time(),
+            "queued_s": (self.t_admit or time.perf_counter()) - self.t_submit,
+            "prompt_tokens": len(self.ids),
+            "cached_tokens": self.cached,
+            "prefilled": self.fed,
+            "prefilled_on_device": self.prefilled_on_device,
+            "generated": len(self.generated),
+            "prefill_s": self.prefill_seconds,
+            "decode_s": self.decode_seconds,
+        }
 
     def status(self) -> dict:
         """A snapshot for the status pane (read from another thread, so keep it cheap)."""
@@ -1643,6 +1667,12 @@ class _Scheduler:
         self._window_prefed = 0  # ... of which the output reader had already written the packet
         self._window_gap = 0.0  # host seconds from a turn's output coming back to its next packet
         self.step_rate = 0.0  # steps/s across all users, over the last window
+        # Every turn that has ended (finished, stopped, failed or drained), for the web monitor: totals, and
+        # records of the latest (Turn.record), each also carrying the totals up to and including it.
+        self.ended = 0
+        self.ended_prefilled = 0
+        self.ended_generated = 0
+        self.ended_turns: deque[dict] = deque(maxlen=_ENDED_TURNS)
         self._t_started = time.perf_counter()
         self._thread = threading.Thread(target=self._loop, name="decode-scheduler", daemon=True)
 
@@ -2579,7 +2609,11 @@ class _Scheduler:
             assistant["tool_calls"] = turn.stream.tool_calls
         user.messages.append(assistant)
         user._next_render = len(user.messages)
-        self._retire(turn)
+        if turn.cancelled.is_set():
+            outcome = "stopped"
+        else:
+            outcome = "length" if turn.hit_cap else "tool_calls" if turn.stream.tool_calls else "stop"
+        self._retire(turn, outcome)
         if len(user.tokens) == user.pos:
             user.marks.append((len(user.messages), user.pos, user.pending_id))
         replayed = len(turn.ids) - turn.prefilled_on_device
@@ -2624,7 +2658,7 @@ class _Scheduler:
         its stored conversation already holds the prompt's message, so the slot goes into :attr:`_cut_short`."""
         if turn in self._active:
             self._cut_short.add(turn.slot)
-        self._retire(turn)
+        self._retire(turn, "stopped")
         turn.t_done = time.perf_counter()
         logger.info(
             f"user {turn.user_key!r} (slot {turn.slot}): stopped after {turn.fed}/{len(turn.ids)} prompt tokens, "
@@ -2650,7 +2684,7 @@ class _Scheduler:
         """Drop a turn whose step raised. Its session keeps whatever was written; the
         client is told, and the remaining turns keep generating."""
         logger.warning(f"turn for user {turn.user_key!r} failed: {exc}")
-        self._retire(turn)
+        self._retire(turn, "error")
         turn.events.put(("error", exc))
 
     def _abort_all(self, exc: Exception) -> None:
@@ -2676,12 +2710,25 @@ class _Scheduler:
         with self._wake:
             pending, self._new = list(self._new), deque()
         for turn in list(self._active) + pending:
-            self._retire(turn)
+            self._retire(turn, "error")
             turn.events.put(("error", exc))
 
-    def _retire(self, turn: _Turn) -> None:
+    def _retire(self, turn: _Turn, outcome: str) -> None:
         if self._posted and self._posted[0] is turn:
             self._feed_posted(turn)
+        self.ended_prefilled += turn.fed
+        self.ended_generated += len(turn.generated)
+        self.ended += 1
+        # The record carries the totals, and goes in before the turn leaves the active ones: a monitor that reads
+        # the records and then the active turns finds every turn in exactly one of them.
+        self.ended_turns.append(
+            {
+                **turn.record(outcome),
+                "total_turns": self.ended,
+                "total_prefilled": self.ended_prefilled,
+                "total_generated": self.ended_generated,
+            }
+        )
         if turn in self._active:
             self._active.remove(turn)
 
