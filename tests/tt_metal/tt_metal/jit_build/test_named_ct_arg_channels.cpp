@@ -21,6 +21,7 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "common/executor.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/program/kernel_compile_utils.hpp"
@@ -61,7 +62,7 @@ protected:
         const auto kernel = program.impl().get_kernel(0);
         program.impl().compile(device);
 
-        auto& build_env_manager = BuildEnvManager::get_instance(kernel->get_context_id());
+        auto& build_env_manager = MetalContext::instance(kernel->get_context_id()).build_env_manager();
         const auto recipe =
             kernel_build_state(*kernel, kernel->get_kernel_processor_type(0)).export_target_recipe(kernel.get());
 
@@ -268,8 +269,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDu
 
     // The kernel uses no CBs, so its build options need nothing beyond the kernel's own.
     Program program(descriptor);
-    const auto& build_env =
-        BuildEnvManager::get_instance(device->impl().get_context_id()).get_device_build_env(device->build_id());
+    const auto& build_env = device->impl().metal_context().build_env_manager().get_device_build_env(device->build_id());
     JitBuildOptions build_options(build_env.build_env);
     program.impl().get_kernel(0)->set_build_options(build_options);
     const size_t kernel_hash =

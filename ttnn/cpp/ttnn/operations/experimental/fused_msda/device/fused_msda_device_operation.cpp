@@ -289,6 +289,45 @@ void FusedMSDAOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(total > 0, "fused_msda: num_valid_queries leaves no query to compute");
     }
+    TT_FATAL(
+        attrs.device_valid_counts == args.num_valid_queries_tensor.has_value(),
+        "fused_msda: internal error, device_valid_counts does not match the supplied tensors");
+    if (attrs.device_valid_counts) {
+        TT_FATAL(
+            attrs.num_valid_queries.empty(), "fused_msda: pass num_valid_queries as a list or as a tensor, not both");
+        const Tensor& counts = *args.num_valid_queries_tensor;
+        TT_FATAL(
+            counts.storage_type() == StorageType::DEVICE && counts.is_allocated(),
+            "fused_msda: num_valid_queries tensor must be allocated on device");
+        TT_FATAL(
+            counts.device() == args.value.device(),
+            "fused_msda: num_valid_queries tensor must be on the same device as value");
+        TT_FATAL(
+            counts.dtype() == DataType::UINT32,
+            "fused_msda: num_valid_queries tensor must be UINT32, got {}",
+            counts.dtype());
+        TT_FATAL(
+            counts.layout() == Layout::ROW_MAJOR,
+            "fused_msda: num_valid_queries tensor must be ROW_MAJOR, got {}",
+            counts.layout());
+        TT_FATAL(
+            counts.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "fused_msda: num_valid_queries tensor must be INTERLEAVED");
+        // One page holding all B counts: the kernels read it with a single NoC read.
+        const auto& cs = counts.logical_shape();
+        TT_FATAL(
+            cs.volume() == s.batch && cs[-1] == s.batch,
+            "fused_msda: num_valid_queries tensor needs its B ({}) counts in the last dim, got shape {}",
+            s.batch,
+            cs);
+        TT_FATAL(
+            counts.buffer()->page_size() == s.batch * sizeof(uint32_t),
+            "fused_msda: num_valid_queries tensor must hold its {} counts in one unpadded {}-byte page, got {}-byte "
+            "pages",
+            s.batch,
+            s.batch * sizeof(uint32_t),
+            counts.buffer()->page_size());
+    }
 }
 
 void FusedMSDAOperation::validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& args) {
@@ -390,7 +429,8 @@ ttnn::Tensor fused_msda_from_offsets(
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<uint32_t>>& num_valid_queries) {
+    const std::optional<std::vector<uint32_t>>& num_valid_queries,
+    const std::optional<Tensor>& num_valid_queries_tensor) {
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
         .spatial_shapes_hw = flatten_spatial_shapes(spatial_shapes),
@@ -401,6 +441,7 @@ ttnn::Tensor fused_msda_from_offsets(
         .locations_in_grid_space = false,
         .from_offsets = true,
         .reference_mode = reference_mode,
+        .device_valid_counts = num_valid_queries_tensor.has_value(),
     };
     if (num_valid_queries.has_value()) {
         // An empty list would read as "every query"; reject it instead of guessing.
@@ -416,6 +457,7 @@ ttnn::Tensor fused_msda_from_offsets(
         .sampling_locations = std::nullopt,
         .reference_points = reference_points,
         .sampling_offsets = sampling_offsets,
+        .num_valid_queries_tensor = num_valid_queries_tensor,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
@@ -427,7 +469,8 @@ bool can_use_fused_msda_from_offsets_l1_value(
     const Tensor& attention_weights,
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
-    bool align_corners) {
+    bool align_corners,
+    bool device_valid_counts) {
     using tt::tt_metal::BufferType;
     using tt::tt_metal::Layout;
     using tt::tt_metal::PageConfig;
@@ -443,6 +486,7 @@ bool can_use_fused_msda_from_offsets_l1_value(
         .locations_in_grid_space = false,
         .from_offsets = true,
         .reference_mode = reference_mode,
+        .device_valid_counts = device_valid_counts,
     };
     auto args = OperationType::tensor_args_t{
         .value = value,

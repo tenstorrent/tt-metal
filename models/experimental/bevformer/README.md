@@ -51,15 +51,21 @@ scene selection, score filtering, and output format.
 
 ## Performance
 
-- For the detector's device ops, one live frame with a previous BEV between Tracy's `start` and
-  `stop` signposts by default. Set `BEVFORMER_PERF_FRAMES=2` for two consecutive measured frames;
-  the harness accepts only `1` or `2`, and either run has one preparation frame outside the
-  signposts:
+- For the detector's device ops, one frame with a previous BEV between Tracy's `start` and `stop`
+  signposts by default, live (`[live]`) or replayed from the demo's traces (`[trace]`). Set
+  `BEVFORMER_PERF_FRAMES=2` for two consecutive measured frames; the harness accepts only `1` or
+  `2`, and either run has one preparation frame outside the signposts. Profile one variant per
+  run, and add `--tracing-mode` to `tt-perf-report` for `[trace]`:
 
 ```sh
-python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
-BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
+# Live: one measured frame, or two with BEVFORMER_PERF_FRAMES=2
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
+BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
+
+# Replayed from traces
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[trace]"
+tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop --tracing-mode
 ```
 - See the demo's [recorded smoke results](demo/README.md#recorded-smoke-results) for ten-frame
   end-to-end measurements of the bundled tiny, small and base configs. These wall-clock results
@@ -102,6 +108,15 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```sh
 pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
 ```
+- `tests/e2e/test_bevformer_trace.py`: the demo's pipelined path, two command queues with host
+  inputs prepared ahead, against the same detector run live, frame by frame: replays at changing
+  counts, a frame no camera sees, and the plan grown both within a frame and between frames, each
+  followed by a recapture. It runs the selected variant and is not part of `tests/pcc/`, as its
+  cold run compiles every kernel again for the two-queue grid:
+
+```sh
+pytest models/experimental/bevformer/tests/e2e/test_bevformer_trace.py
+```
 
 ## Project Structure
 
@@ -113,6 +128,7 @@ models/experimental/bevformer/
 ├── reference/          # PyTorch reference implementation
 ├── tests/
 │   ├── common.py       # Test helpers: dataset presets, dummy weights and random inputs
+│   ├── e2e/            # The detector replayed from traces against the live detector
 │   ├── fixtures/       # Deterministic synthetic camera geometry used only by tests
 │   ├── pcc/            # Unit tests for individual components
 │   └── perf/           # Device-perf harnesses, one per stage and one for the detector
@@ -358,4 +374,5 @@ tt/model_preprocessing.py
 - BEV grid (base): 200x200, small 150x150, tiny 50x50; 900 object queries; up to 300 boxes per frame
 - Preparing a frame projects the cameras on device and reads back only their visible counts, which
   size the spatial cross-attention's rebatch plan; the plan's shapes follow a capacity that only
-  grows, and the detector runs live, not under a trace.
+  grows. `tt/tt_bevformer_trace.py` replays the detector from three traces around that readback,
+  capturing them again when the capacity grows (the demo's `--trace`).

@@ -75,12 +75,20 @@
 //   [1]                 attention_weights buffer address
 //   [2]                 sampling_locations (V1) / sampling_offsets (V2) address
 //   [3]                 reference_points address (V2; 0 for V1)
-//   [4]                 num_output_tiles
+//   [4]                 num_output_tiles; with MSDA_DEVICE_COUNTS, the address
+//                       of the (B,) uint32 valid query counts instead
 //   [5 .. 5+3L)         per level l: H_l (unread; compute bounds the corner),
 //                       W_l, level_start_index_l
 //   [5+3L .. 5+11L)     TILED_GEOMETRY only: per level l, the fp32 bit patterns
 //                       of (primary, secondary, bias, extent) for x, then for y
-//   [...]               per output tile: b, head, q_start, v_rows
+//   [...]               per output tile: b, head, q_start, v_rows; with
+//                       MSDA_DEVICE_COUNTS, this core's index and the core count
+//                       instead, from which the reader derives its tiles
+//
+// With MSDA_DEVICE_COUNTS the reader stages the MSDA_BATCH counts in
+// MSDA_READER_COUNTS_CB (msda_device_counts.hpp) and hands its tile count to
+// compute through MSDA_TILE_COUNT_CB, so nothing that depends on the counts is
+// a runtime arg and a replayed trace follows the counts tensor.
 
 // NOTE: kernels are JIT-compiled as C++17. No abbreviated function templates
 // (`const auto&` parameters), no concepts — spell template parameters out.
@@ -99,6 +107,8 @@
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tiled_geometry.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_work_list.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_device_counts.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_gather_rows.hpp"
 
 // ---------------------------------------------------------------------------
@@ -198,7 +208,12 @@ static_assert(
 // match MAX_LEVELS in fused_msda_device_operation.cpp, which validates against it.
 constexpr uint32_t MSDA_MAX_LEVELS = 8;
 
+static_assert(TILE_MAX_ROWS == fused_msda_work::TILE_ROWS);
+
 namespace fused_msda {
+
+// The counts accessor reader_main takes when MSDA_DEVICE_COUNTS is off.
+struct NoCountsAccessor {};
 
 struct LevelGeom {
     uint32_t width;        // W_l
@@ -482,16 +497,21 @@ inline void scatter_stick(uint32_t tile_l1, uint32_t r, uint32_t src_l1) {
 // data they already hold from the previous tile, so nothing here may write to
 // them.
 //
+// `counts_acc` is the counts tensor's accessor under MSDA_DEVICE_COUNTS and is
+// unused otherwise.
+//
 // With TILED_GEOMETRY the source also provides (and `stage` goes unused):
 //     bool stage_tiled(Noc&, b, q_start, head, v_rows, uint32_t off_l1, uint32_t off_row_nbytes);
 //         stages the offsets at off_l1 and the reference points into its
 //         arena; true when the reference points were re-read
 //     void fill_ref_tile(uint32_t tile_l1, uint32_t v_rows) const;
 // ---------------------------------------------------------------------------
-template <typename ValueAccessor, typename AttnAccessor, typename LocSrc>
-inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn_acc, LocSrc& loc_src) {
-    const uint32_t num_output_tiles = get_arg_val<uint32_t>(4);
-
+template <typename ValueAccessor, typename AttnAccessor, typename LocSrc, typename CountsAccessor = NoCountsAccessor>
+inline void reader_main(
+    const ValueAccessor& value_acc,
+    const AttnAccessor& attn_acc,
+    LocSrc& loc_src,
+    [[maybe_unused]] const CountsAccessor& counts_acc = {}) {
     LevelGeom levels[MSDA_MAX_LEVELS];
     for (uint32_t l = 0; l < NUM_LEVELS; ++l) {
         levels[l].width = get_arg_val<uint32_t>(5 + 3 * l + 1);
@@ -555,12 +575,20 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
     [[maybe_unused]] Semaphore<> gather_done(gather_done_sem_id);
     [[maybe_unused]] uint32_t gather_seq = 0;
 
-    struct Unit {
-        uint32_t b;
-        uint32_t head;
-        uint32_t q_start;
-        uint32_t v_rows;
-    };
+    using Unit = fused_msda_work::Unit;
+#ifdef MSDA_DEVICE_COUNTS
+    const auto work = fused_msda_work::stage_work_list<MSDA_BATCH, Q, NUM_HEADS>(
+        noc, counts_acc, MSDA_READER_COUNTS_CB, get_arg_val<uint32_t>(arg_idx), get_arg_val<uint32_t>(arg_idx + 1));
+    {
+        CircularBuffer tile_count_cb(MSDA_TILE_COUNT_CB);
+        tile_count_cb.reserve_back(1);
+        CoreLocalMem<volatile uint32_t>(tile_count_cb.get_write_ptr())[0] = work.run.count;
+        tile_count_cb.push_back(1);
+    }
+    const uint32_t num_output_tiles = work.run.count;
+    auto unit = [&](uint32_t t) { return work.unit(t); };
+#else
+    const uint32_t num_output_tiles = get_arg_val<uint32_t>(4);
     const uint32_t unit_args = arg_idx;
     auto unit = [&](uint32_t t) {
         const uint32_t base = unit_args + 4 * t;
@@ -570,6 +598,7 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             get_arg_val<uint32_t>(base + 2),
             get_arg_val<uint32_t>(base + 3)};
     };
+#endif
 
     // Tiled geometry: block t's offsets and attn rows go into one row-major
     // page, its reference points into the source's arena. Nothing is pushed

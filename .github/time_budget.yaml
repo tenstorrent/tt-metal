@@ -120,10 +120,9 @@ ttnn:
   unit_tier3:
     wh_n150: 4
   device_perf:
-    bh_p150b_civ2: 12
+    bh_p150b_civ2: 9
     wh_n150: 10
     wh_llmbox_perf: 8
-    wh_n300_civ2: 3
   integration:
     wh_llmbox: 30
     wh_galaxy: 100
@@ -312,7 +311,7 @@ llk:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
     sim_quasar_xl: 30
-    cpu_xlarge: 10
+    cpu_medium: 10
   sanity:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
@@ -329,6 +328,9 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
+  # Stage 2 of the LLK perf gate (llk-perf-gate.yaml): runs only when stage 1 finds a regression.
+  perf_placement:
+    bh_p150b_civ2: 60
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
@@ -341,7 +343,7 @@ llk:
     bh_p150b_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
-    bh_p150b_civ2_viommu: 85
+    bh_p150b_civ2_viommu: 100
   weekly:
     sim_wh_n150_xl: 75
     sim_bh_p150_xl: 240

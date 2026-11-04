@@ -199,9 +199,11 @@ LAYER_PCC_THRESHOLD = 0.88
 # ~0.86 (glm_5_3 @L75); indexer-K nope 0.980 (glm_5_3 captures layers 0-2 + every 4th).
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
-# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.848, below the bf16 floor).
+# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.857, below the bf16 floor). Raised 0.82 -> 0.83
+# with the mean-centred gate bias (MOE_GATE_BIAS_CENTERED), which took that row from 0.849 to 0.857 and the
+# warm-cache 55k row from 0.9841 to 0.9850; the margin stays ~0.027.
 GLM_KV_CACHE_FORMAT = MlaKvCacheFormat.SCALED_FP8
-KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.82
+KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.83
 
 
 def _sparse_cache_format(has_indexer, kv_cache_format):
@@ -243,8 +245,8 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, fabric2d MoE transport. CI run 41205106009 / job 124580284086.
-    (78, 11, 10): [0.388, 0.386, 0.392, 0.390, 0.397, 0.396, 0.392, 0.394, 0.400, 0.405, 0.411],
+    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1. CI run 41433485152 / job 125242838736.
+    (78, 11, 10): [0.363, 0.362, 0.367, 0.366, 0.371, 0.371, 0.367, 0.369, 0.376, 0.381, 0.387],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 

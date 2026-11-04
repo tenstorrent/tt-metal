@@ -101,16 +101,16 @@ To pin a run, pass `--image ghcr.io/tenstorrent/tt-metal/exabox-tools:<tag>`. To
 Discovers Ethernet connections, compares against expected topology (FSD), resets chips, sends traffic. Catches bad cables, DRAM failures, unstable links, CRC errors.
 
 ```bash
-./tools/scaleout/exabox/run_validation.sh --hosts <hosts> --image <docker-image>
+./tools/scaleout/exabox/run_validation.sh --hosts <hosts> [--image <docker-image>] [--output <output-dir>]
 ```
 
-Runs 50 loops (reset, discovery, 10 traffic iterations each). Logs go to `validation_output/` in your current directory.
+Runs 50 loops (cross-host port down, `tt-smi -glx_reset`, discovery, 10 traffic iterations each). Logs go to `<comma-separated-hosts>-<timestamp>/` in your current directory, or to the directory passed with `--output`. `--image` is optional and defaults to `exabox-tools:latest`.
 
 Why 50? Some links only fail after a few resets - they train fine once but can't do it reliably. Running many iterations catches these. It also burns in the hardware a bit, so weak components show themselves early rather than failing in production.
 
 Analyze results with:
 ```bash
-python3 tools/scaleout/exabox/analyze_validation_results.py validation_output/
+python3 tools/scaleout/exabox/analyze_validation_results.py <output-dir>/
 ```
 
 The script parses all `*.log` files in the specified directory and provides:

@@ -1350,21 +1350,24 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
     const D2DEndpointConfig to_next{
         .sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx};
     // Channels between the same two ranks pair up in creation order, so every rank builds them
-    // in the same order: inbound before outbound, gated before plain.
+    // in the same order: inbound before outbound, gated before plain. Each direction's two
+    // channels share the routers in one lease group, like the prefill runner.
     std::vector<std::unique_ptr<D2DStreamServiceReceiver>> inbound;
     std::vector<std::unique_ptr<D2DStreamServiceSender>> outbound;
     for (const bool gated : {true, false}) {
         const uint32_t metadata_bytes = gated ? kMetadataBytes : 0;
         if (rank > 0) {
             auto cfg = make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes);
+            cfg.fabric_link_group = "export-inbound";
             if (gated) {
                 cfg.stage_gate = gate_cfg;
             }
             inbound.push_back(D2DStreamService::create_receiver(mesh_device_, std::move(cfg), from_prev));
         }
         if (rank + 1 < world_size) {
-            outbound.push_back(D2DStreamService::create_sender(
-                mesh_device_, make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes), to_next));
+            auto cfg = make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes);
+            cfg.fabric_link_group = "export-outbound";
+            outbound.push_back(D2DStreamService::create_sender(mesh_device_, std::move(cfg), to_next));
         }
     }
 

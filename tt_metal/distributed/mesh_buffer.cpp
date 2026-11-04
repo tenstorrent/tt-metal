@@ -30,6 +30,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <utility>
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
 
@@ -258,6 +259,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         TT_FATAL(!address.has_value(), "Per-core allocation does not support explicit address");
         mesh_buffer = std::shared_ptr<MeshBuffer>(
             new MeshBuffer(mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
+        mesh_buffer->unique_id_ = BufferImpl::allocate_unique_id();
         // Per-core: each device allocates independently. The mesh-level lockstep allocator queries
         // device per-bank ranges at allocation time, so no explicit mirroring is needed.
         for (auto& [coord, device_buffer] : mesh_buffer->buffers_) {
@@ -265,14 +267,15 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
                 continue;
             }
             auto* device = mesh_device->impl().get_device(coord);
-            auto buffer = BufferImpl::create(
+            auto buffer = BufferImpl::create_for_mesh_buffer(
                 device,
                 device_local_size,
                 device_local_config.page_size,
                 device_local_config.buffer_type,
                 device_local_config.sharding_args,
                 device_local_config.bottom_up,
-                device_local_config.sub_device_id);
+                device_local_config.sub_device_id,
+                *mesh_buffer->unique_id_);
             device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
         }
     } else if (!address.has_value()) {
@@ -388,6 +391,7 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     address_(other.address_),
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
+    unique_id_(std::exchange(other.unique_id_, std::nullopt)),
     state_(std::move(other.state_)) {
     other.state_ = DeallocatedState{};
     other.address_ = 0;
@@ -405,6 +409,7 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         address_ = other.address_;
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
+        unique_id_ = std::exchange(other.unique_id_, std::nullopt);
         state_ = std::move(other.state_);
 
         other.state_ = DeallocatedState{};

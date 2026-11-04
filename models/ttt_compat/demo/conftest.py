@@ -74,9 +74,8 @@ def pytest_addoption(parser):
     )
     parser.addoption(
         "--use_prefetcher",
-        action="store",
+        action="store_true",
         default=False,
-        type=bool,
         help="Whether to use DRAM prefetcher for prefetching weights into L1 during decode (only available on BH)",
     )
     parser.addoption(
