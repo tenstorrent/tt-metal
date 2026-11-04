@@ -25,12 +25,15 @@ from __future__ import annotations
 import argparse
 import gc
 import os
+import tempfile
 from math import comb
 from typing import Callable, List, Sequence, Tuple
+from unittest import mock
 
 import ttnn
 from datasets import load_dataset
 from transformers import AutoTokenizer
+from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers.grpo_trainer.remote_rollout.ttt_presets import bf16_attn_bfp8_mlp_optimizations, stop_and_pad
 from ttml.trainers.grpo_trainer.remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
 
@@ -84,41 +87,45 @@ def generate_on_tt(
     max_seq_len: int,
     mesh_shape: Sequence[int],
 ) -> List[List[List[int]]]:
-    """Return ``completions[q][s]`` for one checkpoint, on a fresh sampler and mesh."""
-    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), offset=ttnn.MeshCoordinate(0, 0))
-    sampler = None
-    try:
-        stop_ids, pad_id = stop_and_pad(model_path)
-        sampler = TTTRolloutSampler(
-            mesh_device=mesh,
-            model_source=model_path,
-            max_batch_size=max_batch_size,
-            max_seq_len=max_seq_len,
-            instruct=True,
-            optimizations=bf16_attn_bfp8_mlp_optimizations,
-            stop_token_ids=stop_ids,
-            pad_token_id=pad_id,
-            completions_per_prompt=n_samples,
-            max_completion_length=max_new_tokens,
-            temperature=temperature,
-            dummy_weights=False,
-        )
-        prompts_per_call = max(1, max_batch_size * mesh.get_num_devices() // n_samples)
-        result: List[List[List[int]]] = []
-        for start in range(0, len(prompts), prompts_per_call):
-            chunk = [list(p) for p in prompts[start : start + prompts_per_call]]
-            print(
-                f"[eval_gsm8k] {os.path.basename(model_path)}: prompts {start + len(chunk)}/{len(prompts)}", flush=True
-            )
-            completions = sampler.generate(chunk).completions
-            result.extend(completions[i * n_samples : (i + 1) * n_samples] for i in range(len(chunk)))
-        return result
-    finally:
-        if sampler is not None:
-            sampler.close()
+    """Return ``completions[q][s]`` for one checkpoint, on a fresh sampler, mesh and tensor cache."""
+    cache_root = os.path.join(get_tt_metal_runtime_root(), "generated", "tt-train")
+    os.makedirs(cache_root, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=cache_root) as tmp, mock.patch.dict(os.environ, {"TT_CACHE_PATH": tmp}):
+        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), offset=ttnn.MeshCoordinate(0, 0))
         sampler = None
-        gc.collect()
-        ttnn.close_mesh_device(mesh)
+        try:
+            stop_ids, pad_id = stop_and_pad(model_path)
+            sampler = TTTRolloutSampler(
+                mesh_device=mesh,
+                model_source=model_path,
+                max_batch_size=max_batch_size,
+                max_seq_len=max_seq_len,
+                instruct=True,
+                optimizations=bf16_attn_bfp8_mlp_optimizations,
+                stop_token_ids=stop_ids,
+                pad_token_id=pad_id,
+                completions_per_prompt=n_samples,
+                max_completion_length=max_new_tokens,
+                temperature=temperature,
+                dummy_weights=False,
+            )
+            prompts_per_call = max(1, max_batch_size * mesh.get_num_devices() // n_samples)
+            result: List[List[List[int]]] = []
+            for start in range(0, len(prompts), prompts_per_call):
+                chunk = [list(p) for p in prompts[start : start + prompts_per_call]]
+                print(
+                    f"[eval_gsm8k] {os.path.basename(model_path)}: prompts {start + len(chunk)}/{len(prompts)}",
+                    flush=True,
+                )
+                completions = sampler.generate(chunk).completions
+                result.extend(completions[i * n_samples : (i + 1) * n_samples] for i in range(len(chunk)))
+            return result
+        finally:
+            if sampler is not None:
+                sampler.close()
+            sampler = None
+            gc.collect()
+            ttnn.close_mesh_device(mesh)
 
 
 def parse_models(entries: Sequence[str]) -> List[Tuple[str, str]]:
