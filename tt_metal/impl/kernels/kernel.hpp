@@ -123,9 +123,9 @@ struct DataflowBufferBindingHandle {
     bool consumes = false;
     uint8_t pap = 0;
     uint8_t cap = 0;
-    // Watcher: the nodes the DFB's address is reserved on, as NoC rectangles packed x_start, y_start, x_end, y_end
-    // from the top byte down. Empty without Watcher NoC sanitizing, or for a DFB borrowed from an interleaved tensor.
-    std::vector<uint32_t> watcher_node_ranges;
+    // Watcher: the nodes the DFB's address is reserved on, as rectangles in NoC coordinates. Empty without Watcher NoC
+    // sanitizing, or for a DFB borrowed from an interleaved tensor.
+    std::vector<experimental::NodeRange> watcher_node_ranges;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -135,7 +135,7 @@ struct SemaphoreBindingHandle {
     SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
     // Watcher: the nodes the semaphore exists on, as for DataflowBufferBindingHandle::watcher_node_ranges.
-    std::vector<uint32_t> watcher_node_ranges;
+    std::vector<experimental::NodeRange> watcher_node_ranges;
 };
 // Metal 2.0: semaphore accessor names -> {semaphore id, scope}
 using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindingHandle>;
@@ -344,9 +344,10 @@ public:
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const override;
     void process_watcher_node_ranges(
-        const std::function<void(const std::string& accessor_name, const std::vector<uint32_t>& node_ranges)>&
-            dfb_callback,
-        const std::function<void(const std::string& accessor_name, const std::vector<uint32_t>& node_ranges)>&
+        const std::function<void(
+            const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& dfb_callback,
+        const std::function<
+            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&
             semaphore_callback) const override;
     void process_tensor_binding_handles(const std::function<void(
                                             const std::string& accessor_name,

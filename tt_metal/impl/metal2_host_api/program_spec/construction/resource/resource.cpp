@@ -14,16 +14,22 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-// A node set as NoC rectangles, packed x_start, y_start, x_end, y_end from the top byte down.
-std::vector<uint32_t> PackWatcherNodeRanges(distributed::MeshDevice& mesh_device, const NodeRangeSet& nodes) {
-    std::vector<uint32_t> packed;
-    packed.reserve(nodes.ranges().size());
+// A node set as rectangles in NoC (virtual) coordinates, which the kernel stores in 8 bits each.
+std::vector<NodeRange> ToVirtualNodeRanges(distributed::MeshDevice& mesh_device, const NodeRangeSet& nodes) {
+    std::vector<NodeRange> virtual_ranges;
+    virtual_ranges.reserve(nodes.ranges().size());
     for (const NodeRange& range : nodes.ranges()) {
         const NodeCoord start = mesh_device.virtual_core_from_logical_core(range.start_coord, CoreType::WORKER);
         const NodeCoord end = mesh_device.virtual_core_from_logical_core(range.end_coord, CoreType::WORKER);
-        packed.push_back(((start.x & 0xFF) << 24) | ((start.y & 0xFF) << 16) | ((end.x & 0xFF) << 8) | (end.y & 0xFF));
+        TT_FATAL(
+            start.x <= 0xFF && start.y <= 0xFF && end.x <= 0xFF && end.y <= 0xFF,
+            "Watcher stores NoC coordinates in 8 bits, but node range {} spans {} to {}",
+            range.str(),
+            start.str(),
+            end.str());
+        virtual_ranges.emplace_back(start, end);
     }
-    return packed;
+    return virtual_ranges;
 }
 
 WatcherNodeRanges MakeWatcherNodeRanges(
@@ -39,7 +45,7 @@ WatcherNodeRanges MakeWatcherNodeRanges(
     for (const auto& [dfb_name, nodes] : collected.dfb_node_set) {
         const std::optional<TensorParamName>& borrowed_from = collected.dfb_by_name.at(dfb_name)->borrowed_from;
         if (!borrowed_from.has_value()) {
-            ranges.dfbs.emplace(dfb_name, PackWatcherNodeRanges(mesh_device, nodes));
+            ranges.dfbs.emplace(dfb_name, ToVirtualNodeRanges(mesh_device, nodes));
             continue;
         }
         // A borrowed-memory DFB's address is reserved on its backing tensor's nodes, which may reach past the DFB's
@@ -51,12 +57,11 @@ WatcherNodeRanges MakeWatcherNodeRanges(
         if (const std::optional<BufferDistributionSpec> distribution =
                 tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec()) {
             ranges.dfbs.emplace(
-                dfb_name, PackWatcherNodeRanges(mesh_device, NodeRangeSet(distribution->cores()).merge_ranges()));
+                dfb_name, ToVirtualNodeRanges(mesh_device, NodeRangeSet(distribution->cores()).merge_ranges()));
         }
     }
     for (const auto& sem : spec.semaphores) {
-        ranges.semaphores.emplace(
-            sem.unique_id, PackWatcherNodeRanges(mesh_device, to_node_range_set(sem.target_nodes)));
+        ranges.semaphores.emplace(sem.unique_id, ToVirtualNodeRanges(mesh_device, to_node_range_set(sem.target_nodes)));
     }
     return ranges;
 }

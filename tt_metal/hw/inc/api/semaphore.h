@@ -357,13 +357,13 @@ private:
             noc_y_start,
             noc_x_end,
             noc_y_end,
-            (DebugMulticastNodeSet{.packed_ranges = node_ranges_, .num_ranges = num_node_ranges_}),
+            (DebugMulticastNodeSet{.ranges = node_ranges_, .num_ranges = num_node_ranges_}),
             includes_sender);
 #endif
     }
 #endif
 #if defined(DEBUG_SANITIZE_NOC_ENABLED)
-    const std::uint32_t* node_ranges_ = nullptr;
+    const DebugNodeRange* node_ranges_ = nullptr;
     std::uint32_t num_node_ranges_ = 0;
 #endif
 };

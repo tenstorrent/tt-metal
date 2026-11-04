@@ -531,10 +531,11 @@ private:
     // Watcher: the nodes this DFB exists on, for checking multicasts into it. Only a DFB built from a binding token
     // knows them; one built from a bare id is not checked.
 #if defined(DEBUG_SANITIZE_NOC_ENABLED)
-    const uint32_t* node_ranges_ = nullptr;
+    const DebugNodeRange* node_ranges_ = nullptr;
     uint32_t num_node_ranges_ = 0;
 #endif
-    void store_node_ranges([[maybe_unused]] const uint32_t* node_ranges, [[maybe_unused]] uint32_t num_node_ranges) {
+    void store_node_ranges(
+        [[maybe_unused]] const DebugNodeRange* node_ranges, [[maybe_unused]] uint32_t num_node_ranges) {
 #if defined(DEBUG_SANITIZE_NOC_ENABLED)
         node_ranges_ = node_ranges;
         num_node_ranges_ = num_node_ranges;
@@ -628,7 +629,7 @@ struct noc_traits_t<DataflowBuffer> {
     // The nodes the DFB exists on, which Noc::async_write_multicast checks the rectangle against with Watcher.
     static DebugMulticastNodeSet multicast_node_set([[maybe_unused]] const DFB_CLASS& dst) {
 #if defined(DEBUG_SANITIZE_NOC_ENABLED)
-        return {.packed_ranges = dst.node_ranges_, .num_ranges = dst.num_node_ranges_};
+        return {.ranges = dst.node_ranges_, .num_ranges = dst.num_node_ranges_};
 #else
         return {};
 #endif

@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dfb_access.h"
+#include "internal/debug/node_range.h"
 #include "internal/llk_metadata.h"
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
@@ -33,10 +34,10 @@
 // function parameter must spell `DFBBindingToken<P, C>` (or take the id).
 template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 struct DFBBindingToken {
-    // node_ranges: Watcher builds only, the rectangles the DFB exists on, packed as x_start, y_start, x_end, y_end
-    // from the top byte down, so multicasts into it can be checked against them.
+    // node_ranges: Watcher builds only, the rectangles the DFB exists on, so multicasts into it can be checked against
+    // them.
     explicit constexpr DFBBindingToken(
-        uint16_t id, const uint32_t* node_ranges = nullptr, uint32_t num_node_ranges = 0) noexcept :
+        uint16_t id, const DebugNodeRange* node_ranges = nullptr, uint32_t num_node_ranges = 0) noexcept :
         id_(id), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
 
     // Binding token constructor when host supplies LLK metadata.
@@ -49,7 +50,7 @@ struct DFBBindingToken {
     constexpr DFBBindingToken(
         uint16_t id,
         binding_details::LLKMetadata llk,
-        const uint32_t* node_ranges = nullptr,
+        const DebugNodeRange* node_ranges = nullptr,
         uint32_t num_node_ranges = 0) noexcept :
         id_(id), llk_metadata_(llk), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
 
@@ -61,7 +62,7 @@ struct DFBBindingToken {
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
 
-    constexpr const uint32_t* node_ranges() const noexcept { return node_ranges_; }
+    constexpr const DebugNodeRange* node_ranges() const noexcept { return node_ranges_; }
     constexpr uint32_t num_node_ranges() const noexcept { return num_node_ranges_; }
 
 private:
@@ -78,7 +79,7 @@ private:
 
     uint16_t id_;
     binding_details::LLKMetadata llk_metadata_{};
-    const uint32_t* node_ranges_ = nullptr;
+    const DebugNodeRange* node_ranges_ = nullptr;
     uint32_t num_node_ranges_ = 0;
 };
 

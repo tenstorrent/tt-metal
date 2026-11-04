@@ -6,16 +6,17 @@
 // own nodes, so the multicast rectangle must stay within them. Part of the NoC sanitizer, which includes this header.
 #pragma once
 
+#include "internal/debug/node_range.h"
 #include "internal/debug/sanitize.h"
 
 // The nodes a multicast destination's address is reserved on, which its traits report through multicast_node_set:
-// num_nodes packed coordinates (x in bits 8-15, y in bits 0-7) and num_ranges packed rectangles (x_start, y_start,
-// x_end, y_end from the top byte down). A destination with neither is not checked. Defined without Watcher too, so the
+// num_nodes packed coordinates (x in bits 8-15, y in bits 0-7) and num_ranges rectangles. A destination with neither is
+// not checked. Defined without Watcher too, so the
 // traits needn't depend on it.
 struct DebugMulticastNodeSet {
     const uint16_t* packed_xy_coords = nullptr;
     uint32_t num_nodes = 0;
-    const uint32_t* packed_ranges = nullptr;
+    const DebugNodeRange* ranges = nullptr;
     uint32_t num_ranges = 0;
 };
 
@@ -132,15 +133,15 @@ inline DebugNodesInside debug_coords_inside(
     }
     return inside;
 }
-// Over the destination's packed rectangles, counting the workers of each one's overlap with the rectangle.
+// Over the destination's rectangles, counting the workers of each one's overlap with the rectangle.
 inline DebugNodesInside debug_ranges_inside(
     uint8_t noc_id, const DebugMulticastRect& rect, DebugMulticastNodeSet nodes, DebugNodeCoord sender) {
     DebugNodesInside inside;
     for (uint32_t i = 0; i < nodes.num_ranges; ++i) {
-        const uint32_t packed = nodes.packed_ranges[i];
+        const DebugNodeRange& node_range = nodes.ranges[i];
         const DebugMulticastRect range{
-            DebugNodeCoord{packed >> 24, (packed >> 16) & 0xFF},
-            DebugNodeCoord{(packed >> 8) & 0xFF, packed & 0xFF},
+            DebugNodeCoord{node_range.start.x, node_range.start.y},
+            DebugNodeCoord{node_range.end.x, node_range.end.y},
         };
         inside.has_sender |= debug_rect_contains(range, sender);
         // Both rectangles have worker corners, so their overlap does too.
@@ -173,7 +174,7 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
     DebugNodeCoord end,
     DebugMulticastNodeSet nodes,
     bool includes_sender) {
-    if (nodes.packed_xy_coords == nullptr && nodes.packed_ranges == nullptr) {
+    if (nodes.packed_xy_coords == nullptr && nodes.ranges == nullptr) {
         return;
     }
     const DebugMulticastRect rect{noc_id, start, end};
