@@ -175,7 +175,7 @@ class VisionAttention(LightweightModule):
                 qkv_bias,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                dtype=ttnn.bfloat8_b,
+                dtype=self.configuration.vision_weight_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
@@ -228,7 +228,7 @@ class VisionAttention(LightweightModule):
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.configuration.vision_weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -332,19 +332,17 @@ class VisionAttention(LightweightModule):
 
         self.scale = self.head_dim**-0.5
 
-        dram_shard_grid_width = 8
+        grid = configuration.max_grid_size  # derived from the device; 8x8 reproduces the original config
         target_device_shape = (1, 1)  # each 1x1 device runs a vision model
         self.xqkv_prefill_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(grid.x, grid.y),
             in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=max(
-                1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
-            ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=math.ceil(
-                configuration.qkv_size / target_device_shape[1] / 32 / dram_shard_grid_width
-            ),  # N / TILE_WIDTH / grid width
+                1, math.ceil(min(seq_len, self.MAX_QKV_MM_SEQ_LEN) / self.tile_size / grid.y)
+            ),  # M / TILE_HEIGHT / grid rows (M is chunked to MAX_QKV_MM_SEQ_LEN above that length)
+            per_core_N=math.ceil(configuration.qkv_size / target_device_shape[1] / 32 / grid.x),  # N / TILE / grid cols
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -447,13 +445,13 @@ class VisionAttention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.configuration.vision_weight_dtype)
         ttnn.deallocate(q_heads_1QSD)
 
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
         ttnn.deallocate(k_heads_1KSD)
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=self.configuration.vision_weight_dtype)
         ttnn.deallocate(v_heads_1VSD)
 
         # SDPA
@@ -506,7 +504,7 @@ class VisionAttention(LightweightModule):
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-            dtype=self.activation_dtype or ttnn.bfloat8_b,
+            dtype=self.activation_dtype or self.configuration.vision_weight_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )

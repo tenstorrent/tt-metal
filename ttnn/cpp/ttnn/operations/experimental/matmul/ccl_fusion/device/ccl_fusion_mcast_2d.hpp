@@ -2,20 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Pre-Metal 2.0 2D multicast matmul builder, used only by the CCL-fused ops all_gather_matmul_async
-// and matmul_reduce_scatter_async, which build the matmul and the CCL kernels into one program per
-// device and exchange fused-op signals through positional runtime args (ttnn/operations/ccl/ccl_op_fusion.hpp).
-// Delete this file once those CCL ops are on Metal 2.0 and use matmul's spec-based builder instead.
-//
-// It holds two forms of the same builder:
-// - Program&: moved verbatim out of
-//   ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp when that
-//   factory was ported to Metal 2.0, so that matmul itself carries no legacy builder. Only
-//   all_gather_matmul_async still calls it; delete it when that op is ported to ProgramDescriptor (#59566).
-// - ProgramDescriptor: used by matmul_reduce_scatter_async. Its origin is described above its definition
-//   in the .cpp.
-// Both bind the same kernels, which parse their runtime args positionally, so the two must push the same
-// args in the same order. Keep them in sync until the Program& form is deleted.
+// Pre-Metal 2.0 2D multicast matmul builder, in ProgramDescriptor form, used only by the CCL-fused ops
+// all_gather_matmul_async and matmul_reduce_scatter_async, which build the matmul and the CCL kernels into one
+// program per device and exchange fused-op signals through positional runtime args
+// (ttnn/operations/ccl/ccl_op_fusion.hpp). Delete this file once those CCL ops are on Metal 2.0 and use matmul's
+// spec-based builder instead.
 //
 // It binds matmul's legacy kernels in ttnn/operations/matmul/device/kernels/ (not their _metal2 forks),
 // which matmul's legacy 1D builder binds too. Copy them here before matmul deletes them.
@@ -29,47 +20,8 @@
 
 namespace ttnn::prim::ccl_fusion {
 
-struct Mcast2DSharedVariables {
-    tt::tt_metal::KernelHandle mm_kernel_in0_sender_id{};
-    std::vector<CoreCoord> in0_sender_interleaved_cores;
-    tt::tt_metal::KernelHandle mm_kernel_in1_sender_writer_id{};
-    std::vector<CoreCoord> in1_sender_cores;
-    tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id{};
-    std::vector<CoreCoord> in1_receiver_cores;
-    tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id{};
-    std::vector<CoreCoord> in1_receiver_other_cores;
-    tt::tt_metal::CBHandle cb_src2{};
-    tt::tt_metal::CBHandle cb_output{};
-    uint32_t num_cores_with_work_r{};
-    uint32_t num_cores_with_work_c{};
-    uint32_t start_core_x{};
-    uint32_t start_core_y{};
-    bool transpose_mcast{};
-    std::vector<CoreCoord> cores;
-};
-
-// Cache-hit refresh of the tensor addresses written by matmul_multi_core_reuse_mcast_2d_optimized_helper.
-void override_mcast_2d_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const Mcast2DSharedVariables& shared_variables,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value);
-
-ttnn::device_operation::CachedProgram<Mcast2DSharedVariables> matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    tt::tt_metal::Program& program, /* Take programa as input by reference */
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<const Tensor>& bias,
-    Tensor& output_tensor,
-    bool broadcast_batch,
-    DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::MatmulProgramConfig& program_config,
-    bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
-
-// ProgramDescriptor form of the helper above: appends the matmul's kernels, CBs and semaphores to `desc`. Tensor
-// addresses are recorded as buffer bindings, so a WorkloadDescriptor op built from it needs no matmul-specific
-// cache-hit refresh.
+// Appends the matmul's kernels, CBs and semaphores to `desc`. Tensor addresses are recorded as buffer bindings, so a
+// WorkloadDescriptor op built from it needs no matmul-specific cache-hit refresh.
 void matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& a,
