@@ -389,6 +389,7 @@ def _record_kv_cache_pcc(
     pe_interleave=True,
     start=0,
     sp_axis=0,
+    chunk_size=CHUNK,
 ):
     """Gather the device KV cache, un-rotate the block-cyclic layout, and PCC each layer's valid region
     [start:total_len] against the golden kv_post_transform trace ([nope | pe], the pe half re-based to the
@@ -411,7 +412,7 @@ def _record_kv_cache_pcc(
     the un-rotation runs over sp*tp stripes."""
     logger.info("Device KV cache vs golden kv_post_transform:")
     cache_full, stripes = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv, sp_axis)  # [layers, S, kvpe]
-    p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
+    p = blockcyclic_positions(stripes, chunk_size, seq_len_cache)
     cache_min_pcc = {}
     slots = list(range(num_layers)) if slot_layer_ids is None else list(range(len(slot_layer_ids)))
     for slot in slots:
@@ -465,6 +466,7 @@ def _record_indexer_k_cache_pcc(
     tp_shard_kv=False,
     start=0,
     sp_axis=0,
+    chunk_size=CHUNK,
 ):
     """Gather the device DSA indexer-K cache, un-rotate the block-cyclic layout, and PCC each captured
     layer's valid region [start:total_len] against the golden dsa/indexer_k trace. The index_head_dim key is
@@ -480,7 +482,7 @@ def _record_indexer_k_cache_pcc(
     if not layers:
         logger.info("  (no indexer_k golden layers present -- skipping)")
         return
-    p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
+    p = blockcyclic_positions(stripes, chunk_size, seq_len_cache)
     rope = config.index_head_dim // 2  # [rope | nope]
     index_hadamard = normalized_hadamard_matrix(config.index_head_dim).float()
     idx_min_pcc = {}
@@ -558,6 +560,7 @@ def _preload_kvpe_prefix_from_trace(
     host_dtype,
     host_layout,
     tp_shard_kv=False,
+    chunk_size=CHUNK,
 ):
     """Preload the first `preload_isl` tokens of each layer's prior KV into the block-cyclic device KVPE
     cache, so a chunk measured at KV depth preload_isl attends to REAL prior KV (representative MoE routing)
@@ -595,7 +598,7 @@ def _preload_kvpe_prefix_from_trace(
             real = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, real_len)
             real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
             kv_prior[:real_len] = real.to(torch.bfloat16)
-        bc = blockcyclic_cache_host(kv_prior, stripes, CHUNK, seq_len_cache, kvpe_dim)[0, 0]  # [seq, D]
+        bc = blockcyclic_cache_host(kv_prior, stripes, chunk_size, seq_len_cache, kvpe_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
             # linear chip order L=s*tp+t -> [tp, seq/tp]: reshape [sp,tp,local], move tp to front, flatten sp.
             cache_host[i] = _to_tp_stripe_major(bc, sp, tp, local, kvpe_dim, seq_len_cache)
@@ -637,6 +640,7 @@ def _preload_indexer_k_prefix_from_trace(
     mesh_device,
     sp_axis,
     tp_shard_kv=False,
+    chunk_size=CHUNK,
 ):
     """Preload the first `preload_isl` tokens of the DSA indexer key cache from the golden dsa/indexer_k
     trace, so a measured chunk at KV depth preload_isl has a REAL indexer prefix (representative top-k
@@ -678,7 +682,7 @@ def _preload_indexer_k_prefix_from_trace(
             idx_prior[:real_len] = real.to(torch.bfloat16)
         idx_prior = (idx_prior.float() @ index_hadamard).to(torch.bfloat16)
         slot = full_indexer_rank(config, i)
-        bc = blockcyclic_cache_host(idx_prior, stripes, CHUNK, seq_len_cache, index_head_dim)[0, 0]  # [seq, D]
+        bc = blockcyclic_cache_host(idx_prior, stripes, chunk_size, seq_len_cache, index_head_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
             cache_host[slot] = _to_tp_stripe_major(bc, sp, tp, local, index_head_dim, seq_len_cache)
         else:
@@ -2131,6 +2135,7 @@ def run_chunked_transformer_updated(
             cache_format.storage_dtype,
             cache_format.storage_layout,
             tp_shard_kv=tp_shard_kv,
+            chunk_size=chunk_size,
         )
         if tt_index_kv_cache is not None:
             _preload_indexer_k_prefix_from_trace(
@@ -2147,6 +2152,7 @@ def run_chunked_transformer_updated(
                 mesh_device,
                 sp_axis,
                 tp_shard_kv=tp_shard_kv,
+                chunk_size=chunk_size,
             )
 
     _seed_preload()

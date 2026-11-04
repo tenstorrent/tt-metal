@@ -175,15 +175,19 @@ class ttMLA:
         def _wkv_b1():
             if not replicate_wkv_b1:
                 return _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
+
+            def _tensorbin(name):
+                return name and Path(f"{name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
+
             repl_name = _cache_name("wkv_b1", "mla_repl")
-            repl_file = repl_name and Path(
-                f"{repl_name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
-            )
+            repl_file = _tensorbin(repl_name)
+            tp1_file = _tensorbin(_cache_name("wkv_b1"))
             has_host_weights = bool(state_dict) and "q_a_layernorm.weight" in state_dict
             if device is None or has_host_weights or (repl_file and repl_file.exists()):
-                if device is None or (has_host_weights and cache_path):
+                if (device is None or (has_host_weights and cache_path)) and not (tp1_file and tp1_file.exists()):
                     # Any write of the cache keeps the TP-sharded file too: check_cache_complete looks for
-                    # it. Written host-side only, so a load from host weights uploads just the replica.
+                    # it. Written host-side only, so a load from host weights uploads just the replica;
+                    # skipped when the file is already there, since as_tensor would only read it back.
                     _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"), on_device=False)
                 return _wkv_b1_as(ttnn.ReplicateTensorToMesh(mesh_device), repl_name)
             # A cache built before the replicated file existed: gather the TP shards once, at load. Loading

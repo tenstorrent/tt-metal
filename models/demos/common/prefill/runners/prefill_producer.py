@@ -4,12 +4,10 @@
 
 
 import argparse
-import faulthandler
 import json
 import math
 import os
 import random
-import signal
 import struct
 import sys
 import threading
@@ -49,6 +47,7 @@ from models.demos.common.prefill.runners.migration import (
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_PAD_TOKEN_ID,
     h2d_row_len,
+    install_crash_diagnostics,
     load_trace_token_ids,
     num_mtp_tokens,
     resolve_trace_dir,
@@ -1771,9 +1770,8 @@ def _run_validator(rank: int, world_size: int) -> None:
 
 
 def main() -> None:
-    # SIGUSR1 prints every thread's Python stack to stderr and keeps running: run_multirank_pcc.sh's
-    # stall watchdog sends it to a hung run before tearing it down.
-    faulthandler.register(signal.SIGUSR1, all_threads=True)
+    # Stacks on SIGUSR1 and an uncaught-exception marker for run_multirank_pcc.sh's watchdogs.
+    install_crash_diagnostics()
     parser = argparse.ArgumentParser(
         prog="prefill_producer",
         description="H2D producer for the prefill runner. Config comes from a YAML manifest "

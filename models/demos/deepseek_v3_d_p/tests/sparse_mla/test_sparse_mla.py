@@ -689,7 +689,7 @@ def run_sparse_mla_pad_overflow_case(
     cache_all = _collect_kvpe_cache(tt_kvpe_cache, mesh_device, sp_axis)
     assert torch.count_nonzero(cache_all[0:1]) == 0, "sparse MLA wrote KVPE into unselected user slot 0"
     cache_sr = cache_all[cache_user_id : cache_user_id + 1, :1]
-    p = blockcyclic_positions(sp * mesh_device.shape[1], chunk, cache_sr.shape[2])
+    p = blockcyclic_positions(mesh_device.get_num_devices(), chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     nat[p] = cache_sr[0, 0]
     _, m = comp_pcc(ref_kvpe, nat[:total_real].unsqueeze(0), 0)
