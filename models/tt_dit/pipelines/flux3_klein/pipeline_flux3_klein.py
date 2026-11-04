@@ -33,7 +33,6 @@ from .dbcache_flux3_klein import Flux3KleinDBCache
 from .packing import MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
-from .upsampler_flux3_klein import Flux3KleinUpsampler
 from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import resolve_weights_dir
 
@@ -55,14 +54,12 @@ class Flux3KleinRequest:
     guidance: float | None = None
     images: tuple = ()
     cache: DBCacheConfig | None = None
-    prompt_upsampling: bool = True
     return_final_tokens: bool = False
 
 
 @dataclass
 class Flux3KleinResult:
     image: Image.Image
-    caption: str
     seed: int
     timings: dict[str, float]
     cached_steps: int = 0
@@ -138,10 +135,8 @@ class Flux3KleinPipeline:
         tp_axis: int = 0,
         topology: ttnn.Topology = ttnn.Topology.Ring,
         num_links: int = 2,
-        upsampler: Flux3KleinUpsampler | None = None,
     ) -> None:
         self._device = mesh_device
-        self._upsampler = upsampler
         self._text_length = text_length
         self._sp_axis = sp_axis
         mesh_shape = tuple(mesh_device.shape)
@@ -191,13 +186,8 @@ class Flux3KleinPipeline:
         self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None
 
     @classmethod
-    def create(
-        cls, mesh_device: ttnn.MeshDevice, *, models: tuple[str, ...] = ("distilled",), upsample: bool = True, **kwargs
-    ):
-        # the upsampler runs on one chip of the mesh, next to the DiT
-        upsampler = Flux3KleinUpsampler(mesh_device.create_submesh(ttnn.MeshShape(1, 1))) if upsample else None
-        snapshots = {model: resolve_weights_dir(model) for model in models}
-        return cls(mesh_device, snapshots=snapshots, upsampler=upsampler, **kwargs)
+    def create(cls, mesh_device: ttnn.MeshDevice, *, models: tuple[str, ...] = ("distilled",), **kwargs):
+        return cls(mesh_device, snapshots={model: resolve_weights_dir(model) for model in models}, **kwargs)
 
     def warmup(self, sizes: tuple[int, ...] = SIZES) -> None:
         """Compile every program of the served shapes: each size with and without a reference."""
@@ -207,13 +197,7 @@ class Flux3KleinPipeline:
                     image = Image.new("RGB", (size, size))
                     self.generate(
                         Flux3KleinRequest(
-                            "warmup",
-                            model=model,
-                            width=size,
-                            height=size,
-                            seed=0,
-                            images=(image,) * references,
-                            prompt_upsampling=False,
+                            "warmup", model=model, width=size, height=size, seed=0, images=(image,) * references
                         )
                     )
 
@@ -230,28 +214,20 @@ class Flux3KleinPipeline:
         if request.model == "distilled" and guidance not in (None, 1.0):
             raise ValueError("the distilled model takes no guidance")
         guidance = None if request.model == "distilled" else guidance
+        seed = caption_seed(request.prompt) if request.seed is None else request.seed
         timings = {}
-        reference = None
+
+        t0 = time.time()
+        text = self._prompt_encoder.encode(request.prompt, self._text_length)
+        timings["encode"] = time.time() - t0
+
+        t0 = time.time()
+        image_cond = None
         if request.images:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
             reference = prepare_reference(reference, size)
-
-        t0 = time.time()
-        caption = request.prompt
-        if request.prompt_upsampling and self._upsampler is not None:
-            caption = self._upsampler(request.prompt, reference)
-        timings["upsample"] = time.time() - t0
-        seed = caption_seed(caption) if request.seed is None else request.seed
-
-        t0 = time.time()
-        text = self._prompt_encoder.encode(caption, self._text_length)
-        timings["encode"] = time.time() - t0
-
-        t0 = time.time()
-        image_cond = None
-        if reference is not None:
             h, w = latent_shape(*reference.size)
             image_cond = (self._vae.encode(reference), reference_ids(h, w, 0))
         timings["encode_reference"] = time.time() - t0
@@ -281,12 +257,7 @@ class Flux3KleinPipeline:
         timings["to_host"] = time.time() - t0
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
         return Flux3KleinResult(
-            image=image,
-            caption=caption,
-            seed=seed,
-            timings=timings,
-            cached_steps=cached_steps,
-            final_tokens=final_tokens,
+            image=image, seed=seed, timings=timings, cached_steps=cached_steps, final_tokens=final_tokens
         )
 
     def _upload_rows(self, rows: torch.Tensor, sp_factor: int) -> ttnn.Tensor:
@@ -398,8 +369,6 @@ class Flux3KleinPipeline:
         for module in (*self._transformers.values(), self._text_encoder):
             module.deallocate_weights()
         self._vae.deallocate_weights()
-        if self._upsampler is not None:
-            self._upsampler.close()
 
 
 def _load_dit_state(snapshot: Path) -> dict[str, torch.Tensor]:

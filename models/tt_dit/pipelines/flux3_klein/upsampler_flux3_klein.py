@@ -34,8 +34,8 @@ I2I_SCAFFOLD = (
 REFERENCE_MULTIPLE = 32
 REFERENCE_MAX_PIXELS = 1024 * 1024
 JPEG_QUALITY = 92
-# What the upsampler needs from the mesh it runs on: qwen36's GDN conv uses L1_SMALL, and its prefill and decode run
-# from captured traces on two command queues.
+# The upsampler's own one-chip mesh: qwen36's GDN conv uses L1_SMALL, and its prefill and decode run from captured
+# traces on two command queues. It cannot share chips with a mesh the DiT holds (a submesh has its own allocator).
 DEVICE_PARAMS = {"l1_small_size": 24576, "num_command_queues": 2, "trace_region_size": 256 * 1024 * 1024}
 
 
