@@ -978,9 +978,13 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    @staticmethod
+    def _has_counter_readback():
+        return TestConfig.counted_zones_address() is not None
+
     def _read_counters_of_launch(self, variant_counter_results, run_index):
         # A counted zone without its readout raises (counters.py) and fails the test instead of leaving a blank window.
-        if TestConfig.counted_zones_address() is None:
+        if not self._has_counter_readback():
             return  # ttsim: no launch word, nothing counts
         counter_results = read_counters(
             location=TestConfig.TENSIX_LOCATION,
@@ -1084,7 +1088,7 @@ class PerfConfig(TestConfig):
                 profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
 
-            if TestConfig.ENABLE_PERF_COUNTERS:
+            if TestConfig.ENABLE_PERF_COUNTERS and self._has_counter_readback():
                 # INIT counts in launches of its own, the same code up to INIT's end; their timing is not used.
                 self.counted_zones = COUNT_INIT
                 for run_index in range(run_count):

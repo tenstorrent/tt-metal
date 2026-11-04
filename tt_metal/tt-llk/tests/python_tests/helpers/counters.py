@@ -113,6 +113,8 @@ def _zone_sync_ctrl_addr(zone: int) -> int:
 _SYNC_ZONE_COMPLETE = _parse_uint(_HEADER_TEXT, "SYNC_ZONE_COMPLETE")
 # The device stores this when the counter select never took effect; the count is unknown, not zero.
 _COUNTER_SELECT_MISSED = _parse_uint(_HEADER_TEXT, "COUNTER_SELECT_MISSED")
+LAUNCH_TOKEN_SHIFT = _parse_uint(_HEADER_TEXT, "LAUNCH_TOKEN_SHIFT")
+LAUNCH_WORD_OVERLAY_BASE = _parse_uint(_HEADER_TEXT, "LAUNCH_WORD_OVERLAY_BASE")
 
 
 class CounterReadoutMissing(RuntimeError):
@@ -146,7 +148,7 @@ def _read_zone_counters(
         f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
     )
 
-    if token is not None and sync_word >> TestConfig._LAUNCH_TOKEN_SHIFT != token:
+    if token is not None and sync_word >> LAUNCH_TOKEN_SHIFT != token:
         return missing(f"sync word 0x{sync_word:08x} is not this launch's readout")
 
     # Zone was never used

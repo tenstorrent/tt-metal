@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Two CHIP_ARCH passes: gathering is @blackhole_only, the out-of-tree contract inherits CHIP_ARCH so blackhole runs it too,
-# and the accuracy suite judges the table of the CHIP_ARCH it runs under, so blackhole runs it over its own table.
+# Two CHIP_ARCH passes: Blackhole adds gathering and repeats the architecture-dependent out-of-tree and launch-count checks.
+# The accuracy suite also runs against each architecture's table.
 # -c and --confcutdir keep this suite's pytest.ini when a parent checkout has its own.
 # Do not export PYTHONPATH: the plugin inserts tools/python, and the out-of-tree child copies this environment.
 
@@ -38,7 +38,7 @@ pytest "${COMMON[@]}" "${XDIST[@]}" \
 export CHIP_ARCH=blackhole
 # A directory plus -k, not two files: file args outside the rootdir leave classname empty in the junit report.
 pytest "${COMMON[@]}" ../hardware_free \
-    -k "test_gathering_config or test_out_of_tree_contract" \
+    -k "test_gathering_config or test_out_of_tree_contract or test_run_counter_launches" \
     --junitxml=pytest-report-hardware-free-blackhole.xml \
     || pytest_exit=$?
 # The accuracy suite by its directory, not by -k: a renamed directory fails here rather than selecting nothing.

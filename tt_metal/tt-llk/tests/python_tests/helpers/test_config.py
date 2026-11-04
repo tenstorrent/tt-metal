@@ -284,10 +284,7 @@ class TestConfig:
     _PERF_COUNTERS_QUASAR_COUNTED_ZONES: ClassVar[int] = (
         PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
     )
-    # counters.h LAUNCH_TOKEN_SHIFT: the launch word's token sits above the zone bits (the sync word's above its flag).
-    _LAUNCH_TOKEN_SHIFT: ClassVar[int] = 8
     # counters.h LAUNCH_WORD_*: the Wormhole/Blackhole launch word is STREAM_SCRATCH_1 of overlay stream 0.
-    _LAUNCH_WORD_OVERLAY_BASE: ClassVar[int] = 0xFFB40000
     _LAUNCH_WORD_SCRATCH_INDEX_WORMHOLE: ClassVar[int] = 249
     _LAUNCH_WORD_SCRATCH_INDEX_BLACKHOLE: ClassVar[int] = 37
     _STREAM_REG_BYTES: ClassVar[int] = 4
@@ -429,9 +426,10 @@ class TestConfig:
                 index = TestConfig._LAUNCH_WORD_SCRATCH_INDEX_BLACKHOLE
             case _:
                 return TestConfig._PERF_COUNTERS_QUASAR_COUNTED_ZONES
-        return (
-            TestConfig._LAUNCH_WORD_OVERLAY_BASE + index * TestConfig._STREAM_REG_BYTES
-        )
+        # Imported here because counters.py imports this module.
+        from .counters import LAUNCH_WORD_OVERLAY_BASE
+
+        return LAUNCH_WORD_OVERLAY_BASE + index * TestConfig._STREAM_REG_BYTES
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
@@ -2029,21 +2027,18 @@ class TestConfig:
             TestConfig._LAUNCH_TOKEN = TestConfig._LAUNCH_TOKEN % 0xFFFF + 1
             self.launch_token = TestConfig._LAUNCH_TOKEN
         counted_zones_addr = TestConfig.counted_zones_address()
-        if counted_zones_addr is not None:
-            write_words_to_device(
-                TestConfig.TENSIX_LOCATION,
-                counted_zones_addr,
-                [counted_zones | self.launch_token << TestConfig._LAUNCH_TOKEN_SHIFT],
-                safe_mode=False,  # a register on Wormhole and Blackhole
-            )
-        if (
-            counted_zones_addr is not None
-            and TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
-            and counted_zones
-        ):
-            # imported here: counters.py imports this module
-            from .counters import configure_quasar_counters
+        if counted_zones_addr is None:
+            return
+        # Imported here because counters.py imports this module.
+        from .counters import LAUNCH_TOKEN_SHIFT, configure_quasar_counters
 
+        write_words_to_device(
+            TestConfig.TENSIX_LOCATION,
+            counted_zones_addr,
+            [counted_zones | self.launch_token << LAUNCH_TOKEN_SHIFT],
+            safe_mode=False,  # a register on Wormhole and Blackhole
+        )
+        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR and counted_zones:
             configure_quasar_counters(TestConfig.TENSIX_LOCATION)
 
     def run_elf_files(self) -> list:

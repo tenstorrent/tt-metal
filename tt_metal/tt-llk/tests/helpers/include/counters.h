@@ -222,7 +222,8 @@ inline volatile std::uint32_t arm_cmds[PERF_COUNTERS_MAX_ZONES] = {};
 inline volatile std::uint32_t l1_client_cmds[PERF_COUNTERS_MAX_ZONES] = {};
 #endif
 
-// value if bit, else 0, without a branch: a branch on launch data would leave launches with different predictor state.
+// Return value if bit, else 0, without a branch: branching on launch data would leave launches with different predictor state.
+// Other launch-data branches are harmless because every measured launch counts TILE_LOOP.
 __attribute__((always_inline)) inline std::uint32_t when(bool bit, std::uint32_t value)
 {
     return value & (0u - static_cast<std::uint32_t>(bit));
