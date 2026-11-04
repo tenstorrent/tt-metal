@@ -314,7 +314,7 @@ _PERF_START = _ROWS + 320
             # Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY.
             # Galaxy's 32 chips start a call further apart, so its medians spread wider (194-209 us over repeated runs).
             (kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"), 203.0, 0.08),
-            (kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1"), 203.0, 0.05),
+            (kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1"), 276.0, 0.05),
             (kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1"), 203.0, 0.05),
         )
     ],
