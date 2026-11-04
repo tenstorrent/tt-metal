@@ -466,6 +466,9 @@ class VaeAttention(Module):
         }
     )
     default_sdpa_chunk_size: tuple[int, int] = (128, 128)
+    # Attend only for this chip's query rows instead of the full sequence replicated on every chip; per-row
+    # results are identical (full K/V, one head, no mask). Supports H sharding and TP, not W sharding.
+    local_queries: bool = False
 
     def __init__(
         self,
@@ -599,14 +602,44 @@ class VaeAttention(Module):
 
         del x
 
+        program_config = self._sdpa_program_config
+        h_local = h // self._ctx.h_factor
+        tp_split = self._tp_factor > 1 and h_local % self._tp_factor == 0 and h_local // self._tp_factor * w % 32 == 0
+        local = (
+            self.local_queries
+            and self._ctx.w_factor == 1
+            and (tp_split or (self._ctx.h_factor > 1 and h_local * w % 32 == 0))
+        )
+        if local:
+            q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+            if self._ctx.h_factor > 1:
+                q = ttnn.mesh_partition(q, dim=2, cluster_axis=self._ctx.h_mesh_axis, memory_config=q.memory_config())
+            if tp_split:
+                q = ttnn.mesh_partition(q, dim=2, cluster_axis=self._tp_axis, memory_config=q.memory_config())
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
+            rows = q.shape[2]
+            if rows % program_config.q_chunk_size:
+                program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
+                    q_chunk_size=max(d for d in range(32, program_config.q_chunk_size + 1, 32) if rows % d == 0),
+                    k_chunk_size=program_config.k_chunk_size,
+                    exp_approx_mode=program_config.exp_approx_mode,
+                )
+
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=False,
-            program_config=self._sdpa_program_config,
+            program_config=program_config,
             compute_kernel_config=self._sdpa_compute_kernel_config,
         )
+
+        if local:
+            if tp_split:
+                x = self._ccl_manager.all_gather(x, dim=2, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
+            return x.reshape([n, h_local, w, -1]) + identity
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
 

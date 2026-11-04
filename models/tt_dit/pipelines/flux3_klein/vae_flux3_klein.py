@@ -17,6 +17,7 @@ import ttnn
 
 from ...layers.conv2d import Conv2d
 from ...models.vae.encoder_flux2 import Flux2VaeEncoder
+from ...models.vae.vae import VaeAttention
 from ...models.vae.vae_flux2 import Flux2VaeDecoder
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
@@ -49,7 +50,8 @@ def register_conv_slices(mesh_shape: tuple[int, int], height: int, width: int, h
     h, w = height, width
     for level, partitioned in zip(CONV_SLICES_PER_LEVEL, PARTITIONED_DECODER_CONVS_PER_LEVEL):
         for (cin, cout), slices in level.items():
-            table.setdefault((h, w, cin, cout), min(slices, max(1, -(-w // 32))))
+            # the table is sized for inputs up to 2048 wide; ttnn picks the count (0) for wider ones
+            table.setdefault((h, w, cin, cout), 0 if width > 2048 else min(slices, max(1, -(-w // 32))))
         if h_factor > 1:
             # per-device input rows: the H shard plus one halo row on each side
             for cin, cout in partitioned:
@@ -69,12 +71,14 @@ def _vae_kwargs(mesh_device, parallel_config, ccl_manager) -> dict:
     )
 
 
-def _configure_convs(module) -> None:
-    # keeps the convs' sliding-window config tensors out of L1_SMALL at 2K and 4K
+def _configure(module) -> None:
     if isinstance(module, Conv2d):
+        # keeps the sliding-window config tensors out of L1_SMALL at 2K and 4K
         module.conv_config_overrides["config_tensors_in_dram"] = True
+    if isinstance(module, VaeAttention):
+        module.local_queries = True
     for _, child in module.named_children():
-        _configure_convs(child)
+        _configure(child)
 
 
 class Flux3KleinVae:
@@ -105,7 +109,7 @@ class Flux3KleinVae:
     def _load(self, module, parallel_config, subfolder: str):
         from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
 
-        _configure_convs(module)
+        _configure(module)
         cache.load_model(
             module,
             model_name=self._model_name,
