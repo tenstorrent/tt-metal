@@ -18,9 +18,9 @@ void kernel_main() {
     constexpr uint32_t CB_OWN =
         get_compile_time_arg_val(5);  // this chip's own chunk (not part of the receive CB: 7 remote slots)
     constexpr uint32_t NR = NS - 1;   // remote sources (7)
-    constexpr auto in_args = TensorAccessorArgs<6>();
+    constexpr uint32_t TILEB = get_compile_time_arg_val(6);  // compact tile bytes: 512 (8 rows) or 1024 (16 rows)
+    constexpr auto in_args = TensorAccessorArgs<7>();
     constexpr uint32_t PIECE = 256;
-    constexpr uint32_t TILEB = 2 * PIECE;
 
     const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t gsem = get_common_arg_val<uint32_t>(1);
@@ -41,8 +41,12 @@ void kernel_main() {
     cb_reserve_back(CB_OWN, Q);  // a plain circular buffer of this program for the own chunk
     const uint32_t base = get_write_ptr(CB_OWN);
     for (uint32_t i = 0; i < Q; ++i) {
-        noc_async_read(src_addr(p * Q + i, 0), base + i * TILEB, PIECE);
-        noc_async_read(src_addr(p * Q + i, 512), base + i * TILEB + PIECE, PIECE);
+        if constexpr (TILEB == 512) {
+            noc_async_read(src_addr(p * Q + i, 0), base + i * TILEB, PIECE);
+            noc_async_read(src_addr(p * Q + i, 512), base + i * TILEB + PIECE, PIECE);
+        } else {
+            noc_async_read(src_addr(p * Q + i, 0), base + i * TILEB, TILEB);
+        }
     }
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gsem);

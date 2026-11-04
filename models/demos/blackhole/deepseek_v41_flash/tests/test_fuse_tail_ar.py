@@ -131,9 +131,9 @@ def make_part(md, seed, l1=False):
     return host, ttnn.reshape(part, (1, 1, 32, D))
 
 
-def golden(host):
+def golden(host, vr=8):
     # [4*32, 8*D] -> per mesh row r: sum over the 8 column chips of the valid rows 0..7
-    h = host.float().reshape(4, 32, 8, D)[:, :8]  # [r, row, c, D]
+    h = host.float().reshape(4, 32, 8, D)[:, :vr]  # [r, row, c, D]
     return h.sum(dim=2)  # [r, 8, D]
 
 
@@ -279,7 +279,7 @@ def test_fuse_tail_post(mesh_device):
     T = int(os.environ.get("FT_T", "8"))
     host, part = make_part(md, 3, IN_L1)
     _, part_dram = make_part(md, 3)
-    gold = golden(host)[:, :T]  # [4, T, D]
+    gold = golden(host, max(8, T))[:, :T]  # [4, T, D]
     torch.manual_seed(11)
     x = torch.randn(T, 1, 4, D)
     post = torch.rand(T, 1, 4, 1) * 2

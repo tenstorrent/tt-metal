@@ -41,10 +41,14 @@ void kernel_main() {
     constexpr uint32_t STOP = get_compile_time_arg_val(11);     // debug: 1 = stop after phase 1 sends
     constexpr uint32_t IN_L1 = get_compile_time_arg_val(
         12);  // 1: the input is L1 width sharded on 8 cores (core j = slice j), args after the landing array
-    constexpr auto in_args = TensorAccessorArgs<13>();
+    constexpr uint32_t TILEB = get_compile_time_arg_val(
+        13);  // compact tile bytes: 512 (8 rows, T <= 8) or 1024 (16 rows, T <= 16: the first two faces of the tile)
+    constexpr uint32_t NPL = get_compile_time_arg_val(
+        14);  // landing cores per source chip (NM = 8 NPL); PPL = NP / NPL reducers fill one landing core
+    constexpr uint32_t PPL = NP / NPL;
+    constexpr auto in_args = TensorAccessorArgs<15>();
 
     constexpr uint32_t PIECE = 256;
-    constexpr uint32_t TILEB = 2 * PIECE;
     constexpr uint32_t CHUNK = Q * TILEB;
     constexpr uint32_t RING = 8;
 
@@ -59,7 +63,7 @@ void kernel_main() {
     const auto in_acc = TensorAccessor(in_args, in_addr, 2048);
     auto src_addr = [&](uint32_t j, uint32_t t, uint32_t off) -> uint64_t {
         if constexpr (IN_L1) {
-            const uint32_t b = 1 + 2 * NP + 2 * NP * 8;
+            const uint32_t b = 1 + 2 * NP + 2 * NPL * 8;
             return get_noc_addr(
                 get_arg_val<uint32_t>(b + 2 * j), get_arg_val<uint32_t>(b + 2 * j + 1), in_addr + t * 2048 + off);
         } else {
@@ -86,8 +90,12 @@ void kernel_main() {
                 const uint32_t dst = pkt + (di * PN + pi) * CHUNK;
                 const uint32_t tile0 = j * NT + p * Q;
                 for (uint32_t i = 0; i < Q; ++i) {
-                    noc_async_read(src_addr(j, p * Q + i, 0), dst + i * TILEB, PIECE);
-                    noc_async_read(src_addr(j, p * Q + i, 512), dst + i * TILEB + PIECE, PIECE);
+                    if constexpr (TILEB == 512) {
+                        noc_async_read(src_addr(j, p * Q + i, 0), dst + i * TILEB, PIECE);
+                        noc_async_read(src_addr(j, p * Q + i, 512), dst + i * TILEB + PIECE, PIECE);
+                    } else {  // 16 rows: face 0 and face 1 are the first 1024 B of the tile
+                        noc_async_read(src_addr(j, p * Q + i, 0), dst + i * TILEB, TILEB);
+                    }
                 }
             }
         }
@@ -139,10 +147,11 @@ void kernel_main() {
                 noc_semaphore_wait_min(ssem, 1);
             }
             noc_semaphore_set(ssem, 0);
-            const uint32_t m = c * NP + p;  // landing core of this chunk
+            const uint32_t m = c * NPL + p / PPL;  // landing core of this chunk (PPL reducers fill the tile columns of
+                                                   // one landing core, side by side)
             const uint32_t lx = get_arg_val<uint32_t>(1 + 2 * NP + 2 * m);
             const uint32_t ly = get_arg_val<uint32_t>(2 + 2 * NP + 2 * m);
-            const uint64_t dst = get_noc_addr(lx, ly, land_base);
+            const uint64_t dst = get_noc_addr(lx, ly, land_base + (p % PPL) * CHUNK);
             const uint64_t sem = get_noc_addr(lx, ly, gsem);
             volatile PACKET_HEADER_TYPE* h = (k & 1) ? hdr1 : hdr0;
             fabric_multicast_noc_fused_unicast_with_atomic_inc(

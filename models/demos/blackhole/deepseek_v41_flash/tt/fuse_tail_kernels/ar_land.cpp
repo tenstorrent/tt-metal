@@ -9,11 +9,13 @@
 #include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
+    constexpr uint32_t PPL = get_compile_time_arg_val(
+        0);  // reducers filling one landing core: the semaphore counts one increment per reducer
     const uint32_t gsem = get_common_arg_val<uint32_t>(0);
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gsem);
     {
         DeviceZoneScopedN("L_WAIT");
-        noc_semaphore_wait_min(sem, 1);
+        noc_semaphore_wait_min(sem, PPL);
     }
     noc_semaphore_set(sem, 0);
 }

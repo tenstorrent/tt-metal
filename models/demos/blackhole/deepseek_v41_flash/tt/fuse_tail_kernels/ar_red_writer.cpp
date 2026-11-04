@@ -14,7 +14,10 @@ void kernel_main() {
     constexpr uint32_t Q = get_compile_time_arg_val(2);
     constexpr uint32_t NP = get_compile_time_arg_val(3);
     constexpr uint32_t SEM_STG0 = get_compile_time_arg_val(4);
-    constexpr uint32_t CHUNK = Q * 512;
+    constexpr uint32_t NPL = get_compile_time_arg_val(5);    // landing cores per source chip
+    constexpr uint32_t TILEB = get_compile_time_arg_val(6);  // compact tile bytes (512 or 1024)
+    constexpr uint32_t PPL = NP / NPL;                       // reducers per landing core
+    constexpr uint32_t CHUNK = Q * TILEB;
 
     const uint32_t gsem = get_common_arg_val<uint32_t>(0);
     const uint32_t land_base = get_common_arg_val<uint32_t>(1);
@@ -24,8 +27,10 @@ void kernel_main() {
     const uint32_t fy = get_arg_val<uint32_t>(3);
     const uint32_t bx = get_arg_val<uint32_t>(4);
     const uint32_t by = get_arg_val<uint32_t>(5);
-    const uint32_t lx = get_arg_val<uint32_t>(6 + 2 * c * NP + 2 * p);
-    const uint32_t ly = get_arg_val<uint32_t>(7 + 2 * c * NP + 2 * p);
+    const uint32_t lm = c * NPL + p / PPL;  // landing core of this chunk
+    const uint32_t lx = get_arg_val<uint32_t>(6 + 2 * lm);
+    const uint32_t ly = get_arg_val<uint32_t>(7 + 2 * lm);
+    const uint32_t lbase = land_base + (p % PPL) * CHUNK;
 
     {
         DeviceZoneScopedN("W_WAITOUT");
@@ -35,7 +40,7 @@ void kernel_main() {
     const uint32_t stg = get_write_ptr(CB_STG) + p * CHUNK;
     noc_async_write(src, get_noc_addr(fx, fy, stg), CHUNK);
     noc_async_write(src, get_noc_addr(bx, by, stg), CHUNK);
-    noc_async_write(src, get_noc_addr(lx, ly, land_base), CHUNK);
+    noc_async_write(src, get_noc_addr(lx, ly, lbase), CHUNK);
     noc_async_write_barrier();
     const uint32_t sem_addr = get_semaphore(SEM_STG0 + p);
     noc_semaphore_inc(get_noc_addr(fx, fy, sem_addr), 1);

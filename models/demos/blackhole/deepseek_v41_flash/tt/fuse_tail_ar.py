@@ -25,13 +25,26 @@ RING = 8
 NT = 20  # 32-column tiles of a 640-column slice
 NP = 5  # reducer cores per chip
 Q = NT // NP  # tiles per reducer chunk (= tile columns per mHC expand core)
-NM = RING * NP  # landing cores (one per chunk of the whole row)
+NPL = 5  # landing cores per source chip (the mHC expand grid: NM = 8 NPL = 40 columns slices of 4 tile columns; T <= 12 uses 2 groups of 6 tokens)
+QL = NT // NPL  # tile columns per landing core
+NM = RING * NPL  # landing cores (one per chunk of the whole row)
 NRECV = (
     RING - 1
 )  # receive slots per reducer: one per REMOTE chip (the own chunk lives in its own circular buffer): 14 KiB instead of 16
 TILE_B = 512  # compact tile bytes (8 x 32 bf16, two faces)
 CHUNK = Q * TILE_B
 GRID_W = 13
+NP_MAX = 10
+
+
+def variant(T):
+    """Geometry of the fused all-reduce for T token rows: T <= 8 uses the 8-row compact tile (512 B), 5 reducers x 4 tiles, mHC token groups of 4; T <= 12 uses the 16-row compact tile (the
+    first 1024 B of the tile), 10 reducers x 2 tiles (two reducers fill one landing core: the receive buffer stays 14 KiB per core in both), token groups of 6 (24 x rows + 6 y rows <= 32).
+    """
+    if T <= 8:
+        return dict(NP=5, Q=4, TILEB=512, TG=4)
+    assert T <= 12, T
+    return dict(NP=10, Q=2, TILEB=1024, TG=6)
 
 
 def _cores(lst):
@@ -63,13 +76,11 @@ class FuseTailAR:
         assert cols == RING
         self.rows = rows
         self.stop = stop
-        self.red = red_cores or [(p, 7) for p in range(NP)]
+        self.red_all = red_cores or [
+            (p, 7) for p in range(NP_MAX)
+        ]  # a variant with NP reducers uses the first NP of them
         self.in_l1 = in_l1
         self.links = links
-        # reducer chunks served by each link (contiguous): 5 reducers over 2 links -> [0,1,2], [3,4]
-        per = [NP // links + (1 if l < NP % links else 0) for l in range(links)]
-        self.link_p = [list(range(sum(per[:l]), sum(per[: l + 1]))) for l in range(links)]
-        self.link_of = {p: l for l, ps in enumerate(self.link_p) for p in ps}
         self.comm = comm_cores or {
             (d, l): (2 * (0 if d == "fwd" else 1) + l, 8) for d in ("fwd", "bwd") for l in range(links)
         }
@@ -105,14 +116,16 @@ class FuseTailAR:
         # DSV41_FUSE_TAIL_FILL=<bytes> (debug): a filler L1 buffer on every core allocated first, to emulate the persistent-L1 pressure of the server boot.
         _fill = int(os.environ.get("DSV41_FUSE_TAIL_FILL", "0"))
         self._fill = l1_sharded(self.all_cores, grid.x * grid.y, _fill // 2) if _fill > 0 else None
-        self.out = l1_sharded(_rowmajor_set(self.land), NM, Q * TILE_B // 2)
-        # receive buffer of the reducers: 8 slots x Q compact tiles; landing buffer: Q compact tiles per landing core
-        _rcores = _rect(self.red[0][0], self.red[0][1], self.red[-1][0], self.red[-1][1])
+        # landing buffer: QL compact tiles per landing core (512 B tiles: 2 KiB; 1024 B tiles: 4 KiB: one 4 KiB buffer serves both variants)
+        self.out = l1_sharded(_rowmajor_set(self.land), NM, QL * 1024 // 2)
+        # receive buffer of the reducers: 7 slots x Q compact tiles (14336 B per core for both variants: 5 x 4 x 512 or 10 x 2 x 1024 B tiles)
+        _rcores = _rect(self.red_all[0][0], self.red_all[0][1], self.red_all[-1][0], self.red_all[-1][1])
+        _recv_w = NRECV * 4 * 512 // 2
         self.recv = None
         self.recv_small = False
         if os.environ.get("DSV41_FUSE_TAIL_RECV_SMALL", "1") == "1":
             try:
-                self.recv = l1_sharded(_rcores, NP, NRECV * Q * TILE_B // 2, btype=ttnn.BufferType.L1_SMALL)
+                self.recv = l1_sharded(_rcores, NP_MAX, _recv_w, btype=ttnn.BufferType.L1_SMALL)
                 self.recv_small = True
             except Exception as e:  # noqa: BLE001 (no L1_SMALL bank / not free / sharded L1_SMALL unsupported)
                 print(
@@ -120,7 +133,7 @@ class FuseTailAR:
                 )
                 self.recv = None
         if self.recv is None:
-            self.recv = l1_sharded(_rcores, NP, NRECV * Q * TILE_B // 2)
+            self.recv = l1_sharded(_rcores, NP_MAX, _recv_w)
         ttnn.synchronize_device(md)
         if os.environ.get("DSV41_FUSE_TAIL_DEBUG") == "1":
             print(
@@ -133,15 +146,26 @@ class FuseTailAR:
         c = self.md.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
         return c.x, c.y
 
-    def _build(self, part, post_args=None):
-        """Mesh program descriptor of the all-reduce (+ the mHC post when post_args = dict(x, comb, post, out, T))."""
+    def _build(self, part, post_args=None, T=8):
+        """Mesh program descriptor of the all-reduce (+ the mHC post when post_args = dict(x, comb, post, out, T)) for T token rows (variant(T): 8-row or 16-row compact tiles)."""
         md = self.md
+        if post_args is not None:
+            T = post_args["T"]
+        V = variant(T)
+        # the geometry of this variant shadows the module constants of the T <= 8 design inside this method
+        NP, Q, TILE_B, TG = V["NP"], V["Q"], V["TILEB"], V["TG"]
+        CHUNK = Q * TILE_B
+        red = self.red_all[:NP]
+        # reducer chunks served by each link (contiguous): 5 reducers over 2 links -> [0,1,2], [3,4]; 10 -> [0..4], [5..9]
+        per = [NP // self.links + (1 if l < NP % self.links else 0) for l in range(self.links)]
+        link_p = [list(range(sum(per[:l]), sum(per[: l + 1]))) for l in range(self.links)]
+        link_of = {p: l for l, ps in enumerate(link_p) for p in ps}
         dev_recv = ttnn.get_device_tensors(self.recv)
         gsem_addr = ttnn.get_global_semaphore_address(self.gsem)
         recv_addr = self.recv.buffer_address()
         land_addr = self.out.buffer_address()
         in_addr = part.buffer_address()
-        red_xy = [self._phys(*c) for c in self.red]
+        red_xy = [self._phys(*c) for c in red]
         land_xy = [self._phys(*c) for c in self.land]
         comm_xy = {k: self._phys(*v) for k, v in self.comm.items()}
         in_arr = []
@@ -149,9 +173,9 @@ class FuseTailAR:
             gcores = ttnn.corerange_to_cores(part.memory_config().shard_spec.grid, row_wise=True)
             assert len(gcores) == RING
             in_arr = [v for c_ in gcores for v in self._phys(c_.x, c_.y)]
-        red_set = _cores(self.red)
+        red_set = _cores(red)
         comm_set = _cores(list(self.comm.values()))
-        stg_set = _cores(self.red + list(self.comm.values()))
+        stg_set = _cores(red + list(self.comm.values()))
         CB_RECV, CB_OUT, CB_STG, CB_PKT, CB_OWN = 8, 9, 10, 11, 12  # (the mHC expand uses 0..4 on its own cores)
         SEM0, SEM_PARTNER = 0, NP
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -159,16 +183,16 @@ class FuseTailAR:
         if fused:
             px = post_args
             T = px["T"]
-            assert 4 < T <= 8, "fused post: T in 5..8 (two token groups of 4)"
+            assert 4 < T <= 12, "fused post: T in 5..12 (two token groups of 4 (T <= 8) or 6 (T <= 12))"
             nt_total = RING * NT
-            G = (T + 3) // 4
+            G = (T + TG - 1) // TG
             csl = max(c for c in range(1, nt_total + 1) if nt_total % c == 0 and G * c <= 96)
-            assert csl == NM and nt_total // csl == Q, (csl, NM, Q)
+            assert csl == NM and nt_total // csl == QL, (csl, NM, QL)
             mcores = [(k % GRID_W, k // GRID_W) for k in range(G * csl)]
             assert mcores[:NM] == self.land
             mset = _cores(mcores)
-            gpc = Q
-            assert max(c[1] for c in mcores) < min(c[1] for c in self.red)
+            gpc = QL
+            assert max(c[1] for c in mcores) < min(c[1] for c in red)
         mpd = ttnn.MeshProgramDescriptor()
         rows = self.rows
         for r in range(rows):
@@ -187,7 +211,7 @@ class FuseTailAR:
                         buffer_index=CB_RECV,
                         data_format=ttnn.bfloat16,
                         page_size=TILE_B,
-                        tile=ttnn.TileDescriptor(8, 32),
+                        tile=ttnn.TileDescriptor(TILE_B // 64, 32),
                     )
                 ]
                 cb_out = ttnn.CBDescriptor(
@@ -198,7 +222,7 @@ class FuseTailAR:
                             buffer_index=CB_OUT,
                             data_format=ttnn.bfloat16,
                             page_size=TILE_B,
-                            tile=ttnn.TileDescriptor(8, 32),
+                            tile=ttnn.TileDescriptor(TILE_B // 64, 32),
                         )
                     ],
                 )
@@ -210,7 +234,7 @@ class FuseTailAR:
                             buffer_index=CB_OWN,
                             data_format=ttnn.bfloat16,
                             page_size=TILE_B,
-                            tile=ttnn.TileDescriptor(8, 32),
+                            tile=ttnn.TileDescriptor(TILE_B // 64, 32),
                         )
                     ],
                 )
@@ -221,7 +245,7 @@ class FuseTailAR:
                         ttnn.CBFormatDescriptor(buffer_index=CB_STG, data_format=ttnn.bfloat16, page_size=CHUNK)
                     ],
                 )
-                maxpn = max(len(ps) for ps in self.link_p)
+                maxpn = max(len(ps) for ps in link_p)
                 cb_pkt = ttnn.CBDescriptor(
                     total_size=4 * maxpn * CHUNK,
                     core_ranges=comm_set,
@@ -234,18 +258,18 @@ class FuseTailAR:
 
                 kernels = []
                 rt_rd, rt_cp, rt_wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-                for p, (x, y) in enumerate(self.red):
+                for p, (x, y) in enumerate(red):
                     rt_rd[x][y] = [col, p] + in_arr
                     rt_cp[x][y] = []
-                    fx, fy = comm_xy[("fwd", self.link_of[p])]
-                    bx, by = comm_xy[("bwd", self.link_of[p])]
+                    fx, fy = comm_xy[("fwd", link_of[p])]
+                    bx, by = comm_xy[("bwd", link_of[p])]
                     rt_wr[x][y] = [col, p, fx, fy, bx, by] + [v for xy in land_xy for v in xy]
                 kernels.append(
                     ttnn.KernelDescriptor(
                         kernel_source=f"{KDIR}/ar_red_reader.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=red_set,
-                        compile_time_args=[CB_RECV, Q, NT, RING, int(self.in_l1), CB_OWN] + acc(part),
+                        compile_time_args=[CB_RECV, Q, NT, RING, int(self.in_l1), CB_OWN, TILE_B] + acc(part),
                         runtime_args=rt_rd,
                         common_runtime_args=[in_addr, gsem_addr],
                         config=ttnn.ReaderConfigDescriptor(),
@@ -276,7 +300,7 @@ class FuseTailAR:
                         kernel_source=f"{KDIR}/ar_red_writer.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=red_set,
-                        compile_time_args=[CB_OUT, CB_STG, Q, NP, SEM0],
+                        compile_time_args=[CB_OUT, CB_STG, Q, NP, SEM0, NPL, TILE_B],
                         runtime_args=rt_wr,
                         common_runtime_args=[gsem_addr, land_addr],
                         config=ttnn.WriterConfigDescriptor(),
@@ -288,7 +312,7 @@ class FuseTailAR:
                             kernel_source=f"{KDIR}/ar_land.cpp",
                             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                             core_ranges=_rowmajor_set(self.land),
-                            compile_time_args=[],
+                            compile_time_args=[NP // NPL],
                             runtime_args=ttnn.RuntimeArgs(),
                             common_runtime_args=[gsem_addr],
                             config=ttnn.ReaderConfigDescriptor(),
@@ -298,7 +322,7 @@ class FuseTailAR:
                 for name, ndist, dr in (("fwd", 4, 0), ("bwd", 3, 1)):
                     for lk in range(self.links):
                         x, y = self.comm[(name, lk)]
-                        ps = self.link_p[lk]
+                        ps = link_p[lk]
                         rt = ttnn.RuntimeArgs()
                         rt[x][y] = [col] + [v for xy in red_xy for v in xy] + [v for xy in land_xy for v in xy] + in_arr
                         fab_base = 1 + 2 * NP + 2 * NM + len(in_arr)
@@ -321,6 +345,8 @@ class FuseTailAR:
                                     fab_base,
                                     self.stop,
                                     int(self.in_l1),
+                                    TILE_B,
+                                    NPL,
                                 ]
                                 + acc(part),
                                 runtime_args=rt,
@@ -331,7 +357,7 @@ class FuseTailAR:
                         comm_kidx[(name, lk)] = len(kernels) - 1
                 if fused:
                     sems.append(ttnn.SemaphoreDescriptor(SEM_PARTNER, ttnn.CoreType.WORKER, mset, 0))
-                    kernels += self._mhc_kernels(px, mcores, mset, gsem_addr, land_addr, SEM_PARTNER, cbs, acc)
+                    kernels += self._mhc_kernels(px, mcores, mset, gsem_addr, land_addr, SEM_PARTNER, cbs, acc, V)
                 prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
                 for (name, lk), ki in comm_kidx.items():
                     dst = fwd_n if name == "fwd" else bwd_n
@@ -341,12 +367,13 @@ class FuseTailAR:
                 mpd[ttnn.MeshCoordinateRange(coord, coord)] = prog
         return mpd
 
-    def _mhc_kernels(self, px, mcores, mset, gsem_addr, land_addr, sem_partner, cbs, acc):
+    def _mhc_kernels(self, px, mcores, mset, gsem_addr, land_addr, sem_partner, cbs, acc, V):
         """The mHC expand (mhc_expand3 fast + token-group layout) reader / writer / compute on the 80 expand cores; the reader takes y from the landing buffers."""
         x, comb, post, out, T = px["x"], px["comb"], px["post"], px["out"], px["T"]
         nt = RING * NT
-        G = (T + 3) // 4
-        gpc = Q
+        TG = V["TG"]
+        G = (T + TG - 1) // TG
+        gpc = QL
         csl = NM
         CB_A, CB_B, CB_S, CB_O, CB_SA = 0, 1, 2, 3, 4
 
@@ -380,16 +407,16 @@ class FuseTailAR:
             kernel_source=f"{KDIR}/ft_expand_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=mset,
-            compile_time_args=[CB_B, CB_S, T, nt, G, gpc, sem_partner] + acc(x),
+            compile_time_args=[CB_B, CB_S, T, nt, G, gpc, sem_partner, TG, V["TILEB"], V["NP"] // NPL] + acc(x),
             runtime_args=rt_rd,
             common_runtime_args=[x.buffer_address(), gsem_addr, land_addr],
             config=ttnn.ReaderConfigDescriptor(),
         )
         writer = ttnn.KernelDescriptor(
-            kernel_source=f"{MHC_KDIR}/mhc_expand5_writer.cpp",
+            kernel_source=f"{KDIR}/ft_expand_writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=mset,
-            compile_time_args=[CB_O, CB_A, CB_SA, T, nt, gpc, 0] + acc(out) + acc(comb) + acc(post),
+            compile_time_args=[CB_O, CB_A, CB_SA, T, nt, gpc, 0, TG] + acc(out) + acc(comb) + acc(post),
             runtime_args=rt_wr,
             common_runtime_args=[out.buffer_address(), comb.buffer_address(), post.buffer_address()],
             config=ttnn.WriterConfigDescriptor(),
@@ -405,9 +432,9 @@ class FuseTailAR:
         return [reader, writer, compute]
 
     # ------------------------------------------------------------------------------------------------
-    def __call__(self, part):
+    def __call__(self, part, T=8):
         """All-reduce only: returns the landing tensor (compact format, see decode)."""
-        ttnn.generic_op([part, self.recv, self.out], self._build(part))
+        ttnn.generic_op([part, self.recv, self.out], self._build(part, T=T))
         return self.out
 
     def call_post(self, part, x, comb, post, out):
@@ -419,10 +446,13 @@ class FuseTailAR:
 
     # ------------------------------------------------------------------------------------------------
     @staticmethod
-    def decode(land_host, vr=8):
-        """land_host [NM, Q*256] bf16 (torch, one chip) -> [vr, 5120] fp32 (the reduced rows)."""
-        t = land_host.reshape(NM, Q, 2, vr, 16)  # core, tile, face, row, col
-        t = t.permute(3, 0, 1, 2, 4).reshape(vr, NM * Q * 32)
+    def decode(land_host, vr=8, tileb=512):
+        """land_host [NM, >= QL * tileb / 2] bf16 (torch, one chip; tileb 512: rows 0..7, 1024: rows 0..15 of the compact tile) -> [vr, 5120] fp32 (the reduced rows)."""
+        rws = tileb // 64
+        t = land_host.reshape(NM, -1)[:, : QL * tileb // 2].reshape(NM, QL, 2, rws, 16)[
+            :, :, :, :vr
+        ]  # core, tile, face, row, col
+        t = t.permute(3, 0, 1, 2, 4).reshape(vr, NM * QL * 32)
         return t.float()
 
 
@@ -474,7 +504,7 @@ def shared(md):
 
 def applies(md, T, part=None):
     """True when the decode layer can use the fused all-reduce + mHC post: T = 8 token rows, 4x8 mesh, ring fabric, DRAM interleaved bf16 TILE partial."""
-    if not enabled() or T != 8 or tuple(md.shape) != (4, 8):
+    if not enabled() or T not in (8, 12) or tuple(md.shape) != (4, 8):
         return False
     if part is not None:
         mc = part.memory_config()
