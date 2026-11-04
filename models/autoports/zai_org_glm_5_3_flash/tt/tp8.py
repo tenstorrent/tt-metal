@@ -125,12 +125,21 @@ class TPShards:
         i_full = int(self.host("mlp.gate_proj.weight").shape[-1])
         assert i_full % (self.tp * TILE) == 0
         ir = i_full // self.tp
+        # the chip's intermediate padded to 8 tiles (TP32: 12288 / 32 = 384 -> 512): the readers' activation CB holds
+        # 2 x the largest K block (16 tiles) and a phase's blocks must not straddle its end, so every phase's K tile
+        # count must be a multiple of 8 across the stack's layers (the low-rank phase streams 8-tile blocks); with a
+        # 12-tile down K the second layer's low-rank blocks straddled the CB (2026-11-04 one-chip loop: layer 1's
+        # low-rank output garbage, vtp 16 exact). Zero columns of gate / up give m = 0 there; zero rows of down.
+        ir_pad = -(-ir // (8 * TILE)) * 8 * TILE
         isl = lambda r: slice(ir * r, ir * (r + 1))  # noqa: E731
+        pad_c = lambda t: torch.nn.functional.pad(t, (0, ir_pad - ir)) if ir_pad != ir else t  # noqa: E731
+        pad_r = lambda t: torch.nn.functional.pad(t, (0, 0, 0, ir_pad - ir)) if ir_pad != ir else t  # noqa: E731
+        gate_w, up_w, down_w = (self.host(f"mlp.{n}_proj.weight") for n in ("gate", "up", "down"))
         return dict(
-            gate=self.col("mlp.gate_proj.weight", isl, ttnn.bfloat8_b),
-            up=self.col("mlp.up_proj.weight", isl, ttnn.bfloat8_b),
-            down=self.row("mlp.down_proj.weight", isl, ttnn.bfloat8_b),
-            intermediate=ir,
+            gate=self.sharded([pad_c(gate_w[..., isl(r)]) for r in range(self.ndev)], ttnn.bfloat8_b, dim=-1),
+            up=self.sharded([pad_c(up_w[..., isl(r)]) for r in range(self.ndev)], ttnn.bfloat8_b, dim=-1),
+            down=self.sharded([pad_r(down_w[isl(r)]) for r in range(self.ndev)], ttnn.bfloat8_b, dim=0),
+            intermediate=ir_pad,
         )
 
     def shared_tensors(self, group: int | None = None) -> dict:
