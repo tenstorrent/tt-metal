@@ -283,6 +283,7 @@ def host_signal_address(slot: int) -> int | None:
     """Quasar emulator and RTL simulator: the cluster control register the TRISC at mailbox word `slot` signals done
     in. None elsewhere: ttsim keeps the L1 mailboxes, and Wormhole and Blackhole silicon use launch_done_address().
     """
+    return None  # experiment: host side off everywhere
     if get_chip_architecture() != ChipArchitecture.QUASAR:
         return None
     # The emulator models the cluster control registers; ttsim (a shared library) does not
