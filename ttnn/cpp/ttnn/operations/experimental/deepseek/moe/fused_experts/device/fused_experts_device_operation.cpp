@@ -263,11 +263,11 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         const auto& gate = *tensor_args.router_weight;
         const auto& bias = *tensor_args.router_bias;
         const uint32_t hidden_dim = static_cast<uint32_t>(x.logical_shape()[-1]);
-        // The router cores alias their activation over the same one-row replica the expert cores use.
+        // The router cores read the activation from the same one-row cb_input the expert cores use: the
+        // replica it is aliased over, or the {1,0} broadcast's copy.
         TT_FATAL(
-            input_replicated && batch == 1,
-            "fused_experts: router_weight needs the one-row ROW_MAJOR HEIGHT_SHARDED L1 replica as input, got {} "
-            "rows ({})",
+            batch == 1,
+            "fused_experts: router_weight runs on one token row, got {} rows ({})",
             batch,
             x.memory_config());
         TT_FATAL(gate.storage_type() == StorageType::DEVICE, "fused_experts: router_weight must be on device");
@@ -629,6 +629,46 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             grid.x);
     }
 
+    TT_FATAL(
+        attributes.persistent.has_value() == tensor_args.layer_table.has_value(),
+        "fused_experts: the persistent op's parameters and its layer_table come together");
+    if (attributes.persistent.has_value()) {
+        const auto& persistent = *attributes.persistent;
+        const auto& table = *tensor_args.layer_table;
+        const auto& mesh = *x.device();
+        TT_FATAL(
+            attributes.all_reduce.has_value() && !attributes.all_reduce->cluster_axis.has_value(),
+            "fused_experts: the persistent op reduces over the whole mesh, so it needs all_reduce over both axes");
+        TT_FATAL(
+            input_replicated && batch == 1,
+            "fused_experts: the persistent op takes its token row into the one-row L1 replica, got {}",
+            x.memory_config());
+        TT_FATAL(
+            tensor_args.router_weight.has_value() &&
+                tensor_args.router_weight->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "fused_experts: the persistent op runs the router from a DRAM gate (an L1 gate cannot change per layer)");
+        TT_FATAL(
+            tensor_args.shared_gate_up_weights.has_value(),
+            "fused_experts: the persistent op needs the fused shared expert");
+        TT_FATAL(persistent.num_layers >= 1, "fused_experts: the persistent op needs at least one layer");
+        TT_FATAL(
+            persistent.h2d_socket_config_addresses.size() == mesh.shape().mesh_size(),
+            "fused_experts: the persistent op needs one H2D socket per chip ({}), got {}",
+            mesh.shape().mesh_size(),
+            persistent.h2d_socket_config_addresses.size());
+        const uint32_t table_width = 16u + 2u * static_cast<uint32_t>(tensor_args.gate_up_weights.size());
+        TT_FATAL(
+            table.dtype() == tt::tt_metal::DataType::UINT32 && table.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                table.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                !table.memory_config().is_sharded() && table.logical_shape()[-1] == table_width,
+            "fused_experts: layer_table must be [num_layers, {}] UINT32 ROW_MAJOR DRAM interleaved, got {} {} {} {}",
+            table_width,
+            table.logical_shape(),
+            table.dtype(),
+            table.layout(),
+            table.memory_config());
+    }
+
     // TODO: validate per-expert weight shapes against H / 2I / I, dtypes, and tile alignment.
 }
 
@@ -712,7 +752,17 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         attributes.all_reduce.has_value() ? attributes.all_reduce->cluster_axis : std::nullopt,
         attributes.all_reduce.has_value() ? attributes.all_reduce->ring_size : 0u,
         attributes.all_reduce.has_value() ? attributes.all_reduce->num_links : 0u,
-        attributes.all_reduce.has_value() ? static_cast<uint32_t>(attributes.all_reduce->topology) : 0u);
+        attributes.all_reduce.has_value() ? static_cast<uint32_t>(attributes.all_reduce->topology) : 0u,
+        // The persistent op's socket addresses and layer count are compile-time args, and its control
+        // core places kernels.
+        attributes.persistent.has_value(),
+        attributes.persistent.has_value() ? attributes.persistent->num_layers : 0u,
+        attributes.persistent.has_value() ? attributes.persistent->socket_core.x : 0u,
+        attributes.persistent.has_value() ? attributes.persistent->socket_core.y : 0u,
+        attributes.persistent.has_value() ? attributes.persistent->h2d_socket_config_addresses
+                                          : std::vector<uint32_t>{},
+        attributes.persistent.has_value() ? attributes.persistent->d2h_socket_config_address : 0u,
+        tensor_args.layer_table);
     return hash;
 }
 
@@ -772,7 +822,11 @@ FusedExpertsDeviceOperation::invoke(
     const std::optional<Tensor>& router_bias,
     const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes,
     uint32_t all_reduce_num_links,
-    tt::tt_fabric::Topology all_reduce_topology) {
+    tt::tt_fabric::Topology all_reduce_topology,
+    const std::optional<Tensor>& persistent_layer_table,
+    const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
+    const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
+    std::optional<uint32_t> persistent_d2h_socket_address) {
     operation_attributes_t attributes{
         .num_experts = num_experts,
         .intermediate_size = intermediate_size,
@@ -819,6 +873,19 @@ FusedExpertsDeviceOperation::invoke(
             .topology = all_reduce_topology,
         };
     }
+    if (persistent_layer_table.has_value()) {
+        TT_FATAL(
+            persistent_socket_core.has_value() && persistent_h2d_socket_addresses.has_value() &&
+                persistent_d2h_socket_address.has_value(),
+            "fused_experts: the persistent op needs the socket core and the H2D and D2H socket config addresses "
+            "along with persistent_layer_table");
+        attributes.persistent = FusedPersistentParams{
+            .num_layers = static_cast<uint32_t>(persistent_layer_table->logical_shape()[-2]),
+            .socket_core = *persistent_socket_core,
+            .h2d_socket_config_addresses = *persistent_h2d_socket_addresses,
+            .d2h_socket_config_address = *persistent_d2h_socket_address,
+        };
+    }
     tensor_args_t tensor_args{
         .input_tensor = input_tensor,
         .routing_indices = routing_indices,
@@ -830,6 +897,7 @@ FusedExpertsDeviceOperation::invoke(
         .shared_down_weights = shared_down_weights,
         .router_weight = router_weight,
         .router_bias = router_bias,
+        .layer_table = persistent_layer_table,
     };
     return {std::move(attributes), std::move(tensor_args)};
 }
@@ -861,7 +929,11 @@ fused_experts(
     const std::optional<Tensor>& router_bias,
     const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes,
     uint32_t all_reduce_num_links,
-    tt::tt_fabric::Topology all_reduce_topology) {
+    tt::tt_fabric::Topology all_reduce_topology,
+    const std::optional<Tensor>& persistent_layer_table,
+    const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
+    const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
+    std::optional<uint32_t> persistent_d2h_socket_address) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
     auto [operation_attributes, tensor_args] = OperationType::invoke(
         input_tensor,
@@ -886,7 +958,11 @@ fused_experts(
         router_bias,
         all_reduce_cluster_axes,
         all_reduce_num_links,
-        all_reduce_topology);
+        all_reduce_topology,
+        persistent_layer_table,
+        persistent_socket_core,
+        persistent_h2d_socket_addresses,
+        persistent_d2h_socket_address);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

@@ -9,6 +9,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "../persistent.h"
 
 namespace {
 
@@ -75,6 +76,7 @@ FORCE_INLINE uint32_t face_row_offset(uint32_t r, uint32_t h, uint32_t face_r_di
 //   then (used by INPUT_RM_ROWS): rows, k_tiles, cb_input, input_tile_bytes, face_r_dim,
 //         input_row_stride (bytes between a replica's rows), cb_rm_stage, stage_chunk_tiles
 //         (32-column chunks per staged DRAM read), then TensorAccessorArgs(input)
+//   then (FE_ALL_REDUCE): sem_ar_ready, cb_ar_scratch, ring_size, and (FE_PERSISTENT) cb_ar_out
 //
 // Runtime args:
 //   0: output base address
@@ -85,6 +87,14 @@ FORCE_INLINE uint32_t face_row_offset(uint32_t r, uint32_t h, uint32_t face_r_di
 //   8: down_local     (6-expert path: this core's slot among its group's 16 down cores, picking its
 //                      H columns; 0xFFFFFFFF on a gate_up-only 9th-row core, which writes no output)
 //   9: input base address (INPUT_RM_ROWS only)
+//   10-15 (FE_ALL_REDUCE): scratch address, this chip's slot, sender NoC x/y, out_ready, staging slot
+//   16-17 (FE_PERSISTENT): out_ready of the odd iterations, the D2H staging address (two rows)
+//
+// FE_PERSISTENT: one pass per iteration (see persistent.h), then FE_SEM_WRITER_DONE. The all-reduce
+// becomes a reduce to the root chip (see fe_reduce_sender.cpp): off the root a group-0 core only stages
+// its partial at its sender; on the root (FE_REDUCE_ROOT) it writes its own slot of the iteration's
+// scratch half, waits for the other chips' slots there, and writes the sum into its place in the
+// iteration's half of the control core's D2H staging.
 //
 // A producer scatters its I slice to whichever hub owns it (the slice's first column decides: below
 // `split_col` goes to hub0, at or above it to hub1) and bumps BOTH hubs' gather semaphores. Bumping
@@ -130,6 +140,9 @@ void kernel_main() {
     constexpr uint32_t sem_ar_ready_id = get_compile_time_arg_val(kArArg);
     constexpr uint32_t cb_ar_scratch_id = get_compile_time_arg_val(kArArg + 1);
     constexpr uint32_t ar_ring_size = get_compile_time_arg_val(kArArg + 2);
+#if defined(FE_PERSISTENT)
+    constexpr uint32_t cb_ar_out_id = get_compile_time_arg_val(kArArg + 3);
+#endif
     static_assert(out_tile_bytes == 64, "fused all-reduce slots are 1x32 bf16 faces");
     const uint32_t ar_scratch_addr = get_arg_val<uint32_t>(10);
     const uint32_t ar_slot = get_arg_val<uint32_t>(11);
@@ -137,6 +150,10 @@ void kernel_main() {
     const uint32_t ar_sender_noc_y = get_arg_val<uint32_t>(13);
     const uint32_t ar_out_ready_addr = get_arg_val<uint32_t>(14);
     const uint32_t ar_staging_slot = get_arg_val<uint32_t>(15);
+#if defined(FE_PERSISTENT)
+    const uint32_t ar_out_ready_addrs[2] = {ar_out_ready_addr, get_arg_val<uint32_t>(16)};
+    const uint32_t d2h_staging_addr = get_arg_val<uint32_t>(17);
+#endif
 #endif
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -174,270 +191,340 @@ void kernel_main() {
     CircularBuffer cb_act(cb_act_id);
     CircularBuffer cb_reduce(cb_reduce_id);
 
+    auto iteration = [&](uint32_t iter) {
 #ifdef INPUT_RM_ROWS
-    {
-        // Lays `num_tiles` 32-column chunks of the rows (row r at src + r * src_row_stride) out as
-        // consecutive input tiles from dst. Tile rows past `rows` are left as the CB held them: matmul
-        // and SwiGLU keep rows independent, and those rows are never written back out.
-        auto rows_to_tiles = [](uint32_t src, uint32_t src_row_stride, uint32_t dst, uint32_t num_tiles) {
-            constexpr uint32_t kHalfWords = kFaceRowBytes / sizeof(uint32_t);
-            for (uint32_t r = 0; r < rows; ++r) {
-                auto* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + r * src_row_stride);
-                const uint32_t lo = face_row_offset(r, 0, face_r_dim);
-                const uint32_t hi = face_row_offset(r, 1, face_r_dim);
-                for (uint32_t t = 0; t < num_tiles; ++t) {
-                    auto* d_lo = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + t * input_tile_bytes + lo);
-                    auto* d_hi = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + t * input_tile_bytes + hi);
-                    for (uint32_t w = 0; w < kHalfWords; ++w) {
-                        d_lo[w] = s[w];
+        {
+            // Lays `num_tiles` 32-column chunks of the rows (row r at src + r * src_row_stride) out as
+            // consecutive input tiles from dst. Tile rows past `rows` are left as the CB held them: matmul
+            // and SwiGLU keep rows independent, and those rows are never written back out.
+            auto rows_to_tiles = [](uint32_t src, uint32_t src_row_stride, uint32_t dst, uint32_t num_tiles) {
+                constexpr uint32_t kHalfWords = kFaceRowBytes / sizeof(uint32_t);
+                for (uint32_t r = 0; r < rows; ++r) {
+                    auto* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + r * src_row_stride);
+                    const uint32_t lo = face_row_offset(r, 0, face_r_dim);
+                    const uint32_t hi = face_row_offset(r, 1, face_r_dim);
+                    for (uint32_t t = 0; t < num_tiles; ++t) {
+                        auto* d_lo = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + t * input_tile_bytes + lo);
+                        auto* d_hi = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + t * input_tile_bytes + hi);
+                        for (uint32_t w = 0; w < kHalfWords; ++w) {
+                            d_lo[w] = s[w];
+                        }
+                        for (uint32_t w = 0; w < kHalfWords; ++w) {
+                            d_hi[w] = s[kHalfWords + w];
+                        }
+                        s += 2 * kHalfWords;
                     }
-                    for (uint32_t w = 0; w < kHalfWords; ++w) {
-                        d_hi[w] = s[kHalfWords + w];
-                    }
-                    s += 2 * kHalfWords;
                 }
-            }
-        };
+            };
 
-        const uint32_t input_addr = get_arg_val<uint32_t>(9);
-        CircularBuffer cb_input(cb_input_id);
-        cb_input.reserve_back(k_tiles);
-        const uint32_t tiles_l1 = cb_input.get_write_ptr();
+            const uint32_t input_addr = get_arg_val<uint32_t>(9);
+            CircularBuffer cb_input(cb_input_id);
+            cb_input.reserve_back(k_tiles);
+            const uint32_t tiles_l1 = cb_input.get_write_ptr();
 #ifdef INPUT_REPLICATED
-        // The replica's rows sit in this core's L1 at the same address on every core.
-        (void)input_args;
+            // The replica's rows sit in this core's L1 at the same address on every core.
+            (void)input_args;
+            (void)cb_rm_stage_id;
+            (void)stage_chunk_tiles;
+            rows_to_tiles(input_addr, input_row_stride, tiles_l1, k_tiles);
+#else
+            // A DRAM read keeps 64-byte alignment between source and destination, which a 32-byte face
+            // row does not have, so each chunk of every row lands contiguously in a staging slot first.
+            // While one slot is restriped the next chunk is in flight into the other.
+            (void)input_row_stride;
+            const auto input = TensorAccessor(input_args, input_addr);
+            CircularBuffer cb_stage(cb_rm_stage_id);
+            const uint32_t stage_l1 = (cb_stage.get_write_ptr() + 63u) & ~63u;
+            constexpr uint32_t stage_row_bytes = stage_chunk_tiles * kRowChunkBytes;
+            constexpr uint32_t slot_bytes = rows * stage_row_bytes;
+            constexpr uint32_t num_chunks = (k_tiles + stage_chunk_tiles - 1) / stage_chunk_tiles;
+            auto chunk_tiles = [](uint32_t c) {
+                const uint32_t left = k_tiles - c * stage_chunk_tiles;
+                return left < stage_chunk_tiles ? left : stage_chunk_tiles;
+            };
+            auto read_chunk = [&](uint32_t c) {
+                const uint32_t slot = stage_l1 + (c % 2u) * slot_bytes;
+                for (uint32_t r = 0; r < rows; ++r) {
+                    noc.async_read(
+                        input,
+                        CoreLocalMem<uint32_t>(slot + r * stage_row_bytes),
+                        chunk_tiles(c) * kRowChunkBytes,
+                        {.page_id = r, .offset_bytes = c * stage_row_bytes},
+                        {});
+                }
+            };
+            read_chunk(0);
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                noc.async_read_barrier();
+                if (c + 1 < num_chunks) {
+                    read_chunk(c + 1);
+                }
+                rows_to_tiles(
+                    stage_l1 + (c % 2u) * slot_bytes,
+                    stage_row_bytes,
+                    tiles_l1 + c * stage_chunk_tiles * input_tile_bytes,
+                    chunk_tiles(c));
+            }
+#endif
+            cb_input.push_back(k_tiles);
+        }
+#else
+        (void)rows;
+        (void)k_tiles;
+        (void)cb_input_id;
+        (void)input_tile_bytes;
+        (void)input_row_stride;
         (void)cb_rm_stage_id;
         (void)stage_chunk_tiles;
-        rows_to_tiles(input_addr, input_row_stride, tiles_l1, k_tiles);
-#else
-        // A DRAM read keeps 64-byte alignment between source and destination, which a 32-byte face
-        // row does not have, so each chunk of every row lands contiguously in a staging slot first.
-        // While one slot is restriped the next chunk is in flight into the other.
-        (void)input_row_stride;
-        const auto input = TensorAccessor(input_args, input_addr);
-        CircularBuffer cb_stage(cb_rm_stage_id);
-        const uint32_t stage_l1 = (cb_stage.get_write_ptr() + 63u) & ~63u;
-        constexpr uint32_t stage_row_bytes = stage_chunk_tiles * kRowChunkBytes;
-        constexpr uint32_t slot_bytes = rows * stage_row_bytes;
-        constexpr uint32_t num_chunks = (k_tiles + stage_chunk_tiles - 1) / stage_chunk_tiles;
-        auto chunk_tiles = [](uint32_t c) {
-            const uint32_t left = k_tiles - c * stage_chunk_tiles;
-            return left < stage_chunk_tiles ? left : stage_chunk_tiles;
-        };
-        auto read_chunk = [&](uint32_t c) {
-            const uint32_t slot = stage_l1 + (c % 2u) * slot_bytes;
-            for (uint32_t r = 0; r < rows; ++r) {
-                noc.async_read(
-                    input,
-                    CoreLocalMem<uint32_t>(slot + r * stage_row_bytes),
-                    chunk_tiles(c) * kRowChunkBytes,
-                    {.page_id = r, .offset_bytes = c * stage_row_bytes},
-                    {});
-            }
-        };
-        read_chunk(0);
-        for (uint32_t c = 0; c < num_chunks; ++c) {
-            noc.async_read_barrier();
-            if (c + 1 < num_chunks) {
-                read_chunk(c + 1);
-            }
-            rows_to_tiles(
-                stage_l1 + (c % 2u) * slot_bytes,
-                stage_row_bytes,
-                tiles_l1 + c * stage_chunk_tiles * input_tile_bytes,
-                chunk_tiles(c));
-        }
-#endif
-        cb_input.push_back(k_tiles);
-    }
-#else
-    (void)rows;
-    (void)k_tiles;
-    (void)cb_input_id;
-    (void)input_tile_bytes;
-    (void)input_row_stride;
-    (void)cb_rm_stage_id;
-    (void)stage_chunk_tiles;
-    (void)input_args;
+        (void)input_args;
 #endif
 
-    // Drains `num_tiles` output tiles from the front of cb_down_out into H columns from
-    // out_col_start. Restriped rows go back as one face row per (row, half), because each row of a
-    // ROW_MAJOR output is its own page run; the 32-byte writes only need DRAM's 16-byte write alignment.
-    auto write_output = [&](uint32_t num_tiles) {
-        for (uint32_t t = 0; t < num_tiles; ++t) {
-            const uint32_t global_tile = out_col_start + t;
+        // Drains `num_tiles` output tiles from the front of cb_down_out into H columns from
+        // out_col_start. Restriped rows go back as one face row per (row, half), because each row of a
+        // ROW_MAJOR output is its own page run; the 32-byte writes only need DRAM's 16-byte write alignment.
+        auto write_output = [&](uint32_t num_tiles) {
+            for (uint32_t t = 0; t < num_tiles; ++t) {
+                const uint32_t global_tile = out_col_start + t;
 #ifdef INPUT_RM_ROWS
-            constexpr uint32_t pages_per_row = k_tiles / dst_tiles_per_page;
-            for (uint32_t r = 0; r < rows; ++r) {
-                for (uint32_t h = 0; h < 2; ++h) {
-                    noc.async_write(
-                        cb_down_out,
-                        out,
-                        kFaceRowBytes,
-                        {.offset_bytes = t * out_tile_bytes + face_row_offset(r, h, face_r_dim)},
-                        {.page_id = r * pages_per_row + global_tile / dst_tiles_per_page,
-                         .offset_bytes = (global_tile % dst_tiles_per_page) * kRowChunkBytes + h * kFaceRowBytes});
+                constexpr uint32_t pages_per_row = k_tiles / dst_tiles_per_page;
+                for (uint32_t r = 0; r < rows; ++r) {
+                    for (uint32_t h = 0; h < 2; ++h) {
+                        noc.async_write(
+                            cb_down_out,
+                            out,
+                            kFaceRowBytes,
+                            {.offset_bytes = t * out_tile_bytes + face_row_offset(r, h, face_r_dim)},
+                            {.page_id = r * pages_per_row + global_tile / dst_tiles_per_page,
+                             .offset_bytes = (global_tile % dst_tiles_per_page) * kRowChunkBytes + h * kFaceRowBytes});
+                    }
                 }
-            }
 #else
-            noc.async_write(
-                cb_down_out,
-                out,
-                out_tile_bytes,
-                {.offset_bytes = t * out_tile_bytes},
-                {.page_id = global_tile / dst_tiles_per_page,
-                 .offset_bytes = (global_tile % dst_tiles_per_page) * out_tile_bytes});
+                noc.async_write(
+                    cb_down_out,
+                    out,
+                    out_tile_bytes,
+                    {.offset_bytes = t * out_tile_bytes},
+                    {.page_id = global_tile / dst_tiles_per_page,
+                     .offset_bytes = (global_tile % dst_tiles_per_page) * out_tile_bytes});
 #endif
-        }
-        noc.async_write_barrier();
-    };
-
-    // cb_act / cb_reduce are allocated identically on every core, so every hub's staging region
-    // shares this core's BASE address -- read here, before anything can have advanced the write
-    // pointer.
-    const uint32_t act_slot_base = cb_act.get_write_ptr();
-    const uint32_t reduce_base = cb_reduce.get_write_ptr();
-    constexpr uint32_t kNumBlocks = (num_active + experts_block - 1) / experts_block;
-    const uint32_t block_act_tiles = experts_block * i_tiles;
-    const uint32_t act_slots = kNumBlocks > 1 ? 2 : 1;
-
-    Semaphore<> sem_gather(sem_gather_id);
-
-    // The gather bump goes to BOTH hubs: the owning hub needs it to know the chunk landed, and the
-    // other hub needs it as the only evidence that this core is done with the previous block's slot
-    // (that hub never gathers this core's chunk, so it has no scatter of its own to observe).
-    auto bump_gather = [&]() {
-        sem_gather.up(noc, hub0_noc_x, hub0_noc_y, 1);
-        if constexpr (num_hubs > 1) {
-            sem_gather.up(noc, hub1_noc_x, hub1_noc_y, 1);
-        }
-    };
-
-    if constexpr (num_expert_groups > 1) {
-        const uint32_t scatter_tiles = i_shards_per_core * swiglu_tiles;
-        if (swiglu_core) {
-            {
-                DeviceZoneScopedN("FE_W_SCATTER_WAIT");
-                cb_out.wait_front(scatter_tiles);
             }
-            DeviceZoneScopedN("FE_W_SCATTER");
-            noc.async_write(
-                cb_out,
-                UnicastEndpoint{},
-                scatter_tiles * act_tile_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = chunk_hub_x,
-                 .noc_y = chunk_hub_y,
-                 .addr = act_slot_base + swiglu_col_start * act_tile_bytes});
             noc.async_write_barrier();
-            bump_gather();
-            cb_out.pop_front(scatter_tiles);
-        }
-        // Shared-expert tile j of this group runs on local core j + shared_first_local and lands right
-        // after the routed activation, in the last hub's range (see run_reader_loop).
-        const uint32_t shared_tiles = expert_group < shared_i_tiles
-                                          ? (shared_i_tiles - expert_group + num_expert_groups - 1u) / num_expert_groups
-                                          : 0u;
-        if (local_idx >= shared_first_local && local_idx < shared_first_local + shared_tiles) {
-            cb_out.wait_front(1);
-            noc.async_write(
-                cb_out,
-                UnicastEndpoint{},
-                act_tile_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = num_hubs > 1 ? hub1_noc_x : hub0_noc_x,
-                 .noc_y = num_hubs > 1 ? hub1_noc_y : hub0_noc_y,
-                 .addr = act_slot_base + (i_tiles + local_idx - shared_first_local) * act_tile_bytes});
-            noc.async_write_barrier();
-            bump_gather();
-            cb_out.pop_front(1);
-        }
-        if (!down_core) {
-            noc.async_atomic_barrier();
-            return;
-        }
+        };
 
-        constexpr uint32_t kLocalTiles = shards_per_core * kOutTiles;
-        cb_down_out.wait_front(kLocalTiles);
-        if (expert_group == 0) {
-#ifdef FE_ALL_REDUCE
-            // This chip's partial goes to its own slot of the scratch (reduce_noc_* is this core on
-            // group 0) and to this core's place in the link's sender's staging (the same address
-            // range there), which the sender multicasts to every other reduced chip.
-            noc.async_write(
-                cb_down_out,
-                UnicastEndpoint{},
-                kLocalTiles * out_tile_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = reduce_noc_x,
-                 .noc_y = reduce_noc_y,
-                 .addr = ar_scratch_addr + ar_slot * kLocalTiles * out_tile_bytes});
-            noc.async_write(
-                cb_down_out,
-                UnicastEndpoint{},
-                kLocalTiles * out_tile_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = ar_sender_noc_x,
-                 .noc_y = ar_sender_noc_y,
-                 .addr = ar_scratch_addr + ar_staging_slot * kLocalTiles * out_tile_bytes});
-            noc.async_write_barrier();
-            Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
+        // cb_act / cb_reduce are allocated identically on every core, so every hub's staging region
+        // shares this core's BASE address -- read here, before anything can have advanced the write
+        // pointer.
+        const uint32_t act_slot_base = cb_act.get_write_ptr();
+        const uint32_t reduce_base = cb_reduce.get_write_ptr();
+        constexpr uint32_t kNumBlocks = (num_active + experts_block - 1) / experts_block;
+        const uint32_t block_act_tiles = experts_block * i_tiles;
+        const uint32_t act_slots = kNumBlocks > 1 ? 2 : 1;
+
+        Semaphore<> sem_gather(sem_gather_id);
+
+        // The gather bump goes to BOTH hubs: the owning hub needs it to know the chunk landed, and the
+        // other hub needs it as the only evidence that this core is done with the previous block's slot
+        // (that hub never gathers this core's chunk, so it has no scatter of its own to observe).
+        auto bump_gather = [&]() {
+            sem_gather.up(noc, hub0_noc_x, hub0_noc_y, 1);
+            if constexpr (num_hubs > 1) {
+                sem_gather.up(noc, hub1_noc_x, hub1_noc_y, 1);
+            }
+        };
+
+        if constexpr (num_expert_groups > 1) {
+            const uint32_t scatter_tiles = i_shards_per_core * swiglu_tiles;
+            if (swiglu_core) {
+                {
+                    DeviceZoneScopedN("FE_W_SCATTER_WAIT");
+                    cb_out.wait_front(scatter_tiles);
+                }
+                DeviceZoneScopedN("FE_W_SCATTER");
+                noc.async_write(
+                    cb_out,
+                    UnicastEndpoint{},
+                    scatter_tiles * act_tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = chunk_hub_x,
+                     .noc_y = chunk_hub_y,
+                     .addr = act_slot_base + swiglu_col_start * act_tile_bytes});
+                noc.async_write_barrier();
+                bump_gather();
+                cb_out.pop_front(scatter_tiles);
+            }
+            // Shared-expert tile j of this group runs on local core j + shared_first_local and lands right
+            // after the routed activation, in the last hub's range (see run_reader_loop).
+            const uint32_t shared_tiles =
+                expert_group < shared_i_tiles
+                    ? (shared_i_tiles - expert_group + num_expert_groups - 1u) / num_expert_groups
+                    : 0u;
+            if (local_idx >= shared_first_local && local_idx < shared_first_local + shared_tiles) {
+                cb_out.wait_front(1);
+                noc.async_write(
+                    cb_out,
+                    UnicastEndpoint{},
+                    act_tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = num_hubs > 1 ? hub1_noc_x : hub0_noc_x,
+                     .noc_y = num_hubs > 1 ? hub1_noc_y : hub0_noc_y,
+                     .addr = act_slot_base + (i_tiles + local_idx - shared_first_local) * act_tile_bytes});
+                noc.async_write_barrier();
+                bump_gather();
+                cb_out.pop_front(1);
+            }
+            if (!down_core) {
+                noc.async_atomic_barrier();
+                return;
+            }
+
+            constexpr uint32_t kLocalTiles = shards_per_core * kOutTiles;
+            cb_down_out.wait_front(kLocalTiles);
+            if (expert_group == 0) {
+#if defined(FE_ALL_REDUCE) && defined(FE_PERSISTENT)
+                constexpr uint32_t core_bytes = kLocalTiles * out_tile_bytes;
+#if defined(FE_REDUCE_ROOT)
+                noc.async_write(
+                    cb_down_out,
+                    UnicastEndpoint{},
+                    core_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = reduce_noc_x,
+                     .noc_y = reduce_noc_y,
+                     .addr = ar_scratch_addr + ((iter & 1u) * ar_ring_size + ar_slot) * core_bytes});
+                noc.async_write_barrier();
 #else
-            write_output(kLocalTiles);
+                noc.async_write(
+                    cb_down_out,
+                    UnicastEndpoint{},
+                    core_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = ar_sender_noc_x,
+                     .noc_y = ar_sender_noc_y,
+                     .addr = ar_scratch_addr + ar_staging_slot * core_bytes});
+                noc.async_write_barrier();
+                Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
+#endif
+#elif defined(FE_ALL_REDUCE)
+                // This chip's partial goes to its own slot of the scratch (reduce_noc_* is this core on
+                // group 0) and to this core's place in the link's sender's staging (the same address
+                // range there), which the sender multicasts to every other reduced chip.
+                noc.async_write(
+                    cb_down_out,
+                    UnicastEndpoint{},
+                    kLocalTiles * out_tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = reduce_noc_x,
+                     .noc_y = reduce_noc_y,
+                     .addr = ar_scratch_addr + ar_slot * kLocalTiles * out_tile_bytes});
+                noc.async_write(
+                    cb_down_out,
+                    UnicastEndpoint{},
+                    kLocalTiles * out_tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = ar_sender_noc_x,
+                     .noc_y = ar_sender_noc_y,
+                     .addr = ar_scratch_addr + ar_staging_slot * kLocalTiles * out_tile_bytes});
+                noc.async_write_barrier();
+                Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
+#else
+                write_output(kLocalTiles);
+#endif
+            } else {
+                const uint32_t slot = (expert_group - 1u) * kLocalTiles * out_tile_bytes;
+                noc.async_write(
+                    cb_down_out,
+                    UnicastEndpoint{},
+                    kLocalTiles * out_tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = reduce_noc_x, .noc_y = reduce_noc_y, .addr = reduce_base + slot});
+                noc.async_write_barrier();
+                Semaphore<>(sem_reduce_id).up(noc, reduce_noc_x, reduce_noc_y, 1);
+            }
+            cb_down_out.pop_front(kLocalTiles);
+#if defined(FE_ALL_REDUCE) && defined(FE_PERSISTENT) && defined(FE_REDUCE_ROOT)
+            if (expert_group == 0) {
+                constexpr uint32_t core_bytes = kLocalTiles * out_tile_bytes;
+                const uint32_t parity = iter & 1u;
+                // Every other chip's slot of this half bumps its out_ready once; ours was written above.
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ar_out_ready_addrs[parity]),
+                    (ar_ring_size - 1u) * (iter / 2u + 1u));
+                CircularBuffer(cb_ar_scratch_id).push_back(ar_ring_size * kLocalTiles);
+                CircularBuffer cb_ar_out(cb_ar_out_id);
+                cb_ar_out.wait_front(kLocalTiles);
+                noc.async_write(
+                    cb_ar_out,
+                    UnicastEndpoint{},
+                    core_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = FE_CTRL_X,
+                     .noc_y = FE_CTRL_Y,
+                     .addr = d2h_staging_addr + parity * k_tiles * out_tile_bytes + down_local * core_bytes});
+                noc.async_write_barrier();
+                noc_semaphore_inc(get_noc_addr(FE_CTRL_X, FE_CTRL_Y, get_semaphore(FE_SEM_D2H_COUNT)), 1);
+                cb_ar_out.pop_front(kLocalTiles);
+                // The sum has consumed this half: the link's sender returns the credit for it.
+                Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
+            }
+#elif defined(FE_ALL_REDUCE) && !defined(FE_PERSISTENT)
+            if (expert_group == 0) {
+                // Every other chip's slot bumps out_ready once; this chip's own slot was written above.
+                // out_ready is a GlobalSemaphore, which Semaphore<> (per-program ids) cannot wrap.
+                auto* out_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ar_out_ready_addr);
+                noc_semaphore_wait(out_ready, ar_ring_size - 1);
+                CircularBuffer(cb_ar_scratch_id).push_back(ar_ring_size * kLocalTiles);
+                noc_semaphore_set(out_ready, 0);
+            }
 #endif
         } else {
-            const uint32_t slot = (expert_group - 1u) * kLocalTiles * out_tile_bytes;
-            noc.async_write(
-                cb_down_out,
-                UnicastEndpoint{},
-                kLocalTiles * out_tile_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = reduce_noc_x, .noc_y = reduce_noc_y, .addr = reduce_base + slot});
-            noc.async_write_barrier();
-            Semaphore<>(sem_reduce_id).up(noc, reduce_noc_x, reduce_noc_y, 1);
-        }
-        cb_down_out.pop_front(kLocalTiles);
-#ifdef FE_ALL_REDUCE
-        if (expert_group == 0) {
-            // Every other chip's slot bumps out_ready once; this chip's own slot was written above.
-            // out_ready is a GlobalSemaphore, which Semaphore<> (per-program ids) cannot wrap.
-            auto* out_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ar_out_ready_addr);
-            noc_semaphore_wait(out_ready, ar_ring_size - 1);
-            CircularBuffer(cb_ar_scratch_id).push_back(ar_ring_size * kLocalTiles);
-            noc_semaphore_set(out_ready, 0);
-        }
-#endif
-    } else {
-        if (swiglu_core) {
-            for (uint32_t blk = 0; blk < kNumBlocks; ++blk) {
-                const uint32_t first_expert = blk * experts_block;
-                const uint32_t remaining = num_active - first_expert;
-                const uint32_t block_experts = remaining < experts_block ? remaining : experts_block;
-                const uint32_t slot_base = act_slot_base + (blk % act_slots) * block_act_tiles * act_tile_bytes;
+            if (swiglu_core) {
+                for (uint32_t blk = 0; blk < kNumBlocks; ++blk) {
+                    const uint32_t first_expert = blk * experts_block;
+                    const uint32_t remaining = num_active - first_expert;
+                    const uint32_t block_experts = remaining < experts_block ? remaining : experts_block;
+                    const uint32_t slot_base = act_slot_base + (blk % act_slots) * block_act_tiles * act_tile_bytes;
 
-                for (uint32_t j = 0; j < block_experts; ++j) {
-                    cb_out.wait_front(swiglu_tiles);
-                    const uint32_t hub_addr = slot_base + (j * i_tiles + swiglu_col_start) * act_tile_bytes;
-                    noc.async_write(
-                        cb_out,
-                        UnicastEndpoint{},
-                        swiglu_tiles * act_tile_bytes,
-                        {.offset_bytes = 0},
-                        {.noc_x = chunk_hub_x, .noc_y = chunk_hub_y, .addr = hub_addr});
-                    noc.async_write_barrier();
-                    bump_gather();
-                    cb_out.pop_front(swiglu_tiles);
+                    for (uint32_t j = 0; j < block_experts; ++j) {
+                        cb_out.wait_front(swiglu_tiles);
+                        const uint32_t hub_addr = slot_base + (j * i_tiles + swiglu_col_start) * act_tile_bytes;
+                        noc.async_write(
+                            cb_out,
+                            UnicastEndpoint{},
+                            swiglu_tiles * act_tile_bytes,
+                            {.offset_bytes = 0},
+                            {.noc_x = chunk_hub_x, .noc_y = chunk_hub_y, .addr = hub_addr});
+                        noc.async_write_barrier();
+                        bump_gather();
+                        cb_out.pop_front(swiglu_tiles);
+                    }
                 }
             }
-        }
 
-        // The compute kernel has already summed routing_w[e] * down_e over all experts into
-        // cb_down_out, so the writer drains it once into output pages idx*2 + {0, 1}.
-        cb_down_out.wait_front(kOutTiles);
-        write_output(kOutTiles);
-        cb_down_out.pop_front(kOutTiles);
+            // The compute kernel has already summed routing_w[e] * down_e over all experts into
+            // cb_down_out, so the writer drains it once into output pages idx*2 + {0, 1}.
+            cb_down_out.wait_front(kOutTiles);
+            write_output(kOutTiles);
+            cb_down_out.pop_front(kOutTiles);
+        }
+        // Every Semaphore::up above is a non-posted atomic; async_write_barrier does not drain those.
+        noc.async_atomic_barrier();
+    };
+
+#if defined(FE_PERSISTENT)
+    uint32_t iter = 0;
+    for (; fe_wait_go(iter); ++iter) {
+        fe_rewind_cbs();
+        iteration(iter);
+        fe_writer_done(iter);
     }
-    // Every Semaphore::up above is a non-posted atomic; async_write_barrier does not drain those.
-    noc.async_atomic_barrier();
+#if defined(FE_ALL_REDUCE) && defined(FE_REDUCE_ROOT)
+    // Every bump of the out_ready pair has been waited for, so none can land after this.
+    if (expert_group == 0 && down_core) {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ar_out_ready_addrs[0]) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ar_out_ready_addrs[1]) = 0;
+    }
+#endif
+#else
+    iteration(0);
+#endif
 }

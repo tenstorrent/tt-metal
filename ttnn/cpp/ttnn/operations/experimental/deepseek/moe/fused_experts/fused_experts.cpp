@@ -31,7 +31,11 @@ Tensor fused_experts(
     const std::optional<Tensor>& router_bias,
     const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes,
     uint32_t all_reduce_num_links,
-    tt::tt_fabric::Topology all_reduce_topology) {
+    tt::tt_fabric::Topology all_reduce_topology,
+    const std::optional<Tensor>& persistent_layer_table,
+    const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
+    const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
+    std::optional<uint32_t> persistent_d2h_socket_address) {
     return ttnn::prim::fused_experts(
         input_tensor,
         gate_up_weights,
@@ -55,7 +59,11 @@ Tensor fused_experts(
         router_bias,
         all_reduce_cluster_axes,
         all_reduce_num_links,
-        all_reduce_topology);
+        all_reduce_topology,
+        persistent_layer_table,
+        persistent_socket_core,
+        persistent_h2d_socket_addresses,
+        persistent_d2h_socket_address);
 }
 
 }  // namespace ttnn::experimental::deepseek::moe

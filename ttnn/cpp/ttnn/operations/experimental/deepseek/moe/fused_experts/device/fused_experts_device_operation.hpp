@@ -149,7 +149,11 @@ struct FusedExpertsDeviceOperation {
         const std::optional<Tensor>& router_bias,
         const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes,
         uint32_t all_reduce_num_links,
-        tt::tt_fabric::Topology all_reduce_topology);
+        tt::tt_fabric::Topology all_reduce_topology,
+        const std::optional<Tensor>& persistent_layer_table,
+        const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
+        const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
+        std::optional<uint32_t> persistent_d2h_socket_address);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts
@@ -179,5 +183,9 @@ fused_experts(
     const std::optional<Tensor>& router_bias = std::nullopt,
     const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes = std::nullopt,
     uint32_t all_reduce_num_links = 1,
-    tt::tt_fabric::Topology all_reduce_topology = tt::tt_fabric::Topology::Linear);
+    tt::tt_fabric::Topology all_reduce_topology = tt::tt_fabric::Topology::Linear,
+    const std::optional<Tensor>& persistent_layer_table = std::nullopt,
+    const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses = std::nullopt,
+    std::optional<uint32_t> persistent_d2h_socket_address = std::nullopt);
 }  // namespace ttnn::prim

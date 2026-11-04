@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 
 #include "fetch_gate_up.h"
+#include "../persistent.h"
 
 // Input-broadcaster kernel (runs on the second core, {1,0}).
 //
@@ -81,6 +82,9 @@
 //   9: hub1_noc_x   10: hub1_noc_y    ascending corners of its multicast rectangle)
 //   11: down_local  (this core's down slot in its expert group; see run_reader_loop)
 //   12: shared gate_up base address   13: shared down base address
+//
+// FE_PERSISTENT (always with INPUT_REPLICATED): one publish + reader loop per iteration (see
+// persistent.h), as for the other receivers.
 void kernel_main() {
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
@@ -136,7 +140,14 @@ void kernel_main() {
     constexpr uint32_t gate_up_k_shards = get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset());
     constexpr uint32_t gate_up_col_shards =
         get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset() + 1);
-    const SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(12), get_arg_val<uint32_t>(13));
+    SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(12), get_arg_val<uint32_t>(13));
+#if defined(FE_PERSISTENT)
+    constexpr uint32_t kHitGateUpAddrs = num_weights + num_active * batch;
+    constexpr uint32_t kHitDownAddrs = kHitGateUpAddrs + num_active;
+#else
+    constexpr uint32_t kHitGateUpAddrs = kGateUpAddrBase;
+    constexpr uint32_t kHitDownAddrs = kDownAddrBase;
+#endif
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t mcast_start_x = get_arg_val<uint32_t>(1);
@@ -159,123 +170,137 @@ void kernel_main() {
 
     CircularBuffer cb_input(cb_input_id);
 
+    auto iteration = [&](uint32_t iter) {
+#if defined(FE_PERSISTENT)
+        shared.gate_up_addr = fe_header(kFeHdrSharedGateUp);
+        shared.down_addr = fe_header(kFeHdrSharedDown);
+#endif
 #if defined(INPUT_RM_ROWS)
-    // Several ROW_MAJOR rows: every core's writer (this one's included) restripes them into its own
-    // cb_input, so there is nothing to read, broadcast or publish here.
-    (void)input_addr;
-    (void)input_args;
-    (void)src_tiles_per_page;
-    (void)sem_input_id;
-    (void)input_page_size;
-    (void)input_num_pages;
-    (void)cb_input;
+        // Several ROW_MAJOR rows: every core's writer (this one's included) restripes them into its own
+        // cb_input, so there is nothing to read, broadcast or publish here.
+        (void)input_addr;
+        (void)input_args;
+        (void)src_tiles_per_page;
+        (void)sem_input_id;
+        (void)input_page_size;
+        (void)input_num_pages;
+        (void)cb_input;
 #elif defined(INPUT_REPLICATED)
-    // The activation is a ROW_MAJOR HEIGHT_SHARDED replica this core already holds in L1, with
-    // cb_input aliased over its shard. There is nothing to read from DRAM, nothing to multicast and
-    // nothing to wait for: this core is an ordinary compute core, and publishing the tiles that are
-    // already in place is the whole job. The input accessor and the input-ready semaphore below are
-    // correspondingly unused.
-    (void)input_addr;
-    (void)input_args;
-    (void)src_tiles_per_page;
-    (void)sem_input_id;
-    publish_input(cb_input_id, input_num_pages);
+        // The activation is a ROW_MAJOR HEIGHT_SHARDED replica this core already holds in L1, with
+        // cb_input aliased over its shard. There is nothing to read from DRAM, nothing to multicast and
+        // nothing to wait for: this core is an ordinary compute core, and publishing the tiles that are
+        // already in place is the whole job. The input accessor and the input-ready semaphore below are
+        // correspondingly unused.
+        (void)input_addr;
+        (void)input_args;
+        (void)src_tiles_per_page;
+        (void)sem_input_id;
+        publish_input(cb_input_id, input_num_pages);
 #else
-    const auto input = TensorAccessor(input_args, input_addr);
+        const auto input = TensorAccessor(input_args, input_addr);
 
-    // ---- 1. Read all activation tiles into cb_input. ----
-    {
-        DeviceZoneScopedN("FE_INPUT_BCAST");
-        cb_input.reserve_back(input_num_pages);
-        const uint32_t input_l1 = cb_input.get_write_ptr();
-        for (uint32_t p = 0; p < input_num_pages; ++p) {
-            const uint32_t src_page = p / src_tiles_per_page;
-            const uint32_t src_off = (p % src_tiles_per_page) * input_page_size;
-            noc.async_read(
-                input,
-                cb_input,
-                input_page_size,
-                {.page_id = src_page, .offset_bytes = src_off},
-                {.offset_bytes = p * input_page_size});
+        // ---- 1. Read all activation tiles into cb_input. ----
+        {
+            DeviceZoneScopedN("FE_INPUT_BCAST");
+            cb_input.reserve_back(input_num_pages);
+            const uint32_t input_l1 = cb_input.get_write_ptr();
+            constexpr uint32_t src_page_bytes = src_tiles_per_page * input_page_size;
+            for (uint32_t p = 0; p < input_num_pages; p += src_tiles_per_page) {
+                noc.async_read(
+                    input,
+                    cb_input,
+                    src_page_bytes,
+                    {.page_id = p / src_tiles_per_page, .offset_bytes = 0},
+                    {.offset_bytes = p * input_page_size});
+            }
+            noc.async_read_barrier();
+
+            // ---- 2. Broadcast the activation to all other cores' L1 (same cb_input address). ----
+            const uint32_t total_bytes = input_page_size * input_num_pages;
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(input_l1),
+                MulticastEndpoint{},
+                total_bytes,
+                num_dests,
+                {.offset_bytes = 0},
+                {.noc_x_start = mcast_start_x,
+                 .noc_y_start = mcast_start_y,
+                 .noc_x_end = mcast_end_x,
+                 .noc_y_end = mcast_end_y,
+                 .addr = input_l1},
+                /*linked=*/false);
+            noc.async_write_barrier();
+
+            // ---- 3. Signal the other cores via the input-ready semaphore. ----
+            Semaphore<> sem(sem_input_id);
+            sem.set(1);
+            sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
+
+            // ---- 4. Publish the activation to this core's compute kernel. ----
+            cb_input.push_back(input_num_pages);
         }
-        noc.async_read_barrier();
-
-        // ---- 2. Broadcast the activation to all other cores' L1 (same cb_input address). ----
-        const uint32_t total_bytes = input_page_size * input_num_pages;
-        noc.async_write_multicast(
-            CoreLocalMem<uint32_t>(input_l1),
-            MulticastEndpoint{},
-            total_bytes,
-            num_dests,
-            {.offset_bytes = 0},
-            {.noc_x_start = mcast_start_x,
-             .noc_y_start = mcast_start_y,
-             .noc_x_end = mcast_end_x,
-             .noc_y_end = mcast_end_y,
-             .addr = input_l1},
-            /*linked=*/false);
-        noc.async_write_barrier();
-
-        // ---- 3. Signal the other cores via the input-ready semaphore. ----
-        Semaphore<> sem(sem_input_id);
-        sem.set(1);
-        sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
-
-        // ---- 4. Publish the activation to this core's compute kernel. ----
-        cb_input.push_back(input_num_pages);
-    }
 #endif
 
-    // ---- 5. Run the per-expert reader loop (it waits for the expert-id broadcast). ----
-    run_reader_loop(
-        noc,
-        num_active,
-        core_index,
-        i_tiles,
-        k_tiles,
-        gate_up_tile_bytes,
-        down_slice_tiles,
-        down_tile_bytes,
-        act_tile_bytes,
-        num_producers,
-        cb_bcast_id,
-        cb_weights_id,
-        cb_down_w_id,
-        cb_act_id,
-        sem_gather_id,
-        sem_bcast_id,
-        mcast_start_x,
-        mcast_start_y,
-        mcast_end_x,
-        mcast_end_y,
-        num_dests,
-        gate_up_args,
-        kGateUpAddrBase,
-        down_args,
-        kDownAddrBase,
-        cb_rscalar_id,
-        num_weights,
-        down_prefetch,
-        batch,
-        experts_block,
-        gate_up_reserve_tiles,
-        down_reserve_tiles,
-        rscalar_tile_h,
-        rscalar_face_r_dim,
-        rscalar_num_face_rows,
-        rscalar_tile_bytes,
-        cores_per_expert,
-        shards_per_core,
-        i_shards_per_core,
-        num_expert_groups,
-        gather,
-        sem_reduce_id,
-        cb_reduce_id,
-        get_arg_val<uint32_t>(11),
-        shared,
-        shared_gate_up_args,
-        shared_down_args,
-        gate_up_k_shards,
-        gate_up_col_shards,
-        sem_id);
+        // ---- 5. Run the per-expert reader loop (it waits for the expert-id broadcast). ----
+        run_reader_loop(
+            noc,
+            num_active,
+            core_index,
+            i_tiles,
+            k_tiles,
+            gate_up_tile_bytes,
+            down_slice_tiles,
+            down_tile_bytes,
+            act_tile_bytes,
+            num_producers,
+            cb_bcast_id,
+            cb_weights_id,
+            cb_down_w_id,
+            cb_act_id,
+            sem_gather_id,
+            sem_bcast_id,
+            mcast_start_x,
+            mcast_start_y,
+            mcast_end_x,
+            mcast_end_y,
+            num_dests,
+            gate_up_args,
+            kHitGateUpAddrs,
+            down_args,
+            kHitDownAddrs,
+            cb_rscalar_id,
+            num_weights,
+            down_prefetch,
+            batch,
+            experts_block,
+            gate_up_reserve_tiles,
+            down_reserve_tiles,
+            rscalar_tile_h,
+            rscalar_face_r_dim,
+            rscalar_num_face_rows,
+            rscalar_tile_bytes,
+            cores_per_expert,
+            shards_per_core,
+            i_shards_per_core,
+            num_expert_groups,
+            gather,
+            sem_reduce_id,
+            cb_reduce_id,
+            get_arg_val<uint32_t>(11),
+            shared,
+            shared_gate_up_args,
+            shared_down_args,
+            gate_up_k_shards,
+            gate_up_col_shards,
+            sem_id,
+            iter);
+    };
+
+#if defined(FE_PERSISTENT)
+    for (uint32_t iter = 0; fe_begin_iteration(iter, cb_input_id, k_tiles, /*has_writer=*/true); ++iter) {
+        iteration(iter);
+    }
+#else
+    iteration(0);
+#endif
 }
