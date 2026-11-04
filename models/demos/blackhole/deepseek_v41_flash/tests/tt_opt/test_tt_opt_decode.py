@@ -220,6 +220,10 @@ def test_decode_gate(mesh_device):
     md = mesh_device
     _, runner, X, base, snaps = _setup(md, minimal=True, tracy_layers=False) if GATE_MINIMAL else _setup(md)
     dec = runner.dec
+    for _kv in [
+        x for x in os.environ.get("TT_OPT_ARM_AFTER_SEED", "").split(",") if x
+    ]:  # call-time switches applied only to the gated round (the seed / prefill / golden state stay as the golden run)
+        os.environ[_kv.split("=")[0]] = _kv.split("=")[1]
     cols = md.shape[1]
     _gpath = os.path.join(GOLDEN_DIR, f"decode_k{runner.k}_L{'-'.join(map(str, LAYERS))}_P{BASE_POS}.pt")
     if os.environ.get("TT_OPT_GOLDEN", "check") == "check" and os.path.exists(_gpath):
@@ -270,6 +274,8 @@ def test_decode_gate(mesh_device):
         assert tag in out["streams"], f"stream {tag} missing"
         for r, (g, c) in enumerate(zip(rows, out["streams"][tag])):
             p = _pcc(g, c)
+            if os.environ.get("TT_OPT_PCC_ALL") == "1":
+                _log(f"GATE_PCC {tag} row {r} {p:.6f}")
             if p < worst:
                 worst, worst_tag = p, f"{tag} row {r}"
             if p < thr:

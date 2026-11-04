@@ -21,7 +21,9 @@ import os
 import time
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC, _odd_t, _pad_rows, _slice_rows
+from models.demos.blackhole.deepseek_v41_flash.tt import fuse_tail_ar as _FT
+from models.demos.blackhole.deepseek_v41_flash.tt import mhc_stream_pool
+from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC, _flag, _odd_t, _pad_rows, _slice_rows
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import DSV41MoEBlock
 from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_v2 import (
     DSV41SharedExpertV2 as DSV41SharedExpert,  # 155 -> 112 us/layer (tuned 1D mcast configs)
@@ -263,10 +265,30 @@ class DSV41Layer:
                 self.mhc_attn.collapse_norm(xp, prep, self.attn_norm_w, self.eps)
             )  # fused collapse + RMSNorm -> bf16 [1,1,T,D]
             mark("mhc_attn_collapse+norm")
-        a = self.attention.forward(h, st)  # [1,1,T,D] bf16, replicated
+        _ft_on = (
+            (not sbf)
+            and (self.mhc_pool_tag == "main" or os.environ.get("DSV41_FUSE_TAIL_DRAFT", "0") == "1")
+            and _FT.applies(self.mesh_device, T)
+            and int(xp.shape[0]) == 8
+            and (_flag("DSV41_MHC_EXPAND_VALID") or _flag("DSV41_MHC_LANEPAR"))
+            and _flag("DSV41_MHC_EXPAND_V2", "1")
+        )
+        if _ft_on:
+            self.attention._ft_defer = True
+        a = self.attention.forward(h, st)  # [1,1,T,D] bf16, replicated (a FusedPartial with DSV41_FUSE_TAIL)
         mark("attention")
         # a: bf16 [1,1,T,D], consumed as is; expand + the FFN-side mixes are one program with DSV41_MHC_EP=1
-        if sbf:  # accuracy study: round the stream to bf16 at every hc_post like the bf16 reference / GPU model
+        if isinstance(
+            a, _FT.FusedPartial
+        ):  # DSV41_FUSE_TAIL: all-reduce + attention-side mHC post in ONE program (tt/fuse_tail_ar.py)
+            self.attention._ft_defer = False
+            _buf = mhc_stream_pool.get(self.mesh_device, T, int(xp.shape[3]), self.mhc_pool_tag, "attn")
+            x2 = _FT.shared(self.mesh_device).call_post(a.part, xp, attn_comb, attn_post, _buf)
+            ttnn.deallocate(a.part)
+            fused = None
+            if not fuse_pre:
+                ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
+        elif sbf:  # accuracy study: round the stream to bf16 at every hc_post like the bf16 reference / GPU model
             x2 = _rnd_bf16(self.mhc_attn.expand(a, xp, attn_post, attn_comb, None))
             ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
         elif fuse_pre:
@@ -312,14 +334,32 @@ class DSV41Layer:
                 h
             )  # this column's slice of the shared expert; summed with the routed partial by the MoE reduce_scatter
             mark("shared_expert_tp")
-            m = self.moe.forward(h, h_tok, forced_routing, fold=part)
+            _ft_moe = (
+                (not sbf)
+                and (self.mhc_pool_tag == "main" or os.environ.get("DSV41_FUSE_TAIL_DRAFT", "0") == "1")
+                and self.debug is None
+                and getattr(self.moe, "supports_ft_defer", False)
+                and os.environ.get("DSV41_FUSE_TAIL_MOE", "1") == "1"
+                and _FT.applies(self.mesh_device, T)
+                and int(x2.shape[0]) == 8
+                and (_flag("DSV41_MHC_EXPAND_VALID") or _flag("DSV41_MHC_LANEPAR"))
+                and _flag("DSV41_MHC_EXPAND_V2", "1")
+            )
+            m = self.moe.forward(h, h_tok, forced_routing, fold=part, **({"ft_defer": True} if _ft_moe else {}))
             ttnn.deallocate(part)
         else:
             m = self.moe.forward(h, h_tok, forced_routing)  # [1,1,T,D/cols] per device
         mark("moe")
-        m = self.mesh_config.allgather(
-            m, self.ccl, axis=1, dim=3, **({"lean_ag": True} if getattr(self.mesh_config, "_dsv41_lean", False) else {})
-        )  # -> [1,1,T,D] replicated
+        if isinstance(m, _FT.FusedPartial):
+            pass
+        else:
+            m = self.mesh_config.allgather(
+                m,
+                self.ccl,
+                axis=1,
+                dim=3,
+                **({"lean_ag": True} if getattr(self.mesh_config, "_dsv41_lean", False) else {}),
+            )  # -> [1,1,T,D] replicated
         mark("moe_allgather")
         sh = (
             None if use_tp else self.shared.forward(h)
@@ -333,11 +373,18 @@ class DSV41Layer:
                 routed=m,
                 shared=sh,
             )
-        x3 = S0o(
-            self.mhc_ffn.expand(
-                P2(m), x2, ffn_post, ffn_comb, None if sh is None else P2(sh), pool=(self.mhc_pool_tag, "ffn")
-            )
-        )  # post * (routed + shared) + comb^T x, summed inside the kernel
+        if isinstance(
+            m, _FT.FusedPartial
+        ):  # DSV41_FUSE_TAIL: reduce_scatter + all_gather + FFN-side mHC post in ONE program
+            _buf = mhc_stream_pool.get(self.mesh_device, T, int(x2.shape[3]), self.mhc_pool_tag, "ffn")
+            x3 = _FT.shared(self.mesh_device).call_post(m.part, x2, ffn_comb, ffn_post, _buf)
+            ttnn.deallocate(m.part)
+        else:
+            x3 = S0o(
+                self.mhc_ffn.expand(
+                    P2(m), x2, ffn_post, ffn_comb, None if sh is None else P2(sh), pool=(self.mhc_pool_tag, "ffn")
+                )
+            )  # post * (routed + shared) + comb^T x, summed inside the kernel
         if sbf:
             x3 = _rnd_bf16(x3)
         mark("mhc_ffn_expand")

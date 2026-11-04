@@ -201,9 +201,10 @@ def _inject_routes(md, dec, R, U, n, seed):
         moe = layer.moe
         orig = moe.forward
 
-        def fwd(h, h_tok, forced_routing=None, fold=None, _o=orig, _m=moe, _s=t_s, _i=t_i):
+        def fwd(h, h_tok, forced_routing=None, fold=None, ft_defer=False, _o=orig, _m=moe, _s=t_s, _i=t_i):
             _m.gate.forward(h)  # keeps the router program in the graph (its time is part of the round)
-            return _o(h, h_tok, (_s, _i), fold=fold) if fold is not None else _o(h, h_tok, (_s, _i))
+            kw = {"ft_defer": True} if ft_defer else {}
+            return _o(h, h_tok, (_s, _i), fold=fold, **kw) if fold is not None else _o(h, h_tok, (_s, _i))
 
         moe.forward = fwd
     return held
@@ -400,6 +401,17 @@ def test_fusedec_round_prof(mesh_device):
             walls[tag] = _wall(md, replay("S"))
         _log("FD_WALL_MS " + json.dumps({k: round(v, 4) for k, v in walls.items()}))
     json.dump(dict(meta=meta, walls=walls), open(os.path.join(OUT, "walls.json"), "w"))
+    if (
+        int(os.environ.get("FD_CANARY", "0")) > 0
+    ):  # hang canary: replay the traces back to back N times (a fabric deadlock shows as a timeout)
+        for name in [n for n in ("M", "A", "B") if n in ONLY]:
+            f = replay(name)
+            for it in range(int(os.environ["FD_CANARY"])):
+                f()
+                if it % 10 == 9:
+                    ttnn.synchronize_device(md)
+            ttnn.synchronize_device(md)
+            _log(f"FD_CANARY_OK {name} {os.environ['FD_CANARY']}")
     # ---- profiled replays
     if (
         os.environ.get("FD_DUMP") == "1"

@@ -45,6 +45,7 @@ class _TailDecode(TTMoEDecode):
         )
 
     fold = None  # DSV41_SHARED_EXPERT_TP=1: [1,1,T,D] bf16 partial of the column-sharded shared expert, added to the routed partial before the reduce_scatter
+    ft_defer = False  # DSV41_FUSE_TAIL: return the un-reduced partial (FusedPartial) instead of the reduce_scatter result; the layer fuses RS + AG + mHC post (tt/fuse_tail_ar.py)
 
     def forward(self, tt_x, tt_scores, tt_indices, layer_id: int = 0):
         pass
@@ -108,6 +109,13 @@ class _TailDecode(TTMoEDecode):
             red = red2
         from models.demos.blackhole.deepseek_v41_flash.tt import ccl_lean
 
+        if self.ft_defer:
+            self.ft_defer = False
+            from models.demos.blackhole.deepseek_v41_flash.tt import fuse_tail_ar as _FT
+
+            if _FT.applies(self._mesh, int(red.shape[2]), red):
+                return _FT.FusedPartial(red)
+
         if ccl_lean.moe_rs_min_enabled() and _RS_CCL[0] is not None:
             out = ccl_lean.reduce_scatter_lean(red, _RS_CCL[0], cluster_axis=cfg.reduce_scatter.cluster_axis)
         else:
@@ -149,6 +157,8 @@ def _read_rows(md, t):
 
 
 class DSV41MoEBlock:
+    supports_ft_defer = True  # DSV41_FUSE_TAIL: forward(..., ft_defer=True) may return a FusedPartial
+
     def __init__(
         self,
         mesh_device,
@@ -330,7 +340,9 @@ class DSV41MoEBlock:
         """True when ``forward(..., fold=partial)`` is supported (fused tail path)."""
         return hasattr(self.decode, "tail_ok") and self.decode.tail_ok()
 
-    def forward(self, tt_x_gate: ttnn.Tensor, tt_x_tokens: ttnn.Tensor, forced_routing=None, fold=None) -> ttnn.Tensor:
+    def forward(
+        self, tt_x_gate: ttnn.Tensor, tt_x_tokens: ttnn.Tensor, forced_routing=None, fold=None, ft_defer=False
+    ) -> ttnn.Tensor:
         """tt_x_gate: [1, 1, tokens_per_device, hidden] tile layout (router input).
         tt_x_tokens: [tokens_per_device, 1, 1, hidden] row-major bf16 DRAM (dispatch input).
         Returns [1, 1, tokens_per_device, hidden / mesh_cols] per device."""
@@ -357,10 +369,12 @@ class DSV41MoEBlock:
             tt_scores = ttnn.to_layout(tt_scores, ttnn.ROW_MAJOR_LAYOUT)
         self._l1("after typecasts")
         self.decode.fold = fold
+        self.decode.ft_defer = ft_defer
         try:
             out = self.decode.forward(tt_x=tt_x_tokens, tt_scores=tt_scores, tt_indices=tt_indices, layer_id=0)
         finally:
             self.decode.fold = None
+            self.decode.ft_defer = False
         self._l1("after decode")
         return out
 

@@ -511,6 +511,14 @@ class DSV41Attention:
             c = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=NH)  # [1,1,32,9*512], L1 width sharded
             c = ttnn.to_memory_config(c, ttnn.DRAM_MEMORY_CONFIG)  # wo_a is 2x faster from interleaved DRAM
         part = self._lin(self._lin(c, self.wo_a, "OA"), self.wo_b, "OB")
+        if getattr(
+            self, "_ft_defer", False
+        ):  # DSV41_FUSE_TAIL: the layer fuses the all-reduce with the mHC post (tt/fuse_tail_ar.py)
+            self._ft_defer = False
+            from models.demos.blackhole.deepseek_v41_flash.tt import fuse_tail_ar as _FT
+
+            if _FT.applies(self.mesh_device, self.T, part):
+                return _FT.FusedPartial(part)
         out = self.mesh_config.allreduce(part, self.ccl, axis=1)
         return ttnn.reshape(
             out, (1, 1, self.T, DIM), (1, 1, 32, DIM)
