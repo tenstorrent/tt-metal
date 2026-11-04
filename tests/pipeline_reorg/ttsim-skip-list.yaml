@@ -17,6 +17,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul_2d_config_bitexact.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py

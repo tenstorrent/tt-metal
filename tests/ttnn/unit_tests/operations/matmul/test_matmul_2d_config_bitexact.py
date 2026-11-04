@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 
 import pytest
 import torch
@@ -34,7 +33,6 @@ def make_input(dist, m, k):
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole only")
-@pytest.mark.skipif(bool(os.getenv("TT_METAL_SIMULATOR")), reason="Too slow on ttsim")
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
 @pytest.mark.parametrize("dist", ["randn", "outliers", "colscale"])
 @pytest.mark.parametrize(
