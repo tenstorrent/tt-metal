@@ -41,6 +41,12 @@ inline constexpr const char* SOFTMAX_KERNEL_PATH_GENERAL =
     "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels";
 inline constexpr const char* SOFTMAX_KERNEL_PATH_ATTENTION =
     "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention";
+struct SoftmaxInterleavedPlan {
+    bool deep_out = false;
+    std::uint32_t split_active = 0;
+    std::uint32_t chain_c = 0;
+};
+
 struct SoftmaxParams {
     const SoftmaxOperationType softmax_type;
     const int8_t dim;
@@ -56,6 +62,7 @@ struct SoftmaxParams {
     // bulk intermediate buffers in Float32 for an explicit fp32_dest_acc_en, as it did before the
     // defaulted path started enabling fp32 accumulation with 16-bit bulk buffers.
     const bool has_explicit_compute_kernel_config = false;
+    const SoftmaxInterleavedPlan interleaved_plan = {};
 };
 
 struct SoftmaxInputs {

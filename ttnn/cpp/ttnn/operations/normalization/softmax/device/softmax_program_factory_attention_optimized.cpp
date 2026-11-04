@@ -25,11 +25,28 @@ namespace ttnn::prim {
 
 using namespace tt::tt_metal::experimental;
 
-SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::InterleavedPlan
-SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(
+namespace {
+constexpr std::uint32_t row_parallel_min_tiles = 8;
+constexpr std::uint32_t row_split_max_tile_rows = 16;
+constexpr std::uint32_t row_chain_max_cores = 8;
+constexpr std::uint32_t row_chain_min_tiles_per_core = 16;
+constexpr std::uint32_t row_chain_min_tiles_per_core_fp32 = 4;
+constexpr std::uint32_t deep_out_depth = 4;
+constexpr std::uint64_t l1_reserve_bytes = 16384;
+constexpr double l1_cb_fraction = 0.9;
+constexpr std::uint32_t small_kernel_single_tile_cbs = 5;
+constexpr std::uint32_t row_split_im_single_tiles = 4;
+constexpr std::uint32_t row_split_acc_single_tiles = 5;
+constexpr std::uint32_t row_chain_im_single_tiles = 3;
+constexpr std::uint32_t row_chain_acc_single_tiles = 6;
+constexpr const char* read_batch_tiles = "32";
+constexpr const char* large_kernel_read_batch_tiles = "16";
+}  // namespace
+
+SoftmaxInterleavedPlan SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
-    InterleavedPlan plan;
+    SoftmaxInterleavedPlan plan;
     const auto& input_tensor = tensor_args.input_tensor;
     auto* device = input_tensor.device();
     const auto arch = device->arch();
@@ -41,18 +58,18 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(
     const std::uint32_t W = shape[-1], H = (input_tensor.physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
     const std::uint32_t Wt = W / input_tensor.tensor_spec().tile().get_width();
     const std::uint32_t Ht = H / input_tensor.tensor_spec().tile().get_height();
-    if (arch != tt::ARCH::WORMHOLE_B0 || tensor_args.mask.has_value() || Wt < 8 ||
+    if (arch != tt::ARCH::WORMHOLE_B0 || tensor_args.mask.has_value() || Wt < row_parallel_min_tiles ||
         !plain_dram(input_tensor.memory_config().buffer_type(), input_tensor.dtype()) ||
         !plain_dram(out_spec.memory_config().buffer_type(), out_spec.data_type())) {
         return plan;
     }
     const bool mask_padded_data = W > input_tensor.logical_shape()[-1];
-    constexpr std::uint64_t l1_reserve_bytes = 16384;
-    const std::uint64_t l1_budget_bytes = (ttnn::operations::core::usable_program_l1_capacity(device) >> 16) << 16;
+    const std::uint64_t l1_budget_bytes = ttnn::operations::core::usable_program_l1_capacity(device);
     const std::uint64_t l1_bank = device->allocator()->get_bank_size(BufferType::L1);
 
     const tt::DataFormat in0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const bool batched_io = attributes.numeric_stable || (Wt > 8 && in0_cb_data_format != tt::DataFormat::Float32);
+    const bool batched_io =
+        attributes.numeric_stable || (Wt > row_parallel_min_tiles && in0_cb_data_format != tt::DataFormat::Float32);
     const std::uint32_t in0_tile_size = tt::tile_size(in0_cb_data_format);
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, attributes.compute_kernel_config);
@@ -76,19 +93,21 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(
     const std::uint32_t wt_blocks = tt::div_up(Wt, block_size) * block_size;
     const std::uint32_t in0_t = attributes.numeric_stable && !mask_padded_data ? wt_blocks : block_size * 2;
     const std::uint32_t out0_t = block_size * 2;
-    std::uint64_t cb_size_sum_bytes = (std::uint64_t{in0_t} * in0_tile_size) +
-                                      (std::uint64_t{wt_blocks} * im_tile_size) +
-                                      (std::uint64_t{out0_t} * out0_tile_size) + (5ull * im_tile_size);
+    std::uint64_t cb_size_sum_bytes =
+        (std::uint64_t{in0_t} * in0_tile_size) + (std::uint64_t{wt_blocks} * im_tile_size) +
+        (std::uint64_t{out0_t} * out0_tile_size) + (std::uint64_t{small_kernel_single_tile_cbs} * im_tile_size);
     if (attributes.numeric_stable && mask_padded_data) {
         cb_size_sum_bytes += std::uint64_t{wt_blocks} * im_tile_size;
     }
-    const bool use_large_kernel = (device->l1_size_per_core() * 0.9) < cb_size_sum_bytes;
-    const std::uint64_t deep_need = cb_size_sum_bytes + (3ull * out0_t * out0_tile_size);
+    const bool use_large_kernel = (device->l1_size_per_core() * l1_cb_fraction) < cb_size_sum_bytes;
+    const std::uint64_t deep_need = cb_size_sum_bytes + (std::uint64_t{deep_out_depth - 1} * out0_t * out0_tile_size);
     plan.deep_out = batched_io && !use_large_kernel && Wt % block_size == 0 &&
-                    (device->l1_size_per_core() * 0.9) >= deep_need && l1_budget_bytes >= deep_need + l1_reserve_bytes;
+                    (device->l1_size_per_core() * l1_cb_fraction) >= deep_need &&
+                    l1_budget_bytes >= deep_need + l1_reserve_bytes;
 
     const auto grid = device->compute_with_storage_grid_size();
-    if (use_large_kernel && !mask_padded_data && attributes.numeric_stable && NC * Ht <= 16 && Wt % block_size == 0) {
+    if (use_large_kernel && !mask_padded_data && attributes.numeric_stable && NC * Ht <= row_split_max_tile_rows &&
+        Wt % block_size == 0) {
         const std::uint64_t streamed_entry_bytes = in0_tile_size + (2ull * im_tile_size);
         const std::uint64_t single_entry_bytes = (std::uint64_t{out0_t} * out0_tile_size) + (3ull * acc_tile_size) +
                                                  (2ull * im_tile_size) + max_scaler_tile_size + acc_tile_size +
@@ -119,10 +138,12 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(
                     t_max = std::max(t_max, tcount);
                     nck_max = std::max(nck_max, nck);
                 }
-                const std::uint64_t need = std::uint64_t{t_max} * in0_tile_size + std::uint64_t{L} * im_tile_size +
-                                           2ull * block_size * out0_tile_size + (4ull + active) * im_tile_size +
-                                           (5ull + nck_max + nchunk) * acc_tile_size + max_scaler_tile_size +
-                                           acc_tile_size + l1_reserve_bytes;
+                const std::uint64_t need =
+                    std::uint64_t{t_max} * in0_tile_size + std::uint64_t{L} * im_tile_size +
+                    2ull * block_size * out0_tile_size +
+                    (std::uint64_t{row_split_im_single_tiles} + active) * im_tile_size +
+                    (std::uint64_t{row_split_acc_single_tiles} + nck_max + nchunk) * acc_tile_size +
+                    max_scaler_tile_size + acc_tile_size + l1_reserve_bytes;
                 if (need <= std::min(l1_bank, l1_budget_bytes)) {
                     plan.split_active = active;
                     break;
@@ -132,19 +153,24 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(
     }
 
     if (!use_large_kernel && !mask_padded_data && attributes.numeric_stable) {
-        const std::uint32_t lim = std::min<std::uint32_t>(8u, (grid.x * grid.y) / std::max<std::uint32_t>(1u, NC * Ht));
+        const std::uint32_t lim =
+            std::min<std::uint32_t>(row_chain_max_cores, (grid.x * grid.y) / std::max<std::uint32_t>(1u, NC * Ht));
         std::uint32_t C = 1;
         while (C * 2 <= lim) {
             C *= 2;
         }
-        const std::uint32_t min_tiles = in0_cb_data_format == tt::DataFormat::Float32 ? 4u : 16u;
+        const std::uint32_t min_tiles = in0_cb_data_format == tt::DataFormat::Float32
+                                            ? row_chain_min_tiles_per_core_fp32
+                                            : row_chain_min_tiles_per_core;
         while (C >= 2 && (Wt % (C * block_size) != 0 || Wt / C < min_tiles)) {
             C /= 2;
         }
         const bool shape_ok = (C <= grid.x && grid.x % C == 0) || (C % grid.x == 0 && C / grid.x <= grid.y);
         const std::uint64_t need = std::uint64_t{Wt / C} * (in0_tile_size + im_tile_size) +
-                                   2ull * block_size * out0_tile_size + (3ull + C) * im_tile_size +
-                                   6ull * acc_tile_size + max_scaler_tile_size + acc_tile_size + l1_reserve_bytes;
+                                   2ull * block_size * out0_tile_size +
+                                   (std::uint64_t{row_chain_im_single_tiles} + C) * im_tile_size +
+                                   std::uint64_t{row_chain_acc_single_tiles} * acc_tile_size + max_scaler_tile_size +
+                                   acc_tile_size + l1_reserve_bytes;
         if (C >= 2 && shape_ok && need <= std::min(l1_bank, l1_budget_bytes)) {
             plan.chain_c = C;
         }
@@ -198,11 +224,28 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
                (t.dtype() == DataType::BFLOAT16 || t.dtype() == DataType::FLOAT32);
     };
     const bool row_parallel = arch == tt::ARCH::WORMHOLE_B0 && plain_dram(input_tensor) && plain_dram(output_tensor);
-    const auto plan = select_plan(attributes, tensor_args);
+    const auto& plan = attributes.interleaved_plan;
+    const auto check_rect = [device](const CoreRangeSet& nodes, const CoreCoord& lo, const CoreCoord& hi) {
+        TT_FATAL(
+            nodes.contains(CoreRange(lo, hi)),
+            "Softmax remote-write targets {} are outside the program's buffer cores",
+            CoreRange(lo, hi).str());
+        const auto v0 = device->worker_core_from_logical_core(lo);
+        for (std::size_t y = lo.y; y <= hi.y; ++y) {
+            for (std::size_t x = lo.x; x <= hi.x; ++x) {
+                const auto v = device->worker_core_from_logical_core(CoreCoord{x, y});
+                TT_FATAL(
+                    v.x == v0.x + (x - lo.x) && v.y == v0.y + (y - lo.y),
+                    "Softmax cores {} do not map to a contiguous worker rectangle",
+                    CoreRange(lo, hi).str());
+            }
+        }
+    };
 
     const tt::DataFormat in0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const bool batched_io = row_parallel && !has_mask && Wt >= 8 &&
-                            (attributes.numeric_stable || (Wt > 8 && in0_cb_data_format != tt::DataFormat::Float32));
+    const bool batched_io =
+        row_parallel && !has_mask && Wt >= row_parallel_min_tiles &&
+        (attributes.numeric_stable || (Wt > row_parallel_min_tiles && in0_cb_data_format != tt::DataFormat::Float32));
     const std::uint32_t in0_tile_size = tt::tile_size(in0_cb_data_format);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -365,50 +408,37 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         in4_t);
     const bool deep_out = plan.deep_out;
 
-    if (plan.split_active != 0 && row_parallel && use_large_kernel && !has_mask && !mask_padded_data &&
-        attributes.numeric_stable && NC * Ht <= 16 && Wt % block_size == 0 && dfb_length % block_size == 0) {
+    if (plan.split_active != 0) {
+        TT_FATAL(
+            use_large_kernel && dfb_length % block_size == 0, "Softmax row split needs the large-kernel buffer layout");
         const auto ws_grid = device->compute_with_storage_grid_size();
         const std::uint32_t L = dfb_length;
         const std::uint32_t nchunk = tt::div_up(Wt, L);
         const std::uint32_t last_len = Wt - (nchunk - 1) * L;
-        const std::uint32_t grid_n = ws_grid.x * ws_grid.y;
-        const std::uint32_t req = grid_n / std::max<std::uint32_t>(1u, std::min<std::uint32_t>(NC * Ht, ws_grid.y));
-        std::uint32_t active = std::min<std::uint32_t>(std::min<std::uint32_t>(req, nchunk), grid_n);
-        std::vector<std::uint32_t> ck0, nck, tcount;
-        std::uint32_t t_max = 0, nck_max = 0, rect_w = 1, rect_h = 1, rect_n = 1;
-        bool fits = false;
-        for (; active <= std::min<std::uint32_t>(nchunk, grid_n); ++active) {
-            rect_w = std::min<std::uint32_t>(active, ws_grid.x);
-            rect_h = tt::div_up(active, rect_w);
-            rect_n = rect_w * rect_h;
-            ck0.assign(rect_n, 0);
-            nck.assign(rect_n, 0);
-            tcount.assign(rect_n, 0);
-            t_max = 0;
-            nck_max = 0;
-            for (std::uint32_t c = 0; c < active; ++c) {
-                ck0[c] = c * nchunk / active;
-                nck[c] = (c + 1) * nchunk / active - ck0[c];
-                for (std::uint32_t k = ck0[c]; k < ck0[c] + nck[c]; ++k) {
-                    tcount[c] += (k == nchunk - 1) ? last_len : L;
-                }
-                t_max = std::max(t_max, tcount[c]);
-                nck_max = std::max(nck_max, nck[c]);
+        const std::uint32_t active = plan.split_active;
+        const std::uint32_t rect_w = std::min<std::uint32_t>(active, ws_grid.x);
+        const std::uint32_t rect_h = tt::div_up(active, rect_w);
+        const std::uint32_t rect_n = rect_w * rect_h;
+        std::vector<std::uint32_t> ck0(rect_n, 0), nck(rect_n, 0), tcount(rect_n, 0);
+        std::uint32_t t_max = 0, nck_max = 0;
+        for (std::uint32_t c = 0; c < active; ++c) {
+            ck0[c] = c * nchunk / active;
+            nck[c] = (c + 1) * nchunk / active - ck0[c];
+            for (std::uint32_t k = ck0[c]; k < ck0[c] + nck[c]; ++k) {
+                tcount[c] += (k == nchunk - 1) ? last_len : L;
             }
-            if (active == plan.split_active) {
-                fits = true;
-                break;
-            }
+            t_max = std::max(t_max, tcount[c]);
+            nck_max = std::max(nck_max, nck[c]);
         }
-        do {
-            if (!fits) {
-                break;
-            }
+        {
             const std::uint32_t n_rows = NC * Ht;
             const std::uint32_t n_groups = std::max<std::uint32_t>(
                 1u, std::min<std::uint32_t>(n_rows, static_cast<std::uint32_t>(ws_grid.y) / rect_h));
             const CoreRange ws_rect({0, 0}, {rect_w - 1, n_groups * rect_h - 1});
             const CoreRangeSet ws_nodes(ws_rect);
+            for (std::uint32_t grp = 0; grp < n_groups; ++grp) {
+                check_rect(ws_nodes, CoreCoord{0, grp * rect_h}, CoreCoord{rect_w - 1, grp * rect_h + rect_h - 1});
+            }
 
             const KernelSpecName W_READER{"reader"};
             const KernelSpecName W_WRITER{"writer"};
@@ -651,25 +681,15 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             wrun.tensor_args.emplace(W_SRC, input_tensor.mesh_tensor());
             wrun.tensor_args.emplace(W_DST, output_tensor.mesh_tensor());
             return ttnn::device_operation::ProgramArtifacts{.spec = std::move(wspec), .run_params = std::move(wrun)};
-        } while (false);
+        }
     }
 
-    if (row_parallel && !use_large_kernel && !has_mask && !mask_padded_data && attributes.numeric_stable) {
+    if (plan.chain_c >= 2) {
         const auto wc_grid = device->compute_with_storage_grid_size();
-        const std::uint32_t lim =
-            std::min<std::uint32_t>(8u, (wc_grid.x * wc_grid.y) / std::max<std::uint32_t>(1u, NC * Ht));
-        std::uint32_t C = 1;
-        while (C * 2 <= lim) {
-            C *= 2;
-        }
-        const std::uint32_t min_tiles = in0_cb_data_format == tt::DataFormat::Float32 ? 4u : 16u;
-        while (C >= 2 && (Wt % (C * block_size) != 0 || Wt / C < min_tiles)) {
-            C /= 2;
-        }
+        const std::uint32_t C = plan.chain_c;
         const std::uint32_t gx = wc_grid.x, gy = wc_grid.y;
-        const bool shape_ok = (C <= gx && gx % C == 0) || (C % gx == 0 && C / gx <= gy);
         const std::uint32_t T = Wt / C;
-        if (C >= 2 && C == plan.chain_c && shape_ok && Wt % (C * block_size) == 0) {
+        {
             const std::uint32_t n_rows = NC * Ht;
             const std::uint32_t per_row = C <= gx ? gx / C : 0;
             const std::uint32_t cap = C <= gx ? per_row * gy : gy / (C / gx);
@@ -684,6 +704,10 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             for (std::uint32_t g = 0; g < G; ++g) {
                 const CoreCoord a = logical(g, 0), b = logical(g, C - 1);
                 wc_nodes = wc_nodes.merge(CoreRangeSet(CoreRange(a, CoreCoord{std::max(a.x, b.x), b.y})));
+            }
+            for (std::uint32_t g = 0; g < G; ++g) {
+                const CoreCoord a = logical(g, 0), b = logical(g, C - 1);
+                check_rect(wc_nodes, a, CoreCoord{std::max(a.x, b.x), b.y});
             }
 
             const KernelSpecName C_READER{"reader"};
@@ -719,7 +743,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             cbase["NUMERIC_STABLE"] = "1";
             KernelSpec::CompilerOptions::Defines ccomp = cbase;
             KernelSpec::CompilerOptions::Defines cread = cbase;
-            cread["READ_BATCH"] = "32";
+            cread["READ_BATCH"] = read_batch_tiles;
             ccomp["EXP_APPROX"] = math_approx_mode ? "1" : "0";
             ccomp["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
             auto c_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
@@ -941,7 +965,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = OUT0,
         .entry_size = out0_tile_size,
-        .num_entries = out0_t * (deep_out ? 4u : 1u),
+        .num_entries = out0_t * (deep_out ? deep_out_depth : 1u),
         .data_format_metadata = out0_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = RECIP_SUM_EXPS,
@@ -1037,7 +1061,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     KernelSpec::CompilerOptions::Defines reader_defines = base_defines;
     KernelSpec::CompilerOptions::Defines writer_defines;
     if (batched_io) {
-        reader_defines["READ_BATCH"] = use_large_kernel ? "16" : "32";
+        reader_defines["READ_BATCH"] = use_large_kernel ? large_kernel_read_batch_tiles : read_batch_tiles;
         writer_defines["FLUSH_WRITES"] = "1";
     }
     compute_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";

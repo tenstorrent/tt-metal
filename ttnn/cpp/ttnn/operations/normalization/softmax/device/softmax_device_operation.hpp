@@ -64,12 +64,7 @@ struct SoftmaxDeviceOperation {
     // Interleaved memory
     // Ported to Metal 2.0 (MetalV2FactoryConcept). See device/softmax_program_factory_attention_optimized.cpp.
     struct SoftmaxProgramFactoryAttentionOptimized {
-        struct InterleavedPlan {
-            bool deep_out = false;
-            std::uint32_t split_active = 0;
-            std::uint32_t chain_c = 0;
-        };
-        static InterleavedPlan select_plan(const operation_attributes_t&, const tensor_args_t&);
+        static SoftmaxInterleavedPlan select_plan(const operation_attributes_t&, const tensor_args_t&);
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
@@ -84,8 +79,6 @@ struct SoftmaxDeviceOperation {
         SoftmaxProgramFactoryAttentionOptimized>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
