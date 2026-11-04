@@ -236,29 +236,37 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_a(
 {
     // reuse_a means A stays fixed while we walk B/DEST across the row-tiling
     // dimension. The loop handles two t-slices at a time so the second slice
-    // can reuse the same B state before resetting both source counters.
+    // can reuse the same B state before resetting both source counters. The
+    // last slice of an odd t_dim runs on its own.
     for (std::uint32_t t = 0; t < t_dim; t += 2)
     {
+        const bool paired = (t + 1) < t_dim;
+
         for (std::uint32_t rut = 0; (rut + 1) < rut_dim; rut++)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * t + rut);
             matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, t_dim);
 
-            if ((t + 1) < t_dim)
+            if (paired)
             {
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * (t + 1) + rut);
                 matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, t_dim);
+                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
             }
-
-            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+            else
+            {
+                // Unpaired last slice: only one srcB bank was run, and srcB valid clear is disabled, so
+                // flipping srcB would park the next rut on a bank the unpacker does not fill for this step. Move srcA only.
+                TTI_SETRWC(p_setrwc::CLR_A, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_ABD);
+            }
         }
 
         const std::uint32_t rut = rut_dim - 1;
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * t + rut);
         matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, t_dim);
 
-        if ((t + 1) < t_dim)
+        if (paired)
         {
             TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * (t + 1) + rut);
@@ -279,26 +287,33 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_b(
     // source that gets reused and later released.
     for (std::uint32_t t = 0; t < t_dim; t += 2)
     {
+        const bool paired = (t + 1) < t_dim;
+
         for (std::uint32_t rut = 0; (rut + 1) < rut_dim; rut++)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + t + rut * ct_dim);
             matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, t_dim);
 
-            if ((t + 1) < t_dim)
+            if (paired)
             {
                 TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + t + 1 + rut * ct_dim);
                 matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, t_dim);
+                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
             }
-
-            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+            else
+            {
+                // Unpaired last slice: only one srcA bank was run, and srcA valid clear is disabled, so
+                // flipping srcA would park the next rut on a bank the unpacker does not fill for this step. Move srcB only.
+                TTI_SETRWC(p_setrwc::CLR_B, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_ABD);
+            }
         }
 
         const std::uint32_t rut = rut_dim - 1;
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + t + rut * ct_dim);
         matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, t_dim);
 
-        if ((t + 1) < t_dim)
+        if (paired)
         {
             TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + t + 1 + rut * ct_dim);

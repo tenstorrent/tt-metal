@@ -26,6 +26,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+# Imported with the real ttnn before any stubbed adapter import below replaces ``ttnn`` in sys.modules: the
+# production modules reach it through models.common, and a first import under the stub fails on ``ttnn.device``
+# (the file-alone and first-in-session case; a run that collected another test module first hid it).
+import models.common.utility_functions  # noqa: E402,F401
+
 _ROOT = Path(__file__).resolve().parents[5]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -40,6 +45,11 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import (  # noqa: E4
     _unused,
 )
 from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state  # noqa: E402
+from models.demos.gemma4.tt.generator import (  # noqa: E402  - pure helpers the stubbed generator keeps
+    filter_warmup_sampling_params,
+    items_within_prefill_window,
+    merge_soft_tokens,
+)
 
 _ENV_CLEARED = (
     "GEMMA4_CONTRACT_ASYNC",
@@ -52,6 +62,17 @@ _ENV_CLEARED = (
     "GEMMA4_BOUNDED_SLIDING_KV_CACHE",
     "GEMMA4_SPEC_RING_HEADROOM_BLOCKS",
 )
+
+
+def _set_module(patch, name, module):
+    """Install ``module`` as ``sys.modules[name]``, and under its ``models.tt_transformers`` alias too.
+
+    Code that still imports the old path would otherwise get whatever an earlier test cached under
+    the old name, and an entry the alias adds during the test would outlive ``patch``.
+    """
+    patch.setitem(sys.modules, name, module)
+    if name.startswith("models.ttt_compat."):
+        patch.setitem(sys.modules, "models.tt_transformers." + name[len("models.ttt_compat.") :], module)
 
 
 def _stub_runtime(patch):
@@ -79,6 +100,29 @@ def _stub_runtime(patch):
         bfloat16=object(),
     )
     patch.setitem(sys.modules, "ttnn", runtime)
+    # generator_vllm imports vLLM's Gemma 4 processor classes and the multimodal
+    # registry at module scope. Stub them only where vLLM is absent (the tt-metal
+    # unit-test runners), so the host tests import the real ones everywhere else.
+    try:
+        importlib.import_module("vllm.multimodal")
+    except ImportError:
+        registry = SimpleNamespace(register_processor=lambda *args, **kwargs: (lambda cls: cls))
+        vllm_stubs = {
+            "vllm": {"__path__": []},
+            "vllm.model_executor": {"__path__": []},
+            "vllm.model_executor.models": {"__path__": []},
+            "vllm.model_executor.models.gemma4_mm": {
+                name: type(name, (), {})
+                for name in ("Gemma4DummyInputsBuilder", "Gemma4MultiModalProcessor", "Gemma4ProcessingInfo")
+            },
+            "vllm.model_executor.models.gemma4_unified": {
+                "Gemma4UnifiedProcessingInfo": type("Gemma4UnifiedProcessingInfo", (), {})
+            },
+            "vllm.model_executor.models.interfaces": {"SupportsMultiModal": type("SupportsMultiModal", (), {})},
+            "vllm.multimodal": {"MULTIMODAL_REGISTRY": registry},
+        }
+        for name, members in vllm_stubs.items():
+            patch.setitem(sys.modules, name, _module(name, **members))
     lower_modules = {
         "ttnn.tools": {"trace_allocation_tracker": SimpleNamespace()},
         "models.common.sampling.tt_log_probs": {
@@ -109,24 +153,51 @@ def _stub_runtime(patch):
         "models.demos.gemma4.tt.generator": {
             "SDPA_CHUNK_ALIGN": 128,
             "ChunkedPrefillPageTableGuardMixin": type("ChunkedPrefillPageTableGuardMixin", (), {}),
+            # the pure helpers (host-tested without vLLM) are the real ones
+            "filter_warmup_sampling_params": filter_warmup_sampling_params,
+            "items_within_prefill_window": items_within_prefill_window,
+            "merge_soft_tokens": merge_soft_tokens,
             "align_num_cached_tokens_to_sdpa": _align_down,
             # Pass-through: the stubbed prefill carries no stale page-table columns.
             "mask_page_table_columns_past_allocation": lambda tables, prompt_lens, block_sizes: (tables, 0),
             "max_batched_prefill_users": _unused,
             "resolve_batched_prefill_chunk_users": _unused,
+            # Packed multi-prompt prefill is an eager-path policy the contract tests never engage.
+            "gemma4_packed_prefill_enabled": lambda: False,
+            # The multimodal entry points (vision / audio weights) are never reached by the contract tests.
+            "_build_vision_state_dict": _unused,
+            "_vision_encoder_seq_len": _unused,
+            "vision_state_dict_for": _unused,
         },
+        # The on-device multimodal embedders generator_vllm imports at module scope.
+        "models.demos.gemma4.tt.vision.embedders": {
+            "Gemma4MultimodalEmbedder": _unused,
+            "Gemma4UnifiedAudioEmbedder": _unused,
+            "Gemma4UnifiedVisionEmbedder": _unused,
+            "has_unified_audio_weights": _unused,
+            "has_unified_vision_weights": _unused,
+        },
+        "models.demos.gemma4.tt.vision.vision_model_config": {"VisionModelArgs": _unused},
+        "models.demos.gemma4.tt.vision.vision_tower": {"VisionTower": _unused},
         "models.demos.gemma4.tt.generator_trace": {
-            name: _unused
-            for name in (
-                "maybe_disable_pli_prefill_trace",
-                "patch_gemma4_trace_model_args",
-                "resolve_gemma4_prefill_chunk_size",
-                "resolve_gemma4_prefill_trace_enable",
-                "should_auto_enable_bounded_sliding",
-                "warmup_gemma4_model_prefill",
-            )
+            **{
+                name: _unused
+                for name in (
+                    "maybe_disable_pli_prefill_trace",
+                    "patch_gemma4_trace_model_args",
+                    "resolve_gemma4_prefill_chunk_size",
+                    "resolve_gemma4_prefill_trace_enable",
+                    "should_auto_enable_bounded_sliding",
+                    "warmup_gemma4_model_prefill",
+                )
+            },
+            # The short-prefill trace opt-in is off for the contract tests (the stubbed prefill is eager).
+            "trace_short_prefill_max": lambda: 128,
+            "trace_short_prefill_opt_in": lambda prefill_seq_len=None, batch_size=1: False,
+            # The boot-captured batched prefill buckets never admit the stubbed prefill (no bucket matches).
+            "batched_prefill_trace_bucket": lambda batch, empty_slots, max_batch, padded_len: None,
         },
-        "models.tt_transformers.tt.common": {
+        "models.ttt_compat.tt.common": {
             "get_padded_prefill_len": _padded_length,
             **{
                 name: _unused
@@ -140,7 +211,7 @@ def _stub_runtime(patch):
                 )
             },
         },
-        "models.tt_transformers.tt.generator_vllm": {
+        "models.ttt_compat.tt.generator_vllm": {
             "HybridAttentionForCausalLM": type(
                 "HybridAttentionForCausalLM",
                 (),
@@ -155,10 +226,11 @@ def _stub_runtime(patch):
             "bounded_ring_modulo": lambda window: window,
         },
         "models.demos.gemma4.tt.ccl": {"ccl_allgather": _unused, "ccl_allreduce": _unused},
-        "models.demos.gemma4.utils.general_utils": {"get_cache_file_name": _unused},
+        "models.tt_transformers.tt.ccl": {"TT_CCL": _unused},
+        "models.demos.gemma4.utils.general_utils": {"cast_host_for_ttnn": _unused, "get_cache_file_name": _unused},
     }
     for name, members in lower_modules.items():
-        patch.setitem(sys.modules, name, _module(name, **members))
+        _set_module(patch, name, _module(name, **members))
     try:
         importlib.import_module("loguru")
     except ImportError:
@@ -170,7 +242,7 @@ def _stub_runtime(patch):
     for name, (owner, attribute) in sampling_package._EXPORTS.items():
         if owner == ".generator":
             patch.setitem(sampling_package.__dict__, name, getattr(sampling, attribute))
-    _fresh_import(patch, "models.tt_transformers.tt.generator")
+    _set_module(patch, "models.ttt_compat.tt.generator", _fresh_import(patch, "models.ttt_compat.tt.generator"))
     try:
         importlib.import_module("vllm_tt_plugin.spec_decode")
     except ImportError:
@@ -391,3 +463,27 @@ def model(adapter, monkeypatch):
 @pytest.fixture
 def device_result():
     return DeviceResult
+
+
+@pytest.fixture
+def expect_error():
+    """The repo-root conftest's ``expect_error`` (``with expect_error(Error, "message"):`` around an expected raise,
+    logged for the CI triager), provided here too so the unit host suite runs under
+    ``--confcutdir=models/demos/gemma4/tests/unit`` without the root conftest."""
+    import contextlib
+
+    from loguru import logger
+
+    @contextlib.contextmanager
+    def expect_error_(error, message):
+        names = ", ".join(e.__name__ for e in (error if isinstance(error, tuple) else (error,)))
+        logger.info(f'[EXPECTED_ERROR BEGIN] {names} message="{message}"')
+        try:
+            with pytest.raises(  # allow-pytest.raises (predates the expect_error rule)
+                error, match=message
+            ) as exc_info:  # allow-pytest.raises (this IS the expect_error fixture)
+                yield exc_info
+        finally:
+            logger.info(f'[EXPECTED_ERROR END] {names} message="{message}"')
+
+    return expect_error_

@@ -26,14 +26,13 @@ from models.common.sampling.tt_sampling import TIEBREAK_INDEX_SENTINEL, TTSampli
 
 NUM_USERS = 32
 NUM_CANDIDATES = 64
-# Global vocabulary indices are in the 100k range, like a real gathered candidate set. Deliberately
-# far above 2**11: the FPU reduce truncates its source registers to a 10-bit mantissa, so indices this
-# large come back rounded from a float32 ttnn.min and match no real index. Only the int32 reduce is
-# exact here, and these magnitudes are what make the test notice if the index half leaves int32.
+# Global vocabulary indices are in the 100k range, like a real gathered candidate set. They are deliberately
+# far above 2**11. The FPU reduce truncates its source registers to a 10-bit mantissa. An index this large
+# would come back rounded from it and match no real index. These magnitudes make the test notice if the
+# index half ever runs on an inexact reduce path.
 INDEX_BASE = 100_000
-# TTSampling.forward builds the gathered global-index tensor as uint32, so that is what these tests
-# feed by default; uint32 min/max are on the same inexact FPU reduce path as float32, and the method is
-# responsible for casting to int32 itself. INDEX_DTYPES also covers int32 in case a caller pre-casts.
+# TTSampling.forward builds the gathered global-index tensor as uint32. These tests feed uint32 by default.
+# The method casts the indices to int32 itself. INDEX_DTYPES also covers int32 in case a caller pre-casts.
 MODEL_INDEX_DTYPE = ttnn.uint32
 INDEX_DTYPES = [ttnn.uint32, ttnn.int32]
 INDEX_DTYPE_IDS = ["uint32_indices", "int32_indices"]
@@ -113,11 +112,11 @@ def _expected_winner_position(indices_row, tie_positions):
 def test_masked_index_min_reduce_is_exact(device, index_dtype):
     """The index half of the tie-break must be exact at real vocabulary magnitudes.
 
-    ``ttnn.min`` on a float32 or uint32 tensor runs on the FPU, which truncates its source registers to
-    a 10-bit mantissa, so an index above 2**11 comes back rounded to a value that equals no real index:
-    the winner mask ends up empty and the whole adjustment degrades into a silent no-op. This pins the
-    int32 reduce (and the int32 broadcast equality) the implementation depends on, so a regression
-    there fails here and names itself instead of resurfacing as an unexplained tie downstream.
+    The method finds the lowest global index among the tied maxima with an int32 masked add, an int32 row
+    min and an int32 broadcast equality. A reduce on the FPU would round an index above 2**11 to a value that
+    equals no real index. The winner mask would then end up empty and the adjustment would do nothing.
+    This test pins those int32 ops. A regression there fails here and names itself instead of resurfacing
+    as an unexplained tie downstream.
 
     Runs first in this file on purpose: under ``-x`` it is the failure you want to see.
     """
