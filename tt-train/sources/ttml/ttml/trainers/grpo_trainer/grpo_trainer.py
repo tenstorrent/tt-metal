@@ -27,6 +27,7 @@ import ttnn
 from ttml.common.schedulers import CosineAnnealingScheduler, LambdaScheduler, LinearScheduler, SequentialScheduler
 from ttml import checkpointing
 from ttml.common.utils import (
+    build_causal_mask,
     create_optimizer,
     deallocate_tensors,
     no_grad,
@@ -1469,7 +1470,9 @@ class GRPOTrainer:
         )
         # Per-device row count after sharding: correct for DDP, FSDP and single device alike.
         B_local = int(x.shape()[0])
-        logits = self.model(x, None)
+        # The composite SDPA has no causal default, so a model built with it needs the mask.
+        mask = build_causal_mask(Tp, device=True) if getattr(self.model.config, "use_composite_sdpa", False) else None
+        logits = self.model(x, mask)
         tgt = ttml.autograd.Tensor.from_numpy(
             targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
         )

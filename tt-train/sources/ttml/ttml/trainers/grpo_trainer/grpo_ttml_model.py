@@ -52,7 +52,6 @@ from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 from ttml.models.qwen3.weights import load_weights_from_hf
 
 from .distributed import resolve_batch_layout
-from .llama_composite_kv import LlamaCompositeKV
 
 _SUPPORTED_KINDS = ("llama", "qwen3")
 
@@ -113,9 +112,9 @@ def setup_ttml_model(
     """Open the device and build the ttml model and tokenizer.
 
     The model family comes from ``transformer_config.model_type`` (``"llama"`` or
-    ``"qwen3"``). Llama reads its architecture from ``transformer_config``; Qwen3
-    only reads ``max_sequence_length`` and ``runner_type`` and takes the
-    architecture from the HF config of ``model_source``.
+    ``"qwen3"``). Both take the architecture from the HF config of ``model_source``;
+    ``transformer_config`` sets ``max_sequence_length``, ``runner_type`` and, for
+    Llama, ``dropout_prob``.
 
     Returns:
         ``(model, tokenizer)``.
@@ -160,10 +159,18 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
 
     tokenizer = AutoTokenizer.from_pretrained(model_source)
-    tf_config.vocab_size = len(tokenizer)
-    llama_cfg = LlamaConfig.from_transformer_config(tf_config, len(tokenizer))
+    hf_path = model_source if os.path.isdir(model_source) else _download_hf_repo(model_source)
+    llama_cfg = LlamaConfig.from_hf(
+        hf_path,
+        max_position_embeddings=tf_config.max_sequence_length,
+        attention_dropout=tf_config.dropout_prob,
+        mlp_dropout=tf_config.dropout_prob,
+        runner_type=RunnerType.from_string(str(tf_config.runner_type)),
+        # The sampler's decode masks differ per row, which only the composite kernel accepts.
+        use_composite_sdpa=True,
+    )
 
-    tt_model = LlamaCompositeKV(llama_cfg)
+    tt_model = Llama(llama_cfg)
 
     if device_config.enable_ddp:
         # NOTE: TP is intentionally disabled here. cross_entropy_loss assumes full-vocab logits.
@@ -174,9 +181,8 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
         logging.info("Loading ttml checkpoint: %s", checkpoint_path)
         load_checkpoint(checkpoint_path, model_params=tt_model.parameters())
     else:
-        hf_path = model_source if os.path.isdir(model_source) else _download_hf_repo(model_source)
         logging.info("Loading HuggingFace weights from: %s", hf_path)
-        load_from_safetensors(tt_model, hf_path, llama_cfg, strict=True)
+        logging.info("%s", load_from_safetensors(tt_model, hf_path))
 
     return tt_model, tokenizer
 
@@ -340,8 +346,7 @@ def _llama_weights_ref_hf_dict(model) -> dict[str, ttnn.Tensor]:
         gate_up = get(f"{p}/mlp/w_gate_up/weight")
         gate_up_shape = tuple(gate_up.shape)
         assert gate_up_shape == (1, 1, 2 * intermediate, H), (
-            f"w_gate_up shape mismatch at layer {i}: got {gate_up_shape}, "
-            f"expected (1, 1, {2 * intermediate}, {H})"
+            f"w_gate_up shape mismatch at layer {i}: got {gate_up_shape}, " f"expected (1, 1, {2 * intermediate}, {H})"
         )
         out[f"model.layers.{i}.mlp.gate_proj.weight"] = rows(gate_up, 0, intermediate)
         out[f"model.layers.{i}.mlp.up_proj.weight"] = rows(gate_up, intermediate, 2 * intermediate)

@@ -58,7 +58,7 @@ class TTMLRolloutSampler(RolloutSampler):
     ``cross_entropy_loss`` gather.
 
     Args:
-        model: A ttml ``Llama`` (e.g. ``LlamaCompositeKV``) or ``Qwen3``.
+        model: A ttml ``Llama`` or ``Qwen3``.
         tokenizer: The HuggingFace tokenizer matching ``model``.
         max_completion_length: Maximum generated tokens per completion, and
             the width of ``RolloutBatch.logprobs``.

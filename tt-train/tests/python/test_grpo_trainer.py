@@ -51,7 +51,7 @@ from transformers import AutoTokenizer, LlamaConfig as HFLlamaConfig, LlamaForCa
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import build_mesh, repeat_interleave
-from ttml.models.llama import load_from_safetensors
+from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, RolloutBatch, RolloutSampler, TrainerCallback, get_grpo_config
 from ttml.trainers.grpo_trainer import (
@@ -76,30 +76,14 @@ from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 
 
-# The sampler builds the Llama from these keys; the completer reads the architecture from the checkpoint's
-# config.json and takes only the run settings from them.
+# The model setup reads the architecture from the checkpoint's config.json; these only set the run.
 TINY_TRANSFORMER_CONFIG = TransformerConfig(
     {
         "transformer_config": {
             "model_type": "llama",
-            "num_heads": 2,
-            "num_groups": 1,
-            "embedding_dim": 64,
-            "intermediate_dim": 128,
             "dropout_prob": 0.0,
-            "num_blocks": 1,
-            "weight_tying": "enabled",
-            # Overwritten by ``len(tokenizer)`` inside the sampler ctor.
-            "vocab_size": 32000,
             "max_sequence_length": 128,
             "runner_type": "memory_efficient",
-            "theta": 500000.0,
-            "rope_scaling": {
-                "scaling_factor": 32.0,
-                "high_freq_factor": 4.0,
-                "low_freq_factor": 1.0,
-                "original_context_length": 8192,
-            },
         }
     }
 )
@@ -108,23 +92,9 @@ LLAMA_1B_TRANSFORMER_CONFIG = TransformerConfig(
     {
         "transformer_config": {
             "model_type": "llama",
-            "num_heads": 32,
-            "num_groups": 8,
-            "embedding_dim": 2048,
-            "intermediate_dim": 8192,
             "dropout_prob": 0.0,
-            "num_blocks": 16,
-            "weight_tying": "enabled",
-            "vocab_size": 32000,
             "max_sequence_length": 1024,
             "runner_type": "memory_efficient",
-            "theta": 500000.0,
-            "rope_scaling": {
-                "scaling_factor": 32.0,
-                "high_freq_factor": 4.0,
-                "low_freq_factor": 1.0,
-                "original_context_length": 8192,
-            },
         }
     }
 )
@@ -211,7 +181,7 @@ class _RecordingCallback(TrainerCallback):
         self.final_step_time_s = trainer.metrics.get("step_time_s")
 
 
-def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> None:
+def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> str:
     """Point ``grpo_ttml_model`` at *checkpoint_dir*, holding only the tiny model's ``config.json``, and skip
     the weight load so the model keeps its random init.
 
@@ -223,12 +193,13 @@ def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> N
     (checkpoint_dir / "config.json").write_text(json.dumps({**TINY_HF_CONFIG, **config_overrides}))
     monkeypatch.setattr(grpo_ttml_model, "_download_hf_repo", lambda model_source: str(checkpoint_dir))
     monkeypatch.setattr(grpo_ttml_model, "load_from_safetensors", lambda *args, **kwargs: None)
+    return str(checkpoint_dir)
 
 
 @pytest.fixture
 def patch_llama_weight_loading(monkeypatch, tmp_path_factory):
-    """Skip the HF download / safetensors load so the tiny model keeps random init."""
-    _patch_tiny_checkpoint(monkeypatch, tmp_path_factory.mktemp("tiny_llama"))
+    """Skip the HF download / safetensors load so the tiny model keeps random init; return its config directory."""
+    return _patch_tiny_checkpoint(monkeypatch, tmp_path_factory.mktemp("tiny_llama"))
 
 
 @pytest.mark.requires_device
@@ -428,18 +399,11 @@ def test_weights_ref_hf_dict_matches_the_transfer_format(patch_llama_weight_load
         assert all(isinstance(p, ttnn.PlacementReplicate) for p in tensor.tensor_topology().placements()), key
         hf_shape = hf_shapes[key]
         assert tuple(tensor.shape) == (1,) * (4 - len(hf_shape)) + hf_shape, key
-        is_kv_slice = key.endswith(("k_proj.weight", "v_proj.weight"))
-        assert (tensor.buffer_address() in live_buffers) != is_kv_slice, key
+        is_slice = key.endswith(
+            ("q_proj.weight", "k_proj.weight", "v_proj.weight", "gate_proj.weight", "up_proj.weight")
+        )
+        assert (tensor.buffer_address() in live_buffers) != is_slice, key
     assert exported["model.embed_tokens.weight"].buffer_address() == exported["lm_head.weight"].buffer_address()
-
-    def to_torch(tensor):
-        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
-
-    kv_dim = cfg.num_key_value_heads * cfg.hidden_size // cfg.num_attention_heads
-    for i in range(cfg.num_hidden_layers):
-        kv = to_torch(params[f"Llama/blocks/{i}/attention/kv_linear/weight"].get_value())
-        assert torch.equal(to_torch(exported[f"model.layers.{i}.self_attn.k_proj.weight"]), kv[:, :, :kv_dim])
-        assert torch.equal(to_torch(exported[f"model.layers.{i}.self_attn.v_proj.weight"]), kv[:, :, kv_dim:])
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -447,7 +411,11 @@ def test_weights_ref_hf_dict_matches_the_transfer_format(patch_llama_weight_load
 @pytest.mark.requires_device
 def test_save_checkpoint_round_trip_llama(patch_llama_weight_loading, tmp_path):
     model, tokenizer = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
-    save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=HF_MODEL_ID)
+    # Distinct values in every parameter, so a fresh init cannot pass for a resumed one.
+    rng = np.random.default_rng(0)
+    for param in model.parameters().values():
+        ttml.autograd.assign_numpy(param, rng.standard_normal(param.shape()).astype(np.float32))
+    save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=patch_llama_weight_loading)
 
     ckpt_dir = str(tmp_path / "checkpoints" / "grpo_step_1")
     loaded, _ = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, ckpt_dir)
@@ -478,14 +446,12 @@ def test_setup_ttml_model_rejects_old_checkpoint_format(tmp_path, expect_error, 
         grpo_ttml_model.setup_ttml_model(transformer_config, DEVICE_CONFIG, str(tmp_path))
 
 
+@pytest.mark.requires_device
 def test_llama_strict_load_raises_on_unloaded_parameters(tmp_path, expect_error):
     _save_old_format_checkpoint(tmp_path)
-    model = SimpleNamespace(parameters=lambda: {"Llama/fc/weight": None})
-    config = SimpleNamespace(
-        use_tp=False, num_attention_heads=1, num_key_value_heads=1, weight_tying=None, num_hidden_layers=0
-    )
-    with expect_error(RuntimeError, "1 model parameters were NOT loaded"):
-        load_from_safetensors(model, tmp_path, config, strict=True)
+    model = Llama(LlamaConfig.from_hf(TINY_HF_CONFIG, max_position_embeddings=128))
+    with expect_error(RuntimeError, "the checkpoint lacks tensors the model needs"):
+        load_from_safetensors(model, tmp_path)
 
 
 def test_layout_microbatch_aligns_old_logprobs_mask_and_targets():

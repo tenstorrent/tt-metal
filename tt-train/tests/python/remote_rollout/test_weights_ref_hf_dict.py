@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""One-device check of ``LlamaHfExport.weights_ref_hf_dict``."""
+"""One-device check of ``weights_ref_hf_dict``."""
 
 from __future__ import annotations
 
@@ -12,9 +12,8 @@ import pytest
 import ttnn
 import ttml
 from ttml.models import WeightTyingType
-from ttml.models.llama import LlamaConfig
-
-from grpo_remote_rollout.utils.llama_overrides import LlamaHfExport
+from ttml.models.llama import Llama, LlamaConfig
+from ttml.trainers.grpo_trainer.grpo_ttml_model import weights_ref_hf_dict
 
 pytestmark = pytest.mark.requires_device
 
@@ -46,7 +45,7 @@ def test_weights_ref_hf_dict_slices_fused_projections():
         max_position_embeddings=64,
         weight_tying=WeightTyingType.Enabled,
     )
-    model = LlamaHfExport(config)
+    model = Llama(config)
     params = model.parameters()
     rng = np.random.default_rng(0)
     # Every gamma starts at ones, which would let a swapped pair of norms pass.
@@ -83,7 +82,7 @@ def test_weights_ref_hf_dict_slices_fused_projections():
     expected["lm_head.weight"] = fc
     expected["model.norm.weight"] = params["Llama/ln_fc/gamma"].to_numpy(ttnn.DataType.FLOAT32)
 
-    exported = model.weights_ref_hf_dict()
+    exported = weights_ref_hf_dict(model)
 
     assert sorted(exported) == sorted(expected)
     for key, value in expected.items():

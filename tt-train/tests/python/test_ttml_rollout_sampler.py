@@ -31,44 +31,23 @@ HF_QWEN3_MODEL_ID = "Qwen/Qwen3-0.6B"  # small Qwen3 for CI-friendly generation
 MAX_COMPLETION_LENGTH = 32
 
 
+# The architecture is read from the HF config of ``model_source``; these set only the run.
 LLAMA_1B_TRANSFORMER_CONFIG = TransformerConfig(
     {
         "transformer_config": {
             "model_type": "llama",
-            "num_heads": 32,
-            "num_groups": 8,
-            "embedding_dim": 2048,
-            "intermediate_dim": 8192,
             "dropout_prob": 0.0,
-            "num_blocks": 16,
-            "weight_tying": "enabled",
-            "vocab_size": 32000,
             "max_sequence_length": 1024,
             "runner_type": "memory_efficient",
-            "theta": 500000.0,
-            "rope_scaling": {
-                "scaling_factor": 32.0,
-                "high_freq_factor": 4.0,
-                "low_freq_factor": 1.0,
-                "original_context_length": 8192,
-            },
         }
     }
 )
 
-# Only ``max_sequence_length`` and ``runner_type`` are consulted for Qwen3 — the
-# architecture itself is read from the HF config of ``model_source``.
 QWEN3_TRANSFORMER_CONFIG = TransformerConfig(
     {
         "transformer_config": {
             "model_type": "qwen3",
-            "num_heads": 1,  # unused
-            "num_groups": 1,  # unused
-            "embedding_dim": 1,  # unused
-            "intermediate_dim": 1,  # unused
             "dropout_prob": 0.0,
-            "num_blocks": 1,  # unused
-            "vocab_size": 1,  # unused
             "max_sequence_length": 512,
             "runner_type": "memory_efficient",
         }
