@@ -2,9 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import json
 
 from models.ttt_compat.tt.model_config import parse_optimizations
+
+
+def _parse_bool(value):
+    normalized = value.lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError("expected a boolean (true/false, yes/no, on/off, or 1/0)")
+
+
+def _parse_page_params(value):
+    params = json.loads(value)
+    if not isinstance(params, dict):
+        raise argparse.ArgumentTypeError("page parameters must be a JSON object")
+    return params
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
@@ -19,9 +36,17 @@ def pytest_addoption(parser):
     )
     parser.addoption("--data_parallel", action="store", type=int, help="Number of data parallel workers")
     parser.addoption(
-        "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
+        "--paged_attention",
+        action="store",
+        type=_parse_bool,
+        help="Whether to use paged attention or default attention",
     )
-    parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
+    parser.addoption(
+        "--page_params",
+        action="store",
+        type=_parse_page_params,
+        help="Page parameters for paged attention as a JSON object",
+    )
     # type=dict cannot parse a command-line string, so the option was write-only until now;
     # accept a JSON object, e.g. --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
     parser.addoption("--sampling_params", action="store", type=json.loads, help="Sampling parameters for decoding")
@@ -45,15 +70,15 @@ def pytest_addoption(parser):
     parser.addoption(
         "--token_accuracy",
         action="store",
-        default=False,
-        type=bool,
+        default=None,
+        type=_parse_bool,
         help="Whether to compute top1 and top5 exact token matching accuracy",
     )
     parser.addoption(
         "--stress_test",
         action="store",
-        default=False,
-        type=bool,
+        default=None,
+        type=_parse_bool,
         help="Run stress test (same decode iteration over a large number of iterations",
     )
     parser.addoption("--enable_trace", action="store_true", default=None, help="Enable tracing")
