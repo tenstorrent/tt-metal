@@ -6155,32 +6155,40 @@ def git_revert(sha: str) -> dict:
     return out
 
 
-def _capture_attempt_diff(max_lines: int = 40) -> str:
-    """Best-effort snapshot of the SOURCE change THIS attempt made, for the RUN_REPORT code-change log.
-    A rejected (no-gain) attempt is still in the working tree at record time (revert happens AFTER) ->
-    `git diff HEAD`; a banked win is already committed -> `git show HEAD`. Scoped to the model dir,
-    truncated to max_lines. Never raises."""
+def _capture_attempt_diff(max_lines: int = 40, gate: bool = False) -> str:
+    """Best-effort snapshot of the SOURCE change THIS attempt made.
+
+    Two modes controlled by `gate`:
+      gate=False (default) — for the RUN_REPORT code-change log. A rejected (no-gain) attempt is
+          still in the working tree at record time (revert happens AFTER) -> `git diff HEAD`; a
+          banked win is already committed -> `git show HEAD`. Scoped to the model dir, truncated
+          to max_lines.
+      gate=True — for the diff-gate decision. Only `git diff HEAD` (uncommitted working-tree
+          changes) counts; `git show HEAD` is NOT consulted, because the last commit's diff is a
+          stale artifact of a prior attempt or an infrastructure fix and must never satisfy the
+          "did THIS attempt change the source?" question. Test files are also excluded: a test
+          scaffold change is not an optimization source edit.
+
+    Never raises."""
     try:
         repo = gitio.repo_root(_MODEL_ROOT)
         try:
             pathspec = str(_MODEL_ROOT.relative_to(repo))
         except ValueError:
             pathspec = "."
-        # Exclude tool-generated artifacts so the captured "code change" is the
-        # ACTUAL source edit — not the report quoting itself (RUN_REPORT.md lives
-        # in the model dir, so without this the diff embeds its own live-update
-        # churn -> the optimize table nests/duplicates) nor scaffold/state files.
         _excludes = [
             ":(exclude,glob)**/RUN_REPORT.md",
             ":(exclude,glob)**/bringup_status.json",
             ":(exclude,glob)**/.bringup_cc_state.json",
             ":(exclude,glob)**/*.opplan.json",
         ]
+        if gate:
+            _excludes.append(":(exclude,glob)**/tests/**")
         out = ""
-        for cmd in (
-            ["git", "-C", str(repo), "diff", "HEAD", "--", pathspec, *_excludes],
-            ["git", "-C", str(repo), "show", "--format=", "HEAD", "--", pathspec, *_excludes],
-        ):
+        _cmds = [["git", "-C", str(repo), "diff", "HEAD", "--", pathspec, *_excludes]]
+        if not gate:
+            _cmds.append(["git", "-C", str(repo), "show", "--format=", "HEAD", "--", pathspec, *_excludes])
+        for cmd in _cmds:
             r = _sp.run(cmd, capture_output=True, text=True, timeout=30)
             if r.returncode == 0 and r.stdout.strip():
                 out = r.stdout
@@ -6737,9 +6745,10 @@ def record_kernel_attempt(
     # beyond that the agent must edit, measure, and let the numbers decide. Without this gate an
     # agent can exhaust the entire ladder on every op with zero code changes and zero real
     # measurements (287 attempts, 0 diffs observed in the first model that hit this).
-    _diff_now = _capture_attempt_diff()
+    _diff_gate = _capture_attempt_diff(gate=True)
+    _diff_now = _diff_gate or _capture_attempt_diff()
     _max_no_diff = int(os.environ.get("PERF_MCP_MAX_NO_DIFF_ATTEMPTS", "0"))
-    if not _diff_now and os.environ.get("PERF_MCP_ALLOW_NO_DIFF") != "1":
+    if not _diff_gate and os.environ.get("PERF_MCP_ALLOW_NO_DIFF") != "1":
         _prior_no_diff = sum(
             1
             for a in _load_attempts_all()
