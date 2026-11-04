@@ -16,6 +16,7 @@ from ....layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_
 from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedLayerNorm
 from ....utils import tensor
+from ....utils.matmul import register_matmul_configs
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
 
@@ -65,6 +66,24 @@ STATE_PREFIXES = (
     ("content_mode_blocks", "early.content_mode_blocks"),
     ("txt_mode_blocks", "early.txt_mode_blocks"),
     ("final_layer.image.linear", "proj_out"),
+)
+
+
+# SP8 x TP4 MLP shapes (M, 3072, N) whose heuristic blocking overflows L1 on the 12x9 worker grid of a Galaxy
+register_matmul_configs(
+    {
+        "12x9": {
+            (2560, 3072, 4608): (4, 8, 16, (1, 4)),
+            (4608, 3072, 2304): (6, 8, 8, (1, 4)),
+            (4608, 3072, 4608): (6, 8, 16, (1, 4)),
+            (8192, 3072, 2304): (11, 8, 8, (1, 4)),
+            (8192, 3072, 4608): (6, 8, 16, (1, 4)),
+            (8704, 3072, 2304): (8, 8, 8, (1, 4)),
+            (8704, 3072, 4608): (6, 8, 16, (1, 4)),
+            (16896, 3072, 2304): (11, 8, 8, (1, 4)),
+            (16896, 3072, 4608): (6, 8, 16, (1, 4)),
+        }
+    }
 )
 
 
@@ -446,7 +465,7 @@ class Flux3KleinTransformer(Module):
             return block(h, rope=plan.single_rope, mod=mod, logical_length=layout.attended())
 
         if cache is not None:
-            h = cache.run(self.single_blocks, h, run_block, layout=layout, sp_axis=self._sp_axis)
+            h = cache(self.single_blocks, h, run_block, layout=layout, sp_axis=self._sp_axis)
         else:
             for block in self.single_blocks:
                 h = run_block(block, h)
