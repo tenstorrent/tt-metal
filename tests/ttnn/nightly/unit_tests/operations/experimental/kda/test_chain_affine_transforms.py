@@ -422,7 +422,7 @@ def test_chain_affine_transforms_production_performance(zero_actual_start, devic
         ("unaligned", "K and V must be positive and tile aligned"),
         ("steps", "transforms must hold one transition per sequence-parallel rank"),
         ("local_rows", "local_rows must be positive and 32-aligned"),
-        ("bf16_dest", "fp32_dest_acc_en must be enabled"),
+        ("bf16_dest", "fp32_dest_acc_en=false is unsupported"),
         ("l1", "need"),
     ],
 )

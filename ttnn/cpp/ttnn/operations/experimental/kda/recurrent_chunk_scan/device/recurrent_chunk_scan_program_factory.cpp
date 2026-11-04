@@ -114,7 +114,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const auto fp32 = tt::DataFormat::Float32;
     const auto output_format = tt::DataFormat::Float16_b;
     const tt::tt_metal::experimental::DFBSpecName transport_state_dfb_name{"transport_state"};
-    const tt::tt_metal::experimental::DFBSpecName identity_scratch_dfb_name{"identity_scratch"};
+    const tt::tt_metal::experimental::DFBSpecName zero_tile_dfb_name{"zero_tile"};
     const auto input_format = [](const Tensor& tensor) {
         return tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     };
@@ -158,7 +158,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         make_dfb(summary_head_state_dfb_name, split_head_tiles, output_format),
         make_dfb(tail_entry_states_dfb_name, tail_entry_states_tiles, fp32),
         // A zero tile from which the summary writer fills slots without a valid segment with the identity map (0, 0).
-        make_dfb(identity_scratch_dfb_name, 1, output_format),
+        make_dfb(zero_tile_dfb_name, 1, output_format),
         // The emitted output terms: a chunk's rows on both paths (F(0) and F(I)), and the last segment's FP32
         // transform.
         make_dfb(chunk_base_dfb_name, emit ? 2 * paths * cv : 1, fp32),
@@ -232,8 +232,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ConsumerOf(summary_head_state_dfb_name, "summary_head_state"),
                 tt::tt_metal::experimental::ConsumerOf(
                     summary ? final_state_dfb_name : transport_state_dfb_name, "unused_state"),
-                tt::tt_metal::experimental::ProducerOf(identity_scratch_dfb_name, "identity_scratch"),
-                tt::tt_metal::experimental::ConsumerOf(identity_scratch_dfb_name, "identity_scratch"),
+                tt::tt_metal::experimental::ProducerOf(zero_tile_dfb_name, "zero_tile"),
+                tt::tt_metal::experimental::ConsumerOf(zero_tile_dfb_name, "zero_tile"),
                 tt::tt_metal::experimental::ConsumerOf(chunk_base_dfb_name, "chunk_base"),
                 tt::tt_metal::experimental::ConsumerOf(final_a_dfb_name, "final_a"),
                 tt::tt_metal::experimental::ConsumerOf(final_b_dfb_name, "final_b"),

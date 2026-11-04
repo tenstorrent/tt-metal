@@ -44,10 +44,10 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_same_device(in.transforms, in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
-    TT_FATAL(
-        attrs.compute_kernel_config.fp32_dest_acc_en,
-        "{}: fp32_dest_acc_en must be enabled; the FP32 product unpacks to DST for the add",
-        operation_name);
+    kda_factory_detail::check_fp32_dest_acc(
+        attrs.compute_kernel_config,
+        operation_name,
+        "the product, B and an exact copy of the state are summed in FP32 DST");
 
     const auto& t_shape = in.transforms.logical_shape();
     const auto& s_shape = in.initial_state.logical_shape();
