@@ -29,8 +29,6 @@ struct AllGatherWeightMinimalMatmulAsyncParams {
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     std::optional<uint32_t> cluster_axis;
     uint32_t num_links = 1;
-    uint32_t num_workers_per_link = 3;
-    uint32_t num_buffers_per_channel = 8;
     std::vector<ttnn::GlobalSemaphore> semaphores;
     bool transpose_b = true;
 };

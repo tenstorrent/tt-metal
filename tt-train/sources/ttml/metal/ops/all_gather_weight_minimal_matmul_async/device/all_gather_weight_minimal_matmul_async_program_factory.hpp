@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include "all_gather_weight_minimal_matmul_async_device_operation_types.hpp"
@@ -12,16 +13,15 @@
 namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
 struct AllGatherWeightMinimalMatmulAsyncProgramFactory {
     struct shared_variables_t {
-        std::vector<ttnn::CoreCoord> cores;
-        tt::tt_metal::KernelHandle in0_sender_kernels_id{};
-        tt::tt_metal::KernelHandle in0_receiver_kernels_id{};
-        tt::tt_metal::KernelHandle in1_sender_kernels_id{};
-        tt::tt_metal::KernelHandle in1_receiver_kernels_id{};
-        bool transpose_core_grid{};
+        struct CoreKernels {
+            ttnn::CoreCoord core;
+            std::optional<tt::tt_metal::KernelHandle> in0;
+            std::optional<tt::tt_metal::KernelHandle> in1;
+        };
+        std::vector<CoreKernels> cores;
         struct Sender {
             ttnn::CoreCoord core;
-            tt::tt_metal::KernelHandle reader{};
-            tt::tt_metal::KernelHandle writer{};
+            tt::tt_metal::KernelHandle kernel{};
         };
         std::vector<Sender> senders;
     };

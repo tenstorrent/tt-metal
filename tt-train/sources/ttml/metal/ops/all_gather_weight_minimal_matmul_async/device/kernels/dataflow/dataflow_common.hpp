@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
@@ -197,33 +198,101 @@ struct SendPieceArgs {
     uint32_t notify = 0;
 };
 
-template <typename OnBegin, typename OnPacket, typename OnDone>
-inline void for_each_send_packet(
-    uint32_t schedule_arg_idx,
-    uint32_t K_tiles,
-    uint32_t chunk_tiles,
-    uint32_t tiles_per_packet,
-    OnBegin on_begin,
-    OnPacket on_packet,
-    OnDone on_done) {
-    const tt_l1_ptr uint32_t* args = reinterpret_cast<const tt_l1_ptr uint32_t*>(get_arg_addr(schedule_arg_idx));
-    const uint32_t num_segments = *args++;
-    for (uint32_t s = 0; s < num_segments; ++s) {
-        const SendSegment& seg = *reinterpret_cast<const tt_l1_ptr SendSegment*>(args);
-        const tt_l1_ptr SendPieceArgs* pieces = reinterpret_cast<const tt_l1_ptr SendPieceArgs*>(&seg + 1);
-        args = reinterpret_cast<const tt_l1_ptr uint32_t*>(pieces + seg.num_pieces);
-        uint32_t chunk_idx = 0;
-        for (uint32_t k_start = 0; k_start < K_tiles; k_start += chunk_tiles, ++chunk_idx) {
-            const uint32_t chunk = std::min(chunk_tiles, K_tiles - k_start);
-            for (uint32_t p = 0; p < seg.num_pieces; ++p) {
-                const SendPieceArgs& piece = pieces[p];
-                on_begin(seg, piece, chunk_idx, p);
-                const uint32_t num_tiles = piece.width * chunk;
-                for (uint32_t t = 0; t < num_tiles; t += tiles_per_packet) {
-                    on_packet(seg, piece, t, std::min(tiles_per_packet, num_tiles - t), k_start, chunk);
-                }
-                on_done(seg, piece, chunk_idx, p);
-            }
+class SendCursor {
+public:
+    SendCursor(uint32_t schedule_arg_idx, uint32_t K_tiles, uint32_t chunk_tiles, uint32_t tiles_per_packet) :
+        K_tiles_(K_tiles), chunk_tiles_(chunk_tiles), tiles_per_packet_(tiles_per_packet) {
+        args_ = reinterpret_cast<const tt_l1_ptr uint32_t*>(get_arg_addr(schedule_arg_idx));
+        segments_left_ = *args_++;
+        done_ = segments_left_ == 0;
+        if (!done_) {
+            load_segment();
         }
     }
-}
+
+    bool done() const {
+        return done_;
+    }
+    const SendSegment& segment() const {
+        return *seg_;
+    }
+    const SendPieceArgs& piece() const {
+        return pieces_[piece_idx_];
+    }
+    uint32_t unit_index() const {
+        return (chunk_idx_ * seg_->num_pieces) + piece_idx_;
+    }
+    uint32_t k_start() const {
+        return k_start_;
+    }
+    uint32_t chunk() const {
+        return chunk_;
+    }
+    uint32_t t0() const {
+        return t0_;
+    }
+    uint32_t count() const {
+        return std::min(tiles_per_packet_, unit_tiles_ - t0_);
+    }
+    bool unit_begin() const {
+        return t0_ == 0;
+    }
+    bool unit_end() const {
+        return t0_ + tiles_per_packet_ >= unit_tiles_;
+    }
+
+    void advance() {
+        if (!unit_end()) {
+            t0_ += tiles_per_packet_;
+            return;
+        }
+        t0_ = 0;
+        if (++piece_idx_ == seg_->num_pieces) {
+            piece_idx_ = 0;
+            k_start_ += chunk_tiles_;
+            ++chunk_idx_;
+            if (k_start_ >= K_tiles_) {
+                if (segments_left_ == 0) {
+                    done_ = true;
+                } else {
+                    load_segment();
+                }
+                return;
+            }
+        }
+        start_unit();
+    }
+
+private:
+    void load_segment() {
+        seg_ = reinterpret_cast<const tt_l1_ptr SendSegment*>(args_);
+        pieces_ = reinterpret_cast<const tt_l1_ptr SendPieceArgs*>(seg_ + 1);
+        args_ = reinterpret_cast<const tt_l1_ptr uint32_t*>(pieces_ + seg_->num_pieces);
+        --segments_left_;
+        k_start_ = 0;
+        chunk_idx_ = 0;
+        piece_idx_ = 0;
+        t0_ = 0;
+        start_unit();
+    }
+
+    void start_unit() {
+        chunk_ = std::min(chunk_tiles_, K_tiles_ - k_start_);
+        unit_tiles_ = pieces_[piece_idx_].width * chunk_;
+    }
+
+    uint32_t K_tiles_;
+    uint32_t chunk_tiles_;
+    uint32_t tiles_per_packet_;
+    const tt_l1_ptr uint32_t* args_ = nullptr;
+    uint32_t segments_left_ = 0;
+    const tt_l1_ptr SendSegment* seg_ = nullptr;
+    const tt_l1_ptr SendPieceArgs* pieces_ = nullptr;
+    uint32_t chunk_idx_ = 0;
+    uint32_t piece_idx_ = 0;
+    uint32_t k_start_ = 0;
+    uint32_t chunk_ = 0;
+    uint32_t t0_ = 0;
+    uint32_t unit_tiles_ = 0;
+    bool done_ = true;
+};

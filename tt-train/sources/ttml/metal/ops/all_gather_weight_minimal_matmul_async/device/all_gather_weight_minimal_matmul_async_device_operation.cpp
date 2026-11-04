@@ -93,6 +93,10 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
         "The fabric gather needs a ring of at least 2 devices, got ring_size={}.",
         attrs.ring_size);
     TT_FATAL(
+        attrs.topology != ttnn::ccl::Topology::Ring || attrs.ring_size > 2,
+        "A ring of 2 devices has the same neighbour in both directions, so both senders of a link would share one "
+        "fabric router channel; use Topology::Linear");
+    TT_FATAL(
         attrs.semaphores.size() == attrs.ring_size,
         "multi_device_global_semaphore must hold one semaphore per ring device ({}), got {}",
         attrs.ring_size,
@@ -106,14 +110,15 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
             all_cores.str());
     }
     TT_FATAL(attrs.num_links >= 1, "num_links must be >= 1, got {}.", attrs.num_links);
+    const ttnn::CoreCoord matmul_grid =
+        attrs.config.has_value() ? attrs.config->compute_with_storage_grid_size : device_grid;
     TT_FATAL(
-        attrs.num_workers_per_link >= 1 && attrs.num_workers_per_link <= 255,
-        "num_workers_per_link must be in [1, 255], got {}",
-        attrs.num_workers_per_link);
-    TT_FATAL(
-        attrs.num_buffers_per_channel >= 1 && attrs.num_buffers_per_channel <= 255,
-        "num_buffers_per_channel must be in [1, 255], got {}",
-        attrs.num_buffers_per_channel);
+        2 * attrs.num_links <= matmul_grid.x - 1,
+        "num_links={} needs {} fabric senders (one per link and direction) in the matmul grid's bottom row, which has "
+        "{} cores past column 0",
+        attrs.num_links,
+        2 * attrs.num_links,
+        matmul_grid.x - 1);
     const auto& mesh_shape = x.device()->shape();
     uint32_t non_unit_dims = 0;
     for (size_t i = 0; i < mesh_shape.dims(); ++i) {
@@ -206,8 +211,6 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t num_links,
-    uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel,
     bool transpose_b) {
     using OperationType =
         ttml::metal::ops::all_gather_weight_minimal_matmul_async::AllGatherWeightMinimalMatmulAsyncDeviceOperation;
@@ -233,8 +236,6 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
             .topology = topology,
             .cluster_axis = cluster_axis,
             .num_links = num_links,
-            .num_workers_per_link = num_workers_per_link,
-            .num_buffers_per_channel = num_buffers_per_channel,
             .semaphores = multi_device_global_semaphore,
             .transpose_b = transpose_b},
         OperationType::tensor_args_t{

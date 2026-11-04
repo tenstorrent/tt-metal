@@ -36,6 +36,9 @@ void kernel_main() {
     constexpr uint32_t stripe_tiles = get_compile_time_arg_val(18);
     constexpr uint32_t piece_tiles = get_compile_time_arg_val(19);
     constexpr uint32_t hops_before = get_compile_time_arg_val(20);
+    constexpr bool sink_in1 = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t in1_sender_semaphore_id = get_compile_time_arg_val(23);
+    constexpr uint32_t in1_receiver_semaphore_id = get_compile_time_arg_val(24);
 
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
@@ -54,8 +57,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < ring_size; i++) {
         stripe_order[i] = get_arg_val<uint32_t>(argidx++);
     }
+    const uint32_t in1_upstream_noc_x = sink_in1 ? get_arg_val<uint32_t>(argidx++) : 0;
+    const uint32_t in1_upstream_noc_y = sink_in1 ? get_arg_val<uint32_t>(argidx++) : 0;
 
-    constexpr auto in0_args = TensorAccessorArgs<22>();
+    constexpr auto in0_args = TensorAccessorArgs<25>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -66,8 +71,14 @@ void kernel_main() {
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
 
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in1_id = tt::CBIndex::c_1;
     constexpr uint32_t cb_out_id = tt::CBIndex::c_2;
     CircularBuffer cb_in0(cb_in0_id);
+
+    constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
+    CircularBuffer cb_in1(cb_in1_id);
+    Semaphore<> in1_sender_semaphore(in1_sender_semaphore_id);
+    Semaphore<> in1_receiver_semaphore(in1_receiver_semaphore_id);
 
     in0_valid_semaphore.set(VALID);
 
@@ -75,20 +86,25 @@ void kernel_main() {
     uint32_t width = 0;
     DeferredBlockWrite<M_block_tiles, N_block_tiles> deferred;
 
-    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
-        uint32_t current_M_block_tiles = m_tile_end - m_tile;
-        uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
+    for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
+        if constexpr (is_output_writer) {
+            block_columns<N_block_tiles, piece_tiles, ring_size, hops_before>(
+                n_block_iter, stripe_order, stripe_tiles, chain_offset, chain_width, cols, width);
+        }
 
-        for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            if constexpr (is_output_writer) {
-                block_columns<N_block_tiles, piece_tiles, ring_size, hops_before>(
-                    n_block_iter, stripe_order, stripe_tiles, chain_offset, chain_width, cols, width);
-            }
-            bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
+        for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+            uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+            uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+            uint32_t current_M_block_tiles = m_tile_end - m_tile;
+            uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
+            bool is_last_block = (m_block_iter == (M_blocks_per_core - 1)) && (n_block_iter == (N_blocks_per_core - 1));
 
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+                if constexpr (sink_in1) {
+                    cb_in1.reserve_back(in1_block_num_tiles);
+                    in1_receiver_semaphore.set(INVALID);
+                    in1_sender_semaphore.up(noc, in1_upstream_noc_x, in1_upstream_noc_y, 1);
+                }
                 cb_in0.reserve_back(in0_block_num_tiles);
 
                 uint32_t in0_start_address = cb_in0.get_write_ptr();
@@ -109,6 +125,10 @@ void kernel_main() {
                 }
 
                 cb_in0.push_back(in0_block_num_tiles);
+                if constexpr (sink_in1) {
+                    in1_receiver_semaphore.wait(VALID);
+                    cb_in1.push_back(in1_block_num_tiles);
+                }
 
                 if (!is_sink_core) {
                     in0_sender_semaphore.wait(1);

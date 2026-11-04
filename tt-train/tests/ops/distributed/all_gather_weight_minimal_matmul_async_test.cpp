@@ -10,12 +10,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
-#include <thread>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-umd/cluster.hpp>
 #include <vector>
+#include <xtensor-blas/xlinalg.hpp>
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/core/xmath.hpp>
+#include <xtensor/views/xview.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -26,6 +27,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace {
 using ttnn::experimental::prim::MinimalMatmulConfig;
@@ -76,62 +78,68 @@ struct Block {
     uint32_t subblock_w;
 };
 
-std::vector<float> reference_matmul(
-    const std::vector<float>& x, const std::vector<float>& w_nk, uint32_t M, uint32_t K, uint32_t N) {
-    std::vector<float> y(static_cast<size_t>(M) * N);
-    const uint32_t num_threads = std::max(1U, std::thread::hardware_concurrency());
-    std::vector<std::thread> threads;
-    for (uint32_t t = 0; t < num_threads; ++t) {
-        threads.emplace_back([&, t]() {
-            for (uint32_t m = t; m < M; m += num_threads) {
-                const float* x_row = &x[static_cast<size_t>(m) * K];
-                for (uint32_t n = 0; n < N; ++n) {
-                    const float* w_row = &w_nk[static_cast<size_t>(n) * K];
-                    std::array<float, 8> acc{};
-                    uint32_t k = 0;
-                    for (; k + 8 <= K; k += 8) {
-                        for (uint32_t j = 0; j < 8; ++j) {
-                            acc[j] += x_row[k + j] * w_row[k + j];
-                        }
-                    }
-                    float sum = 0.0F;
-                    for (const float a : acc) {
-                        sum += a;
-                    }
-                    for (; k < K; ++k) {
-                        sum += x_row[k] * w_row[k];
-                    }
-                    y[(static_cast<size_t>(m) * N) + n] = sum;
-                }
-            }
-        });
-    }
-    for (auto& thread : threads) {
-        thread.join();
-    }
-    return y;
-}
-
 struct Problem {
     Shape shape;
     std::vector<float> x;
     std::vector<float> w_nk;
     std::vector<float> w_kn;
+    std::vector<std::array<uint32_t, 2>> tiles;
     xt::xarray<float> y;
 };
 
-Problem make_problem(const Shape& s) {
+std::vector<std::array<uint32_t, 2>> spot_tiles(const Shape& s, uint32_t ring_size) {
+    const uint32_t m_tiles = s.M / tt::constants::TILE_HEIGHT;
+    const uint32_t stripe_tiles = s.N / tt::constants::TILE_WIDTH / ring_size;
+    std::vector<std::array<uint32_t, 2>> tiles;
+    const uint32_t columns = std::min<uint32_t>(stripe_tiles, 12);
+    for (uint32_t stripe = 0; stripe < ring_size; ++stripe) {
+        for (uint32_t j = 0; j < columns; ++j) {
+            const uint32_t n = (stripe * stripe_tiles) + (((2 * j) + 1) * stripe_tiles / (2 * columns));
+            for (const uint32_t m : {0U, m_tiles / 2, m_tiles - 1}) {
+                tiles.push_back({m, n});
+            }
+        }
+    }
+    return tiles;
+}
+
+Problem make_problem(const Shape& s, uint32_t spot_ring_size = 0) {
     Problem p{.shape = s};
     p.x = ttml::test_utils::make_uniform_vector<float>(static_cast<size_t>(s.M) * s.K, -1.0F, 1.0F, 42);
     p.w_nk = ttml::test_utils::make_uniform_vector<float>(static_cast<size_t>(s.N) * s.K, -1.0F, 1.0F, 43);
-    p.w_kn.resize(p.w_nk.size());
-    for (uint32_t n = 0; n < s.N; ++n) {
-        for (uint32_t k = 0; k < s.K; ++k) {
-            p.w_kn[(static_cast<size_t>(k) * s.N) + n] = p.w_nk[(static_cast<size_t>(n) * s.K) + k];
+    const xt::xarray<float> x = xt::adapt(p.x, std::vector<size_t>{s.M, s.K});
+    const xt::xarray<float> w = xt::adapt(p.w_nk, std::vector<size_t>{s.N, s.K});
+    if (spot_ring_size == 0) {
+        p.w_kn.resize(p.w_nk.size());
+        for (uint32_t n = 0; n < s.N; ++n) {
+            for (uint32_t k = 0; k < s.K; ++k) {
+                p.w_kn[(static_cast<size_t>(k) * s.N) + n] = p.w_nk[(static_cast<size_t>(n) * s.K) + k];
+            }
         }
+        p.y = xt::linalg::dot(x, xt::transpose(w));
+        return p;
     }
-    p.y = xt::adapt(reference_matmul(p.x, p.w_nk, s.M, s.K, s.N), std::vector<size_t>{s.M, s.N});
+    p.tiles = spot_tiles(s, spot_ring_size);
+    p.y = xt::zeros<float>({p.tiles.size(), size_t{32}, size_t{32}});
+    for (size_t i = 0; i < p.tiles.size(); ++i) {
+        const auto [m, n] = p.tiles[i];
+        const xt::xarray<float> x_rows = xt::view(x, xt::range(m * 32, (m + 1) * 32), xt::all());
+        const xt::xarray<float> w_rows = xt::view(w, xt::range(n * 32, (n + 1) * 32), xt::all());
+        xt::view(p.y, i) = xt::linalg::dot(x_rows, xt::transpose(w_rows));
+    }
     return p;
+}
+
+xt::xarray<float> checked_part(const Problem& p, const xt::xarray<float>& y) {
+    if (p.tiles.empty()) {
+        return y;
+    }
+    xt::xarray<float> part = xt::zeros<float>({p.tiles.size(), size_t{32}, size_t{32}});
+    for (size_t i = 0; i < p.tiles.size(); ++i) {
+        const auto [m, n] = p.tiles[i];
+        xt::view(part, i) = xt::view(y, xt::range(m * 32, (m + 1) * 32), xt::range(n * 32, (n + 1) * 32));
+    }
+    return part;
 }
 
 double pcc(const xt::xarray<float>& a, const xt::xarray<float>& b) {
@@ -161,22 +169,21 @@ void run_fabric_gather(
     const ttnn::Tensor& x,
     const ttnn::Tensor& w,
     uint32_t num_links,
-    uint32_t num_workers_per_link,
     bool transpose_b,
     ttnn::ccl::Topology topology,
-    const std::optional<Block>& block) {
+    const std::optional<Block>& block,
+    uint32_t num_calls = kCalls) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto grid = device->compute_with_storage_grid_size();
     std::optional<MinimalMatmulConfig> config;
     if (block.has_value()) {
-        const uint32_t comm_rows = tt::div_up(2 * num_links * (1 + num_workers_per_link), grid.x);
         config = MinimalMatmulConfig{
             .M_block_size = block->M_block,
             .K_block_size = block->K_block,
             .N_block_size = block->N_block,
             .subblock_h = block->subblock_h,
             .subblock_w = block->subblock_w,
-            .compute_with_storage_grid_size = {grid.x, grid.y - comm_rows}};
+            .compute_with_storage_grid_size = grid};
     }
 
     const auto& s = p.shape;
@@ -186,7 +193,7 @@ void run_fabric_gather(
     const auto semaphores = make_semaphores(device);
 
     std::vector<ttnn::Tensor> outputs;
-    for (uint32_t i = 0; i < kCalls; ++i) {
+    for (uint32_t i = 0; i < num_calls; ++i) {
         outputs.push_back(ttml::metal::all_gather_weight_minimal_matmul_async(
             x,
             w,
@@ -199,22 +206,19 @@ void run_fabric_gather(
             std::nullopt,
             std::nullopt,
             num_links,
-            num_workers_per_link,
-            8,
             transpose_b));
     }
-    for (uint32_t i = 0; i < kCalls; ++i) {
+    for (uint32_t i = 0; i < num_calls; ++i) {
         for (const auto& device_y : ttnn::distributed::get_device_tensors(outputs[i])) {
             SCOPED_TRACE(testing::Message() << "call " << i);
             xt::xarray<float> y = ttml::core::to_xtensor(device_y);
             y.reshape({p.shape.M, p.shape.N});
-            expect_close(p.y, y);
+            expect_close(p.y, checked_part(p, y));
         }
     }
 }
 
 void sweep(const Shape& s) {
-    const std::array<std::pair<uint32_t, uint32_t>, 4> links_workers = {{{1, 1}, {2, 1}, {1, 2}, {2, 3}}};
     const std::array<std::optional<Block>, 3> blocks = {std::nullopt, Block{8, 8, 12, 2, 2}, Block{8, 8, 6, 1, 3}};
     auto* device = &ttml::autograd::ctx().get_device();
     const Problem p = make_problem(s);
@@ -225,18 +229,17 @@ void sweep(const Shape& s) {
         const ttnn::Shape w_shape = transpose_b ? ttnn::Shape({s.N, s.K}) : ttnn::Shape({s.K, s.N});
         const auto w =
             ttml::core::from_vector(transpose_b ? p.w_nk : p.w_kn, w_shape, device, ttnn::Layout::TILE, shard.get());
-        for (const auto& [num_links, num_workers] : links_workers) {
+        for (const uint32_t num_links : {1U, 2U}) {
             for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
                 for (const auto& block : blocks) {
                     SCOPED_TRACE(
-                        testing::Message()
-                        << "links=" << num_links << " workers=" << num_workers << " transpose_b=" << transpose_b
-                        << " ring=" << (topology == ttnn::ccl::Topology::Ring) << " block="
-                        << (block.has_value()
-                                ? std::to_string(block->N_block) + "/" + std::to_string(block->subblock_h) + "x" +
-                                      std::to_string(block->subblock_w)
-                                : std::string("default")));
-                    run_fabric_gather(p, x, w, num_links, num_workers, transpose_b, topology, block);
+                        testing::Message() << "links=" << num_links << " transpose_b=" << transpose_b
+                                           << " ring=" << (topology == ttnn::ccl::Topology::Ring) << " block="
+                                           << (block.has_value() ? std::to_string(block->N_block) + "/" +
+                                                                       std::to_string(block->subblock_h) + "x" +
+                                                                       std::to_string(block->subblock_w)
+                                                                 : std::string("default")));
+                    run_fabric_gather(p, x, w, num_links, transpose_b, topology, block);
                 }
             }
         }
@@ -269,8 +272,8 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
     }
     const auto semaphores = make_semaphores(device);
 
-    for (const auto& [num_links, num_workers] : std::array<std::pair<uint32_t, uint32_t>, 2>{{{2, 3}, {1, 2}}}) {
-        SCOPED_TRACE(testing::Message() << "links=" << num_links << " workers=" << num_workers);
+    for (const uint32_t num_links : {2U, 1U}) {
+        SCOPED_TRACE(testing::Message() << "links=" << num_links);
         constexpr uint32_t kRounds = 3;
         std::vector<std::pair<uint32_t, ttnn::Tensor>> outputs;
         for (uint32_t round = 0; round < kRounds; ++round) {
@@ -288,8 +291,7 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
                         std::nullopt,
                         std::nullopt,
                         std::nullopt,
-                        num_links,
-                        num_workers));
+                        num_links));
             }
         }
         for (uint32_t i = 0; i < outputs.size(); ++i) {
@@ -325,31 +327,13 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, CacheHitWithOtherSemaphores) {
             std::nullopt,
             std::nullopt,
             std::nullopt,
-            2,
-            3);
+            2);
         for (const auto& device_y : ttnn::distributed::get_device_tensors(y)) {
             expect_close(p.y, ttml::core::to_xtensor(device_y));
         }
         for (const auto& semaphore : semaphores[0]) {
             semaphore.reset_semaphore_value(1000);
         }
-    }
-}
-
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, LargeBatch4D) {
-    constexpr uint32_t B = 4;
-    constexpr uint32_t S = 2048;
-    auto* device = &ttml::autograd::ctx().get_device();
-    const Problem p = make_problem({B * S, 4096, 11008});
-    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
-    const auto x =
-        ttml::core::from_vector(p.x, ttnn::Shape({B, 1, S, p.shape.K}), device, ttnn::Layout::TILE, replicate.get());
-    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
-    const auto w =
-        ttml::core::from_vector(p.w_nk, ttnn::Shape({p.shape.N, p.shape.K}), device, ttnn::Layout::TILE, shard.get());
-    for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
-        SCOPED_TRACE(testing::Message() << "ring=" << (topology == ttnn::ccl::Topology::Ring));
-        run_fabric_gather(p, x, w, 2, 3, true, topology, std::nullopt);
     }
 }
 
@@ -363,11 +347,9 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, NarrowStripes4D) {
             p.x, ttnn::Shape({2, 1, s.M / 2, s.K}), device, ttnn::Layout::TILE, replicate.get());
         const auto w =
             ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
-        for (const auto& [num_links, num_workers] : std::array<std::pair<uint32_t, uint32_t>, 2>{{{2, 3}, {1, 1}}}) {
-            SCOPED_TRACE(
-                testing::Message() << "K=" << s.K << " N=" << s.N << " links=" << num_links
-                                   << " workers=" << num_workers);
-            run_fabric_gather(p, x, w, num_links, num_workers, true, ttnn::ccl::Topology::Ring, std::nullopt);
+        for (const uint32_t num_links : {2U, 1U}) {
+            SCOPED_TRACE(testing::Message() << "K=" << s.K << " N=" << s.N << " links=" << num_links);
+            run_fabric_gather(p, x, w, num_links, true, ttnn::ccl::Topology::Ring, std::nullopt);
         }
     }
 }
@@ -384,14 +366,12 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, TinyShapes) {
                 ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
             const auto w =
                 ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
-            for (const auto& [num_links, num_workers] :
-                 std::array<std::pair<uint32_t, uint32_t>, 2>{{{2, 3}, {1, 1}}}) {
+            for (const uint32_t num_links : {2U, 1U}) {
                 for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
                     const bool ring = topology == ttnn::ccl::Topology::Ring;
                     SCOPED_TRACE(
-                        testing::Message() << "K=" << K << " N=" << N << " links=" << num_links
-                                           << " workers=" << num_workers << " ring=" << ring);
-                    run_fabric_gather(p, x, w, num_links, num_workers, true, topology, std::nullopt);
+                        testing::Message() << "K=" << K << " N=" << N << " links=" << num_links << " ring=" << ring);
+                    run_fabric_gather(p, x, w, num_links, true, topology, std::nullopt);
                 }
             }
         }
@@ -402,14 +382,51 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, Small) {
     sweep({256, 512, 1024});
 }
 
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, W1) {
-    sweep({2048, 4096, 11008});
+namespace {
+struct LargeCase {
+    const char* name;
+    uint32_t batch;
+    Shape shape;
+};
+
+const LargeCase kLargeCases[] = {
+    {"W1_2048x4096x11008", 1, {2048, 4096, 11008}},
+    {"W2_2048x11008x4096", 1, {2048, 11008, 4096}},
+    {"TransposedGrid_8192x1024x2048", 1, {8192, 1024, 2048}},
+    {"Batch4_4x2048x4096x11008", 4, {8192, 4096, 11008}},
+};
+
+class AllGatherWeightMinimalMatmulAsyncLargeTest : public AllGatherWeightMinimalMatmulAsyncTest,
+                                                   public ::testing::WithParamInterface<LargeCase> {};
+
+std::string CaseName(const ::testing::TestParamInfo<LargeCase>& info) {
+    return info.param.name;
+}
+}  // namespace
+
+TEST_P(AllGatherWeightMinimalMatmulAsyncLargeTest, MatchesReference) {
+    const LargeCase& c = GetParam();
+    const Shape& s = c.shape;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const Problem p = make_problem(s, device->shape()[kClusterAxis]);
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    const ttnn::Shape x_shape = c.batch == 1 ? ttnn::Shape({s.M, s.K}) : ttnn::Shape({c.batch, 1, s.M / c.batch, s.K});
+    const auto x = ttml::core::from_vector(p.x, x_shape, device, ttnn::Layout::TILE, replicate.get());
+    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
+    const auto w = ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+    const auto grid = device->compute_with_storage_grid_size();
+    const size_t available_links = ttnn::operations::ccl::common::get_num_links(*device, kClusterAxis);
+    for (const uint32_t num_links : {2U, 4U}) {
+        if (num_links > available_links || 2 * num_links > grid.x - 1) {
+            continue;
+        }
+        for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
+            SCOPED_TRACE(
+                testing::Message() << "ring=" << (topology == ttnn::ccl::Topology::Ring) << " links=" << num_links);
+            run_fabric_gather(p, x, w, num_links, true, topology, std::nullopt, 2);
+        }
+    }
 }
 
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, W2) {
-    sweep({2048, 11008, 4096});
-}
-
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, TransposedGrid) {
-    sweep({8192, 1024, 2048});
-}
+INSTANTIATE_TEST_SUITE_P(
+    LlamaShapes, AllGatherWeightMinimalMatmulAsyncLargeTest, ::testing::ValuesIn(kLargeCases), CaseName);

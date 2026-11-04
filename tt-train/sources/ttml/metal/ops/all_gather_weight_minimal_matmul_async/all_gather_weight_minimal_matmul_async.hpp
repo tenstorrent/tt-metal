@@ -24,7 +24,5 @@ ttnn::Tensor all_gather_weight_minimal_matmul_async(
     std::optional<const ttnn::DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t num_links = 1,
-    uint32_t num_workers_per_link = 3,
-    uint32_t num_buffers_per_channel = 8,
     bool transpose_b = true);
 }

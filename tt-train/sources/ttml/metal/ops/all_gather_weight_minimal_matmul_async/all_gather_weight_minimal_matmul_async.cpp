@@ -19,8 +19,6 @@ ttnn::Tensor all_gather_weight_minimal_matmul_async(
     std::optional<const ttnn::DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t num_links,
-    uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel,
     bool transpose_b) {
     return ttnn::prim::ttml_all_gather_weight_minimal_matmul_async(
         input_tensor,
@@ -34,8 +32,6 @@ ttnn::Tensor all_gather_weight_minimal_matmul_async(
         dtype,
         compute_kernel_config,
         num_links,
-        num_workers_per_link,
-        num_buffers_per_channel,
         transpose_b);
 }
 }  // namespace ttml::metal
