@@ -239,6 +239,15 @@ def log_words_layout(res, l1s_before=None, l1s_after=None):
 class TtK3MoEBlockFfn:
     """One MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
 
+    def _default_gu_read_pieces(self) -> str:
+        """The gate/up reads' pieces (FlatLayoutOptions.gu_read_pieces) with the default Tensix reads: the fastest
+        DRISC-free choice a model - Kimi-K3 2 (L1-L4 golden, traced, full block: +3.0% over the DRISC senders, 1 piece
+        +6.0%), GLM-5.3 1 (L78 chunked prefill, traced: 302.4 ms a chunk, +1.7%; 2 / 4 pieces 305.1 / 304.9, DRISC
+        297.3). -1 (the op's default) for the DRISC senders."""
+        if os.environ.get("MOE_GU_SOURCE", "tensix") == "drisc":
+            return "-1"
+        return "2" if self.model_name == "KimiK3Config" else "1"
+
     def __init__(self, mesh_device, model_cfg, layer_idx: int, hf_config=None, cache_path=None, state_dict=None):
         self.mesh, self.layer_idx, self.hf_config = mesh_device, int(layer_idx), hf_config
         self.cache = Path(cache_path) if cache_path is not None else None
@@ -247,6 +256,7 @@ class TtK3MoEBlockFfn:
         # made from them, expert e on chip e // (E / N), instead of from the checkpoint and the TtMoe cache)
         self.host_sd = state_dict if state_dict and state_dict.get("routed_expert_weights") is not None else None
         self.dims, self.act = block_dims(model_cfg)
+        self.model_name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", "")
         self.weights = None  # (this layer's MoEBlockWeights, made at its first call)
         self.calls = 0
 
@@ -289,16 +299,12 @@ class TtK3MoEBlockFfn:
                     drisc_tiles=getattr(mb.FlatDriscTiles, os.environ.get("MOE_DRISC_TILES", "both")),
                     # (who reads the gate/up weights - FlatLayoutOptions.gu_source drisc | tensix | tensix_split |
                     # tensix_noc1 | placed | auto_tensix | auto_hybrid; MOE_GU_PLACE: a JSON file of gu_place words for
-                    # placed). Default: the gate/up cores read their own weights on NOC0, each block as 2 reads - no
+                    # placed). Default: the gate/up cores read their own weights on NOC0 (K3: each block as 2 reads) - no
                     # DRISC sender is launched on the DRAM cores (K3 L1-4 golden, traced: +3.0% over the DRISC senders,
                     # the fastest DRISC-free choice; MOE_GU_SOURCE=drisc restores the senders)
                     gu_source=getattr(mb.FlatGuSource, os.environ.get("MOE_GU_SOURCE", "tensix")),
                     gu_read_depth=int(os.environ.get("MOE_GU_READ_DEPTH", "-1")),
-                    gu_read_pieces=int(
-                        os.environ.get(
-                            "MOE_GU_READ_PIECES", "-1" if os.environ.get("MOE_GU_SOURCE") == "drisc" else "2"
-                        )
-                    ),
+                    gu_read_pieces=int(os.environ.get("MOE_GU_READ_PIECES", self._default_gu_read_pieces())),
                     gu_place=json.load(open(os.environ["MOE_GU_PLACE"])) if os.environ.get("MOE_GU_PLACE") else [],
                 ),
             )
