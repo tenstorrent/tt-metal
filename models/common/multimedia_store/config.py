@@ -16,8 +16,8 @@ KEY_ENCODING_ENV = "MEDIA_STORE_KEY_ENCODING"
 """How a media key becomes its Mooncake key. The encoder service, which writes each value, and the prefill runner, which
 reads it, each convert keys this way themselves, so both must see the same value:
 
-- unset or empty: the media key is an ASCII str and is its own store key;
-- ``hex``: the media key is bytes (e.g. a 32-byte SHA-256) and its store key is the lowercase hex of those bytes."""
+- unset or empty: the media key's bytes are valid UTF-8, and that text is its store key;
+- ``hex``: the media key is any bytes (e.g. a 32-byte SHA-256) and its store key is their lowercase hex."""
 KEY_ENCODINGS = ("", "hex")
 
 
@@ -65,7 +65,7 @@ class MediaEmbeddingStoreConfig:
         PREFILL_MEDIA_STORE_METADATA  metadata server, e.g. http://<master host>:<port>/metadata (required)
         PREFILL_MEDIA_STORE_PROTOCOL  rdma (default) or tcp
         PREFILL_MEDIA_STORE_DEVICE    RDMA device(s) (default: Mooncake's choice)
-        MEDIA_STORE_KEY_ENCODING      'hex' for bytes media keys (default: ASCII str keys); shared with the encoder
+        MEDIA_STORE_KEY_ENCODING      'hex' for binary media keys (default: UTF-8 keys); shared with the encoder
         """
 
         def get(name: str, default: Optional[str] = None) -> Optional[str]:

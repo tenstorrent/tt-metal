@@ -3,7 +3,7 @@
 
 """How prefill reads the media embeddings the encoder service stored for this host."""
 
-from typing import NamedTuple, Protocol, Sequence, Union
+from typing import NamedTuple, Protocol, Sequence
 
 
 class Missing(KeyError):
@@ -17,15 +17,15 @@ class StoreUnavailable(RuntimeError):
 class FetchRequest(NamedTuple):
     """Bytes [offset, offset + length) of the value under media_key; length -1 runs to the end of the value."""
 
-    media_key: Union[str, bytes]
-    """An ASCII str, or with MEDIA_STORE_KEY_ENCODING=hex, bytes (e.g. the 32-byte SHA-256 the encoder service
-    returns), stored under their lowercase hex."""
+    media_key: bytes
+    """Valid UTF-8, stored under that text; with MEDIA_STORE_KEY_ENCODING=hex, any bytes (e.g. the 32-byte SHA-256 the
+    encoder service returns), stored under their lowercase hex."""
     offset: int = 0
     length: int = -1
 
 
 class EmbeddingReader(Protocol):
-    def fetch(self, media_key: Union[str, bytes]) -> memoryview:
+    def fetch(self, media_key: bytes) -> memoryview:
         """The stored value under media_key, in the model's format. Raises Missing or StoreUnavailable."""
 
     def fetch_batch(self, requests: Sequence[FetchRequest]) -> list[memoryview]:

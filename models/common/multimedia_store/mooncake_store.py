@@ -18,8 +18,8 @@
   ``ValueError``.
 - ``stats`` counts hits, misses, errors, bytes read, fetch latency and the read buffer's size.
 
-Media keys are ASCII strings, stored as they are, or with MEDIA_STORE_KEY_ENCODING=hex, bytes stored under their
-lowercase hex. ``MooncakeEmbeddingReader.open(config)`` starts the store from a
+Media keys are bytes, stored under their UTF-8 text, or with MEDIA_STORE_KEY_ENCODING=hex, under their lowercase
+hex. ``MooncakeEmbeddingReader.open(config)`` starts the store from a
 ``MediaEmbeddingStoreConfig`` (config.py), read from the ``PREFILL_MEDIA_STORE_*`` variables.
 """
 
@@ -30,7 +30,7 @@ import ctypes
 import threading
 import time
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence, Union
+from typing import Mapping, Optional, Sequence
 
 import numpy as np
 from loguru import logger
@@ -43,17 +43,19 @@ from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUn
 OBJECT_NOT_FOUND = -704
 
 
-def _store_key(media_key: Union[str, bytes], encoding: str) -> str:
-    """The Mooncake key for a media key (config.KEY_ENCODING_ENV). Store keys are ASCII because Mooncake's batched
-    lookup (batch_get_replica_desc) returns its results keyed by str, decoding each key as UTF-8: a raw digest is almost
-    never valid UTF-8 and makes the lookup raise UnicodeDecodeError, though Mooncake's other calls accept it."""
+def _store_key(media_key: bytes, encoding: str) -> str:
+    """The Mooncake key for a media key (config.KEY_ENCODING_ENV): its lowercase hex with MEDIA_STORE_KEY_ENCODING=hex,
+    else its bytes as UTF-8 text. Store keys must be valid UTF-8 because Mooncake's batched lookup
+    (batch_get_replica_desc) returns its results keyed by str, decoding each key as UTF-8: a raw digest is almost never
+    valid UTF-8 and makes the lookup raise UnicodeDecodeError, though Mooncake's other calls accept it."""
+    if not isinstance(media_key, bytes):
+        raise ValueError(f"media key {media_key!r} is not bytes")
     if encoding == "hex":
-        if not isinstance(media_key, bytes):
-            raise ValueError(f"media key {media_key!r} is not bytes ({KEY_ENCODING_ENV}=hex)")
         return media_key.hex()
-    if not isinstance(media_key, str) or not media_key.isascii():
-        raise ValueError(f"media key {media_key!r} is not an ASCII str (set {KEY_ENCODING_ENV}=hex for bytes keys)")
-    return media_key
+    try:
+        return media_key.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(f"media key {media_key!r} is not valid UTF-8 (set {KEY_ENCODING_ENV}=hex)") from None
 
 
 class MediaEmbeddingReaderStats:
@@ -156,7 +158,7 @@ class MooncakeEmbeddingReader:
         mode = "push" if config.segment_bytes else "pull"
         logger.info(
             f"[media_embedding_reader] {mode} mode: segment={segment} master={config.master} "
-            f"bytes={config.segment_bytes} protocol={config.protocol} keys={config.key_encoding or 'ascii'} "
+            f"bytes={config.segment_bytes} protocol={config.protocol} keys={config.key_encoding or 'utf-8'} "
             f"ready in {time.perf_counter() - t0:.1f} s"
         )
         return reader
@@ -168,11 +170,11 @@ class MooncakeEmbeddingReader:
         logger.info(f"[media_embedding_reader] closing segment {self.segment}: {self.stats.snapshot()}")
         self._client.close()
 
-    def fetch(self, media_key: Union[str, bytes]) -> memoryview:
+    def fetch(self, media_key: bytes) -> memoryview:
         """The whole value stored under media_key, as fetch_batch returns it. Raises Missing or StoreUnavailable."""
         return self.fetch_batch([FetchRequest(media_key)])[0]
 
-    def size(self, media_key: Union[str, bytes]) -> int:
+    def size(self, media_key: bytes) -> int:
         """Bytes stored under media_key. Raises Missing or StoreUnavailable."""
         key = _store_key(media_key, self.key_encoding)
         return self._locate([key])[key].size

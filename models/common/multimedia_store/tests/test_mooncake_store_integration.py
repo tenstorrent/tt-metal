@@ -142,12 +142,12 @@ class SimpleCluster:
         self._n = 0
 
     def put(
-        self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True, media_key: str = ""
-    ) -> tuple[str, np.ndarray]:
-        """The encoder service's write: put_from a registered buffer into segment, soft-pinned, under media_key (a
-        store key; default a fresh one). Returns (key, value)."""
+        self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True, store_key: str = ""
+    ) -> tuple[bytes, np.ndarray]:
+        """The encoder service's write: put_from a registered buffer into segment, soft-pinned, under store_key
+        (default a fresh one). Returns (media key, value), the media key being the store key's UTF-8 bytes."""
         self._n += 1
-        media_key = media_key or f"test-media-key-{self._n}"
+        store_key = store_key or f"test-media-key-{self._n}"
         value = np.random.default_rng(self._n).integers(0, 256, nbytes, dtype=np.uint8)
         assert self.writer.register_buffer(value.ctypes.data, nbytes) == 0
         self._buffers.append(value)
@@ -156,18 +156,19 @@ class SimpleCluster:
         if pin:
             config.soft_pin_action = mooncake_store.SoftPinAction.ENABLE
             config.soft_pin_ttl_ms = 60_000
-        assert self.writer.put_from(media_key, value.ctypes.data, nbytes, config) == 0  # the media key itself
-        return media_key, value
+        assert self.writer.put_from(store_key, value.ctypes.data, nbytes, config) == 0
+        return store_key.encode(), value
 
-    def _descriptor(self, media_key: str):
-        (replica,) = self.writer.get_replica_desc(media_key)
+    def _descriptor(self, store_key):
+        (replica,) = self.writer.get_replica_desc(store_key)
         return replica.get_memory_descriptor().buffer_descriptor
 
-    def placed_on(self, media_key: str) -> str:
-        return self._descriptor(media_key).transport_endpoint
+    def placed_on(self, store_key) -> str:
+        """Where the value under store_key (str, or the bytes of a UTF-8 media key) lives."""
+        return self._descriptor(store_key).transport_endpoint
 
-    def address(self, media_key: str) -> int:
-        return self._descriptor(media_key).buffer_address
+    def address(self, store_key) -> int:
+        return self._descriptor(store_key).buffer_address
 
     def master_lookups(self) -> int:
         """Lookups the master has served, single and batched, from its own request counters."""
@@ -219,13 +220,13 @@ def test_range_read(cluster, where):
 
 
 def test_missing_key(cluster, expect_error):
-    absent = "no-such-media-key"
+    absent = b"no-such-media-key"
     before = cluster.store.stats.snapshot()
-    with expect_error(Missing, absent):
+    with expect_error(Missing, absent.decode()):
         cluster.store.fetch(absent)
-    with expect_error(Missing, absent):
+    with expect_error(Missing, absent.decode()):
         cluster.store.fetch_batch([FetchRequest(absent, 0, 64)])
-    with expect_error(Missing, absent):
+    with expect_error(Missing, absent.decode()):
         cluster.store.size(absent)
     after = cluster.store.stats.snapshot()
     assert after["misses"] == before["misses"] + 2 and after["errors"] == before["errors"]
@@ -248,7 +249,7 @@ def test_batch_of_several_requests(cluster, expect_error):
     cluster.store.fetch_batch([FetchRequest(k) for k, _ in here])  # all on this host: in place
     assert cluster.master_lookups() - lookups == 1
     with expect_error(Missing, "absent-media-key"):
-        cluster.store.fetch_batch(requests + [FetchRequest("absent-media-key")])
+        cluster.store.fetch_batch(requests + [FetchRequest(b"absent-media-key")])
 
 
 def test_many_values_from_both_stores(cluster):
@@ -293,11 +294,19 @@ def test_bytes_media_key_is_read_under_its_hex(cluster, where, expect_error):
     lowercase hex; a runner with the same setting reads with the raw bytes."""
     segment = cluster.store.segment if where == "this_host" else cluster.other.segment
     media_key = hashlib.sha256(where.encode()).digest()
-    store_key, value = cluster.put(segment, media_key=media_key.hex())
-    assert cluster.placed_on(store_key) == segment
+    _, value = cluster.put(segment, store_key=media_key.hex())
+    assert cluster.placed_on(media_key.hex()) == segment
     assert bytes(cluster.hex_reader.fetch(media_key)) == value.tobytes()
     (rows,) = cluster.hex_reader.fetch_batch([FetchRequest(media_key, 64, 4096)])
     assert bytes(rows) == value[64 : 64 + 4096].tobytes()
     never_written = hashlib.sha256(b"never written").digest()
     with expect_error(Missing, never_written.hex()):
         cluster.hex_reader.fetch(never_written)
+
+
+def test_non_ascii_utf8_media_key(cluster):
+    """Without MEDIA_STORE_KEY_ENCODING a media key only has to be valid UTF-8, which Mooncake's batched lookup
+    decodes."""
+    media_key, value = cluster.put(cluster.other.segment, store_key="test-media-é-中")
+    assert media_key == "test-media-é-中".encode()
+    assert bytes(cluster.store.fetch(media_key)) == value.tobytes()

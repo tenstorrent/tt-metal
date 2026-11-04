@@ -48,8 +48,9 @@ class FakeClient:
         self.lookups = 0
         self.registered = {}
 
-    def put(self, key: str, segment: str, data: np.ndarray, status: str = "COMPLETE", replicas: int = 1):
-        self.objects[key] = (segment, data, status, replicas)
+    def put(self, key, segment: str, data: np.ndarray, status: str = "COMPLETE", replicas: int = 1):
+        """Stores under the store key; a bytes media key is written as its UTF-8 text, as the encoder does."""
+        self.objects[key.decode() if isinstance(key, bytes) else key] = (segment, data, status, replicas)
 
     def register_buffer(self, ptr, size):
         self.registered[ptr] = size
@@ -88,8 +89,8 @@ class FakeClient:
         return 0
 
 
-def _key(i: int) -> str:
-    return f"media-{i}"
+def _key(i: int) -> bytes:
+    return f"media-{i}".encode()
 
 
 @pytest.fixture
@@ -104,11 +105,14 @@ def setup():
     return client, reader, local, remote
 
 
-def test_key_must_be_ascii(setup, expect_error):
-    _, reader, _, _ = setup
-    for bad in ("media-\u00e9", b"media-1"):
-        with expect_error(ValueError, "not an ASCII str"):
-            reader.fetch(bad)
+def test_key_must_be_utf8_bytes(setup, expect_error):
+    client, reader, local, _ = setup
+    client.put("media-\u00e9", ME, local)  # non-ASCII text is valid UTF-8, so the batched lookup returns it
+    assert bytes(reader.fetch("media-\u00e9".encode())) == local.tobytes()
+    with expect_error(ValueError, "is not valid UTF-8"):
+        reader.fetch(hashlib.sha256(b"image").digest())  # binary keys need MEDIA_STORE_KEY_ENCODING=hex
+    with expect_error(ValueError, "is not bytes"):
+        reader.fetch("media-1")
 
 
 def test_bytes_keys_are_read_under_their_hex(setup, expect_error):
@@ -175,7 +179,7 @@ def test_batch_mixes_local_and_remote_in_one_lookup(setup):
 
 def test_one_missing_key_fails_the_batch(setup, expect_error):
     _, reader, _, _ = setup
-    with expect_error(Missing, _key(9)):
+    with expect_error(Missing, _key(9).decode()):
         reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(9)), FetchRequest(_key(2))])
     s = reader.stats.snapshot()
     assert (s["misses"], s["hits"]) == (1, 0)
@@ -204,9 +208,9 @@ def test_read_buffer_starts_empty_and_grows_on_demand(setup):
 def test_missing_key(setup, expect_error):
     _, reader, _, _ = setup
     for read in (reader.fetch, reader.size):
-        with expect_error(Missing, _key(9)):
+        with expect_error(Missing, _key(9).decode()):
             read(_key(9))
-    with expect_error(KeyError, _key(9)):  # Missing is a KeyError, not a store failure
+    with expect_error(KeyError, _key(9).decode()):  # Missing is a KeyError, not a store failure
         reader.fetch(_key(9))
     s = reader.stats.snapshot()
     assert (s["misses"], s["hits"], s["errors"]) == (2, 0, 0)  # size() is a lookup, not a fetch
