@@ -3,16 +3,14 @@ name: "LLK perf gate"
 on:
   pull_request:
     types: [labeled, synchronize]
-  schedule:
-    - cron: '0 5 * * *'
   workflow_dispatch:
     inputs:
       perf_run_id:
-        description: "Gate this run's perf artifacts (blank = measure the nightly suite now)"
+        description: "Gate this run's perf artifacts, against baseline_run_id or the gate's warehouse baseline"
         required: false
         type: string
       baseline_run_id:
-        description: "Compare against this run's artifacts (blank = the warehouse baseline, nightly mode)"
+        description: "Compare against this run's artifacts (blank = the gate's warehouse baseline)"
         required: false
         type: string
       arch:
@@ -25,7 +23,7 @@ on:
           - wormhole
           - blackhole
       gate:
-        description: "With baseline_run_id: compare under this gate's rules (gate_policy.yaml)"
+        description: "With perf_run_id: compare under this gate's rules (gate_policy.yaml)"
         required: false
         default: nightly
         type: choice
@@ -134,7 +132,7 @@ jobs:
     if: >-
       ${{ !cancelled() &&
       (
-        (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id != '') ||
+        (github.event_name == 'workflow_dispatch' && inputs.perf_run_id != '') ||
         (
           github.event.pull_request.head.repo.full_name == github.repository &&
           (
@@ -412,35 +410,3 @@ jobs:
         run: |
           python3 tt_metal/tt-llk/perf/gate.py render --gate pr --reports reports \
             --comment "${{ needs.placement-plan.outputs.pr }}"
-
-  nightly-measure:
-    name: "Nightly: measure the suite (non speed-of-light)"
-    if: >-
-      github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch'
-      && inputs.baseline_run_id == '' && inputs.perf_run_id == '' && inputs.placement_run_id == '')
-    uses: ./.github/workflows/llk-perf-impl.yaml
-    with:
-      architecture: all
-      speed-of-light: false
-      perf-run-types: ALL_MODES
-      upload-to-warehouse: true
-      pipeline: nightly
-    secrets: inherit
-
-  nightly-gate:
-    name: "Nightly gate ${{ matrix.arch }} (non speed-of-light)"
-    needs: nightly-measure
-    if: >-
-      ${{ !cancelled() && (github.event_name == 'schedule'
-      || (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id == ''
-          && inputs.placement_run_id == '')) }}
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: ${{ fromJSON(inputs.arch == 'wormhole' && '["wormhole"]' || inputs.arch == 'blackhole' && '["blackhole"]' || '["blackhole","wormhole"]') }}
-    uses: ./.github/workflows/llk-perf-gate-impl.yaml
-    with:
-      gate: nightly
-      arch: ${{ matrix.arch }}
-      perf_run_id: ${{ inputs.perf_run_id || '' }}
-    secrets: inherit

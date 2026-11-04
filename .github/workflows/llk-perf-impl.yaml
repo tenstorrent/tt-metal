@@ -311,7 +311,6 @@ jobs:
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
       - name: Record the job start
-        if: ${{ inputs.stage2-baseline-ref != '' }}
         run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
@@ -410,6 +409,17 @@ jobs:
           LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
         run: |
           ${{ matrix.test-group.cmd }}
+
+      # The leg's time against its limit, for the gate verdict and the nightly health message.
+      - name: Record the leg's time
+        if: always()
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          mkdir -p "perf_data/runs/$PERF_RUN_TAG"
+          printf '{"arch": "%s", "group": %s, "minutes": %s, "timeout_minutes": %s}\n' "$CHIP_ARCH" \
+            "${{ matrix.test-group.split_group || 0 }}" "$(( ($(date +%s) - JOB_START_EPOCH) / 60 ))" \
+            "${{ matrix.test-group.timeout }}" > "perf_data/runs/$PERF_RUN_TAG/leg.json"
 
       # One retry: a reset on FinalizeArtifact must not cost the architecture its verdict.
       - name: Upload performance data

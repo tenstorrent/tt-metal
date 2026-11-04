@@ -58,11 +58,7 @@ def policy(gate, arch, path=POLICY):
 
 
 def _csvs(directory):
-    return sorted(
-        p
-        for p in glob.glob(f"{directory}/**/*.csv", recursive=True)
-        if not p.endswith(".post.csv")
-    )
+    return sorted(p for p in glob.glob(f"{directory}/**/*.csv", recursive=True) if not p.endswith(".post.csv"))
 
 
 def waivers(arch, path=WAIVERS):
@@ -83,9 +79,7 @@ def _waived_by(point, entries):
             w["test"] == point[rc.MODULE_COL]
             and w.get("run_type", point["run_type"]) == point["run_type"]
             and w.get("marker", point["marker"]) == point["marker"]
-            and all(
-                str(config.get(k)) == str(v) for k, v in (w.get("config") or {}).items()
-            )
+            and all(str(config.get(k)) == str(v) for k, v in (w.get("config") or {}).items())
             and point["delta"] <= w["max_delta"]
         ):
             return w
@@ -135,13 +129,10 @@ def complete(directory, arch):
         return f"No {arch} leg left a plan (plan.json), so nothing shows what was measured."
     splits = {plan["groups"] for _, plan in plans}
     if len(splits) != 1:
-        return (
-            f"The {arch} legs were cut {' and '.join(map(str, sorted(splits)))} ways."
-        )
+        return f"The {arch} legs were cut {' and '.join(map(str, sorted(splits)))} ways."
     n = splits.pop()
     problems = [
-        f"leg {g}/{n} left no data"
-        for g in sorted(set(range(1, n + 1)) - {plan["group"] for _, plan in plans})
+        f"leg {g}/{n} left no data" for g in sorted(set(range(1, n + 1)) - {plan["group"] for _, plan in plans})
     ]
     for path, plan in plans:
         ran = path.with_name("ran.txt")
@@ -155,6 +146,28 @@ def complete(directory, arch):
     if problems:
         return f"A {arch} measuring leg did not complete: {'; '.join(problems)}."
     return ""
+
+
+def legs(directory, arch):
+    """Each leg of ``arch``: its group, its time against its limit (leg.json), and whether it ran its plan."""
+    out = []
+    for path in sorted(glob.glob(f"{directory}/**/leg.json", recursive=True)):
+        leg = _read_json(path) or {}
+        if leg.get("arch") != arch:
+            continue
+        plan = _read_json(Path(path).with_name("plan.json")) or {}
+        ran = Path(path).with_name("ran.txt")
+        ran = set(ran.read_text().splitlines()) if ran.exists() else set()
+        out.append(
+            {
+                "group": leg.get("group"),
+                "groups": plan.get("groups", "?"),
+                "minutes": leg.get("minutes"),
+                "timeout_minutes": leg.get("timeout_minutes"),
+                "complete": bool(plan) and set(plan["nodes"]) <= ran,
+            }
+        )
+    return sorted(out, key=lambda leg: leg["group"] or 0)
 
 
 def _short_baseline(p, result):
@@ -250,12 +263,7 @@ def _baseline(a, base):
 
 def _legs(current, arch):
     """The measuring legs of ``arch`` that wrote data: one perf_data/runs/<run>-<arch>-<job> directory each."""
-    return {
-        part
-        for path in current
-        for part in Path(path).parts
-        if re.fullmatch(rf"\d+-{arch}-\d+", part)
-    }
+    return {part for path in current for part in Path(path).parts if re.fullmatch(rf"\d+-{arch}-\d+", part)}
 
 
 def _stage2(a, current, regressions_csv, gate_base):
@@ -265,19 +273,11 @@ def _stage2(a, current, regressions_csv, gate_base):
         results, notes = pc.gate(
             [json.loads(Path(path).read_text()) for path in paths],
             len(_legs(current, a.arch)),
-            (
-                pc.read_candidates(regressions_csv)
-                if Path(regressions_csv).exists()
-                else []
-            ),
+            (pc.read_candidates(regressions_csv) if Path(regressions_csv).exists() else []),
             gate_base,
             [
                 Path(b).read_text().strip()
-                for b in sorted(
-                    glob.glob(
-                        a.stage2.replace("stage2.json", "stage2.base"), recursive=True
-                    )
-                )
+                for b in sorted(glob.glob(a.stage2.replace("stage2.json", "stage2.base"), recursive=True))
             ],
         )
         report = pc.render(results, a.arch)
@@ -285,9 +285,7 @@ def _stage2(a, current, regressions_csv, gate_base):
             report += "\n\n" + "\n".join(f"> ⚠️ {n}" for n in notes)
         counts = collections.Counter(r["outcome"] for r in results)
         return report, {"legs": len(paths), "notes": notes, "outcomes": dict(counts)}
-    except (
-        Exception
-    ) as e:  # noqa: BLE001 - report-only: any fault becomes a line in the report
+    except Exception as e:  # noqa: BLE001 - report-only: any fault becomes a line in the report
         return f"Stage 2 could not build its report: {e!r}", {"error": repr(e)}
 
 
@@ -299,9 +297,7 @@ def compare(a):
     incomplete = complete(a.current, a.arch)
     if not incomplete and (a.baseline_commit or a.baseline_run):
         # A branch point or a run measured in CI: its legs left a plan too.
-        incomplete = complete(a.baseline, a.arch).replace(
-            "measuring leg", "baseline leg"
-        )
+        incomplete = complete(a.baseline, a.arch).replace("measuring leg", "baseline leg")
     if not incomplete and baseline and baseline["have"]:
         sol = _speed_of_light(current)
         if not current:
@@ -330,18 +326,12 @@ def compare(a):
                 except (OSError, ValueError, yaml.YAMLError) as e:
                     error = f"The waivers could not be read: {e}"
 
-    status, reason = decide(
-        p, incomplete=incomplete, baseline=baseline, result=result, error=error
-    )
+    status, reason = decide(p, incomplete=incomplete, baseline=baseline, result=result, error=error)
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     if result and result["records"]:
         b = p["baseline"]
-        label = (
-            f"pinned baseline, run {b['run']}"
-            if isinstance(b, dict)
-            else b.replace("_", " ")
-        )
+        label = f"pinned baseline, run {b['run']}" if isinstance(b, dict) else b.replace("_", " ")
         if baseline.get("stale"):
             label += ", stale"
         report = rc.render_report(
@@ -371,9 +361,7 @@ def compare(a):
         regressions_csv = out / "perf_gate_report.regressions.csv"
         rc._write_points_csv(result["regressions"], regressions_csv)
         if a.stage2:
-            section, stage2 = _stage2(
-                a, current, regressions_csv, baseline.get("commit_sha", "")
-            )
+            section, stage2 = _stage2(a, current, regressions_csv, baseline.get("commit_sha", ""))
             report += "\n\n" + section
         (out / "perf_gate_report.md").write_text(report + "\n")
     verdict = {
@@ -394,6 +382,7 @@ def compare(a):
             "waived": len(result.get("waived", [])) if result else 0,
         },
         "stage2": stage2,
+        "legs": legs(a.current, a.arch),
     }
     verdict["fails"] = fails(verdict)
     path = out / f"verdict-{a.arch}.json"
@@ -406,17 +395,13 @@ COMMENT_MARKER = "<!-- llk-perf-gate -->"
 
 
 def _gh(*args, data=None):
-    out = subprocess.run(
-        ["gh", "api", *args], input=data, capture_output=True, text=True, check=True
-    )
+    out = subprocess.run(["gh", "api", *args], input=data, capture_output=True, text=True, check=True)
     return out.stdout
 
 
 def _queue_pr():
     """The PR a merge-queue ref (gh-readonly-queue/main/pr-123-<sha>) carries, or {}."""
-    m = re.search(
-        r"gh-readonly-queue/[^/]+/pr-(\d+)-", os.environ.get("GITHUB_REF", "")
-    )
+    m = re.search(r"gh-readonly-queue/[^/]+/pr-(\d+)-", os.environ.get("GITHUB_REF", ""))
     if not m:
         return {}
     repo = os.environ["GITHUB_REPOSITORY"]
@@ -451,14 +436,8 @@ def _comment(reports, directory):
         if report and report.exists():
             parts.append(report.read_text().strip())
         else:
-            status, reason = (
-                (v["status"], v["reason"])
-                if v
-                else ("no verdict", "Its gate job wrote no verdict.")
-            )
-            parts.append(
-                f"# Perf compare — LLK perf — {arch.capitalize()}\n\n**{status}**: {reason}"
-            )
+            status, reason = (v["status"], v["reason"]) if v else ("no verdict", "Its gate job wrote no verdict.")
+            parts.append(f"# Perf compare — LLK perf — {arch.capitalize()}\n\n**{status}**: {reason}")
         for stage2 in glob.glob(f"{directory}/**/stage2-{arch}.md", recursive=True):
             parts.append(Path(stage2).read_text().strip())
     return "\n\n".join(parts) + "\n"
@@ -466,15 +445,8 @@ def _comment(reports, directory):
 
 def _post_comment(pr, body):
     repo = os.environ["GITHUB_REPOSITORY"]
-    comments = json.loads(
-        _gh("--paginate", "--slurp", f"repos/{repo}/issues/{pr}/comments?per_page=100")
-    )
-    mine = [
-        c
-        for page in comments
-        for c in page
-        if c["user"]["type"] == "Bot" and c["body"].startswith(COMMENT_MARKER)
-    ]
+    comments = json.loads(_gh("--paginate", "--slurp", f"repos/{repo}/issues/{pr}/comments?per_page=100"))
+    mine = [c for page in comments for c in page if c["user"]["type"] == "Bot" and c["body"].startswith(COMMENT_MARKER)]
     payload = json.dumps({"body": body})
     if mine:
         _gh(
@@ -510,9 +482,7 @@ def _slack(reports, ctx, post_pass):
             **{k: x for k, x in arch_ctx.items() if x != ""},
         }
         rows = (
-            notify.read_regressions(str(d / "perf_gate_report.regressions.csv"))
-            if d and status == "regressed"
-            else []
+            notify.read_regressions(str(d / "perf_gate_report.regressions.csv")) if d and status == "regressed" else []
         )
         if d:
             points[arch] = str(d / "perf_gate_report.points.csv")
@@ -589,9 +559,7 @@ def verdict_cmd(a):
     """Print the verdict, add the report to the step summary, and exit 1 when the job fails."""
     v = _read_json(a.path)
     if v is None:
-        print(
-            f"::error::{a.path} is missing: the compare did not finish, so the gate has no verdict."
-        )
+        print(f"::error::{a.path} is missing: the compare did not finish, so the gate has no verdict.")
         return 1
     report = Path(a.path).with_name("perf_gate_report.md")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -606,16 +574,12 @@ def verdict_cmd(a):
     if status == "pass":
         print(f"✅ {v['arch']}: no regressions ({v['counts']['points']} points)")
     elif status == "regression":
-        print(
-            f"::{level}::{v['arch']}: {v['counts']['regressions']} point(s) regressed."
-        )
+        print(f"::{level}::{v['arch']}: {v['counts']['regressions']} point(s) regressed.")
         if not v["fails"]:
             print("Report-only: the job does not fail.")
     else:
         print(f"::{level}::{v['arch']}: {status}. {reason}")
-        print(
-            "This is not a performance result: a measuring leg, the baseline or the compare failed."
-        )
+        print("This is not a performance result: a measuring leg, the baseline or the compare failed.")
     return 1 if v["fails"] else 0
 
 
@@ -649,9 +613,7 @@ def baseline_cmd(a):
         return 0
     if a.match_ref:
         # Commits and trees only: enough for the merge base and the 200 commits before it.
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-        )
+        head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
         subprocess.run(
             [
                 "git",
@@ -664,10 +626,7 @@ def baseline_cmd(a):
             ],
             check=True,
         )
-        script = (
-            Path(__file__).resolve().parents[3]
-            / ".github/scripts/llk-perf-baseline-commits.sh"
-        )
+        script = Path(__file__).resolve().parents[3] / ".github/scripts/llk-perf-baseline-commits.sh"
         out = subprocess.run([str(script), a.match_ref], capture_output=True, text=True)
         # An empty list is passed on, so the reader skips instead of taking any run.
         a.commits = ",".join(out.stdout.split()) if out.returncode == 0 else ""
@@ -707,9 +666,7 @@ def main(argv=None):
     c = sub.add_parser("compare", help="compare one arch and write verdict-<arch>.json")
     c.add_argument("--gate", required=True)
     c.add_argument("--arch", required=True)
-    c.add_argument(
-        "--current", required=True, help="directory of the current side's data"
-    )
+    c.add_argument("--current", required=True, help="directory of the current side's data")
     c.add_argument("--baseline", required=True, help="directory of the baseline's data")
     c.add_argument(
         "--baseline-meta",
@@ -726,38 +683,28 @@ def main(argv=None):
         default="",
         help="the baseline is this workflow run's perf data",
     )
-    c.add_argument(
-        "--stage2", default="", help="glob of the legs' stage2.json (merge gate)"
-    )
+    c.add_argument("--stage2", default="", help="glob of the legs' stage2.json (merge gate)")
     c.add_argument("--waivers", default=str(WAIVERS), help="the accepted regressions")
     c.add_argument("--current-sha", default="?")
     c.add_argument("--current-label", default="")
     c.add_argument("--out-dir", default=".")
     c.set_defaults(func=compare)
 
-    m = sub.add_parser(
-        "complete", help="exit 1 unless every leg of an arch ran its plan"
-    )
+    m = sub.add_parser("complete", help="exit 1 unless every leg of an arch ran its plan")
     m.add_argument("--dir", required=True)
     m.add_argument("--arch", required=True)
     m.set_defaults(func=complete_cmd)
 
-    n = sub.add_parser(
-        "render", help="the PR comment and the Slack post, from the verdicts"
-    )
+    n = sub.add_parser("render", help="the PR comment and the Slack post, from the verdicts")
     n.add_argument("--gate", required=True)
     n.add_argument(
         "--reports",
         required=True,
         help="directory holding every arch's verdict and report",
     )
-    n.add_argument(
-        "--comment", default="", help="post or update the comment on this PR"
-    )
+    n.add_argument("--comment", default="", help="post or update the comment on this PR")
     n.add_argument("--slack", action="store_true", help="post to SLACK_CHANNEL_ID")
-    n.add_argument(
-        "--post-pass", action="store_true", help="also post when every arch passed"
-    )
+    n.add_argument("--post-pass", action="store_true", help="also post when every arch passed")
     n.add_argument("--trigger", default="nightly", help="what started a run with no PR")
     n.add_argument("--out-dir", default=".")
     n.set_defaults(func=render_cmd)
@@ -769,9 +716,7 @@ def main(argv=None):
     b = sub.add_parser("baseline", help="read the gate's baseline from the warehouse")
     b.add_argument("--gate", required=True)
     b.add_argument("--arch", required=True)
-    b.add_argument(
-        "--commits", default=None, help="newest first; the run at the first is wanted"
-    )
+    b.add_argument("--commits", default=None, help="newest first; the run at the first is wanted")
     b.add_argument(
         "--exclude-run",
         default="",

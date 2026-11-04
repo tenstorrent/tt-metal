@@ -1,9 +1,10 @@
 name: "LLK perf nightly health"
 
 on:
-  workflow_run:
-    workflows: ["LLK perf", "LLK perf gate"]
-    types: [completed]
+  # One check a day, after both nightlies of llk-perf.yaml (03:00 and 05:00 UTC, up to 4 hours each).
+  # A schedule also reports a nightly that did not run, which a completion of that nightly never could.
+  schedule:
+    - cron: '0 10 * * *'
   workflow_dispatch:
     inputs:
       date:
@@ -18,7 +19,6 @@ permissions:
 jobs:
   health:
     name: "Check the nightlies and report"
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule'
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
@@ -26,46 +26,24 @@ jobs:
         timeout-minutes: 20
         with:
           fetch-depth: 1
-          sparse-checkout: |
-            tt_metal/tt-llk/perf
-            tests/pipeline_reorg
+          sparse-checkout: tt_metal/tt-llk/perf
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
-      - run: pip install -c tt_metal/tt-llk/perf/constraints.txt pyyaml
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
-          OWNER_SLACK_ID: U0BCPNHUF43
-          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
-          DAY: ${{ inputs.date || github.event.workflow_run.created_at }}
-          TRIGGER_RUN: ${{ github.event.workflow_run.id }}
+          DAY: ${{ inputs.date }}
         run: |
-          python3 tt_metal/tt-llk/perf/nightly_health.py \
-            --repo "$GITHUB_REPOSITORY" --dm "$OWNER_SLACK_ID" --channel "$SLACK_CHANNEL_ID" \
-            ${DAY:+--date "${DAY:0:10}"} ${TRIGGER_RUN:+--trigger-run "$TRIGGER_RUN"}
-          [ -f health_payloads.json ] || exit 0
-          python3 -c 'import json; [json.dump(p, open(f"payload_{i}.json", "w")) for i, p in enumerate(json.load(open("health_payloads.json")))]'
-          for payload in payload_*.json; do
-            RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
-              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-              -H "Content-type: application/json; charset=utf-8" \
-              --data @"$payload")
-            case "$RESPONSE" in
-              *'"ok":true'*) echo "Sent $payload." ;;
-              *) echo "::error::Slack rejected $payload: ${RESPONSE}"; exit 1 ;;
-            esac
-          done
+          python3 tt_metal/tt-llk/perf/nightly_health.py --repo "$GITHUB_REPOSITORY" ${DAY:+--date "$DAY"} \
+            --post U0BCPNHUF43 "${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}"
       - name: Report a failed check
         if: failure()
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
-          OWNER_SLACK_ID: U0BCPNHUF43
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python3 -c 'import json, os; print(json.dumps({"channel": os.environ["OWNER_SLACK_ID"], "text": ":warning: LLK perf nightly health check failed: " + os.environ["RUN_URL"]}))' > failed_payload.json
-          curl -sS -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H "Content-type: application/json; charset=utf-8" \
-            --data @failed_payload.json
+          curl -sS --fail-with-body -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" -H "Content-type: application/json; charset=utf-8" \
+            --data "{\"channel\": \"U0BCPNHUF43\", \"text\": \":warning: LLK perf nightly health check failed: ${RUN_URL}\"}"

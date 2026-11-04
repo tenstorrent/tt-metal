@@ -11,7 +11,7 @@ their formats: a slice that bypasses `PERF_SWEEP_OPS` rather than widening it.
 
 Nothing here duplicates the shared sweep. Every float op these kernels touch is
 already in `_OP_DOMAIN_REGISTRY`, hence in `PERF_SWEEP_OPS`, and measured at
-these same parameters; `run_llk_perf_wormhole.sh` collects the whole directory,
+these same parameters; `run_llk_perf_leg.sh` collects the whole directory,
 so carrying them here too would measure those rows twice in every perf shard.
 
 loop_factor/iterations/dimensions match the shared sweep so the numbers stay

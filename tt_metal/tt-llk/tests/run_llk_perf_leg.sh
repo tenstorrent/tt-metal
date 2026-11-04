@@ -2,15 +2,17 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-# Wormhole LLK perf runner, shared by the 5 wh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
+# LLK perf runner for one leg: group <group> of <n_groups> of the perf suite on <arch>
+# (tests/pipeline_reorg/llk_perf_tests.yaml, llk_perf_merge_gate_tests.yaml).
 #
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
+# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_leg.sh <wormhole|blackhole> <group> <n_groups>
 # Optional: LLK_PERF_PHASE=all|compile|run, LLK_PERF_COMPILE_WORKERS, LLK_PERF_DEBUG_SYMBOLS.
 set -euo pipefail
 
-GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
+USAGE="usage: run_llk_perf_leg.sh <wormhole|blackhole> <group> <n_groups>"
+ARCH="${1:?$USAGE}"
+GROUP="${2:?$USAGE}"
+N_GROUPS="${3:?$USAGE}"
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
 
@@ -53,7 +55,7 @@ mkdir -p perf_data
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
-REPORT="pytest-report-wormhole-${GROUP}"
+REPORT="pytest-report-${ARCH}-${GROUP}"
 COMPILE_XML="${REPORT}-compile.xml"
 RUN_XML="${REPORT}-run.xml"
 
