@@ -852,21 +852,19 @@ def _is_uint16_to_fp32(src_format: DataFormat, dst_format: DataFormat) -> bool:
 # so a signed read gives -0.0 and -32767 instead.
 _UINT16_TO_FP32_SEEDS = (0, 1, 32767, 32768, 65535)
 
-# Int8 -> UInt8: int32_to_uint8 drops the sign, so -1, -2, -64, -127 come back as 1, 2, 64, 127.
+# Int8 -> UInt8 clamps, same as float -> UInt8. These four come back as 0, not their magnitude.
 # UInt8 -> Int8 saturates to sign-magnitude Int8: 128, 200 and 255 -> 127, and 127 stays 127.
+# Int32/Int16 -> Int8 plants values the narrow convert must saturate.
 _INT8_TO_UINT8_SEEDS = (-1, -2, -64, -127)
 _UINT8_TO_INT8_SEEDS = (128, 200, 255, 127)
+_SIGNED_TO_INT8_SEEDS = (128, -128, 200, -200, 32767, -32767)
 
 
 def _quasar_typecast_integer(value, dst_format: DataFormat):
-    """Map one integer onto the Quasar destination before the torch cast.
-
-    A raw uint8 cast wraps negatives, and a raw int8 cast rejects anything above 127.
-    int32_to_uint8 keeps the magnitude. A signed destination saturates, and Int8 has no -128.
-    """
+    """Clamp onto the Quasar integer destination before the torch cast."""
     v = int(value)
     if dst_format == DataFormat.UInt8:
-        return min(abs(v), 255)
+        return min(max(v, 0), 255)
     if dst_format == DataFormat.Int8:
         return max(-127, min(v, 127))
     return v
@@ -936,6 +934,11 @@ def _prepare_typecast_input(
             int8_uint8_seeds = _INT8_TO_UINT8_SEEDS
         elif src_format == DataFormat.UInt8 and dst_format == DataFormat.Int8:
             int8_uint8_seeds = _UINT8_TO_INT8_SEEDS
+        elif dst_format == DataFormat.Int8 and src_format in (
+            DataFormat.Int32,
+            DataFormat.Int16,
+        ):
+            int8_uint8_seeds = _SIGNED_TO_INT8_SEEDS
         if int8_uint8_seeds is not None:
             flat = result.flatten()
             for i, seed in enumerate(int8_uint8_seeds):
@@ -2004,6 +2007,10 @@ _TYPECAST_EDGE_GROUPS = (
     ("round-nearest-even ties", _TYPECAST_TIE_CASES),
     ("exact values", _TYPECAST_EXACT_CASES),
     ("upper saturation", _TYPECAST_SATURATION_CASES),
+    (
+        "non-finite and signed zero",
+        ((float("inf"), 65535), (float("-inf"), 0), (-0.0, 0), (0.0, 0)),
+    ),
 )
 
 
@@ -2014,7 +2021,7 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
 
     The randomised sweep cannot see any of those. The case list is repeated across the tile so a
     lane-dependent clamp failure shows up; the shared runner keeps the count coprime with the
-    16-wide face row.
+    face row.
     """
     _run_fp32_to_int_edge_case(
         dest_sync[0], DataFormat.UInt16, _TYPECAST_EDGE_GROUPS, "Float32 -> UInt16"
@@ -2057,12 +2064,25 @@ _INT8_EDGE_SATURATION = (
     (200.0, 127),
     (-128.0, -127),
 )
+
+
+def _nonfinite_cases(most_negative, most_positive):
+    """±Inf saturate. -0.0 is a distinct input; both zeros become integer 0."""
+    return (
+        (float("inf"), most_positive),
+        (float("-inf"), most_negative),
+        (-0.0, 0),
+        (0.0, 0),
+    )
+
+
 _INT8_EDGE_GROUPS = (
     ("negative and fractional", _INT8_EDGE_NEGATIVE),
     ("fraction just past an even tie", _INT8_EDGE_PAST_TIE),
     ("round-nearest-even ties", _INT8_EDGE_TIES),
     ("exact values", _INT8_EDGE_EXACT),
     ("saturation", _INT8_EDGE_SATURATION),
+    ("non-finite and signed zero", _nonfinite_cases(-127, 127)),
 )
 
 # The convert saturates.
@@ -2087,9 +2107,11 @@ _INT16_EDGE_GROUPS = (
             (-40000.0, -32767),
         ),
     ),
+    ("non-finite and signed zero", _nonfinite_cases(-32767, 32767)),
 )
 
-# Int32 uses the int16 convert below 32768 and SFPCAST above it. 2^31 saturates to 2^31-1.
+# Int32 uses the int16 convert below 32767.5 and SFPCAST from there up. 2^31 saturates to 2^31-1.
+# 32767.5 is the value that separates `< 32767.5` from `< 32768`: it must round to 32768.
 _INT32_EDGE_GROUPS = (
     (
         "fraction just past an even tie",
@@ -2103,9 +2125,19 @@ _INT32_EDGE_GROUPS = (
         ),
     ),
     ("round-nearest-even ties", ((2.5, 2),)),
+    (
+        "int16 convert boundary",
+        (
+            (32767.5, 32768),
+            (-32767.75, -32768),
+            (40000.5, 40000),
+            (40001.5, 40002),
+        ),
+    ),
     ("above the 8-fraction-bit range", ((40000.0, 40000), (-40000.0, -40000))),
     ("exact values", ((1.0, 1),)),
     ("saturation", ((2147483648.0, 2147483647),)),
+    ("non-finite and signed zero", _nonfinite_cases(-2147483647, 2147483647)),
 )
 
 _UINT8_EDGE_GROUPS = (
@@ -2117,21 +2149,24 @@ _UINT8_EDGE_GROUPS = (
     ("round-nearest-even ties", ((0.5, 0), (2.5, 2))),
     ("exact values", ((1.0, 1), (255.0, 255))),
     ("saturation", ((256.0, 255), (300.0, 255))),
+    ("non-finite and signed zero", _nonfinite_cases(0, 255)),
 )
 
 
-def _run_fp32_to_int_edge_case(dest_sync, out_format, groups, label):
-    """Run one Float32 -> integer edge tile. `groups` is (name, [(input, expected), ...]).
+def _run_fp32_to_int_edge_case(
+    dest_sync, out_format, groups, label, src_format=DataFormat.Float32
+):
+    """Run one float -> integer edge tile. `groups` is (name, [(input, expected), ...]).
 
-    The cases are repeated across the tile. The count stays coprime with the 16-wide face row so
-    each case lands on a different lane; a clamp that is wrong on only some lanes still shows up.
+    The cases are repeated across the tile. The count stays coprime with the face row so each
+    case lands on a different lane; a clamp that is wrong on only some lanes still shows up.
     """
     cases = tuple(case for _, group in groups for case in group)
     assert (
-        math.gcd(len(cases), 16) == 1
-    ), f"{label} has {len(cases)} cases; keep the count coprime with the 16-wide face row"
+        math.gcd(len(cases), FACE_C_DIM) == 1
+    ), f"{label} has {len(cases)} cases; keep the count coprime with the face row"
 
-    formats = InputOutputFormat(DataFormat.Float32, out_format)
+    formats = InputOutputFormat(src_format, out_format)
     variants = generate_quasar_sfpu_format_variants(MathOperation.Typecast, [formats])
     assert (
         len(variants) == 1
@@ -2142,7 +2177,8 @@ def _run_fp32_to_int_edge_case(dest_sync, out_format, groups, label):
     repeats = math.ceil(element_count / len(cases))
     inputs = [value for value, _ in cases] * repeats
     expected_values = [result for _, result in cases] * repeats
-    src_A = torch.tensor(inputs[:element_count], dtype=torch.float32)
+    src_dtype = torch.bfloat16 if src_format == DataFormat.Float16_b else torch.float32
+    src_A = torch.tensor(inputs[:element_count], dtype=src_dtype)
     expected_flat = torch.tensor(expected_values[:element_count], dtype=torch.int64)
     src_B = torch.zeros_like(src_A)
 
@@ -2238,7 +2274,7 @@ def test_typecast_fp32_to_int16_edge_cases_quasar(dest_sync):
 @pytest.mark.quasar
 @parametrize(dest_sync=[DestSync.Half, DestSync.Full])
 def test_typecast_fp32_to_int32_edge_cases_quasar(dest_sync):
-    """Float32 -> Int32 rounds fractions below 32768 that SFPCAST alone gets wrong."""
+    """Float32 -> Int32 rounds fractions below 32767.5 that SFPCAST alone gets wrong."""
     _run_fp32_to_int_edge_case(
         dest_sync[0], DataFormat.Int32, _INT32_EDGE_GROUPS, "Float32 -> Int32"
     )
@@ -2250,6 +2286,126 @@ def test_typecast_fp32_to_uint8_edge_cases_quasar(dest_sync):
     """Float32 -> UInt8 clamps negatives to 0, rounds the full float, and saturates at 255."""
     _run_fp32_to_int_edge_case(
         dest_sync[0], DataFormat.UInt8, _UINT8_EDGE_GROUPS, "Float32 -> UInt8"
+    )
+
+
+# Float16_b has at most 8 significant bits, so these bf16-exact values are the direct convert.
+# The sweep rounds integer endpoints, so it never sees a tie, a fraction, or saturation here.
+_FP16B_INT8_EDGE_GROUPS = (
+    (
+        "bf16-exact",
+        (
+            (0.5, 0),
+            (2.5, 2),
+            (126.5, 126),
+            (127.5, 127),  # nearest-even is 128, then saturation
+            (-1.5, -2),
+            (300.0, 127),
+            (float("inf"), 127),
+            (float("-inf"), -127),
+            (-0.0, 0),
+        ),
+    ),
+)
+_FP16B_UINT8_EDGE_GROUPS = (
+    (
+        "bf16-exact",
+        (
+            (0.5, 0),
+            (2.5, 2),
+            (126.5, 126),
+            (127.5, 128),
+            (-1.5, 0),
+            (300.0, 255),
+            (float("inf"), 255),
+            (float("-inf"), 0),
+            (-0.0, 0),
+        ),
+    ),
+)
+_FP16B_INT16_EDGE_GROUPS = (
+    (
+        "bf16-exact",
+        (
+            (0.5, 0),
+            (2.5, 2),
+            (126.5, 126),
+            (127.5, 128),
+            (-1.5, -2),
+            (300.0, 300),
+            (float("inf"), 32767),
+            (float("-inf"), -32767),
+            (-0.0, 0),
+        ),
+    ),
+)
+_FP16B_UINT16_EDGE_GROUPS = (
+    (
+        "bf16-exact",
+        (
+            (0.5, 0),
+            (2.5, 2),
+            (126.5, 126),
+            (127.5, 128),
+            (-1.5, 0),
+            (300.0, 300),
+            (float("inf"), 65535),
+            (float("-inf"), 0),
+            (-0.0, 0),
+        ),
+    ),
+)
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp16b_to_int8_edge_cases_quasar(dest_sync):
+    """Float16_b -> Int8 rounds bf16-exact values and saturates to [-127, 127]."""
+    _run_fp32_to_int_edge_case(
+        dest_sync[0],
+        DataFormat.Int8,
+        _FP16B_INT8_EDGE_GROUPS,
+        "Float16_b -> Int8",
+        DataFormat.Float16_b,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp16b_to_uint8_edge_cases_quasar(dest_sync):
+    """Float16_b -> UInt8 clamps negatives to 0 and saturates at 255."""
+    _run_fp32_to_int_edge_case(
+        dest_sync[0],
+        DataFormat.UInt8,
+        _FP16B_UINT8_EDGE_GROUPS,
+        "Float16_b -> UInt8",
+        DataFormat.Float16_b,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp16b_to_int16_edge_cases_quasar(dest_sync):
+    """Float16_b -> Int16 rounds bf16-exact values and saturates to [-32767, 32767]."""
+    _run_fp32_to_int_edge_case(
+        dest_sync[0],
+        DataFormat.Int16,
+        _FP16B_INT16_EDGE_GROUPS,
+        "Float16_b -> Int16",
+        DataFormat.Float16_b,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp16b_to_uint16_edge_cases_quasar(dest_sync):
+    """Float16_b -> UInt16 clamps negatives to 0 and saturates at 65535."""
+    _run_fp32_to_int_edge_case(
+        dest_sync[0],
+        DataFormat.UInt16,
+        _FP16B_UINT16_EDGE_GROUPS,
+        "Float16_b -> UInt16",
+        DataFormat.Float16_b,
     )
 
 
