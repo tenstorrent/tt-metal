@@ -162,9 +162,7 @@ struct TopologyMappingConfig {
     // calling host's chips instead of an arbitrary host. Default empty (no restriction).
     std::set<tt::tt_metal::experimental::PhysicalNodeId> placement_asic_allowlist;
 
-    // Optional exact logical (mesh, host-rank) -> physical ASIC-pool hard constraints from the
-    // --mesh-pinning-file. Each pool is the ASIC set exposed by one selected hostname + TT_VISIBLE_DEVICES
-    // placement. Keyed by the MeshIds the solver sees (merged/global for multi-MGD). Default empty.
+    // Optional hard (mesh, host-rank) -> ASIC-pool pins from --mesh-pinning-file, keyed by solver MeshIds.
     std::map<std::pair<MeshId, MeshHostRankId>, std::set<tt::tt_metal::experimental::PhysicalNodeId>>
         mesh_host_rank_pinnings;
 };

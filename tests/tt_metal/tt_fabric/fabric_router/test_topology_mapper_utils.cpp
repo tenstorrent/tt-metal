@@ -587,7 +587,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         }
     }
 
-    // A pool with fewer ASICs than the host rank has fabric nodes can never satisfy the pin.
+    // A pool smaller than the host rank's node count is rejected.
     {
         TopologyMappingConfig config;
         config.disable_rank_bindings = false;
@@ -599,8 +599,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         EXPECT_NE(mapping.error_message.find("Mesh-host-rank pinning"), std::string::npos) << mapping.error_message;
     }
 
-    // A right-sized pool that straddles both hosts resolves cleanly but is infeasible: host rank 0's two
-    // chips are adjacent and must share a host, while 100 and 103 are on different hosts and not connected.
+    // A right-sized pool straddling both hosts is infeasible (rank 0's chips are adjacent and share a host).
     {
         TopologyMappingConfig config;
         config.disable_rank_bindings = false;
@@ -612,7 +611,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         EXPECT_FALSE(mapping.success) << "straddling pool must not be satisfiable";
     }
 
-    // Two host ranks pinned to the same host pool: four chips into two ASICs can never be injective.
+    // Two host ranks pinned to one two-ASIC pool is infeasible.
     {
         TopologyMappingConfig config;
         config.disable_rank_bindings = false;

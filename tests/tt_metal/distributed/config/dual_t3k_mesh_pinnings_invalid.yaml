@@ -1,7 +1,0 @@
-# Deliberately unsatisfiable --mesh-pinning-file for the dual T3K CI mock: a 2x4 mesh needs all four MMIO
-# devices of a T3K host, but this pin exposes only two. Phase 1 must reject it before launching anything.
-mesh_host_rank_pinnings:
-  - mesh_id: 0
-    mesh_host_rank: 0
-    hostname: f10cs03
-    TT_VISIBLE_DEVICES: "0,1"

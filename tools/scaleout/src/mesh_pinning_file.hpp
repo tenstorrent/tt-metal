@@ -21,16 +21,7 @@
 using tt::tt_fabric::MeshHostRankId;
 using tt::tt_fabric::MeshId;
 
-// One entry of the --mesh-pinning-file: the logical (mesh_id, mesh_host_rank) must run on `hostname`
-// using exactly the devices in `tt_visible_devices` (sorted, unique, non-negative).
-//
-//   mesh_host_rank_pinnings:
-//     - mesh_id: 0
-//       mesh_host_rank: 0
-//       hostname: nodeA
-//       TT_VISIBLE_DEVICES: "0,1,2,3"
-//
-// Logical host ranks absent from the file stay automatic.
+// One --mesh-pinning-file entry: (mesh_id, mesh_host_rank) runs on hostname with exactly tt_visible_devices (sorted).
 struct MeshHostRankPinning {
     MeshId mesh_id{0};
     MeshHostRankId mesh_host_rank{0};

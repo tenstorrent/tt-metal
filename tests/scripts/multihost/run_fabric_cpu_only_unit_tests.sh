@@ -253,7 +253,7 @@ run_test() {
     status=1
   fi
   rm -f "$out"
-  # run_test_expect_fail: the command must exit nonzero (e.g. Phase 1 rejecting bad input before launch).
+  # run_test_expect_fail: a nonzero exit is the pass.
   if [[ "${EXPECT_FAIL:-0}" -eq 1 ]]; then
     if [[ $status -eq 0 ]]; then
       echo "error: command was expected to fail but exited 0" >&2
@@ -271,7 +271,7 @@ run_test() {
   fi
 }
 
-# Like run_test, but the command is expected to FAIL (nonzero exit); a zero exit is the failure.
+# run_test for a command that must exit nonzero.
 run_test_expect_fail() {
   EXPECT_FAIL=1 run_test "$@"
 }
@@ -472,15 +472,6 @@ run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_des
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual2x4Fabric2DSanity"
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual2x4RemoteTransferDispatchChannels"
 
-# tt-run --mesh-pinning-file end to end on the dual T3K CI mock, whose descriptors carry cluster_id (f10cs03 /
-# f10cs04), so hostnames are real host names rather than descriptor file names. Phase 1 must honour the pins
-# (mesh 0 on f10cs03, mesh 1 on f10cs04: the reverse of the unpinned placement) and every Phase 2 rank checks
-# its TT_METAL_CLUSTER_ID / TT_VISIBLE_DEVICES against the file. The second run must fail inside Phase 1
-# before anything launches: its pin exposes two of the four MMIO devices a 2x4 mesh needs.
-DUAL_T3K_MESH_PINNINGS_SWAPPED=tests/tt_metal/distributed/config/dual_t3k_mesh_pinnings_swapped.yaml
-run_test env TT_METAL_TEST_MESH_PINNING_FILE="${DUAL_T3K_MESH_PINNINGS_SWAPPED}" tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/dual_t3k_ci/dual_t3k_ci_cluster_desc_mapping.yaml --mesh-pinning-file "${DUAL_T3K_MESH_PINNINGS_SWAPPED}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.MeshPinningFileHonored"
-run_test_expect_fail tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/dual_t3k_ci/dual_t3k_ci_cluster_desc_mapping.yaml --mesh-pinning-file tests/tt_metal/distributed/config/dual_t3k_mesh_pinnings_invalid.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.MeshPinningFileHonored"
-
 # Split 2x2 T3K Multi-host
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestSplit2x2ControlPlaneInit"
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestSplit2x2Fabric2DSanity"
@@ -658,6 +649,10 @@ for mock in \
     "${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}"; do
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_4galaxy_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
 done
+# --mesh-pinning-file end to end: host ranks 0/1 of the 32x4 quad torus pinned to swapped hosts; then an invalid pin that Phase 1 must reject.
+SC4_QUAD_GALAXY_MESH_PINNINGS=tests/tt_metal/distributed/config/sc4_quad_galaxy_mesh_pinnings_swapped.yaml
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_TEST_MESH_PINNING_FILE="${SC4_QUAD_GALAXY_MESH_PINNINGS}" tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mesh-pinning-file "${SC4_QUAD_GALAXY_MESH_PINNINGS}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.MeshPinningFileHonored"
+run_test_expect_fail env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mesh-pinning-file tests/tt_metal/distributed/config/sc4_quad_galaxy_mesh_pinnings_invalid.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.MeshPinningFileHonored"
 # Quad-galaxy heterogeneous 4x8+4x2 10-stage ring (128 ASICs): 2x 4x8 RING+RING + 8x 4x2 RING+LINE on subtorus mock.
 # Homogeneous 4x2 hops use NESW (no assign_z_direction); heterogeneous 4x8<->4x2 hops use assign_z_direction.
 # Runs the pipeline-builder and layout checks. Corner-pin checks are not run because the corner-fold

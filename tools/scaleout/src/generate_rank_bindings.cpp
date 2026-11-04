@@ -52,8 +52,7 @@ using MeshHostRankKey = std::pair<MeshId, MeshHostRankId>;
 
 struct TopologyMappingParts {
     std::vector<TopologyMappingResult> parts;
-    // (mesh_id, mesh_host_rank) -> the hostname + TT_VISIBLE_DEVICES placement from the --mesh-pinning-file.
-    // Empty when no pinning file was given. Keyed by the single MGD's local ids.
+    // --mesh-pinning-file entries by (mesh_id, mesh_host_rank); empty without a pinning file.
     std::map<MeshHostRankKey, MeshHostRankPinning> mesh_host_rank_pinnings;
 };
 
@@ -78,10 +77,7 @@ std::map<std::string, std::set<tt::tt_metal::experimental::PhysicalNodeId>> host
     return hostname_to_asics;
 }
 
-// Turn each (hostname, TT_VISIBLE_DEVICES) pin of the pinning file into the exact set of physical nodes it
-// exposes, and check the logical (mesh_id, mesh_host_rank) it names exists in the MGD with the same node
-// count. Single-MGD only, so the file's mesh ids are the solver's mesh ids. The result feeds
-// TopologyMappingConfig::mesh_host_rank_pinnings as hard per-host-rank ASIC pools.
+// Resolve each pin to its physical-node pool and validate mesh, host rank, host, devices and pool size.
 std::map<MeshHostRankKey, std::set<tt::tt_metal::experimental::PhysicalNodeId>> resolve_mesh_host_rank_pinnings(
     const PhysicalSystemDescriptor& psd,
     const MeshGraph& mesh_graph,
@@ -360,8 +356,7 @@ TopologyMappingParts run_topology_mapping(
         out.mesh_host_rank_pinnings[{pinning.mesh_id, pinning.mesh_host_rank}] = pinning;
     }
 
-    // The pools are hard per-host-rank constraints inside the intra-mesh solve; a seating that cannot honour
-    // them fails that stage and the enumerator moves on to the next seating.
+    // Pools are hard intra-mesh constraints; a seating that cannot honour them is forbidden and retried.
     MultiMeshSolutionEnumerator enumerator = make_topology_mapping_enumerator(
         psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false, mesh_host_rank_pools);
     out.parts = enumerator.next();

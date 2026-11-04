@@ -879,11 +879,7 @@ std::optional<std::string> add_pinning_constraints(
     return apply_pinning_groups(intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids);
 }
 
-// Hard constraints from the optional --mesh-pinning-file: every fabric node of a pinned (mesh, host-rank)
-// must land inside that host-rank's selected ASIC pool (one hostname + TT_VISIBLE_DEVICES placement), and
-// the pool must sit inside the physical mesh this logical mesh is seated on. Returns an error message when
-// a pin cannot be honoured for this seating; the caller treats that as an intra-mesh failure so the
-// enumerator forbids the seating and moves on.
+// --mesh-pinning-file pins as required constraints; returns an error when a pin cannot hold for this seating.
 std::optional<std::string> add_mesh_host_rank_pinning_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>&
         intra_mesh_constraints,

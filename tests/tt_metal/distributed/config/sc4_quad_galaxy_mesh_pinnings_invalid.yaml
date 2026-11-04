@@ -1,0 +1,6 @@
+# Unsatisfiable: a galaxy host rank needs all 32 devices, this pin exposes 16, so Phase 1 must reject it.
+mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: bh-glx-110-d04u02
+    TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
