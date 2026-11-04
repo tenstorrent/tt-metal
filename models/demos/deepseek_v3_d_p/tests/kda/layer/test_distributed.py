@@ -21,7 +21,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    make_actual_start,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -259,21 +263,12 @@ def test_sp_segmented_prefill_matches_one_shot(
         local_width=local_heads * config.head_k_dim,
     )
     label = f"tp_axis={tensor_parallel_axis} group={summary_group_chunks}"
-    assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.9999, nrmse_threshold=9e-06)
-    assert_accurate(
-        one_shot_recurrent,
-        chunked_recurrent,
-        name=f"{label} chunked recurrent",
-        pcc_threshold=0.9999,
-        nrmse_threshold=1e-06,
-    )
-    assert_accurate(
-        one_shot_convolution,
-        chunked_convolution,
-        name=f"{label} chunked convolution",
-        pcc_threshold=0.9999,
-        nrmse_threshold=1e-06,
-    )
+    # The two runs reach a group's entry state through different compositions: the distributed prefix transports
+    # each rank's composed transform as BF16, while the local scan applies the same groups in FP32. Outputs agree to
+    # one BF16 rounding of those entry states (5.7e-5 NRMSE on 2x4 1D); the carried states stay bit-identical.
+    assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.9999, nrmse_threshold=1e-4)
+    assert_bit_identical(one_shot_recurrent, chunked_recurrent, name=f"{label} chunked recurrent")
+    assert_bit_identical(one_shot_convolution, chunked_convolution, name=f"{label} chunked convolution")
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
