@@ -12,12 +12,16 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/get-index.cpp 2>&1 | FileCheck %s --check-prefix=SEM_INDEX
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/read-index.cpp 2>&1 | FileCheck %s --check-prefix=SEM_INDEX
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/post-list-index.cpp 2>&1 | FileCheck %s --check-prefix=SEM_INDEX
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/post-set-type.cpp 2>&1 | FileCheck %s --check-prefix=SEM_SET_TYPE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/post-access.cpp 2>&1 | FileCheck %s --check-prefix=SEM_ACCESS
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/post-runtime-access.cpp 2>&1 | FileCheck %s --check-prefix=SEM_ACCESS
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/get-access.cpp 2>&1 | FileCheck %s --check-prefix=SEM_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/get-runtime-access.cpp 2>&1 | FileCheck %s --check-prefix=SEM_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/stall-targets.cpp 2>&1 | FileCheck %s --check-prefix=STALL_TARGETS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/stall-conditions.cpp 2>&1 | FileCheck %s --check-prefix=STALL_CONDITIONS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/semwait-targets.cpp 2>&1 | FileCheck %s --check-prefix=SEMWAIT_TARGETS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/semwait-conditions.cpp 2>&1 | FileCheck %s --check-prefix=SEMWAIT_CONDITIONS
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/semwait-conditions-range.cpp 2>&1 | FileCheck %s --check-prefix=SEMWAIT_CONDITIONS
 // clang-format on
 
 // Match an actual compiler error, not the echoed static_assert source text.
@@ -25,6 +29,7 @@
 // INIT_INITIAL: error: static assertion failed: SEMINIT initial value must fit in four bits
 // INIT_MAXIMUM: error: static assertion failed: SEMINIT maximum value must fit in four bits
 // SEM_INDEX: error: static assertion failed: Semaphore index must be in [0, 7]
+// SEM_SET_TYPE: error: static assertion failed: Semaphore selections must contain only Semaphore values
 // SEM_ACCESS: error: static assertion failed: Semaphore access must be MMIO or Tensix
 // STALL_TARGETS: error: static assertion failed: STALLWAIT target mask must fit in nine bits
 // STALL_CONDITIONS: error: static assertion failed: Blackhole STALLWAIT condition mask must fit in 13 bits
@@ -71,7 +76,7 @@ constexpr std::uint32_t operation = sync::semaphore::init_operation<0, 16, sync:
 
 void probe()
 {
-    sync::semaphore::post<sync::Access::Tensix, static_cast<sync::Semaphore>(8)>();
+    sync::semaphore::post<sync::Access::MMIO, static_cast<sync::Semaphore>(8)>();
 }
 
 //--- get-index.cpp
@@ -98,12 +103,37 @@ void probe()
     sync::semaphore::post<sync::Semaphore::S1, static_cast<sync::Semaphore>(8)>();
 }
 
+//--- post-set-type.cpp
+#include "common.h"
+
+// The first element is a Semaphore parameter; a later one selects the variadic constructor.
+void probe()
+{
+    sync::semaphore::post({sync::Semaphore::S0, 1});
+}
+
 //--- post-access.cpp
 #include "common.h"
 
 void probe()
 {
     sync::semaphore::post<static_cast<sync::Access>(2), sync::Semaphore::S0>();
+}
+
+//--- post-runtime-access.cpp
+#include "common.h"
+
+void probe(const sync::Semaphore semaphore)
+{
+    sync::semaphore::post<static_cast<sync::Access>(2)>(semaphore);
+}
+
+//--- get-access.cpp
+#include "common.h"
+
+void probe()
+{
+    sync::semaphore::get<static_cast<sync::Access>(2), sync::Semaphore::S0>();
 }
 
 //--- get-runtime-access.cpp
@@ -144,4 +174,12 @@ void probe()
 void probe()
 {
     sync::wait::semaphore<sync::StallTarget::Math, static_cast<sync::SemaphoreCondition>(0), sync::Semaphore::S1>();
+}
+
+//--- semwait-conditions-range.cpp
+#include "common.h"
+
+void probe()
+{
+    sync::wait::semaphore<sync::StallTarget::Math, static_cast<sync::SemaphoreCondition>(4), sync::Semaphore::S1>();
 }

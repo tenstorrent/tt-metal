@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s
 
 #include "hal/misc.h"
 
@@ -18,10 +18,10 @@ extern "C" __attribute__((noinline, used)) void flush_tdma_scopes()
 }
 
 // CHECK-LABEL: <flush_tdma_scopes>:
-// CHECK-NEXT: ttflushdma 0
-// CHECK-NEXT: ttflushdma 1
-// CHECK-NEXT: ttflushdma 6
-// CHECK-NEXT: ttflushdma 8
+// CHECK-NEXT: ttflushdma 0{{$}}
+// CHECK-NEXT: ttflushdma 1{{$}}
+// CHECK-NEXT: ttflushdma 6{{$}}
+// CHECK-NEXT: ttflushdma 8{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void reset_and_tbuf()
@@ -44,10 +44,10 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 }
 
 // CHECK-LABEL: <issue_encoded_operations>:
-// CHECK-NEXT: ttflushdma 10
+// CHECK-NEXT: ttflushdma 10{{$}}
 // CHECK-NEXT: ttrstdma
 // CHECK-NEXT: tttbufcmd
-// CHECK-NEXT: ttresourcedecl 9,257,5
+// CHECK-NEXT: ttresourcedecl 9,257,5{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void declare_resources()
@@ -59,9 +59,9 @@ extern "C" __attribute__((noinline, used)) void declare_resources()
 
 // The default declaration is class 0, no resources, and a one-cycle linger.
 // CHECK-LABEL: <declare_resources>:
-// CHECK-NEXT: ttresourcedecl 1,0,0
-// CHECK-NEXT: ttresourcedecl 7,511,3
-// CHECK-NEXT: ttresourcedecl 15,0,15
+// CHECK-NEXT: ttresourcedecl 1,0,0{{$}}
+// CHECK-NEXT: ttresourcedecl 7,511,3{{$}}
+// CHECK-NEXT: ttresourcedecl 15,0,15{{$}}
 // CHECK-NEXT: ret
 
 static_assert(misc::is_valid(misc::ResourceDeclaration {15, 0x1ff, 15}));

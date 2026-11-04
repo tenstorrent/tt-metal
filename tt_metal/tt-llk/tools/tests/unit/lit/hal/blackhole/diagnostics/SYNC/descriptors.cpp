@@ -6,16 +6,17 @@
 // RUN: %split-file %s %t
 // RUN: %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/valid.cpp
 // RUN: %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT %t/valid.cpp
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=1 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=2 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=3 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=4 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=5 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=6 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=7 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=8 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=9 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID-SELECTOR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=10 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=EMPTY
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/mutex-acquire.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/post-selector.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/init-initial.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/init-maximum.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/stall-targets.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/stall-conditions.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/semwait-conditions-empty.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/semwait-conditions-range.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/get-list-selector.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/get-operation-selector.cpp 2>&1 | FileCheck %s --check-prefix=INVALID-SELECTOR
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/get-empty.cpp 2>&1 | FileCheck %s --check-prefix=EMPTY
 // clang-format on
 
 // INVALID: error: {{.*}}__builtin_trap(){{.*}} is not a constant expression
@@ -83,30 +84,60 @@ static_assert(hs::SemaphoreGet {{hs::Semaphore::S1, hs::Semaphore::S1}}.operatio
 static_assert(hs::semaphore::init_operation<5, 15, hs::Semaphore::S0, hs::Semaphore::S7>() == 0xa3f50204u);
 static_assert(hs::wait::semaphore_operation<hs::StallTarget::Math, hs::SemaphoreCondition::WhileZero, hs::Semaphore::S1, hs::Semaphore::S3>() == 0xa6200029u);
 
-//--- invalid.cpp
+//--- mutex-acquire.cpp
 #include "common.h"
 
-#if INVALID_CASE == 1
 constexpr auto invalid = hs::MutexAcquire {static_cast<hs::Mutex>(1)}.operation();
-#elif INVALID_CASE == 2
+
+//--- post-selector.cpp
+#include "common.h"
+
 constexpr auto invalid = hs::SemaphorePost {static_cast<hs::Semaphore>(8)}.operation();
-#elif INVALID_CASE == 3
+
+//--- init-initial.cpp
+#include "common.h"
+
 constexpr auto invalid = hs::SemaphoreInit {hs::Semaphore::S0, 16, 15}.operation();
-#elif INVALID_CASE == 4
+
+//--- init-maximum.cpp
+#include "common.h"
+
 constexpr auto invalid = hs::SemaphoreInit {hs::Semaphore::S0, 0, 16}.operation();
-#elif INVALID_CASE == 5
+
+//--- stall-targets.cpp
+#include "common.h"
+
 constexpr auto invalid = hs::StallWait {static_cast<hs::StallTarget>(512), hs::StallCondition::MathIdle}.operation();
-#elif INVALID_CASE == 6
+
+//--- stall-conditions.cpp
+#include "common.h"
+
 constexpr auto invalid = hs::StallWait {hs::StallTarget::Math, static_cast<hs::StallCondition>(8192)}.operation();
-#elif INVALID_CASE == 7
+
+//--- semwait-conditions-empty.cpp
+#include "common.h"
+
 constexpr auto invalid = hs::SemaphoreWait {hs::StallTarget::Math, hs::Semaphore::S0, static_cast<hs::SemaphoreCondition>(0)}.operation();
-#elif INVALID_CASE == 8
+
+//--- semwait-conditions-range.cpp
+#include "common.h"
+
+constexpr auto invalid = hs::SemaphoreWait {hs::StallTarget::Math, hs::Semaphore::S0, static_cast<hs::SemaphoreCondition>(4)}.operation();
+
+//--- get-list-selector.cpp
+#include "common.h"
+
 constexpr auto invalid = hs::SemaphoreGet {{hs::Semaphore::S1, static_cast<hs::Semaphore>(255)}}.operation();
-#elif INVALID_CASE == 9
+
+//--- get-operation-selector.cpp
+#include "common.h"
+
 constexpr auto invalid = hs::semaphore::get_operation<hs::Semaphore::S1, static_cast<hs::Semaphore>(8)>();
-#elif INVALID_CASE == 10
+
+//--- get-empty.cpp
+#include "common.h"
+
 void invalid()
 {
     hs::semaphore::get<>();
 }
-#endif
