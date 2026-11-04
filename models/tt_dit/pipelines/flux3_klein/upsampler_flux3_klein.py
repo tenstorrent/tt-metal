@@ -66,6 +66,12 @@ def reference_size(width: int, height: int) -> tuple[int, int]:
     if w * h > REFERENCE_MAX_PIXELS:
         beta = math.sqrt(width * height / REFERENCE_MAX_PIXELS)
         w, h = floor(width / beta), floor(height / beta)
+    # the 32-pixel minimum can push a very thin image back over the limit
+    if w * h > REFERENCE_MAX_PIXELS:
+        if w > h:
+            w = REFERENCE_MAX_PIXELS // h // REFERENCE_MULTIPLE * REFERENCE_MULTIPLE
+        else:
+            h = REFERENCE_MAX_PIXELS // w // REFERENCE_MULTIPLE * REFERENCE_MULTIPLE
     return w, h
 
 
