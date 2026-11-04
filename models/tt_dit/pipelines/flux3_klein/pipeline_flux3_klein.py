@@ -36,12 +36,11 @@ from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
 from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import resolve_weights_dir
 
-# The first release serves fixed square sizes, all warmed up at startup, and at most one reference image.
+# The first release serves fixed square sizes, all warmed up at startup, and at most one reference image,
+# center-cropped and resized to the output size.
 SIZES = (1024, 2048, 4096)
 DEFAULT_SIZE = 2048
 MAX_REFERENCES = 1
-# A reference is center-cropped and resized to a square: the output size, capped at the reference's 4 MP limit.
-REFERENCE_SIZE = {1024: 1024, 2048: 2048, 4096: 2048}
 
 
 @dataclass(frozen=True)
@@ -195,7 +194,7 @@ class Flux3KleinPipeline:
         for model in self._transformers:
             for size in sizes:
                 for references in range(MAX_REFERENCES + 1):
-                    image = Image.new("RGB", (REFERENCE_SIZE[size],) * 2)
+                    image = Image.new("RGB", (size, size))
                     self.generate(
                         Flux3KleinRequest(
                             "warmup", model=model, width=size, height=size, seed=0, images=(image,) * references
@@ -228,7 +227,7 @@ class Flux3KleinPipeline:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
-            reference = prepare_reference(reference, REFERENCE_SIZE[size])
+            reference = prepare_reference(reference, size)
             h, w = latent_shape(*reference.size)
             image_cond = (self._vae.encode(reference), reference_ids(h, w, 0))
         timings["encode_reference"] = time.time() - t0
