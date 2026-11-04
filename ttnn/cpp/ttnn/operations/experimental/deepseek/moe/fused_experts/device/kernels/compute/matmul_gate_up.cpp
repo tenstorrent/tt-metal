@@ -137,6 +137,11 @@ void kernel_main() {
     constexpr uint32_t shared_chunk_k = get_compile_time_arg_val(27);
     constexpr uint32_t shared_limit_bits = get_compile_time_arg_val(28);
     constexpr uint32_t shared_first_local = get_compile_time_arg_val(29);
+#ifdef FE_ALL_REDUCE
+    constexpr uint32_t cb_ar_scratch_id = get_compile_time_arg_val(30);
+    constexpr uint32_t cb_ar_out_id = get_compile_time_arg_val(31);
+    constexpr uint32_t ar_ring_size = get_compile_time_arg_val(32);
+#endif
 
     const uint32_t core_index = get_arg_val<uint32_t>(0);
     const uint32_t local_idx = core_index % cores_per_expert;
@@ -574,6 +579,32 @@ void kernel_main() {
                 dst_cb.push_back(kLocalTiles);
             }
             reduce_cb.pop_front(kRemoteGroups * kLocalTiles);
+#ifdef FE_ALL_REDUCE
+            // Sum the ring's slots in chip order, as width_sharded_all_reduce does, so every chip
+            // packs the same bits.
+            CircularBuffer ar_in_cb(cb_ar_scratch_id);
+            CircularBuffer ar_out_cb(cb_ar_out_id);
+            ar_in_cb.wait_front(ar_ring_size * kLocalTiles);
+            ar_out_cb.reserve_back(kLocalTiles);
+            reconfig_full_operand(cb_ar_scratch_id, cb_ar_scratch_id);
+            pack_reconfig_data_format(cb_ar_out_id);
+            for (uint32_t t = 0; t < kLocalTiles; ++t) {
+                copy_init(cb_ar_scratch_id);
+                tile_regs_acquire();
+                copy_tile(cb_ar_scratch_id, t, 0);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_ar_scratch_id);
+                for (uint32_t r = 1; r < ar_ring_size; ++r) {
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        cb_ar_scratch_id, r * kLocalTiles + t, 0);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, cb_ar_out_id, t);
+                tile_regs_release();
+            }
+            ar_out_cb.push_back(kLocalTiles);
+            ar_in_cb.pop_front(ar_ring_size * kLocalTiles);
+#endif
         }
     } else {
         for (uint32_t blk = 0; blk < kNumBlocks; ++blk) {
