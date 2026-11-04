@@ -45,6 +45,7 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
 
     ValidateScratchpadsUsed(ctx);
     ValidateTensorParametersUsed(ctx);
+    ValidatePerNodeTensorPlacement(ctx);
     ValidatePrefetcherPipesUsed(ctx);
 }
 

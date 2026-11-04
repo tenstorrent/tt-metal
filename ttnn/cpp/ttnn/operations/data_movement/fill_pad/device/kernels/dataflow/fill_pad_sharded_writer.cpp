@@ -24,8 +24,8 @@
  *            data_out rendezvous unsatisfiable on bottom-only cores — sim deadlock.)
  *   DFBs:  dfb::right_mask (PRODUCER), dfb::bot_mask (PRODUCER), dfb::data_out
  *          (this writer is its CONSUMER).
- *   tensor: tensor::dst — bound only to recover this core's shard L1 base
- *           (Case 2: get_bank_base_address()); raw self-write arithmetic unchanged.
+ *   tensor: tensor::dst — this core's L1 shard, written via a LocalTensorAccessor as the
+ *           loopback NOC destination (byte offsets into the shard are unchanged).
  *   RTAs:  shard_H_tiles, has_bottom_pad_core, num_work, local_right_col,
  *          has_right_pad_core.
  *
@@ -37,7 +37,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
-#include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "fill_pad_dataflow_common.hpp"
 
@@ -57,10 +57,8 @@ void kernel_main() {
         return;
     }
 
-    // Case 2: recover this core's shard L1 base from the tensor binding; the raw
-    // self-write address arithmetic below is unchanged from the legacy kernel.
-    const auto s = TensorAccessor(tensor::dst);
-    const std::uint32_t shard_l1_base = s.get_bank_base_address();
+    // This core's shard; the self-write byte-offset arithmetic below is unchanged from the legacy kernel.
+    const LocalTensorAccessor<std::uint32_t> s(tensor::dst);
 
     Noc noc;
 #ifdef HAS_RIGHT_PAD
@@ -91,9 +89,8 @@ void kernel_main() {
     // ---- Phase 2: write-back loop ----
     // Tiles arrive in the same order as the reader and compute kernels.
     //
-    // Local-L1 self-write via the Noc wrapper's UnicastEndpoint form: no
-    // address-generator trait is applicable, so the endpoint carries explicit
-    // noc_x/noc_y/addr. CB wait/pop and the writes-flushed barrier use the Device 2.0 API.
+    // Local-L1 self-write via the LocalTensorAccessor endpoint (a loopback to this core) at a
+    // byte offset into the shard. CB wait/pop and the writes-flushed barrier use the Device 2.0 API.
 
     if (has_bottom_pad_core) {
         // ---- Mode B ----
@@ -101,16 +98,9 @@ void kernel_main() {
         // Step 1: right non-corner tiles (rows 0..shard_H_tiles-2, col local_right_col)
         if (has_right_pad_core) {
             for (std::uint32_t r = 0; r < shard_H_tiles - 1u; r++) {
-                const std::uint32_t dst = shard_l1_base + (r * W_tiles + local_right_col) * tile_bytes;
+                const std::uint32_t dst_offset = (r * W_tiles + local_right_col) * tile_bytes;
                 dfb_data_out.wait_front(1);
-                noc.async_write(
-                    dfb_data_out,
-                    UnicastEndpoint{},
-                    tile_bytes,
-                    {.offset_bytes = 0},
-                    {.noc_x = (std::uint32_t)my_x[noc.get_noc_id()],
-                     .noc_y = (std::uint32_t)my_y[noc.get_noc_id()],
-                     .addr = dst});
+                noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.offset_bytes = dst_offset});
                 noc.async_writes_flushed();
                 dfb_data_out.pop_front(1);
             }
@@ -120,44 +110,23 @@ void kernel_main() {
         if (has_right_pad_core) {
             // Non-corner bottom tiles: cols 0..local_right_col-1
             for (std::uint32_t c = 0; c < local_right_col; c++) {
-                const std::uint32_t dst = shard_l1_base + ((shard_H_tiles - 1u) * W_tiles + c) * tile_bytes;
+                const std::uint32_t dst_offset = ((shard_H_tiles - 1u) * W_tiles + c) * tile_bytes;
                 dfb_data_out.wait_front(1);
-                noc.async_write(
-                    dfb_data_out,
-                    UnicastEndpoint{},
-                    tile_bytes,
-                    {.offset_bytes = 0},
-                    {.noc_x = (std::uint32_t)my_x[noc.get_noc_id()],
-                     .noc_y = (std::uint32_t)my_y[noc.get_noc_id()],
-                     .addr = dst});
+                noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.offset_bytes = dst_offset});
                 noc.async_writes_flushed();
                 dfb_data_out.pop_front(1);
             }
             // Corner tile: col local_right_col
-            const std::uint32_t dst = shard_l1_base + ((shard_H_tiles - 1u) * W_tiles + local_right_col) * tile_bytes;
+            const std::uint32_t dst_offset = ((shard_H_tiles - 1u) * W_tiles + local_right_col) * tile_bytes;
             dfb_data_out.wait_front(1);
-            noc.async_write(
-                dfb_data_out,
-                UnicastEndpoint{},
-                tile_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = (std::uint32_t)my_x[noc.get_noc_id()],
-                 .noc_y = (std::uint32_t)my_y[noc.get_noc_id()],
-                 .addr = dst});
+            noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.offset_bytes = dst_offset});
             noc.async_writes_flushed();
             dfb_data_out.pop_front(1);
         } else {
             for (std::uint32_t c = 0; c <= local_right_col; c++) {
-                const std::uint32_t dst = shard_l1_base + ((shard_H_tiles - 1u) * W_tiles + c) * tile_bytes;
+                const std::uint32_t dst_offset = ((shard_H_tiles - 1u) * W_tiles + c) * tile_bytes;
                 dfb_data_out.wait_front(1);
-                noc.async_write(
-                    dfb_data_out,
-                    UnicastEndpoint{},
-                    tile_bytes,
-                    {.offset_bytes = 0},
-                    {.noc_x = (std::uint32_t)my_x[noc.get_noc_id()],
-                     .noc_y = (std::uint32_t)my_y[noc.get_noc_id()],
-                     .addr = dst});
+                noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.offset_bytes = dst_offset});
                 noc.async_writes_flushed();
                 dfb_data_out.pop_front(1);
             }
@@ -168,16 +137,9 @@ void kernel_main() {
 
         if (has_right_pad_core) {
             for (std::uint32_t r = 0; r < shard_H_tiles; r++) {
-                const std::uint32_t dst = shard_l1_base + (r * W_tiles + local_right_col) * tile_bytes;
+                const std::uint32_t dst_offset = (r * W_tiles + local_right_col) * tile_bytes;
                 dfb_data_out.wait_front(1);
-                noc.async_write(
-                    dfb_data_out,
-                    UnicastEndpoint{},
-                    tile_bytes,
-                    {.offset_bytes = 0},
-                    {.noc_x = (std::uint32_t)my_x[noc.get_noc_id()],
-                     .noc_y = (std::uint32_t)my_y[noc.get_noc_id()],
-                     .addr = dst});
+                noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.offset_bytes = dst_offset});
                 noc.async_writes_flushed();
                 dfb_data_out.pop_front(1);
             }

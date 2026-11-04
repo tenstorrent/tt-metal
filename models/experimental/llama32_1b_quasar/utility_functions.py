@@ -1039,6 +1039,14 @@ def is_quasar():
     return "quasar" in ARCH_NAME
 
 
+def linear(*args, program_config=None, **kwargs):
+    """ttnn.linear; on Quasar ttnn.experimental.quasar.linear with no program config, which runs the unified matmul
+    (the model's program configs are WH/BH-only and it builds none on Quasar)."""
+    if is_quasar():
+        return ttnn.experimental.quasar.linear(*args, program_config=None, **kwargs)
+    return ttnn.linear(*args, program_config=program_config, **kwargs)
+
+
 def is_blackhole():
     ARCH_NAME = ttnn.get_arch_name()
     return "blackhole" in ARCH_NAME

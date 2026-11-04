@@ -95,7 +95,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
         output_single_tile_size,
         TILE_HEIGHT,
         TILE_WIDTH,
-        sub_core_grids);
+        sub_core_grids,
+        a.device()->arch() == tt::ARCH::QUASAR
+            ? std::optional<uint32_t>(operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES)
+            : std::nullopt);
     const BlockBufferSet& full_set = plan.full;
     const BlockBufferSet& cliffrow_set = plan.cliffrow;
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
@@ -111,7 +114,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
     uint32_t unpadded_row_size_bytes = a.padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     ProgramSpec spec{.name = "tilize_with_val_padding_multi_core_block"};
 

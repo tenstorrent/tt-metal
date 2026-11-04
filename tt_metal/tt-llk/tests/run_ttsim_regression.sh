@@ -7,12 +7,17 @@
 # Wormhole/Blackhole this excludes Quasar-only tests; for Quasar it selects
 # Quasar-only tests. Each test runs in a forked subprocess so that ttsim's
 # `_Exit(1)` on UnimplementedFunctionality (and similar) only kills that one
-# test and the suite continues.
+# test and the suite continues. LLK node ids in
+# tests/pipeline_reorg/ttsim-skip-list.yaml are deselected for the architecture
+# under test, on both the collection pass and the real run. The weekly workflow
+# passes --no-ignore; that list is for callers that must stay green.
 #
 # Generates:
 #   - JUnit XML at python_tests/ttsim_results/ttsim_<timestamp>.xml
-#   - Self-contained HTML at python_tests/ttsim_results/ttsim_<timestamp>.html
+#   - Self-contained HTML at python_tests/ttsim_results/ttsim_<timestamp>.html,
+#     unless --no-html is set (the Quasar PR-gate shards use that)
 #   - Symlinks `latest.xml` / `latest.html` pointing at the most recent run.
+#     latest.html is omitted when HTML is disabled.
 
 set -euo pipefail
 
@@ -30,13 +35,23 @@ LATEST_COLLECTED="${RESULTS_DIR}/latest.collected.txt"
 WORKERS="${WORKERS:-10}"
 TIMEOUT="${TIMEOUT:-300}"
 ARCHITECTURE="${TTSIM_ARCHITECTURE:-blackhole}"
+USE_IGNORE=1
+LIST_IGNORE=0
+WRITE_HTML=1
 TEST_PATHS=()
 PYTEST_ARGS=()
+DESELECT_ARGS=()
+IGNORE_PREFIXES=()
+# pytest's own status when the selection matches nothing.
+PYTEST_NO_TESTS_COLLECTED=5
 
 # Cache layout for auto-provisioned ttsim artifacts. The release tag comes from
 # tt_metal/ttsim-version, the same pin every tt-metal sim pipeline uses, so
 # bumping that one file moves this script too.
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+# Same file the ttnn sim legs deselect from. LLK entries live in its per-arch
+# sections; this script keeps the ones under python_tests/.
+IGNORE_FILE="${TTSIM_IGNORE_FILE:-${REPO_ROOT}/tests/pipeline_reorg/ttsim-skip-list.yaml}"
 TTSIM_VERSION_FILE="${REPO_ROOT}/tt_metal/ttsim-version"
 TTSIM_REPO="tenstorrent/ttsim"
 TTSIM_CACHE_ROOT="${TTSIM_CACHE_DIR:-${HOME}/.cache/ttsim}"
@@ -51,7 +66,8 @@ Usage: $(basename "$0") [OPTIONS] [TEST_PATH...] [-- PYTEST_EXTRA_ARGS...]
 Runs the LLK pytest suite on ttsim. Wormhole/Blackhole runs exclude
 Quasar-only tests; Quasar runs select Quasar-only tests. Per-test
 process isolation via pytest-forked converts ttsim _Exit(1) crashes into normal pytest
-failures; junit XML + HTML report are produced in:
+failures; junit XML is produced in the directory below. HTML is produced too
+unless --no-html is set:
 
   ${RESULTS_DIR}
 
@@ -62,6 +78,16 @@ Options:
   -a, --architecture A  ttsim architecture: 'blackhole', 'wormhole', or
                         'quasar' (default: blackhole; env: TTSIM_ARCHITECTURE).
                         Controls test selection and collection.
+  --ignore-file PATH    ttsim skip list (default: tests/pipeline_reorg/ttsim-skip-list.yaml;
+                        env: TTSIM_IGNORE_FILE). LLK entries are repo-root paths
+                        under tt_metal/tt-llk/tests/python_tests/. The matching
+                        architecture section is wormhole_b0, blackhole, or quasar.
+                        file.py::test_name also skips test_name_extra; use
+                        file.py::test_name[ to skip one parametrized test.
+  --no-ignore           Run every collected test; do not read the skip list.
+  --no-html             Do not render the HTML report. JUnit XML is still written.
+  --list-ignore         Print the prefixes selected for --architecture and exit.
+                        Does not download ttsim or run pytest.
   -h, --help            Show this help message.
 
 Environment:
@@ -71,6 +97,7 @@ Environment:
                         \${TTSIM_CACHE_DIR:-\$HOME/.cache/ttsim} and exports
                         this automatically.
   TTSIM_CACHE_DIR       Override the download cache root (default: ~/.cache/ttsim).
+  TTSIM_IGNORE_FILE     Override the default ttsim skip-list path.
   GH_TOKEN              Optional. Sent with the GitHub API request for the
                         release digest, to avoid the unauthenticated rate limit.
 
@@ -80,6 +107,8 @@ Examples:
   TT_METAL_SIMULATOR=~/sim/libttsim.so $(basename "$0") -a quasar
   $(basename "$0") -n 16 test_eltwise_unary_datacopy.py
   $(basename "$0") -- -k Float16_b
+  $(basename "$0") -a quasar --no-ignore
+  $(basename "$0") -a quasar --list-ignore
   WORKERS=8 $(basename "$0")
 EOF
     exit 0
@@ -93,6 +122,17 @@ while [[ $# -gt 0 ]]; do
         -n|--workers)      WORKERS="$2"; shift 2 ;;
         -t|--timeout)      TIMEOUT="$2"; shift 2 ;;
         -a|--architecture) ARCHITECTURE="$2"; shift 2 ;;
+        --ignore-file)
+            if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "ERROR: --ignore-file requires a path" >&2
+                exit 1
+            fi
+            IGNORE_FILE="$2"
+            shift 2
+            ;;
+        --no-ignore)       USE_IGNORE=0; shift ;;
+        --no-html)         WRITE_HTML=0; shift ;;
+        --list-ignore)     LIST_IGNORE=1; shift ;;
         -h|--help)         usage ;;
         --)           shift; PYTEST_ARGS+=("$@"); break ;;
         -*)           PYTEST_ARGS+=("$1"); shift ;;
@@ -125,6 +165,84 @@ esac
 # it. Explicit test paths from the caller are still honored as-is.
 if [[ "$ARCHITECTURE" == "quasar" && ${#TEST_PATHS[@]} -eq 0 ]]; then
     TEST_PATHS=(quasar)
+fi
+
+# ──────────────────────────────────────────────────────────────
+# Skip list
+# ──────────────────────────────────────────────────────────────
+# Entries in the shared skip list are repo-root pytest node ids. This suite
+# collects with python_tests/ as rootdir, so only entries under that tree are
+# kept and the directory prefix is removed. `--deselect` uses
+# nodeid.startswith(), so a file path skips that file, `file.py::test_name`
+# also skips `test_name_extra`, and `file.py::test_name[` skips only the
+# parametrizations of that test. The same prefixes go to the collection pass
+# and the real run; otherwise a deselected test would still be in the
+# collected denominator and the HTML report would count it as crashed.
+load_ttsim_skip_list() {
+    local file="$1"
+    local arch="$2"
+    local yaml_arch prefix parsed node_id
+
+    case "$arch" in
+        wormhole)  yaml_arch=wormhole_b0 ;;
+        blackhole|quasar) yaml_arch="$arch" ;;
+        *)
+            echo "ERROR: no ttsim skip-list section for architecture '$arch'" >&2
+            exit 1
+            ;;
+    esac
+
+    if [[ ! -f "$file" ]]; then
+        echo "ERROR: ttsim skip list not found: $file" >&2
+        exit 1
+    fi
+
+    prefix="tt_metal/tt-llk/tests/python_tests/"
+    if ! parsed="$(
+        python3 - "$file" "$yaml_arch" "$prefix" <<'PY'
+import sys
+
+path, arch, prefix = sys.argv[1:]
+current = None
+with open(path, encoding="utf-8") as handle:
+    for raw in handle:
+        line = raw.split("#", 1)[0].rstrip("\r\n")
+        if not line.strip():
+            continue
+        stripped = line.strip()
+        if not line[:1].isspace() and stripped.endswith(":"):
+            current = stripped[:-1].strip().strip("\"'")
+            continue
+        if not stripped.startswith("- "):
+            continue
+        item = stripped[2:].strip().strip("\"'")
+        if current is None:
+            sys.stderr.write(f"ERROR: skip entry before any architecture key in {path}: {item}\n")
+            sys.exit(1)
+        if current == arch and item.startswith(prefix):
+            sys.stdout.write(item[len(prefix) :] + "\n")
+PY
+    )"; then
+        echo "ERROR: failed to read ttsim skip list: $file" >&2
+        exit 1
+    fi
+
+    while IFS= read -r node_id; do
+        [[ -z "$node_id" ]] && continue
+        IGNORE_PREFIXES+=("$node_id")
+        DESELECT_ARGS+=(--deselect "$node_id")
+    done <<<"$parsed"
+}
+
+if [[ "$USE_IGNORE" -eq 1 ]]; then
+    load_ttsim_skip_list "$IGNORE_FILE" "$ARCHITECTURE"
+fi
+
+if [[ "$LIST_IGNORE" -eq 1 ]]; then
+    if [[ ${#IGNORE_PREFIXES[@]} -gt 0 ]]; then
+        printf '%s\n' "${IGNORE_PREFIXES[@]}"
+    fi
+    exit 0
 fi
 
 # ──────────────────────────────────────────────────────────────
@@ -310,6 +428,10 @@ if [[ "$WORKERS" -gt 0 ]]; then
     )
 fi
 
+if [[ ${#DESELECT_ARGS[@]} -gt 0 ]]; then
+    PYTEST_BASE_ARGS+=("${DESELECT_ARGS[@]}")
+fi
+
 # ──────────────────────────────────────────────────────────────
 # Enumerate the expected test set (stable denominator)
 # ──────────────────────────────────────────────────────────────
@@ -317,8 +439,10 @@ fi
 # set is pure static parametrization (there is no pytest_generate_tests, and
 # pytest_collection_modifyitems no-ops without --test-order-file) and therefore
 # identical across ttsim versions, so it gives us a version-independent
-# denominator. The renderer diffs it against the testcases actually recorded in
-# the JUnit XML; anything collected but never recorded is counted as "crashed"
+# denominator. The ignore list's --deselect prefixes are applied here too, so
+# an ignored test is absent from both lists. The renderer diffs this list
+# against the testcases actually recorded in the JUnit XML; anything collected
+# but never recorded is counted as "crashed"
 # (a hard crash that took down the worker before its result could be written,
 # so --forked never turned it into a normal failure).
 #
@@ -343,6 +467,9 @@ COLLECT_CMD=(
     --compile-producer
     -m "$MARKER_EXPR"
 )
+if [[ ${#DESELECT_ARGS[@]} -gt 0 ]]; then
+    COLLECT_CMD+=("${DESELECT_ARGS[@]}")
+fi
 if [[ ${#TEST_PATHS[@]} -gt 0 ]]; then
     COLLECT_CMD+=("${TEST_PATHS[@]}")
 fi
@@ -382,8 +509,17 @@ echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"
 echo " Tests collected: ${collected_count}"
+if [[ "$USE_IGNORE" -eq 1 ]]; then
+    echo " Skip list      : ${IGNORE_FILE} (${#IGNORE_PREFIXES[@]} for ${ARCHITECTURE})"
+else
+    echo " Skip list      : disabled"
+fi
 echo " JUnit XML      : ${XML_PATH}"
-echo " HTML report    : ${HTML_PATH}"
+if [[ "$WRITE_HTML" -eq 1 ]]; then
+    echo " HTML report    : ${HTML_PATH}"
+else
+    echo " HTML report    : disabled"
+fi
 echo " Test paths     : ${TEST_PATHS[*]:-<all>}"
 echo " Extra args     : ${PYTEST_ARGS[*]:-<none>}"
 echo "============================================================"
@@ -410,7 +546,8 @@ pytest_exit=0
 ) || pytest_exit=$?
 
 # ──────────────────────────────────────────────────────────────
-# Render HTML (always, so partial/failed runs still produce a report)
+# Render HTML unless --no-html. Partial and failed runs still get a report
+# when rendering is enabled.
 # ──────────────────────────────────────────────────────────────
 # Prefer the in-tree renderer (render_ttsim_report.py) which produces a
 # polished single-page report with pass/fail/skip percentages, a donut
@@ -419,7 +556,10 @@ pytest_exit=0
 RENDERER="${SCRIPT_DIR}/render_ttsim_report.py"
 if [[ -f "$XML_PATH" ]]; then
     rendered=0
-    if [[ -x "$RENDERER" || -f "$RENDERER" ]] \
+    if [[ "$WRITE_HTML" -eq 0 ]]; then
+        ln -sfn "$(basename "$XML_PATH")" "$LATEST_XML"
+        [[ -s "$COLLECTED_PATH" ]] && ln -sfn "$(basename "$COLLECTED_PATH")" "$LATEST_COLLECTED"
+    elif [[ -x "$RENDERER" || -f "$RENDERER" ]] \
        && python3 -c "import junitparser" &>/dev/null; then
         RENDER_CMD=(python3 "$RENDERER" "$XML_PATH" "$HTML_PATH")
         # Pass the expected-test list so the renderer can flag the
@@ -431,16 +571,16 @@ if [[ -f "$XML_PATH" ]]; then
             rendered=1
         fi
     fi
-    if [[ $rendered -eq 0 ]] && command -v junit2html &>/dev/null; then
+    if [[ "$WRITE_HTML" -eq 1 && $rendered -eq 0 ]] && command -v junit2html &>/dev/null; then
         echo "Falling back to junit2html (install junitparser for the nicer report)" >&2
         junit2html "$XML_PATH" "$HTML_PATH"
         rendered=1
     fi
-    if [[ $rendered -eq 1 ]]; then
+    if [[ "$WRITE_HTML" -eq 1 && $rendered -eq 1 ]]; then
         ln -sfn "$(basename "$XML_PATH")"  "$LATEST_XML"
         ln -sfn "$(basename "$HTML_PATH")" "$LATEST_HTML"
         [[ -s "$COLLECTED_PATH" ]] && ln -sfn "$(basename "$COLLECTED_PATH")" "$LATEST_COLLECTED"
-    else
+    elif [[ "$WRITE_HTML" -eq 1 ]]; then
         echo ""
         echo "WARNING: no HTML renderer available; only XML produced." >&2
         echo "         Install with:  pip install junitparser"          >&2
@@ -453,6 +593,10 @@ if [[ $pytest_exit -eq 0 ]]; then
     echo " ALL TESTS PASSED"
 else
     echo " TESTS FAILED (pytest exit code: $pytest_exit)"
+    if [[ $pytest_exit -eq $PYTEST_NO_TESTS_COLLECTED && ${#IGNORE_PREFIXES[@]} -gt 0 ]]; then
+        echo " No tests were collected. The skip list may have deselected every requested test."
+        echo " Re-run with --no-ignore to include those tests."
+    fi
 fi
 echo "------------------------------------------------------------"
 echo " XML  : ${XML_PATH}"
