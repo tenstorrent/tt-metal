@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import math
 import re
 from typing import TYPE_CHECKING
 
@@ -36,15 +35,14 @@ class Conv2d(Module):
         packer_l1_acc=False,
     )
 
-    # Opt-in fallback for conv shapes missing from slice_params (off by default, so models that
-    # rely on unlisted shapes running unsliced are unchanged). When on, an unlisted shape is
-    # DRAM-width-sliced at the documented max (ceil(w / TILE)), and every conv keeps its
-    # halo/reader config tensors in DRAM instead of L1_SMALL. Without it an unlisted large conv
-    # runs unsliced and its static CBs can clash with resident L1 buffers. The Ideogram 4 VAE
-    # (14 output resolutions on any mesh) sets it on its convs: the config tensors stay allocated
-    # with each cached program, so in L1_SMALL they fill it after one or two output sizes.
-    slice_fallback: bool = False
+    # Keep each conv's halo/reader config tensors in DRAM instead of L1_SMALL. They stay allocated
+    # with every cached program, so a model that runs many input sizes fills L1_SMALL without it.
+    config_tensors_in_dram: bool = False
 
+    # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
+    # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
+    # so ttnn picks the slicing from the L1 free at call time. Models can extend the table for their
+    # own convs with configure_conv2d.
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
@@ -536,13 +534,7 @@ class Conv2d(Module):
                 raise ValueError(msg)
 
         slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
-        shape_key = (h, w, self.in_channels, self.out_channels)
-        if shape_key in slice_params:
-            num_slices = slice_params[shape_key]
-        elif self.slice_fallback:
-            num_slices = max(1, math.ceil(w / 32))
-        else:
-            num_slices = None
+        num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
         slice_config = (
             ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
             if num_slices is not None
@@ -554,9 +546,12 @@ class Conv2d(Module):
         conv_config = ttnn.Conv2dConfig(
             act_block_h_override=32,
             weights_dtype=self.weight.dtype,
-            config_tensors_in_dram=self.slice_fallback,
+            config_tensors_in_dram=self.config_tensors_in_dram,
         )
 
+        # The prepared layout depends on the input size and the slice config. The input memory config,
+        # layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each
+        # Conv2d instance always gets inputs with the same memory config, layout and dtype.
         prepared_key = (b, h, w, num_slices)
         prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
         if prepared_weight is None:
@@ -636,3 +631,27 @@ class Conv2d(Module):
             )
 
         return x
+
+
+def configure_conv2d(
+    module: Module,
+    *,
+    slice_params: dict[tuple[int, ...], dict[tuple[int, int, int, int], int]] | None = None,
+    config_tensors_in_dram: bool | None = None,
+) -> None:
+    """Configure every Conv2d in ``module``'s tree.
+
+    ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
+    each mesh shape it names, for these instances only. ``config_tensors_in_dram`` overrides the
+    class default for them.
+    """
+    if isinstance(module, Conv2d):
+        if slice_params is not None:
+            table = dict(Conv2d.slice_params)
+            for mesh_shape, entries in slice_params.items():
+                table[mesh_shape] = {**Conv2d.slice_params.get(mesh_shape, Conv2d.slice_default), **entries}
+            module.slice_params = table
+        if config_tensors_in_dram is not None:
+            module.config_tensors_in_dram = config_tensors_in_dram
+    for _, child in module.named_children():
+        configure_conv2d(child, slice_params=slice_params, config_tensors_in_dram=config_tensors_in_dram)

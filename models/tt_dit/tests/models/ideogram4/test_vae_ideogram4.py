@@ -110,7 +110,8 @@ def _make_akl(weights: str, torch_dtype) -> AutoencoderKL:
             "random",
             id="bh_galaxy_tp4_1024px",
         ),
-        # Non-square API sizes, where the default 8x8 GroupNorm grid does not divide Ht.
+        # The API's other output sizes (1024x1024 is above): non-square sizes, where the default 8x8
+        # GroupNorm grid does not divide Ht, and the 2K sizes, which use vae_ideogram4's slice table.
         *[
             pytest.param(
                 (4, 8),
@@ -124,7 +125,21 @@ def _make_akl(weights: str, torch_dtype) -> AutoencoderKL:
                 "random",
                 id=f"bh_galaxy_tp4_{w}x{h}",
             )
-            for w, h in [(1248, 832), (832, 1248), (1280, 720), (1152, 864)]
+            for w, h in [
+                (1280, 720),
+                (720, 1280),
+                (1152, 864),
+                (864, 1152),
+                (1248, 832),
+                (832, 1248),
+                (2048, 2048),
+                (2048, 1152),
+                (1152, 2048),
+                (2048, 1536),
+                (1536, 2048),
+                (2048, 1360),
+                (1360, 2048),
+            ]
         ],
     ],
     indirect=["mesh_device", "device_params"],

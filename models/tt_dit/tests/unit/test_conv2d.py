@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 
-from ...layers.conv2d import Conv2d
+from ...layers.conv2d import Conv2d, configure_conv2d
 from ...parallel.config import vae_all_gather
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
@@ -180,15 +180,15 @@ def test_conv2d_input_parallel(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("in_channels", "out_channels", "size_a", "size_b", "slice_fallback"),
+    ("in_channels", "out_channels", "size_a", "size_b", "extra_slices"),
     [
-        # Listed in slice_params at 1024x1024 (16 slices), fallback at 720x1280 (ceil(1280 / 32) = 40).
-        # Weights prepared for 1024x1024 give NaN at 720x1280 (job 171948).
-        (256, 128, (1024, 1024), (720, 1280), True),
-        # Listed in slice_params at both sizes: 4 then 8 slices.
-        (512, 512, (128, 128), (256, 256), False),
+        # 16 slices at 1024x1024 (shared table), 40 at 720x1280 (added for this instance). Weights
+        # prepared for 1024x1024 give NaN at 720x1280 (job 171948).
+        (256, 128, (1024, 1024), (720, 1280), 40),
+        # Shared table at both sizes: 4 then 8 slices.
+        (512, 512, (128, 128), (256, 256), None),
     ],
-    ids=["slice_params_then_fallback", "slice_params"],
+    ids=["instance_table", "shared_table"],
 )
 def test_conv2d_input_size_change(
     *,
@@ -197,7 +197,7 @@ def test_conv2d_input_size_change(
     out_channels: int,
     size_a: tuple[int, int],
     size_b: tuple[int, int],
-    slice_fallback: bool,
+    extra_slices: int | None,
 ) -> None:
     """One Conv2d instance run at size A, then B, then A again, with a different slice count at
     each size. Weights prepared for one size can give wrong results at another (on the Ideogram 4
@@ -213,7 +213,9 @@ def test_conv2d_input_size_change(
     tt_model = Conv2d.from_torch(
         torch_ref=torch_model, mesh_device=mesh_device, out_mesh_axis=1, ccl_manager=ccl_manager
     )
-    tt_model.slice_fallback = slice_fallback
+    if extra_slices is not None:
+        mesh_shape = tuple(mesh_device.shape)
+        configure_conv2d(tt_model, slice_params={mesh_shape: {(*size_b, in_channels, out_channels): extra_slices}})
 
     for height, width in (size_a, size_b, size_a):
         torch_input = torch.randn(1, in_channels, height, width)
