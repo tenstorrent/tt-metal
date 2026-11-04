@@ -141,8 +141,8 @@ struct Routing1D {
         FORCE_INLINE explicit Route(uint32_t route_word) : field_(route_word & LowLatencyFields::FIELD_MASK) {
             ASSERT(field_ != LowLatencyFields::NOOP);
         }
-        // Downstream 0, the one downstream, when the packet goes on.
-        FORCE_INLINE uint32_t forward_to() const { return forwards() ? 0x1u : 0u; }
+        // The one downstream (entry 0), by name, when the packet goes on.
+        FORCE_INLINE uint32_t forward_to() const { return forwards() ? 1u << downstream_name(0) : 0u; }
         FORCE_INLINE bool forwards() const { return (field_ & LowLatencyFields::FORWARD_ONLY) != 0; }
         FORCE_INLINE bool delivers() const { return (field_ & LowLatencyFields::WRITE_ONLY) != 0; }
 

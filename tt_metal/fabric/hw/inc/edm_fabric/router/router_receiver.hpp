@@ -824,8 +824,16 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
     }
 }
 
-// After every connection is open: the forwards' command buffers preset (ForwardCommands).
-FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) { ForwardCommands<0>::preset(args.vc0()); }
+// After every connection is open: the forwards' command buffers preset (ForwardCommands), each pair of buffers by the
+// lowest VC on it (VC0 forwards to routers and is the lowest on its pair).
+FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) {
+    static_assert(CommandBuffers::presets_forward_pair(0));
+    ForwardCommands<0>::preset(args.vc0());
+    if constexpr (CommandBuffers::presets_forward_pair(1)) {
+        ForwardCommands<1>::preset(args.vc1());
+    }
+    static_assert(!vc_forwards_to_routers(2), "the runtime args list downstream routers for VC0 and VC1");
+}
 
 // The receiver loop: rounds of passes over the serviced VCs' receiver channels until termination. A function of its
 // own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).

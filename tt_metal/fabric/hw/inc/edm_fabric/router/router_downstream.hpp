@@ -88,22 +88,17 @@ struct DownstreamTraits {
 // edge (an exit may leave in any direction) can turn onto N/S. In 1D, downstream 0.
 template <size_t VC>
 constexpr uint32_t live_downstreams() {
-    if constexpr (!is_2d) {
-        return 0x1u;
-    } else {
-        constexpr bool east_west =
-            my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST;
-        constexpr bool turns = is_intermesh_router || is_intramesh_router_on_edge;
-        uint32_t live = 0;
-        for (size_t entry = 0; entry < DownstreamTraits<VC>::count; entry++) {
-            const auto direction = downstream_direction(entry);
-            if (!(east_west && !turns &&
-                  (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH))) {
-                live |= 1u << direction;
-            }
+    constexpr bool east_west =
+        is_2d && (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST);
+    constexpr bool turns = is_intermesh_router || is_intramesh_router_on_edge;
+    uint32_t live = 0;
+    for (size_t entry = 0; entry < DownstreamTraits<VC>::count; entry++) {
+        const size_t name = downstream_name(entry);
+        if (!(east_west && !turns && (name == eth_chan_directions::NORTH || name == eth_chan_directions::SOUTH))) {
+            live |= 1u << name;
         }
-        return live;
     }
+    return live;
 }
 
 // Forward command buffers. Every forward to a router is two commands on its VC's forwarding command buffers
@@ -114,24 +109,29 @@ constexpr uint32_t live_downstreams() {
 //   - several destinations: the buffers keep only what no forward changes (PartialPresetForwards);
 //   - no presets (CommandBuffers::forward_presets false): every forward writes its whole commands (StatelessForwards).
 
-// Whether VC's forwards can use VC0's destination preset: VC forwards to no router here, or it uses VC0's two buffers
-// and goes to VC0's downstreams.
+// Whether VC's forwards can use VC0's destination preset: VC forwards to no router here, or it shares VC0's two
+// buffers and goes to VC0's downstreams.
 template <size_t VC>
-constexpr bool can_share_vc0_destination() {
+constexpr bool shares_vc0_destination() {
     if constexpr (!vc_forwards_to_routers(VC)) {
         return true;
     } else {
-        return CommandBuffers::forwards_on_vc0_bufs(VC) && live_downstreams<VC>() == live_downstreams<0>();
+        return ((CommandBuffers::vcs_on_forward_pair(0) >> VC) & 1u) != 0 &&
+               live_downstreams<VC>() == live_downstreams<0>();
     }
+}
+template <size_t... VCs>
+constexpr bool all_share_vc0_destination(std::index_sequence<VCs...>) {
+    return (shares_vc0_destination<VCs>() && ...);
 }
 
 // Whether every forward here goes to one destination for the whole run: VC0 has one live downstream (every 1D router;
 // an E/W-facing 2D router inside a mesh), the router picks no downstream at run time (not intermesh, not on a mesh's
-// edge), and VC1 shares VC0's destination. Otherwise every forwarding VC is partially preset, so no VC's commands
-// overwrite another's preset.
+// edge), and every forwarding VC shares VC0's destination. Otherwise every forwarding VC is partially preset, so no
+// VC's commands overwrite another's preset.
 constexpr bool forwards_have_one_destination = !is_intermesh_router && !is_intermesh_router_on_edge &&
                                                !is_intramesh_router_on_edge && popcount(live_downstreams<0>()) == 1 &&
-                                               can_share_vc0_destination<1>();
+                                               all_share_vc0_destination(std::make_index_sequence<MAX_NUM_VCS>{});
 
 // Set once at init from the runtime args.
 struct DownstreamLink {
@@ -206,13 +206,13 @@ struct StatelessForwards {
 };
 
 // One destination for the whole run: the buffers keep the downstream's coordinate and credit register, programmed
-// once at init; each forward sets its ring slot, length and go (and VC1's forwards, sharing the preset, their credit
+// once at init; each forward sets its ring slot, length and go (and, where several VCs share the preset, its credit
 // register).
 template <size_t VC>
 struct FullPresetForwards {
     using Traits = DownstreamTraits<VC>;
 
-    // After the opens: program the buffers with VC0's one live downstream.
+    // After the opens: program the buffers with VC's one live downstream (every forwarding VC's: they share it).
     __attribute__((noinline)) static void preset(const DownstreamArgs& args) {
         constexpr size_t entry = downstream_entry(lowest_bit(live_downstreams<VC>()));
         if ((args.entries >> entry) & 1u) {
@@ -277,10 +277,11 @@ struct FullPresetForwards {
     }
 
 private:
-    // Whether a forward sets its credit register: where VC1 shares the preset (its credit registers differ), and on
-    // deadlock-avoiding routers, where every forward re-programs it to the address the preset holds (conservative:
-    // not shown to be needed).
-    static constexpr bool credit_register_varies = enable_deadlock_avoidance || vc_forwards_to_routers(1);
+    // Whether a forward sets its credit register: where several VCs share the preset (their credit registers differ),
+    // and on deadlock-avoiding routers, where every forward re-programs it to the address the preset holds
+    // (conservative: not shown to be needed).
+    static constexpr bool credit_register_varies =
+        enable_deadlock_avoidance || popcount(CommandBuffers::vcs_on_forward_pair(VC)) > 1;
 };
 
 // Several destinations: the buffers keep the fields no forward changes, preset at init: the data write's control
@@ -291,13 +292,11 @@ template <size_t VC>
 struct PartialPresetForwards {
     using Traits = DownstreamTraits<VC>;
 
-    // After the opens: preset the forwarding buffers' invariant fields. The destination node in the preset is a
-    // placeholder: every forward writes its own.
+    // After the opens: preset the forwarding buffers' invariant fields, from the lowest VC on them
+    // (CommandBuffers::presets_forward_pair). The destination node in the preset is a placeholder: every forward writes
+    // its own.
     __attribute__((noinline)) static void preset(const DownstreamArgs&) {
-        static_assert(VC == 0, "presets every forwarding VC's buffers from VC0's call");
-        // The host's buffer ids (RX_CH_<n>_FWD_DATA_ / FWD_SYNC_CMD_BUF_ID) put every VC's forwards on VC0's two
-        // buffers, so one preset serves them all; a VC given buffers of its own would be preset here.
-        static_assert(CommandBuffers::forwards_on_vc0_bufs(1), "VC1's forwards share VC0's forwarding command buffers");
+        static_assert(CommandBuffers::presets_forward_pair(VC), "VCs on one pair of buffers share one preset");
         preset_cmd_bufs();
     }
 

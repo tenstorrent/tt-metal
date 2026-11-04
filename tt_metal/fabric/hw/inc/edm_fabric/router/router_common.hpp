@@ -143,10 +143,22 @@ constexpr size_t downstream_compact_index(eth_chan_directions dir) {
 }
 
 // Routing names a downstream by its direction (2D: action bit d is direction d); 1D's one downstream is named 0. The
-// downstream tables keep the host's compact order, and downstream_entry maps a name to its entry there.
+// downstream tables keep the host's compact order: downstream_name gives an entry's name, downstream_entry a name's
+// entry.
+constexpr size_t downstream_name(size_t entry) { return is_2d ? static_cast<size_t>(downstream_direction(entry)) : 0; }
 constexpr size_t downstream_entry(size_t name) {
     return is_2d ? downstream_compact_index(static_cast<eth_chan_directions>(name)) : 0;
 }
+static_assert(
+    [] {
+        for (size_t entry = 0; entry < (is_2d ? max_downstreams : 1); entry++) {
+            if (downstream_entry(downstream_name(entry)) != entry) {
+                return false;
+            }
+        }
+        return true;
+    }(),
+    "downstream_entry inverts downstream_name");
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Ethernet TX queues
@@ -237,10 +249,22 @@ struct CommandBuffers {
     static constexpr uint32_t preset_kinds =
         presets ? ~(ATOMICS | (forward_presets ? 0u : FORWARD_DATA | FORWARD_CREDITS)) : 0u;
 
-    // Whether VC's forwards use VC0's two buffers (true where VC forwards to no router here).
-    static constexpr bool forwards_on_vc0_bufs(size_t vc) {
-        return !vc_forwards_to_routers(vc) ||
-               (forward_data[vc] == forward_data[0] && forward_credits[vc] == forward_credits[0]);
+    // The VCs forwarding to routers on VC's two forward buffers, one bit each (VC's own bit where it forwards to
+    // routers).
+    static constexpr uint32_t vcs_on_forward_pair(size_t vc) {
+        uint32_t vcs = 0;
+        for (size_t other = 0; other < MAX_NUM_VCS; other++) {
+            if (vc_forwards_to_routers(other) && forward_data[other] == forward_data[vc] &&
+                forward_credits[other] == forward_credits[vc]) {
+                vcs |= 1u << other;
+            }
+        }
+        return vcs;
+    }
+    // Whether VC presets its forward buffers: it forwards to routers and is the lowest VC on them (VCs on one pair of
+    // buffers share one preset).
+    static constexpr bool presets_forward_pair(size_t vc) {
+        return vc_forwards_to_routers(vc) && lowest_bit(vcs_on_forward_pair(vc)) == vc;
     }
 };
 static_assert(
