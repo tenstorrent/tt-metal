@@ -62,7 +62,9 @@ class TernaryMLP:
     def forward_prefill(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [..., T, dim] bf16 TILE, T a multiple of 32 -> the same shape: down(up * silu(gate)) in the exact ternary
         weights."""
-        xr = self.prot_in(x)
+        xr = prerot.take(x)  # the layer's fused add + norm + rotation (tprefill/norm_rot.py), else rotate here
+        if xr is None:
+            xr = self.prot_in(x)
         h = self.pre_gateup(xr)
         ttnn.deallocate(xr)
         hr = self.prot_hidden(h)
@@ -148,6 +150,17 @@ def swap_in_ternary_mlp(model, mlp_only=False) -> None:
         model._ternary_mlp = None
         model._ternary_signs, model._ternary_rotations = signs, rotations
         model._prefill_rotations = prefill_rotations
+        if PREFILL and os.environ.get("BONSAI_PREFILL_NROT", "1") == "1":
+            # prefill norms fused with the residual add and the 5120-wide rotation (tprefill/norm_rot.py)
+            from models.demos.blackhole.bonsai2.tt.tprefill.norm_rot import PrefillNormRot
+
+            for layer in model.layers:
+                for norm, attr in (
+                    (layer.attention_norm, "_bonsai_pre_attn_nrot"),
+                    (layer.ffn_norm, "_bonsai_pre_ff_nrot"),
+                ):
+                    w = ttnn.to_torch(norm.weight).float().reshape(-1)  # includes the unit offset
+                    setattr(layer, attr, PrefillNormRot(device, signs[5120], w, norm.eps))
         print(f"BONSAI_TERNARY_MLP_SWAP_MLP_S={time.time() - t0:.1f}", flush=True)
     if mlp_only or not hasattr(model, "_ternary_signs") or getattr(model, "_ternary_rest_done", False):
         return

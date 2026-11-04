@@ -325,6 +325,11 @@ class Qwen36DecoderLayer:
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
         single_decode = self.num_devices == 1 and mode == "decode" and x.shape[-2] <= ttnn.TILE_SIZE
+        # Bonsai exact-ternary prefill: residual add + norm + rotation in one op per norm
+        # (models/demos/blackhole/bonsai2/tt/tprefill/norm_rot.py); the ternary modules take the rotated copy.
+        single_prefill = self.num_devices == 1 and mode == "prefill" and not decode_cfg
+        pre_attn = getattr(self, "_bonsai_pre_attn_nrot", None) if single_prefill else None
+        pre_ff = getattr(self, "_bonsai_pre_ff_nrot", None) if single_prefill else None
         if single_decode and getattr(self, "_bonsai_attn_nrot", None) is not None:
             # Bonsai: norm + rotation in one op; the ternary attention / GDN takes the rotated copies
             # (models/demos/blackhole/bonsai2/tt/ternary/rotate.py NormRotation, prerot.py).
@@ -334,6 +339,11 @@ class Qwen36DecoderLayer:
             prerot.put(attn_input, _xr)
         elif single_decode:
             attn_input = sharded_decode_rms_norm(self.attention_norm, x, self.args.dim)
+        elif pre_attn is not None:
+            from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+            _, attn_input, _xr = pre_attn(x, want_n=True)  # n: GDN's a/b projection reads it
+            prerot.put(attn_input, _xr)
         else:
             attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
@@ -431,7 +441,12 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        if mode == "prefill":
+        if pre_ff is not None:
+            from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+            h, _, ff_input = pre_ff(x, attn_output)  # h = x + attn_output; ff_input: the rotated norm output
+            prerot.put(ff_input, ff_input)
+        elif mode == "prefill":
             # Prefill residual stays DRAM interleaved even when attn_output arrives L1-sharded
             # (GDN o_proj), so the L1 shard is freed before ffn_norm's CBs are allocated.
             h = ttnn.add(x, attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -439,7 +454,9 @@ class Qwen36DecoderLayer:
             h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
-        if single_decode and getattr(self, "_bonsai_ff_nrot", None) is not None:
+        if pre_ff is not None:
+            pass  # ff_input from the fused op above
+        elif single_decode and getattr(self, "_bonsai_ff_nrot", None) is not None:
             from models.demos.blackhole.bonsai2.tt.ternary import prerot
 
             ff_input, _xr = self._bonsai_ff_nrot(h)
@@ -451,7 +468,8 @@ class Qwen36DecoderLayer:
             ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
-        ttnn.deallocate(ff_input)
+        if pre_ff is None:  # else the ternary MLP took ff_input as its rotated input and freed it
+            ttnn.deallocate(ff_input)
 
         output = ttnn.add(h, ff_output)
         ttnn.deallocate(h)

@@ -266,3 +266,39 @@ def test_tprefill2_model_shapes_time(device):
         l1 = TernaryPrefillLinear.from_host(device, t, s)
         out.append(f"k5120n{N} 2D={_time(device, lambda: l2(xt)):.3f} 1D={_time(device, lambda: l1(xt)):.3f}")
     print("SHAPES_MS " + " | ".join(out))
+
+
+@pytest.mark.parametrize("add, want_n", [(False, False), (False, True), (True, False), (True, True)])
+def test_prefill_norm_rot(device, add, want_n):
+    """norm_rot.PrefillNormRot against torch: h = a (+ b), n = h / rms(h) * w, x' = fwht_blocks(bf16(n) * d)."""
+    from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import fwht_blocks
+    from models.demos.blackhole.bonsai2.tt.tprefill.norm_rot import PrefillNormRot
+
+    T, K = 2048, 5120
+    rng = np.random.default_rng(5)
+    signs = rng.choice([-1.0, 1.0], size=K).astype(np.float32)
+    w = (1.0 + 0.3 * torch.randn(K)).bfloat16().float()
+    a = (torch.randn(T, K) * 3).bfloat16()
+    b = (torch.randn(T, K) * 2).bfloat16() if add else None
+    tt = lambda v: ttnn.from_torch(v.reshape(1, 1, T, K), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    op = PrefillNormRot(device, signs, w, 1e-6)
+    h, n, xr = op(tt(a), tt(b) if add else None, want_n=want_n)
+    # the residual as the model's ttnn.add produces it (its packer rounding), and the bit-exact match the fused op gives
+    href = ttnn.to_torch(ttnn.add(tt(a), tt(b))).float().reshape(T, K) if add else a.float()
+    if add:
+        rn = (href - (a.float() + b.float()).bfloat16().float()).abs().max().item()
+        print(f"ttnn.add vs round-to-nearest max diff {rn}")
+    nref = href / torch.sqrt((href * href).mean(-1, keepdim=True) + 1e-6) * w
+    xref = torch.from_numpy(fwht_blocks((nref * torch.from_numpy(signs)).bfloat16().float().numpy(), 1024)).float()
+    rel = lambda y, r: ((ttnn.to_torch(y).float().reshape(T, K) - r).norm() / r.norm()).item()
+    msg = f"NORMROT add={add} n={want_n} xr rel {rel(xr, xref):.5f}"
+    if add:
+        msg += f" h rel {rel(h, href):.6f}"
+    if want_n:
+        msg += f" n rel {rel(n, nref):.5f}"
+    print(msg)
+    assert rel(xr, xref) < 0.01
+    if add:
+        assert rel(h, href) < 1e-6, "h must equal ttnn.add bit for bit"
+    if want_n:
+        assert rel(n, nref) < 0.01

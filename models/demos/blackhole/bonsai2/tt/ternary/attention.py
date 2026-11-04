@@ -107,7 +107,9 @@ class TernaryAttentionPrefillTtnn:
     def linear(self, a, b, *args, **kwargs):
         w, t = self._w, self._t
         if b is w.q_proj:
-            self._xr = t.prot_in(a)
+            self._xr = prerot.take(a)  # the layer's fused norm + rotation (tprefill/norm_rot.py), else rotate here
+            if self._xr is None:
+                self._xr = t.prot_in(a)
             return t.pre_q(self._xr)
         if b is w.k_proj:
             kv = t.pre_kv(self._xr)

@@ -265,7 +265,11 @@ def gdn_chunk_forward(gdn, x, linear_shim):
     tern = gdn.ternary if _ternary_prefill(gdn) else None
     if tern is not None:
         # exact ternary in_proj: [qkv | z] on the rotated input; a and b (bf16 weights) at HiFi4
-        xr = tern.prot_in(x)
+        from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+        xr = prerot.take(x)  # the layer's fused norm + rotation (tprefill/norm_rot.py), else rotate here
+        if xr is None:
+            xr = tern.prot_in(x)
         mega = tern.pre_qkvz(xr)  # [1, T, qkv | z]
         ttnn.deallocate(xr)
         ab = ttnn.linear(x, tern.ab_w, compute_kernel_config=tern.ab_ckc)
