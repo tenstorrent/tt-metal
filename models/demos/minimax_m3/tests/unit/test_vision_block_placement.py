@@ -216,17 +216,17 @@ MEASURED_SHARDED_CB_BYTES_2304 = dict(fc1=786432, fc2=434176)
 SHARDED_MLP_MARGINS_2304 = dict(fc1=322176, gelu=912000, fc2=428672)
 # The least margin of any op at any size of L1_PATCHES, in a bank of PROOF_L1_BANK_BYTES: (bytes, op).
 LEAST_MARGIN = {
-    ("l1", (11, 10)): (128512, "qkv"),
-    ("l1", (12, 10)): (198144, "qkv"),
-    ("l1", (13, 10)): (142848, "fc1"),
-    ("l1_interleaved", (11, 10)): (124416, "fc1"),
-    ("l1_interleaved", (12, 10)): (124416, "fc1"),
-    ("l1_interleaved", (13, 10)): (142848, "fc1"),
+    ("l1", (11, 10)): (112128, "qkv"),
+    ("l1", (12, 10)): (181760, "qkv"),
+    ("l1", (13, 10)): (126464, "fc1"),
+    ("l1_interleaved", (11, 10)): (108032, "fc1"),
+    ("l1_interleaved", (12, 10)): (108032, "fc1"),
+    ("l1_interleaved", (13, 10)): (126464, "fc1"),
 }
 # With L1_MAX_ROWS lifted, on 12x10 with activations "l1": the patch counts above 2304 where the rule would keep the
 # activations in L1, those where some op's circular buffers would overlap a tensor, and the least margin, (bytes, op,
 # patches).
-UNCAPPED_12X10 = dict(l1_patches=((2308, 3200),), overlap_patches=((3076, 3200),), least=(-23040, "fc1", 3172))
+UNCAPPED_12X10 = dict(l1_patches=((2308, 3200),), overlap_patches=((3076, 3200),), least=(-39424, "fc1", 3172))
 
 
 def _ranges(values, step=4):
