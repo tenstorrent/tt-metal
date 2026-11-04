@@ -18,9 +18,10 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#include "tools/profiler/perf_counters.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/perf_counters.hpp"
 #include "hostdev/dev_msgs.h"
+#include "hostdev/l1_ecc_halt_constants.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
@@ -92,6 +93,7 @@ bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)
 bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+uint32_t tensor_prefetcher_signal_noc_xy[NUM_DRAM_BANKS] __attribute__((used));
 uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
 // These arrays are used to store the worker logical to virtual coordinate mapping
@@ -200,6 +202,129 @@ void set_deassert_addresses() {
     cfg_regs[TRISC_RESET_PC_SEC2_PC_ADDR32] = MEM_TRISC2_FIRMWARE_BASE;
     cfg_regs[TRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0b111;
     cfg_regs[NCRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0x1;
+#endif
+}
+
+#if defined(L1_ECC_HALT)
+// Rows 3072-4095 have no SRAM. Any access to them (the scrubber walks all 4096 rows, a NoC read past the end of L1)
+// reads back as false SBEs and DBEs.
+constexpr uint32_t l1_ecc_populated_rows = MEM_L1_SIZE / (l1_ecc_banks * l1_ecc_word_bytes);
+
+// ECC_CTRL's interrupt enables while armed, and the ECC_STATUS view selected after arming and after a false error.
+constexpr uint32_t ecc_ctrl_armed = ECC_CTRL_L1_DBE_IRQ_EN;
+constexpr uint32_t ecc_ctrl_host_view = static_cast<uint32_t>(EccView::L1_COUNTS);
+
+inline __attribute__((always_inline)) uint32_t read_ecc_view(EccView view) {
+    *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL) =
+        ecc_ctrl_armed | static_cast<uint32_t>(view);
+    // The view select must land before the ECC_STATUS load.
+    asm volatile("fence" ::: "memory");
+    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_STATUS);
+}
+
+// Records the ECC state for the host and halts the core until the next device open releases it.
+inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t last_l1_error_banks_0_15) {
+    tt_l1_ptr l1_ecc_halt_slot_t* const slot = reinterpret_cast<tt_l1_ptr l1_ecc_halt_slot_t*>(MEM_L1_ECC_HALT_BASE);
+    slot->record.ecc_ctrl = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
+    slot->record.l1_counts = read_ecc_view(EccView::L1_COUNTS);
+    slot->record.last_l1_error_banks_0_15 = last_l1_error_banks_0_15;
+    slot->record.last_l1_error_banks_16_31 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_16_31);
+    slot->record.program_id = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.host_assigned_id;
+    asm volatile("fence" ::: "memory");
+    // A valid last error here is in a populated row; without one, IRQ 3 came from another source (the watchdog).
+    bool l1_dbe = last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK;
+    slot->record.reason = l1_dbe ? L1_ECC_HALT_REASON_DBE : L1_ECC_HALT_REASON_UNEXPECTED;
+    WAYPOINT("ECCH");
+    while (true) {
+    }
+}
+
+// Called from l1_ecc_irq_entry on PIC IRQ 3. A false error from an unpopulated row is cleared and returns;
+// anything else halts the core. PIC handlers do not nest, so nothing can change the ECC_CTRL view between a select
+// and its read.
+extern "C" __attribute__((noinline, used)) void l1_ecc_check() {
+    volatile tt_reg_ptr uint32_t* ecc_ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
+    // The valid bit and row cover an error in any of the 32 banks.
+    uint32_t last_l1_error_banks_0_15 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_0_15);
+    if ((last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK) &&
+        (last_l1_error_banks_0_15 & ECC_LAST_ERR_ROW_MASK) >= l1_ecc_populated_rows) {
+        // Without the IRQ clear, mret re-enters the handler. Without the last error clear, a later IRQ 3 from another
+        // source (the watchdog) would find this error still valid and return here forever.
+        *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
+        *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view;
+        return;
+    }
+    halt_on_ecc_error(last_l1_error_banks_0_15);
+}
+
+// IRQ 3 handler. Saves the caller-saved registers around l1_ecc_check.
+// BRISC can skip an mret: a branch predictor (BTB) entry whose hashed PC matches mret's makes the core treat mret
+// as a mispredicted non-branch, so it continues at mret + 4 still inside the handler. The jump there runs mret
+// again; the first attempt removes that BTB entry, so the retry returns.
+__attribute__((naked)) void l1_ecc_irq_entry() {
+    asm volatile(
+        "addi sp, sp, -(16 * 4)\n"
+        "sw ra, 0 * 4(sp)\n"
+        "sw t0, 1 * 4(sp)\n"
+        "sw t1, 2 * 4(sp)\n"
+        "sw t2, 3 * 4(sp)\n"
+        "sw t3, 4 * 4(sp)\n"
+        "sw t4, 5 * 4(sp)\n"
+        "sw t5, 6 * 4(sp)\n"
+        "sw t6, 7 * 4(sp)\n"
+        "sw a0, 8 * 4(sp)\n"
+        "sw a1, 9 * 4(sp)\n"
+        "sw a2, 10 * 4(sp)\n"
+        "sw a3, 11 * 4(sp)\n"
+        "sw a4, 12 * 4(sp)\n"
+        "sw a5, 13 * 4(sp)\n"
+        "sw a6, 14 * 4(sp)\n"
+        "sw a7, 15 * 4(sp)\n"
+        "call l1_ecc_check\n"
+        "lw ra, 0 * 4(sp)\n"
+        "lw t0, 1 * 4(sp)\n"
+        "lw t1, 2 * 4(sp)\n"
+        "lw t2, 3 * 4(sp)\n"
+        "lw t3, 4 * 4(sp)\n"
+        "lw t4, 5 * 4(sp)\n"
+        "lw t5, 6 * 4(sp)\n"
+        "lw t6, 7 * 4(sp)\n"
+        "lw a0, 8 * 4(sp)\n"
+        "lw a1, 9 * 4(sp)\n"
+        "lw a2, 10 * 4(sp)\n"
+        "lw a3, 11 * 4(sp)\n"
+        "lw a4, 12 * 4(sp)\n"
+        "lw a5, 13 * 4(sp)\n"
+        "lw a6, 14 * 4(sp)\n"
+        "lw a7, 15 * 4(sp)\n"
+        "addi sp, sp, 16 * 4\n"
+        "mret_loop: mret\n"
+        "j mret_loop\n");
+}
+#endif
+
+void arm_l1_ecc_halt() {
+#if defined(L1_ECC_HALT)
+    volatile tt_reg_ptr uint32_t* ecc_ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
+    // ECC_CTRL survives RISC soft reset. Nothing else enables its interrupts today (ARC firmware leaves it at 0), so
+    // any enable outside our own means another owner, such as future ARC firmware, and arming is skipped. The clears
+    // are ours too: a reset between the handler's two ECC_CTRL writes leaves them set.
+    if (*ecc_ctrl & ~(ECC_CTRL_VIEW_MASK | ecc_ctrl_armed | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR)) {
+        return;
+    }
+    // Arm in this order: clear stale state, enable the ECC sources, install the handler, and enable BRISC at the
+    // PIC last. Only that last write lets BRISC take IRQ 3, so the handler is always installed first (both PIC
+    // writes land in order), and an ECC error raised before it stays latched until then.
+
+    // Clear the counts, the last error and the IRQ.
+    *ecc_ctrl = ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
+    *ecc_ctrl = 0;
+    *ecc_ctrl = ecc_ctrl_host_view | ecc_ctrl_armed;
+    asm volatile("fence" ::: "memory");
+    RISC_PIC_INT_PCS[pic_num_sw_ints + pic_hw_int_err] = reinterpret_cast<uint32_t>(l1_ecc_irq_entry);
+    // Only BRISC takes IRQ 3. NCRISC needs no masking: it is still in soft reset here, which holds its PIC
+    // enables at 0, and nothing sets them later. Of the IRQ 3 sources, only the L1 DBE is armed.
+    *RISC_PIC_BRISC_HW_INT_EN |= 1u << pic_hw_int_err;
 #endif
 }
 
@@ -363,6 +488,7 @@ int main() {
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+    tensor_prefetcher_signal_table_init(MEM_BANK_TO_NOC_SCRATCH);
     noc_worker_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -372,6 +498,7 @@ int main() {
 
     risc_init();
     device_setup();
+    arm_l1_ecc_halt();
     DEVICE_PRINT_INITIALIZE_LOCK();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
@@ -380,7 +507,7 @@ int main() {
 
     // Wait for all cores to be finished initializing before reporting initialization done.
     wait_ncrisc_trisc();
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    clear_go_messages(mailboxes->go_messages);
 
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
@@ -399,33 +526,34 @@ int main() {
         // written in order, so it will arrive in order. We also have a barrier
         // before mcasting the launch message (as a hang workaround), which
         // ensures that the unicast data will also have been received.
+        // The go message is looked up again on every pass: a sub-device reconfigure rewrites go_message_index, and a
+        // reset moves the launch message read pointer, while this core waits here.
+        volatile tt_l1_ptr go_msg_t* go_message;
         while (
-            ((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
+            ((go_message_signal = (go_message = current_go_message(mailboxes))->signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
-                (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
-                // Set the rd_ptr on workers to specified value
+            if (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+                // The host writes this into slot 0 and then overwrites it with the next go.
                 mailboxes->launch_msg_rd_ptr = 0;
-                if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                    if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                        DeviceIncrementTraceCount();
-                        DeviceTraceOnlyProfilerInit();
-                    }
-                    uint32_t go_message_index = mailboxes->go_message_index;
-                    // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
-                    // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
-                    // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn
-                    // is not issued.
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                    mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                    // Notify dispatcher that this has been done
-                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                    notify_dispatch_core_done(dispatch_addr, noc_index);
+            } else if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                    DeviceIncrementTraceCount();
+                    DeviceTraceOnlyProfilerInit();
                 }
+                // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
+                // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
+                // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn
+                // is not issued.
+                uint64_t dispatch_addr = calculate_dispatch_addr(go_message);
+                // Free the slot the reset arrived in before the dispatcher, seeing the ack, sends the next go.
+                go_message->signal = RUN_MSG_DONE;
+                mailboxes->launch_msg_rd_ptr = 0;
+                // Notify dispatcher that this has been done
+                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                notify_dispatch_core_done(dispatch_addr, noc_index);
             }
         }
 
@@ -461,7 +589,6 @@ int main() {
 #ifdef DEBUG_CHECKPOINT_ENABLED
                 debug_checkpoint_init(enables);
 #endif
-                ArmPerfCounters();
                 run_triscs(enables);
 
                 noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -491,6 +618,8 @@ int main() {
 
                 uint32_t tt_l1_ptr* cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                // Before either data movement kernel can issue on a NOC.
+                CLEAR_NOC_CMD_BUF_USAGE_FOR_WATCHER();
                 start_ncrisc_kernel_run_early(enables);
 
                 // Run the BRISC kernel
@@ -550,8 +679,9 @@ int main() {
 
                 wait_ncrisc_trisc();
 
-                // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
-                ReadPerfCounters();
+                // BRISC stops and reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
+                StopPerfCounters();
+                ReadPerfCounters(enables);
 
                 trigger_sync_register_init();
 
@@ -568,6 +698,15 @@ int main() {
                             ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
                             ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
                             ASSERT(ncrisc_noc_packet_tags_cleared(noc), DebugAssertNCriscNOCPacketTagClearedTripped);
+#ifdef ARCH_BLACKHOLE
+                            // dynamic_noc_init only re-zeros MID on a noc mode change, so PCIe routing left
+                            // by one dynamic kernel reaches the next one. Every RISC has finished here, so
+                            // no command buffer should still hold it. Buffers alias in this mode, hence all
+                            // four rather than a per-RISC subset.
+                            for (uint32_t cmd_buf = 0; cmd_buf < NUM_NOC_CMD_BUFS; cmd_buf++) {
+                                ASSERT(noc_cmd_buf_mid_clear(noc, cmd_buf), DebugAssertNocMidNotClearedTripped);
+                            }
+#endif
                         }
                         WAYPOINT("NKFD");
                     }
@@ -582,8 +721,10 @@ int main() {
 
             } while (reload_next_stage(launch_msg_address, reload_stage, reload_round));
 
-            uint32_t go_message_index = mailboxes->go_message_index;
-            mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            // Look the go message up again: a preloaded launch can leave the wait loop holding the row from before a
+            // sub-device reconfigure, and its go then arrives on the new row.
+            go_message = current_go_message(mailboxes);
+            go_message->signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
@@ -592,7 +733,7 @@ int main() {
                 // if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                uint64_t dispatch_addr = calculate_dispatch_addr(go_message);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch

@@ -66,15 +66,24 @@ void kernel_main() {
     constexpr auto rotary_output = bulk_output(out_cb_id);
 
     CircularBuffer in_cb(in_cb_id);
+    DataflowBuffer in_cb_dfb(in_cb_id);  // chain-side handle for the same buffer
     CircularBuffer cos_cb(cos_cb_id);
+    DataflowBuffer cos_cb_dfb(cos_cb_id);  // chain-side handle for the same buffer
     CircularBuffer sin_cb(sin_cb_id);
+    DataflowBuffer sin_cb_dfb(sin_cb_id);  // chain-side handle for the same buffer
     CircularBuffer scalar_cb(scalar_cb_id);
+    DataflowBuffer scalar_cb_dfb(scalar_cb_id);  // chain-side handle for the same buffer
     CircularBuffer rotated_in_interm_cb(rotated_in_interm_cb_id);
+    DataflowBuffer rotated_in_interm_cb_dfb(rotated_in_interm_cb_id);  // chain-side handle for the same buffer
     CircularBuffer cos_interm_cb(cos_interm_cb_id);
+    DataflowBuffer cos_interm_cb_dfb(cos_interm_cb_id);  // chain-side handle for the same buffer
     CircularBuffer sin_interm_cb(sin_interm_cb_id);
+    DataflowBuffer sin_interm_cb_dfb(sin_interm_cb_id);  // chain-side handle for the same buffer
     CircularBuffer out_cb(out_cb_id);
+    DataflowBuffer out_cb_dfb(out_cb_id);  // chain-side handle for the same buffer
 
-    compute_kernel_hw_startup(in_cb_id, sin_cb_id, sin_interm_cb_id);  // General Init for all binary ops
+    // Scalar CB is always Float16_b.
+    compute_kernel_hw_startup(in_cb_id, scalar_cb_id, rotated_in_interm_cb_id);
 
     // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
     // write -1.0 into the scalar CB and push it.
@@ -111,12 +120,16 @@ void kernel_main() {
                         ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
-                    ckl::input(scalar_cb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
-                    half_Wt, 0u},
+                    ckl::input(
+                        scalar_cb_id,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Enabled)>{in_cb_dfb, scalar_cb_dfb, half_Wt, 0u},
                 // Copy first half to second half of rotated buffer
                 ckl::CopyTile<
                     ckl::input(in_cb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
-                    ckl::Dst::D1>{},
+                    ckl::Dst::D1>{in_cb_dfb},
                 ckl::PackTile<
                     ckl::output(
                         rotated_in_interm_cb_id,
@@ -124,7 +137,7 @@ void kernel_main() {
                         ckl::PushPolicy::None,
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
-                    ckl::Dst::D0>{0u},
+                    ckl::Dst::D0>{rotated_in_interm_cb_dfb, 0u},
                 ckl::PackTile<
                     ckl::output(
                         rotated_in_interm_cb_id,
@@ -132,7 +145,7 @@ void kernel_main() {
                         ckl::PushPolicy::None,
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
-                    ckl::Dst::D1>{half_Wt});
+                    ckl::Dst::D1>{rotated_in_interm_cb_dfb, half_Wt});
             rotated_in_interm_cb.push_back(Wt);
 
             // sin_interim = rotated * sin (broadcast rows)
@@ -143,21 +156,26 @@ void kernel_main() {
             mul_bcast_rows_init(rotated_in_interm_cb_id, sin_cb_id);
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
-                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, rotated_input, ckl::input(sin_input, ckl::BroadcastDim::Row)>{},
-                ckl::PackTile<sin_output>{});
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, rotated_input, ckl::input(sin_input, ckl::BroadcastDim::Row)>{
+                    rotated_in_interm_cb_dfb, sin_cb_dfb},
+                ckl::PackTile<sin_output>{sin_interm_cb_dfb});
 
             reconfig_data_format(rotated_in_interm_cb_id, in_cb_id, sin_cb_id, cos_cb_id);
             pack_reconfig_data_format(sin_interm_cb_id, cos_interm_cb_id);
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
-                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, in_input, ckl::input(cos_input, ckl::BroadcastDim::Row)>{},
-                ckl::PackTile<cos_output>{});
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, in_input, ckl::input(cos_input, ckl::BroadcastDim::Row)>{
+                    in_cb_dfb, cos_cb_dfb},
+                ckl::PackTile<cos_output>{cos_interm_cb_dfb});
 
             // out = cos_interim + sin_interim
             reconfig_data_format(in_cb_id, cos_interm_cb_id, cos_cb_id, sin_interm_cb_id);
             pack_reconfig_data_format(cos_interm_cb_id, out_cb_id);
             ckl::add<cos_interm_input, sin_interm_input, rotary_output>(
-                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+                cos_interm_cb_dfb,
+                sin_interm_cb_dfb,
+                out_cb_dfb);
         }
 
         sin_cb.pop_front(Wt);

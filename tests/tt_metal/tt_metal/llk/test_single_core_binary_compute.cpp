@@ -36,7 +36,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "single_core_compute_runners.hpp"
@@ -464,10 +464,20 @@ bool single_core_binary(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -503,10 +513,20 @@ bool single_core_binary(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -520,7 +540,7 @@ bool single_core_binary(
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeUnpackModes unpack_modes{};
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
     if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
         unpack_modes = {
             {INP0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
@@ -528,19 +548,11 @@ bool single_core_binary(
             {INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
         };
     }
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.enable_32_bit_dest,
-            .unpack_modes = unpack_modes,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.enable_32_bit_dest,
-            .unpack_modes = unpack_modes,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .fpu_math_fidelity = test_config.math_fidelity,
+        .enable_32_bit_dest = test_config.enable_32_bit_dest,
+        .unpack_modes = unpack_modes,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
@@ -649,7 +661,17 @@ bool single_core_binary(
 // which matters on simulator targets where one iteration costs about a minute.
 // MathFidelity is a sparse enum, so the valid values are listed rather than counted.
 class LLKMeshDeviceFixtureSlowDispatchOnlyFidelity : public LLKMeshDeviceFixtureSlowDispatchOnly,
-                                                     public testing::WithParamInterface<MathFidelity> {};
+                                                     public testing::WithParamInterface<MathFidelity> {
+protected:
+    void SetUp() override {
+        // Every test here uses Float16_b operands: Quasar's first fidelity phase covers a Float16_b multiply in full,
+        // and add and subtract take no extra phases, so the other fidelities add nothing.
+        if (detail::detect_arch() == ARCH::QUASAR && GetParam() != MathFidelity::LoFi) {
+            GTEST_SKIP() << "Quasar computes Float16_b add, sub and mul in full at LoFi";
+        }
+        LLKMeshDeviceFixtureSlowDispatchOnly::SetUp();
+    }
+};
 
 TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreSingleTileAdd) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {

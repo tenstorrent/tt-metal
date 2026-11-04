@@ -7,8 +7,8 @@
 // Single 1Sx1A DFB (logical id 0): DM4 → Neo0, implicit_sync enabled.
 //
 // Quasar launches this kernel on num_threads_per_cluster DM harts, but only DM4
-// produces. finish() -> handle_final_credits() calls sync_threads(get_num_threads()),
-// so we force num_sw_threads=1 on the producer hart to avoid waiting for DMs that
+// produces. finish() -> handle_final_credits() calls sync_threads(), which waits for
+// get_num_threads() DM harts, so we force num_sw_threads=1 on the producer hart to avoid waiting for DMs that
 // returned early without calling finish().
 
 #include "api/kernel_thread_globals.h"

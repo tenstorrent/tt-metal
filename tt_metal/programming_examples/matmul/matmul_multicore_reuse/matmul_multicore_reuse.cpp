@@ -76,7 +76,7 @@ void matmul_multicore_reuse(
     Program program{};
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     // uint32_t single_tile_size = 2 * 1024;
 

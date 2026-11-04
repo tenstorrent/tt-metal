@@ -24,6 +24,11 @@ struct RecurrentChunkScanParams {
     // Groups folded into batch_heads; 1 means ungrouped.
     uint32_t groups_per_head;
     RecurrentChunkScanMode mode;
+    // SUMMARY only. The output is one [S, BH, K, K+V] tensor of [A | B] rows: slot 0 holds head transforms and,
+    // with tail, slot 1 holds tail transforms (S = 2). With init, every slot without a valid segment holds the
+    // identity (I, 0); otherwise such slots are unspecified.
+    bool tail = false;
+    bool init = true;
     uint32_t sequence_parallel_axis;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -42,6 +47,7 @@ struct RecurrentChunkScanInputs {
     // already replicated across SP. Required for SP recurrence.
     std::optional<Tensor> tail_entry_states;
     Tensor actual_start;
+    std::optional<Tensor> actual_end;
 };
 
 }  // namespace ttnn::experimental::prim

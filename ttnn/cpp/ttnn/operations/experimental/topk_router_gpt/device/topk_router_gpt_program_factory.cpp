@@ -2,25 +2,87 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk_router_gpt_program_factory.hpp"
+#include "topk_router_gpt_device_operation.hpp"
 #include "topk_router_gpt_device_operation_types.hpp"
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <algorithm>
 #include <numeric>
 #include <tuple>
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::topk_router_gpt::program {
+namespace ttnn::operations::experimental::topk_router_gpt {
 
-TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::create(
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
+
+namespace {
+
+// name / DataFormat / is_tile / tiles_per_dfb
+using DfbSpec = std::tuple<DFBSpecName, tt::DataFormat, bool, uint32_t>;
+
+void push_dfbs(ProgramSpec& spec, const std::vector<DfbSpec>& specs) {
+    for (const auto& [name, data_format, is_tile, tiles_per_dfb] : specs) {
+        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = bytes_per_tile,
+            .num_entries = tiles_per_dfb,
+            .data_format_metadata = data_format,
+        });
+    }
+}
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts
+TopkRouterGptDeviceOperation::TopkRouterGptProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    const KernelSpecName DM0{"dm0"};
+    const KernelSpecName DM1{"dm1"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    const DFBSpecName DFB_WEIGHT{"weight"};
+    const DFBSpecName DFB_INPUT{"input"};
+    const DFBSpecName DFB_PARTIAL_RECV{"partial_recv"};
+    const DFBSpecName DFB_LOCAL_OUT{"local_out"};
+    const DFBSpecName DFB_BIAS{"bias"};
+    const DFBSpecName DFB_INDEX{"index"};
+    const DFBSpecName DFB_TOPK_VAL{"topk_val"};
+    const DFBSpecName DFB_GATHERED_VAL{"gathered_val"};
+    const DFBSpecName DFB_GATHERED_IND{"gathered_ind"};
+    const DFBSpecName DFB_INTERMED_VAL{"intermed_val"};
+    const DFBSpecName DFB_INTERMED_IND{"intermed_ind"};
+    const DFBSpecName DFB_SOFTMAX_MASK{"softmax_mask"};
+    const DFBSpecName DFB_SOFTMAX_TMP{"softmax_tmp"};
+    const DFBSpecName DFB_REDUCE_SCALAR{"reduce_scalar"};
+    const DFBSpecName DFB_BCAST_SCALER{"bcast_scaler"};
+    const DFBSpecName DFB_FINAL_OUT{"final_out"};
+    const DFBSpecName DFB_DISPATCH{"dispatch"};
+
+    const SemaphoreSpecName SEM_PARTIAL_READY{"partial_ready"};
+    const SemaphoreSpecName SEM_TOPK_READY{"topk_ready"};
+
+    const TensorParamName INPUT{"input"};
+    const TensorParamName WEIGHT{"weight"};
+    const TensorParamName BIAS{"bias"};
+    const TensorParamName INDICES_RM{"indices_rm"};
+    const TensorParamName WEIGHTS_RM{"weights_rm"};
+
+    const auto& input = tensor_args.input_tensor.mesh_tensor();
+    const auto& weight = tensor_args.weight_tensor.mesh_tensor();
+    const auto& bias = tensor_args.bias_tensor.mesh_tensor();
+    const auto& indices_rm = std::get<0>(tensor_return_value).mesh_tensor();
+    const auto& weights_rm = std::get<1>(tensor_return_value).mesh_tensor();
+
+    ProgramSpec spec{.name = "topk_router_gpt"};
 
     auto* device = tensor_args.input_tensor.device();
 
@@ -31,8 +93,13 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
     constexpr uint32_t num_groups = 4;
-    constexpr uint32_t cores_per_group = 3;
-    constexpr uint32_t required_cores = num_groups * cores_per_group;
+    // Wormhole exposes 12 DRAM-aligned workers and uses two senders per
+    // expert group. Blackhole P150 exposes 8, so split each K dimension between
+    // one sender and one worker instead. The rest of the four-group routing
+    // and collection pipeline is identical.
+    const uint32_t cores_per_group = num_cores >= 12 ? 3 : 2;
+    const uint32_t num_senders = cores_per_group - 1;
+    const uint32_t required_cores = num_groups * cores_per_group;
     TT_FATAL(
         num_cores >= required_cores,
         "topk_router_gpt requires at least {} DRAM-aligned cores, got {}",
@@ -51,32 +118,34 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     const uint32_t k_tiles_remainder = total_k_tiles % cores_per_group;
     const uint32_t max_k_tiles = k_tiles_per_core_base + (k_tiles_remainder > 0 ? 1 : 0);
 
-    // CBs used in the topk_router_gpt operation
-    // CB0-CB3 MUST have identical sizes on all cores because the DM1 kernel reads its
-    // own CB2 base address and uses it as the NOC write destination for other cores.
-    // If CB sizes differed between cores, the L1 offsets would diverge silently.
+    // DFBs used in the topk_router_gpt operation
+    // Every DFB MUST sit at the same L1 offset on all cores because the DM1 kernel reads its
+    // own partial_recv (and, on workers, gathered_val / gathered_ind) base address and uses it
+    // as the NOC write destination for other cores. If the layouts differed between cores, the
+    // L1 offsets would diverge silently. Every kernel runs on every core, so every DFB is placed
+    // on all cores and allocated in the order declared below, which keeps the layout uniform.
     /*
-        ------------------------------------------------------------------------------------
-        |     Name           |   CB Index    |   Dtype    | Tile? | Tiles/CB | Cores       |
-        ------------------------------------------------------------------------------------
-        | cb_weight          | CBIndex::c_0  | Float16_b  | true  | max_k    | All         |
-        | cb_input           | CBIndex::c_1  | Float16_b  | true  | max_k    | All         |
-        | cb_partial_recv    | CBIndex::c_2  | Float16_b  | true  | 2        | All         |
-        | cb_local_out       | CBIndex::c_3  | Float16_b  | true  | 1        | All         |
-        | cb_bias            | CBIndex::c_4  | Float16_b  | true  | 1        | Workers     |
-        | cb_index           | CBIndex::c_5  | Float16_b  | true  | 1        | Workers     |
-        | cb_topk_val        | CBIndex::c_6  | Float16_b  | true  | 1        | Workers     |
-        | cb_gathered_val    | CBIndex::c_8  | Float16_b  | true  | 4        | Workers     |
-        | cb_gathered_ind    | CBIndex::c_9  | Float16_b  | true  | 4        | Workers     |
-        | cb_intermed_val    | CBIndex::c_10 | Float16_b  | true  | 2        | Collector   |
-        | cb_intermed_ind    | CBIndex::c_11 | Float16_b  | true  | 1        | Collector   |
-        | cb_softmax_mask    | CBIndex::c_12 | Float16_b  | true  | 1        | Collector   |
-        | cb_softmax_tmp     | CBIndex::c_13 | Float16_b  | true  | 1        | Collector   |
-        | cb_reduce_scalar   | CBIndex::c_14 | Float16_b  | true  | 1        | Collector   |
-        | cb_bcast_scaler    | CBIndex::c_15 | Float16_b  | true  | 1        | Collector   |
-        | cb_final_out       | CBIndex::c_16 | Float16_b  | true  | 2        | Collector   |
-        | cb_dispatch        | CBIndex::c_19 | Float16_b  | false | var      | Collector   |
-        ------------------------------------------------------------------------------------
+        -------------------------------------------------------------------
+        |     Name           |   Dtype    | Tile? | Tiles/DFB | Used on     |
+        -------------------------------------------------------------------
+        | weight             | Float16_b  | true  | max_k     | All         |
+        | input              | Float16_b  | true  | max_k     | All         |
+        | partial_recv       | Float16_b  | true  | senders   | All         |
+        | local_out          | Float16_b  | true  | 1         | All         |
+        | bias               | Float16_b  | true  | 1         | Workers     |
+        | index              | Float16_b  | true  | 1         | Workers     |
+        | topk_val           | Float16_b  | true  | 1         | Workers     |
+        | gathered_val       | Float16_b  | true  | 4         | Workers     |
+        | gathered_ind       | Float16_b  | true  | 4         | Workers     |
+        | intermed_val       | Float16_b  | true  | 2         | Collector   |
+        | intermed_ind       | Float16_b  | true  | 1         | Collector   |
+        | softmax_mask       | Float16_b  | true  | 1         | Collector   |
+        | softmax_tmp        | Float16_b  | true  | 1         | Collector   |
+        | reduce_scalar      | Float16_b  | true  | 1         | Collector   |
+        | bcast_scaler       | Float16_b  | true  | 1         | Collector   |
+        | final_out          | Float16_b  | true  | 2         | Collector   |
+        | dispatch           | Float16_b  | false | var       | Collector   |
+        -------------------------------------------------------------------
     */
 
     // Create optimal ring ordering for NOC1 to minimize traffic conflicts
@@ -97,153 +166,376 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         });
 
     // Map ring positions to group roles
-    const uint32_t collector_ring_pos = 2;
+    const uint32_t collector_ring_pos = num_senders;
     const uint32_t collector_bank_id = ring_pos2bank_id[collector_ring_pos];
     const auto collector_logical = dram_bank2core_coords[collector_bank_id];
     const auto collector_physical = device->worker_core_from_logical_core(collector_logical);
 
-    // Gather core sets by role
-    std::vector<CoreCoord> sender_cores, worker_cores_vec, collector_cores_vec;
-    for (uint32_t ring_pos = 0; ring_pos < required_cores; ring_pos++) {
-        uint32_t bank_id = ring_pos2bank_id[ring_pos];
-        uint32_t pos_in_group = ring_pos % cores_per_group;
-        if (pos_in_group < 2) {
-            sender_cores.push_back(dram_bank2core_coords[bank_id]);
-        } else {
-            worker_cores_vec.push_back(dram_bank2core_coords[bank_id]);
-            if (ring_pos == collector_ring_pos) {
-                collector_cores_vec.push_back(dram_bank2core_coords[bank_id]);
-            }
-        }
-    }
+    push_dfbs(
+        spec,
+        {
+            {DFB_WEIGHT, tt::DataFormat::Float16_b, true, max_k_tiles},
+            {DFB_INPUT, tt::DataFormat::Float16_b, true, max_k_tiles},
+            {DFB_PARTIAL_RECV, tt::DataFormat::Float16_b, true, num_senders},
+            {DFB_LOCAL_OUT, tt::DataFormat::Float16_b, true, 1},
+        });
 
-    auto worker_core_set = tt::tt_metal::CoreRangeSet(worker_cores_vec);
-    auto collector_core_set = tt::tt_metal::CoreRangeSet(collector_cores_vec);
+    // Worker DFBs (includes collector)
+    push_dfbs(
+        spec,
+        {
+            {DFB_BIAS, tt::DataFormat::Float16_b, true, 1},
+            {DFB_INDEX, tt::DataFormat::Float16_b, true, 1},
+            {DFB_TOPK_VAL, tt::DataFormat::Float16_b, true, 1},
+            {DFB_GATHERED_VAL, tt::DataFormat::Float16_b, true, num_groups},
+            {DFB_GATHERED_IND, tt::DataFormat::Float16_b, true, num_groups},
+        });
 
-    // Define CB configuration as tuples: name, CBIndex, DataFormat, is_tile, tiles_per_cb
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> all_core_cb_specs = {
-        {"cb_weight", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, max_k_tiles},
-        {"cb_input", tt::CBIndex::c_1, tt::DataFormat::Float16_b, true, max_k_tiles},
-        {"cb_partial_recv", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 2},
-        {"cb_local_out", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 1},
-    };
+    // Collector-only DFBs
+    push_dfbs(
+        spec,
+        {
+            {DFB_INTERMED_VAL, tt::DataFormat::Float16_b, true, 2},
+            {DFB_INTERMED_IND, tt::DataFormat::Float16_b, true, 1},
+            {DFB_SOFTMAX_MASK, tt::DataFormat::Float16_b, true, 1},
+            {DFB_SOFTMAX_TMP, tt::DataFormat::Float16_b, true, 1},
+            {DFB_REDUCE_SCALAR, tt::DataFormat::Float16_b, true, 1},
+            {DFB_BCAST_SCALER, tt::DataFormat::Float16_b, true, 1},
+            {DFB_FINAL_OUT, tt::DataFormat::Float16_b, true, 2},
+        });
 
-    [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles;
-
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : all_core_cb_specs) {
-        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile);
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
-    }
-
-    // Worker CBs (includes collector)
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> worker_cb_specs = {
-        {"cb_bias", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 1},
-        {"cb_index", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 1},
-        {"cb_topk_val", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 1},
-        {"cb_gathered_val", tt::CBIndex::c_8, tt::DataFormat::Float16_b, true, num_groups},
-        {"cb_gathered_ind", tt::CBIndex::c_9, tt::DataFormat::Float16_b, true, num_groups},
-    };
-
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : worker_cb_specs) {
-        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile);
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, worker_core_set, cb_config);
-    }
-
-    // Collector-only CBs
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> collector_cb_specs = {
-        {"cb_intermed_val", tt::CBIndex::c_10, tt::DataFormat::Float16_b, true, 2},
-        {"cb_intermed_ind", tt::CBIndex::c_11, tt::DataFormat::Float16_b, true, 1},
-        {"cb_softmax_mask", tt::CBIndex::c_12, tt::DataFormat::Float16_b, true, 1},
-        {"cb_softmax_tmp", tt::CBIndex::c_13, tt::DataFormat::Float16_b, true, 1},
-        {"cb_reduce_scalar", tt::CBIndex::c_14, tt::DataFormat::Float16_b, true, 1},
-        {"cb_bcast_scaler", tt::CBIndex::c_15, tt::DataFormat::Float16_b, true, 1},
-        {"cb_final_out", tt::CBIndex::c_16, tt::DataFormat::Float16_b, true, 2},
-    };
-
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : collector_cb_specs) {
-        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile);
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, collector_core_set, cb_config);
-    }
-
-    // CB19: Dispatch scratch (collector only, non-tile)
+    // Dispatch scratch (collector only, non-tile)
     uint32_t k_padded = tt::round_up(operation_attributes.k, 8);
     uint32_t dispatch_scratch_size = 2 * tile_hw * k_padded * 2;
-    {
-        const auto cb_config =
-            tt::tt_metal::CircularBufferConfig(dispatch_scratch_size, {{tt::CBIndex::c_19, tt::DataFormat::Float16_b}})
-                .set_page_size(tt::CBIndex::c_19, dispatch_scratch_size);
-        cb_handles["cb_dispatch"] = tt::tt_metal::CreateCircularBuffer(program, collector_core_set, cb_config);
-    }
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = DFB_DISPATCH,
+        .entry_size = dispatch_scratch_size,
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    });
 
-    // Create compile args for the program
-    const auto tensors =
-        std::vector<const Tensor*>{&tensor_args.input_tensor, &tensor_args.weight_tensor, &tensor_args.bias_tensor};
-
-    std::vector<uint32_t> compile_args;
-    for (const auto& tensor : tensors) {
-        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
-    }
-    // Output tensor accessors (indices_rm and weights_rm)
-    tt::tt_metal::TensorAccessorArgs(*std::get<0>(tensor_return_value).buffer()).append_to(compile_args);
-    tt::tt_metal::TensorAccessorArgs(*std::get<1>(tensor_return_value).buffer()).append_to(compile_args);
+    // Tensors: inputs are read by dm0, outputs written by dm1.
+    spec.tensor_parameters = {
+        {.unique_id = INPUT, .spec = input.tensor_spec()},
+        {.unique_id = WEIGHT, .spec = weight.tensor_spec()},
+        {.unique_id = BIAS, .spec = bias.tensor_spec()},
+        {.unique_id = INDICES_RM, .spec = indices_rm.tensor_spec()},
+        {.unique_id = WEIGHTS_RM, .spec = weights_rm.tensor_spec()},
+    };
 
     const uint32_t tile_size_bf16 = tt::tile_size(tt::DataFormat::Float16_b);
 
-    std::unordered_map<std::string, uint32_t> named_compile_time_args = {
+    const KernelSpec::CompileTimeArgs named_compile_time_args = {
         {"num_cores", num_cores},
         {"num_groups", num_groups},
         {"cores_per_group", cores_per_group},
-        {"collector_physical_x", collector_physical.x},
-        {"collector_physical_y", collector_physical.y},
+        {"num_senders", num_senders},
+        {"collector_physical_x", static_cast<uint32_t>(collector_physical.x)},
+        {"collector_physical_y", static_cast<uint32_t>(collector_physical.y)},
         {"topk_k", operation_attributes.k},
         {"k_padded", k_padded},
         {"n_tiles", n_tiles},
         {"tile_size_bf16", tile_size_bf16},
     };
 
-    // Create kernels for the program
-    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/dm0.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
+    // Shared runtime-arg schema across all 3 kernels (each reads only what it needs).
+    const KernelSpec::RuntimeArgSchema runtime_arg_schema = {
+        .runtime_arg_names =
+            {
+                "dram_bank_id",
+                "vchannel",
+                "is_sender",
+                "is_worker",
+                "is_collector",
+                "num_k_tiles",
+                "k_tile_offset",
+                "n_tile_id",
+                "worker_phys_x",
+                "worker_phys_y",
+                "sender_slot",
+                "worker_gather_slot",
+            },
+    };
 
-    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/dm1.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
+    // Create kernels for the program.  Pushed dm0, dm1, compute; all three read the same
+    // per-core runtime-arg block set below.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = DM0,
+        .source = "ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/dm0.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O2},
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = DFB_WEIGHT,
+                    .accessor_name = "weight",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_INPUT,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_BIAS,
+                    .accessor_name = "bias",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "input",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = WEIGHT,
+                    .accessor_name = "weight",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = BIAS,
+                    .accessor_name = "bias",
+                },
+            },
+        .compile_time_args = named_compile_time_args,
+        .runtime_arg_schema = runtime_arg_schema,
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    });
 
-    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/compute.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi2,
-            .fp32_dest_acc_en = true,
-            .dst_full_sync_en = false,
-            .bfp8_pack_precise = false,
-            .math_approx_mode = false,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = DM1,
+        .source = "ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/dm1.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O2},
+        .dfb_bindings =
+            {
+                // Senders peek partial_recv's write pointer as the NOC destination on their worker;
+                // workers fill it (FIFO producer) from the senders' NOC writes.
+                DFBBinding{
+                    .dfb_spec_name = DFB_PARTIAL_RECV,
+                    .accessor_name = "partial_recv",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_LOCAL_OUT,
+                    .accessor_name = "local_out",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                // index: dm1 both generates the index tile and reads it back, so it is its sole toucher.
+                DFBBinding{
+                    .dfb_spec_name = DFB_INDEX,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_INDEX,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_TOPK_VAL,
+                    .accessor_name = "topk_val",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                // Non-collector workers peek gathered_val / gathered_ind's write pointer as the NOC
+                // destination on the collector; the collector fills them (FIFO producer).
+                DFBBinding{
+                    .dfb_spec_name = DFB_GATHERED_VAL,
+                    .accessor_name = "gathered_val",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_GATHERED_IND,
+                    .accessor_name = "gathered_ind",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_SOFTMAX_MASK,
+                    .accessor_name = "softmax_mask",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_BCAST_SCALER,
+                    .accessor_name = "bcast_scaler",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_FINAL_OUT,
+                    .accessor_name = "final_out",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                // dispatch: dm1-only scratch for the row-major outputs.
+                DFBBinding{
+                    .dfb_spec_name = DFB_DISPATCH,
+                    .accessor_name = "dispatch",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_DISPATCH,
+                    .accessor_name = "dispatch",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_PARTIAL_READY,
+                    .accessor_name = "partial_ready",
+                },
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_TOPK_READY,
+                    .accessor_name = "topk_ready",
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INDICES_RM,
+                    .accessor_name = "indices_rm",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = WEIGHTS_RM,
+                    .accessor_name = "weights_rm",
+                },
+            },
+        .compile_time_args = named_compile_time_args,
+        .runtime_arg_schema = runtime_arg_schema,
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    });
 
-    // Create semaphores
-    const uint32_t sem_partial_ready = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-    const uint32_t sem_topk_ready = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/compute.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = DFB_WEIGHT,
+                    .accessor_name = "weight",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_INPUT,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_PARTIAL_RECV,
+                    .accessor_name = "partial_recv",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_LOCAL_OUT,
+                    .accessor_name = "local_out",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_BIAS,
+                    .accessor_name = "bias",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_TOPK_VAL,
+                    .accessor_name = "topk_val",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_GATHERED_VAL,
+                    .accessor_name = "gathered_val",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_GATHERED_IND,
+                    .accessor_name = "gathered_ind",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                // intermed_val / intermed_ind / softmax_tmp / reduce_scalar are compute-internal
+                // staging buffers: compute both packs into them and unpacks from them.
+                DFBBinding{
+                    .dfb_spec_name = DFB_INTERMED_VAL,
+                    .accessor_name = "intermed_val",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_INTERMED_VAL,
+                    .accessor_name = "intermed_val",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_INTERMED_IND,
+                    .accessor_name = "intermed_ind",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_INTERMED_IND,
+                    .accessor_name = "intermed_ind",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_SOFTMAX_MASK,
+                    .accessor_name = "softmax_mask",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_SOFTMAX_TMP,
+                    .accessor_name = "softmax_tmp",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_SOFTMAX_TMP,
+                    .accessor_name = "softmax_tmp",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_REDUCE_SCALAR,
+                    .accessor_name = "reduce_scalar",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_REDUCE_SCALAR,
+                    .accessor_name = "reduce_scalar",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_BCAST_SCALER,
+                    .accessor_name = "bcast_scaler",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DFB_FINAL_OUT,
+                    .accessor_name = "final_out",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .compile_time_args = named_compile_time_args,
+        .runtime_arg_schema = runtime_arg_schema,
+        .hw_config =
+            ComputeHardwareConfig{
+                .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi2,
+                .sfpu_precision_mode = Precision::Precise,
+                .enable_32_bit_dest = true,
+                .double_buffer_dest = true,
+            },
+    });
+
+    // Create semaphores. dm1 signals them remotely (sender -> worker, worker -> collector) and
+    // waits on them locally, so they live on every core.
+    spec.semaphores = {
+        SemaphoreSpec{
+            .unique_id = SEM_PARTIAL_READY,
+            .target_nodes = all_cores,
+        },
+        SemaphoreSpec{
+            .unique_id = SEM_TOPK_READY,
+            .target_nodes = all_cores,
+        },
+    };
+
+    spec.work_units = {
+        WorkUnitSpec{
+            .name = "main",
+            .kernels = {DM0, DM1, COMPUTE},
+            .target_nodes = all_cores,
+        },
+    };
 
     // VChannel computation with conflict avoidance
     std::vector<uint32_t> vchannels;
@@ -263,37 +555,15 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         vchannels.push_back(vchannel);
     }
 
-    // Dispatch output addresses
-    uint32_t indices_rm_addr = std::get<0>(tensor_return_value).buffer()->address();
-    uint32_t weights_rm_addr = std::get<1>(tensor_return_value).buffer()->address();
-    uint32_t dispatch_aligned_page_size = std::get<0>(tensor_return_value).buffer()->aligned_page_size();
-
     // Set the runtime arguments for the kernels
-    // Shared layout across all 3 kernels (each reads only what it needs):
-    //   [0]  dram_bank_id       [1]  vchannel
-    //   [2]  weight_addr        [3]  input_addr         [4]  bias_addr
-    //   [5]  sem_partial_ready  [6]  is_sender           [7]  is_worker
-    //   [8]  is_collector       [9]  num_k_tiles         [10] k_tile_offset
-    //   [11] n_tile_id          [12] worker_phys_x       [13] worker_phys_y
-    //   [14] sender_slot        [15] worker_gather_slot   [16] sem_topk_ready
-    //   [17] indices_rm_addr    [18] weights_rm_addr      [19] aligned_page_size
-    std::vector<uint32_t> runtime_args(20, 0);
-    runtime_args[2] = tensor_args.weight_tensor.buffer()->address();
-    runtime_args[3] = tensor_args.input_tensor.buffer()->address();
-    runtime_args[4] = tensor_args.bias_tensor.buffer()->address();
-    runtime_args[5] = sem_partial_ready;
-    runtime_args[16] = sem_topk_ready;
-    runtime_args[17] = indices_rm_addr;
-    runtime_args[18] = weights_rm_addr;
-    runtime_args[19] = dispatch_aligned_page_size;
-
-    std::vector<CoreCoord> configured_cores;
-    configured_cores.reserve(required_cores);
-
+    // Shared across all 3 kernels (each reads only what it needs). The five tensor addresses
+    // are tensor bindings and the two semaphores are semaphore bindings, so the framework
+    // patches the addresses on a cache hit. Everything else derives from the tensor specs and
+    // the device's DRAM bank assignment, all of which a cache hit reproduces.
+    KernelRunArgs::RuntimeArgValues runtime_arg_values;
     for (uint32_t ring_pos = 0; ring_pos < required_cores; ring_pos++) {
         uint32_t bank_id = ring_pos2bank_id[ring_pos];
         const auto& core = dram_bank2core_coords[bank_id];
-        configured_cores.push_back(core);
 
         uint32_t group_id = ring_pos / cores_per_group;
         uint32_t pos_in_group = ring_pos % cores_per_group;
@@ -304,64 +574,60 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
             k_tile_offset += k_tiles_per_core_base + (j < k_tiles_remainder ? 1 : 0);
         }
 
-        bool is_sender = (pos_in_group < 2);
-        bool is_worker = (pos_in_group == 2);
+        bool is_sender = (pos_in_group < num_senders);
+        bool is_worker = (pos_in_group == num_senders);
         bool is_collector = (bank_id == collector_bank_id);
 
-        uint32_t worker_ring_pos = (group_id * cores_per_group) + 2;
+        uint32_t worker_ring_pos = (group_id * cores_per_group) + num_senders;
         uint32_t worker_bank_id_val = ring_pos2bank_id[worker_ring_pos];
         const auto worker_physical = device->worker_core_from_logical_core(dram_bank2core_coords[worker_bank_id_val]);
 
-        runtime_args[0] = bank_id;
-        runtime_args[1] = vchannels[bank_id];
-        // [2-4] tensor addresses already set
-        // [5] sem_partial_ready already set
-        runtime_args[6] = is_sender ? 1u : 0u;
-        runtime_args[7] = is_worker ? 1u : 0u;
-        runtime_args[8] = is_collector ? 1u : 0u;
-        runtime_args[9] = k_tiles;
-        runtime_args[10] = k_tile_offset;
-        runtime_args[11] = group_id;  // n_tile_id
-        runtime_args[12] = worker_physical.x;
-        runtime_args[13] = worker_physical.y;
-        runtime_args[14] = pos_in_group;  // sender_slot
-        runtime_args[15] = group_id;      // worker_gather_slot
-        // [16-19] already set
-
-        tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
+        AddRuntimeArgsForNode(
+            runtime_arg_values,
+            core,
+            {
+                {"dram_bank_id", bank_id},
+                {"vchannel", vchannels[bank_id]},
+                {"is_sender", is_sender ? 1u : 0u},
+                {"is_worker", is_worker ? 1u : 0u},
+                {"is_collector", is_collector ? 1u : 0u},
+                {"num_k_tiles", k_tiles},
+                {"k_tile_offset", k_tile_offset},
+                {"n_tile_id", group_id},
+                {"worker_phys_x", static_cast<uint32_t>(worker_physical.x)},
+                {"worker_phys_y", static_cast<uint32_t>(worker_physical.y)},
+                {"sender_slot", pos_in_group},
+                {"worker_gather_slot", group_id},
+            });
     }
 
-    return cached_program_t{
-        std::move(program),
-        TopkRouterGptSharedVariables{
-            .kernel_handles = {dm0_kernel_handle, dm1_kernel_handle, compute_kernel_handle},
-            .worker_cores = std::move(configured_cores)}};
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        KernelRunArgs{
+            .kernel = DM0,
+            .runtime_arg_values = runtime_arg_values,
+        },
+        KernelRunArgs{
+            .kernel = DM1,
+            .runtime_arg_values = runtime_arg_values,
+        },
+        KernelRunArgs{
+            .kernel = COMPUTE,
+            .runtime_arg_values = std::move(runtime_arg_values),
+        },
+    };
+    run_args.tensor_args = {
+        {INPUT, input},
+        {WEIGHT, weight},
+        {BIAS, bias},
+        {INDICES_RM, indices_rm},
+        {WEIGHTS_RM, weights_rm},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
-void TopkRouterGptProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-
-    // Update runtime args for all kernels with new tensor addresses
-    // Runtime args layout: [2] = weight, [3] = input, [4] = bias,
-    //                      [17] = indices_rm, [18] = weights_rm, [19] = aligned_page_size
-    for (const auto& core : shared_variables.worker_cores) {
-        for (const auto& kernel_handle : shared_variables.kernel_handles) {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
-            runtime_args[2] = tensor_args.weight_tensor.buffer()->address();
-            runtime_args[3] = tensor_args.input_tensor.buffer()->address();
-            runtime_args[4] = tensor_args.bias_tensor.buffer()->address();
-            runtime_args[17] = std::get<0>(tensor_return_value).buffer()->address();
-            runtime_args[18] = std::get<1>(tensor_return_value).buffer()->address();
-            runtime_args[19] = std::get<0>(tensor_return_value).buffer()->aligned_page_size();
-        }
-    }
-}
-
-}  // namespace ttnn::operations::experimental::topk_router_gpt::program
+}  // namespace ttnn::operations::experimental::topk_router_gpt

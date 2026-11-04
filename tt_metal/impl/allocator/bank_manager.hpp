@@ -5,15 +5,12 @@
 #pragma once
 
 #include <buffer_types.hpp>
-#include <stdint.h>
-#include <fstream>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <algorithm>
-#include <functional>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
 
@@ -125,6 +122,10 @@ public:
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
     MemoryBlockTable get_memory_block_table(
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
+
+    // Allocated [begin, end) ranges in address order. Unlike extract_state, touching ranges are not coalesced.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_allocated_ranges(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
     void shrink_size(

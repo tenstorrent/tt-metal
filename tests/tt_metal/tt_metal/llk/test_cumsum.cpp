@@ -2,50 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
-#include <fmt/base.h>
-#include <gtest/gtest.h>
 #include <cstdint>
-#include <functional>
-#include <map>
-#include <memory>
-#include <string>
-#include <variant>
+#include <tuple>
+#include <utility>
 #include <vector>
 
+#include <gtest/gtest.h>
+
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "llk_device_fixture.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "impl/program/program_impl.hpp"
+#include "llk_device_fixture.hpp"
+#include "test_golden_impls.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::cumsum {
 
 struct CumsumConfig {
-    int N;
-    int Wt;
-    int Ht;
+    uint32_t N;
+    uint32_t Wt;
+    uint32_t Ht;
     bool rowwise;
 };
 
@@ -74,110 +67,178 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
     return golden;
 }
 
-void run_single_core_cumsum(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CumsumConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshWorkload workload;
-    Program program = tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
+// A flat DRAM-interleaved buffer of `num_tiles` tile-sized pages, bound to the reader/writer as a tensor.
+static TensorSpec make_flat_dram_tensor_spec(uint32_t tile_size, uint32_t num_tiles) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::UINT32, page_config, memory_config);
+    return TensorSpec(Shape{num_tiles, tile_size / static_cast<uint32_t>(sizeof(uint32_t))}, tensor_layout);
+}
 
-    CoreCoord core = {0, 0};
+// Quasar runs the data movement kernels on its 2xx DM cores; everything else uses the 1xx NCRISC/BRISC pair.
+static experimental::DataMovementHardwareConfig make_dm_hw_config(
+    const distributed::MeshDevice& mesh_device, DataMovementProcessor processor, NOC noc) {
+    if (mesh_device.arch() == ARCH::QUASAR) {
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
+    }
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx =
+            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = processor,
+                .noc = noc,
+            },
+    };
+}
 
-    constexpr uint32_t tile_width = 32;
-    constexpr uint32_t tile_height = 32;
+void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumConfig& test_config) {
+    const experimental::NodeCoord node{0, 0};
 
-    constexpr uint32_t single_tile_size = tile_width * tile_height * sizeof(bfloat16);
+    constexpr uint32_t single_tile_size = constants::TILE_HW * sizeof(bfloat16);
+    constexpr uint32_t num_buffer_tiles = 2;
 
-    uint32_t W = test_config.Wt * tile_width;
-    uint32_t H = test_config.Ht * tile_height;
-    uint32_t dram_buffer_size = single_tile_size * test_config.N * test_config.Wt * test_config.Ht;
+    const uint32_t W = test_config.Wt * constants::TILE_WIDTH;
+    const uint32_t H = test_config.Ht * constants::TILE_HEIGHT;
+    const uint32_t HtWt = test_config.Ht * test_config.Wt;
+    const uint32_t num_tiles = test_config.N * HtWt;
+    const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
+    auto in_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(single_tile_size, num_tiles));
+    auto out_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(single_tile_size, num_tiles));
 
-    auto src_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    tt_metal::CircularBufferConfig l1_src_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{0, tt::DataFormat::Float16_b}})
-        .set_page_size(0, single_tile_size);
-    tt_metal::CreateCircularBuffer(program_, core, l1_src_cb_config);
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
-    auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-    tt_metal::CircularBufferConfig l1_dst_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{16, tt::DataFormat::Float16_b}})
-        .set_page_size(16, single_tile_size);
-    tt_metal::CreateCircularBuffer(program_, core, l1_dst_cb_config);
+    experimental::DataflowBufferSpec input_dfb_spec{
+        .unique_id = INPUT_DFB,
+        .entry_size = single_tile_size,
+        .num_entries = num_buffer_tiles,
+        .data_format_metadata = DataFormat::Float16_b,
+    };
+    experimental::DataflowBufferSpec output_dfb_spec{
+        .unique_id = OUTPUT_DFB,
+        .entry_size = single_tile_size,
+        .num_entries = num_buffer_tiles,
+        .data_format_metadata = DataFormat::Float16_b,
+    };
 
-    std::string reader_kernel_name, writer_kernel_name;
-    std::map<std::string, std::string> defines = {};
-    std::vector<uint32_t> compile_args = {};
+    // Columnwise chains cumsum down H, so tiles stream in (and back out) in NWH order. Rowwise transposes each
+    // tile in and out of Dest, so the plain NHW tile order already chains across W.
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
+        .hw_config = make_dm_hw_config(mesh_device, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default),
+    };
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .hw_config = make_dm_hw_config(mesh_device, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
+    };
+    experimental::ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER};
+    experimental::ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER};
+
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
+    uint32_t compute_ht = test_config.Ht;
+    uint32_t compute_wt = test_config.Wt;
 
     if (test_config.rowwise) {
-        reader_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp";
-        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp";
-        compile_args = {test_config.Wt, test_config.Ht, test_config.N};
-        defines["ROWWISE"] = "1";
+        reader_spec.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp";
+        reader_spec.compile_time_args = {{"num_entries_per_producer", num_tiles}, {"implicit_sync", 0}};
+        reader_spec.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+        reader_run_args.runtime_arg_values =
+            experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0}, {"entries_per_core", num_tiles}});
+
+        writer_spec.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp";
+        writer_spec.runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}};
+        writer_run_args.runtime_arg_values =
+            experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}});
+
+        compute_defines.emplace("ROWWISE", "1");
+        std::swap(compute_ht, compute_wt);
     } else {
-        reader_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh.cpp";
-        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_transpose_wh.cpp";
-        compile_args = {test_config.Ht, test_config.Wt, test_config.N};
+        auto make_nwh_args = [&]() {
+            return experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"N", test_config.N}, {"Ht", test_config.Ht}, {"Wt", test_config.Wt}, {"HtWt", HtWt}});
+        };
+
+        reader_spec.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp";
+        reader_spec.runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}};
+        reader_run_args.runtime_arg_values = make_nwh_args();
+
+        writer_spec.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_transpose_wh.cpp";
+        writer_spec.runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}};
+        writer_run_args.runtime_arg_values = make_nwh_args();
     }
 
-    auto reader_kernel = tt_metal::CreateKernel(
-        program_,
-        reader_kernel_name,
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/cumsum.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = compute_defines},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = INPUT_DFB,
+                 .accessor_name = "in",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUTPUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args = {{"Ht", compute_ht}, {"Wt", compute_wt}, {"NC", test_config.N}},
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
 
-    auto writer_kernel = tt_metal::CreateKernel(
-        program_,
-        writer_kernel_name,
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
 
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/cumsum.cpp",
-        core,
-        tt_metal::ComputeConfig{.compile_args = compile_args, .defines = defines});
+    experimental::ProgramSpec spec{
+        .name = "cumsum",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
 
-    tt_metal::SetRuntimeArgs(
-        program_,
-        reader_kernel,
-        core,
-        {
-            (uint32_t)dram_buffer_src_addr,
-            (uint32_t)0,                                                // dram bank id
-            (uint32_t)test_config.N * test_config.Ht * test_config.Wt,  // Used for non transposing kernel
-            (uint32_t)0,                                                // Unused
-            (uint32_t)test_config.N,                                    // Used for transposing kernel
-            (uint32_t)test_config.Ht,                                   // Used for transposing kernel
-            (uint32_t)test_config.Wt,                                   // Used for transposing kernel
-            (uint32_t)test_config.Ht * test_config.Wt                   // Used for transposing kernel
-        });
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    tt_metal::SetRuntimeArgs(
-        program_,
-        writer_kernel,
-        core,
-        {
-            (uint32_t)dram_buffer_dst_addr,
-            (uint32_t)0,                                                // dram bank id
-            (uint32_t)test_config.N * test_config.Ht * test_config.Wt,  // Used for non transposing kernel
-            (uint32_t)0,                                                // Unused
-            (uint32_t)test_config.N,                                    // Used for transposing kernel
-            (uint32_t)test_config.Ht,                                   // Used for transposing kernel
-            (uint32_t)test_config.Wt,                                   // Used for transposing kernel
-            (uint32_t)test_config.Ht * test_config.Wt                   // Used for transposing kernel
-        });
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {reader_run_args, writer_run_args, {.kernel = COMPUTE}};
+    params.tensor_args = {
+        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+    };
+    experimental::SetProgramRunArgs(program, params);
 
-    std::vector<bfloat16> input = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, dram_buffer_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+    // Fixed seed so a failure reproduces across runs.
+    constexpr uint32_t kRandomSeed = 0x1234;
+    std::vector<bfloat16> input =
+        generate_uniform_random_vector<bfloat16>(-1.0f, 1.0f, dram_buffer_size / sizeof(bfloat16), kRandomSeed);
 
     std::vector<bfloat16> golden = gold_cumsum(input, {test_config.N, W, H}, test_config.rowwise);
     auto golden_packed = pack_vector<uint32_t, bfloat16>(golden);
@@ -186,13 +247,12 @@ void run_single_core_cumsum(
     auto input_packed_tilized =
         ::unit_tests::compute::gold_standard_tilize(input_packed, {test_config.N * test_config.Ht, test_config.Wt});
 
-    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, input_packed_tilized, /*blocking=*/true);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input_packed_tilized);
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> output_packed_tilized;
-    distributed::EnqueueReadMeshBuffer(cq, output_packed_tilized, dst_dram_buffer, /*blocking=*/true);
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output_packed_tilized);
     auto output_packed = ::unit_tests::compute::gold_standard_untilize(
         output_packed_tilized, {test_config.N * test_config.Ht, test_config.Wt});
 
@@ -202,27 +262,39 @@ void run_single_core_cumsum(
         output_packed, golden_packed, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.01f); });
     ASSERT_TRUE(result);
 }
+
+// Every (N, Wt, Ht) in [1, 3]^3. The Quasar emulator is too slow for the full sweep, so there it runs a subset that
+// still covers a single tile, the carry chain across Ht, several Wt columns and several batches.
+std::vector<CumsumConfig> make_sweep(ARCH arch, bool rowwise) {
+    std::vector<CumsumConfig> configs;
+    if (arch == ARCH::QUASAR) {
+        for (const auto& [n, wt, ht] :
+             std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>{{1, 1, 1}, {1, 1, 3}, {1, 3, 1}, {2, 2, 2}}) {
+            configs.push_back({.N = n, .Wt = wt, .Ht = ht, .rowwise = rowwise});
+        }
+        return configs;
+    }
+    for (uint32_t n = 1; n <= 3; n++) {
+        for (uint32_t wt = 1; wt <= 3; wt++) {
+            for (uint32_t ht = 1; ht <= 3; ht++) {
+                configs.push_back({.N = n, .Wt = wt, .Ht = ht, .rowwise = rowwise});
+            }
+        }
+    }
+    return configs;
+}
+
 }  // namespace unit_tests::compute::cumsum
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeCumsumColumnwise) {
-    for (int i = 1; i <= 3; i++) {
-        for (int j = 1; j <= 3; j++) {
-            for (int k = 1; k <= 3; k++) {
-                unit_tests::compute::cumsum::CumsumConfig test_config = {.N = i, .Wt = j, .Ht = k, .rowwise = false};
-                unit_tests::compute::cumsum::run_single_core_cumsum(this->devices_.at(0), test_config);
-            }
-        }
+    for (const auto& test_config : unit_tests::compute::cumsum::make_sweep(this->arch_, /*rowwise=*/false)) {
+        unit_tests::compute::cumsum::run_single_core_cumsum(*this->devices_.at(0), test_config);
     }
 }
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeCumsumRowwise) {
-    for (int i = 1; i <= 3; i++) {
-        for (int j = 1; j <= 3; j++) {
-            for (int k = 1; k <= 3; k++) {
-                unit_tests::compute::cumsum::CumsumConfig test_config = {.N = i, .Wt = j, .Ht = k, .rowwise = true};
-                unit_tests::compute::cumsum::run_single_core_cumsum(this->devices_.at(0), test_config);
-            }
-        }
+    for (const auto& test_config : unit_tests::compute::cumsum::make_sweep(this->arch_, /*rowwise=*/true)) {
+        unit_tests::compute::cumsum::run_single_core_cumsum(*this->devices_.at(0), test_config);
     }
 }
 

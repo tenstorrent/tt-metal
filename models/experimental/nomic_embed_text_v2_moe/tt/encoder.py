@@ -22,13 +22,17 @@ class TtNomicBertEncoder(LightweightModule):
 
     The rotary tables and the additive mask are arguments rather than members: both depend only
     on S, which is the batch's longest sequence and so varies per call, and building them once
-    per forward pass instead of once per block saves 11 repetitions of the same host work.
+    per forward pass instead of once per block saves 11 repetitions of the same host work. The
+    model keeps the tables across forwards (tt.common.RotaryTables).
     """
 
     def __init__(self, device, config, tt_config, state_dict, state_dict_prefix="encoder."):
         super().__init__()
         # The trailing dot is part of the prefix, as it is for every module here. Inserting the
         # separator instead would make "encoder." build "encoder..layers.0." and raise KeyError.
+        # The last block's output leaves the model and outlives the forward: in L1 it would sit
+        # under ops that plan L1 as free, so it goes to DRAM whatever its size.
+        last = config.num_hidden_layers - 1
         self.layers = [
             TtNomicBertBlock(
                 device,
@@ -37,6 +41,7 @@ class TtNomicBertEncoder(LightweightModule):
                 state_dict,
                 f"{state_dict_prefix}layers.{idx}.",
                 moe=config.is_moe_layer(idx),
+                output_memory_config=ttnn.DRAM_MEMORY_CONFIG if idx == last else None,
             )
             for idx in range(config.num_hidden_layers)
         ]
@@ -51,7 +56,7 @@ class TtNomicBertEncoder(LightweightModule):
 
         Args:
             hidden_states: (B, 1, S, H) post-embedding input.
-            rot_mats: (cos, sin), each (1, 1, S, D).
+            rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
             attn_mask: (B, 1, S, S) additive mask, or None.
 
         Returns:

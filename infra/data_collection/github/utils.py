@@ -703,7 +703,7 @@ def create_json_with_github_benchmark_environment(
     git_branch_name = os.environ["GITHUB_REF_NAME"]
 
     assert "GITHUB_RUN_ID" in os.environ
-    github_pipeline_id = os.environ["GITHUB_RUN_ID"]
+    github_pipeline_id = int(os.environ["GITHUB_RUN_ID"])
 
     github_pipeline_link = f"https://github.com/{git_repo_name}/actions/runs/{github_pipeline_id}"
 

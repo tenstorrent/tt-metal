@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import comp_allclose, is_wormhole_b0
 from tests.ttnn.unit_tests.operations.test_utils import (
     check_dim,
     compute_kernel_ids,
@@ -455,6 +455,44 @@ def test_moreh_norm_rank_1_dim_0(p, keepdim, device, is_linalg_vector_norm):
     )
 
 
+@pytest.mark.parametrize("p", [2.0, 3.0])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_backward_rank_1_dim_0(p, device, is_linalg_vector_norm):
+    """Regression test for #57475 item 4: moreh_norm_backward's need_bcast_dim vector is sized
+    from input_grad's rank, so a rank-1 input_grad (this dim=0 norm over a 1-D tensor) made the
+    factory read ht_need_bcast one element past the end of that vector.
+
+    check_dim/run_moreh_norm_backward skip keepdim=False + dim=0 on a rank-1 shape (a rank-1
+    tensor's only dim is also its last dim), so this bypasses them and calls torch_norm/ttnn_norm
+    directly, mirroring test_moreh_norm_rank_1_dim_0's forward-only equivalent.
+    """
+    torch.manual_seed(2024)
+    torch_input, torch_output_grad = make_torch_tensors([5], 0, keepdim=False)
+    _, expected_input_grad = torch_norm(
+        torch_input,
+        torch_output_grad,
+        p=p,
+        dim=0,
+        keepdim=False,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+        do_backward=True,
+    )
+    _, actual_input_grad = ttnn_norm(
+        torch_input,
+        torch_output_grad,
+        p=p,
+        dim=0,
+        keepdim=False,
+        device=device,
+        do_backward=True,
+        dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+    )
+    passing, out = comp_allclose(expected_input_grad.reshape(-1), actual_input_grad.reshape(-1), rtol=0.06, atol=0.06)
+    logger.info(f"input_grad's {out}")
+    assert passing
+
+
 @pytest.mark.parametrize("p", [2.0, 0.0, float("inf"), float("-inf")])
 @pytest.mark.parametrize("dim", [[], None], ids=["global_norm(dim=[])", "global_norm(dim=None)"])
 @pytest.mark.parametrize("keepdim", [True, False])
@@ -773,3 +811,62 @@ def test_moreh_norm_backward_callback(dim_rtol_atol, keepdim, device, is_linalg_
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+@pytest.mark.parametrize("p", [0.5, 1.0, 2.0, 4.0, 5.0])
+def test_moreh_norm_backward_zero_elements(device, p):
+    x = torch.tensor([[0.0, 0.0, 0.0], [0.0, 3.0, 4.0]], dtype=torch.bfloat16, requires_grad=True)
+    dy = torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16)
+
+    y = torch.linalg.vector_norm(x, ord=p, dim=1, keepdim=True)
+    y.backward(dy)
+    expected_dx = x.grad
+
+    tt_x = ttnn.from_torch(x.detach(), device=device, layout=ttnn.TILE_LAYOUT)
+    tt_y = ttnn.from_torch(y.detach(), device=device, layout=ttnn.TILE_LAYOUT)
+    tt_dy = ttnn.from_torch(dy, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_dx = ttnn.operations.moreh.norm_backward(tt_x, tt_y, tt_dy, p=p, dim=1, keepdim=True)
+    res_dx = ttnn.to_torch(tt_dx)
+
+    assert torch.isfinite(res_dx).all()
+    assert (res_dx[0] == 0.0).all()
+    assert res_dx[1, 0] == 0.0
+    assert torch.allclose(res_dx[1, 1:], expected_dx[1, 1:], rtol=1e-1, atol=1e-1)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [
+        ([1, 1, 32, 32], 3),
+        ([2, 3, 64, 64], 2),
+        ([2, 3, 64, 64], 3),
+        ([2, 3, 64, 64], [2, 3]),
+        ([1, 1, 64, 100], 3),
+        ([45, 22], 1),
+        ([3, 4, 5, 17, 22], 3),
+        ([3, 4, 5, 17, 22], [3, 4]),
+    ],
+)
+@pytest.mark.parametrize("p", [2.0, 3.0])
+def test_moreh_norm_backward_keepdim_false_last_dims(input_shape, dim, p, device):
+    """keepdim=False over one of the last two dims, with output_grad shaped as torch gives it (the reduced dims
+    dropped)."""
+    torch.manual_seed(2024)
+    torch_input = torch.rand(input_shape).bfloat16().float().requires_grad_()
+    torch_output = torch.linalg.vector_norm(torch_input, ord=p, dim=dim, keepdim=False)
+    torch_output_grad = torch.rand(torch_output.shape).bfloat16().float()
+    torch_output.backward(torch_output_grad)
+    expected = torch_input.grad
+
+    ttnn_input = ttnn.from_torch(torch_input.detach(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.operations.moreh.norm(ttnn_input, p=p, dim=dim, keepdim=False)
+    ttnn_output_grad = ttnn.from_torch(torch_output_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_grad = ttnn.operations.moreh.norm_backward(
+        ttnn_input, ttnn_output, ttnn_output_grad, p=p, dim=dim, keepdim=False
+    )
+    actual = ttnn.to_torch(ttnn_input_grad).float()
+
+    assert actual.shape == expected.shape
+    tolerance = 0.05 * expected.abs().max() + 0.05 * expected.abs()
+    assert ((actual - expected).abs() <= tolerance).all()

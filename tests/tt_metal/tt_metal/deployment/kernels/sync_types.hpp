@@ -5,7 +5,7 @@
 #ifndef SYNC_TYPES_H
 #define SYNC_TYPES_H
 
-typedef std::atomic_flag spinlock;
+using spinlock = std::atomic_flag;
 
 struct barrier {
     uint32_t total_threads;

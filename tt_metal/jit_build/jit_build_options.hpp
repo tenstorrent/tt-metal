@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <cstddef>
-#include <map>
 #include <optional>
 #include <string>
 #include <vector>

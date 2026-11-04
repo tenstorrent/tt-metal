@@ -44,10 +44,6 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 namespace ttnn::graph::test {
 
 struct BufferTestParam {
@@ -768,6 +764,17 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
             ASSERT_TRUE(params.contains(ttnn::graph::kShape));
             ASSERT_TRUE(params.contains(ttnn::graph::kTensorId));
 
+            // Device tensors record a buffer type even without a backing buffer; host tensors record none
+            ASSERT_TRUE(params.contains(ttnn::graph::kStorageType));
+            const auto storage_type = params.at(ttnn::graph::kStorageType).get<std::string>();
+            if (storage_type == "DEVICE") {
+                EXPECT_TRUE(params.contains(ttnn::graph::kBufferType));
+                EXPECT_TRUE(params.contains(ttnn::graph::kMemoryConfig));
+            } else {
+                EXPECT_EQ(storage_type, "HOST");
+                EXPECT_FALSE(params.contains(ttnn::graph::kBufferType));
+            }
+
             // Check for extended tensor info
             if (params.contains(ttnn::graph::kDtype)) {
                 found_tensor_with_full_info = true;
@@ -800,6 +807,43 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
 
     EXPECT_TRUE(found_tensor_with_full_info)
         << "Expected at least one tensor node with full info (dtype, layout, etc.)";
+}
+
+// A device tensor without a backing buffer still records the buffer type its memory config declares
+TEST_P(TensorInfoTest, DeallocatedDeviceTensorKeepsBufferType) {
+    auto run_mode = GetParam();
+
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    auto tensor = ttnn::create_device_tensor(tensor_spec, device_);
+    tensor.deallocate(/*force=*/true);
+    ASSERT_FALSE(tensor.is_allocated());
+
+    nlohmann::json trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(run_mode);
+        // Report the tensor as an input the way operations do; no operation accepts a deallocated tensor
+        const auto& deallocated = tensor;
+        tt::tt_metal::GraphTracker::instance().track_function_start("probe", deallocated);
+        tt::tt_metal::GraphTracker::instance().track_function_end();
+        trace = capture.end_graph_capture();
+    }
+
+    const auto node = std::find_if(trace.begin(), trace.end(), [&](const nlohmann::json& n) {
+        return n.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeTensor &&
+               n.at(ttnn::graph::kParams).at(ttnn::graph::kTensorId).get<std::uint64_t>() == tensor.tensor_id;
+    });
+    ASSERT_NE(node, trace.end()) << "Expected a tensor node for the deallocated tensor";
+
+    const auto& params = node->at(ttnn::graph::kParams);
+    EXPECT_EQ(params.at(ttnn::graph::kStorageType), "DEVICE");
+    EXPECT_TRUE(params.contains(ttnn::graph::kMemoryConfig));
+    EXPECT_FALSE(params.contains(ttnn::graph::kAddress));
+    EXPECT_EQ(params.at(ttnn::graph::kBufferType).get<int>(), static_cast<int>(tt::tt_metal::BufferType::L1));
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Stage 2 of 3 -- Semantic Tokens -> Mel Spectrogram (~0.42 GB FP32).
+# Verified: Conformer encoder 6 blocks / 8 heads / d_k 64 (tests/pcc/test_flow_encoder.py:76);
+# 10 Euler steps; 16 ResnetBlock1D + 64 BasicTransformerBlock (tt/flow/estimator.py:21).
+
+direction: down
+
+classes: {
+  host: { style: { fill: "#f6f8fa"; stroke: "#8b949e"; stroke-dash: 4; font-color: "#57606a" } }
+  dev: { style: { fill: "#eef6ff"; stroke: "#0969da" } }
+  onnx: { shape: hexagon; style: { fill: "#fff8c5"; stroke: "#9a6700" } }
+}
+
+from_llm: "← Stage 1: LLM" { style: { fill: "#f6f8fa"; stroke: "#8b949e" } }
+
+from_host: "From the host front-end" {
+  class: host
+  st: "speech_tokenizer_v1.onnx" { class: onnx }
+  cp: "campplus.onnx" { class: onnx }
+}
+
+flow: "2. Semantic Tokens → Mel Spectrogram\n~0.42 GB FP32" {
+  class: dev
+
+  token_embedding: "Token embedding\n4096 × 512"
+
+  encoder: "Conformer encoder\n6 blocks · 8 heads · d=512" {
+    class: dev
+    blocks: "6 × Conformer blocks"
+    projection: "512 → 80"
+    blocks -> projection
+  }
+
+  regulator: "Length regulator" {
+    class: dev
+    resample: "Token rate → mel rate"
+    out: "80-channel mel representation"
+    resample -> out
+  }
+
+  speaker80: "Speaker embedding\n192 → 80"
+
+  condition: "Prompt conditioning" {
+    class: dev
+    prompt_mel: "Prompt mel"
+    zeros: "Zero padding\nfor generated region"
+    prompt_mel -> zeros
+  }
+
+  cfm: "Conditional Flow Matching" {
+    class: dev
+    noise: "Initial noise z\n[frames × 80]"
+    solver: "10-step Euler solver"
+    unet: "UNet estimator\n16 ResNet + 64 Transformer blocks"
+    noise -> solver
+    solver -> unet
+    unet -> solver: "×10"
+  }
+
+  mel: "Mel spectrogram\n80 channels"
+
+  token_embedding -> encoder
+  encoder -> regulator
+  regulator -> cfm.solver
+  speaker80 -> cfm.solver: "speaker condition"
+  condition -> cfm.solver: "prompt condition"
+  cfm.unet -> mel
+}
+
+from_llm -> flow.token_embedding: "semantic token IDs"
+from_host.cp -> flow.speaker80: "x-vector"
+from_host.st -> flow.condition.prompt_mel: "prompt audio features"
+
+to_voc: "→ Stage 3: HiFTNet vocoder" { style: { fill: "#f6f8fa"; stroke: "#8b949e" } }
+flow.mel -> to_voc: "mel spectrogram"

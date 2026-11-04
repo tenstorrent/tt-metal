@@ -1,0 +1,12 @@
+{
+  "_comment": "gh-aw compiler version each agentic workflow is compiled with. Read by .github/scripts/utils/update_agentic_workflows.py. Deliberately NOT part of actions-lock.json: gh-aw's own `compile` rewrites that file's entries block (and drops any keys it doesn't recognize, including this one) whenever the compiling version differs from what's currently recorded there — confirmed by a real CI failure where compiling a v0.86.2 workflow while actions-lock.json still said v0.89.21 silently stripped this data. A workflow missing here falls back to actions-lock.json's entries.*.version. See copilot-setup-steps.yml for why these are split: the three copilot-loop workflows moved to v0.89.21 for the enforced required-labels fix on resolve-pull-request-review-thread; the other six are still on v0.86.2.",
+  "ci-failure-triage": "v0.86.2",
+  "issue-monster": "v0.89.21",
+  "mattpocock-skills-reviewer": "v0.86.2",
+  "pr-sous-chef": "v0.89.21",
+  "repo-assist": "v0.86.2",
+  "silencer": "v0.86.2",
+  "squad-plan": "v0.89.21",
+  "tenstorrent-skills-reviewer": "v0.86.2",
+  "test-command": "v0.86.2"
+}

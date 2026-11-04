@@ -4,12 +4,14 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <set>
 #include <cstdint>
+#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include "device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -21,8 +23,7 @@ namespace tt::tt_metal {
 class DramSubchannelHelperFixture : public BlackholeSingleCardFixture {};
 
 TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
-    auto mesh_device = devices_[0];
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->get_device_ids()[0]);
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(this->device().get_device_ids()[0]);
 
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
@@ -56,7 +57,7 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
         const CoreCoord expected_logical =
             soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank), static_cast<int>(expected_free));
         const CoreCoord picked_logical =
-            mesh_device->impl().pick_unused_dram_logical_core(mesh_device->get_devices()[0], bank);
+            this->device().impl().pick_unused_dram_logical_core(this->device().impl().get_devices()[0], bank);
         EXPECT_EQ(picked_logical, expected_logical) << "Mismatch for bank " << bank;
 
         tt::umd::CoreCoord picked_coord = soc_desc.get_dram_core_for_channel(
@@ -74,7 +75,7 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
 // runtime.
 TEST_F(DramSubchannelHelperFixture, LogicalSubchannelOrderFollowsEndpointRole) {
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
 
     const uint32_t num_banks = soc_desc.get_num_dram_views();
@@ -128,8 +129,8 @@ TEST_F(DramSubchannelHelperFixture, LogicalSubchannelOrderFollowsEndpointRole) {
 // table orders each view's NOC0 worker endpoint first, so returning the UMD coord resolved onto the
 // syseng-owned NOC0 endpoint for every view whose worker_endpoint[0] is not subchannel 0.
 TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet) {
-    auto mesh_device = devices_[0];
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->get_device_ids()[0]);
+    const auto device_id = this->device().get_device_ids()[0];
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
     const auto& cluster = MetalContext::instance().get_cluster();
 
     const auto translated_cores = soc_desc.get_metal_dram_cores(tt::CoordSystem::TRANSLATED);
@@ -155,8 +156,8 @@ TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet
     std::set<std::pair<size_t, size_t>> resolved;
     for (const auto& logical_core : logical_cores) {
         // The conversion watcher and any other logical-coord consumer goes through.
-        const CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-            mesh_device->get_device_ids()[0], logical_core, CoreType::DRAM);
+        const CoreCoord virtual_core =
+            cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::DRAM);
         EXPECT_FALSE(noc0_endpoints.contains({virtual_core.x, virtual_core.y}))
             << "LOGICAL core " << logical_core.str() << " resolved to NOC0 worker endpoint (" << virtual_core.x << ", "
             << virtual_core.y << ")";
@@ -168,11 +169,84 @@ TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet
     EXPECT_EQ(resolved.size(), logical_cores.size()) << "LOGICAL DRAM coords are not distinct after resolution";
 }
 
-TEST_F(DramSubchannelHelperFixture, RejectsOutOfRangeBank) {
+// CI boards run pre-relocation CMFW, so the relocated assignment is only reachable by passing its
+// telemetry word directly.
+namespace {
+
+// GDDR_MRISC_NOC2AXI_PORT per kMriscFwNoc2AxiPort in bh_arc/gddr.c: nibble i is GDDR instance i's port.
+constexpr uint32_t kPreRelocationTelemetry = 0x00000002u;
+constexpr uint32_t kRelocatedTelemetry = 0x00001110u;
+
+constexpr size_t kNumDramChannels = 8;
+
+// {noc0, noc1} subchannel per DRAM channel; eth endpoints match worker endpoints.
+using EndpointTable = std::array<std::array<int, 2>, kNumDramChannels>;
+constexpr EndpointTable kPreRelocationEndpoints = {{{2, 1}, {0, 1}, {0, 1}, {0, 1}, {2, 1}, {2, 1}, {2, 1}, {2, 1}}};
+constexpr EndpointTable kRelocatedEndpoints = {{{0, 2}, {1, 2}, {1, 2}, {1, 2}, {2, 0}, {2, 0}, {2, 0}, {2, 0}}};
+
+}  // namespace
+
+TEST_F(DramSubchannelHelperFixture, MriscTelemetrySelectsMatchingEndpointAssignment) {
     auto mesh_device = devices_[0];
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->get_device_ids()[0]);
+    auto* device = mesh_device->get_devices()[0];
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+
+    if (soc_desc.harvesting_masks.dram_harvesting_mask != 0) {
+        GTEST_SKIP() << "board has harvested DRAM channels; view index is not the physical channel";
+    }
+    ASSERT_EQ(soc_desc.get_num_dram_views(), kNumDramChannels);
+
+    struct Assignment {
+        const char* name;
+        uint32_t telemetry;
+        const EndpointTable& endpoints;
+    };
+    for (const Assignment& assignment :
+         {Assignment{"pre-relocation", kPreRelocationTelemetry, kPreRelocationEndpoints},
+          Assignment{"relocated", kRelocatedTelemetry, kRelocatedEndpoints}}) {
+        SCOPED_TRACE(assignment.name);
+        const metal_SocDescriptor selected(soc_desc, tt::BoardType::UNKNOWN, assignment.telemetry);
+
+        for (size_t channel = 0; channel < kNumDramChannels; ++channel) {
+            const auto& expected = assignment.endpoints.at(channel);
+            const auto& worker_cores = selected.dram_view_worker_cores.at(channel);
+            ASSERT_EQ(worker_cores.size(), expected.size()) << "channel " << channel;
+            for (size_t noc = 0; noc < expected.size(); ++noc) {
+                const tt::umd::CoreCoord expected_core = selected.get_dram_core_for_channel(
+                    static_cast<int>(channel), expected.at(noc), tt::CoordSystem::TRANSLATED);
+                const CoreCoord expected_coord(expected_core.x, expected_core.y);
+                EXPECT_EQ(
+                    selected.get_preferred_worker_core_for_dram_view(
+                        static_cast<int>(channel), static_cast<uint8_t>(noc)),
+                    expected_coord)
+                    << "channel " << channel << " noc" << noc << " did not load subchannel " << expected.at(noc);
+                EXPECT_EQ(worker_cores.at(noc), expected_coord)
+                    << "channel " << channel << " noc" << noc << " worker core";
+                EXPECT_EQ(selected.dram_view_eth_cores.at(channel).at(noc), expected_coord)
+                    << "channel " << channel << " noc" << noc << " eth core";
+            }
+        }
+    }
+
+    const metal_SocDescriptor legacy(soc_desc, tt::BoardType::UNKNOWN, kPreRelocationTelemetry);
+    const metal_SocDescriptor relocated(soc_desc, tt::BoardType::UNKNOWN, kRelocatedTelemetry);
+    EXPECT_NE(legacy.dram_view_worker_cores, relocated.dram_view_worker_cores);
+
+    const metal_SocDescriptor absent(soc_desc, tt::BoardType::UNKNOWN, std::nullopt);
+    EXPECT_EQ(absent.dram_view_worker_cores, legacy.dram_view_worker_cores);
+
+    const uint32_t unknown_port_word = (kPreRelocationTelemetry & ~0xFu) | 0x3u;
+    EXPECT_ANY_THROW(metal_SocDescriptor(soc_desc, tt::BoardType::UNKNOWN, unknown_port_word));
+
+    const uint32_t mixed_word = kRelocatedTelemetry & ~0xF0u;
+    EXPECT_ANY_THROW(metal_SocDescriptor(soc_desc, tt::BoardType::UNKNOWN, mixed_word));
+}
+
+TEST_F(DramSubchannelHelperFixture, RejectsOutOfRangeBank) {
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(this->device().get_device_ids()[0]);
     const uint32_t num_banks = soc_desc.get_num_dram_views();
-    EXPECT_ANY_THROW(mesh_device->impl().pick_unused_dram_logical_core(mesh_device->get_devices()[0], num_banks));
+    EXPECT_ANY_THROW(
+        this->device().impl().pick_unused_dram_logical_core(this->device().impl().get_devices()[0], num_banks));
 }
 
 }  // namespace tt::tt_metal

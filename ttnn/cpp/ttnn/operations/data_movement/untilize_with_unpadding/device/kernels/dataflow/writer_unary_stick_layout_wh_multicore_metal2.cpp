@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: This is the Metal 2.0 fork of writer_unary_stick_layout_wh_multicore.cpp, which lives beside
-// it. Ops ported to Metal 2.0 bind this file; the original serves the consumers still on the legacy
-// API. Until the last of them migrates and the original is retired, changes here likely belong there
-// too.
+// NOTE: This forked writer_unary_stick_layout_wh_multicore.cpp during the Metal 2.0 migration. Its
+// last legacy binder has migrated and the original is retired, so this is the only copy and the
+// _metal2 suffix is historical.
 //
 // The binding names below (dfb::out, tensor::dst) and the named argument set are this fork's
 // interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
@@ -39,30 +38,31 @@ void kernel_main() {
                            std::uint32_t width_size,
                            std::uint32_t size_2d,
                            std::uint32_t single_block_size) {
-        bool has_rows = (num_rows) > 0;
-
-        dfb_out0.wait_front(single_block_size * has_rows);
+        // The compute kernel pushes every sub-block, including those of a tile row that lies entirely
+        // in the height padding (num_rows == 0), so each one is waited for and popped here even when
+        // no row is written. Otherwise the buffer fills and the compute kernel blocks, and on Quasar
+        // the end-of-kernel drain also waits for the unpopped entries.
+        dfb_out0.wait_front(single_block_size);
         std::uint32_t l1_read_addr = dfb_out0.get_read_ptr();
 
-        for (std::uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            std::uint32_t total_size = start_column_id + width_size;
-            std::uint32_t write_size = width_size;
+        // The work split runs over the input padded width.
+        if (start_column_id < unpadded_X_size) {
+            const std::uint32_t total_size = start_column_id + width_size;
+            const std::uint32_t write_size =
+                (total_size > unpadded_X_size) ? (unpadded_X_size - start_column_id) : width_size;
 
-            if (total_size > unpadded_X_size) {
-                std::uint32_t padded_size = total_size - unpadded_X_size;
-                write_size -= padded_size;
+            for (std::uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
+                CoreLocalMem<std::uint32_t> src(l1_read_addr);
+                noc.async_write(
+                    src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
+
+                noc.async_write_barrier();
+
+                l1_read_addr += width_size;
             }
-
-            CoreLocalMem<std::uint32_t> src(l1_read_addr);
-            noc.async_write(
-                src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
-
-            noc.async_write_barrier();
-
-            l1_read_addr += width_size;
         }
 
-        dfb_out0.pop_front(single_block_size * has_rows);
+        dfb_out0.pop_front(single_block_size);
     };
 
     const std::uint32_t width_size = get_arg(args::width_size);
@@ -77,21 +77,24 @@ void kernel_main() {
         std::uint32_t single_sub_block_size_row_arg = get_arg(args::single_sub_block_size_row_arg);
 
         for (std::uint32_t b = 0; b < single_block_size_col_arg; b++) {
+            // The work split walks the input padded height, which can extend past the output height
+            // by one tile row or more. A tile row that starts at or past the output end has no rows
+            // to write.
             std::uint32_t this_block_num_rows = tile_height;
-            if (start_row_id + tile_height > total_num_rows) {
+            if (start_row_id >= total_num_rows) {
+                this_block_num_rows = 0;
+            } else if (start_row_id + tile_height > total_num_rows) {
                 this_block_num_rows = total_num_rows - start_row_id;
             }
             for (std::uint32_t m = 0; m < width_size; m += sub_block_width_size) {
                 std::uint32_t start_column_id_u = start_column_id + m;
-                if (this_block_num_rows > 0) {
-                    write_block(
-                        this_block_num_rows,
-                        start_row_id,
-                        start_column_id_u,
-                        sub_block_width_size,
-                        size_2d,
-                        single_sub_block_size_row_arg);
-                }
+                write_block(
+                    this_block_num_rows,
+                    start_row_id,
+                    start_column_id_u,
+                    sub_block_width_size,
+                    size_2d,
+                    single_sub_block_size_row_arg);
             }
             start_row_id += tile_height;
         }

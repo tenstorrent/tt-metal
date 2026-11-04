@@ -12,11 +12,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE unary_backward_kernels device/kernels/*.cpp)
-
-file(GLOB_RECURSE tanh_bw_kernels tanh_bw/device/kernels/*.cpp)
-
-file(GLOB_RECURSE kernels gelu_bw/device/kernels/*.cpp)
+file(
+    GLOB_RECURSE unary_backward_kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_eltwise_unary_backward
@@ -28,13 +28,23 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${unary_backward_kernels} ${tanh_bw_kernels} ${kernels}
+        FILES ${unary_backward_kernels}
     PRIVATE
         ${TTNN_OP_ELTWISE_UNARY_BACKWARD_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_unary_backward PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(ttnn_op_eltwise_unary_backward PUBLIC TTNN::Core PRIVATE TT::Metalium)
+
+# Each fused backward op registers from its own device/ops/<op>_bw.def, so adding one edits no shared list.
+file(GLOB unary_bw_op_defs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/device/ops/*.def)
+list(SORT unary_bw_op_defs)
+set(unary_bw_ops "")
+foreach(def IN LISTS unary_bw_op_defs)
+    string(APPEND unary_bw_ops "#include \"${def}\"\n")
+endforeach()
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/unary_bw_ops.def.inc CONTENT "${unary_bw_ops}")
+target_include_directories(ttnn_op_eltwise_unary_backward PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 install(
     TARGETS

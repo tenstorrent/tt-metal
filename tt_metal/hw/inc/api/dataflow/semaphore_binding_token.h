@@ -12,8 +12,8 @@
  *        intervention needed. The kernel gets the pick inside its binding token. The pick is
  *        the fastest path that keeps the semaphore's operations atomic.
  *        The cached and NoC tiers are Quasar (tt-2xx) only. Gen1 (Wormhole, Blackhole) DM
- *        bindings always resolve to LOCAL_NONATOMIC; a Blackhole compute binding resolves to
- *        COMPUTE_ATOMIC.
+ *        bindings always resolve to LOCAL_NONATOMIC; a Blackhole or Quasar compute binding
+ *        resolves to COMPUTE_ATOMIC.
  *
  *  - LOCAL_NONATOMIC: Stored in L1 and accessed by read-modify-write. Picked only when at most
  *                     one binder instance exists.
@@ -24,7 +24,7 @@
  *                     in dev_mem_map.h.
  *  - EXTERNAL:        Stored in L1 and accessed through atomic operations via the NOC. Picked
  *                     whenever the semaphore is reachable beyond a single node.
- *  - COMPUTE_ATOMIC:  Blackhole only. The Tensix hardware (Sync Unit) semaphore, updated atomically
+ *  - COMPUTE_ATOMIC:  Blackhole and Quasar. The Tensix hardware (Sync Unit) semaphore, updated atomically
  *                     by SEMPOST/SEMGET. Picked when every binder is a compute kernel (UNPACK <-> PACK
  *                     only, core-local). Rules and limits: api/semaphore.h.
  *
@@ -43,7 +43,7 @@ namespace semaphore_detail {
 
 // Dependent false, so a static_assert in a Semaphore class-template member fires only on instantiation.
 // Defined here (next to SemScope) so the DM and compute Semaphore implementations share one definition.
-template <SemScope>
+template <auto>
 inline constexpr bool always_false = false;
 
 }  // namespace semaphore_detail
@@ -53,10 +53,9 @@ inline constexpr bool always_false = false;
  *
  * Carries everything the host resolved for this binding: the semaphore id and the mechanism
  * its accesses must use. A Semaphore is constructed from the token, which is how the
- * mechanism reaches the kernel as a compile-time property.
+ * mechanism reaches the kernel as a compile-time constant.
  */
-template <std::uint32_t SEM_ID, SemScope SEM_SCOPE>
 struct SemaphoreBindingToken {
-    static constexpr std::uint32_t id = SEM_ID;
-    static constexpr SemScope scope = SEM_SCOPE;
+    std::uint32_t id;
+    SemScope scope;
 };

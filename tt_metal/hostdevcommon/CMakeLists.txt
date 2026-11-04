@@ -14,10 +14,6 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS api
         FILES ${HOSTDEVCOMMON_JIT_API_HEADERS}
-        FILE_SET hostdev_headers
-        TYPE HEADERS
-        BASE_DIRS ${PROJECT_SOURCE_DIR}
-        FILES ${HOSTDEVCOMMON_HOSTDEV_HEADERS}
 )
 
 target_include_directories(ttmetalium_hostdevcommon INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>")
@@ -41,8 +37,4 @@ install(
     FILE_SET
     api
         COMPONENT metalium-dev
-    FILE_SET
-    hostdev_headers
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
-        COMPONENT metalium-runtime
 )

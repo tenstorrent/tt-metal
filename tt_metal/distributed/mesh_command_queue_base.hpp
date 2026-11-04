@@ -8,11 +8,8 @@
 
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 
-#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_target_device.hpp"
-
-#include <tt_stl/assert.hpp>
 
 #include <mutex>
 #include <functional>
@@ -145,7 +142,6 @@ public:
     virtual void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
         const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
         ttsl::Span<const uint32_t> workers_per_sub_device) = 0;
 
@@ -154,8 +150,8 @@ public:
     // target's `address` is the full device destination. Must be called with the
     // MeshDevice api lock already held — unlike the other queue APIs this does NOT
     // re-lock, so the caller can keep the lock across the surrounding sequence (the
-    // Tensor prefetcher's WaitForCq needs the counter bump and the WAIT_CQ enqueue
-    // to be atomic). Fast/slow dispatch perform the write; the dummy (inactive-rank)
+    // Tensor prefetcher's WaitForCq needs its counter bump, this write, and the wait it
+    // queues to be atomic). Fast/slow dispatch perform the write; the dummy (inactive-rank)
     // queue is a no-op.
     virtual void enqueue_write_dram_core_counter(
         ttsl::Span<const DeviceMemoryAddress> targets,
@@ -166,6 +162,8 @@ public:
     virtual void wait_for_completion(bool) {}
     // May only be called after wait_for_completion has been called on both command queues on the device.
     virtual void finish_and_reset_in_use() {}
+    // Rethrows an exception stored by the completion-queue reader thread, if any.
+    virtual void throw_if_reader_failed() {}
 };
 
 }  // namespace tt::tt_metal::distributed

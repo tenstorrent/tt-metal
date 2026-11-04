@@ -8,6 +8,10 @@ General utilities for MiniMax-M3.
 
 from models.common.utility_functions import is_blackhole
 
+# Cache name of the MoE router's correction bias (fp32, mean-centered; tt/topk.py). Distinct from the bf16
+# un-centered "e_score_correction_bias" entry so that one is never loaded in its place.
+ROUTER_BIAS_CACHE_NAME = "e_score_correction_bias_centered"
+
 
 def get_cache_file_name(tensor_cache_path, name):
     return f"{tensor_cache_path}/{name}" if tensor_cache_path else None
@@ -42,6 +46,53 @@ def cache_file_exists(cache_file_name):
         return any(e.startswith(prefix) and e.endswith(".tensorbin") for e in os.listdir(directory))
     except OSError:
         return False
+
+
+def sparse_attention_freq(hf_config):
+    """Per-layer MSA flags (``sparse_attention_config.sparse_attention_freq``, 1 = block-sparse layer: M3
+    layers 3-59), or None when the config has none. ``sparse_attention_config`` may be a dict (gated by
+    ``use_sparse_attention``) or an object. ``Layer``, the weight cache and the KV chunk table's index_k rows
+    all read it here, so they agree on which layers carry an index_k."""
+    cfg = getattr(hf_config, "sparse_attention_config", None)
+    if isinstance(cfg, dict):
+        return cfg.get("sparse_attention_freq") if cfg.get("use_sparse_attention") else None
+    return getattr(cfg, "sparse_attention_freq", None) if cfg is not None else None
+
+
+def is_sparse_attention_layer(hf_config, layer_idx: int) -> bool:
+    """True iff global layer ``layer_idx`` runs MSA block-sparse attention (see ``sparse_attention_freq``)."""
+    freq = sparse_attention_freq(hf_config)
+    return bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
+
+
+def is_dense_mlp_layer(hf_config, layer_idx: int) -> bool:
+    """True iff global layer ``layer_idx`` has a plain dense MLP (``moe_layer_freq[idx] == 0``), else MoE. ``Layer``
+    and the weight cache both read it here."""
+    return hf_config.moe_layer_freq[layer_idx] == 0
+
+
+def _sparse_config_get(hf_config, key):
+    cfg = hf_config.sparse_attention_config
+    return cfg.get(key) if isinstance(cfg, dict) else getattr(cfg, key, None)
+
+
+def msa_params(hf_config) -> dict:
+    """``AttentionConfig`` MSA fields from ``sparse_attention_config`` (no defaults: a missing one is an error)."""
+    params = {
+        "msa_block_size": _sparse_config_get(hf_config, "sparse_block_size"),
+        "msa_topk_blocks": _sparse_config_get(hf_config, "sparse_topk_blocks"),
+        "msa_index_dim": _sparse_config_get(hf_config, "sparse_index_dim"),
+    }
+    missing = [k for k, v in params.items() if v is None]
+    assert not missing, f"sparse_attention_config lacks {missing}"
+    return params
+
+
+def msa_topk_window(hf_config) -> int:
+    """Tokens covered by the MSA top-k selection (sparse_topk_blocks * sparse_block_size). A context at most this
+    long has every block selected, so MSA equals dense causal attention there."""
+    params = msa_params(hf_config)
+    return params["msa_topk_blocks"] * params["msa_block_size"]
 
 
 def get_default_num_links(mesh_device):

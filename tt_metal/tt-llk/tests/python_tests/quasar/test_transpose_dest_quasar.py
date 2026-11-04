@@ -5,6 +5,8 @@ from typing import List
 
 import pytest
 import torch
+from helpers.constraints import is_valid_quasar_dest_mode_conversion
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -16,17 +18,18 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     Transpose,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
+    quasar_mx_smoke,
+    runtime,
     select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -36,7 +39,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
     NUM_BLOCKS,
@@ -50,7 +52,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TILE_DIMENSIONS = [32, 32]
 
@@ -86,24 +88,6 @@ def generate_qsr_transpose_dest_combinations(
         # Float16/Float16_b in Src regs and Float32 in dest reg is unsupported for MOVB2D
         return (DestAccumulation.No,)
 
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
-            out_fmt.is_32_bit()
-            and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
-        if (
-            dest_acc == DestAccumulation.No
-            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and in_fmt != out_fmt
-        ):
-            return False
-        return True
-
     # Curated dimensions: some fit in one bank (no switching), some require
     # multiple blocks (triggering dest bank switches with DstSync.Half).
     # DstSync.Half capacity: 8 tiles (16-bit dest) / 4 tiles (32-bit dest)
@@ -134,7 +118,7 @@ def generate_qsr_transpose_dest_combinations(
         ],
     }
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
     transpose_faces_modes = (Transpose.No, Transpose.Yes)
     combinations = []
     for fmt in formats_list:
@@ -144,7 +128,7 @@ def generate_qsr_transpose_dest_combinations(
             continue
 
         for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+            if is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, dest_acc):
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
                         if is_perf:
@@ -168,7 +152,7 @@ def generate_qsr_transpose_dest_combinations(
                                         dest_acc,
                                         dest_sync,
                                         math_transpose_faces,
-                                        dimensions,
+                                        runtime(dimensions),
                                     )
                                 )
                             continue
@@ -179,34 +163,26 @@ def generate_qsr_transpose_dest_combinations(
                                     dest_acc,
                                     dest_sync,
                                     math_transpose_faces,
-                                    dimensions,
+                                    runtime(dimensions),
                                 )
                             )
 
     return combinations
 
 
-def transpose_dest_implied_math_formats(*, is_perf=False):
-    return (
-        [ImpliedMathFormat.Yes]
-        if is_perf
-        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    )
-
-
 TRANSPOSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+    # The MX pair here is on the output side: the transpose happens inside Dest at
+    # math precision, so the packer re-derives the block exponents from the
+    # post-transpose layout. That interaction is specific to this test -- the pack
+    # test never transposes -- so it is the pair worth keeping.
+) + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxInt8)
 PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
     TRANSPOSE_DEST_FORMATS,
     is_perf=True,
@@ -218,13 +194,11 @@ PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
     formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
-    implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_transpose_dest_quasar(
     formats_dest_acc_sync_transpose_dims,
-    implied_math_format,
     run_types,
     loop_factor,
     *,
@@ -323,9 +297,7 @@ def test_transpose_dest_quasar(
             golden_tensor.to(torch.bfloat16), formats.output_format
         )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -334,7 +306,6 @@ def test_transpose_dest_quasar(
         "test_name": "sources/quasar/transpose_dest_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -391,11 +362,7 @@ def test_transpose_dest_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

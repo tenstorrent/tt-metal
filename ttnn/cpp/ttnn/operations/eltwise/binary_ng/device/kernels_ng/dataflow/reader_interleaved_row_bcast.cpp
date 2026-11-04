@@ -4,11 +4,35 @@
 
 #include <stdint.h>
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+
+#if COL_GROUP_B
+#include <algorithm>
+
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/col_group_walk.hpp"
+#endif
+
+#if B_ROW_WORDS
+// Row 0 of a 32x32 tile: the first rows of faces 0 and 1, held back to back.
+constexpr uint32_t kRowBytes = B_ROW_WORDS * 4;
+constexpr uint32_t kFaceBytes = 16 * kRowBytes;
+
+FORCE_INLINE void copy_row0(uint32_t dst, uint32_t dst_face, uint32_t src, uint32_t src_face) {
+    auto* d0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+    auto* d1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + dst_face);
+    auto* s0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
+    auto* s1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + src_face);
+    for (uint32_t i = 0; i < B_ROW_WORDS; ++i) {
+        d0[i] = s0[i];
+        d1[i] = s1[i];
+    }
+}
+#endif
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -96,6 +120,76 @@ void kernel_main() {
     uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
     uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;
+
+#if COL_GROUP_B
+    // Column groups (0 = page order): each B tile is read once per column and held in c_7.
+    const uint32_t group = get_arg_val<uint32_t>(23);
+    if (group != 0) {
+        CircularBuffer cb_held_b(tt::CBIndex::c_7);
+        cb_held_b.reserve_back(COL_GROUP_B);
+        const uint32_t held = cb_held_b.get_write_ptr();
+        uint32_t held_page[COL_GROUP_B];
+        std::fill_n(held_page, COL_GROUP_B, 0xFFFFFFFF);
+        uint32_t channel = start_tile_id / HtWt;
+        ColGroupWalk walk(start_tile_id % HtWt, Ht, Wt, group);
+        uint32_t a_off = 0, b_off = 0;
+        const auto set_channel = [&](uint32_t ch) {
+            const uint32_t cc = ch % C, nn = ch / C % N, dd = ch / (C * N) % D, ndd = ch / (C * N * D);
+            a_off = ndd * nD_stride + dd * d_stride + nn * n_stride + cc * c_stride;
+            b_off = ndd * nD_stride_b + dd * d_stride_b + nn * n_stride_b + cc * c_stride_b;
+        };
+        set_channel(channel);
+        for (uint32_t i = 0; i < dst_num_tiles; ++i) {
+            const uint32_t tw = walk.tw();
+            const uint32_t b_page = b_off + tw;
+            const bool fetch = held_page[walk.k] != b_page;
+            held_page[walk.k] = b_page;
+            cb_src.reserve_back(onetile);
+            cb_src_b.reserve_back(onetile);
+            noc.async_read(src, cb_src, src_tile_bytes, {.page_id = a_off + walk.th * Wt + tw}, {.offset_bytes = 0});
+#if B_ROW_WORDS
+            // Restore row 0 from c_7 while A's read is in flight.
+            const uint32_t b_tile = cb_src_b.get_write_ptr();
+            const uint32_t slot = held + walk.k * 2 * kRowBytes;
+            if (fetch) {
+                noc.async_read(src_b, cb_src_b, src_tile_bytes_b, {.page_id = b_page}, {.offset_bytes = 0});
+            } else {
+                copy_row0(b_tile, kFaceBytes, slot, kRowBytes);
+            }
+            noc.async_read_barrier();
+            if (fetch) {
+                copy_row0(slot, kRowBytes, b_tile, kFaceBytes);
+            }
+#if !BCAST_LLK
+            FILL_TILE_WITH_FIRST_ROW_B(b_tile);
+#endif
+#else
+            // Block float: hold the whole tile.
+            const uint32_t slot = held + walk.k * src_tile_bytes_b;
+            if (fetch) {
+                noc.async_read(
+                    src_b,
+                    cb_held_b,
+                    src_tile_bytes_b,
+                    {.page_id = b_page},
+                    {.offset_bytes = walk.k * src_tile_bytes_b});
+                noc.async_read_barrier();
+#if !BCAST_LLK
+                FILL_TILE_WITH_FIRST_ROW_B(slot);
+#endif
+            }
+            noc.async_read(CoreLocalMem<uint32_t>(slot), cb_src_b, src_tile_bytes_b, {}, {});
+            noc.async_read_barrier();
+#endif
+            cb_src.push_back(onetile);
+            cb_src_b.push_back(onetile);
+            if (walk.next()) {
+                set_channel(++channel);
+            }
+        }
+        return;
+    }
+#endif
 
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {

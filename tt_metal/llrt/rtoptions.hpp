@@ -20,17 +20,17 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "tt_target_device.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 
 // Forward declarations — full definitions not needed in this header
 namespace tt::tt_metal {
@@ -199,6 +199,9 @@ class RunTimeOptions {
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
+    tt::tt_fabric::MeshId fabric_mesh_id{0};
+    tt::tt_fabric::MeshHostRankId fabric_mesh_host_rank{tt::tt_fabric::MESH_HOST_RANK_UNSET};
+
     // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of the cluster's
     // topology, as opposed to the Physical System Descriptor (PSD) that tooling discovers live from the
     // running hardware. Users supply it via `tt-run --factory-system-descriptor <path>`, which is
@@ -243,7 +246,9 @@ class RunTimeOptions {
     bool profiler_accumulate = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
-    bool profiler_sync_events_enabled = false;
+    bool streaming_profiler_sync_events_enabled = false;
+    bool streaming_profiler_sync_check_enabled = false;
+    bool streaming_profiler_inline_enabled = true;
     // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
     bool streaming_profiler_enabled = false;
@@ -303,6 +308,9 @@ class RunTimeOptions {
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
 
+    std::string noc_att_map_;
+    bool noc_att_specified_ = false;
+
     std::filesystem::path simulator_path = "";
 
     bool fast_dispatch = true;
@@ -313,6 +321,9 @@ class RunTimeOptions {
     // e.g. Store A followed by Load A will be unchanges but Store A followed by Load B may return B before A is written
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
+
+    // Blackhole silicon: BRISC halts on an L1 ECC error and the host reports it.
+    bool disable_l1_ecc_halt = false;
 
     // Enable instruction gathering in Tensix core.
     bool enable_gathering = false;
@@ -337,6 +348,9 @@ class RunTimeOptions {
 
     // presence-based override to force-disable fabric 2-ERISC regardless of defaults
     bool disable_fabric_2_erisc_mode = false;
+
+    // Carry inter-mesh fabric traffic on VC0, with no VC1 (TT_METAL_FABRIC_DISABLE_INTERMESH_VC)
+    bool disable_fabric_intermesh_vc = false;
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
@@ -382,10 +396,13 @@ class RunTimeOptions {
     // Mock cluster initialization using a provided cluster descriptor
     std::string mock_cluster_desc_path;
 
+    // Cluster id handed to UMD topology discovery; unset means UMD uses the OS hostname
+    std::optional<std::string> cluster_id;
+
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
-    // Timeout duration for operations
-    std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
+    // Timeout duration for operations in seconds (0 = off)
+    std::atomic<float> timeout_duration_for_operations = 0.0f;
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
     // Dispatch kernel progress update period in milliseconds (default 100ms)
@@ -410,6 +427,13 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
+    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    bool simulator_serve_over_sockets = false;
+
+    // Use the DRAM size the soc descriptor declares on the emulator models that back less
+    // (TT_METAL_SIMULATOR_DRAM_UNCAPPED=1).
+    bool simulator_dram_uncapped = false;
+
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
 
@@ -423,9 +447,6 @@ class RunTimeOptions {
     // User override for fabric kernel compiler optimization level
     // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
     std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
-
-    // Disable XIP dump
-    bool disable_xip_dump = false;
 
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
@@ -694,6 +715,12 @@ public:
             compile_hash_str += "_blaze_runtime_reload_";
             compile_hash_str += get_brisc_firmware_header();
         }
+        // Each ATT map gets its own JIT build directory so toggling ATT does not rebuild the non-ATT
+        // tree. Appended only when a map is selected so non-ATT cache keys stay unchanged.
+        if (!noc_att_map_.empty()) {
+            compile_hash_str += "_att:";
+            compile_hash_str += noc_att_map_;
+        }
         return compile_hash_str;
     }
 
@@ -720,7 +747,9 @@ public:
     }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
-    bool get_profiler_sync_events_enabled() const { return profiler_sync_events_enabled; }
+    bool get_streaming_profiler_sync_events_enabled() const { return streaming_profiler_sync_events_enabled; }
+    bool get_streaming_profiler_sync_check_enabled() const { return streaming_profiler_sync_check_enabled; }
+    bool get_streaming_profiler_inline_enabled() const { return streaming_profiler_inline_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
@@ -797,6 +826,8 @@ public:
     bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
+    // Callers also check for Blackhole; the option is arch-agnostic.
+    bool get_l1_ecc_halt_enabled() const { return !this->disable_l1_ecc_halt; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
     std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
@@ -808,6 +839,19 @@ public:
         return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
     }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
+    // The simulator directory name: the last component of TT_METAL_SIMULATOR, trailing '/' ignored.
+    // Empty unless the simulator target is selected.
+    std::string get_simulator_name() const {
+        if (!get_simulator_enabled()) {
+            return {};
+        }
+        std::string simulator = simulator_path.string();
+        while (simulator.size() > 1 && simulator.back() == '/') {
+            simulator.pop_back();
+        }
+        return std::filesystem::path(simulator).filename().string();
+    }
+    bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
@@ -820,18 +864,31 @@ public:
     // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
     bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
 
+    // Quasar ATT map selected for device NoC traffic (TT_METAL_NOC_ATT); nullopt = plain XY addressing.
+    std::optional<std::string_view> get_noc_att_map() const {
+        if (noc_att_map_.empty()) {
+            return std::nullopt;
+        }
+        return std::string_view(noc_att_map_);
+    }
+    // True when TT_METAL_NOC_ATT was set explicitly.
+    bool is_noc_att_specified() const { return noc_att_specified_; }
+    void set_noc_att_map(std::string map) { noc_att_map_ = std::move(map); }
+
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
     uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
     bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 
     // Presence-based override to force-disable fabric 2-ERISC
     bool get_disable_fabric_2_erisc_mode() const { return disable_fabric_2_erisc_mode; }
+
+    // Inter-mesh fabric traffic on VC0, with no VC1
+    bool get_disable_fabric_intermesh_vc() const { return disable_fabric_intermesh_vc; }
 
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
@@ -848,6 +905,11 @@ public:
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    // TT_MESH_ID / TT_MESH_HOST_RANK. Mesh 0 / MESH_HOST_RANK_UNSET (resolved by the topology mapper) unless the
+    // launcher assigned this process a binding.
+    tt::tt_fabric::MeshId get_fabric_mesh_id() const { return fabric_mesh_id; }
+    tt::tt_fabric::MeshHostRankId get_fabric_mesh_host_rank() const { return fabric_mesh_host_rank; }
 
     // Factory System Descriptor (FSD) path. Empty when unset.
     bool has_factory_system_descriptor_path() const { return !factory_system_descriptor_path.empty(); }
@@ -906,6 +968,11 @@ public:
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
+    // Cluster id to stamp on the discovered cluster descriptor. Nullopt on bare metal, where UMD
+    // falls back to the OS hostname; set from TT_METAL_CLUSTER_ID in a container or a VM, where the
+    // hostname names the container or the guest rather than the accelerator group.
+    const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
+
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
@@ -962,7 +1029,12 @@ public:
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
-    std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    std::chrono::duration<float> get_timeout_duration_for_operations() const {
+        return std::chrono::duration<float>(timeout_duration_for_operations.load(std::memory_order_relaxed));
+    }
+    void set_timeout_duration_for_operations(std::chrono::duration<float> timeout) {
+        timeout_duration_for_operations.store(timeout.count(), std::memory_order_relaxed);
+    }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
 
@@ -982,6 +1054,11 @@ public:
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
+    bool get_simulator_serve_over_sockets() const { return simulator_serve_over_sockets; }
+    void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
+
+    bool get_simulator_dram_uncapped() const { return simulator_dram_uncapped; }
+
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
@@ -990,8 +1067,6 @@ public:
     void set_fabric_kernel_opt_level(std::optional<tt_metal::KernelBuildOptLevel> opt_level) {
         fabric_kernel_opt_level = opt_level;
     }
-
-    bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     bool get_dump_build_commands() const { return dump_build_commands; }
 

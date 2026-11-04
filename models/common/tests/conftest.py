@@ -121,6 +121,24 @@ def pytest_collection_modifyitems(config, items):
         config.hook.pytest_deselected(items=deselected)
 
 
+# UMD PCIe hang / board-off-bus. Matched on the invariant tail of:
+#   Read 0xffffffff over PCIe ID 13: the board should be reset.
+# Same class as sweeps_runner._DEVICE_FATAL_SIGNATURES — do not skip these as
+# "device unavailable" or coverage fail-under will fire after host-only tests.
+_DEVICE_FATAL_SIGNATURES = (
+    "the board should be reset",
+    "0xffffffff",
+    "pciehang",
+)
+
+
+def _is_device_fatal_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` indicates a hung board that needs a reset."""
+    msg = str(exc).lower()
+    name = type(exc).__name__.lower()
+    return any(sig in msg or sig in name for sig in _DEVICE_FATAL_SIGNATURES)
+
+
 @pytest.fixture(scope="module")
 def ttnn_mesh_device(request):
     """Create and yield a mesh device for a given mesh shape, cleanup on teardown."""
@@ -147,10 +165,12 @@ def ttnn_mesh_device(request):
             pytest.skip(f"{__file__}: mesh_shape is required: {e}")
 
     # Pre-check: if no devices at all, skip without invoking C++ open.
-    # Some environments can throw here (e.g. transient driver/UMD issues); treat as "device unavailable".
+    # Transient driver/UMD issues are "device unavailable"; a hung PCIe bus is not.
     try:
         num_pcie = ttnn.get_num_pcie_devices()
     except Exception as e:
+        if _is_device_fatal_error(e):
+            pytest.fail(f"{__file__}: Device hung / needs reset, not a test skip: {e}")
         pytest.skip(f"{__file__}: Unable to query TT devices on this system: {e}")
 
     if isinstance(num_pcie, int) and num_pcie == 0:
@@ -225,8 +245,9 @@ def ttnn_mesh_device(request):
         except Exception as e:
             # Focused BH qualification nodes are required gates. Exceptions raised by the test body
             # cross the fixture's ``yield`` and must remain failures rather than becoming skips.
-            # Retain the legacy skip behavior for non-opted-in WH tests.
-            if blackhole_selected:
+            # A hung PCIe bus is likewise not a skip: later coverage fail-under would hide it.
+            # Retain the legacy skip behavior for other non-opted-in WH errors.
+            if blackhole_selected or _is_device_fatal_error(e):
                 raise
             pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
         finally:

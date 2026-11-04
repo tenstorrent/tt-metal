@@ -46,8 +46,12 @@ constexpr auto kReaderKernelPath =
 constexpr uint32_t kMetadataBytes = 16;  // CB page size (16B L1 alignment floor); only 4B (element [0]) is read
 
 // Metadata-path-only names (everything else comes from rope_metal2).
-const DFBSpecName META_DFB{"meta"};
+const ScratchpadSpecName META_SCRATCH{"meta"};
 const TensorParamName METADATA_PARAM{"metadata"};
+const TensorParamName CONCAT_PREFIX_PARAM{"concat_prefix"};
+// row_major_output only: the prefix tiles the reader hands compute, and the untilized rows compute hands the writer.
+const DFBSpecName PREFIX_DFB{"prefix"};
+const DFBSpecName ROWS_DFB{"rows"};
 
 uint32_t axis_extent(const distributed::MeshDeviceView& mesh_view, uint32_t axis) {
     return axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -120,11 +124,36 @@ void validate_runtime_args(
             name,
             tile.get_height(),
             tile.get_width());
+        TT_FATAL(
+            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+            "rotary_embedding_indexed requires ordinary face order for {}",
+            name);
     };
     require_standard_tile(input, "input");
     require_standard_tile(cos, "cos");
     require_standard_tile(tensor_args.sin, "sin");
     require_standard_tile(tensor_args.trans_mat, "trans_mat");
+    if (tensor_args.concat_prefix.has_value()) {
+        const auto& prefix = *tensor_args.concat_prefix;
+        require_standard_tile(prefix, "concat_prefix");
+        TT_FATAL(
+            prefix.storage_type() == StorageType::DEVICE && prefix.is_allocated(), "concat_prefix must be on device");
+        TT_FATAL(prefix.device() == input.device(), "concat_prefix must be on the input device");
+        TT_FATAL(prefix.dtype() == input.dtype(), "concat_prefix dtype must match input");
+        TT_FATAL(prefix.logical_shape().rank() == 4, "concat_prefix must be rank 4");
+        for (uint32_t dim = 0; dim < 3; ++dim) {
+            TT_FATAL(
+                prefix.logical_shape()[dim] == input.logical_shape()[dim],
+                "concat_prefix leading shape must match input");
+            // The writer indexes both inputs with the input tensor's physical row stride.
+            TT_FATAL(
+                prefix.padded_shape()[dim] == input.padded_shape()[dim],
+                "concat_prefix padded leading shape must match input");
+        }
+        TT_FATAL(prefix.logical_shape()[-1] % TILE_WIDTH == 0, "concat_prefix width must be tile-aligned");
+        TT_FATAL(
+            prefix.padded_shape()[-1] == prefix.logical_shape()[-1], "concat_prefix width must not have extra padding");
+    }
 
     if (tensor_args.metadata.has_value()) {
         // Metadata path: kv_actual_global is read on-device from element [0] of the metadata tensor, so
@@ -134,7 +163,7 @@ void validate_runtime_args(
         // without this guard a uint32-then-bf16 sequence would silently reuse the cached program.
         const auto& metadata = tensor_args.metadata.value();
         TT_FATAL(metadata.storage_type() == StorageType::DEVICE, "metadata must be on device");
-        TT_FATAL(metadata.buffer() != nullptr, "metadata must be allocated in a buffer on device");
+        TT_FATAL(metadata.is_allocated(), "metadata must be allocated in a buffer on device");
         TT_FATAL(metadata.device() == input.device(), "metadata must be on the same device as input");
         TT_FATAL(
             metadata.dtype() == DataType::UINT32,
@@ -199,10 +228,10 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
 
     // Every operand is bound as a tensor parameter and accessed on the input's mesh device, so all
     // must be allocated and live on that same device.
-    TT_FATAL(input.buffer() != nullptr, "input must be allocated in a buffer on device");
-    TT_FATAL(cos.buffer() != nullptr, "cos must be allocated in a buffer on device");
-    TT_FATAL(sin.buffer() != nullptr, "sin must be allocated in a buffer on device");
-    TT_FATAL(trans_mat.buffer() != nullptr, "trans_mat must be allocated in a buffer on device");
+    TT_FATAL(input.is_allocated(), "input must be allocated in a buffer on device");
+    TT_FATAL(cos.is_allocated(), "cos must be allocated in a buffer on device");
+    TT_FATAL(sin.is_allocated(), "sin must be allocated in a buffer on device");
+    TT_FATAL(trans_mat.is_allocated(), "trans_mat must be allocated in a buffer on device");
     TT_FATAL(cos.device() == input.device(), "cos must be on the same device as input");
     TT_FATAL(sin.device() == input.device(), "sin must be on the same device as input");
     TT_FATAL(trans_mat.device() == input.device(), "trans_mat must be on the same device as input");
@@ -246,6 +275,39 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t input_seq = input_shape[-2];
     TT_FATAL(input_seq % TILE_HEIGHT == 0, "input seq dim ({}) must be tile-aligned", input_seq);
+    if (args.row_major_output) {
+        TT_FATAL(
+            tensor_args.concat_prefix.has_value(), "rotary_embedding_indexed row_major_output needs concat_prefix");
+        TT_FATAL(
+            args.rotary_offset == 0 && args.rotary_dim == input_shape[-1],
+            "rotary_embedding_indexed row_major_output needs the input rotated across its whole width (rotary_offset "
+            "{}, rotary_dim {}, input width {})",
+            args.rotary_offset,
+            args.rotary_dim,
+            input_shape[-1]);
+        TT_FATAL(
+            tensor_args.concat_prefix->padded_shape()[-1] % args.rotary_dim == 0,
+            "rotary_embedding_indexed row_major_output needs a concat_prefix width ({}) that is a multiple of "
+            "rotary_dim ({})",
+            tensor_args.concat_prefix->padded_shape()[-1],
+            args.rotary_dim);
+        TT_FATAL(
+            input.dtype() == DataType::BFLOAT16,
+            "rotary_embedding_indexed row_major_output needs a bfloat16 input, got {}",
+            input.dtype());
+        // The writer writes every padded row, one full-width row per output page.
+        TT_FATAL(
+            input.logical_shape() == input_shape &&
+                tensor_args.concat_prefix->logical_shape() == tensor_args.concat_prefix->padded_shape(),
+            "rotary_embedding_indexed row_major_output needs an unpadded input and concat_prefix (input {} padded to "
+            "{})",
+            input.logical_shape(),
+            input_shape);
+        TT_FATAL(
+            args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "rotary_embedding_indexed row_major_output needs an interleaved output, got {}",
+            args.output_mem_config.memory_layout());
+    }
 
     validate_runtime_args(args, tensor_args);
 }
@@ -262,9 +324,21 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_hit(
 RotaryEmbeddingIndexedDeviceOperation::spec_return_value_t RotaryEmbeddingIndexedDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
+    auto output_shape = input.logical_shape();
+    if (tensor_args.concat_prefix.has_value()) {
+        ttsl::SmallVector<uint32_t> dims;
+        for (uint32_t i = 0; i < output_shape.rank(); ++i) {
+            dims.push_back(output_shape[i]);
+        }
+        dims.back() += tensor_args.concat_prefix->logical_shape()[-1];
+        output_shape = ttnn::Shape(dims);
+    }
     return tt::tt_metal::TensorSpec(
-        input.logical_shape(),
-        tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(input.layout()), args.output_mem_config));
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            input.dtype(),
+            tt::tt_metal::PageConfig(args.row_major_output ? Layout::ROW_MAJOR : input.layout()),
+            args.output_mem_config));
 }
 
 RotaryEmbeddingIndexedDeviceOperation::tensor_return_value_t
@@ -292,6 +366,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     // mesh adapter already folds into the workload hash via the target coordinates.
     auto hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
         tensor_args.metadata.has_value(),
+        tensor_args.concat_prefix.has_value(),
         args.cluster_axis,
         args.seq_subshard_axis,
         args.rotary_dim,
@@ -299,10 +374,14 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         args.rotary_offset,
         args.compute_kernel_config,
         args.output_mem_config,
+        args.row_major_output,
         tensor_args.input.tensor_spec(),
         tensor_args.cos.tensor_spec(),
         tensor_args.sin.tensor_spec(),
         tensor_args.trans_mat.tensor_spec());
+    if (tensor_args.concat_prefix.has_value()) {
+        hash = ttsl::hash::hash_objects(hash, tensor_args.concat_prefix->tensor_spec());
+    }
     if (tensor_args.metadata.has_value()) {
         // metadata is an optional TensorParameter, compared just as strictly when it is present.
         hash = ttsl::hash::hash_objects(hash, tensor_args.metadata->tensor_spec());
@@ -322,6 +401,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     const auto& trans_mat = tensor_args.trans_mat.mesh_tensor();
     const auto& out = output.mesh_tensor();
     const bool has_metadata = tensor_args.metadata.has_value();
+    const bool has_concat_prefix = tensor_args.concat_prefix.has_value();
 
     auto* mesh_device = tensor_args.input.device();
 
@@ -340,6 +420,9 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     const uint32_t n_heads = input.padded_shape()[1];
     const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t input_head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
+    const uint32_t prefix_head_dim_t =
+        has_concat_prefix ? tensor_args.concat_prefix->mesh_tensor().padded_shape()[3] / TILE_WIDTH : 0;
+    const uint32_t output_head_dim_t = input_head_dim_t + prefix_head_dim_t;
     const uint32_t head_dim_t = args.rotary_dim / TILE_WIDTH;
     const uint32_t rotary_offset_t = args.rotary_offset / TILE_WIDTH;
     const uint32_t cos_seq_len_t = cos.padded_shape()[2] / TILE_HEIGHT;
@@ -436,20 +519,36 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             .entry_size = output_single_tile_size,
             .num_entries = num_output_tiles,
             .data_format_metadata = output_cb_data_format},
-        DataflowBufferSpec{
-            .unique_id = ZERO_DFB,
-            .entry_size = output_single_tile_size,
-            .num_entries = std::max(1u, input_head_dim_t - head_dim_t),
-            .data_format_metadata = output_cb_data_format},
     };
-    if (has_metadata) {
+
+    const bool row_major_output = args.row_major_output;
+    if (row_major_output) {
+        // Two tile rows of each, so the reader and writer overlap compute.
+        constexpr uint32_t buffered_tile_rows = 2;
+        // Without reload, compute waits for all of a core's sin/cos rows before it takes any prefix, and the reader
+        // pushes each row's sin/cos after that row's prefix, so the prefix buffer holds all of them.
+        const uint32_t prefix_tile_rows =
+            use_reload_impl ? buffered_tile_rows : std::max(buffered_tile_rows, num_sin_cos_rows_per_core);
         dfbs.push_back(DataflowBufferSpec{
-            .unique_id = META_DFB,
-            .entry_size = kMetadataBytes,
-            .num_entries = 1,
-            .data_format_metadata = tt::DataFormat::UInt32});
+            .unique_id = PREFIX_DFB,
+            .entry_size = input_single_tile_size,
+            .num_entries = prefix_tile_rows * prefix_head_dim_t,
+            .data_format_metadata = input_cb_data_format});
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = ROWS_DFB,
+            .entry_size = output_single_tile_size,
+            .num_entries = buffered_tile_rows * output_head_dim_t,
+            .data_format_metadata = output_cb_data_format});
     }
 
+    std::vector<ScratchpadSpec> scratchpads = {
+        ScratchpadSpec{
+            .unique_id = ZERO_SCRATCH,
+            .size_per_node = output_single_tile_size * std::max(1u, prefix_head_dim_t + input_head_dim_t - head_dim_t)},
+    };
+    if (has_metadata) {
+        scratchpads.push_back(ScratchpadSpec{.unique_id = META_SCRATCH, .size_per_node = kMetadataBytes});
+    }
     // ------------------------------------------------------------------ tensor parameters
     std::vector<TensorParameter> tensor_params = {
         TensorParameter{.unique_id = INPUT_PARAM, .spec = input.tensor_spec()},
@@ -462,12 +561,25 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         tensor_params.push_back(
             TensorParameter{.unique_id = METADATA_PARAM, .spec = tensor_args.metadata->mesh_tensor().tensor_spec()});
     }
+    // Bind input as the zero-width prefix fallback, so the writer can select its
+    // path from prefix_Wt without a kernel preprocessor branch.
+    const auto& prefix = has_concat_prefix ? tensor_args.concat_prefix->mesh_tensor() : input;
+    tensor_params.push_back(TensorParameter{.unique_id = CONCAT_PREFIX_PARAM, .spec = prefix.tensor_spec()});
 
-    const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config =
+        ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        // Quasar sets the same common fields (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from TT-1.x.x and not yet optimized for Quasar.
+        compute_hw_config = ComputeHardwareConfig{
+            .fpu_math_fidelity = math_fidelity,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+        };
+    }
 
-    const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
-    KernelSpec::CompilerOptions::Defines reader_defines = reload_define;
+    const KernelSpec::CompilerOptions::Defines kernel_defines{
+        {"RELOAD_IMPL", use_reload_impl ? "1" : "0"}, {"ROW_MAJOR_OUTPUT", row_major_output ? "1" : "0"}};
+    KernelSpec::CompilerOptions::Defines reader_defines = kernel_defines;
     if (has_metadata) {
         reader_defines.emplace("HAS_METADATA", "1");
     }
@@ -486,12 +598,16 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         TensorBinding{.tensor_parameter_name = SIN_PARAM, .accessor_name = "sin"},
         TensorBinding{.tensor_parameter_name = TRANS_MAT_PARAM, .accessor_name = "trans_mat"},
     };
+    if (row_major_output) {
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = PREFIX_DFB, .accessor_name = "prefix", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_tensors.push_back(
+            TensorBinding{.tensor_parameter_name = CONCAT_PREFIX_PARAM, .accessor_name = "concat_prefix"});
+    }
+    // meta is a reader-private staging region (fill + read back), so it is a Scratchpad, not a self-loop DFB.
+    std::vector<ScratchpadBinding> reader_scratchpads;
     if (has_metadata) {
-        // meta scratch CB is a single-toucher (reader fills + reads it) → self-loop.
-        reader_dfbs.push_back(
-            DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::PRODUCER});
-        reader_dfbs.push_back(
-            DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::CONSUMER});
+        reader_scratchpads.push_back(ScratchpadBinding{.scratchpad_spec_name = META_SCRATCH, .accessor_name = "meta"});
         reader_tensors.push_back(TensorBinding{.tensor_parameter_name = METADATA_PARAM, .accessor_name = "metadata"});
     }
 
@@ -506,6 +622,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         .source = std::filesystem::path{kReaderKernelPath},
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings = reader_dfbs,
+        .scratchpad_bindings = reader_scratchpads,
         .tensor_bindings = reader_tensors,
         .compile_time_args =
             {{"n_heads", n_heads},
@@ -521,43 +638,49 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"my_sp_coord", my_sp_coord},
              {"sp_factor", sp_factor},
              {"chunk_local_t", full_sp_slab_tiles(tensor_args.input, mesh_view, args.seq_subshard_axis)},
-             {"query_offset_t", seq_len_t * subshard_coord}},
+             {"query_offset_t", seq_len_t * subshard_coord},
+             {"prefix_Wt", prefix_head_dim_t}},
         .runtime_arg_schema = reader_schema,
-        .hw_config = create_reader_datamovement_config(mesh_device->arch())};
+        .hw_config = create_reader_datamovement_config()};
 
     // ------------------------------------------------------------------ indexed writer + reused llama compute
     TT_FATAL(
         rotary_seq_len_t == seq_len_t,
         "Indexed RoPE writer requires compute to produce rotary tiles for every input row");
+    // Row-major output hands the writer untilized rows instead of the rotated tiles.
+    const DFBBinding writer_output_binding =
+        row_major_output
+            ? DFBBinding{.dfb_spec_name = ROWS_DFB, .accessor_name = "rows", .endpoint_type = DFBEndpointType::CONSUMER}
+            : DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER};
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/kernels/dataflow/"
             "writer_rotary_embedding_indexed.cpp",
-        .compiler_options = {.defines = reload_define},
-        .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
-             // Borrow the shared zero-buffer slot for writer-only passthrough scratch.
-             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "copy", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = ZERO_DFB, .accessor_name = "copy", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .compiler_options = {.defines = kernel_defines},
+        .dfb_bindings = {writer_output_binding},
+        // Reuse the shared "zero" scratchpad slot for the writer-only passthrough-tile staging.
+        .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = ZERO_SCRATCH, .accessor_name = "copy"}},
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"},
-             TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"}},
+             TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
+             TensorBinding{.tensor_parameter_name = CONCAT_PREFIX_PARAM, .accessor_name = "concat_prefix"}},
         .compile_time_args =
             {{"n_heads", n_heads},
              {"Wt", head_dim_t},
              {"Ht", seq_len_t},
              {"input_Wt", input_head_dim_t},
-             {"rotary_offset_t", rotary_offset_t}},
+             {"rotary_offset_t", rotary_offset_t},
+             {"prefix_Wt", prefix_head_dim_t},
+             {"output_Wt", output_head_dim_t}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}},
-        .hw_config = create_writer_datamovement_config(mesh_device->arch())};
+        .hw_config = create_writer_datamovement_config()};
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = kComputeSource,
-        .compiler_options = {.defines = reload_define, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = kernel_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
@@ -593,10 +716,20 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
                  .dfb_spec_name = SIN_INTERM_DFB,
                  .accessor_name = "sin_interm",
                  .endpoint_type = DFBEndpointType::CONSUMER}},
-        .compile_time_args = {{"Wt", head_dim_t}, {"rotary_Ht", rotary_seq_len_t}},
+        .compile_time_args = {{"Wt", head_dim_t}, {"rotary_Ht", rotary_seq_len_t}, {"prefix_Wt", prefix_head_dim_t}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "n_heads"}},
         .hw_config = compute_hw_config};
+
+    if (row_major_output) {
+        // Compute also consumes its rotated tiles (untilizing them with the prefix) and produces the rows.
+        compute_spec.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_spec.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = PREFIX_DFB, .accessor_name = "prefix", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_spec.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = ROWS_DFB, .accessor_name = "rows", .endpoint_type = DFBEndpointType::PRODUCER});
+    }
 
     // ------------------------------------------------------------------ per-node runtime args
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
@@ -671,6 +804,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         .name = "rotary_embedding_indexed",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = dfbs,
+        .scratchpads = scratchpads,
         .tensor_parameters = tensor_params,
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
 
@@ -685,6 +819,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     if (has_metadata) {
         run_args.tensor_args.emplace(METADATA_PARAM, TensorArgument{tensor_args.metadata->mesh_tensor()});
     }
+    run_args.tensor_args.emplace(CONCAT_PREFIX_PARAM, TensorArgument{prefix});
 
     auto program = MakeProgramFromSpec(*mesh_device, spec);
     SetProgramRunArgs(program, run_args);
@@ -732,6 +867,11 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
         reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
         run_args.kernel_run_args = {reader_run};
     }
+    run_args.tensor_args.emplace(
+        CONCAT_PREFIX_PARAM,
+        TensorArgument{
+            tensor_args.concat_prefix.has_value() ? tensor_args.concat_prefix->mesh_tensor()
+                                                  : tensor_args.input.mesh_tensor()});
 
     // All stamped programs declare identical tensor specs and runtime schemas; only my_sp_coord
     // differs. Validate this update once, then refresh every program's bindings without repeating
@@ -759,7 +899,9 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<uint32_t>& seq_subshard_axis,
     const std::optional<uint32_t>& rotary_dim,
-    uint32_t rotary_offset) {
+    uint32_t rotary_offset,
+    const std::optional<ttnn::Tensor>& concat_prefix,
+    bool row_major_output) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::
         RotaryEmbeddingIndexedDeviceOperation;
 
@@ -784,9 +926,15 @@ ttnn::Tensor rotary_embedding_indexed(
         .rotary_offset = rotary_offset,
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
+        .row_major_output = row_major_output,
     };
     auto tensor_args = OperationType::tensor_args_t{
-        .input = input, .cos = cos, .sin = sin, .trans_mat = trans_mat, .metadata = metadata};
+        .input = input,
+        .cos = cos,
+        .sin = sin,
+        .trans_mat = trans_mat,
+        .metadata = metadata,
+        .concat_prefix = concat_prefix};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 

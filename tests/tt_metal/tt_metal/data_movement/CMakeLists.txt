@@ -25,7 +25,7 @@ set_target_properties(
 )
 
 # Let dm_common.cpp see kEmuleAsanBuild=true so it registers its raw-L1 scratch
-# extent with the emule OOB sanitizer (see dm_common.cpp / SANITIZER_CHECKS.md).
+# extent with the emule OOB sanitizer (see dm_common.cpp).
 # PRIVATE on the metal lib, so the test target must opt in explicitly.
 if(TT_METAL_USE_EMULE)
     target_compile_definitions(unit_tests_data_movement PRIVATE TT_METAL_USE_EMULE=1)

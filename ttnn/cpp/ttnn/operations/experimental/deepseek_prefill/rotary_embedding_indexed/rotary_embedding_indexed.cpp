@@ -20,7 +20,9 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<uint32_t>& seq_subshard_axis,
     const std::optional<uint32_t>& rotary_dim,
-    uint32_t rotary_offset) {
+    uint32_t rotary_offset,
+    const std::optional<ttnn::Tensor>& concat_prefix,
+    bool row_major_output) {
     return ttnn::prim::rotary_embedding_indexed(
         input,
         cos,
@@ -33,7 +35,9 @@ ttnn::Tensor rotary_embedding_indexed(
         compute_kernel_config,
         seq_subshard_axis,
         rotary_dim,
-        rotary_offset);
+        rotary_offset,
+        concat_prefix,
+        row_major_output);
 }
 
 // Tensor form: kv_actual_global is a 1-element uint32 DRAM tensor read on-device (element [0]); the
@@ -49,7 +53,9 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<uint32_t>& seq_subshard_axis,
     const std::optional<uint32_t>& rotary_dim,
-    uint32_t rotary_offset) {
+    uint32_t rotary_offset,
+    const std::optional<ttnn::Tensor>& concat_prefix,
+    bool row_major_output) {
     return ttnn::prim::rotary_embedding_indexed(
         input,
         cos,
@@ -62,7 +68,9 @@ ttnn::Tensor rotary_embedding_indexed(
         compute_kernel_config,
         seq_subshard_axis,
         rotary_dim,
-        rotary_offset);
+        rotary_offset,
+        concat_prefix,
+        row_major_output);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed

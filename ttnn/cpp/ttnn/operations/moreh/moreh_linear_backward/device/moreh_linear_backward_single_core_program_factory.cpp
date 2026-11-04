@@ -59,7 +59,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     ////////////////////////////////////////////////////////////////////////////
     const NodeCoord node = {0, 0};
 
-    IDevice* device = output_grad.device();
+    MeshDevice* device = output_grad.device();
     auto arch = device->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
@@ -175,7 +175,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_TENSOR, .accessor_name = "src"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "start_id", "mask_h", "mask_w", "do_mask_h", "do_mask_w"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -188,7 +188,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = BIAS_GRAD_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -255,39 +255,34 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     // Style A: the op resolves a TTNN DeviceComputeKernelConfig, so the TTNN helper carries its
     // values across (including the math_approx_mode bool -> Precision mapping and the
     // dst_full_sync_en -> double_buffer_dest inversion).
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
     // Legacy carried an unpack-to-dest-mode vector indexed by buffer index and left every entry at
     // its default in this factory. Metal 2.0 keys the same information by DFB name and requires an
     // explicit entry wherever a compute kernel consumes a Float32 DFB with a 32-bit Dest register,
     // so the legacy default has to be stated for the DFBs this kernel consumes: intermed1 is Float32
     // whenever fp32_dest_acc_en is set, and the rest are Float32 whenever output_grad is. The legacy
-    // default is UnpackToSrc, which is legal for any format, so transcribing the whole legacy row
-    // reproduces the legacy unpack vector byte-for-byte in every configuration.
+    // default is UnpackToSrc, which is legal for any format.
     //
-    // Note the divergence from the multi-core factory, which sets intermed1 to UnpackToDest under
-    // the same fp32_dest_acc_en while this factory leaves it at UnpackToSrc. That looks unintended
-    // rather than deliberate: intermed1 is the running reduction accumulator and is read back on
-    // every iteration, so unpacking it to SrcA/SrcB narrows a 32-bit partial to the source
-    // registers' 19 bits — the precision fp32_dest_acc_en was asked for. Reproduced as-is anyway,
-    // because a port makes no functional change; correcting it is the op owner's call.
-    ComputeUnpackModes dfb_unpack_modes = {
+    // intermed1 is the running reduction accumulator and is reloaded on every iteration, so under
+    // fp32_dest_acc_en it must unpack straight to Dest: unpacking it to SrcA/SrcB narrows the 32-bit
+    // partial to the source registers' 19 bits. Matches the multi-core factory.
+    ComputeHardwareConfig::ComputeUnpackModes dfb_unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {SCALER_DFB, UnpackMode::UnpackToSrc},
         {INTERMED0_DFB, UnpackMode::UnpackToSrc},
         {INTERMED1_DFB, UnpackMode::UnpackToSrc},
     };
+    if (fp32_dest_acc_en) {
+        dfb_unpack_modes[INTERMED1_DFB] = UnpackMode::UnpackToDest;
+    }
     if (do_mask_h_w) {
         // An entry naming a DFB the kernel does not bind is rejected, so this one shares the
         // binding's condition.
         dfb_unpack_modes.emplace(MASK_H_W_DFB, UnpackMode::UnpackToSrc);
     }
-    // Assign through the generation-neutral accessor rather than std::get<ComputeGen1Config>: the
-    // helper above returns whichever alternative matches `arch`, so naming Gen1 here would throw
-    // std::bad_variant_access on Quasar. (The local is named dfb_unpack_modes so it does not shadow
-    // the accessor.)
     // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-    unpack_modes(compute_hw) = std::move(dfb_unpack_modes);
+    compute_hw.unpack_modes = std::move(dfb_unpack_modes);
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,

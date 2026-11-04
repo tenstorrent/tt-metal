@@ -182,7 +182,6 @@ def test_masked_bucket_after_trace_capture(device):
     lengths = [50, 137, 700, 1024]  # prefill_paged-safe lengths covering buckets 128/256/1024
     prompts = {L: torch.randint(0, 2000, (1, L), dtype=torch.long) for L in lengths}
 
-    # ---- Pre-capture references (reassign-mode prefill_paged) ----
     ref = {}
     for L in lengths:
         ref[L] = ttnn.to_torch(model.prefill_paged(prompts[L], page_table)).squeeze().float()
@@ -234,8 +233,6 @@ def test_traced_chunked_tail_matches_reference(device, actual_len):
     torch.manual_seed(0)
     real_tokens = torch.randint(0, 2000, (1, actual_len), dtype=torch.long)
 
-    # ---- Reference: trusted non-traced exact-length paged prefill (captured BEFORE the trace
-    #      reassigns the GDN to its in-place external state buffers). ----
     ref = ttnn.to_torch(model.prefill_paged(real_tokens, page_table)).squeeze().float()
     ref_states = model._save_deltanet_states()
 
@@ -327,3 +324,39 @@ def test_chunked_replay_matches_reference(device, actual_len):
     logger.info(f"actual_len={actual_len} bucket={bucket} ref_tok={ref_tok} test_tok={test_tok} pcc={pcc:.6f}")
     assert test_tok == ref_tok, f"next-token argmax mismatch: ref={ref_tok} test={test_tok} (pcc={pcc:.4f})"
     assert pcc > 0.99, f"prefill-logits PCC {pcc:.6f} < 0.99"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("T", [128, 2 * 2048 + 100], ids=["short", "multi_chunk"])
+def test_eager_prefill_after_trace_prepare(device, T):
+    """Eager prefill and the decode after it still work once the chunk trace has been prepared."""
+    num_blocks = 128
+    device.enable_program_cache()
+
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+
+    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=num_blocks * BLOCK_SIZE, n_layers=4)
+    page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
+    kv_shape = [num_blocks, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
+
+    torch.manual_seed(0)
+    tokens = torch.randint(0, 2000, (1, T), dtype=torch.long)
+
+    def prefill_and_decode():
+        logits = ttnn.to_torch(model.prefill_paged(tokens, page_table, valid_len=T)).squeeze().float()
+        tok = torch.tensor([[int(logits.argmax())]], dtype=torch.long)
+        dec = ttnn.to_torch(model.decode_paged(tok, current_pos=T, page_table=page_table)).squeeze().float()
+        return logits, dec
+
+    ref_logits, ref_dec = prefill_and_decode()
+
+    model.prepare_prefill_trace_chunked(device, page_table, chunk_size=2048)
+
+    out_logits, out_dec = prefill_and_decode()
+
+    prefill_pcc = compute_pcc(ref_logits, out_logits)
+    decode_pcc = compute_pcc(ref_dec, out_dec)
+    logger.info(f"T={T} prefill_pcc={prefill_pcc:.6f} decode_pcc={decode_pcc:.6f}")
+    assert prefill_pcc >= 0.99, f"T={T}: eager prefill after trace prepare PCC {prefill_pcc:.6f} < 0.99"
+    assert decode_pcc >= 0.99, f"T={T}: decode after eager prefill post-prepare PCC {decode_pcc:.6f} < 0.99"

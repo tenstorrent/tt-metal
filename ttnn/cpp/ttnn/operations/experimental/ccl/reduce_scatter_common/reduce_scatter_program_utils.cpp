@@ -13,9 +13,26 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
+#include <enchantum/enchantum.hpp>
+
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn::experimental::ccl {
+
+uint32_t count_worker_cores_placeable_after_offset(
+    const tt::tt_metal::CoreRangeSet& worker_cores, const tt::tt_metal::CoreCoord& core_grid_offset) {
+    // Shift every range by the offset, then keep the part that still lands on worker cores. The
+    // ranges of a CoreRangeSet are disjoint, so the intersection's core count is exactly the number
+    // of cores whose shifted position is a worker core.
+    std::vector<tt::tt_metal::CoreRange> shifted_ranges;
+    shifted_ranges.reserve(worker_cores.ranges().size());
+    for (const auto& core_range : worker_cores.ranges()) {
+        shifted_ranges.emplace_back(
+            tt::tt_metal::CoreCoord(core_range.start_coord.x + core_grid_offset.x, core_range.start_coord.y + core_grid_offset.y),
+            tt::tt_metal::CoreCoord(core_range.end_coord.x + core_grid_offset.x, core_range.end_coord.y + core_grid_offset.y));
+    }
+    return tt::tt_metal::CoreRangeSet(std::move(shifted_ranges)).intersection(worker_cores).num_cores();
+}
 
 uint32_t reduce_scatter_core_count_per_link(
     uint32_t num_workers_per_direction,
@@ -38,10 +55,17 @@ uint32_t reduce_scatter_default_workers(
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link) {
+    uint32_t num_mux_cores_per_direction_per_link,
+    const tt::tt_metal::CoreCoord& core_grid_offset) {
+    TT_FATAL(
+        topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+        "reduce_scatter_default_workers only supports Ring and Linear topologies, got {}",
+        enchantum::to_string(topology));
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    // choose_worker_cores shifts every core it picks by core_grid_offset, so only the cores whose
+    // shifted position is still a worker core are available; the rest would land off the grid.
+    const uint32_t num_cores = count_worker_cores_placeable_after_offset(subdevice_core_range_set, core_grid_offset);
     log_trace(tt::LogOp, "DEBUG: num_cores: {}", num_cores);
     ttsl::SmallVector<uint32_t> candidate_worker_counts;
     double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
@@ -95,8 +119,13 @@ uint32_t reduce_scatter_default_workers(
     }
     TT_THROW(
         "Not enough cores available on the subdevice or device for the requested configuration to match the number of "
-        "links {}",
-        num_links);
+        "links {}: {} worker cores stay on the grid after core_grid_offset ({}, {}), the smallest candidate needs {}",
+        num_links,
+        num_cores,
+        core_grid_offset.x,
+        core_grid_offset.y,
+        num_links * reduce_scatter_core_count_per_link(
+                        candidate_worker_counts.back(), num_directions_per_link, num_mux_cores_per_direction_per_link));
 }
 
 uint32_t reduce_scatter_default_chunks_per_sync(
@@ -367,7 +396,10 @@ void append_fabric_mux_connection_ct_args(
     const std::array<uint32_t, num_ct_args> ct_args = {
         mux_kernel_config.get_num_buffers(channel_type),
         mux_kernel_config.get_buffer_size_bytes(channel_type),
-        mux_kernel_config.get_status_address(),
+        // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place
+        // of the status word; every other mux address is then an offset from that address.
+        mux_kernel_config.is_in_program_local_l1() ? mux_kernel_config.get_l1_base_semaphore_id()
+                                                   : static_cast<uint32_t>(mux_kernel_config.get_status_address()),
         mux_kernel_config.get_termination_signal_address(),
         num_workers_per_direction};
     writer_ct_args.reserve(writer_ct_args.capacity() + num_ct_args);

@@ -119,16 +119,15 @@ struct Matmul {
             // ================================================================
             constexpr uint32_t out_w = CTArgs::out_w;
             constexpr bool transpose = CTArgs::transpose;
-            constexpr bool split_acc = true;
-            constexpr bool dense_packing = true;
-            constexpr bool finalize = split_acc && true;
+            constexpr auto dest_layout = CustomMmDestLayout::DenseSplitAcc;
+            constexpr bool finalize = true;
             constexpr bool read_transposed = transpose && true;
             constexpr bool fuse_activation = CTArgs::fuse_sigmoid || CTArgs::fuse_silu;
             if constexpr (!skip_reconfig) {
                 reconfig_full_operand<SrcOrder::Reverse>(args.in0, args.in1);
                 pack_reconfig_data_format<true>(args.out);
             }
-            custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
+            custom_mm_block_init_short<transpose, dest_layout>(args.in0, args.in1, args.out, out_w);
             if constexpr (!fuse_activation && !skip_reconfig) {
                 pack_block_contiguous_init(args.out);
             }
@@ -158,7 +157,8 @@ struct Matmul {
                 for (uint32_t w = 0; w < out_w; w++) {
                     tile_regs_acquire();
 
-                    custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
+                    custom_mm_block<dest_layout, finalize, read_transposed>(
+                        args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
 
                     tile_regs_commit();
 
@@ -197,7 +197,8 @@ struct Matmul {
                 // Batch processing - all tiles at once
                 tile_regs_acquire();
 
-                custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
+                custom_mm_block<dest_layout, finalize, read_transposed>(
+                    args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 
                 tile_regs_commit();
 
@@ -207,7 +208,7 @@ struct Matmul {
             }
             cb_push_back(args.out, out_w);
 
-            custom_mm_block_uninit<dense_packing>();
+            custom_mm_block_uninit<dest_layout>(args.out);
 
             // Pop inputs
             if constexpr (pop_in0) {

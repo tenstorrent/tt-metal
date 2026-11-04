@@ -13,7 +13,7 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -22,6 +22,7 @@
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "internal/ethernet/erisc.h"
+#include "internal/ethernet/eth_fw_stage.h"
 
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
@@ -197,8 +198,12 @@ extern "C" __attribute__((naked)) void enter_reset(void) {
     );
 }
 
+// Called by active_erisc-crt0 when erisc_exit() longjmps back to base FW, bypassing the return from main().
+void __attribute__((noinline)) on_erisc_exit() { set_eth_fw_stage(ETH_FW_STAGE_BASE_FW); }
+
 int __attribute__((noinline)) main(void) {
     WAYPOINT("I");
+    set_eth_fw_stage(ETH_FW_STAGE_FW_INIT);
     configure_csr();
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
@@ -207,7 +212,7 @@ int __attribute__((noinline)) main(void) {
     update_next_link_status_check_timestamp();
     aerisc_ptp_trace_entry();
 
-    noc_index = 0;
+    noc_index = PHYSICAL_AERISC_ID;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
@@ -228,13 +233,22 @@ int __attribute__((noinline)) main(void) {
     set_deassert_addresses();
 
     kg_noc_mode = DM_DEDICATED_NOC;
+#if defined(ENABLE_2_ERISC_MODE)
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
     noc_clear_all_packet_tags();
-    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     ncrisc_noc_full_sync();
+#else
+    static_assert(PHYSICAL_AERISC_ID == 1);
+    // Base FW on ERISC0 uses NoC0 concurrently, so only touch our own NoC.
+    noc_init_one(PHYSICAL_AERISC_ID, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    noc_local_state_init(PHYSICAL_AERISC_ID);
+    noc_clear_packet_tags(PHYSICAL_AERISC_ID);
+    ncrisc_noc_sync(PHYSICAL_AERISC_ID);
+#endif
+    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
 #if defined(ENABLE_2_ERISC_MODE)
     deassert_all_reset();
@@ -245,41 +259,33 @@ int __attribute__((noinline)) main(void) {
     DEVICE_PRINT_INITIALIZE_LOCK();
     wait_subordinate_eriscs();
     flag_disable[0] = 1;
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
-    // Add an invalidate before the first read of mailboxes->go_messages[0].signal
+    // Add an invalidate before the first read of mailboxes->go_messages[0].slot[0].signal
     invalidate_l1_cache();
 
     DeviceProfilerInit();
     while (1) {
         // Wait...
         WAYPOINT("GW");
+        set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
 
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
+        while ((go_message_signal = mailboxes->go_messages[0].slot[0].signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
 
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
                 aerisc_ptp_trace_exit();
+                set_eth_fw_stage(ETH_FW_STAGE_BASE_FW);
                 return 0;
-            } else if (
-                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST ||
-                go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                // Set the rd_ptr on workers to specified value
+            } else if (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+                // Host-driven (slow dispatch) read-pointer reset. The dispatcher-driven resets
+                // (RUN_MSG_RESET_READ_PTR / RUN_MSG_REPLAY_TRACE) and the done notify were removed
+                // with fast dispatch to ethernet.
                 mailboxes->launch_msg_rd_ptr = 0;
-                if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                    if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                        DeviceIncrementTraceCount();
-                        DeviceTraceOnlyProfilerInit();
-                    }
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
-                    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
-                    // Notify dispatcher that this has been done
-                    internal_::notify_dispatch_core_done(dispatch_addr);
-                }
             } else {
                 internal_::risc_context_switch();
             }
@@ -293,6 +299,10 @@ int __attribute__((noinline)) main(void) {
             DeviceZoneScopedMainN("ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+#if defined(PROFILE_STREAMING)
+            // The streaming profiler publishes this launch's zones only after this call validates the launch.
+            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+#endif
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
@@ -326,6 +336,7 @@ int __attribute__((noinline)) main(void) {
             constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
                 WAYPOINT("R");
+                set_eth_fw_stage(ETH_FW_STAGE_KERNEL);
 
                 manually_flush_icache();
                 uint32_t kernel_config_base =
@@ -334,21 +345,15 @@ int __attribute__((noinline)) main(void) {
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
                 reinterpret_cast<void (*)()>(kernel_lma)();
+                set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
                 WAYPOINT("D");
             }
 
             wait_subordinate_eriscs();
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
-
-            // Notify dispatcher core that it has completed
-            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
-                launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
-                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                internal_::notify_dispatch_core_done(dispatch_addr);
-                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-            }
+            // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance.
+            // Slow (host) dispatch polls go_messages[0].slot[0].signal and manages the read pointer itself.
         }
     }
 

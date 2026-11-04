@@ -31,14 +31,14 @@ using namespace overlay;
 
 // 2 faces, each face: 4 cols x 4 rows
 constexpr uint32_t src_base = 0x10000;
-constexpr LoopConfig src_inner_cfg = {.stride = 128, .end_addr = 4 * 128};    // 4 cols, 128B apart
-constexpr LoopConfig src_outer_cfg = {.stride = 1024, .end_addr = 4 * 1024};  // 4 rows, 1024B apart
-constexpr uint64_t src_face_size = src_outer_cfg.end_addr;                    // one face = 4096B
+constexpr LoopConfig src_inner_cfg = {.stride = 128, .end = 4 * 128};    // 4 cols, 128B apart
+constexpr LoopConfig src_outer_cfg = {.stride = 1024, .end = 4 * 1024};  // 4 rows, 1024B apart
+constexpr uint64_t src_face_size = src_outer_cfg.end;                    // one face = 4096B
 
 constexpr uint32_t dst_base = 0x20000;
-constexpr LoopConfig dst_inner_cfg = {.stride = 128, .end_addr = 4 * 128};
-constexpr LoopConfig dst_outer_cfg = {.stride = 1024, .end_addr = 4 * 1024};
-constexpr uint64_t dst_face_size = dst_outer_cfg.end_addr;
+constexpr LoopConfig dst_inner_cfg = {.stride = 128, .end = 4 * 128};
+constexpr LoopConfig dst_outer_cfg = {.stride = 1024, .end = 4 * 1024};
+constexpr uint64_t dst_face_size = dst_outer_cfg.end;
 
 void kernel_main() {
     constexpr uint32_t src_stride_en = get_arg(args::src_stride_en);

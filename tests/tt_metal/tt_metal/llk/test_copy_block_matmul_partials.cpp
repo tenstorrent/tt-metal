@@ -32,7 +32,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "single_core_compute_runners.hpp"
 
@@ -57,8 +57,8 @@ struct CopyBlockMatmulPartialsConfig {
     bool fp32_dest_acc_en = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
-    // Compute kernel exercised by the test. Defaults to the copy_block_matmul_partials / pack_tile_block
-    // kernel; the copy_block / pack_block variant points this at eltwise_copy_pack_block.cpp.
+    // Compute kernel exercised by the test. Defaults to the kernel that loops copy_block per tile with
+    // a single pack_block; the single-copy_block variant points this at eltwise_copy_pack_block.cpp.
     std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp";
 };
 
@@ -118,10 +118,20 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -137,10 +147,20 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -155,32 +175,21 @@ void run_single_core_copy_block_matmul_partials(
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
-    if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     experimental::ComputeHardwareConfig compute_hw_config;
     {
         // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
         // consumes it, so the Metal 2.0 host API requires an explicit unpack_modes entry.
         // UnpackToSrc is unpack via SrcA/B, ~19-bit precision.
-        experimental::ComputeUnpackModes unpack_modes{};
+        experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
         if (test_config.fp32_dest_acc_en) {
             unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}};
         }
-        if (mesh_device->arch() == tt::ARCH::QUASAR) {
-            compute_hw_config = experimental::ComputeGen2Config{
-                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-                .double_buffer_dest = !test_config.dst_full_sync_en,
-                .unpack_modes = unpack_modes,
-            };
-        } else {
-            compute_hw_config = experimental::ComputeGen1Config{
-                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-                .double_buffer_dest = !test_config.dst_full_sync_en,
-                .unpack_modes = unpack_modes,
-            };
-        }
+        compute_hw_config = experimental::ComputeHardwareConfig{
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
+        };
     }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -273,9 +282,6 @@ constexpr const char* kBlockKernel = "tests/tt_metal/tt_metal/test_kernels/compu
 //                             Test Description
 // ------------------------------------------------------------------------
 // These tests aim to cover usage of these API calls:
-// - copy_block_matmul_partials
-// - pack_tile_block
-// and the uniform op_block surface that supersedes them:
 // - copy_block
 // - pack_block
 ////////////////////////////////////////////////////////////////////////////
@@ -331,9 +337,9 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     }
 }
 
-// Same coverage as TensixComputeCopyBlockMultiple, but exercises the uniform op_block surface
-// (copy_block + pack_block) directly instead of the deprecated copy_block_matmul_partials /
-// pack_tile_block. The golden is an identity copy, so results must match bit-for-bit.
+// Same coverage as TensixComputeCopyBlockMultiple, but issues one copy_block call per ublock instead
+// of a loop of single-tile copy_block calls (pack_block is one call per ublock in both). The golden is an identity
+// copy, so results must match bit-for-bit.
 TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -378,7 +384,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockComputeBottleneck) {
 }
 
 // ============================================================================
-// Id-free (2.0) copy_block / copy_tile_to_dst_init_short / pack_block: each is a pure Float16_b -> Float16_b
+// Id-free (2.0) copy_block / copy_init / pack_block: each is a pure Float16_b -> Float16_b
 // datacopy, so the host golden is the identity (device output == input, bit-for-bit). Validated against the
 // input, not a legacy kernel. Runs on Blackhole (the id-free API is BH-only).
 // ============================================================================

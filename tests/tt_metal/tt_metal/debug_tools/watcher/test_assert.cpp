@@ -31,7 +31,8 @@
 #include "impl/debug/debug_helpers.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -62,8 +63,8 @@ static void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
-    auto* device = mesh_device->get_devices()[0];
+    Program program = CreateProgram(*mesh_device);
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     // TENSIX cores use the Metal 2.0 host API and the *_2_0.cpp kernel; ETH/DRAM cores remain on the legacy
@@ -101,7 +102,7 @@ static void RunTest(
                     auto gen1_noc = (gen1_processor == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                         ? tt_metal::NOC::RISCV_1_default
                                         : tt_metal::NOC::RISCV_0_default;
-                    // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
+                    // Configure the KernelSpec per arch so it runs on either.
                     if (is_quasar) {
                         // processor.processor_type is the absolute DM index (2..7 for DM2..DM7).
                         // Map to kernel-local thread id (0..5) since the kernel launches on the 6 user DMs.
@@ -109,12 +110,15 @@ static void RunTest(
                         uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
                         assert_kernel_spec.num_threads = 6;
                         assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
-                        assert_kernel_spec.hw_config = experimental::DataMovementGen2Config{};
+                        assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{};
                     } else {
                         assert_kernel_spec.num_threads = 1;
-                        assert_kernel_spec.hw_config = experimental::DataMovementGen1Config{
-                            .processor = gen1_processor,
-                            .noc = gen1_noc,
+                        assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
+                            .config_1xx =
+                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                    .processor = gen1_processor,
+                                    .noc = gen1_noc,
+                                },
                         };
                     }
                     break;
@@ -127,11 +131,7 @@ static void RunTest(
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
                     assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
-                    if (is_quasar) {
-                        assert_kernel_spec.hw_config = experimental::ComputeGen2Config{};
-                    } else {
-                        assert_kernel_spec.hw_config = experimental::ComputeGen1Config{};
-                    }
+                    assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     break;
                 }
                 default: TT_THROW("Unsupported processor class type for TENSIX");
@@ -252,7 +252,7 @@ static void RunTest(
 
     // Run the kernel, expect an exit due to the assert.
     log_info(LogTest, "Running args that should assert...");
-    fixture->RunProgram(mesh_device, workload);
+    fixture->RunProgramExpectingWatcherError(mesh_device, workload);
 
     // Wait for watcher to catch the assert with a timeout of 5s
     std::string exception;
@@ -432,6 +432,10 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
             is_dram ? "DRAM" : (is_dispatch ? "DISPATCH" : "IDLE_ETH"));
         GTEST_SKIP();
     }
+    bool is_active_eth = (params.processor.core_type == HalProgrammableCoreType::ACTIVE_ETH);
+    if (is_active_eth && !using_slow_dispatch) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram && !is_dispatch) {
         GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, DRAM, or DISPATCH cores";
     }
@@ -480,6 +484,7 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"Brisc", {TENSIX, DM, 0}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"NCrisc", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
         WatcherTestParams{"NCriscPacketTag", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCPacketTagClearedTripped},
+        WatcherTestParams{"NCriscNocMid", {TENSIX, DM, 1}, dev_msgs::DebugAssertNocMidNotClearedTripped},
         // DM2 to DM7 only run on Quasar
         WatcherTestParams{"DM2", {TENSIX, DM, 2}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"DM3", {TENSIX, DM, 3}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},

@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: This is the Metal 2.0 fork of untilize_wh.cpp, which lives beside it. Ops ported to Metal 2.0
-// bind this file; the original serves the consumers still on the legacy API. Until the last of them
-// migrates and the original is retired, changes here likely belong there too.
+// NOTE: This forked untilize_wh.cpp during the Metal 2.0 migration. Its last legacy binder has
+// migrated and the original is retired, so this is the only copy and the _metal2 suffix is historical.
 //
 // The binding names below (dfb::src, dfb::out) and named args are this fork's interface — shared with
 // the sibling untilize_metal2.cpp / untilize_variable_num_blocks_metal2.cpp forks so a factory can
@@ -21,6 +20,7 @@ void kernel_main() {
 
     // Each region binds the buffer set matching its block width: `src` / `out` are that set's input
     // and output buffers -- see BlockBufferSet in data_movement/common.
+    DataflowBuffer src(dfb::src), out(dfb::out);
     compute_kernel_hw_startup(dfb::src, dfb::out);
     compute_kernel_lib::untilize<
         block_size_row,
@@ -29,5 +29,5 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-        block_size_col * third_dim);
+        src, out, block_size_col * third_dim);
 }

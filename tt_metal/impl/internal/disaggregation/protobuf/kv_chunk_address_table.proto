@@ -25,6 +25,14 @@ enum ChunkCompression {
     STRIDED_ROWS = 1;  // base+stride runs (field 11) covering each (slot, layer) row
 }
 
+// What kind of cached tensor a config's chunks belong to (values must match
+// KvChunkTensorType in kv_chunk_address_table.hpp). Absent = KV, so legacy files read
+// as KV. Unknown values must be rejected loudly by readers (fail-closed versioning).
+enum KvChunkTensorType {
+    KV = 0;        // temporal::Dense — positional KV over [0, prefix_len)
+    SNAPSHOT = 1;  // temporal::None — fixed-size state keyed by snapshot prefix_len
+}
+
 // One config ("group") — a distinct attention implementation / tensor
 // representation a layer may use. A table holds one or more.
 message KvChunkConfig {
@@ -35,6 +43,7 @@ message KvChunkConfig {
     uint32 chunk_n_tokens = 5;
     uint32 chunk_size_bytes = 6;
     ChunkCompression compression = 7;  // payload form for this config's chunks (default UNROLLED)
+    KvChunkTensorType tensor_type = 8;  // cached tensor kind (default KV)
 }
 
 message KvCacheEntry {

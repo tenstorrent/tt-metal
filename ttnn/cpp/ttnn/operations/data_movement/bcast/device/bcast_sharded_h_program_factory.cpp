@@ -11,7 +11,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
@@ -37,7 +37,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     const auto& bshape = b.padded_shape();
     const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     const auto shard_spec = a.shard_spec().value();
     const auto all_cores = shard_spec.grid;
@@ -96,7 +96,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
         num_tile_per_core);
 
     const std::uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
 
     const std::uint32_t num_input_tiles = (b.padded_shape()[-1] * output.element_size() + TILE_HW - 1) / TILE_HW;
 
@@ -157,10 +157,10 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
         // Legacy arg names on the reader side: the kernel reads index 4 as "NC" (fed Ht_per_core) and
         // index 5 as "batch_offset" (fed tile_offset). Names preserve the kernel-side identifiers.
         .runtime_arg_schema = {.runtime_arg_names = {"Ht", "Wt", "offset", "NC", "batch_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};  // legacy ComputeConfigDescriptor{} defaults
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source =

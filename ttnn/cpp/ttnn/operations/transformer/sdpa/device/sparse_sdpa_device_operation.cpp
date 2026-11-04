@@ -30,7 +30,7 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     if (t.attention_sink.has_value()) {
         const auto& sink = t.attention_sink.value();
         TT_FATAL(
-            sink.storage_type() == StorageType::DEVICE && sink.buffer() != nullptr,
+            sink.storage_type() == StorageType::DEVICE && sink.is_allocated(),
             "Attention sink tensor must be on device");
         TT_FATAL(sink.device() == q.device(), "Attention sink must be on the same device as Q");
         TT_FATAL(sink.dtype() == DataType::BFLOAT16, "Attention sink must be BF16");
@@ -90,7 +90,7 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     const auto& kv = t.kv;
     const auto& idx = t.indices;
 
-    TT_FATAL(tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa is Blackhole-only");
+    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa is Blackhole-only");
 
     // dtypes. q and kv may each be bf16 or fp8_e4m3 — fp8 halves that input's K/Q-gather bytes; the reader
     // gathers it row-major and compute tilizes fp8 -> bfp8_b cb_*_in (near-lossless, also halves the L1).

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <numeric>
 #include <optional>
@@ -30,7 +31,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
-#include "metal2_host_api/test_helpers.hpp"
+#include "metal2_host_api/test_helpers/test_helpers.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -163,12 +164,18 @@ void run_borrowed_memory_dfb_program(
     // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        auto& producer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         if (!cfg.tensix_consumer) {
-            auto& consumer_hw_config =
-                std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+            auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
+            if (!consumer_spec_dm.config_2xx) {
+                consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+            }
+            auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
             consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
         }
     }
@@ -337,10 +344,16 @@ void run_update_address_test(
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        auto& producer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
-        auto& consumer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
+        auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
+        if (!consumer_spec_dm.config_2xx) {
+            consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }
@@ -422,6 +435,10 @@ void run_update_address_test(
     std::vector<uint32_t> input_b(total_words);
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
     slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input_b);
+    // Zero ring B on the node so run 2 can only fill it if the device received the rebound address.
+    const uint32_t ring_b_address = static_cast<uint32_t>(ring_tensor_b.address());
+    std::vector<uint32_t> ring_zeros(total_words, 0u);
+    slow_dispatch::WriteToL1(mesh_device, node, ring_b_address, ring_zeros);
 
     if (reentry_num_entries_override.has_value()) {
         // Combined re-bind + resize in ONE SetProgramRunArgs: point the borrowed ring at a different
@@ -464,6 +481,22 @@ void run_update_address_test(
         slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), output);
         EXPECT_EQ(input_b, output);
     }
+    // The data check above passes even if the device kept ring A, so check ring B directly: entry i of
+    // run 2 lands in ring slot i % ring_entries, and later entries overwrite earlier ones.
+    {
+        const uint32_t ring_entries = reentry_num_entries_override.value_or(num_entries);
+        constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+        std::vector<uint32_t> expected_ring(total_words, 0u);
+        for (uint32_t entry = 0; entry < num_entries; entry++) {
+            std::copy_n(
+                input_b.begin() + entry * words_per_entry,
+                words_per_entry,
+                expected_ring.begin() + (entry % ring_entries) * words_per_entry);
+        }
+        std::vector<uint32_t> ring_b;
+        slow_dispatch::ReadFromL1(mesh_device, node, ring_b_address, total_words * sizeof(uint32_t), ring_b);
+        EXPECT_EQ(expected_ring, ring_b) << "DFB ring was not redirected to ring_tensor_b on the device";
+    }
 }
 
 }  // anonymous namespace
@@ -487,11 +520,11 @@ TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S) {
         });
 }
 
-TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddress) {
+TEST_F(UnitMeshAnyDispatchFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddress) {
     run_update_address_test(this->device(), NodeCoord{0, 0});
 }
 
-TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddressAndSize) {
+TEST_F(UnitMeshAnyDispatchFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddressAndSize) {
     run_update_address_test(this->device(), NodeCoord{0, 0}, /*reentry_num_entries_override=*/8);
 }
 

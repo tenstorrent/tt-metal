@@ -54,8 +54,11 @@ from collections import defaultdict
 import yaml
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-DEFAULT_TESTS_DIR = os.path.join(REPO_ROOT, "tests", "pipeline_reorg")
-DEFAULT_BUDGET_FILE = os.path.join(REPO_ROOT, ".github", "time_budget.yaml")
+# When this action is invoked pinned to a ref (owner/repo/path@ref), GITHUB_ACTION_PATH --
+# and hence __file__ -- resolves inside a separate checkout of that ref, not the caller's
+# own checkout. Prefer GITHUB_WORKSPACE so defaults follow the branch under test.
+DEFAULT_TESTS_DIR = os.path.join(os.environ.get("GITHUB_WORKSPACE", REPO_ROOT), "tests", "pipeline_reorg")
+DEFAULT_BUDGET_FILE = os.path.join(os.environ.get("GITHUB_WORKSPACE", REPO_ROOT), ".github", "time_budget.yaml")
 
 # Budget types that gate a merge, and the ceiling on any single test entry in them.
 GATE_BUDGET_TYPES = {"pr_gate", "merge_gate"}
@@ -82,8 +85,9 @@ def resolve_budget_key(budgets, team, budget_type, tier):
 def load_tests(tests_dir):
     """Yield (basename, entries) for each test-list yaml under tests_dir.
 
-    Files whose top level is not a list (e.g. ttsim-skip-list.yaml) are not test
-    lists and are skipped.
+    Files whose top level is not a list (e.g. ttsim-skip-list.yaml and
+    models_trace_config.yaml) are configuration mappings and are skipped.
+    Generated trace jobs in models_sweep_tests.yaml are still charged.
     """
     for path in sorted(glob.glob(os.path.join(tests_dir, "*.yaml"))):
         with open(path, "r") as f:

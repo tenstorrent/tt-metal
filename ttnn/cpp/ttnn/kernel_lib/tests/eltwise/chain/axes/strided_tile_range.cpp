@@ -16,6 +16,9 @@ void kernel_main() {
     constexpr uint32_t input_base = get_compile_time_arg_val(4);
     constexpr uint32_t output_base = get_compile_time_arg_val(5);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_out);
 
     cb_wait_front(cb_in, Ht * input_stride);
@@ -30,10 +33,10 @@ void kernel_main() {
             PopPolicy::None,
             InputTileMapping::Block,
             DataFormatReconfig::Disabled,
-            TileAddressing::Strided)>{StridedTileRange{input_base, input_stride}},
+            TileAddressing::Strided)>{cb_in_obj, StridedTileRange{input_base, input_stride}},
         PackTile<output(
             cb_out, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Disabled, TileAddressing::Strided)>{
-            StridedTileRange{output_base, output_stride}});
+            cb_out_obj, StridedTileRange{output_base, output_stride}});
 
     cb_pop_front(cb_in, Ht * input_stride);
     cb_push_back(cb_out, Ht * output_stride);

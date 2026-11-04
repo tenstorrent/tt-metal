@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <type_traits>
 
+// Ick! We have to tell ckernel_ops.h that we're using TTI_ macros.
+// This is just wrong and should be fixed. See #58141
+#define LLK_BOOT_BRISC 1
 #include "boot.h"
 #include "counters.h"
 
@@ -127,8 +130,9 @@ int main()
 
                 device_setup();
 
-                // Configure + arm counters before releasing TRISCs (no-op in NC builds).
-                llk_perf::configure_and_arm_from_brisc();
+                llk_perf::clear_debug_features();
+                // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
+                llk_perf::configure_from_brisc();
 
                 clear_trisc_soft_reset();
 

@@ -112,7 +112,7 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
         // 32-bit dest uses ELWADD, which requires dvalid from both SrcA and SrcB.
         // Data is unpacked to SrcB, so zero the unused engine (SrcA) and set its dvalid.
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_end_op(clr_unused_unpacr_engine);
+        temp.set_start_op(clr_unused_unpacr_engine);
     }
     temp.program_bank0_sw_cntl(instrn_buffer);
 }

@@ -16,6 +16,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -25,17 +26,15 @@ void kernel_main() {
         return;
     }
 
-    const uint32_t in1_tensor_addr = TensorAccessor(tensor::in1).get_bank_base_address();
-#ifdef FUSE_BIAS
-    const uint32_t in3_tensor_addr = TensorAccessor(tensor::bias).get_bank_base_address();
-#endif
+    // in1 is DRAM height-sharded: read by bank (this reader's dram_bank_id) at offsets into the tensor.
+    const auto in1_accessor = TensorAccessor(tensor::in1);
     const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
     const uint32_t vc = get_arg(args::vc);
 
-    // Output storage core coordinates and L1 address (where to NOC write output)
-    const uint32_t output_storage_noc_x = get_arg(args::output_storage_noc_x);
-    const uint32_t output_storage_noc_y = get_arg(args::output_storage_noc_y);
-    const uint32_t output_shard_l1_addr = TensorAccessor(tensor::output).get_bank_base_address();
+    // Output L1 shard. The factory requires the output storage core to be this worker core, so the
+    // shard is this core's own L1 and is written as a loopback NoC destination (output_storage_noc_x/y
+    // name this core and are not needed).
+    const LocalTensorAccessor<uint32_t> output_shard(tensor::output);
 
     // COMPILE TIME ARGS
     constexpr auto in1_page_size = get_arg(args::in1_page_size);
@@ -61,11 +60,21 @@ void kernel_main() {
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);  // Local output buffer (compute writes here)
     // DRAM read setup
-    const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
-    // Output reshard setup - build NOC address for remote output storage core
-    const UnicastEndpoint remote;
+    const BankView dram_bank(in1_accessor);
 #ifdef FUSE_BIAS
+    // Push [1, N] bias once (broadcast over this core's batches).
+    // TensorAccessor: bias is interleaved DRAM; dram_bank_id is the HEIGHT_SHARDED in1 bank.
     DataflowBuffer dfb_in3(dfb::bias);
+    const auto s3 = TensorAccessor(tensor::bias);
+    const uint32_t bias_tile_bytes = dfb_in3.get_tile_size();
+    dfb_in3.reserve_back(in3_block_tiles);
+    uint32_t in3_write_offset = 0;
+    for (uint32_t t = 0; t < in3_block_tiles; ++t) {
+        noc.async_read(s3, dfb_in3, bias_tile_bytes, {.page_id = t}, {.offset_bytes = in3_write_offset});
+        in3_write_offset += bias_tile_bytes;
+    }
+    noc.async_read_barrier();
+    dfb_in3.push_back(in3_block_tiles);
 #endif
 
     // Process each batch
@@ -88,7 +97,7 @@ void kernel_main() {
                     dram_bank,
                     dfb_in1,
                     read_size,
-                    {.bank_id = dram_bank_id, .addr = in1_tensor_addr + in1_batch_offset + curr_dram_offset},
+                    {.bank_id = dram_bank_id, .offset_bytes = in1_batch_offset + curr_dram_offset},
                     {.offset_bytes = dfb_write_offset});
                 dfb_write_offset += read_size;
                 curr_dram_offset += read_size;
@@ -100,33 +109,14 @@ void kernel_main() {
             l1_read_addr_in1 += in1_block_size_bytes;
         }
 
-#ifdef FUSE_BIAS
-        // Read bias for this batch (if fused)
-        dfb_in3.reserve_back(in3_block_tiles);
-        noc.async_read(
-            dram_bank,
-            dfb_in3,
-            in3_block_tiles * dfb_in3.get_tile_size(),
-            {.bank_id = dram_bank_id, .addr = in3_tensor_addr},
-            {.offset_bytes = 0});
-        noc.async_read_barrier();
-        dfb_in3.push_back(in3_block_tiles);
-#endif
-
         // Wait for compute to finish this batch
         dfb_out.wait_front(out_block_num_tiles);
 
 #ifdef OUT_SHARDED
-        // NOC write output into the output tensor's own L1 shard on the remote output storage core
+        // NOC write output into the output tensor's own L1 shard on the output storage core (this core)
         const uint32_t out_batch_offset = batch * out_tensor_stride_batch_bytes;
         noc.async_write(
-            dfb_out,
-            remote,
-            out_block_size_bytes,
-            {.offset_bytes = 0},
-            {.noc_x = output_storage_noc_x,
-             .noc_y = output_storage_noc_y,
-             .addr = output_shard_l1_addr + out_batch_offset});
+            dfb_out, output_shard, out_block_size_bytes, {.offset_bytes = 0}, {.offset_bytes = out_batch_offset});
         noc.async_write_barrier();
 #endif
 

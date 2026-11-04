@@ -4,14 +4,18 @@
 
 #include <internal/disaggregation/kv_chunk_address_table.hpp>
 
+#include "impl/dispatch/host_device_transfer.hpp"
+
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "tt_metal/impl/internal/disaggregation/noc_addr.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
@@ -21,9 +25,9 @@ namespace {
 tt::tt_metal::IDevice* resolve_device(const tt::tt_fabric::FabricNodeId& node_id) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto chip_id = cp.get_physical_chip_id_from_fabric_node_id(node_id);
-    auto* dev = tt::tt_metal::detail::GetActiveDevice(chip_id);
-    TT_FATAL(dev != nullptr, "GetActiveDevice({}) returned null for {}", chip_id, node_id);
-    return dev;
+    const auto& device_manager = tt::tt_metal::MetalContext::instance().device_manager();
+    TT_FATAL(device_manager->is_device_active(chip_id), "Device {} for {} is not active", chip_id, node_id);
+    return device_manager->get_active_device(chip_id);
 }
 
 }  // namespace
@@ -171,11 +175,11 @@ KvCacheLocation KvChunkAddressTable::StridedRowMap::lookup(uint32_t layer, uint3
     if (row.step == 0) {
         return KvCacheLocation{};
     }
+    const uint32_t r = chunk % row.step;
     return KvCacheLocation{
-        .noc_addr =
-            row.bases[chunk % row.step] + static_cast<uint64_t>(row.strides[chunk % row.step]) * (chunk / row.step),
+        .noc_addr = row.bases[r] + static_cast<uint64_t>(row.strides[r]) * (chunk / row.step),
         .size_bytes = row.size_bytes,
-        .device_group_index = row.device_group_index,
+        .device_group_index = row.device_group_indices[r],
     };
 }
 
@@ -268,8 +272,8 @@ void KvChunkAddressTable::set(
     auto* grid = std::get_if<UnrolledGrid>(&maps_[config_id]);
     TT_FATAL(
         grid != nullptr,
-        "set() on a compressed (STRIDED_ROWS) config {} — compressed maps are built at import; "
-        "build unrolled and serialize, or install_strided_map()",
+        "set() on a compressed (STRIDED_ROWS) config {} — author its rows with set_strided_row(), "
+        "or build it unrolled and serialize / install_strided_map()",
         config_id);
     grid->entries[grid->flat_index(layer, to_chunk_index(config_id, position), slot)] = location;
 }
@@ -294,13 +298,71 @@ void KvChunkAddressTable::install_strided_map(uint32_t config_id, StridedRowMap 
         config_id);
     for (const auto& row : map.rows) {
         TT_FATAL(
-            row.step == 0 || (row.bases.size() == row.step && row.strides.size() == row.step),
-            "strided row has step {} but bases {} / strides {}",
+            row.step == 0 || (row.bases.size() == row.step && row.strides.size() == row.step &&
+                              row.device_group_indices.size() == row.step),
+            "strided row has step {} but bases {} / strides {} / device groups {}",
             row.step,
             row.bases.size(),
-            row.strides.size());
+            row.strides.size(),
+            row.device_group_indices.size());
     }
     maps_[config_id] = std::move(map);
+}
+
+void KvChunkAddressTable::set_strided_row(
+    uint32_t layer,
+    uint32_t slot,
+    uint32_t size_bytes,
+    std::vector<uint64_t> bases,
+    std::vector<int64_t> strides,
+    std::vector<DeviceGroupIndex> device_group_indices,
+    uint32_t config_id) {
+    validate_config_id(config_id);
+    auto* map = std::get_if<StridedRowMap>(&maps_[config_id]);
+    TT_FATAL(
+        map != nullptr, "set_strided_row() on an UNROLLED config {} — construct the config as STRIDED_ROWS", config_id);
+    TT_FATAL(layer < map->num_layers, "layer {} out of range [0, {})", layer, map->num_layers);
+    TT_FATAL(slot < map->num_slots, "slot {} out of range [0, {})", slot, map->num_slots);
+    const size_t step = bases.size();
+    TT_FATAL(
+        step > 0 && step <= map->num_position_chunks,
+        "strided row step {} must be in [1, {}] (config {})",
+        step,
+        map->num_position_chunks,
+        config_id);
+    TT_FATAL(
+        strides.size() == step && device_group_indices.size() == step,
+        "strided row has bases {} / strides {} / device groups {}; all must match",
+        step,
+        strides.size(),
+        device_group_indices.size());
+    for (const auto& dg : device_group_indices) {
+        TT_FATAL(*dg < device_groups_.size(), "device group index {} not registered", *dg);
+    }
+    // A zero-size chunk with base 0 / group 0 is indistinguishable from an unset cell.
+    TT_FATAL(size_bytes > 0, "strided row size_bytes must be > 0 (config {})", config_id);
+    for (size_t r = 0; r < step; r++) {
+        // Residue r holds ceil((npc - r) / step) chunks; its last address must not wrap.
+        const uint64_t count = (map->num_position_chunks - r + step - 1) / step;
+        const __int128 last = static_cast<__int128>(bases[r]) + static_cast<__int128>(strides[r]) * (count - 1);
+        TT_FATAL(
+            last >= 0 && last <= static_cast<__int128>(std::numeric_limits<uint64_t>::max()),
+            "strided row residue {} wraps: base {:#x} + stride {} x {} (config {})",
+            r,
+            bases[r],
+            strides[r],
+            count - 1,
+            config_id);
+        if (count <= 1) {
+            strides[r] = 0;  // unused; canonical like the serializer's detect_row(), so exports compare equal
+        }
+    }
+    auto& row = map->rows[static_cast<size_t>(slot) * map->num_layers + layer];
+    row.step = static_cast<uint32_t>(step);
+    row.size_bytes = size_bytes;
+    row.bases = std::move(bases);
+    row.strides = std::move(strides);
+    row.device_group_indices = std::move(device_group_indices);
 }
 
 void KvChunkAddressTable::set_fabric_node_host(
@@ -343,8 +405,8 @@ std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
         config_id);
 
     std::vector<uint8_t> buf(loc.size_bytes);
-    tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-        resolve_device(dg.fabric_node_ids.front()),
+    tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(
+        *resolve_device(dg.fabric_node_ids.front()),
         static_cast<int>(addr_channel(loc.noc_addr)),
         addr_local(loc.noc_addr),
         std::span<uint8_t>(buf));

@@ -12,6 +12,14 @@ sender/writer that #53329 was originally filed for. #53329 is the Qwen3.6 suite 
 
 Shapes and program config mirror the Qwen3.6-27B GDN prefill out projection
 (models/demos/blackhole/qwen36/tt/tp_common.py::matmul_reduce_scatter_prefill).
+
+M is parametrized because the two rows exercise different bugs. M=128 keeps the reduce-scatter in
+the 2-worker band and is the scatter-header case above. M=2048 is the real prefill size: the data
+moved per link crosses the Blackhole 1 MiB ring threshold, so reduce_scatter_default_workers asks
+for 8 workers, and with reduce_scatter_core_grid_offset=(0, 8) only the two bottom rows of the
+grid can host them. Before the heuristic counted only the cores that stay on the grid after the
+offset, choose_worker_cores failed that combination with "Core grid offset 0-8 pushed 14 of the 36
+selected worker cores (first: 0-10) off the worker grid" (#57519, fixed in #57507).
 """
 import math
 
@@ -27,15 +35,21 @@ TILE = 32
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 24576}], indirect=True
 )
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-def test_fused_matmul_reduce_scatter_atomic_barrier(mesh_device):
+@pytest.mark.parametrize("M", [128, 2048], ids=["M128_scatter_header", "M2048_worker_count"])
+def test_fused_matmul_reduce_scatter_atomic_barrier(mesh_device, M):
     nd = mesh_device.get_num_devices()
-    M, K_local, N = 128, 1536, 5120
+    K_local, N = 1536, 5120
     grid = (8, 8)
     rs_dtype = ttnn.float32
 
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
-    rs_sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    # The RS workers sit below the matmul grid, so the semaphores must cover the whole grid.
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    sem_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+    )
+    rs_sems = [ttnn.create_global_semaphore(mesh_device, sem_crs, 0) for _ in range(3)]
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, sem_crs, 0)
 
     interm = ttnn.from_torch(
         torch.zeros(1, 1, M, N),

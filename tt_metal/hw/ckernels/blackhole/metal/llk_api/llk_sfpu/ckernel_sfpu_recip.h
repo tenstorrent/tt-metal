@@ -11,7 +11,6 @@
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_rsqrt_compat.h"
 #include "lltt.h"
 using namespace sfpi;
 
@@ -19,7 +18,8 @@ namespace ckernel {
 namespace sfpu {
 
 // Computes the reciprocal of a floating point value x.
-template <int max_iter = 2>
+// normalized=true requires a finite input with magnitude in [1, 2).
+template <int max_iter = 2, bool normalized = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x) {
     // sfpi::approx_recip(x) will return ±0 for x = ±inf or x ≥ ±2**126, and ±inf for x = ±0.
     sfpi::vFloat y = sfpi::approx_recip(x);
@@ -32,7 +32,14 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x) {
         // Equivalently, we could use v_if (t >= 2.0) instead, but SFPI doesn't support SFPLE/SFPGT at the moment.
         sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0;
 
-        if constexpr (max_iter > 1) {
+        if constexpr (normalized) {
+            // Normalized operands cannot trigger the exceptional reciprocal cases.
+            y = y * -t - 0.0f;
+            if constexpr (max_iter > 1) {
+                t = x * y - sfpi::vConstFloatPrgm0;
+                y = y * -t - 0.0f;
+            }
+        } else if constexpr (max_iter > 1) {
             sfpi::vFloat y1 = y * -t - 0.0f;
             // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
             v_if(t < 0) {
@@ -376,11 +383,9 @@ sfpi_inline void sfpu_reciprocal_init() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
-    if constexpr (legacy_compat) {
-        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
-    } else if constexpr (APPROXIMATION_MODE) {
+    if constexpr (APPROXIMATION_MODE) {
         _calculate_reciprocal_fast_7b_(ITERATIONS);
     } else if constexpr (is_fp32_dest_acc_en) {
         _calculate_reciprocal_fast_24b_5c_(ITERATIONS);
@@ -389,8 +394,12 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool legacy_compat = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void recip_init() {
+    // Full-tile reciprocal owns the shared LOADMACRO/Misc configuration and, for precise FP32,
+    // SFPU replay slots 0-5. Reinitialize another SFPU macro/replay owner before using it again.
+    // Scalar/first-column sfpu_reciprocal_iter callers only need generic unary SFPU init plus
+    // sfpu_reciprocal_init; they must not pay for or clobber state with this full-tile setup.
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + reciprocal's ADDR_MOD_6 + counter
     // reset), then the op-specific reciprocal setup below -- one self-contained init, matching exp_init.
     // SDPA runs reciprocal in its softmax after matmul/exp, so the general SFPU state is re-established
@@ -399,15 +408,13 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
-        if constexpr (APPROXIMATION_MODE) {
-            _init_reciprocal_fast_7b_();
-        } else if constexpr (is_fp32_dest_acc_en) {
-            _init_reciprocal_fast_24b_5c_();
-        } else {
-            _init_reciprocal_fast_8b_3c_();
-        }
+    sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
+    if constexpr (APPROXIMATION_MODE) {
+        _init_reciprocal_fast_7b_();
+    } else if constexpr (is_fp32_dest_acc_en) {
+        _init_reciprocal_fast_24b_5c_();
+    } else {
+        _init_reciprocal_fast_8b_3c_();
     }
 }
 

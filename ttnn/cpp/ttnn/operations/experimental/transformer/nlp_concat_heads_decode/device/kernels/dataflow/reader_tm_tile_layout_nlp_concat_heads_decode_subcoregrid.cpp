@@ -9,6 +9,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "internal/tensor/transfer_noc_addr.h"
 
 void kernel_main() {
     Noc noc;
@@ -32,7 +33,8 @@ void kernel_main() {
 
     // Base address of the (sharded) input tensor; the remote NoC addresses are assembled by hand below.
     auto in_tensor = TensorAccessor(tensor::input);
-    uint32_t q_start_addr = in_tensor.get_bank_base_address();
+    // Raw: same L1 address on the source cores (no handle form yet).
+    uint32_t q_start_addr = tensor_accessor::detail::TransferAccess::bank_base(in_tensor);
 
     DataflowBuffer dfb_q_out(dfb::q_out);
     UnicastEndpoint src_ep;
@@ -79,8 +81,13 @@ void kernel_main() {
 
             if (num_tiles_read_cur_core == num_tiles_per_core) {
                 cur_core_idx++;
-                qkv_noc_x = get_vararg(cur_core_idx);
-                qkv_noc_y = get_vararg(in_num_cores + cur_core_idx);
+                // After the last input core the cursor points one past the coordinate tables; the
+                // value would never be used, but the read itself is out of bounds (caught by the
+                // kernel runtime-arg assert / watcher), so only refetch while a core is left.
+                if (cur_core_idx < in_num_cores) {
+                    qkv_noc_x = get_vararg(cur_core_idx);
+                    qkv_noc_y = get_vararg(in_num_cores + cur_core_idx);
+                }
                 qkv_read_addr = q_start_addr + in_tile_offset_by_head;
                 num_tiles_read_cur_core = 0;
             }

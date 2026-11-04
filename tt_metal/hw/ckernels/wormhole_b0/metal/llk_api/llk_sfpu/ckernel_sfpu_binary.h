@@ -13,7 +13,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_log.h"
+#include "ckernel_sfpu_log.h"
 
 using namespace sfpi;
 
@@ -36,15 +36,16 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     // Normalize base to calculation range
     sfpi::vFloat x = setexp(base, 127);  // set exp to exp bias (put base in range of 1-2)
 
-    // 3rd order polynomial approx - determined using rminimax over [1,2]
-    sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
+    // 3rd order polynomial approx - determined using rminimax over [1,2], see LogPolyNoInit
+    sfpi::vFloat series_result =
+        x * (x * (x * LogPolyNoInit::A - LogPolyNoInit::B) + LogPolyNoInit::C) - LogPolyNoInit::D;
 
     // Convert exponent to float
     sfpi::vSMag exp = sfpi::convert<sfpi::vSMag>(exexp(base));
     sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
 
     // De-normalize to original range
-    sfpi::vFloat vConstLn2 = 0.692871f;
+    sfpi::vFloat vConstLn2 = LogPolyNoInit::LN2;
     sfpi::vFloat log_result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     // Base case when input is 0. ln(0) = -inf
@@ -94,6 +95,59 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     return result;
 }
 
+// True when calculate_sfpu_binary_two_row can serve the call: a single-instruction op with no
+// software rounding after it, over an even row count. An odd ITERATIONS takes the one-row body
+// instead; every caller passes 8 rows per face.
+template <BinaryOp BINOP, int ITERATIONS, bool software_rounding>
+inline constexpr bool use_two_row_binary =
+    (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::MUL) &&
+    !software_rounding && ITERATIONS % 2 == 0;
+
+// ADD/SUB/RSUB/MUL rows that take no software rounding are load, load, op, store. The op -> store
+// latency is two cycles, so a one-row body spends an SFPNOP on every row that nothing can fill
+// (SFPLOAD x2, op, SFPNOP, SFPSTORE, TTINCRWC: 6 instructions per row). Two rows per iteration,
+// the pattern ckernel_sfpu_addcmul.h uses, let the second row's op fill it: SFPLOAD x4, op x2,
+// SFPSTORE x2 and one TTINCRWC, 9 instructions per two rows. Identical instructions on identical
+// operands, only the issue order changes, so the results are bit-identical to the one-row body.
+template <BinaryOp BINOP, int ITERATIONS>
+inline void calculate_sfpu_binary_two_row(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(
+        use_two_row_binary<BINOP, ITERATIONS, false /*software_rounding*/>,
+        "two rows per iteration: ADD/SUB/RSUB/MUL over an even row count");
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const std::uint32_t off_in0 = dst_index_in0 * dst_tile_size_sfpi;
+    const std::uint32_t off_in1 = dst_index_in1 * dst_tile_size_sfpi;
+    const std::uint32_t off_out = dst_index_out * dst_tile_size_sfpi;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];
+        sfpi::vFloat a_in1 = sfpi::dst_reg[off_in1];
+        sfpi::vFloat b_in0 = sfpi::dst_reg[off_in0 + 1];
+        sfpi::vFloat b_in1 = sfpi::dst_reg[off_in1 + 1];
+        sfpi::vFloat a_res;
+        sfpi::vFloat b_res;
+        if constexpr (BINOP == BinaryOp::ADD) {
+            a_res = a_in0 + a_in1;
+            b_res = b_in0 + b_in1;
+        } else if constexpr (BINOP == BinaryOp::SUB) {
+            a_res = a_in0 - a_in1;
+            b_res = b_in0 - b_in1;
+        } else if constexpr (BINOP == BinaryOp::RSUB) {
+            a_res = a_in1 - a_in0;
+            b_res = b_in1 - b_in0;
+        } else {
+            a_res = a_in0 * a_in1;
+            b_res = b_in0 * b_in1;
+        }
+        sfpi::dst_reg[off_out] = a_res;
+        sfpi::dst_reg[off_out + 1] = b_res;
+        sfpi::dst_reg += 2;
+    }
+}
+
 template <
     bool APPROXIMATION_MODE,
     BinaryOp BINOP,
@@ -103,6 +157,30 @@ template <
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    constexpr bool round_to_bf16_rne = (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) &&
+                                       !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
+    if constexpr (use_two_row_binary<BINOP, ITERATIONS, round_to_bf16_rne>) {
+        calculate_sfpu_binary_two_row<BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        return;
+    }
+    // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
+    // loop; as literals inside the loop they would be re-materialised on every row.
+    // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
+    // Unassigned for every other op, so do not read them outside the XLOGY branch.
+    sfpi::vFloat log_c;
+    sfpi::vFloat log_d;
+    if constexpr (BINOP == BinaryOp::XLOGY) {
+        log_c = LogPoly::C;
+        log_d = LogPoly::D;
+    }
+    // The bf16 RNE constants are bound outside the loop for the same reason (two SFPLOADI
+    // per row otherwise). Unassigned unless round_to_bf16_rne, which also gates their use.
+    sfpi::vUInt rne_bias;
+    sfpi::vUInt rne_mask;
+    if constexpr (round_to_bf16_rne) {
+        rne_bias = kBf16RneBias;
+        rne_mask = kBf16RneMask;
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -124,13 +202,26 @@ inline void calculate_sfpu_binary(
         } else if constexpr (BINOP == BinaryOp::POW) {
             result = calculate_sfpu_binary_power(in0, in1);
         } else if constexpr (BINOP == BinaryOp::XLOGY) {
-            v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
-            v_else {
-                sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
-                _calculate_log_body_<false>(0, dst_index_out);
-                result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
+            if constexpr (is_fp32_dest_acc_en) {
+                // ln(in1) on the register. The Dest round trip below (a store of in1, the
+                // in-place log body's load and store, and a reload) is exact on a 32-bit Dest
+                // except for its denormal flush, which the register body reproduces for
+                // sign-clear in1; the guard turns the sign-set lanes, where the two differ,
+                // into NaN. So this is bit-identical and four Dest accesses per row cheaper.
+                result = _calculate_log_body_on_reg_(in1, log_c, log_d) * in0;
+                v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
+                v_endif;
+            } else {
+                // The store to a 16-bit Dest truncates the log intermediate to the Dest format
+                // before the multiply; kept so the result stays bit-identical on that Dest.
+                v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
+                v_else {
+                    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
+                    _calculate_log_body_(log_c, log_d, dst_index_out);
+                    result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
+                }
+                v_endif;
             }
-            v_endif;
         } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
             // Step in0 one representable value toward in1. Consecutive floats of one sign are
             // consecutive integers when the bit pattern is read as an integer, so the step is taken
@@ -159,8 +250,7 @@ inline void calculate_sfpu_binary(
             // The guards test the magnitudes, not in0 and in1 directly, because SFPSETCC is
             // specified only for a comparand that is not negative zero (VectorUnit.md), and
             // in0 == 0.0f tests in0 - 0.0f, which is negative zero exactly when in0 is. Clearing
-            // the sign first is what brings -0.0 into the guard; ckernel_sfpu_rsqrt_compat.h
-            // carries the same construction for the same reason.
+            // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
             sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
@@ -189,10 +279,8 @@ inline void calculate_sfpu_binary(
             v_endif;
         }
 
-        if constexpr (
-            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
-            dst_rounding_mode == DstRoundingMode::NearestEven) {
-            result = float32_to_bf16_rne(result);
+        if constexpr (round_to_bf16_rne) {
+            result = float32_to_bf16_rne(result, rne_bias, rne_mask);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -203,17 +291,32 @@ inline void calculate_sfpu_binary(
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    // A 16-bit Dest rounds the product to bf16 in software and stores x * 0 as +0, so it keeps the
+    // one-row body.
+    if constexpr (use_two_row_binary<BinaryOp::MUL, ITERATIONS, !is_fp32_dest_acc_en>) {
+        calculate_sfpu_binary_two_row<BinaryOp::MUL, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        return;
+    }
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    // RNE constants bound once per face, not re-materialised on every row.
+    // Unassigned unless round_to_bf16_rne, which also gates their use.
+    constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en;
+    sfpi::vUInt rne_bias;
+    sfpi::vUInt rne_mask;
+    if constexpr (round_to_bf16_rne) {
+        rne_bias = kBf16RneBias;
+        rne_mask = kBf16RneMask;
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         sfpi::vFloat result = in0 * in1;
 
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (round_to_bf16_rne) {
             // Software RNE approach (kept for reference):
-            result = float32_to_bf16_rne(result);
+            result = float32_to_bf16_rne(result, rne_bias, rne_mask);
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
             v_endif;
@@ -233,30 +336,59 @@ inline void calculate_sfpu_binary_div(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
-        sfpi::vFloat result = in0 * r;
+        sfpi::vFloat result;
         if constexpr (is_fp32_dest_acc_en) {
-            // Skip quotient refinement when in0*r is already non-finite.
-            // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
-            // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
-            v_if(sfpi::is_finite(result)) {
-                // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
-                // The residual subtraction is exact under Sterbenz's lemma.
-                sfpi::vFloat e = in0 - result * in1;
-                result = result + e * r;
-            }
-            v_endif;
-        }
+            // Refine signed mantissas with magnitudes in [1, 2), so neither the
+            // reciprocal nor the residual underflows, then restore the exponent.
+            sfpi::vFloat ma = sfpi::setexp(in0, 127);
+            sfpi::vFloat mb = sfpi::setexp(in1, 127);
+            // One Newton step suffices when the residual uses a single multiply-add.
+            sfpi::vFloat r = sfpu_reciprocal_iter<1 /*max_iter*/, false /*round_to_bf16*/, true /*normalized*/>(mb);
+            sfpi::vFloat q = ma * r;
+            // Wormhole SFPMAD has no subtract modifier: negate an operand first.
+            sfpi::vFloat residual = ma + q * (-mb);
+            q = q + residual * r;
 
-        v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
+            sfpi::vInt ea = sfpi::exexp(in0, sfpi::ExponentMode::Biased);
+            // eb is unbiased, which absorbs the bias in exponent below.
+            sfpi::vInt eb = sfpi::exexp(in1);
+            // Split exponent restoration between two factors. Their product
+            // supplies hardware overflow/underflow handling, while power-of-two
+            // scaling is exact for normal results.
+            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
+            sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
+            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
+
+            // For exceptional inputs only the reciprocal's sign and zero/Inf
+            // classification matter. Inverting its exponent gives Inf for zero,
+            // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
+            // XOR inverts the exponent but keeps the divisor's sign, avoiding a copysgn.
+            // Normal inputs have biased exponents in [1, 254], or unbiased exponents
+            // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
+            // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
+            v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
+                sfpi::vInt inf_bits = 0x7f800000;
+                // Clear the mantissa first so XOR can reuse the scale register.
+                sfpi::vInt scale_bits = sfpi::as<sfpi::vInt>(sfpi::setman(in1, 0));
+                sfpi::vFloat scale = sfpi::as<sfpi::vFloat>(scale_bits ^ inf_bits);
+                result = in0 * scale;
+                // The zero scale would hide NaN divisors, so propagate them.
+                v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) > inf_bits);
+                result = in1;
+            }
+            v_endif;
+        } else {
+            result = in0 * sfpu_reciprocal_iter<2>(in1);
+            v_if(in1 == 0) {
+                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_else {
+                    result = std::numeric_limits<float>::infinity();
+                    result = sfpi::copysgn(result, in0);
+                }
+                v_endif;
             }
             v_endif;
         }
-        v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:

@@ -37,6 +37,7 @@
 #include "ttnn/operations/normalization/batch_norm/device/running_statistics_device_operation.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_post_all_gather.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_pre_all_gather.hpp"
 #include "ttnn/operations/normalization/rmsnorm/rmsnorm.hpp"
@@ -451,8 +452,8 @@ TEST_F(NormalizationSmoke, LayerNormResidualFused) {
 
 // LayerNormMultiCoreProgramFactory, Welford variant (compute/layernorm_welford.cpp;
 // reader is the standard reader_unary_interleaved_ln.cpp with the welford compile-time
-// arg). LayerNormDefaultProgramConfig fields verified: {legacy_reduction, legacy_rsqrt,
-// use_welford}. Welford is LN-only (validate_on_program_cache_miss rejects RMSNORM) and
+// arg). Default config field order: {legacy_reduction, use_welford}.
+// Welford is LN-only (validate_on_program_cache_miss rejects RMSNORM) and
 // requires a reciprocal LUT tensor (TT_FATAL at layernorm_op_multi_core.cpp) --
 // built here over the full compute grid with width = full W, exactly as
 // ttnn.create_layer_norm_reciprocals does for non-sharded inputs.
@@ -477,7 +478,7 @@ TEST_F(NormalizationSmoke, LayerNormWelfordInterleaved) {
 // LayerNormShardedProgramFactory (compute/layernorm_sharded.cpp): single [32,64] L1
 // shard on core (0,0), WIDTH_SHARDED. Config field order verified:
 // {compute_with_storage_grid_size, subblock_w, block_h, block_w, inplace,
-//  legacy_reduction=false, legacy_rsqrt=false, use_welford=false}.
+// legacy_reduction, use_welford}.
 // Validator (mcast-1d branch, M == block_h*tile_h): block_w == ceil(Kt/num_cores) == 2,
 // block_h == Mt == 1, block dims * tile dims == shard shape, bbox < grid size, and
 // sharded input requires a sharded output (inherited from the input's memory config).
@@ -848,23 +849,56 @@ TEST_F(NormalizationSmoke, DistributedPostGammaBeta) {
     detail::expect_close(v, expected, 0.0f, 0.06f);
 }
 
-TEST_F(NormalizationSmoke, DISABLED_DistributedLayerNormPostWelford) {
-    // KNOWN BUG (disabled; run with --gtest_also_run_disabled_tests): #51231 --
-    // LayerNormPostAllGatherWelfordProgramFactory returns garbage (measured -64512 where the
-    // golden is -1, every element, BH p100a 2026-08-21). use_welford=true on the post stage,
-    // fed by the plain pre stage (num_devices = 1); same +-1 golden as the end-to-end cell.
-    // Enable when #51231 closes. The pre-all-gather Welford factory stays untested: same
-    // issue, hang class.
+TEST_F(NormalizationSmoke, DistributedLayerNormPostWelford) {
+    // Welford pre and post stages (num_devices = 1). The post stage consumes the pre stage's
+    // mean/variance, so both must run Welford; same +-1 golden as the end-to-end cell.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
     const auto x_data = detail::norm_alternating(32 * 64, 1.0f, -1.0f);
     auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
 
-    auto stats = ttnn::layer_norm_pre_all_gather(x);
+    const auto grid = device.compute_with_storage_grid_size();
+    const CoreRangeSet full_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    const auto recip = detail::norm_welford_recip_lut(device, full_grid, 64);
     const ttnn::prim::LayerNormProgramConfig cfg = ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true};
+    auto stats =
+        ttnn::layer_norm_pre_all_gather(x, DataType::BFLOAT16, std::nullopt, std::nullopt, cfg, std::nullopt, recip);
     auto out =
         ttnn::layer_norm_post_all_gather(x, stats, 1e-6f, std::nullopt, std::nullopt, std::nullopt, std::nullopt, cfg);
     detail::expect_close(detail::to_float_vector(out), x_data, 0.0f, 0.03f);
+}
+
+TEST_F(NormalizationSmoke, DistributedLayerNormPostWelford2DGridRejected) {
+    // LayerNormPostAllGatherWelfordProgramFactory has no 2D work split, so the prim must reject
+    // use_2d_core_grid with Welford, as the pre-all-gather validator already does. The public
+    // ttnn::layer_norm_post_all_gather never forwards use_2d_core_grid, hence the prim call.
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const auto x_data = detail::norm_alternating(32 * 64, 1.0f, -1.0f);
+    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
+
+    const auto grid = device.compute_with_storage_grid_size();
+    const CoreRangeSet full_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    const auto recip = detail::norm_welford_recip_lut(device, full_grid, 64);
+    const ttnn::prim::LayerNormProgramConfig cfg = ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true};
+    auto stats =
+        ttnn::layer_norm_pre_all_gather(x, DataType::BFLOAT16, std::nullopt, std::nullopt, cfg, std::nullopt, recip);
+    const auto kernel_config = ttnn::init_device_compute_kernel_config(
+        device.arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
+    EXPECT_THROW(
+        ttnn::prim::layer_norm_post_all_gather(
+            x,
+            stats,
+            ttnn::prim::LayerNormDistributedType::LAYERNORM,
+            1e-6f,
+            std::nullopt,
+            std::nullopt,
+            x.memory_config(),
+            kernel_config,
+            std::nullopt,
+            /*use_2d_core_grid=*/true,
+            cfg),
+        std::exception);
 }
 
 // ---------------------------------------------------------------------------
@@ -965,7 +999,6 @@ TEST_F(NormalizationSmoke, GroupNormNoMcastInterleaved) {
         /*input_mask=*/std::nullopt,
         /*weight=*/std::nullopt,
         /*bias=*/std::nullopt,
-        /*reciprocals=*/std::nullopt,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         ttnn::CoreGrid(1, 1));
@@ -1001,7 +1034,6 @@ TEST_F(NormalizationSmoke, GroupNormMcastInterleaved) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt,
         ttnn::CoreGrid(1, 2));
     detail::expect_close(detail::to_float_vector(out), expected, 0.0f, 0.03f);
 }
@@ -1032,7 +1064,6 @@ TEST_F(NormalizationSmoke, DISABLED_GroupNormMultiRowTileWideC) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt,
         ttnn::CoreGrid(1, 1));
     detail::expect_close(detail::to_float_vector(out), detail::gn_golden_expected(64, 1.0f, 0.0f), 0.0f, 0.03f);
 }
@@ -1058,7 +1089,6 @@ TEST_F(NormalizationSmoke, GroupNormShardedBlock1x1) {
         input,
         /*num_groups=*/2,
         detail::kGnEps,
-        std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,
@@ -1094,7 +1124,6 @@ TEST_F(NormalizationSmoke, GroupNormShardedBlock1x1GammaBeta) {
         std::nullopt,
         gamma,
         beta,
-        std::nullopt,
         sharded_cfg,
         std::nullopt,
         ttnn::CoreGrid(1, 1));
@@ -1114,7 +1143,6 @@ TEST_F(NormalizationSmoke, GroupNormWelfordInterleaved) {
         /*input_mask=*/std::nullopt,
         /*weight=*/std::nullopt,
         /*bias=*/std::nullopt,
-        /*reciprocals=*/std::nullopt,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         ttnn::CoreGrid(1, 1),
@@ -1155,7 +1183,6 @@ TEST_F(NormalizationSmoke, DISABLED_GroupNormInputMask) {
         mask,
         /*weight=*/std::nullopt,
         /*bias=*/std::nullopt,
-        std::nullopt,
         std::nullopt,
         std::nullopt,
         ttnn::CoreGrid(1, 1));

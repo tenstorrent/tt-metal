@@ -11,23 +11,26 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 128]
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
         in0: "input_A"
       - type: "Fpu"
+        block_size: [64, 128]
         in0: "input_A"
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCB"
         math_fidelity: "LoFi"
       - type: "Fpu"
+        block_size: [64, 128]
         in0: "input_A"
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCA"
         math_fidelity: "LoFi"
-    block_size: [64, 128]
     pack:
       - output: "output"
+        block_size: [64, 128]
         packer: "Packer"

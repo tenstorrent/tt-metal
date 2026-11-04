@@ -71,9 +71,17 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                     width. Must match cos/sin width and be a positive multiple of 32.
                 rotary_offset (int): first rotary channel (default 0), a multiple of 32. The region
                     must fit within input width. Other channels are copied without conversion.
+                concat_prefix (ttnn.Tensor, optional): rank-4 TILE tensor on the same device and
+                    with the same dtype as input. Uses ordinary 32x32 tiles (no face transposition).
+                    Logical and padded leading dimensions must match input. Width must be a multiple
+                    of 32 with no extra width padding. Its channels are copied before the rotated
+                    input in the output.
+                row_major_output (bool): write the output row-major, each row the concat_prefix channels then
+                    the rotated ones (default False: TILE). Needs concat_prefix, a bfloat16 input rotated across its
+                    whole width, and a prefix width that is a multiple of it.
 
             Returns:
-                ttnn.Tensor: a new tensor with the same spec as `input`, rotary-embedded.
+                ttnn.Tensor: a rotary-embedded tensor, with concat_prefix channels first when supplied.
         )doc",
         // Scalar form.
         ttnn::overload_t(
@@ -88,7 +96,9 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const KCfg&,
                 const SubshardAxis&,
                 const std::optional<uint32_t>&,
-                uint32_t>(&rotary_embedding_indexed),
+                uint32_t,
+                const std::optional<Tensor>&,
+                bool>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -99,7 +109,9 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("compute_kernel_config") = std::nullopt,
             nb::arg("seq_subshard_axis") = std::nullopt,
             nb::arg("rotary_dim") = std::nullopt,
-            nb::arg("rotary_offset") = 0),
+            nb::arg("rotary_offset") = 0,
+            nb::arg("concat_prefix") = std::nullopt,
+            nb::arg("row_major_output") = false),
         // Metadata form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -113,7 +125,9 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const KCfg&,
                 const SubshardAxis&,
                 const std::optional<uint32_t>&,
-                uint32_t>(&rotary_embedding_indexed),
+                uint32_t,
+                const std::optional<Tensor>&,
+                bool>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -124,7 +138,9 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("compute_kernel_config") = std::nullopt,
             nb::arg("seq_subshard_axis") = std::nullopt,
             nb::arg("rotary_dim") = std::nullopt,
-            nb::arg("rotary_offset") = 0));
+            nb::arg("rotary_offset") = 0,
+            nb::arg("concat_prefix") = std::nullopt,
+            nb::arg("row_major_output") = false));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::detail

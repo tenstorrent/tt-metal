@@ -7,18 +7,15 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <optional>
 #include <set>
-#include <string>
 #include <utility>
 #include <unordered_set>
 #include <vector>
 
 #include <fmt/format.h>
 
-#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>

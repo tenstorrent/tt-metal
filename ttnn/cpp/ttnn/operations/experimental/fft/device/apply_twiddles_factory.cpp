@@ -135,10 +135,10 @@ ttnn::device_operation::ProgramArtifacts ApplyTwiddlesFactory::create_program_ar
              TensorBinding{.tensor_parameter_name = AT_TW_I, .accessor_name = "tw_i"}},
         .compile_time_args = {{"n1", N1}},
         .runtime_arg_schema = {.runtime_arg_names = {"base_row", "num_rows", "n2"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device_raw->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    KernelSpec writer = shared::make_writer(device_raw->arch(), N1, is_bf16);
+    KernelSpec writer = shared::make_writer(N1, is_bf16);
     KernelSpec compute = shared::make_compute();
 
     KernelRunArgs reader_run_args{.kernel = AT_READER};

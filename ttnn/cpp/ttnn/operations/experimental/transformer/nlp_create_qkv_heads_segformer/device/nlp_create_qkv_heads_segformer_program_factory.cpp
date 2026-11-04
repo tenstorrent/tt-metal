@@ -2,32 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_program_factory.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-NlpCreateQkvHeadsSegformerProgramFactory::cached_program_t NlpCreateQkvHeadsSegformerProgramFactory::create(
-    const NlpCreateQkvHeadsSegformerParams& /*operation_attributes*/,
-    const NlpCreateQkvHeadsSegformerInputs& tensor_args,
-    NlpCreateQkvHeadsSegformerResult& output) {
+ttnn::device_operation::ProgramArtifacts
+NlpCreateHeadsSegformerDeviceOperation::NlpCreateQkvHeadsSegformerProgramFactory::create_program_artifacts(
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
     const auto& a = tensor_args.input_tensor;
     const auto& ashape = a.padded_shape();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    tt_metal::Buffer* in0_buffer = a.buffer();
-    TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
-    // Dummy
-    uint32_t in1_buffer_addr = 0;
+    uint32_t single_tile_size = tt::tile_size(data_format);
+    TT_ASSERT(a.buffer()->size() % single_tile_size == 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
@@ -57,61 +59,92 @@ NlpCreateQkvHeadsSegformerProgramFactory::cached_program_t NlpCreateQkvHeadsSegf
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     ttnn::Tensor& q = std::get<0>(output);
-    ttnn::Tensor& k = std::get<1>(output);
-    ttnn::Tensor& v = std::get<2>(output);
 
-    tt_metal::Buffer* q_buffer = q.buffer();
-    TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");
-    tt_metal::Buffer* k_buffer = k.buffer();
-    TT_ASSERT(k_buffer != nullptr, "Output k buffer should be allocated on device!");
-    tt_metal::Buffer* v_buffer = v.buffer();
-    TT_ASSERT(v_buffer != nullptr, "Output v buffer should be allocated on device!");
+    TT_ASSERT(q.is_allocated(), "Output q buffer should be allocated on device!");
+
+    // The Metal 2.0 binding layer works with the Metalium tensor type; extract once.
+    const auto& input_mesh_tensor = a.mesh_tensor();
+    const auto& q_mesh_tensor = q.mesh_tensor();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName QV{"qv"};  // Q head tiles, reader -> writer
+    const TensorParamName INPUT{"input"};
+    const TensorParamName Q{"q"};
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)q_num_tiles,
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/kernels/dataflow/"
+            "reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = QV,
+                    .accessor_name = "qv",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "input",
+                },
+            },
+        .compile_time_args =
+            {
+                {"q_num_tiles", q_num_tiles},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "in0_tensor_tile_id", "in1_tensor_tile_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
-    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)q_out_h_tiles,
-        (std::uint32_t)q_out_w_tiles,
-        (std::uint32_t)q_out_HtWt,
-        (std::uint32_t)num_q_heads,  // q_out_c
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/kernels/dataflow/"
+            "writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = QV,
+                    .accessor_name = "qv",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = Q,
+                    .accessor_name = "q",
+                },
+            },
+        .compile_time_args =
+            {
+                {"q_out_h_tiles", q_out_h_tiles},
+                {"q_out_w_tiles", q_out_w_tiles},
+                {"q_out_HtWt", q_out_HtWt},
+                {"q_out_c", num_q_heads},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "q_out_h_dim", "q_out_tensor_tile_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
-    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
 
-    ///////////// K transpose ////////////////////
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
+    // Create dataflow buffers
+    uint32_t qv_num_tiles = per_tensor_tiles * 2;  // double buffer
+    DataflowBufferSpec qv_dfb{
+        .unique_id = QV,
+        .entry_size = single_tile_size,
+        .num_entries = qv_num_tiles,
+        .data_format_metadata = data_format,
+    };
 
-    //////////////////////////////////////////////
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
-
-    auto writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/kernels/dataflow/"
-        "writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
-
-    // Create circular buffers
-    uint32_t src1_cb_index = 1;
-    uint32_t cb0_num_tiles = per_tensor_tiles * 2;  // double buffer
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(cb0_num_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
-
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_blocks_per_core = 0;
@@ -123,67 +156,60 @@ NlpCreateQkvHeadsSegformerProgramFactory::cached_program_t NlpCreateQkvHeadsSegf
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_runtime_args = {
-            (std::uint32_t)in0_buffer->address(),
-            (std::uint32_t)in1_buffer_addr,
-            num_blocks_per_core,
-            num_blocks_written * per_tensor_tiles,
-            0,
-        };
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {
+                {"num_blocks", num_blocks_per_core},
+                {"in0_tensor_tile_id", num_blocks_written * per_tensor_tiles},
+                {"in1_tensor_tile_id", 0u},
+            });
 
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
         uint32_t q_out_tensor_tile_id =
             (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
 
-        std::vector<uint32_t> writer_runtime_args = {
-            (std::uint32_t)q_buffer->address(),  // q_tensor_addr
-            num_blocks_per_core,                 // num_blocks
-            q_out_h_dim,
-            q_out_tensor_tile_id,
-        };
-
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {
+                {"num_blocks", num_blocks_per_core},
+                {"q_out_h_dim", q_out_h_dim},
+                {"q_out_tensor_tile_id", q_out_tensor_tile_id},
+            });
         num_blocks_written += num_blocks_per_core;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {/* reader_kernel_id = */ reader_kernel_id,
-         /* writer_kernel_id = */ writer_kernel_id,
-         /* num_cores        = */ num_cores,
-         /* num_cores_y      = */ num_cores_y}};
-}
+    ProgramSpec spec{
+        .name = "nlp_create_qkv_heads_segformer",
+        .kernels = {std::move(reader), std::move(writer)},
+        .dataflow_buffers = {std::move(qv_dfb)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()},
+                TensorParameter{.unique_id = Q, .spec = q_mesh_tensor.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "all_cores",
+                    .kernels = {READER, WRITER},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
 
-void NlpCreateQkvHeadsSegformerProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const NlpCreateQkvHeadsSegformerParams& /*operation_attributes*/,
-    const NlpCreateQkvHeadsSegformerInputs& tensor_args,
-    NlpCreateQkvHeadsSegformerResult& output) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& reader_kernel_id = shared_vars.reader_kernel_id;
-    auto& writer_kernel_id = shared_vars.writer_kernel_id;
-    auto& program = cached_program.program;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {
+        {INPUT, input_mesh_tensor},
+        {Q, q_mesh_tensor},
+    };
 
-    uint32_t num_cores = shared_vars.num_cores;
-    uint32_t num_cores_y = shared_vars.num_cores_y;
-
-    auto* src_dram_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_dram_buffer_query = std::get<0>(output).buffer();
-
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer_query->address();
-        }
-    }
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::experimental::prim

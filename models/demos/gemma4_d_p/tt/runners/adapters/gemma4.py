@@ -6,15 +6,21 @@
 import os
 
 from models.demos.common.prefill.adapter import PrefillModelAdapter
+from models.demos.gemma4_d_p.tt.dflash_config import DEFAULT_DFLASH_MODEL, load_dflash_config
 
 
 class Gemma4ServiceConfig:
     NUM_LAYERS = 60
     FABRIC_PAYLOAD_SIZE = 8192
     MESH_SHAPE = (8, 4)
-    CHUNK_SIZE = 8192
+    # Validation runs may set GEMMA4_TEST_CHUNK_SIZE to test another chunk size.
+    CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 8192))
     MAX_SEQ_LEN = 262144
     MAX_USER_SLOTS = 6
+
+
+def is_global_layer_by_index(layer_idx):
+    return layer_idx % 6 == 5
 
 
 def validate_params(params):
@@ -29,7 +35,6 @@ def validate_params(params):
         "sp_axis": 0,
         "tp_axis": 1,
         "use_trace": True,
-        "dflash_enabled": False,
     }
     for name, value in expected.items():
         if getattr(params, name) != value:
@@ -43,8 +48,11 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     model_config = Gemma4ServiceConfig
     hf_model_default = "google/gemma-4-31B-it"
     ttnn_cache_default = ""
-    prefill_trace_default = ""
+    prefill_trace_default = "/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135"
     pipeline_activation_emb_tp_sharded = False
+    supports_dflash = True
+    dflash_model_default = DEFAULT_DFLASH_MODEL
+    dflash_rope_convention = "half_split"
 
     @property
     def hf_model_id(self):
@@ -74,6 +82,27 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             mesh_shape=mesh_shape,
         )
 
+    def _draft_config_for_cache(self, config_id):
+        config = load_dflash_config(os.getenv("DFLASH_HF_MODEL") or self.dflash_model_default)
+        if not 36 <= config_id < 36 + 2 * config.num_key_value_heads:
+            raise ValueError(f"Invalid Gemma4 cache config {config_id}")
+        return config
+
+    def cache_layer_rows(self, config_id, num_layers):
+        if config_id >= 36:
+            draft = self._draft_config_for_cache(config_id)
+            return {layer: layer for layer in range(num_layers, num_layers + draft.num_hidden_layers)}
+        if not 0 <= config_id < 36:
+            raise ValueError(f"Invalid Gemma4 cache config {config_id}")
+        return {layer: layer for layer in range(num_layers) if is_global_layer_by_index(layer) == (config_id < 4)}
+
+    def cache_head_dim(self, config_id):
+        if config_id >= 36:
+            return self._draft_config_for_cache(config_id).head_dim
+        if not 0 <= config_id < 36:
+            raise ValueError(f"Invalid Gemma4 cache config {config_id}")
+        return 640 if config_id < 4 else 256
+
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         validate_params(params)
         from models.demos.gemma4_d_p.config import MeshConfig
@@ -86,6 +115,12 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             num_users=params.num_users,
             max_seq_len=params.max_seq_len,
             prefill_chunk_size=params.chunk_size,
+            bank_aligned=True,
+            dflash_config=(
+                load_dflash_config(params.dflash_checkpoint_path or self.dflash_model_default)
+                if params.dflash_enabled
+                else None
+            ),
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params):

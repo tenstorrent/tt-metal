@@ -37,13 +37,21 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
+        input.padded_shape()[-1] > 0 && input.padded_shape()[-2] > 0,
+        "Input must have non-zero height and width, got shape {}",
+        input.padded_shape());
+    TT_FATAL(
         input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Only interleaved inputs supported.");
+    TT_FATAL(
+        args.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Output memory config must be interleaved for an interleaved input, got: {}",
+        args.memory_config.memory_layout());
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
             input.dtype() == DataType::FLOAT32,
         "Input data format not supported.");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
 
     // Op-level invariant, so it lives here rather than in each program factory.
     TT_FATAL(
@@ -90,7 +98,7 @@ LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherD
 
     auto output_dtype = args.dtype.value_or(input_tensor.dtype());
     return tt::tt_metal::TensorSpec(
-        output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
+        output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), args.memory_config));
 }
 
 LayerNormPreAllGatherDeviceOperation::tensor_return_value_t LayerNormPreAllGatherDeviceOperation::create_output_tensors(
@@ -111,7 +119,8 @@ Tensor layer_norm_pre_all_gather(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
     using OperationType = LayerNormPreAllGatherDeviceOperation;
 
     // Validate the residual before fill_implicit_tile_padding so a malformed residual surfaces
@@ -132,7 +141,7 @@ Tensor layer_norm_pre_all_gather(
             b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Residual tensor must be interleaved.");
         TT_FATAL(b.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-        TT_FATAL(b.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(b.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(input.device() == b.device(), "Input and residual tensors must be on same device");
     }
 
@@ -146,6 +155,7 @@ Tensor layer_norm_pre_all_gather(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
             .dtype = dtype,
+            .memory_config = memory_config.value_or(input.memory_config()),
             .compute_kernel_config = compute_kernel_config,
             .program_config = program_config,
             .use_2d_core_grid = use_2d_core_grid,

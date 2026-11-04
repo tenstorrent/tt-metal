@@ -4,19 +4,23 @@
 
 #pragma once
 
-#include <cstdint>
-
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 #include "deepseek_moe_gate_device_operation_types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate {
 
-// Build executable program descriptor from current tensors / scalars (used on cache hit and miss).
-tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
-    const tensor_args_t& tensor_args, const operation_attributes_t& operation_attrs);
+// Tensor parameters backing the tensor-backed dataflow buffers. create_program_artifacts and
+// override_runtime_arguments both use these names.
+inline const tt::tt_metal::experimental::TensorParamName kInputTensor{"input_tensor"};
+inline const tt::tt_metal::experimental::TensorParamName kBiasTensor{"bias_tensor"};
+inline const tt::tt_metal::experimental::TensorParamName kOutputTensor{"output_tensor"};
+inline const tt::tt_metal::experimental::TensorParamName kInputIndicesTensor{"input_indices_tensor"};
+inline const tt::tt_metal::experimental::TensorParamName kOutputIndicesTensor{"output_indices_tensor"};
 
-// Structural hash excluding buffer addresses (matches generic_op program-cache semantics).
-[[nodiscard]] std::uint64_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescriptor&);
+// Build the program spec and its run args from current tensors / scalars (cache miss only).
+ttnn::device_operation::ProgramArtifacts build_moe_gate_program_artifacts(
+    const tensor_args_t& tensor_args, const operation_attributes_t& operation_attrs);
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate

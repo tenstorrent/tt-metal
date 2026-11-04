@@ -68,7 +68,7 @@ class DeepseekV32Config:
 def deepseek_v32_hf_config(max_seq: int = 16384):
     """HF-attribute-style config the unified ttMLA reads (DeepSeek-V3.2 dims + YaRN + DSA indexer).
 
-    Mirrors `glm_hf_config()`. YaRN is active (`rope_factor=40 > 1`): the device runs YaRN with
+    Mirrors `glm_5_3_hf_config()`. YaRN is active (`rope_factor=40 > 1`): the device runs YaRN with
     `original_max_position_embeddings=4096`, identical to DeepSeek-V3 / R1. The four `index_*` attrs
     configure the DSA lightning indexer (non-interleaved RoPE, vs GLM's interleaved). `has_indexer=True`
     marks the layer sparse so the cache/loading resolver (`resolve_has_indexer`) detects it without

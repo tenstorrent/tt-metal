@@ -33,14 +33,20 @@ void bind_topk_router_gpt(nb::module_& mod) {
         Fused multi-core matmul for GPT-OSS MoE router.
 
         Parallelizes the router linear layer ([B, hidden] x [hidden, num_experts])
-        across 12 DRAM-aligned cores for maximum DRAM read bandwidth.
+        across four expert groups using 12 DRAM-aligned cores on Wormhole or
+        eight on Blackhole P150. Devices with fewer than eight DRAM-aligned workers
+        are unsupported. Each group combines its worker and sender partials.
 
         Args:
-            input_tensor: [B, hidden_dim] bf16 input hidden states
-            weight_tensor: [hidden_dim, num_experts] bf16 router weight in DRAM
-            bias_tensor: [B, num_experts] bf16 router bias in DRAM, pre-broadcast across batch
-            k: Number of top experts (metadata)
-            num_experts: Total number of experts
+            input_tensor: [B, hidden_dim] bf16 tiled input, 1 <= B <= 32 with 32 padded rows
+            weight_tensor: [hidden_dim, num_experts] bf16 tiled router weight in interleaved DRAM or L1
+            bias_tensor: [B, num_experts] bf16 tiled router bias, pre-broadcast across batch
+            k: Number of top experts
+            num_experts: Total number of experts (128)
+
+        Returns:
+            A pair of row-major [B, k] tensors: uint16 expert indices and bf16
+            normalized routing weights. Both buffers contain 32 physical rows.
         )doc",
         &ttnn::operations::experimental::topk_router_gpt::topk_router_gpt_func,
         nb::arg("input_tensor"),

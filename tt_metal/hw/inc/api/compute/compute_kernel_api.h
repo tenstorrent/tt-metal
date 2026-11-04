@@ -31,9 +31,9 @@
 #include "llk_math_binary_api.h"
 #include "llk_math_reduce_api.h"
 // SFPU op kernels invoked directly via the unary macros below. The macros
-// themselves come from llk_math_eltwise_unary_sfpu_macros.h. These BH/WH-only
-// kernels (log, abs, ...) have no Quasar implementation; sigmoid/silu are
-// shared and included for Quasar in the #else branch below.
+// themselves come from llk_math_eltwise_unary_sfpu_macros.h. The Quasar
+// branch below includes the subset Quasar implements (Quasar has no pack-thread
+// SFPU).
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_log.h"
@@ -55,6 +55,21 @@
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_tanh.h"
 #include "ckernel_sfpu_square.h"
+// Ported SFPI kernels behind the log, abs, sign, tiled_prod, power, exp2, heaviside, expm1,
+// add_top_row and alt_complex_rotate90 entry points below.
+// Codegen SFPU kernels behind the signbit (SFPLOADMACRO, SFPI fallback) and unary max/min entry points.
+#include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_signbit.h"
+#include "ckernel_sfpu_abs.h"
+#include "ckernel_sfpu_sign.h"
+#include "ckernel_sfpu_tiled_prod.h"
+#include "ckernel_sfpu_unary_power.h"
+#include "ckernel_sfpu_exp2.h"
+#include "ckernel_sfpu_heaviside.h"
+#include "ckernel_sfpu_expm1.h"
+#include "ckernel_sfpu_add_top_row.h"
+#include "ckernel_sfpu_alt_complex_rotate90.h"
+#include "llk_math_unary_max_min_sfpu_entry.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
@@ -63,6 +78,7 @@
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
 #include "ckernel_sfpu_copy_dest_values.h"
 #include "ckernel_sfpu_reduce.h"
+#include "ckernel_sfpu_max_pool_indices.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -123,23 +139,37 @@ ALWI void sigmoid_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * Call sigmoid_tile_init immediately before: another SFPU op's init in between overwrites the programmable
+ * constants (vConstFloatPrgm0..2) this op reads.
+ *
  * Return value: None
+ *
+ * | Template Parameter  | Description                                                    | Type       | Valid Range      | Default |
+ * |---------------------|----------------------------------------------------------------|------------|------------------|---------|
+ * | vec_mode            | The faces to compute                                           | VectorMode | R, C, RC         | RC      |
+ * | fast_and_approx     | Enable approximate mode                                        | bool       | true, false      | false   |
+ * | is_fp32_dest_acc_en | Whether DST holds 32-bit data                                  | bool       | true, false      | DST_ACCUM_MODE |
+ * | iterations          | Number of iterations over 32-SFPU lanes to run (8 = whole face)| int        | Positive integer | 8       |
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    VectorMode vec_mode = VectorMode::RC,
+    bool fast_and_approx = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    int iterations = 8>
 ALWI void sigmoid_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid, (8 /*ITERATIONS*/), idst, vec_mode));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid, (iterations), idst, vec_mode));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sigmoid,
-        (fast_and_approx, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        (fast_and_approx, is_fp32_dest_acc_en, iterations),
         idst,
         vec_mode));
 #endif
@@ -193,11 +223,7 @@ ALWI void silu_tile_init() {
  */
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile_init() {
-#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
-#else
-    MATH(SFPU_UNARY_INIT(tanh));
-#endif
 }
 
 // TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
@@ -243,17 +269,29 @@ ALWI void tanh_tile(uint32_t idst) {
  *
  * Return value: None
  *
+ * | Template Parameter  | Description                                                    | Type       | Valid Range                  | Default |
+ * |---------------------|----------------------------------------------------------------|------------|------------------------------|---------|
+ * | is_fp32_dest_acc_en | Whether DST holds 32-bit data                                  | bool       | true, false                  | DST_ACCUM_MODE |
+ * | vec_mode            | The faces to compute (Quasar: RC only)                         | VectorMode | R, C, RC                     | RC      |
+ * | iterations          | Number of iterations over 32-SFPU lanes to run (8 = whole face)| int        | Even positive integer (Quasar: 8) | 8 |
+ *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, VectorMode vec_mode = VectorMode::RC, int iterations = 8>
 ALWI void square_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_square, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_square,
+        (APPROX, is_fp32_dest_acc_en, iterations),
+        idst,
+        vec_mode));
 #else
+    static_assert(vec_mode == VectorMode::RC && iterations == 8, "Quasar square_tile computes whole tiles only");
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
 #endif
 }
@@ -286,6 +324,8 @@ ALWI void sigmoid_tile_pack(uint32_t idst) {
         idst,
         vec_mode));
 }
+
+#endif  // !ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
@@ -361,6 +401,7 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
         base_scale));
 }
 
+#ifndef ARCH_QUASAR  // pack-thread SFPU is BH/WH only
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile_init_pack() {
     PACK(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
@@ -376,6 +417,8 @@ ALWI void tanh_tile_pack(uint32_t idst) {
         idst,
         VectorMode::RC));
 }
+
+#endif  // !ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
@@ -461,6 +504,10 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
  *
  * Note: This version of the function is for int32 datatype
  *
+ * On Wormhole, this operation records replay slots 0-2 and relies on the
+ * ADDR_MOD_6 programmed by *abs_tile_init*. Callers sharing the replay buffer
+ * with other SFPU operations must reinitialize it as needed.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
@@ -511,7 +558,7 @@ ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
  */
 // clang-format on
 ALWI void tiled_prod_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC_custom));
 }
 
 /**
@@ -657,20 +704,27 @@ ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside)); }
  *
  * Return value: None
  *
+ * | Template Parameter  | Description                                    | Type | Valid Range      | Default        |
+ * |---------------------|------------------------------------------------|------|------------------|----------------|
+ * | approx              | Enable approximate mode.                       | bool | true, false      | false          |
+ * | is_fp32_dest_acc_en | DST holds FP32 values.                         | bool | true, false      | DST_ACCUM_MODE |
+ * | iterations          | Number of iterations over 32-SFPU lanes to run | int  | Positive integer | 8              |
+ *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode     | Specifies the vector mode for computation (default: VectorMode::RC)        | VectorMode | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
-template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void expm1_tile(uint32_t idst) {
+template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, int iterations = 8>
+ALWI void expm1_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_expm1,
-        (approx, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        (approx, is_fp32_dest_acc_en, iterations),
         idst,
-        VectorMode::RC));
+        vector_mode));
 }
 
 /**
@@ -681,6 +735,7 @@ ALWI void expm1_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(expm1, sfpu::expm1_init, (approx, is_fp32_dest_acc_en)));
 }
 
+#ifndef ARCH_QUASAR  // Quasar has no pack-thread SFPU
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void silu_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
@@ -802,8 +857,6 @@ ALWI void sfpu_reduce_init() {
         reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
 }
 
-#ifndef ARCH_QUASAR  // BH/WH-only ops below
-
 // clang-format off
 /**
  * Performs MaxPool with indices algorithm on the data tile and index tile
@@ -838,7 +891,7 @@ ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chu
         idst,
         idst_idx,
         0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
-        VectorMode::RC,
+        VectorMode::None,
         chunk)));
 }
 
@@ -854,26 +907,30 @@ ALWI void max_reduce_with_indices_init() {
 // clang-format off
 /**
  * Performs element-wise add_top_row operation between the top rows of two tiles in DST register.
- * Takes the top row of tile at dst_tile_0 and adds it with the top row of tile at dst_tile_1,
- * storing the result in the top row of tile at dst_tile_out.
+ * Adds the top four rows of the tile at dst_tile_0 (rows 0-3 of faces 0 and 1) to the top four rows
+ * of the tile at dst_tile_1, storing the result in the top four rows of the tile at dst_tile_out.
+ * The remaining rows of dst_tile_out are left unchanged.
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Only 32x32 tile dimensions are supported.
  * All tile indices must reference valid tiles within the DST register.
+ * Int32 assumes a native Int32 tile brought into DST by unpack-to-dest (a two's-complement word). A
+ * sign-magnitude DST, as produced by promoting an Int8 tile through the FPU with a 32-bit DST, is only
+ * correct for non-negative values.
  *
  * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
  * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
  * | dst_tile_0      | The index of the first tile in DST register                              | uint32_t  | Must be less than the size of the DST register buffer | True     |
  * | dst_tile_1      | The index of the second tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
  * | dst_tile_out    | The index of the output tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
- * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32                                | True     |
+ * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32 (where the arch has UInt32)    | True     |
  */
 // clang-format on
 template <DataFormat format>
 ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t dst_tile_out) {
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        format == DataFormat::Float32 || format == DataFormat::Int32 || is_uint32_format(format),
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
     MATH((SFPU_BINARY_CALL(
@@ -892,6 +949,7 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
  */
 ALWI void sfpu_add_top_row_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(add_top_row, sfpu::init_add_top_row))); }
 
+#ifndef ARCH_QUASAR  // debug halt and Dest readback are BH/WH only
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
  *
@@ -930,6 +988,8 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
     MATH((dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
 }
 
+#endif  // !ARCH_QUASAR
+
 // unary_max : if x > value --> x, else value
 // clang-format off
 /**
@@ -964,6 +1024,18 @@ ALWI void unary_max_int32_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(unary_max_int32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UINT */)));
 }
 
+#ifdef ARCH_QUASAR
+// Quasar has no UInt32 data format. The wrappers are templates so the static_assert fires only when called.
+template <bool quasar_unsupported = false>
+ALWI void unary_max_uint32_tile([[maybe_unused]] uint32_t idst, [[maybe_unused]] uint32_t param0) {
+    static_assert(quasar_unsupported, "unary_max_uint32_tile is not supported on Quasar");
+}
+
+template <bool quasar_unsupported = false>
+ALWI void unary_max_uint32_tile_init() {
+    static_assert(quasar_unsupported, "unary_max_uint32_tile_init is not supported on Quasar");
+}
+#else
 // unary_max : if x > value --> x, else value
 // clang-format off
 /**
@@ -997,6 +1069,7 @@ ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
 ALWI void unary_max_uint32_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(unary_max_uint32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UINT */)));
 }
+#endif  // !ARCH_QUASAR
 
 // unary_max : if x > value --> x, else value
 // clang-format off
@@ -1090,6 +1163,18 @@ ALWI void unary_min_int32_tile_init() {
         SFPU_UNARY_INIT_FN(unary_min_int32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UINT */)));
 }
 
+#ifdef ARCH_QUASAR
+// Quasar has no UInt32 data format. The wrappers are templates so the static_assert fires only when called.
+template <bool quasar_unsupported = false>
+ALWI void unary_min_uint32_tile([[maybe_unused]] uint32_t idst, [[maybe_unused]] uint32_t param0) {
+    static_assert(quasar_unsupported, "unary_min_uint32_tile is not supported on Quasar");
+}
+
+template <bool quasar_unsupported = false>
+ALWI void unary_min_uint32_tile_init() {
+    static_assert(quasar_unsupported, "unary_min_uint32_tile_init is not supported on Quasar");
+}
+#else
 // unary_min : if x < value --> x, else value
 // clang-format off
 /**
@@ -1124,6 +1209,7 @@ ALWI void unary_min_uint32_tile_init() {
     MATH(
         SFPU_UNARY_INIT_FN(unary_min_uint32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UINT */)));
 }
+#endif  // !ARCH_QUASAR
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -1177,8 +1263,6 @@ ALWI uint32_t get_compute_special_value_flags_sfpu(uint32_t special_value_flags_
 }
 
 ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_special_value_flags())); }
-#endif
-
 #endif
 
 }  // namespace ckernel

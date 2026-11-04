@@ -130,6 +130,7 @@ enum class SfpuType {
     unused,
     reshuffle_rows,
     cumsum,
+    cumprod,
     fill,
     alt_complex_rotate90,
     round,
@@ -175,7 +176,5 @@ enum class SfpuType {
     identity,
     sqrt_custom,
     tanh_derivative_lut,
-    rsqrt_compat,
-    reciprocal_compat,
     expm1_cw,
 };

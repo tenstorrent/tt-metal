@@ -3,16 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <cstdint>
 #include <vector>
 #include <chrono>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -102,6 +104,29 @@ protected:
         return usable.front();
     }
 
+    std::array<uint32_t, 3> set_mpfe_weights(uint32_t bank, const std::array<uint32_t, 3>& weights) {
+        const CoreCoord logical_dram_core{bank, first_usable_dram_endpoint(bank)};
+        const CoreCoord virtual_dram_core =
+            mesh_device_->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+
+        Program program = CreateProgram(*mesh_device_);
+        const auto kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_gddr_mc_priority.cpp",
+            logical_dram_core,
+            DramConfig{.noc = NOC::NOC_0});
+        SetRuntimeArgs(program, kernel, logical_dram_core, {weights[0], weights[1], weights[2], drisc_l1_base_});
+        run_workload(std::move(program));
+
+        std::array<uint32_t, 3> readback{};
+        MetalContext::instance().get_cluster().read_core(
+            readback.data(),
+            sizeof(readback),
+            tt_cxy_pair(mesh_device_->build_id(), virtual_dram_core),
+            drisc_l1_noc_addr_);
+        return readback;
+    }
+
     distributed::MeshDevice* mesh_device_{};
     distributed::MeshCoordinateRange device_range_{distributed::MeshCoordinate(0, 0)};
     uint32_t drisc_l1_base_{};
@@ -120,7 +145,7 @@ TEST_F(DramKernelFixture, DramKernelWriteToL1) {
     CoreCoord logical_dram_core{0, first_usable_dram_endpoint(0)};
     auto virtual_dram_core = mesh_device_->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
@@ -170,7 +195,7 @@ TEST_F(DramKernelFixture, DramKernelNiuModesSetByFirmware) {
         num_noc1_stream += (expected_noc1 == kStream);
 
         for (uint32_t run = 0; run < 2; run++) {
-            Program program = CreateProgram();
+            Program program = CreateProgram(*mesh_device_);
             CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/drisc_read_niu_modes.cpp",
@@ -198,6 +223,19 @@ TEST_F(DramKernelFixture, DramKernelNiuModesSetByFirmware) {
     EXPECT_GT(num_noc1_stream, 0u) << "No DRISC endpoint of bank " << bank << " has a free NOC1 NIU";
 }
 
+TEST_F(DramKernelFixture, GddrMcMpfeRoundRobinWeights) {
+    constexpr std::array<std::array<uint32_t, 3>, 4> kWeightSequence = {
+        std::array<uint32_t, 3>{7, 7, 7},
+        std::array<uint32_t, 3>{0, 0, 0},
+        std::array<uint32_t, 3>{0, 1, 5},
+        std::array<uint32_t, 3>{0, 0, 0},
+    };
+
+    for (const auto& weights : kWeightSequence) {
+        EXPECT_EQ(set_mpfe_weights(/*bank=*/0, weights), weights);
+    }
+}
+
 // Run the same kernel across multiple DRAM cores.
 TEST_F(DramKernelFixture, DramKernelOnMultipleCores) {
     constexpr uint32_t kMagicBase = 0xCAFE0000;
@@ -215,7 +253,7 @@ TEST_F(DramKernelFixture, DramKernelOnMultipleCores) {
             auto virtual_dram_core = mesh_device_->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
             uint32_t expected_value = kMagicBase + (i * num_banks) + col;
 
-            Program program = CreateProgram();
+            Program program = CreateProgram(*mesh_device_);
             CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
@@ -246,7 +284,7 @@ TEST_F(DramKernelFixture, DramKernelTensixReadFromDRISCL1) {
     CoreCoord logical_core_tensix{0, 0};
     CoreCoord drisc_virtual = mesh_device_->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
 
     uint32_t magic = kMagicValue;
     MetalContext::instance().get_cluster().write_core(
@@ -293,7 +331,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromTensixL1) {
         tt_cxy_pair(mesh_device_->build_id(), tensix_virtual),
         tensix_l1_base_);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     // DRISC kernel reads from Tensix L1 into DRISC L1 and restores NOC2AXI at the end.
     auto kid = CreateKernel(
         program,
@@ -346,7 +384,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
     std::vector<uint32_t> data =
         create_random_vector_of_bfloat16(num_banks * num_endpoints * bytes_per_iter, 1000.0f, seed);
     auto endpoint_offset = [&](uint32_t i, uint32_t col) { return (i * num_banks + col) * elements_per_endpoint; };
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
 
     for (uint32_t i = 0; i < num_endpoints; i++) {
         const uint32_t row = usable_endpoints[i];
@@ -459,7 +497,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
         }
     }
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     for (uint32_t i = 0; i < num_endpoints; i++) {
         const uint32_t row = usable_endpoints[i];
         for (uint32_t col = 0; col < num_banks; col++) {
@@ -554,7 +592,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromDRAMMcastToTensix) {
     // Write data into DRAM for DRISCs to read
     slow_dispatch::WriteToDRAMChannel(*mesh_device_, dram_channel, dram_addr, data);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     auto mcast_k_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/drisc_mcast_writes_tensix.cpp",
@@ -632,7 +670,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCRTensixParallelDRAMReads) {
     // Write data into the DRAM for DRISCs and Tensix to read
     slow_dispatch::WriteToDRAMChannel(*mesh_device_, dram_channel, dram_addr, data);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
 
     // DRISC Kernel
     auto drisc_k_id = CreateKernel(
@@ -713,7 +751,7 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
     uint32_t dram_addr = dram_buffer->address();
     slow_dispatch::WriteToDRAMChannel(*mesh_device_, dram_channel, dram_addr, data);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     auto drisc_ucast_k_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/drisc_mcast_writes_tensix.cpp",
@@ -822,7 +860,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCNocModeStress) {
     slow_dispatch::WriteToDRAMChannel(*mesh_device_, dram_channel, dram_addr, data);
     std::vector<uint32_t> last_chunk(data.end() - elements_per_iter, data.end());
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
 
     // DRISC stream kernel: read GDDR chunks for multiple iterations, multicasting each to the 4x3 grid
     CoreCoord mcast_start = mesh_device_->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);

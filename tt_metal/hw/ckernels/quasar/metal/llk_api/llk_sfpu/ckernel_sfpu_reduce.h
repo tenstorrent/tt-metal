@@ -155,8 +155,6 @@ inline void reduce_int_average_col() {
     // Keep the original - its sign decides whether to negate again after the shift.
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0 /* instr_mod1: plain copy */);
 
-    TTI_SFPENCC(1 /* imm12: enable */, 2 /* mod1: enable <- imm12[0] */);
-
     // Negate the negative lanes, so every lane holds |x|.
     TTI_SFPSETCC(REDUCE_SETCC_IMM12_INT32, p_sfpu::LREG0, REDUCE_SETCC_MOD_NEGATIVE);
     TTI_SFPIADD(0 /* imm12 */, p_sfpu::LCONST_0, p_sfpu::LREG0, REDUCE_IADD_MOD_NEGATE_KEEP_CC);

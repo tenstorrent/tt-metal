@@ -6,6 +6,7 @@
 
 #include <variant>
 #include <optional>
+#include <string_view>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -75,11 +76,17 @@ struct MeshPartitionDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Label the output Shard{dim} along the partitioned mesh axis. The rules are the CCL topology helper's
+    // (ttnn/operations/ccl/common/host/ccl_topology_utils.hpp, mesh_partition_output_topology: the reduce_scatter rule
+    // where nothing is summed); a label the helper refuses leaves the input's label on the output.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 namespace detail {
 uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::optional<uint32_t>& cluster_axis);
-}
+}  // namespace detail
 
 }  // namespace ttnn::operations::ccl
 

@@ -70,7 +70,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     const auto& ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores_padded = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -81,7 +81,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value));
-        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
+        padding_value_as_u32 = static_cast<uint32_t>(bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
@@ -147,7 +147,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
              {"W_front_pad_bytes", W_padding_front_bytes},
              {"unpadded_stick_step", unpadded_stick_step},
              {"padded_stick_step", padded_stick_step}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer_spec{
@@ -162,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
              {"padded_shard_height", shard_height_padded},
              {"padding_value_as_u32", padding_value_as_u32},
              {"padding_value_num_bytes", static_cast<uint32_t>(output.element_size())}},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Both kernels take no named runtime args (data flows via CBs/compile-time args), so

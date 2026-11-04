@@ -29,29 +29,12 @@ class PenaltyContext:
     sub_core_grids: Any | None = None
 
 
-def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> ttnn.Tensor:
+def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext], keep_input: bool = False) -> ttnn.Tensor:
     if context is None:
         return logits
 
     op_kwargs = {"sub_core_grids": context.sub_core_grids} if context.sub_core_grids else {}
-    # presence
-    presence_term = ttnn.multiply(
-        ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
-    )
-    presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
-    logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
-    presence_term_bf16.deallocate()
-
-    # frequency
-    output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
-
-    freq_term = ttnn.multiply(output_counts_bf16, context.frequency_penalties, **op_kwargs)
-
-    freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op_kwargs)
-    logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op_kwargs)
-    freq_term_bf16.deallocate()
-
-    # repetition
+    # repetition, applied before presence and frequency as in vLLM's apply_penalties
 
     # If token appears in prompt or output, apply, otherwise use 1.0 for no-op.
 
@@ -69,8 +52,25 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     logits_gt1.deallocate()
     penalties.deallocate()
     inverse_penalties.deallocate()
-    logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op_kwargs)
+    logits = ttnn.multiply(logits, scaling, output_tensor=None if keep_input else logits, **op_kwargs)
     scaling.deallocate()
+
+    # presence
+    presence_term = ttnn.multiply(
+        ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
+    )
+    presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
+    logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
+    presence_term_bf16.deallocate()
+
+    # frequency
+    output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
+
+    freq_term = ttnn.multiply(output_counts_bf16, context.frequency_penalties, **op_kwargs)
+
+    freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op_kwargs)
+    logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op_kwargs)
+    freq_term_bf16.deallocate()
 
     return logits
 
@@ -263,8 +263,8 @@ class TTPenalties(LightweightModule):
         is prefilling used to zero everyone else's mask: rows outside the call arrive as the -1
         padding and hash to an empty mask. repetition_penalty is the only consumer of prompt_mask, so
         a live request silently stopped penalising its own prompt until something refreshed it.
-        Under vLLM the next decode's reset_batch does refresh it, which is why this stayed hidden;
-        the demo path never sets reset_batch and keeps the wiped mask for the whole generation.
+        A later full sampling-state reset can hide this bug. A demo without that reset keeps the
+        wiped mask for the rest of the generation.
         """
         prompt_tokens_2d = prompt_tokens.reshape(-1, prompt_tokens.shape[-1])
         prompt_tokens_2d = self._pad_batch_to_max(prompt_tokens_2d, pad_value=-1)
@@ -291,7 +291,60 @@ class TTPenalties(LightweightModule):
         prompt_mask = (prompt_counts > 0).to(torch.int32)
         self._copy_int_host_to_device(self.prompt_mask, prompt_mask, self._shard_dims_mask)
 
-    def reset_output_tokens(self, tokens=None):
+    def reset_output_tokens(self, tokens=None, slots: list[int] | None = None):
+        if slots is not None:
+            slots = sorted({int(slot) for slot in slots})
+            if any(slot < 0 or slot >= self._total_batch for slot in slots):
+                raise ValueError(f"Output reset slots must be in [0, {self._total_batch}), got {slots}")
+            if not slots:
+                return
+
+            # Clear only the admitted slots. A [batch, 1] device mask is
+            # replicated across mesh columns and broadcast across vocabulary,
+            # so continuing requests keep their accumulated device counts.
+            keep_rows = torch.ones((self._total_batch, 1), dtype=torch.int32)
+            keep_rows[slots] = 0
+            keep_rows_tt = self._alloc_int_buffer(
+                host=keep_rows,
+                shard_dims=self._shard_dims_gathered,
+            )
+            self.output_mask = ttnn.mul(
+                self.output_mask, keep_rows_tt, output_tensor=self.output_mask, **self._op_kwargs
+            )
+            self.output_counts = ttnn.mul(
+                self.output_counts, keep_rows_tt, output_tensor=self.output_counts, **self._op_kwargs
+            )
+            self.output_counts_gathered = ttnn.mul(
+                self.output_counts_gathered,
+                keep_rows_tt,
+                output_tensor=self.output_counts_gathered,
+                **self._op_kwargs,
+            )
+            keep_rows_tt.deallocate()
+
+            if tokens is None:
+                return
+
+            # Restore any supplied history for the reset slots. Rows outside
+            # ``slots`` are zero here, so adding cannot change live requests.
+            tokens_2d = tokens.reshape(-1, tokens.shape[-1])
+            tokens_2d = self._pad_batch_to_max(tokens_2d, pad_value=-1)
+            output_counts = self._token_counts_host(tokens_2d)
+            reset_rows = torch.zeros((self._total_batch, 1), dtype=torch.int32)
+            reset_rows[slots] = 1
+            output_counts *= reset_rows
+            output_mask = (output_counts > 0).to(torch.int32)
+            updates = (
+                (self.output_counts_gathered, output_counts, self._shard_dims_gathered),
+                (self.output_counts, output_counts, self._shard_dims_mask),
+                (self.output_mask, output_mask, self._shard_dims_mask),
+            )
+            for destination, host_update, shard_dims in updates:
+                update_tt = self._alloc_int_buffer(host=host_update, shard_dims=shard_dims)
+                ttnn.add(destination, update_tt, output_tensor=destination, **self._op_kwargs)
+                update_tt.deallocate()
+            return
+
         # ALWAYS reset output buffers to zero first (this is the core accuracy fix from issue #35731)
         # This ensures penalty statistics are cleared between prefill and decode phases
         self.output_mask = ttnn.mul(self.output_mask, 0, output_tensor=self.output_mask, **self._op_kwargs)
@@ -360,7 +413,7 @@ class TTPenalties(LightweightModule):
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **self._op_kwargs)
         return counts, mask
 
-    def apply(self, tt_logits: ttnn.Tensor) -> ttnn.Tensor:
+    def apply(self, tt_logits: ttnn.Tensor, keep_input: bool = False) -> ttnn.Tensor:
         if tt_logits is None:
             return tt_logits
         context = PenaltyContext(
@@ -376,5 +429,8 @@ class TTPenalties(LightweightModule):
         )
         original_shape = tt_logits.shape
         reshaped = ttnn.reshape(tt_logits, (-1, original_shape[-1]))
-        apply_penalties(reshaped, context)
+        if reshaped.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            reshaped = ttnn.typecast(reshaped, ttnn.bfloat16, **self._op_kwargs)
+            keep_input = False
+        reshaped = apply_penalties(reshaped, context, keep_input=keep_input)
         return ttnn.reshape(reshaped, original_shape)

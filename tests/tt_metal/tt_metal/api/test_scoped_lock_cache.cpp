@@ -13,6 +13,7 @@
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cache_common.h"
 #include <tt-metalium/allocator.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -135,7 +136,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
         .num_threads = static_cast<uint8_t>(p.num_producers),
         .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
@@ -148,7 +149,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
             .access_pattern = consumer_pattern,
         }},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     std::vector<experimental::SemaphoreSpec> semaphores;
@@ -214,7 +215,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
         for (uint32_t s = 0; s < p.num_entries; ++s) {
             prefill[s * wpe] = DFB_CACHE_OLD_BASE + s;
         }
-        detail::WriteToDeviceL1(mesh_device.get_devices()[0], core, ring_base, prefill);
+        slow_dispatch::WriteToL1(mesh_device, core, ring_base, prefill);
     }
 
     distributed::MeshWorkload workload;
@@ -225,7 +226,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
     // Kernels write their in-kernel verification read-back (via the non-cacheable alias so the result lands
     // in TL1) to the result buffer; the host reads it directly.
     std::vector<uint32_t> result;
-    detail::ReadFromDeviceL1(mesh_device.get_devices()[0], core, result_addr, result_bytes, result);
+    slow_dispatch::ReadFromL1(mesh_device, core, result_addr, result_bytes, result);
     return result;
 }
 
@@ -479,7 +480,7 @@ std::vector<uint32_t> run_scoped_lock_cache_test(distributed::MeshDevice& mesh_d
         .num_threads = 1,
         .runtime_arg_schema =
             {.runtime_arg_names = {"mode", "region_base", "result_addr", "lock_off_lines", "lock_n_lines"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     kernel.compiler_options.defines = {{scoped_lock_cache_abstraction_define(p.abstraction), "1"}};
 
@@ -514,9 +515,8 @@ std::vector<uint32_t> run_scoped_lock_cache_test(distributed::MeshDevice& mesh_d
     // Zeroed so a kernel that never wrote reads back as 0 rather than as whatever the allocator
     // handed over. No probe-region prefill: the kernel seeds its own baseline, which is what lets the
     // Scratchpad variant work at all (the host never learns that region's address).
-    IDevice* device = mesh_device.get_devices()[0];
     std::vector<uint32_t> zeros(SCOPED_LOCK_CACHE_NUM_LINES, 0u);
-    detail::WriteToDeviceL1(device, core, result_addr, zeros);
+    slow_dispatch::WriteToL1(mesh_device, core, result_addr, zeros);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
@@ -524,7 +524,7 @@ std::vector<uint32_t> run_scoped_lock_cache_test(distributed::MeshDevice& mesh_d
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> result;
-    detail::ReadFromDeviceL1(device, core, result_addr, SCOPED_LOCK_CACHE_NUM_LINES * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(mesh_device, core, result_addr, SCOPED_LOCK_CACHE_NUM_LINES * sizeof(uint32_t), result);
     // Only the locked lines are returned; see scoped_lock_cache_expected for why the rest are not asserted.
     result =
         std::vector<uint32_t>(result.begin() + p.lock_off_lines, result.begin() + p.lock_off_lines + p.lock_n_lines);

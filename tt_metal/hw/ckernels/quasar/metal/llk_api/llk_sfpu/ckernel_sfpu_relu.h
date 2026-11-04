@@ -15,6 +15,18 @@
 
 namespace ckernel {
 namespace sfpu {
+
+// SFPI clamp of val to [0, threshold]; copied from the Blackhole tt-llk relu header for the
+// SFPI kernels that call it (activations' hardsigmoid).
+sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshold) {
+    sfpi::vFloat result = val;
+    v_if(result > threshold) { result = threshold; }
+    v_endif;
+    v_if(result < 0.0f) { result = 0.0f; }
+    v_endif;
+    return result;
+}
+
 // Calculates RELU for number of rows of output SFPU ops (Quasar = 2 rows)
 inline void _calculate_relu_sfp_rows_() {
     TTI_SFPLOAD(

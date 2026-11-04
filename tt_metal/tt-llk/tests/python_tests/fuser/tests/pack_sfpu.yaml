@@ -23,23 +23,28 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-    block_size: [64, 64]
     pack:
       - output: "out_raw"
+        block_size: [64, 64]
         packer: "Packer"
       - type: "UnarySfpu"
+        block_size: [64, 64]
         operation: "Exp"
         approximation_mode: false
         iterations: 32
       - output: "out_after_exp"
+        block_size: [64, 64]
         packer: "Packer"
       - type: "UnarySfpu"
+        block_size: [64, 64]
         operation: "Neg"
         approximation_mode: false
         iterations: 32
       - output: "out_after_neg"
+        block_size: [64, 64]
         packer: "Packer"
