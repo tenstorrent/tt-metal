@@ -219,10 +219,15 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
         kv2 = backend.allocate_kv_cache(max_batch=B, max_seq_len=SEQ)  # fresh state / cache / page table
         io2 = backend.allocate_decode_io(kv2)
         backend.write(io2.cur_pos, torch.zeros(B, dtype=torch.int32))
+        t0 = time.perf_counter()
+        # the first prompt token runs eagerly: the new cache's tables / programs are written on the first step, and
+        # host writes are refused under a trace capture
+        backend.write(io2.tokens, torch.full((B,), int(ids[0]), dtype=torch.int32))
+        backend.decode(io2, kv2, B)
+        ttnn.synchronize_device(mesh_device)
         tr2 = backend.capture_decode(io2, kv2, B)
         out = []
-        t0 = time.perf_counter()
-        for i, t in enumerate(ids):
+        for t in ids[1:]:
             backend.write(io2.tokens, torch.full((B,), int(t), dtype=torch.int32))
             backend.replay(tr2)
         sampled = backend.read(io2.sampled)
