@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import NamedTuple
 
 import diffusers
 import torch
@@ -146,6 +147,18 @@ class QwenImageTransformerBlock(TransformerBlock):
         super()._prepare_torch_state(state)
 
 
+class QwenImageCarry(NamedTuple):
+    """What the blocks pass along besides the spatial hidden state."""
+
+    prompt: ttnn.Tensor
+    time_embed: ttnn.Tensor
+    condition_time_embed: ttnn.Tensor | None
+    spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor]
+    prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor]
+    spatial_sequence_length: int | ttnn.Tensor
+    condition_mask: ttnn.Tensor | None
+
+
 # adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/transformer_qwenimage.py
 class QwenImageTransformer(Module):
     def __init__(
@@ -265,6 +278,34 @@ class QwenImageTransformer(Module):
                 shape [1, spatial_sequence_length / sp_factor, 1], 1 on the rows of the input images,
                 which are modulated as at timestep 0.
         """
+        spatial, carry = self.prologue(
+            spatial=spatial,
+            prompt=prompt,
+            timestep=timestep,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+            condition_mask=condition_mask,
+        )
+        spatial, carry = self.run_blocks(spatial, carry, start=0, end=self.num_blocks)
+        return self.epilogue(spatial, carry)
+
+    @property
+    def num_blocks(self) -> int:
+        return len(self.transformer_blocks)
+
+    def prologue(
+        self,
+        *,
+        spatial: ttnn.Tensor,
+        prompt: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
+        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
+        spatial_sequence_length: int | ttnn.Tensor,
+        condition_mask: ttnn.Tensor | None = None,
+    ) -> tuple[ttnn.Tensor, QwenImageCarry]:
+        """Embed the inputs of ``forward`` for the blocks."""
         time_embed = self._time_embed(timestep)
         condition_time_embed = self._time_embed(timestep * 0) if condition_mask is not None else None
 
@@ -273,21 +314,41 @@ class QwenImageTransformer(Module):
         prompt = self.txt_norm(prompt)
         prompt = self.txt_in(prompt)
 
-        for i, block in enumerate(self.transformer_blocks, start=1):
-            spatial, prompt = block.forward(
+        carry = QwenImageCarry(
+            prompt=prompt,
+            time_embed=time_embed,
+            condition_time_embed=condition_time_embed,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+            condition_mask=condition_mask,
+        )
+        return spatial, carry
+
+    def run_blocks(
+        self, spatial: ttnn.Tensor, carry: QwenImageCarry, *, start: int, end: int
+    ) -> tuple[ttnn.Tensor, QwenImageCarry]:
+        prompt = carry.prompt
+        for i in range(start, end):
+            spatial, prompt = self.transformer_blocks[i].forward(
                 spatial=spatial,
                 prompt=prompt,
-                time_embed=time_embed,
-                spatial_rope=spatial_rope,
-                prompt_rope=prompt_rope,
-                spatial_sequence_length=spatial_sequence_length,
+                time_embed=carry.time_embed,
+                spatial_rope=carry.spatial_rope,
+                prompt_rope=carry.prompt_rope,
+                spatial_sequence_length=carry.spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
-                condition_time_embed=condition_time_embed,
-                condition_mask=condition_mask,
+                condition_time_embed=carry.condition_time_embed,
+                condition_mask=carry.condition_mask,
             )
 
-            if i % 6 == 0:
+            if (i + 1) % 6 == 0:
                 ttnn.ReadDeviceProfiler(spatial.device())
+
+        return spatial, carry._replace(prompt=prompt)
+
+    def epilogue(self, spatial: ttnn.Tensor, carry: QwenImageCarry) -> ttnn.Tensor:
+        time_embed = carry.time_embed
 
         # TODO: remove unsqueeze/squeeze when DistributedLayerNorm allows it
         spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
