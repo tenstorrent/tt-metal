@@ -15,7 +15,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t srca_bits()
 }
 
 // CHECK-LABEL: <srca_bits>:
-// CHECK-NEXT: li a0,1
+// CHECK-NEXT: li a0,1{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) std::uint32_t srcb_bits()
@@ -24,7 +24,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t srcb_bits()
 }
 
 // CHECK-LABEL: <srcb_bits>:
-// CHECK-NEXT: li a0,2
+// CHECK-NEXT: li a0,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) std::uint32_t both_sources_bits()
@@ -33,7 +33,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t both_sources_bits()
 }
 
 // CHECK-LABEL: <both_sources_bits>:
-// CHECK-NEXT: li a0,3
+// CHECK-NEXT: li a0,3{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void fill_union_of_sources()
@@ -42,7 +42,7 @@ extern "C" __attribute__((noinline, used)) void fill_union_of_sources()
 }
 
 // CHECK-LABEL: <fill_union_of_sources>:
-// CHECK-NEXT: ttzerosrc 0,1,0,3
+// CHECK-NEXT: ttzerosrc 0,1,0,3{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void release_intersection_of_sources()
@@ -51,5 +51,5 @@ extern "C" __attribute__((noinline, used)) void release_intersection_of_sources(
 }
 
 // CHECK-LABEL: <release_intersection_of_sources>:
-// CHECK-NEXT: ttcleardvalid 2,0
+// CHECK-NEXT: ttcleardvalid 2,0{{$}}
 // CHECK-NEXT: ret
