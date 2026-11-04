@@ -640,14 +640,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         output_tensors[0].dtype(),
         {output_shard_shape[0], output_shard_shape[1]},
         config_tensor_in_dram,
-        reader_indices_actual_page_size);
-    // TILE output: compute untilize-packs each output stick into pre_tilize as a full 32x32 tile, since the
-    // Quasar 1x32 pack_untilize misreads a 32x32-layout DEST (#64327; see compute_pool_2d.cpp). The pack of
-    // stick s writes rows s..s+31, so the last stick of a tile row spills up to 31 rows past it: pre_tilize
-    // holds two tile rows (64 sticks) and each round consumes all of it.
-    if (cb_sizes.has_pre_tilize) {
-        cb_sizes.pre_tilize_cb_npages = 2 * tt::constants::TILE_HEIGHT * params.in_ntiles_c;
-    }
+        reader_indices_actual_page_size,
+        /*scalar_config_actual_page_size=*/std::nullopt,
+        QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];

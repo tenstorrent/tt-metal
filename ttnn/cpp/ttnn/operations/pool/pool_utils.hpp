@@ -109,6 +109,7 @@ struct PoolCBSizes {
     uint32_t total() const;
 };
 
+// pre_tilize_tile_rows: tile rows the TILE-output pre_tilize CB holds (the Quasar pool uses 2, see #64327).
 PoolCBSizes calculate_pool_cb_sizes(
     const FactoryParameters& params,
     bool one_scalar_per_core,
@@ -118,7 +119,8 @@ PoolCBSizes calculate_pool_cb_sizes(
     const std::array<uint32_t, 2>& output_shard_shape,
     bool config_tensor_in_dram,
     std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt,
-    std::optional<uint32_t> scalar_config_actual_page_size = std::nullopt);
+    std::optional<uint32_t> scalar_config_actual_page_size = std::nullopt,
+    uint32_t pre_tilize_tile_rows = 1);
 
 // Separate L1 usage for local CBs vs globally-allocated tensor buffers.
 // Tracking these separately prevents two errors from cancelling out in validation
@@ -167,7 +169,8 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     bool return_indices,
     const Layout& output_layout,
     const DataType& output_dtype,
-    bool config_tensor_in_dram);
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows = 1);
 
 DataType get_index_data_type(uint32_t in_h, uint32_t in_w);
 
@@ -205,7 +208,8 @@ pool_op_l1_usage calculate_L1_usage(
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
     const DataType& output_dtype,
-    bool config_tensor_in_dram);
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows = 1);
 
 uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor);
 
@@ -236,7 +240,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     Layout output_layout,
     const tt::tt_metal::MemoryConfig& input_memory_config,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
-    bool config_tensor_in_dram);
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows = 1);
 
 // pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
 // they are sensical to avoid problems in sliding window config, halo and other setup procedures
