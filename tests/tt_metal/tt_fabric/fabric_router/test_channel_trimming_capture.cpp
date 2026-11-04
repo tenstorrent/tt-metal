@@ -95,8 +95,7 @@ std::vector<std::pair<tt::tt_metal::CoreCoord, chan_id_t>> get_active_fabric_cap
 // ============================================================================
 // Helper: Read capture data from all active fabric ETH channels on a device
 // ============================================================================
-std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
-    BaseFabricFixture* fixture, ChipId physical_chip_id) {
+std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(BaseFabricFixture* fixture, ChipId physical_chip_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
     auto buffer_map = builder_ctx.get_telemetry_and_metadata_buffer_map();
@@ -120,7 +119,8 @@ std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
         tt_metal::slow_dispatch::ReadFromL1(*device, logical_core, capture_addr, capture_size, raw_data, CoreType::ETH);
 
         CaptureResults capture{};
-        std::memcpy(static_cast<void*>(&capture), raw_data.data(), std::min(capture_size, raw_data.size() * sizeof(uint32_t)));
+        std::memcpy(
+            static_cast<void*>(&capture), raw_data.data(), std::min(capture_size, raw_data.size() * sizeof(uint32_t)));
 
         results.push_back(EthCoreCaptureResult{physical_chip_id, logical_core, channel_id, capture});
     }
@@ -197,12 +197,10 @@ void verify_capture_roundtrip(const std::vector<EthCoreCaptureResult>& pre_expor
     // Compare: for each pre-export capture, the imported entry must match
     for (const auto& cap : pre_export_captures) {
         uint64_t key = make_override_key(cap.physical_chip_id, cap.channel_id);
-        ASSERT_TRUE(imported.contains(key))
-            << "Missing imported entry for chip=" << cap.physical_chip_id
-            << " eth_chan=" << static_cast<int>(cap.channel_id);
-        EXPECT_EQ(imported.at(key), cap.capture)
-            << "Roundtrip mismatch for chip=" << cap.physical_chip_id
-            << " eth_chan=" << static_cast<int>(cap.channel_id);
+        ASSERT_TRUE(imported.contains(key)) << "Missing imported entry for chip=" << cap.physical_chip_id
+                                            << " eth_chan=" << static_cast<int>(cap.channel_id);
+        EXPECT_EQ(imported.at(key), cap.capture) << "Roundtrip mismatch for chip=" << cap.physical_chip_id
+                                                 << " eth_chan=" << static_cast<int>(cap.channel_id);
     }
 }
 
@@ -292,8 +290,7 @@ TEST_F(ChannelTrimming1DFixture, ConfigAllocatesL1Buffer) {
 
     EXPECT_NE(config.datapath_usage_l1_address, 0u);
     EXPECT_GT(config.datapath_usage_buffer_size, 0u);
-    EXPECT_EQ(config.datapath_usage_buffer_size,
-              sizeof(CaptureResults));
+    EXPECT_EQ(config.datapath_usage_buffer_size, sizeof(CaptureResults));
 }
 
 // Test: L1 allocation placed before handshake address
@@ -315,8 +312,7 @@ TEST_F(ChannelTrimming1DFixture, DiagnosticBufferMapViaBuilderContext) {
     EXPECT_TRUE(buffer_map.channel_trimming_capture.is_enabled());
     EXPECT_NE(buffer_map.channel_trimming_capture.l1_address, 0u);
     EXPECT_GT(buffer_map.channel_trimming_capture.size_bytes, 0u);
-    EXPECT_EQ(buffer_map.channel_trimming_capture.size_bytes,
-              sizeof(CaptureResults));
+    EXPECT_EQ(buffer_map.channel_trimming_capture.size_bytes, sizeof(CaptureResults));
 }
 
 // Test: DiagnosticBufferMap regions are non-overlapping and ordered
@@ -346,8 +342,7 @@ TEST_F(ChannelTrimming1DFixture, DiagnosticBufferMapRegionsNonOverlapping) {
     // Verify no overlaps: sort by address and check each end <= next start
     std::sort(regions.begin(), regions.end());
     for (size_t i = 1; i < regions.size(); i++) {
-        EXPECT_LE(regions[i - 1].second, regions[i].first)
-            << "Diagnostic buffer regions overlap at index " << i;
+        EXPECT_LE(regions[i - 1].second, regions[i].first) << "Diagnostic buffer regions overlap at index " << i;
     }
 }
 
@@ -451,9 +446,9 @@ TEST_F(ChannelTrimming1DFixture, UnicastSenderAndReceiverChannelUsed) {
                     << ") should not show NocSendType activity on VC " << vc << " since traffic is one-way outbound";
                 EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[vc], 0)
                     << "Source router eth core (chan " << static_cast<int>(cap.channel_id)
-                    << ") should not show forwarding-to on VC " << vc << " since traffic originates here (not forwarded from receiver)";
+                    << ") should not show forwarding-to on VC " << vc
+                    << " since traffic originates here (not forwarded from receiver)";
             }
-
         }
     }
     EXPECT_TRUE(num_routers_with_sender_activity == 1);
@@ -557,7 +552,8 @@ TEST_F(ChannelTrimming1DFixture, UnicastMultiHopForwarding) {
             }
         }
     }
-    EXPECT_TRUE(num_routers_with_sender_activity == 1) << "Expected to find exactly one router with sender activity on source device's edm_port";
+    EXPECT_TRUE(num_routers_with_sender_activity == 1)
+        << "Expected to find exactly one router with sender activity on source device's edm_port";
 
     // --- Intermediate router validation ---
     auto intermediate_captures = read_capture_from_all_eth_cores(this, intermediate_physical);
@@ -585,12 +581,17 @@ TEST_F(ChannelTrimming1DFixture, UnicastMultiHopForwarding) {
                 << "Intermediate router eth core (chan " << static_cast<int>(cap.channel_id)
                 << ") VC0 should show forwarding-to (receiver forwards to sender channel)";
         }
-        sender_and_receiver_channels_active_on_different_routers = sender_and_receiver_channels_active_on_different_routers &&
-            !((cap.capture.receiver_channel_data_forwarded_bitfield_by_vc != 0) && (cap.capture.sender_channel_used_bitfield_by_vc != 0));
+        sender_and_receiver_channels_active_on_different_routers =
+            sender_and_receiver_channels_active_on_different_routers &&
+            !((cap.capture.receiver_channel_data_forwarded_bitfield_by_vc != 0) &&
+              (cap.capture.sender_channel_used_bitfield_by_vc != 0));
     }
-    EXPECT_EQ(num_routers_with_intermediate_sender_activity, 1) << "Expected to find exactly one router with sender activity on intermediate device";
-    EXPECT_EQ(num_routers_with_intermediate_receiver_activity, 1) << "Expected to find exactly one router with receiver activity on intermediate device";
-    EXPECT_TRUE(sender_and_receiver_channels_active_on_different_routers) << "Sender and receiver channels should be active on different routers";
+    EXPECT_EQ(num_routers_with_intermediate_sender_activity, 1)
+        << "Expected to find exactly one router with sender activity on intermediate device";
+    EXPECT_EQ(num_routers_with_intermediate_receiver_activity, 1)
+        << "Expected to find exactly one router with receiver activity on intermediate device";
+    EXPECT_TRUE(sender_and_receiver_channels_active_on_different_routers)
+        << "Sender and receiver channels should be active on different routers";
 
     // --- Destination router validation ---
     auto dst_captures = read_capture_from_all_eth_cores(this, result.dst_physical_device_id);
@@ -609,9 +610,8 @@ TEST_F(ChannelTrimming1DFixture, UnicastMultiHopForwarding) {
                     has_noc_send_type = true;
                 }
             }
-            EXPECT_TRUE(has_noc_send_type)
-                << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
-                << ") should show NocSendType activity (local delivery)";
+            EXPECT_TRUE(has_noc_send_type) << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
+                                           << ") should show NocSendType activity (local delivery)";
             // Sender channel validation — destination is endpoint, no sender transmission
             EXPECT_EQ(cap.capture.sender_channel_used_bitfield_by_vc, 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
@@ -625,7 +625,8 @@ TEST_F(ChannelTrimming1DFixture, UnicastMultiHopForwarding) {
                 << ") VC1 should not show forwarding-to (no VC1 traffic in 1D)";
         }
     }
-    EXPECT_TRUE(num_routers_with_dst_receiver_activity == 1) << "Expected to find exactly one router with receiver activity on destination device";
+    EXPECT_TRUE(num_routers_with_dst_receiver_activity == 1)
+        << "Expected to find exactly one router with receiver activity on destination device";
 
     // Roundtrip: export to YAML → import → compare
     auto all_captures = src_captures;
@@ -659,8 +660,7 @@ TEST_F(ChannelTrimming1DFixture, UnicastPacketSizeTracking) {
         uint16_t used_bitfield = cap.capture.sender_channel_used_bitfield_by_vc;
         ASSERT_NE(used_bitfield, 0) << "Expected sender channel activity on edm_port "
                                     << static_cast<int>(result.edm_port);
-        EXPECT_EQ(used_bitfield, 1)
-            << "Source should only show channel 0 (worker channel) activity";
+        EXPECT_EQ(used_bitfield, 1) << "Source should only show channel 0 (worker channel) activity";
 
         // Full state: source is outbound only
         EXPECT_EQ(cap.capture.receiver_channel_data_forwarded_bitfield_by_vc, 0)
@@ -680,12 +680,11 @@ TEST_F(ChannelTrimming1DFixture, UnicastPacketSizeTracking) {
             uint16_t min_pkt = cap.capture.sender_channel_min_packet_size_seen_bytes_by_vc[ch];
             uint16_t max_pkt = cap.capture.sender_channel_max_packet_size_seen_bytes_by_vc[ch];
 
-            EXPECT_NE(min_pkt, 0xFFFF)
-                << "Sender channel " << ch << ": min_packet_size should be updated from sentinel 0xFFFF";
+            EXPECT_NE(min_pkt, 0xFFFF) << "Sender channel " << ch
+                                       << ": min_packet_size should be updated from sentinel 0xFFFF";
             EXPECT_NE(max_pkt, 0u) << "Sender channel " << ch << ": max_packet_size should be updated from 0";
-            EXPECT_LE(min_pkt, max_pkt)
-                << "Sender channel " << ch << ": min_packet_size (" << min_pkt
-                << ") should be <= max_packet_size (" << max_pkt << ")";
+            EXPECT_LE(min_pkt, max_pkt) << "Sender channel " << ch << ": min_packet_size (" << min_pkt
+                                        << ") should be <= max_packet_size (" << max_pkt << ")";
         }
         break;
     }
@@ -702,9 +701,8 @@ TEST_F(ChannelTrimming1DFixture, UnicastPacketSizeTracking) {
                     has_noc_send_type = true;
                 }
             }
-            EXPECT_TRUE(has_noc_send_type)
-                << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
-                << ") should show NocSendType activity (local delivery)";
+            EXPECT_TRUE(has_noc_send_type) << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
+                                           << ") should show NocSendType activity (local delivery)";
             // Endpoint — no sender transmission (receiver delivers locally, doesn't originate traffic)
             EXPECT_EQ(cap.capture.sender_channel_used_bitfield_by_vc, 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
@@ -718,8 +716,7 @@ TEST_F(ChannelTrimming1DFixture, UnicastPacketSizeTracking) {
             found_dst_receiver = true;
         }
     }
-    EXPECT_TRUE(found_dst_receiver)
-        << "Destination router should show receiver channel forwarding activity";
+    EXPECT_TRUE(found_dst_receiver) << "Destination router should show receiver channel forwarding activity";
 
     // Roundtrip: export to YAML → import → compare
     auto all_captures = src_captures;
@@ -754,9 +751,7 @@ TEST_F(ChannelTrimming2DFixture, DirectionalChannelLiveness) {
         auto result = run_unicast_traffic_bw_nodes(src_node, dst_node, 1, /*num_packets=*/10);
         if (result.skipped) {
             log_info(
-                tt::LogTest,
-                "Traffic run skipped for direction {} — no forwarding links",
-                static_cast<int>(direction));
+                tt::LogTest, "Traffic run skipped for direction {} — no forwarding links", static_cast<int>(direction));
             continue;
         }
 
@@ -770,12 +765,12 @@ TEST_F(ChannelTrimming2DFixture, DirectionalChannelLiveness) {
         for (const auto& cap : src_captures) {
             if (cap.channel_id == result.edm_port) {
                 EXPECT_NE(cap.capture.sender_channel_used_bitfield_by_vc, 0)
-                    << "Source router eth core (chan " << static_cast<int>(cap.channel_id)
-                    << ", direction " << static_cast<int>(direction) << ") should show sender channel activity";
+                    << "Source router eth core (chan " << static_cast<int>(cap.channel_id) << ", direction "
+                    << static_cast<int>(direction) << ") should show sender channel activity";
                 // Worker channel (bit 0) should be set
                 EXPECT_NE(cap.capture.sender_channel_used_bitfield_by_vc & 1, 0)
-                    << "Source router eth core (chan " << static_cast<int>(cap.channel_id)
-                    << ", direction " << static_cast<int>(direction) << ") should show worker channel (0) activity";
+                    << "Source router eth core (chan " << static_cast<int>(cap.channel_id) << ", direction "
+                    << static_cast<int>(direction) << ") should show worker channel (0) activity";
                 found_sender = true;
             }
         }
@@ -796,9 +791,8 @@ TEST_F(ChannelTrimming2DFixture, DirectionalChannelLiveness) {
                     }
                 }
                 EXPECT_TRUE(has_noc_send_type)
-                    << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
-                    << ", direction " << static_cast<int>(direction)
-                    << ") should show NocSendType activity (local delivery)";
+                    << "Destination router eth core (chan " << static_cast<int>(cap.channel_id) << ", direction "
+                    << static_cast<int>(direction) << ") should show NocSendType activity (local delivery)";
                 found_receiver = true;
             }
         }
@@ -893,9 +887,8 @@ TEST_F(ChannelTrimming2DFixture, DirectionalChannelForwardedTo) {
                     has_noc_send_type = true;
                 }
             }
-            EXPECT_TRUE(has_noc_send_type)
-                << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
-                << ") should show NocSendType activity (local delivery)";
+            EXPECT_TRUE(has_noc_send_type) << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
+                                           << ") should show NocSendType activity (local delivery)";
             EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[0], 0)
                 << "Terminal router eth core (chan " << static_cast<int>(cap.channel_id)
                 << ") should not record an outgoing 2D action-map arm";

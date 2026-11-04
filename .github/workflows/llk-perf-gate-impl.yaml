@@ -584,6 +584,7 @@ jobs:
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
           THRESHOLD: ${{ inputs.threshold }}
+          MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -646,6 +647,7 @@ jobs:
             --note "$NOTE" \
             --post-pass "$SLACK_ON_PASS" \
             --threshold "$THRESHOLD" \
+            --min-cycles "$MIN_CYCLES" \
             --module-thresholds "$MODULE_THRESHOLDS" \
             --part-out slack_part.json \
             --out slack_payload.json && exit 0
