@@ -69,7 +69,8 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=3_103_000,
+    # Mean of CI runs 40424879138, 40494538796, 40532334659 and 40610708699 (2.991-3.000 ms).
+    expected_ns=2_996_000,
     margin=0.03,
     shape_note="384 experts / top-8, 7168 emb",
 )
@@ -77,9 +78,8 @@ _K2_7 = _MoEPerfCase(
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    # K3 does not opt into the routed expert / combine overlap; 6.31 ms is its Oct 16 baseline, from before
-    # the overlap existed (#60928's runs: 6.304 / 6.316 / 6.308 ms).
-    expected_ns=6_310_000,
+    # K3 does not opt into the routed expert / combine overlap. CI run 41411540803 / job 125169241093.
+    expected_ns=6_102_000,
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(

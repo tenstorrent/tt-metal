@@ -128,6 +128,9 @@ void kernel_main() {
     // the reader used to do on NoC 0, overlapping the reader's next DRAM read.
     constexpr uint32_t cb_in1_gate = get_compile_time_arg_val(26);
     constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(27) != 0;
+    // The multicast and its mcast_done signal live in the UP_SPLIT branch; without it the
+    // reader would wait for mcast_done forever.
+    static_assert(!writer_mcasts_in1 || writer_split_up != 0, "IN1_WRITER_MCAST requires UP_SPLIT (writer_split_up)");
     // Active-token band, appended after the DOWN_SPLIT block above rather than at 20/21:
     // those slots carry the down-weight args this branch added, so the band moved instead.
     constexpr uint32_t min_active_tokens = get_compile_time_arg_val(28);
@@ -159,7 +162,7 @@ void kernel_main() {
 
     constexpr uint32_t start_accessor_offset = out_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
-    const auto start_acc = TensorAccessor(start_args, start_addr);
+    [[maybe_unused]] const auto start_acc = TensorAccessor(start_args, start_addr);
 
     constexpr uint32_t up_accessor_offset = start_args.next_compile_time_args_offset();
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
@@ -189,14 +192,11 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_buf.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
 
-    // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
-    // each expert's output slice begins at start[global_id] (token row).
+    // The `start` (= expert_region_offsets) page is resident in cb_start_scratch, which
+    // the host maps to the READER's start CB: the reader's counts broadcast delivered it
+    // with counts/idx, before the counts push the wait above observed. Each expert's output slice begins at
+    // start[global_id] (token row).
     const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
-    {
-        const uint32_t start_page_size = start_acc.get_aligned_page_size();
-        noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
-        noc.async_read_barrier();
-    }
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
 
     // ---- UP_SPLIT up-weight read setup (see header) ----

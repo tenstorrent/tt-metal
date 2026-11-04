@@ -146,6 +146,9 @@ void kernel_main() {
     // the reader used to do on NoC 0, overlapping the reader's next DRAM read.
     constexpr uint32_t cb_in1_gate = get_compile_time_arg_val(26);
     constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(27) != 0;
+    // The multicast and its mcast_done signal live in the UP_SPLIT branch; without it the
+    // reader would wait for mcast_done forever.
+    static_assert(!writer_mcasts_in1 || writer_split_up != 0, "IN1_WRITER_MCAST requires UP_SPLIT (writer_split_up)");
     // Active-token band, appended after the DOWN_SPLIT block above rather than at 20/21:
     // those slots carry the down-weight args this branch added, so the band moved instead.
     constexpr uint32_t min_active_tokens = get_compile_time_arg_val(28);
@@ -177,7 +180,7 @@ void kernel_main() {
 
     constexpr uint32_t start_accessor_offset = out_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
-    const auto start_acc = TensorAccessor(start_args, start_addr);
+    [[maybe_unused]] const auto start_acc = TensorAccessor(start_args, start_addr);
 
     constexpr uint32_t up_accessor_offset = start_args.next_compile_time_args_offset();
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
@@ -187,10 +190,17 @@ void kernel_main() {
     // Per-expert `up` base addresses live in a runtime-arg array after the fixed
     // writer args; UP_RT is its first index. up_addr(e) = arg[UP_RT + e].
     constexpr uint32_t UP_RT = 8;
+    // Both per-expert blocks are absent when the union kernel reads the weight bases from its table;
+    // see hybrid_weight_table.hpp.
+#ifdef HYB_WEIGHT_TABLE
+    constexpr uint32_t WEIGHT_RT_EXPERTS = 0;
+#else
+    constexpr uint32_t WEIGHT_RT_EXPERTS = experts_per_chip;
+#endif
     // DOWN_SPLIT: per-expert down base addresses follow the up block.
-    constexpr uint32_t DOWN_RT = UP_RT + experts_per_chip;
+    constexpr uint32_t DOWN_RT = UP_RT + WEIGHT_RT_EXPERTS;
     // DOWN_SPLIT go/done sem ids follow the per-expert down addresses.
-    constexpr uint32_t DOWN_SEM_RT = DOWN_RT + experts_per_chip;
+    constexpr uint32_t DOWN_SEM_RT = DOWN_RT + WEIGHT_RT_EXPERTS;
     // IN1_WRITER_MCAST runtime args (9) follow the DOWN_SPLIT sem pair.
     constexpr uint32_t IN1_WM_RT = DOWN_SEM_RT + 2;
 
@@ -207,14 +217,11 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_buf.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
 
-    // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
-    // each expert's output slice begins at start[global_id] (token row).
+    // The `start` (= expert_region_offsets) page is resident in cb_start_scratch, which
+    // the host maps to the READER's start CB: the reader's counts broadcast delivered it
+    // with counts/idx, before the counts push the wait above observed. Each expert's output slice begins at
+    // start[global_id] (token row).
     const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
-    {
-        const uint32_t start_page_size = start_acc.get_aligned_page_size();
-        noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
-        noc.async_read_barrier();
-    }
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
 
     // ---- UP_SPLIT up-weight read setup (see header) ----
@@ -258,7 +265,12 @@ void kernel_main() {
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
-        const auto up_acc = TensorAccessor(up_args, get_arg_val<uint32_t>(UP_RT + local_expert_id), up_tile_bytes);
+#ifdef HYB_WEIGHT_TABLE
+        const uint32_t up_addr_e = hyb_weight_addr(HYB_W_UP, experts_per_chip, local_expert_id);
+#else
+        const uint32_t up_addr_e = get_arg_val<uint32_t>(UP_RT + local_expert_id);
+#endif
+        const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
@@ -393,8 +405,12 @@ void kernel_main() {
             // corrupts the gate/up path from the second chunk on.
             if constexpr (writer_split_down) {
                 if (is_up_sender) {
-                    const auto down_acc =
-                        TensorAccessor(down_args, get_arg_val<uint32_t>(DOWN_RT + local_expert_id), down_tile_bytes);
+#ifdef HYB_WEIGHT_TABLE
+                    const uint32_t down_addr_e = hyb_weight_addr(HYB_W_DOWN, experts_per_chip, local_expert_id);
+#else
+                    const uint32_t down_addr_e = get_arg_val<uint32_t>(DOWN_RT + local_expert_id);
+#endif
+                    const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
                     // cb_in1_down is double-buffered with one push per down K-block, and this
                     // RISC never pushes, so its write pointer is static: index the live slot
                     // off the block counter, exactly as the UP_SPLIT block does.
