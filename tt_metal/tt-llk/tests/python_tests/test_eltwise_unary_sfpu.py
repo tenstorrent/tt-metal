@@ -741,6 +741,7 @@ def test_eltwise_unary_sfpu_int(
 
 
 _INT32_MAX = 2**31 - 1
+_INT32_MIN = -(2**31)
 
 # Both signs are swept. Every threshold reaches the vInt branch; what the negative half alone
 # reaches is the overflow-safe compare it is split on, and Wormhole's hand-built threshold
@@ -917,9 +918,8 @@ _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
 # out-of-range path. One is kept to pin that wrap.
 _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 
-# Interesting magnitudes only, since a shift is exact: powers of two, a few odd values, and
-# zero. 2**30 keeps a large right shift working on a non-zero operand, and +-_INT32_MAX are the
-# int32 ends the custom stimuli deliver (they clamp INT32_MIN to -_INT32_MAX).
+# Powers of two, a few odd values and zero, applied with both signs; _INT32_MAX is the int32 end
+# the custom stimuli deliver (they clamp INT32_MIN to -_INT32_MAX).
 _SHIFT_STIMULUS_MAGNITUDES = [
     0,
     1,
@@ -937,17 +937,12 @@ _SHIFT_STIMULUS_MAGNITUDES = [
 
 
 def _shift_stimulus_values(mathop, shift_amount):
-    """Values of both signs that stay representable after *mathop* shifts them by *shift_amount*.
-
-    A left shift is the only one that can leave int32, so the value set is chosen per variant.
-    The negative half is what the right shift's sign fill acts on: an arithmetic shift of a
-    negative operand, in range and at the clamp to 31 where it gives -1.
-    """
+    """Both signs of each magnitude, minus left shifts that would leave int32."""
     values = set()
     for m in _SHIFT_STIMULUS_MAGNITUDES:
         for v in (m, -m):
             if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:
-                if not -(2**31) <= v << shift_amount <= _INT32_MAX:
+                if not _INT32_MIN <= v << shift_amount <= _INT32_MAX:
                     continue
             values.add(v)
     return [float(v) for v in sorted(values)]
@@ -966,12 +961,9 @@ def test_eltwise_unary_sfpu_int_shift(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    """Sweep the unary shift ops over the amounts worth driving, in range and out.
+    """The unary shifts over _UNARY_SHIFT_AMOUNTS, on two's-complement Int32 operands of both signs.
 
-    Not the full axis -- see _UNARY_SHIFT_AMOUNTS for which amounts are kept and why.
-    Int32 stimuli are two's complement, which is how ttnn feeds the device and what the
-    kernels' raw I32 loads expect; under this file's sign-magnitude default a negative
-    operand would reach the kernel as a different bit pattern.
+    Two's complement is what ttnn feeds and the kernels' raw I32 loads expect.
     """
     values = _shift_stimulus_values(mathop, shift_amount)
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
@@ -989,8 +981,9 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
-# Negative two's-complement operands, which the positive-only sweep above never shifts: they pin that
-# `vInt >> n` is the arithmetic SFPSHFT. Amounts 32 and 63 clamp to 31 (-1 for every negative lane).
+# Negative two's-complement operands pin the arithmetic right shift; 32 and 63 clamp to 31 (-1 for
+# every negative lane). The nightly sweep above covers these amounts and all values but
+# -(2**31 - 2**7); this test keeps them in the PR gate.
 _RIGHT_SHIFT_SIGNED_VALUES = [
     -1, -2, -3, -255, -256, -65536, -(2**30), -(2**31 - 2**7), 0, 1, 7, 2**30
 ]  # fmt: skip
