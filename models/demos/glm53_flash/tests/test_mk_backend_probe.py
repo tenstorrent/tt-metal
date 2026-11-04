@@ -198,3 +198,35 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
         f"{step_us:.1f} us = {step_us / len(layers):.1f} us per layer"
     )
     assert step_us > 0
+    prompt = os.environ.get("GLM53_MK_PROMPT", "")
+    if prompt:  # coherence: the chat prompt fed token by token on every slot (fresh state), then greedy decode
+        from models.autoports.zai_org_glm_5_3_flash.tt.tokenizer_chat import load_tokenizer
+
+        tok = load_tokenizer(snapshot)
+        ids = tok.encode_chat([{"role": "user", "content": prompt}])
+        gen = int(os.environ.get("GLM53_MK_GEN", "24"))
+        assert len(ids) + gen < SEQ, (len(ids), gen, SEQ)
+        kv2 = backend.allocate_kv_cache(max_batch=B, max_seq_len=SEQ)  # fresh state / cache / page table
+        io2 = backend.allocate_decode_io(kv2)
+        backend.write(io2.cur_pos, torch.zeros(B, dtype=torch.int32))
+        tr2 = backend.capture_decode(io2, kv2, B)
+        out = []
+        t0 = time.perf_counter()
+        for i, t in enumerate(ids):
+            backend.write(io2.tokens, torch.full((B,), int(t), dtype=torch.int32))
+            backend.replay(tr2)
+        sampled = backend.read(io2.sampled)
+        out.append(int(sampled[0]))
+        for _ in range(gen - 1):
+            backend.replay(tr2)  # the device sampler feeds io.tokens
+            sampled = backend.read(io2.sampled)
+            out.append(int(sampled[0]))
+            if tok.is_stop_token(out[-1]):
+                break
+        rows_equal = bool((sampled == sampled[0]).all())
+        text = tok.decode([i for i in out if 0 <= i < tok.vocab_size])
+        logger.info(
+            f"MK_BACKEND_PROMPT: mesh {MESH} layers {len(layers)} B {B}: {len(ids)} prompt + {len(out)} generated "
+            f"tokens in {time.perf_counter() - t0:.1f} s; rows equal {rows_equal}; ids {out}"
+        )
+        logger.info(f"MK_BACKEND_TEXT: {text!r}")
