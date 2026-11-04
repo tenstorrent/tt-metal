@@ -32,6 +32,7 @@ import logging
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 import uuid
@@ -1109,6 +1110,15 @@ def detect_pytest_tests(test_path):
         return False
 
 
+def _tee_command(cmd, output_path):
+    """Bash line that runs cmd with live output, saves it to output_path, and keeps cmd's exit code.
+
+    Every argument is shell-quoted, so values like JSON (--sampling_params '{"top_k": 1}') reach
+    the test unchanged.
+    """
+    return f"set -o pipefail; {shlex.join(cmd)} 2>&1 | tee {shlex.quote(output_path)}"
+
+
 def run_test_with_tracing(
     test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None, include_failed=False
 ):
@@ -1182,14 +1192,9 @@ def run_test_with_tracing(
     os.close(tmp_output_fd)  # Close fd, we'll open as file
 
     try:
-        # Build command with tee to show output live AND save to file
-        # Convert cmd list to properly quoted string for shell
-        cmd_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
-        tee_cmd = f"set -o pipefail; {cmd_str} 2>&1 | tee {tmp_output_path}"
-
-        # Run with shell=True to use tee; use bash for pipefail support so we
-        # get the pytest exit code instead of tee's (always-zero) exit code.
-        result = subprocess.run(tee_cmd, shell=True, executable="/bin/bash", cwd=BASE_DIR, text=True, env=env)
+        result = subprocess.run(
+            _tee_command(cmd, tmp_output_path), shell=True, executable="/bin/bash", cwd=BASE_DIR, text=True, env=env
+        )
 
         # Read the captured output to parse test statistics
         with open(tmp_output_path, "r") as f:
