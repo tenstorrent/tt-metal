@@ -337,7 +337,7 @@ def test_ttnn_sanity_keeps_errexit_around_the_group_cmd(failing_line):
     # ttnn-sanity hands the block to a bash of its own, which must keep that, or a failed line is
     # masked by a later line that passes (e.g. the three pytest lines of "trace allocation tracker").
     hw, sim = _ttnn_sanity_cmd_runners()
-    assert len(hw) == 2 and len(sim) == 1, (hw, sim)
+    assert len(hw) == 2 and len(sim) == 1, "ttnn-sanity runner shape changed; update _ttnn_sanity_cmd_runners"
     lines = ["true", "true", "true"]
     lines[failing_line - 1] = "false"
     cmd = "\n".join(lines)
