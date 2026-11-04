@@ -7,7 +7,7 @@ import math
 import ttnn
 from models.demos.vision.segmentation.segformer.tt.common import Conv
 from models.demos.vision.segmentation.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+from tt_py_test_utils_common.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):

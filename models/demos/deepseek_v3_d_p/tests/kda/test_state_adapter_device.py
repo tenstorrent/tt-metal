@@ -38,7 +38,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     kda_window,
     populate_kv_chunk_address_table_kda,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from tt_py_test_utils_common.kda_test_utils import (
     all_zero_bits,
     assert_bit_identical,
     decode_tail,

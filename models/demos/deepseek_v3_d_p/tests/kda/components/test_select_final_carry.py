@@ -17,8 +17,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     median_device_us,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
-from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profiler
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tt_py_test_utils_common.kda_test_utils import make_actual_start
+from tt_py_test_utils_common.realtime_profiler_utils import require_realtime_profiler
 
 pytestmark = run_for_blackhole()
 

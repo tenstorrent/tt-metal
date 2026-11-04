@@ -34,7 +34,7 @@ from ttnn.experimental.moe_compute_utils import (
 import ttnn
 
 # Import helper functions from the reference 1x8/1x16 test
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
+from tt_py_test_utils_common.moe_compute_helpers import (
     compute_e_t_golden,
     compute_expert_activation_golden,
     compute_selective_tilize_golden,

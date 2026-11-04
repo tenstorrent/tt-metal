@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import TtK3KdaAttention
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
+from tt_py_test_utils_common.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = run_for_blackhole()
 

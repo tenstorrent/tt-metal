@@ -21,7 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     validate_convolution_page_channels,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from tt_py_test_utils_common.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     decode_tail,

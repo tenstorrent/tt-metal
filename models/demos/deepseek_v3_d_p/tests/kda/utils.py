@@ -43,8 +43,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, decode_tail
+from tt_py_test_utils_common.kda_test_utils import assert_accurate, decode_tail
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:

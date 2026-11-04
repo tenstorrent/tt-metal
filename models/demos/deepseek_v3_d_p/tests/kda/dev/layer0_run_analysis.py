@@ -51,7 +51,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     state_after,
     token_ids_sha256,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import golden_floor
+from tt_py_test_utils_common.kda_test_utils import golden_floor
 
 WINDOW = 1024
 _FLOOR_READ_SEGMENTS = 16  # golden segments per read when computing the token floor (~1 GB at 1,024 x 7,168 FP64)

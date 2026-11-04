@@ -16,7 +16,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_con
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from tt_py_test_utils_common.kda_test_utils import (
     assert_accurate,
     assert_equal,
     decode_tail,

@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tt_py_test_utils_common.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 

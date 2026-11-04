@@ -26,7 +26,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronologic
 from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from tt_py_test_utils_common.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     decode_tail,

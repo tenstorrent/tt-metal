@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     export_state,
     import_state,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
+from tt_py_test_utils_common.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.perf]
 

@@ -5,7 +5,7 @@
 import ttnn
 from ttnn.model_preprocessing import ParameterDict
 from torch import nn
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+from tt_py_test_utils_common.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class OpenPDNMnistConv2D:

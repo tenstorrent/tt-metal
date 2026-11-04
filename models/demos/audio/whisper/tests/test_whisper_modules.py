@@ -25,7 +25,7 @@ from models.demos.audio.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
 from models.demos.audio.whisper.tt.whisper_generator import EncoderTraceState, run_encoder_traced_or_eager
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"
 MODEL_NAME = "distil-whisper/distil-large-v3"

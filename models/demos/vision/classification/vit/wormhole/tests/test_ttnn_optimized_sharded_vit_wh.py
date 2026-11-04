@@ -15,7 +15,7 @@ from models.demos.vision.classification.vit.common.common import load_torch_mode
 from models.demos.vision.classification.vit.wormhole.tt import (
     ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
