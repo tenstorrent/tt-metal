@@ -196,17 +196,14 @@ FORCE_INLINE void copy_complement(InDFB& in, IdentityDFB& identity, OutDFB& out)
     const uint32_t out_id = out.get_id();
     out.reserve_back(Kt * Kt);
     reconfig_data_format_srca(in_id);
+    copy_init(in_id);
     for (uint32_t row = 0; row < Kt; ++row) {
         for (uint32_t column = 0; column < Kt; ++column) {
             tile_regs_acquire();
-            copy_init(in_id);
-            copy_tile(in_id, row * Kt + column, 0);
-            if (row == column) {
-                kda::apply_identity<false>(identity, in_id, 0, 1, 0);
-            }
+            const uint32_t a = kda::copy_tile_as_a(in, identity, row * Kt + column, row == column, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, out_id, row * Kt + column);
+            pack_tile(a, out_id, row * Kt + column);
             tile_regs_release();
         }
     }
