@@ -144,9 +144,6 @@ tt::tt_metal::ProgramDescriptor build_program(
             tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0},
     };
-    if (fabric_2d) {
-        sender.defines.emplace_back("FABRIC_2D", "1");
-    }
 
     const auto [arrival_address, final_address] = attrs.semaphore_addresses;
     // Every core reads the same buffers, so they are bound once per kernel.
@@ -168,7 +165,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         writer.emplace_runtime_args(core, writer_rt);
     }
     desc.kernels = {std::move(reader), std::move(writer), std::move(compute), std::move(sender)};
-    constexpr uint32_t sender_kernel = 3;
+    tt::tt_metal::KernelHandle sender_kernel = 3;
 
     const auto source_node = mesh->get_fabric_node_id(coord);
     const auto destination_node = mesh->get_fabric_node_id(successor);
@@ -197,8 +194,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         sender_rt.append(heads);
         sender_rt.append(notify);
         std::vector<uint32_t> fabric_args;
-        tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-            source_node, connection_node, links[link], desc, core, fabric_args, tt::CoreType::WORKER);
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            *mesh, source_node, {connection_node}, {links[link]}, desc, sender_kernel, core, fabric_args);
         sender_rt.append(fabric_args);
         desc.kernels[sender_kernel].emplace_runtime_args(core, sender_rt);
     }
