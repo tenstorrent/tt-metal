@@ -146,8 +146,17 @@ class TT_MoonViT_Vision_Model(Module):
         }
 
     def gather_output(self, out: ttnn.Tensor, *, logical_n: int) -> torch.Tensor:
-        """Concatenate the shards along `sp_axis` and drop the padding -> (logical_n, C)."""
-        raise NotImplementedError("TT_MoonViT_Vision_Model.gather_output")
+        """Concatenate the shards along `sp_axis` and drop the padding -> (logical_n, C). The merger
+        keeps the reference's token order, so no reordering is needed. Without sequence parallelism the
+        replicas are stacked on dim 0 and the first is kept."""
+        sp_axis = self.parallel.sp_axis
+        if sp_axis is None:
+            composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        else:
+            dims = [0, 0]
+            dims[sp_axis] = 2
+            composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims)
+        return ttnn.to_torch(out, mesh_composer=composer)[0, 0, :logical_n]
 
     def forward(
         self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor

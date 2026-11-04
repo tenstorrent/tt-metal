@@ -33,7 +33,6 @@ import ttnn
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
 from models.experimental.kimi_k3_moonvit_v2.tests import goldens
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
-    NOT_WRITTEN,
     RING,
     RING_TRACE,
     Trace,
@@ -61,13 +60,15 @@ from models.experimental.kimi_k3_moonvit_v2.tt.vision_model import TT_MoonViT_En
 H, W, SEED = 256, 256, 0
 CHECKPOINT = pytest.mark.parametrize("reference", ["checkpoint"], indirect=True)
 # Against the fp32 outputs, over every row and over each chip's quarter. Relative RMSE is RMS error over
-# the golden's standard deviation; limits as in common.py (measured: layers <= 1.4%, encoder <= 10.5%).
+# the golden's standard deviation; limits as in common.py (measured: layers <= 1.4%, encoder <= 10.5%,
+# model <= 8.4%).
 LAYERS = pytest.mark.parametrize("layer", range(MoonViTConfig().num_hidden_layers), ids=lambda i: f"layer{i}")
 TRACE_LAYER = 0
 LAYER_PCC = 0.99
 LAYER_RELATIVE_RMSE = 0.03
 ENCODER_PCC = 0.99
 ENCODER_RELATIVE_RMSE = 0.15
+MODEL_RELATIVE_RMSE = 0.17
 
 
 @pytest.fixture
@@ -293,7 +294,6 @@ def test_full_size_encoder_trace(mesh_device, sp_axis, num_links, config, refere
 
 @RING
 @CHECKPOINT
-@NOT_WRITTEN
 def test_full_size_model(mesh_device, sp_axis, num_links, config, reference, saved):
     """The full model (patch embed, all 27 blocks, final norm, patch merger, projector) on the pixels
     `goldens.py` used, against the saved `mm_projector` output."""
@@ -306,7 +306,7 @@ def test_full_size_model(mesh_device, sp_axis, num_links, config, reference, sav
         golden,
         tt.run(pixels, grid_thws),
         ENCODER_PCC,
-        None,
+        MODEL_RELATIVE_RMSE,
         config,
         tt.parallel.sp_factor,
         "model",

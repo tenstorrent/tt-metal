@@ -116,8 +116,6 @@ RING_TRACE = mesh_params(
 TRACE_WARMUP = 2
 TRACE_ITERATIONS = 10
 
-NOT_WRITTEN = pytest.mark.xfail(raises=NotImplementedError, strict=True, reason="ttnn forward not written yet")
-
 # ttsim (TT_METAL_SIMULATOR) simulates one chip at about 1/100 of silicon speed. The ROW_GRIDS cases pad
 # to 16,384 rows per chip, so they skip there; each row-wise part also has a SIMULATOR_GRID case on one
 # chip, with random weights: the chip's quarter of a ring padded to SIMULATOR_ROWS, 128 rows.

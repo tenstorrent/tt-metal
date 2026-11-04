@@ -16,6 +16,7 @@ import torch
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import eager_attention
 from models.experimental.kimi_k3_moonvit_v2.tests.common import SHALLOW_REFERENCE, random_patches, random_tensor
 from models.experimental.kimi_k3_moonvit_v2.tests.goldens import (
+    NORM_EPS,
     chunked_attention,
     encoder_steps,
     to_fp32,
@@ -40,6 +41,16 @@ def test_encoder_steps_match_encoder(shallow_config, shallow_reference):
     assert torch.equal(steps["final_layernorm"], expected)
     assert torch.equal(resumed["final_layernorm"], expected)
     assert torch.equal(steps["mm_projector"], expected_model)
+
+
+@SHALLOW_REFERENCE
+def test_to_fp32_keeps_explicit_norm_eps(shallow_config, shallow_reference):
+    """`to_fp32` gives the encoder norms (`eps=None`) the bf16 eps and leaves the projector's
+    `post_norm` eps (set explicitly) alone."""
+    reference = to_fp32(copy.deepcopy(shallow_reference))
+    assert reference.vision_tower.encoder.final_layernorm.eps == NORM_EPS
+    assert reference.vision_tower.encoder.blocks[0].norm0.eps == NORM_EPS
+    assert reference.mm_projector.post_norm.eps == shallow_config.projector_norm_eps
 
 
 @pytest.mark.parametrize("length", [64, 300])
