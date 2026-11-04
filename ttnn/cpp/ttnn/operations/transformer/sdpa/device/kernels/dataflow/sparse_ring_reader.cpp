@@ -24,7 +24,7 @@ namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 // Reader of the block-sparse ring SDPA: every core holds its Q blocks ("resident" chunks of
 // block_size rows) in L1 for the whole op and streams each K/V piece of a ring iteration's shard once, for all of
 // them. Per ring iteration it publishes one plan (each chunk's kept blocks of the shard and its head group's piece
-// union), streams the pieces (own DRAM read, chain, or the head group's multicast), and on the last active iteration
+// union), streams the pieces (own DRAM read, chain, or the head group's multicast), and on the first active iteration
 // the pooled K/V entries with their generated column bias.
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -159,7 +159,7 @@ void kernel_main() {
     constexpr uint32_t cb_sparse_plan = get_named_compile_time_arg_val("cb_sparse_plan");
     constexpr uint32_t cb_pooled_bias = get_named_compile_time_arg_val("cb_pooled_bias");
     // The pooled route (the correction for the dropped blocks): pooled K/V entries and their column bias on
-    // each pass's last active ring iteration. Off: kept blocks only, the pooled accessors are null and unused.
+    // each pass's first active ring iteration. Off: kept blocks only, the pooled accessors are null and unused.
     constexpr bool pooled_route = get_named_compile_time_arg_val("pooled_route") == 1;
     // Words of per-shard kept-block bits in every plan record (block-form mask).
     constexpr uint32_t plan_block_words = get_named_compile_time_arg_val("plan_block_words");
@@ -256,6 +256,8 @@ void kernel_main() {
     // Sparse sources: mask [1, NH, nqc_pad, n_blocks_pad] uint32 row-major (one page per row); pooled K/V
     // [1, NH, n_blocks_pad, DH] tiles (pooled route only, their readers are built where they are used).
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
+    // Pooled chunks are consumed on the first active ring iteration of every pass.
+    bool pooled_pending = true;
     // Real tokens of block b of shard s. Block b is computed exactly iff its mask bit is set and it holds a real
     // token; tokens past its count are never attended (compute trims the block's tiles and adds the key bias).
     const pooled_bias_gen::Geometry geo{kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad};
@@ -318,6 +320,7 @@ void kernel_main() {
         const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
         auto ring_seq_replay = ring_seq_start;
         q_pushed = false;
+        pooled_pending = true;
         for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
             const bool ring_iter_is_active = ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
             const uint32_t ring_id = [&]() -> uint32_t {
@@ -338,17 +341,14 @@ void kernel_main() {
                 continue;
             }
 
-            // Pooled entries on the pass's last active iteration: they hold most of a row's softmax mass, so after
-            // them the bf16 sum slots would round away the small increments of every later exact step.
-            const uint32_t do_pooled =
-                (pooled_route && is_last_active_ring_iter(active_ring_iter_mask, ring_iter)) ? 1u : 0u;
+            const uint32_t do_pooled = (pooled_route && pooled_pending) ? 1u : 0u;
             // Per ring iteration:
             //   1. on the pass's first active iteration, the pass's Q chunks into cb_q_in;
             //   2. one plan record per resident chunk [this shard's kept-block words, head-group piece union lo, hi,
             //      do_pooled]; a chunk keeps a piece when it keeps any block of it;
             //   3. the shard's pieces once each, heads interleaved per k, skipping a piece no head-group member keeps
             //      (compute mirrors both rules);
-            //   4. on the pass's last active iteration, the pooled K/V chunks once per head, then one bias row per
+            //   4. on the pass's first active iteration, the pooled K/V chunks once per head, then one bias row per
             //      resident chunk of that head (K and V first, so compute never waits for V behind a bias row).
             constexpr uint32_t kResMax = 32;
             const uint32_t n_res = pass_q_end - pass_q_start;
@@ -896,6 +896,8 @@ void kernel_main() {
                     }
                 }
             }
+
+            pooled_pending = false;
         }
     }
 }
