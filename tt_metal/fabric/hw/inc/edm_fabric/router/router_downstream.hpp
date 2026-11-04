@@ -112,7 +112,7 @@ constexpr uint32_t live_downstreams() {
 // buffers and goes to VC0's downstreams.
 template <size_t VC>
 constexpr bool shares_vc0_destination() {
-    if constexpr (!vc_forwards_to_routers(VC)) {
+    if constexpr (!any_forwards_on_vc(VC)) {
         return true;
     } else {
         return ((CommandBuffers::vcs_on_forward_pair(0) >> VC) & 1u) != 0 &&
@@ -485,19 +485,19 @@ private:
     }
 };
 
-// The receiver's downstream connections: the downstream routers of each VC that forwards to other routers (VC0's;
-// VC1's on multi-mesh routers) and UDM's relay, each where this router has it.
+// The receiver's downstream connections: the downstream routers of each VC whose downstream connections a receiver
+// channel here forwards on (any_forwards_on_vc: VC0's, VC1's), and UDM's relay, each where this router has it.
 // Placement: only forwards touch them, so they stay in memory (the receiver loop takes them by reference), not in the
 // registers every packet needs.
 struct DownstreamConnections {
-    Downstreams<0> vc0;
-    [[no_unique_address]] Present<vc_forwards_to_routers(1), Downstreams<1>, 1> vc1;
+    [[no_unique_address]] Present<any_forwards_on_vc(0), Downstreams<0>, 0> vc0;
+    [[no_unique_address]] Present<any_forwards_on_vc(1), Downstreams<1>, 1> vc1;
     [[no_unique_address]] Present<udm_mode, Relay, 2> relay;
 
     // VC's downstream routers.
     template <size_t VC>
     FORCE_INLINE auto& of() {
-        static_assert(vc_forwards_to_routers(VC));
+        static_assert(any_forwards_on_vc(VC));
         if constexpr (VC == 0) {
             return vc0;
         } else {

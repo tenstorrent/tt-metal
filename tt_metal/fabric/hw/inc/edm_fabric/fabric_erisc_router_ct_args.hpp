@@ -234,7 +234,7 @@ static_assert(MAX_NUM_VCS == 3, "the per-VC features below list one host arg per
 // Whether this router is configured for the VC: VC0 always; VC1 and VC2 where the host's mode gives this router the
 // VC (the host defines FABRIC_2D_VC1_SERVICED / FABRIC_2D_VC2_SERVICED). Configuration only: channel trimming is
 // applied per channel (is_receiver_channel_serviced / is_sender_channel_serviced, "serviced" meaning not trimmed). The
-// one per-VC fact that combines both is the receiver's runs_vc (router_receiver.hpp); this array has no other reader.
+// one per-VC fact that combines both is runs_vc (router_common.hpp); this array has no other reader.
 constexpr std::array<bool, MAX_NUM_VCS> is_vc_configured = {
     true,
 #if defined(FABRIC_2D_VC1_SERVICED)

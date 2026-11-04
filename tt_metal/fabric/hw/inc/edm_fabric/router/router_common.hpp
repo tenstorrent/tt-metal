@@ -181,8 +181,40 @@ constexpr uint32_t INLINE_WRITE_ALL_BYTES = 0xF;
 constexpr bool is_sender_role = any_sender_channel_serviced;
 constexpr bool is_receiver_role = any_receiver_channel_serviced;
 
-// The VCs whose forwards go to downstream routers here: the host lists downstream routers for VC0 and VC1.
-constexpr bool vc_forwards_to_routers(size_t vc) { return vc == 0 || (vc == 1 && has_vc1); }
+// The host's receiver channel of VC: its index in the host's per-channel arrays (RX_CH_<r>_*,
+// RECEIVER_NUM_BUFFERS_ARRAY, the stream ids); NUM_RECEIVER_CHANNELS where VC has none.
+constexpr size_t receiver_channel_of(size_t vc) {
+    for (size_t rx = 0; rx < NUM_RECEIVER_CHANNELS; rx++) {
+        if (vc_of_receiver_channel(rx) == vc) {
+            return rx;
+        }
+    }
+    return NUM_RECEIVER_CHANNELS;
+}
+
+// Whether this router runs VC's receiver channel: a VC it is configured for, unless channel trimming took the channel
+// out (the channel's "serviced" flag). The one per-VC fact to use for "this router runs VC". (From the host's tables,
+// not ReceiverChannel<VC>: an absent channel's traits are never computed.)
+constexpr bool runs_vc(size_t vc) {
+    return vc < MAX_NUM_VCS && receiver_channel_of(vc) < NUM_RECEIVER_CHANNELS && is_vc_configured[vc] &&
+           is_receiver_channel_serviced[receiver_channel_of(vc)];
+}
+
+// The VC of the downstream connections VC's receiver channel forwards on: its own, or VC1 where it crosses over.
+constexpr size_t forwards_on_vc_of(size_t vc) { return is_vc_crossover_to_vc1[vc] ? 1 : vc; }
+
+// Whether a receiver channel this router runs sends packets out on VC vc's downstream connections (a channel that
+// forwards, and forwards on vc). It is about vc's downstream connections, not vc's traffic: on a router whose VC0
+// crosses over, VC0's packets are forwarded on VC1's downstreams, so any_forwards_on_vc(0) is false and
+// any_forwards_on_vc(1) is true. False for every VC on a sender-only ERISC.
+constexpr bool any_forwards_on_vc(size_t vc) {
+    for (size_t rx_vc = 0; rx_vc < MAX_NUM_VCS; rx_vc++) {
+        if (runs_vc(rx_vc) && !is_vc_forwarding_disabled[rx_vc] && forwards_on_vc_of(rx_vc) == vc) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // Which NoC command buffer each kind of command uses on this ERISC (the host's ids), which kinds keep their buffer
 // programmed between commands (a preset, through the stateful NoC API), and the rule they follow. A buffer that a kind
@@ -221,8 +253,8 @@ struct CommandBuffers {
     };
 
     // The kinds each of the four buffers (WR, RD, WR_REG, AT) carries on this ERISC. Worker credits by the host's
-    // worker positions, serviced or not (the host assigns buffers by channel, whatever the trimming). The forwards of
-    // every VC that forwards to routers are one kind: VCs on the same buffers share their presets.
+    // worker positions, serviced or not (the host assigns buffers by channel, whatever the trimming). The forwards on
+    // every VC's downstream connections (any_forwards_on_vc) are one kind: VCs on the same buffers share their presets.
     static constexpr std::array<uint32_t, NUM_NOC_CMD_BUFS> kinds_on = [] {
         std::array<uint32_t, NUM_NOC_CMD_BUFS> kinds{};
         kinds[atomics] |= ATOMICS;
@@ -234,7 +266,7 @@ struct CommandBuffers {
         if (is_receiver_role) {
             kinds[local_writes] |= LOCAL_WRITES;
             for (size_t vc = 0; vc < MAX_NUM_VCS; vc++) {
-                if (vc_forwards_to_routers(vc)) {
+                if (any_forwards_on_vc(vc)) {
                     kinds[forward_data[vc]] |= FORWARD_DATA;
                     kinds[forward_credits[vc]] |= forward_presets ? FORWARD_CREDITS : 0u;  // stateless: on atomics
                 }
@@ -246,22 +278,22 @@ struct CommandBuffers {
     static constexpr uint32_t preset_kinds =
         presets ? ~(ATOMICS | (forward_presets ? 0u : FORWARD_DATA | FORWARD_CREDITS)) : 0u;
 
-    // The VCs forwarding to routers on VC's two forward buffers, one bit each (VC's own bit where it forwards to
-    // routers).
+    // The VCs forwarded on (any_forwards_on_vc) whose forwards use VC's two forward buffers, one bit each (VC's own bit
+    // where it is forwarded on).
     static constexpr uint32_t vcs_on_forward_pair(size_t vc) {
         uint32_t vcs = 0;
         for (size_t other = 0; other < MAX_NUM_VCS; other++) {
-            if (vc_forwards_to_routers(other) && forward_data[other] == forward_data[vc] &&
+            if (any_forwards_on_vc(other) && forward_data[other] == forward_data[vc] &&
                 forward_credits[other] == forward_credits[vc]) {
                 vcs |= 1u << other;
             }
         }
         return vcs;
     }
-    // Whether VC presets its forward buffers: it forwards to routers and is the lowest VC on them (VCs on one pair of
+    // Whether VC presets its forward buffers: it is forwarded on and is the lowest such VC on them (VCs on one pair of
     // buffers share one preset).
     static constexpr bool presets_forward_pair(size_t vc) {
-        return vc_forwards_to_routers(vc) && lowest_bit(vcs_on_forward_pair(vc)) == vc;
+        return any_forwards_on_vc(vc) && lowest_bit(vcs_on_forward_pair(vc)) == vc;
     }
 };
 static_assert(

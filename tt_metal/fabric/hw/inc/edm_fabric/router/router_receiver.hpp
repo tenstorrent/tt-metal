@@ -109,25 +109,6 @@ struct CompletionGroupTrids {
 // Channels and their features
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The host's receiver channel of VC: its index in the host's per-channel arrays (RX_CH_<r>_*,
-// RECEIVER_NUM_BUFFERS_ARRAY, the stream ids); NUM_RECEIVER_CHANNELS where VC has none.
-constexpr size_t receiver_channel_of(size_t vc) {
-    for (size_t rx = 0; rx < NUM_RECEIVER_CHANNELS; rx++) {
-        if (vc_of_receiver_channel(rx) == vc) {
-            return rx;
-        }
-    }
-    return NUM_RECEIVER_CHANNELS;
-}
-
-// Whether this router runs VC's receiver channel: a VC it is configured for, unless channel trimming took the channel
-// out (the channel's "serviced" flag). The one per-VC fact to use for "this router runs VC". (From the host's tables,
-// not ReceiverChannel<VC>: an absent channel's traits are never computed.)
-constexpr bool runs_vc(size_t vc) {
-    return vc < MAX_NUM_VCS && receiver_channel_of(vc) < NUM_RECEIVER_CHANNELS && is_vc_configured[vc] &&
-           is_receiver_channel_serviced[receiver_channel_of(vc)];
-}
-
 // The VCs whose receiver channel this router runs, one bit each (ReceiverChannelStates).
 constexpr uint32_t receiver_vcs = [] {
     uint32_t vcs = 0;
@@ -156,7 +137,7 @@ struct ReceiverChannel {
     // Intermesh ingress: the channel's packets come from another mesh (router_routing.hpp).
     static constexpr bool intermesh_ingress = receiver_channel_is_intermesh_ingress[rx];
     // The VC of the downstream routers the channel forwards to: its own, or VC1 where it crosses over.
-    static constexpr size_t forwards_on_vc = is_vc_crossover_to_vc1[VC] ? 1 : VC;
+    static constexpr size_t forwards_on_vc = forwards_on_vc_of(VC);
     // UDM: packets for this chip go to the fabric's relay (router_downstream.hpp), admitted with the forwards.
     static constexpr bool delivers_through_relay = udm_mode;
 #if defined(FABRIC_2D)
@@ -775,15 +756,17 @@ __attribute__((noinline)) void init_channel_streams() {
 constexpr bool has_downstream_connections = is_receiver_role || NUM_ACTIVE_ERISCS == 1;
 
 // Before the Ethernet handshake: the receiver's downstream connections (router_downstream.hpp), returned for its loop,
-// with every connection's links and progress where this ERISC runs the receiver (VC1's and UDM's relay where the router
-// has them), then the receiver channels' slot buffers. A sender-only ERISC gets none. (A template, so an absent
-// connection is named only in template-dependent code.)
+// with every connection's links and progress where this ERISC runs the receiver (VC0's and VC1's where a receiver
+// channel forwards on them, UDM's relay where the router has it), then the receiver channels' slot buffers. A
+// sender-only ERISC gets none. (A template, so an absent connection is named only in template-dependent code.)
 template <typename Connections = Present<has_downstream_connections, DownstreamConnections, 0>>
 FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
     Connections downstreams{};
     if constexpr (is_receiver_role) {
-        init_downstreams(downstreams.vc0, args.vc0());
-        if constexpr (vc_forwards_to_routers(1)) {
+        if constexpr (any_forwards_on_vc(0)) {
+            init_downstreams(downstreams.vc0, args.vc0());
+        }
+        if constexpr (any_forwards_on_vc(1)) {
             init_downstreams(downstreams.vc1, args.vc1());
         }
         if constexpr (udm_mode) {
@@ -827,14 +810,15 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
 }
 
 // After every connection is open: the forwards' command buffers preset (ForwardCommands), each pair of buffers by the
-// lowest VC on it (VC0 forwards to routers and is the lowest on its pair).
+// lowest VC whose downstream connections a receiver channel forwards on (any_forwards_on_vc).
 FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) {
-    static_assert(CommandBuffers::presets_forward_pair(0));
-    ForwardCommands<0>::preset(args.vc0());
+    if constexpr (CommandBuffers::presets_forward_pair(0)) {
+        ForwardCommands<0>::preset(args.vc0());
+    }
     if constexpr (CommandBuffers::presets_forward_pair(1)) {
         ForwardCommands<1>::preset(args.vc1());
     }
-    static_assert(!vc_forwards_to_routers(2), "the runtime args list downstream routers for VC0 and VC1");
+    static_assert(!any_forwards_on_vc(2), "the runtime args list downstream routers for VC0 and VC1");
 }
 
 // The receiver loop: rounds of passes over the serviced VCs' receiver channels until termination. A function of its
