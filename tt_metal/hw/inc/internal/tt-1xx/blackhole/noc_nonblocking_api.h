@@ -2227,6 +2227,8 @@ inline __attribute__((always_inline)) void noc_write_with_state(
 /**
  * Similar to above except takes additional argument, \a  dst_noc_addr, to free up \a dst_addr to be 64 bits
  *
+ * \a update_addr_mid (default true) writes NOC_RET_ADDR_MID from the upper half of \a dst_addr. False leaves it as the
+ * set_state call left it: for on-chip destinations, whose upper half is 0, it saves a register write per transaction.
  */
 template <
     uint8_t noc_mode = DM_DEDICATED_NOC,
@@ -2235,51 +2237,20 @@ template <
     enum CQNocSend send = CQ_NOC_SEND,
     enum CQNocWait wait = CQ_NOC_WAIT,
     bool update_counter = true,
-    bool posted = false>
+    bool posted = false,
+    bool update_addr_mid = true>
 inline __attribute__((always_inline)) void noc_wwrite_with_state(
     uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     noc_common_write_with_state<noc_mode, cmd_buf, flags, wait, update_counter, posted>(noc, src_addr, size, ndests);
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
+        if constexpr (update_addr_mid) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
+        }
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
         // Handles writing to PCIe
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, dst_noc_addr);
-    }
-    if constexpr (send) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    }
-}
-
-// clang-format off
-/**
- * Like noc_write_with_state, for a destination given as a node coordinate and a local address: the coordinate is
- * written as given (as NOC_RET_ADDR_COORDINATE takes it, (noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK), not
- * extracted from a 64-bit address. On-chip addresses only: NOC_RET_ADDR_MID stays as the set_state call left it.
- */
-// clang-format on
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    uint32_t cmd_buf,
-    enum CQNocFlags flags,
-    enum CQNocSend send = CQ_NOC_SEND,
-    enum CQNocWait wait = CQ_NOC_WAIT,
-    bool update_counter = true,
-    bool posted = false>
-inline __attribute__((always_inline)) void noc_write_to_node_with_state(
-    uint32_t noc,
-    uint32_t src_addr,
-    uint32_t node_coordinate,
-    uint32_t dst_addr,
-    uint32_t size = 0,
-    uint32_t ndests = 1) {
-    noc_common_write_with_state<noc_mode, cmd_buf, flags, wait, update_counter, posted>(noc, src_addr, size, ndests);
-    if constexpr (flags & CQ_NOC_FLAG_DST) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_addr);
-    }
-    if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, node_coordinate);
     }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);

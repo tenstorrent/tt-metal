@@ -315,14 +315,15 @@ struct PartialPresetForwards {
             while (!noc_cmd_buf_ready(Traits::noc, Traits::sync_cmd_buf));
         }
         ncrisc_noc_set_transaction_id</*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::data_cmd_buf, trid);
-        noc_write_to_node_with_state<
+        noc_wwrite_with_state<
             DM_DEDICATED_NOC,
             Traits::data_cmd_buf,
             CQ_NOC_SNDL,
             CQ_NOC_SEND,
             CQ_NOC_wait,
             /*update_counter=*/is_blackhole_arch,
-            /*posted=*/true>(Traits::noc, src_addr, node, dst, size_bytes);
+            /*posted=*/true,
+            /*update_addr_mid=*/false>(Traits::noc, src_addr, node, dst, size_bytes);
         noc_inline_dw_write_with_state<
             /*update_addr_lo=*/true,
             /*update_counter=*/false,

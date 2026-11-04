@@ -1783,7 +1783,8 @@ template <
     enum CQNocSend send = CQ_NOC_SEND,
     enum CQNocWait wait = CQ_NOC_WAIT,
     bool update_counter = true,
-    bool posted = false>
+    bool posted = false,
+    bool update_addr_mid = true>  // no NOC_RET_ADDR_MID on Wormhole: accepted so callers compile on both
 inline __attribute__((always_inline)) void noc_wwrite_with_state(
     uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
@@ -1845,32 +1846,6 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
     noc_wwrite_with_state<noc_mode, cmd_buf, flags, send, wait, update_counter, posted>(
         noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
-}
-
-// clang-format off
-/**
- * Like noc_write_with_state, for a destination given as a node coordinate and a local address: the coordinate is
- * written as given (as NOC_RET_ADDR_COORDINATE takes it, (noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK), not
- * extracted from a 64-bit address.
- */
-// clang-format on
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    uint32_t cmd_buf,
-    enum CQNocFlags flags,
-    enum CQNocSend send = CQ_NOC_SEND,
-    enum CQNocWait wait = CQ_NOC_WAIT,
-    bool update_counter = true,
-    bool posted = false>
-inline __attribute__((always_inline)) void noc_write_to_node_with_state(
-    uint32_t noc,
-    uint32_t src_addr,
-    uint32_t node_coordinate,
-    uint32_t dst_addr,
-    uint32_t size = 0,
-    uint32_t ndests = 1) {
-    noc_wwrite_with_state<noc_mode, cmd_buf, flags, send, wait, update_counter, posted>(
-        noc, src_addr, node_coordinate, dst_addr, size, ndests);
 }
 
 // clang-format off
