@@ -115,6 +115,42 @@ constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token
     return token.llk_metadata_.num_faces_c_dim;
 }
 
+// Returns the tile height in elements.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_r_dim(const TensorBindingToken<Cta, Addr>& token) {
+    return get_face_r_dim(token) * get_num_faces_r_dim(token);
+}
+
+// Returns the tile width in elements.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_c_dim(const TensorBindingToken<Cta, Addr>& token) {
+    return get_face_c_dim(token) * get_num_faces_c_dim(token);
+}
+
+// Returns the number of elements in a tile.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_hw(const TensorBindingToken<Cta, Addr>& token) {
+    return get_tile_r_dim(token) * get_tile_c_dim(token);
+}
+
+// Returns the total number of faces in a tile.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_num_faces(const TensorBindingToken<Cta, Addr>& token) {
+    return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
+}
+
+// Returns whether the tile height is less than 32 elements.
+template <uint32_t Cta, uint32_t Addr>
+constexpr bool get_partial_face(const TensorBindingToken<Cta, Addr>& token) {
+    return get_tile_r_dim(token) < 32;
+}
+
+// Returns whether the tile width is less than 32 elements.
+template <uint32_t Cta, uint32_t Addr>
+constexpr bool get_narrow_tile(const TensorBindingToken<Cta, Addr>& token) {
+    return get_tile_c_dim(token) < 32;
+}
+
 // PerNodeTensorBindingToken: the binding token for a per-node tensor.
 //
 // A per-node allocated tensor has an independent base address on every node, so the address
@@ -170,6 +206,42 @@ constexpr uint8_t get_num_faces_r_dim(const PerNodeTensorBindingToken<Cta, Addr>
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_num_faces_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return token.llk_metadata_.num_faces_c_dim;
+}
+
+// Returns the tile height in elements.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+    return get_face_r_dim(token) * get_num_faces_r_dim(token);
+}
+
+// Returns the tile width in elements.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+    return get_face_c_dim(token) * get_num_faces_c_dim(token);
+}
+
+// Returns the number of elements in a tile.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_hw(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+    return get_tile_r_dim(token) * get_tile_c_dim(token);
+}
+
+// Returns the total number of faces in a tile.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_num_faces(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+    return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
+}
+
+// Returns whether the tile height is less than 32 elements.
+template <uint32_t Cta, uint32_t Addr>
+constexpr bool get_partial_face(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+    return get_tile_r_dim(token) < 32;
+}
+
+// Returns whether the tile width is less than 32 elements.
+template <uint32_t Cta, uint32_t Addr>
+constexpr bool get_narrow_tile(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+    return get_tile_c_dim(token) < 32;
 }
 
 // NullTensorBindingToken: the "this name is not bound" result of a binding lookup.
