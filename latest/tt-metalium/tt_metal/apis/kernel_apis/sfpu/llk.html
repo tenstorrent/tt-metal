@@ -878,27 +878,15 @@ operands. For the integer operations, the second operand may also be a
 <code class="docutils literal notranslate"><span class="pre">vMag</span></code> type (the <code class="docutils literal notranslate"><span class="pre">vMag</span></code> type itself does not provide operators).</p>
 <p>The modifying variants, <code class="docutils literal notranslate"><span class="pre">OP=</span></code>, are available.</p>
 <p>Conditional operators are provided – <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>,
-<code class="docutils literal notranslate"><span class="pre">&gt;</span></code> &amp; <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>. These produce a type that may implicitly convert
-to a <code class="docutils literal notranslate"><span class="pre">vBool</span></code> type.  These may be used:</p>
-<blockquote>
-<div>
-<ul class="simple">
-<li><p>in a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> or <code class="docutils literal notranslate"><span class="pre">v_elseif</span></code> conditional.</p></li>
-<li><p>operands to a <code class="docutils literal notranslate"><span class="pre">&amp;&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code> and <code class="docutils literal notranslate"><span class="pre">!</span></code> operators (which may
-themselves be combined and/or used in <code class="docutils literal notranslate"><span class="pre">v_if</span></code> &amp; <code class="docutils literal notranslate"><span class="pre">v_elseif</span></code>
-conditionals.</p></li>
-<li><p>the operand of a <code class="docutils literal notranslate"><span class="pre">mask</span></code> call (see below).</p></li>
-</ul>
-</div>
-</blockquote>
-<p>Both operands must be related vector types, or the second operand may
-be an appropriate scalar operator, or, for integral comparisons, may
-be a <code class="docutils literal notranslate"><span class="pre">vMag</span></code> type.  The <code class="docutils literal notranslate"><span class="pre">&amp;&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code> operators are not
-short-circuiting.</p>
+<code class="docutils literal notranslate"><span class="pre">&gt;</span></code> &amp; <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>. These produce a <code class="docutils literal notranslate"><span class="pre">vBool</span></code> result, which may be used
+directly in a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> conditional. Both operands must
+be related vector types, or the second operand may be an appropriate
+scalar operator, or, for integral comparisons, may be a <code class="docutils literal notranslate"><span class="pre">vMag</span></code> type.</p>
+<p><code class="docutils literal notranslate"><span class="pre">vBool``s</span> <span class="pre">may</span> <span class="pre">be</span> <span class="pre">combined</span> <span class="pre">with</span> <span class="pre">``&amp;&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code> and <code class="docutils literal notranslate"><span class="pre">!</span></code>
+operations. Note that these are not short-circuiting.</p>
 <p>You may create predicate functions that return a <code class="docutils literal notranslate"><span class="pre">vBool</span></code>, but they
 must be invoked inside a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> (or <code class="docutils literal notranslate"><span class="pre">v_elseif</span></code>) condition.  Do not
-store the return value and then interrogate it later (a compile error
-will most-likely result).</p>
+store the return value and then interrogate it later.</p>
 <p>Float comparisons have the following properties:</p>
 <blockquote>
 <div>
@@ -926,7 +914,7 @@ and unsigned) are not correct over the full range – except on Quasar
 for signed compares. This is a compiler defect that is yet to be
 fixed. However, when values are less than 2^31 apart, the
 ordering compares are (a) correct and (b) can be cheaper than the
-full sequence, even on Quasar.  To that end the <code class="docutils literal notranslate"><span class="pre">sfpi::nearby</span></code>
+full sequence, even on Quasar.  To that and the <code class="docutils literal notranslate"><span class="pre">sfpi::nearby</span></code>
 wrapper function is provided and may be used to wrap all, or part, of
 comparison sequences. The compiler does not have vector value range
 information to deduce this itself.</p>
@@ -936,30 +924,6 @@ information to deduce this itself.</p>
 <span class="p">}</span><span class="w"> </span><span class="n">v_endif</span><span class="p">;</span>
 </pre></div>
 </div>
-</section>
-<section id="mask-generation">
-<h4>Mask Generation<a class="headerlink" href="#mask-generation" title="Permalink to this heading"></a>
-</h4>
-<p>Masks can be generated from comparison operations on Blackhole and
-Quasar targets:</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vUInt</span><span class="w"> </span><span class="n">mask</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="n">OP</span><span class="w"> </span><span class="n">b</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Where <code class="docutils literal notranslate"><span class="pre">OP</span></code> is one of <code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> or
-<code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>. The types supported are:</p>
-<blockquote>
-<div>
-<ul class="simple">
-<li><p>vFloat</p></li>
-<li><p>vSMag</p></li>
-<li><p>vInt: Quasar only</p></li>
-</ul>
-</div>
-</blockquote>
-<p>The result elements are all-zeroes or all-ones, depending on the
-comparison result. These use the ordering compare instructions and
-the <code class="docutils literal notranslate"><span class="pre">nearby</span></code> wrapper cannot be used (nor is it needed).</p>
 </section>
 <section id="scalar-values">
 <h4>Scalar Values<a class="headerlink" href="#scalar-values" title="Permalink to this heading"></a>
@@ -1233,14 +1197,8 @@ constants.</p>
 <span class="n">Vec</span><span class="w"> </span><span class="n">subvec_shflshr1</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Two sets of 4 vectors may be transposed as by the <code class="docutils literal notranslate"><span class="pre">sfptransp</span></code>
-instruction. These routines use __all__ the available LRegs, and thus
-there must be no other live values. Compilation will fail if that is
-not true.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">subvec_transp</span><span class="p">(</span><span class="n">vFloat</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="o">&amp;</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="o">&amp;</span><span class="w"> </span><span class="n">c</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="o">&amp;</span><span class="w"> </span><span class="n">d</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="o">&amp;</span><span class="n">e</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="o">&amp;</span><span class="n">f</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="o">&amp;</span><span class="n">g</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="o">&amp;</span><span class="n">h</span><span class="p">)</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">subvec_transp</span><span class="p">(</span><span class="n">vInt</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="o">&amp;</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="o">&amp;</span><span class="w"> </span><span class="n">c</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="o">&amp;</span><span class="w"> </span><span class="n">d</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="o">&amp;</span><span class="n">e</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="o">&amp;</span><span class="n">f</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="o">&amp;</span><span class="n">g</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="o">&amp;</span><span class="n">h</span><span class="p">)</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">subvec_transp</span><span class="p">(</span><span class="n">vUInt</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="o">&amp;</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="o">&amp;</span><span class="w"> </span><span class="n">c</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="o">&amp;</span><span class="w"> </span><span class="n">d</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="o">&amp;</span><span class="n">e</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="o">&amp;</span><span class="n">f</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="o">&amp;</span><span class="n">g</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="o">&amp;</span><span class="n">h</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">subvec_transp</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">A</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">B</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">C</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">D</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="assigning-and-using-constant-registers">
