@@ -45,9 +45,9 @@ from loguru import logger
 
 import ttnn
 
-from ....pipelines.events import SectionEnd, SectionStart
-from ....pipelines.ideogram4.pipeline_ideogram4 import Ideogram4Pipeline
-from ....utils.test import ring_params
+from ...pipelines.events import SectionTimer
+from ...pipelines.ideogram4.pipeline_ideogram4 import Ideogram4Pipeline
+from ...utils.test import ring_params
 
 _NEEDS_WEIGHTS = pytest.mark.skipif(
     not os.environ.get("IDEOGRAM4_WEIGHTS"), reason="IDEOGRAM4_WEIGHTS not set (gated fp8 checkpoint)"
@@ -95,31 +95,6 @@ CAPTION = {
 
 def caption() -> str:
     return json.dumps(CAPTION, ensure_ascii=False, separators=(",", ":"))
-
-
-class SectionTimer:
-    """Wall-clock section times from the pipeline's events. Optionally synchronizes the mesh at the
-    end of every denoise step so per-step times measure execution, not dispatch."""
-
-    def __init__(self, mesh_device, sync_steps: bool) -> None:
-        self.mesh_device = mesh_device
-        self.sync_steps = sync_steps
-        self.starts: dict[str, float] = {}
-        self.durations: dict[str, float] = {}
-
-    def __call__(self, event) -> None:
-        if isinstance(event, SectionStart):
-            self.starts[event.name] = time.perf_counter()
-        elif isinstance(event, SectionEnd):
-            if self.sync_steps and event.name.startswith("denoising_step_"):
-                ttnn.synchronize_device(self.mesh_device)
-            self.durations[event.name] = time.perf_counter() - self.starts[event.name]
-
-    def step_ms(self) -> list[float]:
-        steps = sorted(
-            (int(k.rsplit("_", 1)[1]), v) for k, v in self.durations.items() if k.startswith("denoising_step_")
-        )
-        return [v * 1000 for _, v in steps]
 
 
 def _git_rev() -> str | None:

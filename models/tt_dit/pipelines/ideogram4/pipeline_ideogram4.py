@@ -111,6 +111,7 @@ __all__ = ["Ideogram4DecodeStage", "Ideogram4Sampler", "cfg_blend", "interleave_
 # =============================================================================
 
 import gc as _gc
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -136,23 +137,32 @@ from ..pipeline_api import PipelineAPIMixin
 
 # Opt-out switch for the bf16 dequant cache (default on). Dequantizing the fp8
 # checkpoints (encoder + 2 transformers) dominates pipeline build time; caching the
-# bf16 result next to the source makes subsequent builds skip both the fp8 load and
-# the dequant. Set IDEOGRAM4_DEQUANT_CACHE=0 to force a fresh dequant.
+# bf16 result makes subsequent builds skip both the fp8 load and the dequant. Set
+# IDEOGRAM4_DEQUANT_CACHE=0 to force a fresh dequant.
 _DEQUANT_CACHE = os.environ.get("IDEOGRAM4_DEQUANT_CACHE", "1") != "0"
+
+
+def _dequant_cache_path(path: str) -> str:
+    """Where the bf16 copy of ``path`` is cached: under TT_DIT_CACHE_DIR (default ~/.cache/tt-dit),
+    never beside the source, which may be a shared or read-only HuggingFace cache. Keyed by the
+    source's resolved path, so files with the same name in different checkpoints do not collide."""
+    root = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
+    source = os.path.realpath(path)
+    digest = hashlib.sha256(source.encode()).hexdigest()[:16]
+    return os.path.join(root, "ideogram4", "dequant", f"{digest}-{os.path.basename(source)}")
 
 
 def _dq(path):
     """Load + dequantize an fp8 checkpoint to bf16, caching the bf16 result on disk.
 
-    The cache file lives beside the source (``<path>.dequant-bf16.safetensors``) and is
-    validated against the source's size+mtime (stamped into the safetensors metadata), so
-    it is transparently rebuilt if the source weights change. Cache write failures (e.g.
-    read-only weights dir) fall back to in-memory dequant without erroring.
+    The cache file (see ``_dequant_cache_path``) is validated against the source's size+mtime
+    (stamped into the safetensors metadata), so it is transparently rebuilt if the source
+    weights change. Cache write failures fall back to in-memory dequant without erroring.
     """
     if not _DEQUANT_CACHE:
         return dequant_fp8_state_dict(_load_file(path))
 
-    cache_path = path + ".dequant-bf16.safetensors"
+    cache_path = _dequant_cache_path(path)
     try:
         st = os.stat(path)
         stamp = f"{st.st_size}:{int(st.st_mtime)}"
@@ -172,6 +182,7 @@ def _dq(path):
 
     sd = dequant_fp8_state_dict(_load_file(path))
     try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         tmp = cache_path + ".tmp"
         _save_file(sd, tmp, metadata={"src_stamp": stamp})
         os.replace(tmp, cache_path)

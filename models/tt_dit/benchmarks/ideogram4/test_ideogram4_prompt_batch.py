@@ -48,8 +48,9 @@ from loguru import logger
 
 import ttnn
 
-from ....pipelines.ideogram4.pipeline_ideogram4 import MAX_TEXT_TOKENS, Ideogram4Pipeline
-from .test_perf_ideogram4_gpu_bench import _RING_PIPE, SectionTimer, _git_rev
+from ...pipelines.events import SectionTimer
+from ...pipelines.ideogram4.pipeline_ideogram4 import MAX_TEXT_TOKENS, Ideogram4Pipeline
+from .test_perf_ideogram4_gpu_bench import _RING_PIPE, _git_rev
 
 _REQUIRED = ("IDEOGRAM4_WEIGHTS", "IDEOGRAM_BATCH_CAPTIONS", "IDEOGRAM_BATCH_LATENTS")
 _NEEDS_INPUTS = pytest.mark.skipif(
