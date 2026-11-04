@@ -51,7 +51,7 @@ class RowExchange:
     CB_SEND, CB_TIN, CB_RM, CB_RM2, CB_T, CB_OUT, CB_SEL, CB_ZERO, CB_OUT2, CB_RM3 = range(10)
     SEM_STAGED, SEM_GO = 0, 1
 
-    def __init__(self, mesh, mode: str, widths: list[int], T: int, *, xchg_core=(0, 0), link: int = 0):
+    def __init__(self, mesh, mode: str, widths: list[int], T: int, *, xchg_core=(0, 0), link: int = 0, workers=None):
         self.mesh = mesh
         self.device = mesh.device
         self.mode = MODES[mode]
@@ -77,9 +77,14 @@ class RowExchange:
         self.np = _ceil(self.nchunks if self.mode < 2 else self.cpo, self.cpp)  # packets per peer (per phase)
         self.pkt = self.cpp * self.ps
         grid = self.device.compute_with_storage_grid_size()
-        assert 1 + self.nchunks <= grid.x, (self.nchunks, grid.x, "one exchange core + the workers on grid row 0")
         self.xchg_core = ttnn.CoreCoord(*xchg_core)
-        self.workers = [ttnn.CoreCoord(1 + k, 0) for k in range(self.nchunks)]
+        if workers is None:  # the default placement: the exchange core and the workers along grid row 0
+            assert 1 + self.nchunks <= grid.x, (self.nchunks, grid.x, "one exchange core + the workers on grid row 0")
+            self.workers = [ttnn.CoreCoord(1 + k, 0) for k in range(self.nchunks)]
+        else:  # a caller's placement (the persistent MoE program keeps the exchange off the expert cores)
+            assert len(workers) >= self.nchunks, (len(workers), self.nchunks)
+            self.workers = [ttnn.CoreCoord(*w) for w in workers[: self.nchunks]]
+            assert (self.xchg_core.x, self.xchg_core.y) not in {(w.x, w.y) for w in self.workers}
         self.all_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(self.xchg_core, self.xchg_core)] + [ttnn.CoreRange(c, c) for c in self.workers]
         )

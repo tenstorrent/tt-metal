@@ -31,6 +31,16 @@
 #include "routing_scan.hpp"
 
 void kernel_main() {
+#ifdef PERSIST_WAIT_SEM
+    {
+        // persistent MoE program (custom_ops/moe_persistent): the gathered x / routing land in this program's gather
+        // phase; the exchange core multicasts a 1 into this kernel's semaphore when they are written
+        volatile tt_l1_ptr uint32_t* psem =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(PERSIST_WAIT_SEM));
+        noc_semaphore_wait_min(psem, 1);
+        noc_semaphore_set(psem, 0);
+    }
+#endif
     const uint32_t w_addr = get_arg_val<uint32_t>(0);
     const uint32_t routing_addr = get_arg_val<uint32_t>(1);
     const uint32_t bank_id = get_arg_val<uint32_t>(2);

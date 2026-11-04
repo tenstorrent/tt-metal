@@ -873,6 +873,7 @@ class TtRoutedExperts(LightweightModule):
         self.dense = dense
         self.stream = stream
         self._row_exchange_ops: dict = {}  # the fabric row-exchange ops by (mode, widths, T), built on first use
+        self._persistent_ops: dict = {}  # the persistent MoE block programs by (T, E) (GLM53_MOE_PERSIST=1)
         # GLM53_ROWX_CHECK=N: cross-check the first N eager calls of the fabric combine (1 = the warm-up step's 64)
         _n = int(os.environ.get("GLM53_ROWX_CHECK", "0"))
         self._rowx_checks_left = 64 if _n == 1 else _n
@@ -1901,6 +1902,20 @@ class TtRoutedExperts(LightweightModule):
         compact_gather, combine = decode_glue_modes(
             self.mesh.rows, T, has_idx=idx is not None, in_prefill=self.mesh.in_prefill
         )
+        persist = (
+            os.environ.get("GLM53_MOE_PERSIST", "0") == "1"
+            and self.mesh.rows > 1
+            and compact_gather
+            and self.mesh.rows * T <= TILE
+            and idx is None
+            and self.stream
+            and self.stream_fused
+            and self._stream_serves(self.mesh.rows * T)
+            and self._fold_serves(dense_w)
+        )
+        if persist:
+            # the gather, the fused experts and the combine as ONE program (custom_ops/moe_persistent)
+            return self._forward_persistent(x, dense_w, T)
         if self.mesh.rows > 1:
             fabric_rows = self.mesh.rows * T <= TILE  # the fabric programs assemble one tile row
             if compact_gather and fabric_rows and hybrid_gather_mode() == "fabric":
@@ -1928,6 +1943,40 @@ class TtRoutedExperts(LightweightModule):
             else:
                 y = self.mesh.reduce_scatter_rows(y, dim=2)
         return y
+
+    # ------------------------------------------------------- the persistent MoE block (GLM53_MOE_PERSIST=1)
+    def _persistent_op(self, op, T: int, E: int):
+        """The ``MoePersistent`` program of this placement for ``(T, E)``, built on first (eager) use (its two
+        exchanges hold persistent receive stagings and arrival semaphores, so before any trace capture)."""
+        key = (int(T), int(E))
+        pop = self._persistent_ops.get(key)
+        if pop is None:
+            from models.demos.glm53_flash.custom_ops.moe_persistent.op import MoePersistent
+
+            assert not self.mesh.allocations_frozen[0], f"persistent MoE block {key} first used under live traces"
+            pop = self._persistent_ops[key] = MoePersistent(self.mesh, op, T, self.H, E)
+            logger.info(
+                f"MoePersistent: exchange core {pop.xchg_core}, workers {[(w.x, w.y) for w in pop.gather.workers]}, "
+                f"experts {op.gate_up.cores.num_cores()} + {op.down.cores.num_cores()} cores"
+            )
+        return pop
+
+    def _forward_persistent(self, x: ttnn.Tensor, dense_w: ttnn.Tensor, T: int) -> ttnn.Tensor:
+        """x [1,1,T,H] / dense_w [1,1,T,E] bf16 (this row's users, the full routing matrix) -> [1,1,T,H]: the row
+        gather, the fused expert block and the row combine in one program per chip."""
+        op, w13, w2 = self._stream_source()
+        base = self.stream_base
+        if dense_w.dtype != ttnn.bfloat16:
+            dense_w = ttnn.typecast(dense_w, ttnn.bfloat16)
+        pop = self._persistent_op(op, T, int(dense_w.padded_shape[-1]))
+        mc = ttnn.L1_MEMORY_CONFIG if self.stream_x_l1 else ttnn.DRAM_MEMORY_CONFIG
+        xg, wg = pop.gather.allocate_outputs(mc)
+        act, out = op.alloc(self.device, act_l1=self.stream_act_l1)
+        (comb,) = pop.reduce.allocate_outputs(ttnn.DRAM_MEMORY_CONFIG)
+        pop(x, dense_w, w13, w2, act, out, base, xg, wg, comb)
+        for t in (xg, wg, act, out):
+            ttnn.deallocate(t)
+        return comb
 
     # ------------------------------------------------------- decode row glue at T < 32 (H1 / H2 knobs)
     def _row_exchange(self, mode: str, widths: tuple[int, ...], T: int):

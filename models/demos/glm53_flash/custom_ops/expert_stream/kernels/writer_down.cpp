@@ -35,7 +35,35 @@
 #include "regions_src.hpp"
 #include "routing_scan.hpp"
 
+#ifdef PERSIST_SIGNAL_SEM
+// persistent MoE program (custom_ops/moe_persistent): this core's output tiles are written and acknowledged; count
+// it on every combine worker (both exits of kernel_main call this)
+FORCE_INLINE void persist_signal() {
+    noc_async_write_barrier();
+    constexpr uint32_t xys[] = {
+        PERSIST_XY0, PERSIST_XY1, PERSIST_XY2, PERSIST_XY3, PERSIST_XY4, PERSIST_XY5, PERSIST_XY6, PERSIST_XY7};
+    const uint32_t sem = get_semaphore(PERSIST_SIGNAL_SEM);
+    for (uint32_t i = 0; i < 8; ++i) {
+        noc_semaphore_inc(get_noc_addr(xys[i] >> 16, xys[i] & 0xffff, sem), 1);
+    }
+    noc_async_atomic_barrier();
+}
+#define PERSIST_SIGNAL() persist_signal()
+#else
+#define PERSIST_SIGNAL() ((void)0)
+#endif
+
 void kernel_main() {
+#ifdef PERSIST_WAIT_SEM
+    {
+        // persistent MoE program (custom_ops/moe_persistent): the gathered x / routing land in this program's gather
+        // phase; the exchange core multicasts a 1 into this kernel's semaphore when they are written
+        volatile tt_l1_ptr uint32_t* psem =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(PERSIST_WAIT_SEM));
+        noc_semaphore_wait_min(psem, 1);
+        noc_semaphore_set(psem, 0);
+    }
+#endif
     const uint32_t routing_addr = get_arg_val<uint32_t>(0);
     const uint32_t act_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
@@ -164,6 +192,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         noc_async_full_barrier();  // exit contract (this early return included)
+        PERSIST_SIGNAL();
         return;
     }
     cb_wait_front(cb_out, cols);
@@ -178,4 +207,5 @@ void kernel_main() {
     noc_async_write_barrier();
     cb_pop_front(cb_out, cols);
     noc_async_full_barrier();  // exit contract: every NOC read / write / atomic acknowledged before the next kernel
+    PERSIST_SIGNAL();
 }
