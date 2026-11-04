@@ -11,7 +11,6 @@
 #include "ttnn/operations/experimental/kda/entry_correction/entry_correction_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/qkv_causal_conv1d_silu_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/recurrent_chunk_scan/recurrent_chunk_scan_nanobind.hpp"
-#include "ttnn/operations/experimental/kda/reduce_affine_transforms/reduce_affine_transforms_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/relay_affine_prefix/relay_affine_prefix_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/prepare_chunk_recurrence/prepare_chunk_recurrence_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/select_final_carry/select_final_carry_nanobind.hpp"
@@ -27,7 +26,6 @@ void bind_kda(nb::module_& mod) {
     entry_correction::detail::bind_entry_correction(kda_module);
     qkv_causal_conv1d_silu::detail::bind_qkv_causal_conv1d_silu(kda_module);
     recurrent_chunk_scan::detail::bind_recurrent_chunk_scan(kda_module);
-    reduce_affine_transforms::detail::bind_reduce_affine_transforms(kda_module);
     relay_affine_prefix::detail::bind_relay_affine_prefix(kda_module);
     prepare_chunk_recurrence::detail::bind_prepare_chunk_recurrence(kda_module);
     select_final_carry::detail::bind_select_final_carry(kda_module);

@@ -47,7 +47,6 @@ install(TARGETS ttnn_op_experimental_kda_common LIBRARY COMPONENT tar)
 
 add_subdirectory(sigmoid_gated_rms_norm)
 add_subdirectory(qkv_causal_conv1d_silu)
-add_subdirectory(reduce_affine_transforms)
 add_subdirectory(chain_affine_transforms)
 add_subdirectory(select_final_carry)
 add_subdirectory(relay_affine_prefix)
@@ -65,7 +64,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::KDA::Common
         TTNN::Ops::Experimental::KDA::SigmoidGatedRMSNorm
         TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu
-        TTNN::Ops::Experimental::KDA::ReduceAffineTransforms
         TTNN::Ops::Experimental::KDA::ChainAffineTransforms
         TTNN::Ops::Experimental::KDA::SelectFinalCarry
         TTNN::Ops::Experimental::KDA::RelayAffinePrefix
@@ -85,7 +83,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::Common>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::SigmoidGatedRMSNorm>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ReduceAffineTransforms>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ChainAffineTransforms>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::SelectFinalCarry>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::RelayAffinePrefix>
