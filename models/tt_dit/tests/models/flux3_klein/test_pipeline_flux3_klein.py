@@ -17,6 +17,7 @@ from ....utils.test import ring_params_8k
 PROMPT = "A man in a red jacket walks a golden retriever along a snowy forest path at sunrise, photorealistic"
 
 
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{**ring_params_8k, "l1_small_size": 65536}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("model", ["distilled"])
