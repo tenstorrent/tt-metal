@@ -18,7 +18,9 @@ training_config:
     weight_decay: 0.1
     amsgrad: false
     stochastic_rounding: true
-    weight_decay_skip_1d: true
+    param_groups:
+      - modules: [gamma, bias]
+        weight_decay: 0.0
 
 device_config:
   enable_ddp: false
