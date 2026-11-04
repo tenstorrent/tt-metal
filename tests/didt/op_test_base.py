@@ -10,6 +10,8 @@ import torch
 from models.common.utility_functions import comp_pcc
 import ttnn
 
+from tests.didt import nd_core_map
+
 
 class OpParameter:
     def __init__(self, shape, dtype, layout, mem_config):
@@ -58,8 +60,113 @@ class OpTestBase:
         self.activations = None
         self.inputs = []
 
+        # ND core attribution: device_idx -> {(x, y): failing checks}; filled only if the test sets nd_core_block
+        self.nd_core_hits = {}
+        # device_idx -> {(x, y): [block_structure() per failing check]}, and translated coords per (device, core)
+        self.nd_core_structures = {}
+        self.nd_core_translated = {}
+        self._chip_locations = None
+
     def get_device(self, device_idx):
         return self.mesh_device
+
+    # Map mismatching output elements back to the logical core that produced them, and log the pattern.
+    # Only runs when the test sets self.nd_core_block = (rows, cols) of the per-core output block; see nd_core_map.py.
+    def log_nd_cores(self, device_idx, ref, out):
+        block = getattr(self, "nd_core_block", None)
+        if block is None:
+            return
+        layout = dict(
+            linear_x=getattr(self, "nd_core_linear_x", None), transpose=getattr(self, "nd_core_transpose", False)
+        )
+        cores = nd_core_map.core_mismatches(ref, out, block, **layout)
+        # Where the errors sit inside each failing core's block (row/column strips, whole tiles, a face lane,
+        # scattered; bits), to tell which stage of the core corrupted them. Aggregated into the end-of-run
+        # report; capped at 8 cores per check. Only meaningful for 2D block layouts.
+        structures = {}
+        if not layout["linear_x"]:
+            for (x, y), (by, bx) in sorted(
+                nd_core_map.core_blocks(ref, out, block, **layout).items(), key=lambda c: -cores[c[0]]
+            )[:8]:
+                structures[(x, y)] = nd_core_map.block_structure(ref, out, by, bx, block)
+        hits = self.nd_core_hits.setdefault(device_idx, {})
+        for (x, y), count in sorted(cores.items(), key=lambda c: (c[0][1], c[0][0])):
+            hits[(x, y)] = hits.get((x, y), 0) + 1
+            if (x, y) in structures:
+                self.nd_core_structures.setdefault(device_idx, {}).setdefault((x, y), []).append(structures[(x, y)])
+            translated = self.nd_translated(device_idx, x, y)
+            logger.info(
+                f"ND device {device_idx} logical core ({x},{y})"
+                f"{f' translated=({translated[0]},{translated[1]})' if translated else ''}: "
+                f"{count}/{block[0] * block[1]} elements differ"
+            )
+        # Structure detail per check goes into the end-of-run report (aggregated), not here, to keep logs short
+        logger.info(
+            f"ND device {device_idx} [{self.chip_locations().get(device_idx, 'unknown')}] pattern: "
+            f"{nd_core_map.classify(cores, getattr(self, 'nd_core_grid_size', None))}"
+        )
+
+    def nd_translated(self, device_idx, x, y):
+        key = (device_idx, x, y)
+        if key not in self.nd_core_translated:
+            try:
+                core = self.get_device(device_idx).worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+                self.nd_core_translated[key] = (core.x, core.y)
+            except Exception:
+                self.nd_core_translated[key] = None
+        return self.nd_core_translated[key]
+
+    # Physical location of each device id, e.g. "UBB3 ASIC2 /dev/tenstorrent/17 0000:c2:00.0 board=0x47331831011",
+    # read from the cluster descriptor metal is already using (same source as tt-triage's T<tray>:N<asic> labels)
+    def chip_locations(self):
+        if self._chip_locations is None:
+            self._chip_locations = {}
+            try:
+                import tt_umd
+
+                with open(ttnn.cluster.serialize_cluster_descriptor()) as f:
+                    cd = tt_umd.ClusterDescriptor.create_from_yaml_content(f.read())
+                pci, bdfs = cd.get_chips_with_mmio(), cd.get_chip_pci_bdfs()
+                for chip in cd.get_all_chips():
+                    tray = cd.get_tray_id(chip)
+                    where = f"UBB{tray} ASIC{cd.get_asic_location(chip)}" if tray is not None else "non-UBB"
+                    if chip in pci:
+                        where += f" /dev/tenstorrent/{pci[chip]}"
+                    if chip in bdfs:
+                        where += f" {bdfs[chip]}"
+                    self._chip_locations[chip] = f"{where} board=0x{cd.get_board_id_for_chip(chip):x}"
+            except Exception as e:
+                logger.warning(f"Chip location lookup failed, ND logs will show device ids only: {e}")
+        return self._chip_locations
+
+    # End of run: location of every device in the test, then a short report per device with ND: where it is,
+    # which cores failed in how many checks, the overall pattern, and each core's error signature across checks.
+    def log_nd_core_summary(self, num_checks, nd_checks_per_device):
+        locations = self.chip_locations()
+        for device_idx in sorted(self.device_ids):
+            logger.info(f"Chip map device {device_idx}: {locations.get(device_idx, 'unknown')}")
+        failing = {d: n for d, n in nd_checks_per_device.items() if n}
+        logger.info(f"ND report: {len(failing)} of {len(self.device_ids)} devices non-deterministic ({num_checks} checks)")
+        for device_idx in sorted(failing):
+            hits = self.nd_core_hits.get(device_idx, {})
+            grid = getattr(self, "nd_core_grid_size", None)
+            pattern = nd_core_map.classify(hits, grid) if hits else "no core mapping for this test"
+            per_core = " ".join(
+                f"({x},{y})x{n}" for (x, y), n in sorted(hits.items(), key=lambda c: (-c[1], c[0][1], c[0][0]))
+            )
+            where = locations.get(device_idx, "unknown")
+            logger.info(
+                f"ND summary device {device_idx} [{where}]: {failing[device_idx]}/{num_checks} checks; "
+                f"pattern {pattern}; failing checks per core: {per_core}"
+            )
+            for (x, y), n in sorted(hits.items(), key=lambda c: (-c[1], c[0][1], c[0][0]))[:8]:
+                summary = nd_core_map.summarize_structures(self.nd_core_structures.get(device_idx, {}).get((x, y), []))
+                translated = self.nd_translated(device_idx, x, y)
+                logger.info(
+                    f"ND summary device {device_idx} core ({x},{y})"
+                    f"{f' translated=({translated[0]},{translated[1]})' if translated else ''}: "
+                    f"failed {n}/{num_checks} checks; {nd_core_map.describe_summary(summary)}"
+                )
 
     # Override if needed
     def set_seed(self):
@@ -191,6 +298,7 @@ class OpTestBase:
                             # so we call it only in case we see tensors are not equal
                             _, pcc = comp_pcc(reference_out[current_act_tensor][output_id], outputs[output_id])
                             logger.info(f"Device {device_idx} PCC: {pcc}")
+                            self.log_nd_cores(device_idx, reference_out[current_act_tensor][output_id], outputs[output_id])
                             num_nd_outputs[output_id] += 1
 
                     current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
@@ -205,6 +313,10 @@ class OpTestBase:
 
         catch_nd_on_fail = True
         if self.determinism_check_enabled:
+            self.log_nd_core_summary(
+                -(-self.loop_count // self.determinism_check_interval),
+                {self.device_ids[i]: n for i, n in enumerate(num_nd_outputs)},
+            )
             for nd_output_id in range(num_devices):
                 device_idx = self.device_ids[nd_output_id]
                 logger.info(

@@ -131,4 +131,14 @@ def test_minimal_matmul(
         determinism_check_interval=determinism_check_interval,
     )
 
+    # ND core attribution (minimal_matmul_program_descriptor.cpp): M is split over grid_y and N over grid_x,
+    # each core owning one contiguous output block of round_up(tiles, cores) / cores tiles; the grid is
+    # transposed (M over grid_x) when M > N
+    grid_x, grid_y = compute_with_storage_grid_size
+    transpose = M > N
+    m_cores, n_cores = (grid_x, grid_y) if transpose else (grid_y, grid_x)
+    minimalMatmulTest.nd_core_block = (32 * -(-(M // 32) // m_cores), 32 * -(-(N // 32) // n_cores))
+    minimalMatmulTest.nd_core_transpose = transpose
+    minimalMatmulTest.nd_core_grid_size = (grid_x, grid_y)
+
     minimalMatmulTest.run_op_test()

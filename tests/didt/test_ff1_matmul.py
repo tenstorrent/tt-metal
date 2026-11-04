@@ -116,6 +116,10 @@ def test_ff1_matmul(
         determinism_check_interval=determinism_check_interval,
     )
 
+    # Per-core output block, used to map non-deterministic elements back to the core that produced them
+    ff1_test.nd_core_block = (32 * per_core_M, 32 * per_core_N)
+    ff1_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
+
     # Run test
     ff1_test.run_op_test()
 

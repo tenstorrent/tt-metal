@@ -134,8 +134,13 @@ def test_duty_cycle(
         wl_loops=wl_loops,
     )
 
+    # Per-core output block, used to map non-deterministic elements back to the core that produced them
+    duty_cycle_test.nd_core_block = (32 * per_core_M, 32 * per_core_N)
+    duty_cycle_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
+
     # Run test
     duty_cycle_test.run_op_test()
+
 
 
 @pytest.mark.parametrize(
