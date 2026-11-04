@@ -98,6 +98,9 @@ class TernaryPrefillLinear2:
             if i == GX or vx[i] != vx[i - 1] + 1:
                 runs.append((start, i - 1))
                 start = i
+        rows = sum(1 for mm in m_of if mm)  # active core rows (m_of is front-loaded)
+        vys = [device.worker_core_from_logical_core(ttnn.CoreCoord(0, yy)).y for yy in range(GY)]
+        assert all(vys[i + 1] == vys[i] + 1 for i in range(GY - 1)), vys  # a column multicast is one rectangle
         rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for y in range(GY):
             vy = device.worker_core_from_logical_core(ttnn.CoreCoord(0, y)).y
@@ -107,7 +110,13 @@ class TernaryPrefillLinear2:
                 rects += [vx[a], vy, vx[b], vy, (b - a + 1) - (1 if a == 0 else 0)]
             for xx in range(GX):
                 rd[xx][y] = [1 if xx == 0 else 0, s0.x, s0.y, m_first[y], m_of[y], nblk, GX, len(runs)] + rects
-                wr[xx][y] = [n_first[xx], n_of[xx], m_first[y], m_of[y]]
+                wr[xx][y] = [n_first[xx], n_of[xx], m_first[y], m_of[y], 1 if y == 0 else 0, rows - 1] + [
+                    vx[xx],
+                    vys[0],
+                    vx[xx],
+                    vys[min(1, rows - 1)],
+                    vys[rows - 1],
+                ]
                 cp[xx][y] = [n_of[xx], m_of[y], nblk, m_max * NBLK]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
 
@@ -168,7 +177,7 @@ class TernaryPrefillLinear2:
                     ),
                 ),
             ],
-            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in range(2)],
+            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in range(4)],
             cbs=x_cbs
             + [
                 cb(1, ttnn.bfloat8_b, 256, 2 * kpc * NBLK * 4),

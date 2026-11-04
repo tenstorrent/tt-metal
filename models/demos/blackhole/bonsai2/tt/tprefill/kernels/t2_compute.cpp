@@ -198,7 +198,7 @@ void kernel_main() {
                     }
 #ifndef T2_NOMM
                     for (uint32_t i = 0; i < 4; ++i) {
-                        matmul_block(cb_x, cb_w, j * 4 + i, j * WSLOT + c * 4 + i, 0, 0, 1, m, 4 * KPC);
+                        matmul_block(cb_x, cb_w, j * 4 + i, (c * KPC + j) * 4 + i, 0, 0, 1, m, 4 * KPC);
                     }
 #endif
 #ifndef T2_NOSCALE
