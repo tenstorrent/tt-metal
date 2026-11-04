@@ -182,16 +182,10 @@ For changes to the Metalium host API, follow the
   review and start running pipelines. This is because we don't want to clog
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
-- Once a PR is marked "Ready for review" (not draft), batch your changes
-  locally and push as a single, complete commit rather than pushing after
-  every edit. Pushing to the same non-draft PR more than once within a
-  5-minute window is treated as spam: it burns PR Gate runner capacity for no
-  review benefit, and is grounds for the PR being closed and a cooldown
-  before you may open another one. This applies to AI coding agents as well
-  as humans. If you expect to push rapidly while iterating — for example, an
-  agent repeatedly fixing CI failures — keep the PR in draft until you're
-  done; draft PRs skip PR Gate's heavy jobs entirely, so rapid pushes there
-  cost nothing.
+- To reduce CI load, batch related changes locally and push them together.
+  Run relevant local checks before pushing. Keep unfinished PRs in draft, and
+  mark them ready only when review is the only blocker for merge. Draft PRs
+  skip PR Gate's heavy jobs, but other checks still run.
 
 ### New feature and design specifications
 
