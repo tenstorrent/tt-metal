@@ -18,6 +18,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -273,6 +274,16 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
     return std::min<uint32_t>(num_tile_rows, cap);
 }
 
+// per_head_norm reduces locally over head_dim per head — no AG needed even
+// when ring_size > 1. From the kernel's perspective this is "is_tp_1" =
+// no fabric, no all-gather, drain-only writer.
+bool is_local_norm(const DitFusedDistributedRmsnormParams& args) { return (args.ring_size == 1) || args.per_head_norm; }
+
+// One coalescing forwarder per independent routing plane, never more than there are workers.
+uint32_t forwarder_count(uint32_t num_links, uint32_t num_workers) {
+    return std::min<uint32_t>(std::max<uint32_t>(1u, num_links), num_workers);
+}
+
 // Sizing derivation used in both spec computation (to size the stats scratch
 // tensor in `compute_output_specs`) and the program factory (to lay out
 // kernels + CBs). Single source of truth so the two cannot drift.
@@ -286,10 +297,7 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     const uint32_t W = padded[-1];
     const uint32_t folded_H = input.physical_volume() / W;
     s.num_tile_rows = folded_H / TILE_HEIGHT;
-    // per_head_norm reduces locally over head_dim per head — no AG needed even
-    // when ring_size > 1. From the kernel's perspective this is "is_tp_1" =
-    // no fabric, no all-gather, drain-only writer.
-    s.is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
+    s.is_tp_1 = is_local_norm(args);
     // LayerNorm transports 2 stats/token (mean, M2) -> 256 B sticks; RMS 1 (128 B).
     // Set before derive_worker_cap so its packet-capacity clamp uses the right width.
     s.stats_per_token = (args.norm_type == DitFusedNormType::LAYERNORM) ? 2u : 1u;
@@ -336,7 +344,7 @@ DitFusedDistributedRmsnormSizing compute_sizing(
         // sticks_per_packet 128 B sticks per row-round; the DRAM scratch page IS
         // one packet. Pages per device = num_forwarders * max_rounds, where a
         // round is one tile-row of the worker group.
-        s.num_forwarders = std::min<uint32_t>(std::max<uint32_t>(1u, args.num_links), s.num_workers);
+        s.num_forwarders = forwarder_count(args.num_links, s.num_workers);
         const uint32_t max_rounds = tt::div_up(s.num_tile_rows, s.num_workers);
         // Pack as many 128 B fp32 sticks as fit one fabric packet. Reuse the
         // existing page formula by setting window_size = sticks_per_packet:
@@ -369,9 +377,21 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 namespace dyn = dit_fused_distributed_rmsnorm_dynamic;
 
 // Cores are placed row-major over the compute grid: worker w takes index w and forwarder f takes num_workers + f.
-// Shared by the descriptor builder and override_runtime_arguments() so both resolve the same core.
 CoreCoord placed_core(const CoreCoord& grid_size, uint32_t index) {
     return CoreCoord(index % grid_size.x, index / grid_size.x);
+}
+
+// Number of cores holding per-core runtime args for kernel_idx in a built program.
+uint32_t count_cores_with_runtime_args(const Program& program, uint32_t kernel_idx) {
+    uint32_t count = 0;
+    for (const auto& args_by_y : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
+        for (const auto& args : args_by_y) {
+            if (args.size() != 0) {
+                ++count;
+            }
+        }
+    }
+    return count;
 }
 
 // override_runtime_arguments() patches kernels by the dit_fused_distributed_rmsnorm_dynamic indices, so a push-order
@@ -426,10 +446,12 @@ uint32_t out_ready_semaphore_address(const DitFusedDistributedRmsnormParams& arg
 // Buffers behind the reader and writer common runtime args, in slot order. The descriptor builder emits them as
 // Buffer* bindings and override_runtime_arguments() re-applies their addresses, so slot order and gating live only
 // here. Absent or unused tensors stay null and read as 0.
-std::vector<Buffer*> reader_common_buffers(
+using CommonBuffers = ttsl::SmallVector<Buffer*>;
+
+CommonBuffers reader_common_buffers(
     const DitFusedDistributedRmsnormParams& args, const DitFusedDistributedRmsnormInputs& tensor_args) {
     const bool fuse_rope = fuses_rope(tensor_args);
-    std::vector<Buffer*> buffers = {
+    CommonBuffers buffers = {
         required_buffer(tensor_args.input, "input"),
         optional_buffer(tensor_args.weight, "weight"),
         optional_buffer(tensor_args.bias, "bias"),
@@ -443,21 +465,19 @@ std::vector<Buffer*> reader_common_buffers(
     return buffers;
 }
 
-std::vector<Buffer*> writer_common_buffers(
-    const DitFusedDistributedRmsnormInputs& tensor_args,
-    const std::vector<Tensor>& tensor_return_value,
-    const DitFusedDistributedRmsnormSizing& sizing) {
-    std::vector<Buffer*> buffers = {
+CommonBuffers writer_common_buffers(
+    const DitFusedDistributedRmsnormInputs& tensor_args, const std::vector<Tensor>& tensor_return_value, bool use_mux) {
+    CommonBuffers buffers = {
         required_buffer(tensor_return_value.at(0), "output"),
         fuses_rope(tensor_args) ? optional_buffer(tensor_args.transformation_mat, "transformation_mat") : nullptr,
     };
-    if (sizing.use_mux) {
+    if (use_mux) {
         buffers.push_back(stats_scratch_buffer(tensor_return_value));
     }
     return buffers;
 }
 
-KernelDescriptor::RTArgList to_rt_arg_list(const std::vector<Buffer*>& buffers) {
+KernelDescriptor::RTArgList to_rt_arg_list(const CommonBuffers& buffers) {
     KernelDescriptor::RTArgList args;
     args.reserve(buffers.size());
     for (Buffer* buffer : buffers) {
@@ -588,8 +608,8 @@ ProgramDescriptor build_program_descriptor(
     // ------------------------------------------------------------------------
     // Core allocation
     // ------------------------------------------------------------------------
-    // compute_sizing owns the worker / forwarder split and the stats geometry, so the program,
-    // the stats-buffer spec and override_runtime_arguments() all agree on it.
+    // compute_sizing owns the worker / forwarder split and the stats geometry, so the program
+    // and the stats-buffer spec agree on it.
     //   is_tp_1 (ring==1 or per_head_norm): no AG, no fabric, drain-only writer, one worker
     //     per tile-row up to the whole grid.
     //   AG path (use_mux): workers capped at the core budget (grid − forwarders), plus one
@@ -1504,7 +1524,7 @@ ProgramDescriptor build_program_descriptor(
     // routing in per-core args so a cache hit updates each binding only once.
     reader_kernel.emplace_common_runtime_args(to_rt_arg_list(reader_common_buffers(args, tensor_args)));
     writer_kernel.emplace_common_runtime_args(
-        to_rt_arg_list(writer_common_buffers(tensor_args, tensor_return_value, sizing)));
+        to_rt_arg_list(writer_common_buffers(tensor_args, tensor_return_value, sizing.use_mux)));
     for (uint32_t i = 0; i < num_workers; i++) {
         const auto& core = worker_cores[i];
         const uint32_t tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
@@ -1646,18 +1666,24 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    // The builder takes its kernel set and core layout from the same sizing, so kernel indices and cores match the
-    // cached program.
-    const DitFusedDistributedRmsnormSizing sizing = compute_sizing(operation_attributes, tensor_args.input);
+    // The kernel set and core layout come from the cached program, never from a fresh compute_sizing: sizing reads
+    // inputs outside the program hash (WAN_RMSNORM_WORKER_CAP), so recomputing it here could disagree with the cache.
+    const bool use_mux = !is_local_norm(operation_attributes);
 
-    const auto patch_common_args = [&program](uint32_t kernel_idx, const std::vector<Buffer*>& buffers) {
+    const auto patch_common_args = [&program](uint32_t kernel_idx, const CommonBuffers& buffers) {
         auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_idx);
+        TT_ASSERT(
+            common_args.size() >= buffers.size(),
+            "dit_fused_distributed_rmsnorm kernel {} has {} common runtime args, expected at least {}",
+            kernel_idx,
+            common_args.size(),
+            buffers.size());
         for (size_t slot = 0; slot < buffers.size(); ++slot) {
             common_args[slot] = address_of(buffers[slot]);
         }
     };
     patch_common_args(dyn::kReaderKernelIdx, reader_common_buffers(operation_attributes, tensor_args));
-    patch_common_args(dyn::kWriterKernelIdx, writer_common_buffers(tensor_args, tensor_return_value, sizing));
+    patch_common_args(dyn::kWriterKernelIdx, writer_common_buffers(tensor_args, tensor_return_value, use_mux));
 
     // Forwarders read the stats DRAM scratch base and the out_ready GlobalSemaphore
     // address. BOTH must be refreshed on cache hits: the caller ping-pongs a distinct
@@ -1665,15 +1691,36 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     // cache hit that skipped this refresh would silently keep using the semaphore baked
     // at first compile — defeating the ping-pong isolation and racing the in-kernel sem
     // reset against peers' in-flight fabric atomic-incs (AG desync / hang).
-    if (sizing.num_forwarders > 0) {
+    if (use_mux) {
         const uint32_t stats_address = address_of(stats_scratch_buffer(tensor_return_value));
         const uint32_t out_ready_sem_address = out_ready_semaphore_address(operation_attributes);
-        const CoreCoord grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
-        for (uint32_t f = 0; f < sizing.num_forwarders; f++) {
-            auto& forwarder_args = tt::tt_metal::GetRuntimeArgs(
-                program, dyn::kFirstForwarderKernelIdx + f, placed_core(grid_size, sizing.num_workers + f));
-            forwarder_args[dyn::kForwarderStatsAddrArg] = stats_address;
-            forwarder_args[dyn::kForwarderOutReadySemArg] = out_ready_sem_address;
+        // Only worker cores carry reader runtime args, and num_links is part of the program hash.
+        const uint32_t num_forwarders = forwarder_count(
+            operation_attributes.num_links, count_cores_with_runtime_args(program, dyn::kReaderKernelIdx));
+        for (uint32_t f = 0; f < num_forwarders; f++) {
+            const uint32_t kernel_idx = dyn::kFirstForwarderKernelIdx + f;
+            uint32_t patched_cores = 0;
+            for (auto& args_by_y : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
+                for (auto& forwarder_args : args_by_y) {
+                    if (forwarder_args.size() == 0) {
+                        continue;
+                    }
+                    TT_ASSERT(
+                        forwarder_args.size() > dyn::kForwarderOutReadySemArg,
+                        "dit_fused_distributed_rmsnorm forwarder kernel {} has {} runtime args, expected more than {}",
+                        kernel_idx,
+                        forwarder_args.size(),
+                        dyn::kForwarderOutReadySemArg);
+                    forwarder_args[dyn::kForwarderStatsAddrArg] = stats_address;
+                    forwarder_args[dyn::kForwarderOutReadySemArg] = out_ready_sem_address;
+                    ++patched_cores;
+                }
+            }
+            TT_ASSERT(
+                patched_cores == 1,
+                "dit_fused_distributed_rmsnorm forwarder kernel {} has runtime args on {} cores, expected 1",
+                kernel_idx,
+                patched_cores);
         }
     }
 }

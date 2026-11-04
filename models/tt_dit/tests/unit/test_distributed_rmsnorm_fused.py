@@ -1480,10 +1480,12 @@ def test_create_stats_buffer_host_input_local_norm(mesh_device):
 # All-gather cache hits: every launch binds a different live tensor set
 # ---------------------------------------------------------------------------
 # T3K / LoudBox (2,4): TP=4 rides mesh axis 1 (a 4-chip line) and axis 0 replicates, so the
-# workload holds one program per chip. Four tile rows per chip spread over several workers.
+# workload holds one program per chip. Four tile rows per chip spread over four workers, so
+# the 2-link variant gets two forwarders and exercises forwarder 1 on every hit.
 _AG_CACHE_TP = 4
 _AG_CACHE_TP_AXIS = 1
 _AG_CACHE_LINKS = 1
+_AG_CACHE_LINKS_PARAM = pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 _AG_CACHE_ROWS = 128
 _AG_CACHE_HEADS = 2  # per device
 _AG_CACHE_HEAD_DIM = 128
@@ -1496,7 +1498,7 @@ def _ag_cache_submesh(mesh_device):
     return _resolve_submesh(mesh_device, _AG_CACHE_TP, _AG_CACHE_TP_AXIS, full_mesh=True)
 
 
-def _ag_cache_rms_set(submesh, ccl, seed, *, alias=False):
+def _ag_cache_rms_set(submesh, ccl, seed, num_links, *, alias=False):
     """One complete RMSNorm + weight + bias + broadcast RoPE argument set with its own
     semaphore, stats buffer and golden. alias=True passes the weight tensor as bias and
     the rope_cos tensor as rope_sin."""
@@ -1517,12 +1519,13 @@ def _ag_cache_rms_set(submesh, ccl, seed, *, alias=False):
     s["sin"] = s["cos"] if alias else from_torch(sin_host, device=submesh, dtype=ttnn.float32)
     s["trans"] = bf16_tensor(get_rot_transformation_mat(), device=submesh)
     s["sem"] = ccl.get_ag_ping_pong_semaphore(axis)
+    s["links"] = num_links
     s["pob"] = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
         s["x"],
         axis,
         submesh,
         num_heads_per_device=_AG_CACHE_HEADS,
-        num_links=_AG_CACHE_LINKS,
+        num_links=num_links,
         weight=s["weight"],
         transformation_mat=s["trans"],
         rope_cos=s["cos"],
@@ -1540,7 +1543,7 @@ def _ag_cache_rms_set(submesh, ccl, seed, *, alias=False):
     return s
 
 
-def _ag_cache_ln_set(submesh, ccl, seed):
+def _ag_cache_ln_set(submesh, ccl, seed, num_links):
     """One complete LayerNorm + weight + bias + reciprocal-LUT argument set with its own
     semaphore, stats buffer and golden."""
     torch.manual_seed(seed)
@@ -1556,12 +1559,13 @@ def _ag_cache_ln_set(submesh, ccl, seed):
     s["bias"] = bf16_tensor(b, device=submesh, mesh_axis=axis, shard_dim=-1)
     s["recip"] = from_torch(recip, device=submesh, layout=ttnn.Layout.ROW_MAJOR, dtype=ttnn.float32)
     s["sem"] = ccl.get_ag_ping_pong_semaphore(axis)
+    s["links"] = num_links
     s["pob"] = ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
         s["x"],
         axis,
         submesh,
         num_heads_per_device=1,
-        num_links=_AG_CACHE_LINKS,
+        num_links=num_links,
         weight=s["weight"],
     )
 
@@ -1585,7 +1589,7 @@ def _ag_cache_run(submesh, s):
             weight=s["weight"],
             bias=s["bias"],
             persistent_output_buffer=s["pob"],
-            num_preferred_links=_AG_CACHE_LINKS,
+            num_preferred_links=s["links"],
             reciprocals=s["recip"],
         )
     return ttnn.experimental.dit_fused_distributed_rmsnorm(
@@ -1602,7 +1606,7 @@ def _ag_cache_run(submesh, s):
         rope_cos=s["cos"],
         rope_sin=s["sin"],
         persistent_output_buffer=s["pob"],
-        num_preferred_links=_AG_CACHE_LINKS,
+        num_preferred_links=s["links"],
     )
 
 
@@ -1611,12 +1615,12 @@ def _ag_cache_check(submesh, s, label):
     assert pcc >= 0.999, f"{label}: PCC={pcc}"
 
 
-def _ag_cache_hit_rebinding(mesh_device, make_set):
+def _ag_cache_hit_rebinding(mesh_device, make_set, num_links):
     submesh = _ag_cache_submesh(mesh_device)
-    ccl = CCLManager(mesh_device=submesh, num_links=_AG_CACHE_LINKS, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device=submesh, num_links=num_links, topology=ttnn.Topology.Linear)
     # Both sets stay alive so the hits bind different addresses. Consecutive launches
     # alternate the two ping-pong semaphores and stats buffers.
-    sets = [make_set(submesh, ccl, seed) for seed in (13, 29)]
+    sets = [make_set(submesh, ccl, seed, num_links) for seed in (13, 29)]
     # Every device must finish creating its semaphores before any peer's first atomic-inc.
     ttnn.synchronize_device(submesh)
 
@@ -1630,18 +1634,20 @@ def _ag_cache_hit_rebinding(mesh_device, make_set):
 
 @_AG_CACHE_MESH
 @_AG_CACHE_FABRIC
-def test_rmsnorm_ag_cache_hit_rebinding(mesh_device):
+@_AG_CACHE_LINKS_PARAM
+def test_rmsnorm_ag_cache_hit_rebinding(mesh_device, num_links):
     """All-gather RMSNorm + RoPE: each cache hit binds a new input, weight, bias, cos, sin,
     transformation matrix, semaphore and stats buffer, and must match its own golden."""
-    _ag_cache_hit_rebinding(mesh_device, _ag_cache_rms_set)
+    _ag_cache_hit_rebinding(mesh_device, _ag_cache_rms_set, num_links)
 
 
 @_AG_CACHE_MESH
 @_AG_CACHE_FABRIC
-def test_layernorm_ag_cache_hit_rebinding(mesh_device):
+@_AG_CACHE_LINKS_PARAM
+def test_layernorm_ag_cache_hit_rebinding(mesh_device, num_links):
     """All-gather LayerNorm with a reciprocal LUT: each cache hit binds a new input, weight,
     bias, reciprocals, semaphore and stats buffer, and must match its own golden."""
-    _ag_cache_hit_rebinding(mesh_device, _ag_cache_ln_set)
+    _ag_cache_hit_rebinding(mesh_device, _ag_cache_ln_set, num_links)
 
 
 @_AG_CACHE_MESH
@@ -1651,8 +1657,8 @@ def test_rmsnorm_ag_cache_hit_aliased_miss(mesh_device):
     rope_sin; the hit passes distinct tensors with different data and must see its own."""
     submesh = _ag_cache_submesh(mesh_device)
     ccl = CCLManager(mesh_device=submesh, num_links=_AG_CACHE_LINKS, topology=ttnn.Topology.Linear)
-    aliased = _ag_cache_rms_set(submesh, ccl, 13, alias=True)
-    distinct = _ag_cache_rms_set(submesh, ccl, 29)
+    aliased = _ag_cache_rms_set(submesh, ccl, 13, _AG_CACHE_LINKS, alias=True)
+    distinct = _ag_cache_rms_set(submesh, ccl, 29, _AG_CACHE_LINKS)
     ttnn.synchronize_device(submesh)
 
     submesh.enable_program_cache()
