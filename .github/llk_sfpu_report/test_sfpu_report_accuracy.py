@@ -7,8 +7,9 @@ Not a test in the usual sense: it asserts nothing about accuracy. It runs each
 requested op over two stimuli per variant and saves ``(src, golden, result)``, so
 the report can compare the base side's results with the head side's lane by lane:
 
-* ``sweep``    -- every finite value of the input format (float32: a stride of
-  them), the same stimuli as the nightly ULP sweep in ``test_unary_sfpu_ulp.py``;
+* ``sweep``    -- every normal value of the input format, and zero on a 16-bit one
+  (float32: a stride of them), the same stimuli as the nightly ULP sweep in
+  ``test_unary_sfpu_ulp.py``; no subnormal, which the unpack path flushes;
 * ``specials`` -- the inputs a sweep never feeds: NaNs, infinities, signed zeros
   and subnormals.
 
@@ -52,7 +53,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.ulp_sweep import golden_input, stimuli_format_for, sweep_spec
+from helpers.ulp_sweep import fp16_dest_unusable, golden_input, sweep_spec
 
 pytestmark = pytest.mark.accuracy
 
@@ -73,10 +74,10 @@ SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
 SPECIALS_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
 
 
-def _arch_is_blackhole():
-    from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+def _arch():
+    from helpers.chip_architecture import get_chip_architecture
 
-    return get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    return get_chip_architecture()
 
 
 def _cells():
@@ -90,9 +91,9 @@ def _cells():
         # A float32 input through a 16-bit Dest is truncated before the SFPU sees
         # it: that measures the Dest, not the kernel.
         and not (in_fmt == DataFormat.Float32 and dest == DestAccumulation.No)
-        # Blackhole cannot run a Float16 SFPU input through a 16-bit Dest (the
-        # functional tests skip it too); what comes back is not the kernel's.
-        and not (_arch_is_blackhole() and DataFormat.Float16 in (in_fmt, out_fmt) and dest == DestAccumulation.No)
+        # Blackhole cannot run fp16 through a 16-bit Dest; what comes back is not the
+        # kernel's. The sweep leaves out the same cells.
+        and not fp16_dest_unusable(in_fmt, out_fmt, dest, _arch())
     ]
 
 
@@ -186,11 +187,10 @@ def test_sfpu_report_accuracy(op_name, in_fmt, out_fmt, approx_mode, dest_acc, k
     classes = None
     if kind == "sweep":
         torch.manual_seed(0)
-        stimuli_format = stimuli_format_for(in_fmt)
         src, tile_cnt, _, _ = generate_stimuli(
-            stimuli_format_A=stimuli_format,
+            stimuli_format_A=in_fmt,
             input_dimensions_A=SWEEP_DIMENSIONS,
-            stimuli_format_B=stimuli_format,
+            stimuli_format_B=in_fmt,
             input_dimensions_B=SWEEP_DIMENSIONS,
             spec_A=sweep_spec(in_fmt),
         )

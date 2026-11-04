@@ -103,7 +103,7 @@ std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
 void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::detail::ProgramCacheKey& key) {
     mesh.enable_program_cache();
 
-    Program program;
+    Program program = CreateProgram(mesh);
     const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
     CreateKernel(
         program,
@@ -179,7 +179,7 @@ TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
 }
 
 TEST_F(MeshDevice2x4Test, ViewIs2D) {
-    std::vector<IDevice*> devices;
+    std::vector<Device*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().impl().get_device(coord));

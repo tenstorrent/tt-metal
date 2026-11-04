@@ -8,11 +8,8 @@
 
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 
-#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_target_device.hpp"
-
-#include <tt_stl/assert.hpp>
 
 #include <mutex>
 #include <functional>
@@ -165,6 +162,8 @@ public:
     virtual void wait_for_completion(bool) {}
     // May only be called after wait_for_completion has been called on both command queues on the device.
     virtual void finish_and_reset_in_use() {}
+    // Rethrows an exception stored by the completion-queue reader thread, if any.
+    virtual void throw_if_reader_failed() {}
 };
 
 }  // namespace tt::tt_metal::distributed

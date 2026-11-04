@@ -8,6 +8,8 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 /* Reduce Scatter Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
@@ -77,6 +79,38 @@ MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
         args.matmul_struct, {.input_tensors = {tensor_args.input, tensor_args.weight}})[0];
 
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
+}
+
+std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // {mm, reduce_scatter}. The matmul output takes the union label of input, weight and bias, as launch() would give
+    // a plain matmul. The reduce_scatter consumes that matmul output, so its label is the reduce_scatter of the matmul
+    // label (not of any tensor in tensor_args) along reduce_scatter_params.cluster_axis for reduce_scatter_params.dim;
+    // the caller's persistent output buffer is that result. The host prim always passes cluster_axis = nullopt and the
+    // program factory ranks that whole-mesh ring by `tensor_args.input`'s device-storage coordinates
+    // (get_linearized_index_from_physical_coord), so the label is spelled over them (over_storage_ring_order). With
+    // no honest label (nullopt, already reported) the reduce_scatter output keeps the matmul label, the label of the
+    // tensor it scatters.
+    const auto& input_topology = tensor_args.input.tensor_topology();
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(input_topology), std::cref(tensor_args.weight.tensor_topology())};
+    if (tensor_args.bias.has_value()) {
+        operands.emplace_back(tensor_args.bias->tensor_topology());
+    }
+    TensorTopology mm_topology = ttnn::operations::ccl::common::union_topology(operands, input_topology.mesh_coords());
+
+    auto reduce_scatter_topology = ttnn::operations::ccl::common::over_storage_ring_order(
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            mm_topology,
+            args.reduce_scatter_params.cluster_axis,
+            tensor_args.input.device()->shape(),
+            static_cast<uint32_t>(tensor_args.input.logical_shape().rank()),
+            static_cast<int32_t>(args.reduce_scatter_params.dim)),
+        tensor_args.input,
+        args.reduce_scatter_params.cluster_axis);
+    TensorTopology output_topology = std::move(reduce_scatter_topology).value_or(mm_topology);
+    return {std::move(mm_topology), std::move(output_topology)};
 }
 
 ttsl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(

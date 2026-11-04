@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -23,7 +24,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -253,7 +254,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
     uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     std::vector<uint32_t> active_eth_args = {clk_mhz * 3000000};  // 3 seconds
     std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     if (has_active_eth_cores) {
         std::set<CoreRange> ranges;

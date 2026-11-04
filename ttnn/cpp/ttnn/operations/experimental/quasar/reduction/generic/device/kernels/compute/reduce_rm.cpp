@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 //
 // Dense RM reduce compute (handles both W reduce and H reduce; branched on REDUCE_DIM).
 //
@@ -41,8 +41,17 @@ constexpr uint32_t cb_acc = tt::CBIndex::c_5;
 // One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in cb_tile_in.
 // is_last_chunk == true packs the final result into cb_out (with optional post-mul); otherwise the
 // partial is left in cb_acc at index chunk_idx and accumulation continues on the next call.
+template <typename TileInDFB, typename ScalerDFB, typename OutDFB, typename AccDFB>
 FORCE_INLINE void reduce_block(
-    uint32_t ht_in_chunk, uint32_t wt_in_chunk, uint32_t NC, uint32_t chunk_idx, bool is_last_chunk) {
+    TileInDFB& tile_in,
+    ScalerDFB& scaler,
+    OutDFB& out,
+    AccDFB& acc,
+    uint32_t ht_in_chunk,
+    uint32_t wt_in_chunk,
+    uint32_t NC,
+    uint32_t chunk_idx,
+    bool is_last_chunk) {
     if (is_last_chunk) {
         compute_kernel_lib::reduce<
             REDUCE_OP,
@@ -52,9 +61,12 @@ FORCE_INLINE void reduce_block(
             cb_out,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+            tile_in,
+            scaler,
+            out,
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
+            compute_kernel_lib::Accumulate(acc, chunk_idx),
 #ifdef REDUCE_POST_MUL
             [](uint32_t dst_idx) {
                 constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
@@ -74,9 +86,12 @@ FORCE_INLINE void reduce_block(
             cb_acc,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+            tile_in,
+            scaler,
+            acc,
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
+            compute_kernel_lib::Accumulate(acc, chunk_idx),
             compute_kernel_lib::NoOp{});
     }
 }
@@ -95,6 +110,12 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_rm, cb_tile_in);
 
+    DataflowBuffer rm(cb_rm);
+    DataflowBuffer tile_in(cb_tile_in);
+    DataflowBuffer scaler(cb_scaler);
+    DataflowBuffer out(cb_out);
+    DataflowBuffer acc(cb_acc);
+
     if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) {
         //
         // === W reduce path ===
@@ -108,8 +129,8 @@ void kernel_main() {
                 const bool is_last_chunk = (wt_base + wt_tiles_per_chunk) >= Wt;
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, cb_rm, cb_tile_in>(
-                    ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
-                reduce_block(ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
+                    rm, tile_in, ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
+                reduce_block(tile_in, scaler, out, acc, ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
                 ++chunk_idx;
             }
         }
@@ -133,8 +154,8 @@ void kernel_main() {
                 const bool is_last_chunk = (ht_base + ht_in_chunk) == Ht_total;
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, cb_rm, cb_tile_in>(
-                    ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
-                reduce_block(ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
+                    rm, tile_in, ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
+                reduce_block(tile_in, scaler, out, acc, ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
                 ++chunk_idx;
             }
         }
