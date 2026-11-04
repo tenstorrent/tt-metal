@@ -438,6 +438,20 @@ def test_policy_forward_is_causal(patch_llama_weight_loading):
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+@pytest.mark.requires_device
+def test_setup_ttml_model_rejects_a_checkpoint_missing_a_parameter(patch_llama_weight_loading, tmp_path, expect_error):
+    """A checkpoint saved under older parameter names must not resume with those weights at init."""
+    model, tokenizer = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
+    save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=patch_llama_weight_loading)
+    checkpoint_dir = tmp_path / "checkpoints" / "grpo_step_1"
+    params = {name: p for name, p in model.parameters().items() if not name.endswith("/qkv_linear/weight")}
+    ttml.checkpointing.save_checkpoint(str(checkpoint_dir / grpo_ttml_model.CHECKPOINT_FILE), model_params=params)
+
+    with expect_error(RuntimeError, r"param\(s\) left at init"):
+        grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, str(checkpoint_dir))
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
 def test_save_checkpoint_header_records_given_learning_rate(monkeypatch, tmp_path):
     headers = []
     monkeypatch.setattr(ttml.checkpointing, "save_checkpoint", lambda path, header, **_: headers.append(header))
