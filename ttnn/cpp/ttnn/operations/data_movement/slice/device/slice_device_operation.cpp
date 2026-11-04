@@ -490,6 +490,15 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
             po.memory_config());
     }
 
+    // The RM factory sizes its input DFB from the L1 free at program creation. Key on that plan, or a
+    // program built while L1 was emptier replays its larger DFB over buffers allocated since.
+    if (std::holds_alternative<SliceRmProgramFactory>(factory)) {
+        const auto& destination =
+            tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output->tensor_spec() : output_spec;
+        hash = ttsl::hash::hash_objects(
+            hash, SliceRmProgramFactory::dfb_entry_size(operation_attributes, tensor_args, destination));
+    }
+
     return hash;
 }
 
