@@ -7,11 +7,12 @@
 #include "../../ternary/kernels/core_span.hpp"
 
 void kernel_main() {
-    // common args: o, z, consts, Nitems, ncores, grid_x, Tt, Wt (z width in tiles)
+    // common args: o, z, consts, Nitems, ncores, grid_x, Tt, Wt (z tensor width in tiles), Zoff (z's first tile column)
     uint32_t first, n;
     core_span(
         get_common_arg_val<uint32_t>(3), get_common_arg_val<uint32_t>(4), get_common_arg_val<uint32_t>(5), 1, first, n);
     const uint32_t Tt = get_common_arg_val<uint32_t>(6), Wt = get_common_arg_val<uint32_t>(7);
+    const uint32_t Zoff = get_common_arg_val<uint32_t>(8);
     constexpr auto o_args = TensorAccessorArgs<0>();
     constexpr auto z_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
     constexpr auto c_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
@@ -32,7 +33,7 @@ void kernel_main() {
         cb_reserve_back(cb_z, 4);
         for (uint32_t d = 0; d < 4; ++d) {
             noc_async_read(os.get_noc_addr((h * Tt + tt) * 4 + d), get_write_ptr(cb_o) + d * 4096, 4096);
-            noc_async_read(zs.get_noc_addr(tt * Wt + h * 4 + d), get_write_ptr(cb_z) + d * 2048, 2048);
+            noc_async_read(zs.get_noc_addr(tt * Wt + Zoff + h * 4 + d), get_write_ptr(cb_z) + d * 2048, 2048);
         }
         noc_async_read_barrier();
         cb_push_back(cb_o, 4);
