@@ -9,8 +9,8 @@
 //
 // Each pass (pass, below):
 //   reads     the worker channels' connection semaphores and the free-slots registers of every VC with a worker
-//             channel, as one read group (begin_read_group); a VC without one reads its registers right before its
-//             visit, so a packet landing during the earlier VCs' visits does not wait a pass
+//             channel, together at the pass's start; a VC without one reads its registers right before its visit,
+//             so a packet landing during the earlier VCs' visits does not wait a pass
 //   connect   each worker channel's connection, checked every pass (by rule); a change is handled out of line
 //   visit     each VC in turn, against its remote receiver channel's progress:
 //               - its worker channel: send if it holds a packet and the remote receiver channel has room; take
@@ -125,14 +125,14 @@ public:
     // VC's worker channel, where this router serves one (named only under has_worker_channel).
     static constexpr bool has_worker_channel = worker_channels != 0;
     static constexpr size_t worker_channel = has_worker_channel ? lowest_bit(worker_channels) : 0;
-    // Where its free-slots registers are read: in the pass's first read group where VC has a worker channel (with its
-    // connection semaphore, which that group reads anyway); otherwise right before VC's own visits, so a packet landing
+    // Where its free-slots registers are read: in the pass's first reads where VC has a worker channel (with its
+    // connection semaphore, which those reads take anyway); otherwise right before VC's own visits, so a packet landing
     // during the earlier VCs' visits does not wait a pass.
     static constexpr bool reads_free_slots_at_pass_start = has_worker_channel;
 };
 
 // The router's serviced sender channels, every VC's together, one bit per channel: all of them, by kind, and those
-// whose free-slots registers the pass's first read group reads; and the VCs they belong to, one bit per VC.
+// whose free-slots registers the pass's first reads take; and the VCs they belong to, one bit per VC.
 struct SenderChannels {
     static_assert(MAX_NUM_VCS == 3, "the sender's features and its pass name VCs 0, 1 and 2");
     static constexpr uint32_t serviced =
@@ -378,7 +378,7 @@ struct WorkerChannel {
         return state.connection_state != tt::tt_fabric::connection_interface::unused_connection_value;
     }
 
-    // The connection, every pass (by rule), from the semaphore the pass's read group read: a change (open or close
+    // The connection, every pass (by rule), from the semaphore the pass's first reads took: a change (open or close
     // request) is handled out of line. Returns whether it changed.
     static FORCE_INLINE bool check_connection(SenderChannelState<CH>& state, uint32_t semaphore) {
         if (semaphore != state.connection_state) {
@@ -529,15 +529,13 @@ FORCE_INLINE void read_connection_semaphores(uint32_t* connection_semaphores) {
 }
 
 // The channels in MASK that hold a packet, one bit each, and the connection semaphores of the worker channels in
-// WORKERS (into connection_semaphores[CH]). Every register and semaphore is read first, as one read group, then the
-// registers are tested. Only the one-word result stays live across the pass.
+// WORKERS (into connection_semaphores[CH]). Every register and semaphore is read first, then the registers are
+// tested. Only the one-word result stays live across the pass.
 template <uint32_t MASK, uint32_t WORKERS = 0>
 FORCE_INLINE uint32_t channels_with_packets(uint32_t* connection_semaphores = nullptr) {
     uint32_t registers[MASK == 0 ? 1 : mask_width(MASK)];
-    begin_read_group();
     read_free_slots_registers<MASK>(registers);
     read_connection_semaphores<WORKERS>(connection_semaphores);
-    end_read_group();
     return channels_holding_packets<MASK>(registers);
 }
 
@@ -861,7 +859,7 @@ FORCE_INLINE void visit_channels(
 }
 
 // VC's visit, on its send state where SenderChannelStates places it: its free-slots registers (when not read with the
-// pass's first read group), then its channels. The loop-local VC is visited every pass on its state in place. A later
+// pass's first reads), then its channels. The loop-local VC is visited every pass on its state in place. A later
 // VC is skipped with one test when none of its channels holds a packet or has packets in flight; otherwise its remote
 // receiver progress is taken into a local and put back where it changed (after_visit). None where VC has no serviced
 // sender channel.
@@ -945,7 +943,7 @@ FORCE_INLINE void restore_worker_credit_presets(LoopCopy& loop_copy, SenderChann
     restore_worker_credit_preset<2>(loop_copy, states);
 }
 
-// VC's worker channel's connection (every pass, by rule), from the semaphores the pass's read group read
+// VC's worker channel's connection (every pass, by rule), from the semaphores the pass's first reads took
 // (`connection_semaphores[CH]`).
 template <size_t VC, typename LoopCopy>
 FORCE_INLINE void check_worker_connection(
@@ -957,7 +955,7 @@ FORCE_INLINE void check_worker_connection(
     }
 }
 
-// One pass over the sender channels: the first read group, each worker channel's connection, then one visit per VC.
+// One pass over the sender channels: the first reads, each worker channel's connection, then one visit per VC.
 // The body of run()'s loop; a single-ERISC router runs it as the sender half of each pass over its state in memory
 // (router_single.hpp).
 template <typename LoopCopy>
