@@ -228,7 +228,8 @@ inline void llk_sfpu_srcs_binary_impl(
  * Experimental. The third input is unpacked into SrcS slice 2, the slice the SFPU writes and PACK1 reads.
  * The unpacker refills a bank on the SFPU's read-done and is not gated on PACK1, so a refill before PACK1
  * drained slice 2 would overwrite that slice's result. This loop therefore runs one slice at a time:
- * unpack -> PACR1 -> SFPU -> clear valids -> wait_pack_idle(). No auto-loops, hence slower than unary/binary.
+ * unpack -> stall the next unpack on PACK1 -> PACR1 -> SFPU -> clear valids. No auto-loops, hence slower than
+ * unary/binary.
  */
 template <bool CLEAR_VALIDS, typename PerSlice>
 inline void llk_sfpu_srcs_ternary_impl(
@@ -244,6 +245,10 @@ inline void llk_sfpu_srcs_ternary_impl(
         for (std::uint32_t slice = 0; slice < slice_count; slice++) {
             _llk_unpack_srcs_ternary_();  // in0/in1/in2 -> slices 0/1/2; sets dvalid for SFPU read
 
+            // The next unpack refills the bank the previous PACR1 reads: hold it until PACK1 is done. An in-stream
+            // stall, not a RISC poll, so a PACR1 still queued cannot be mistaken for an idle packer.
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK1);
+
             // Pack before SFPU: the SFPU loop clogs the instruction buffer and hangs if pack comes after.
             _llk_pack_srcs_<1 /*INSTRN_COUNT*/>(bfd_pack, i * slice_count + slice);  // Sets dvalid for SFPU to write
 
@@ -253,11 +258,10 @@ inline void llk_sfpu_srcs_ternary_impl(
                     true /*SRCS_RD_DONE*/,
                     true /*SRCS_WR_DONE*/>();  // Clears dvalid for SFPU read and write
             }
-
-            // PACK1 must have drained slice 2 before the unpacker refills this bank two slices from now.
-            ckernel::wait_pack_idle();
         }
     }
+    // Drain the last PACR1 before any later unpack on this thread.
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK1);
 }
 
 namespace ckernel::sfpu {

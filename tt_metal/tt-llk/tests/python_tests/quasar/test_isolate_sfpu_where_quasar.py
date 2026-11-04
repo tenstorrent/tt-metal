@@ -62,7 +62,7 @@ SFPU_WHERE_COMBINATIONS = generate_isolate_where_combinations()
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_input_dims=SFPU_WHERE_COMBINATIONS,
-    # all_ones reads only slices 0 and 1, all_zeros only slice 2, mixed both per lane.
+    # all_zeros selects in2 (already in slice 2), all_ones selects in1, mixed both.
     test_case=runtime(["mixed", "all_ones", "all_zeros"]),
 )
 def test_isolate_sfpu_where_quasar(
