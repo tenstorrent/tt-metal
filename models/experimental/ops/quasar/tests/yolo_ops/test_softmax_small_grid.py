@@ -9,7 +9,8 @@
 # the same test body with sizes that fit 1-2 cores; everything else (layouts, memory
 # configs, checks) is unchanged.
 #
-# Fidelity sweep (issue #63782):
+# Fidelity sweep (issue #63782): exercise fp32 intermediates at different phase counts to catch
+# stale ALU source-format declarations.
 #   default - the model's call, no compute_kernel_config (op default: HiFi4 on Quasar today)
 #   hifi4   - explicit HiFi4, otherwise identical to the bf16-input default config
 #   lofi    - explicit LoFi, otherwise identical
