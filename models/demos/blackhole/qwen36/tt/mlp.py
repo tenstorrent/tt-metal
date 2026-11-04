@@ -290,7 +290,7 @@ class Qwen36MLP:
             down_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
                 in0_block_w=17,
-                out_subblock_h=1,
+                out_subblock_h=7,
                 out_subblock_w=1,
                 out_block_h=7,
                 out_block_w=13,
@@ -299,6 +299,14 @@ class Qwen36MLP:
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=True,
+            )
+            # bf16 dest (8 tiles) allows the 7x1 subblock; packer L1 accumulation: sweep 688 vs 1499 us/call, pcc 0.99985
+            ckc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+                dst_full_sync_en=False,
             )
         output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
