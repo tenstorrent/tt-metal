@@ -9,10 +9,15 @@ import csv
 import glob
 import json
 import os
+import re
 import sys
 
 VALUE_PREFIXES = ("mean(", "std(", "min(", "max(", "median(", "TEXT_SIZE(")
 SKIP_PARTS = (".gw", ".master", ".post.", ".counters.")
+COUNTER_METRIC = re.compile(
+    r"^(L1_TO_L1|UNPACK_ISOLATE|MATH_ISOLATE|PACK_ISOLATE|L1_CONGESTION)_"
+)
+ARCH = re.compile(r"wormhole|blackhole|quasar")
 
 
 def report_files(root):
@@ -32,13 +37,20 @@ def load(root):
         sys.exit(f"no perf report CSVs under {root}")
     for path in files:
         module = os.path.splitext(os.path.basename(path))[0]
+        arch = ARCH.search(os.path.relpath(path, root))
+        if arch:
+            module = f"{arch.group(0)}/{module}"
         with open(path, newline="") as fh:
             reader = csv.DictReader(fh)
             cols = reader.fieldnames or []
             if "marker" not in cols:
                 continue
             keys = [
-                c for c in cols if not c.startswith(VALUE_PREFIXES) and c != "marker"
+                c
+                for c in cols
+                if not c.startswith(VALUE_PREFIXES)
+                and c != "marker"
+                and not COUNTER_METRIC.match(c)
             ]
             means = [c for c in cols if c.startswith("mean(")]
             for row in reader:
