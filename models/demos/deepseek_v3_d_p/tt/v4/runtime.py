@@ -10,7 +10,8 @@
   resets a slot's state at the head of each request in that slot and leaves the other slots alone;
 * the state advances on host counters, which a trace replay would not update, so the runtime is
   eager-only;
-* a non-first rank receives the packed fp32 residual streams, not a bf16 hidden state.
+* the pipeline boundary carries the ``hc_mult`` residual streams, one bf16 D2D plane each, where other
+  models send one hidden-state plane; the model itself keeps them packed in fp32.
 
 What migrates is the model's compressed caches and CSA index keys (``tt/v4/kv_caches.py``); the per-slot
 carries do not.
@@ -20,13 +21,36 @@ from __future__ import annotations
 
 import inspect
 
-import torch
-
 import ttnn
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layouts
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 from models.demos.deepseek_v3_d_p.tt.v4.kv_caches import build_v4_kv_chunk_table
 from models.demos.deepseek_v3_d_p.tt.v4.transformer import TtV4Transformer
+
+
+def streams_to_planes(streams: ttnn.Tensor, hc_mult: int) -> ttnn.Tensor:
+    """Packed residual streams ``[1, 1, S/sp, hc_mult * hidden/tp]`` fp32 -> the D2D activation
+    ``[1, hc_mult, S/sp, hidden/tp]`` bf16, one plane per stream. Each chip's columns already hold its hidden
+    slice of every stream, stream-major, so this is a per-chip reshape; the cast to bf16 is the boundary's
+    only loss."""
+    _, _, rows, width = streams.shape
+    split = ttnn.reshape(streams, (1, rows, hc_mult, width // hc_mult))
+    planes = ttnn.permute(split, (0, 2, 1, 3))
+    ttnn.deallocate(split)
+    out = ttnn.typecast(planes, ttnn.bfloat16)
+    ttnn.deallocate(planes)
+    return out
+
+
+def planes_to_streams(planes: ttnn.Tensor) -> ttnn.Tensor:
+    """The inverse of ``streams_to_planes``, back to fp32 for the model."""
+    _, hc_mult, rows, width = planes.shape
+    wide = ttnn.typecast(planes, ttnn.float32)
+    split = ttnn.permute(wide, (0, 2, 1, 3))
+    ttnn.deallocate(wide)
+    out = ttnn.reshape(split, (1, 1, rows, hc_mult * width))
+    ttnn.deallocate(split)
+    return out
 
 
 class TtV4Runtime(TtPrefillRuntime):
@@ -40,35 +64,32 @@ class TtV4Runtime(TtPrefillRuntime):
             raise ValueError("DeepSeek-V4 prefill is eager-only: its attention state advances on host counters")
         if self.config.dflash_enabled:
             raise ValueError("DeepSeek-V4 prefill has no DFlash drafter")
-        # The runner's D2D boundary is bf16 at hidden width; V4 hands over fp32 hc_mult * hidden streams.
-        if not (self.config.is_first_rank and self.config.is_last_rank):
-            raise ValueError(
-                "DeepSeek-V4 runner is single-rank: the pipeline boundary cannot carry its residual streams"
-            )
         super()._build_model(state_dict)
 
+    @property
+    def activation_planes(self) -> int:
+        """The residual streams cross a pipeline boundary as one D2D plane each (``streams_to_planes``)."""
+        return self.hf_config.hc_mult
+
     def prefill_chunk(self, *args, **kwargs):
-        """Reset the slot's attention state at the head of a request, then defer to the shared runtime."""
+        """Reset the slot's attention state at the head of a request, then defer to the shared runtime,
+        converting the pipeline handoff between the D2D planes and the model's packed streams."""
         bound = inspect.signature(TtPrefillRuntime.prefill_chunk).bind_partial(self, *args, **kwargs)
         if bound.arguments.get("actual_start") == 0:
             # None is the traced path's "the slot is on device", which an eager-only runtime never sees;
             # forward reads it as slot 0, so the reset does too.
             slot_id = bound.arguments.get("slot_id")
             self.model.reset_streams(0 if slot_id is None else slot_id)
-        return super().prefill_chunk(*args, **kwargs)
-
-    def make_placeholder_activation(self, dflash_packed: bool = True) -> ttnn.Tensor:
-        """A zero ``[1, 1, chunk/sp, hc_mult * hidden/tp]`` fp32 activation, the shape a non-first rank receives."""
-        rows = self.config.chunk_size // self.config.sp_factor
-        width = self.hf_config.hc_mult * self.hf_config.hidden_size // self.config.tp_factor
-        return ttnn.from_torch(
-            torch.zeros(1, 1, rows, width, dtype=torch.float32),
-            device=self.mesh_device,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        if not self.config.is_first_rank:
+            planes = bound.arguments["input_tensor"]
+            bound.arguments["input_tensor"] = planes_to_streams(planes)
+            ttnn.deallocate(planes)
+        out = super().prefill_chunk(*bound.args[1:], **bound.kwargs)
+        if self.config.is_last_rank:
+            return out
+        handoff = streams_to_planes(out, self.hf_config.hc_mult)
+        ttnn.deallocate(out)
+        return handoff
 
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
         """The model's own caches, three stages in table-config order (``tt/v4/kv_caches.py``). The engine's

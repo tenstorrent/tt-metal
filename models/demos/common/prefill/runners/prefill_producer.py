@@ -784,6 +784,12 @@ def _read_slot_kv_and_check_pcc(
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "llama_3p1_8b":
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name.startswith("deepseek_v4"):
+        from models.demos.deepseek_v3_d_p.tt.v4.kv_validation import read_slot_kv_and_check_pcc
+
+        return read_slot_kv_and_check_pcc(
+            table, device_map, slot_id, real_len, trace_dir, ADAPTER.model_config, NUM_LAYERS
+        )
     if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir, num_ranks)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
@@ -803,11 +809,13 @@ def _has_index_config(table) -> bool:
     return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
 
 
-def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
+def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0, step=None):
+    """Rows ``[start, read_len)`` of one config, one table chunk at a time. ``step`` is the config's rows a
+    chunk, 32 unless a config pages finer (DeepSeek-V4's CSA joint table is one row a page)."""
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
     rows = []
-    for pos in range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+    for pos in range(start, read_len, step or NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         loc = table.lookup(layer, pos, slot_id, config_id)
         unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
         raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)

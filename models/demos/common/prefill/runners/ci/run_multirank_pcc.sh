@@ -17,10 +17,12 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
-# First entry is the default; membership is the validation. These models support sc1 only.
+# First entry is the default; membership is the validation. These models support sc1 only, and
+# DeepSeek-V4-Pro, which no single galaxy holds, sc4 only.
 case "${MODEL}" in
-  mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
-  *)                   MODEL_CONFIGS="sc4 sc1" ;;
+  mistral4|gptoss120b|dsv4_flash) MODEL_CONFIGS="sc1" ;;
+  dsv4_pro)                       MODEL_CONFIGS="sc4" ;;
+  *)                              MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
 case " ${MODEL_CONFIGS} " in
@@ -144,6 +146,17 @@ case "${MODEL}" in
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
     fi
+    ;;
+  dsv4_flash|dsv4_pro)
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/${MODEL}_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/${MODEL}.json"
+    # The producer grades against the adapter's default golden, the 55K vLLM trace, so it pushes the whole
+    # trace and needs no PREFILL_TRACE_DIR.
+    REQUEST_LEN=${GOLDEN_LEN}
+    # sc1 (Flash) runs layers 0-9, the ones the golden keeps; they hold CSA and HCA layers both, so every
+    # table config is graded. Each layer loads from the native checkpoint on host, which is what sets the
+    # depth CI can afford.
+    SC1_NUM_LAYERS=10
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
