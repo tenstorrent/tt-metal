@@ -68,10 +68,12 @@ int main(void)
     *(mailbox_base + 2)    = ckernel::RESET_VAL;
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
+#if !defined(TT_METAL_TTSIM)
     for (std::uint32_t slot = 0; slot < llk_barrier::NUM_THREADS; ++slot)
     {
         host_signal::write(slot, ckernel::RESET_VAL);
     }
+#endif
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
@@ -120,8 +122,10 @@ int main(void)
     // ttsim BRISC resets this core once the mailbox reads complete: _start publishes it after the coverage dump
 #else
     *mailbox = ckernel::KERNEL_COMPLETE;
+#if !defined(TT_METAL_TTSIM) // ttsim: the host polls the L1 mailboxes, no flag to order
     asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
     host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#endif
 #endif
 }
 
