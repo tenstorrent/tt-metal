@@ -58,20 +58,12 @@ def test_bw_sqrt_output(input_shapes, device):
     assert status
 
 
-# Exhaustive BF16 accuracy of ttnn.sqrt_bw.
+# Exhaustive BF16 accuracy of ttnn.sqrt_bw: every BF16 bit pattern with each gradient in SQRT_BW_GRADS.
 #
-# Every BF16 bit pattern is paired with each gradient in GRADS. The reference is torch autograd
-# of torch.sqrt(x) in float64, rounded once to BF16 with subnormal results flushed to zero.
-# The SFPU may read a subnormal operand as zero, so torch is evaluated both at the operands and at
-# the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
-# path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
-# the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
-# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
-# pure ULP error against torch and the lanes of another class, for the output and for the
-# composite's on the same operands.
-# The output is 0 wherever x is +inf, where f'(x)'s limit is 0 (torch's product is NaN for an infinite
-# or NaN grad), as the composite this program replaces computes it; torch keeps the exact product.
+# The SFPU may read a subnormal operand as zero, so an output may match torch at the operands or at the
+# operands with subnormals flushed; the pack stores NaN as +inf and -0 as +0, so classes compare as stored.
+# Declared lanes, as the composite this program replaces computes them unless noted: 0 wherever x is +inf, where
+# f'(x)'s limit is 0 (torch's product is NaN for an infinite or NaN grad).
 SQRT_BW_GRADS = [
     "1",
     "-1",
@@ -84,6 +76,7 @@ SQRT_BW_GRADS = [
     "inf",
     "-inf",
     "nan",
+    "-nan",
     "1.1754943508222875e-38",
     "-1.1754943508222875e-38",
     "3.3895313892515355e+38",
@@ -100,6 +93,9 @@ def _sqrt_bw_grad_like(x, grad):
     if grad.startswith("random"):
         generator = torch.Generator().manual_seed(int(grad.removeprefix("random")))
         return torch.randn(x.shape, generator=generator).to(torch.bfloat16)
+    if grad == "-nan":
+        # torch.full rounds every NaN to 0x7FC0: the sign-set NaN, 0xFFC0, is written by its bits.
+        return torch.full(x.shape, -64, dtype=torch.int16).view(torch.bfloat16)
     return torch.full(x.shape, float(grad), dtype=torch.bfloat16)
 
 
@@ -113,8 +109,8 @@ def _sqrt_bw_torch_reference(grad, x, flush):
         return x64.grad.detach()
 
 
-def _sqrt_bw_reference(grad, x, flush, board):
-    """Torch, except on the declared lanes in the module docstring."""
+def _sqrt_bw_reference(grad, x, flush):
+    """Torch, except on the declared lanes."""
     result = _sqrt_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
     result = torch.where(((x32 == torch.inf)), torch.zeros_like(result), result)
@@ -193,14 +189,14 @@ def test_sqrt_bw_exhaustive_bfloat16(grad, device):
         f"ours_class_mismatches={ours_classes} stock_class_mismatches={composite_classes} grad={grad}"
     )
     ulp = torch.minimum(
-        _sqrt_bw_pure_ulp(_sqrt_bw_reference(g, x, False, board), actual),
-        _sqrt_bw_pure_ulp(_sqrt_bw_reference(g, x, True, board), actual),
+        _sqrt_bw_pure_ulp(_sqrt_bw_reference(g, x, False), actual),
+        _sqrt_bw_pure_ulp(_sqrt_bw_reference(g, x, True), actual),
     )
     worst = ulp.argmax()
     assert ulp.max().item() < 1.0, (
         f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
-        f"expected {_sqrt_bw_reference(g, x, False, board).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
+        f"expected {_sqrt_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
 
 
@@ -316,11 +312,8 @@ def _sqrt_bw_placements(shape):
     ],
 )
 def test_sqrt_bw_runs_the_fused_program_only_where_it_applies(call, device):
-    """BF16 operands of one shape in tiles, interleaved or sharded in L1 or DRAM, with one placement or
-    an output config run the fused program and match torch, with or without a BF16 input_grad,
-    which the program writes in place in any layout. Every other call keeps the composite, which
-    broadcasts and takes any layout, placement and dtype; it writes an FP32 input_grad in place, and
-    matches torch."""
+    """BF16 tiles of one shape, interleaved or sharded in L1 or DRAM, with one placement or an output config, run
+    the fused program, also into a BF16 input_grad; every other call keeps the composite."""
     shape = (1, 2, 64, 128)
     generator = torch.Generator().manual_seed(0)
     x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)

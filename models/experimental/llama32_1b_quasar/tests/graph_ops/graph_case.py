@@ -58,6 +58,7 @@ suspicion, or on an emulator where PCC of a bfloat8_b path is not the point).
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 from typing import Any
@@ -67,6 +68,7 @@ import torch
 
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from tests.ttnn.utils_for_testing import assert_allclose
 
 # Re-exported so generated files need one import only.
 with_default_mesh = U.with_default_mesh
@@ -1234,11 +1236,31 @@ _QUASAR_UNSUPPORTED_OPS = {
 }
 
 
-def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
+def _bfp_specs(case):
+    """The capture's tensor specs (args, kwargs, outs) whose dtype is a Bfp format, as "where:dtype"."""
+    found = []
+
+    def visit(node, where):
+        if isinstance(node, dict):
+            if node.get("dtype") in _BLOCK_FLOAT_DTYPES:
+                found.append(f"{where}:{node['dtype']}")
+            for key, value in node.items():
+                visit(value, f"{where}.{key}")
+        elif isinstance(node, (list, tuple)):
+            for i, value in enumerate(node):
+                visit(value, f"{where}[{i}]")
+
+    for key in ("args", "kwargs", "outs"):
+        visit(case.get(key), key)
+    return found
+
+
+def run_case(op, case, mesh_device, *, op_name=None, pcc=None, rtol=None):
     """Materialize one captured call, run it, and check the result.
 
     ``op`` is the callable (``ttnn.linear``, or a small lambda for operators like
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
+    ``rtol`` also checks the golden with allclose (atol = rtol x the golden's largest magnitude).
     """
     op_name = op_name or case["op"]
 
@@ -1246,6 +1268,11 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     # RuntimeErrors -- so skip them pre-flight, before any device work, rather than hanging the run.
     if _is_quasar(mesh_device) and op_name in _QUASAR_UNSUPPORTED_OPS:
         pytest.skip(f"{op_name} faults on Quasar: {_QUASAR_UNSUPPORTED_OPS[op_name]}")
+    # Quasar has no Bfp formats (bfloat8_b / bfloat4_b): skip such a capture pre-flight rather than fail it.
+    if _is_quasar(mesh_device):
+        bfp = _bfp_specs(case)
+        if bfp:
+            pytest.skip(f"Quasar has no Bfp formats; this capture uses {', '.join(bfp)}")
 
     torch_inputs: dict[str, torch.Tensor] = {}
 
@@ -1303,5 +1330,53 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
                     if host is None and i < len(hosts):
                         continue
                     U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device, host=host)
+                    if rtol is not None:
+                        got = (host if host is not None else from_tt(tensors[i], mesh_device)).reshape(-1)
+                        ref = one.float().reshape(-1)[: got.numel()]
+                        assert_allclose(ref, got[: ref.numel()], rtol=rtol, atol=rtol * ref.abs().max().item())
 
     return out
+
+
+# Ops the model runs through the Quasar fork with no program config on Quasar (utility_functions.linear,
+# executor.py); their generated files also run every case that way.
+_NO_PROGRAM_CONFIG_OP = {
+    "ttnn.linear": ttnn.experimental.quasar.linear,
+    "ttnn.matmul": ttnn.experimental.quasar.matmul,
+}
+_BLOCK_FLOAT_DTYPES = ("BFLOAT8_B", "BFLOAT4_B")
+
+
+def run_case_without_program_config(case, mesh_device):
+    """Run a captured ``ttnn.linear`` / ``ttnn.matmul`` case through ``ttnn.experimental.quasar.linear`` /
+    ``matmul`` with no program config: the unified matmul on Quasar, as the model calls it there.
+
+    The op places the matmul itself, so the output's shard detail is not compared. Block-float operands and
+    outputs are bf16 (Quasar has no block-float formats; the model's Quasar weights are bf16), input shard grids
+    this device lacks are DRAM-interleaved (as test_llama_e2e.py forces them on Quasar), and so is every input
+    off Quasar, where no program config means the fork's legacy auto config: it takes an interleaved B only and its
+    1D path FATALs on case 07's L1-sharded A (cb_in0 with no consumer on an idle core). Checked with allclose on top
+    of the PCC, to 10% of the largest output: bf16 partial sums over K reach ~7% on WH at K=8192.
+    """
+    case = copy.deepcopy(case)
+    case["kwargs"].pop("program_config", None)
+    case["kwargs"].pop("core_grid", None)
+    dtype = case["kwargs"].get("dtype")
+    if dtype is not None and dtype["v"] in _BLOCK_FLOAT_DTYPES:
+        dtype["v"] = "BFLOAT16"
+    for spec in case["args"]:
+        if spec["k"] != "t":
+            continue
+        if spec["dtype"] in _BLOCK_FLOAT_DTYPES:
+            spec["dtype"] = "BFLOAT16"
+        mem = spec.get("mem")
+        if mem is not None and (not _is_quasar(mesh_device) or not _shard_grid_fits(mem, mesh_device)[0]):
+            spec["mem"] = {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None}
+    for spec in case["outs"]:
+        if spec is None:
+            continue
+        if spec.get("dtype") in _BLOCK_FLOAT_DTYPES:
+            spec["dtype"] = "BFLOAT16"
+        if spec.get("mem") is not None:
+            spec["mem"]["shard"] = None
+    return run_case(_NO_PROGRAM_CONFIG_OP[case["op"]], case, mesh_device, op_name=case["op"], rtol=0.1)

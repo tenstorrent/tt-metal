@@ -40,7 +40,8 @@ import pytest
 import ttml
 import ttnn
 from ttml import checkpointing
-from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, RowParallelLinear
+from ttml.modules import AbstractModuleBase, LinearLayer
+from tp_block import fresh_tp, make_adamw, train_step, trained_tp
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -74,8 +75,7 @@ ALL_OPTIMIZERS = SHARDED_PARAM_OPTIMIZERS + ["MuonComposite"]
 
 def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimizers.OptimizerBase":
     if name == "AdamW":
-        cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
-        return ttml.optimizers.AdamW(params, cfg)
+        return make_adamw(params)
     if name == "AdamWFullPrecision":
         cfg = ttml.optimizers.AdamWFullPrecisionConfig.make(
             lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0
@@ -90,22 +90,6 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
     if name in COMPOSITE_CONFIGS:
         return ttml.optimizers.create_optimizer({"lr": 1e-3, **COMPOSITE_CONFIGS[name]}, params)
     raise ValueError(f"Unknown optimizer name: {name!r}")
-
-
-def _train_step(model, opt, input_scale: float = 1.0) -> None:
-    """One forward/backward/optimizer step on a ``(1, 1, DIM, DIM)`` input, so every moment exists and has been
-    touched by the update kernel (and, for FSDP, so the gather -> compute -> reduce-scatter -> reshard hooks ran)."""
-    ctx = ttml.autograd.AutoContext.get_instance()
-    x = ttml.autograd.Tensor.from_numpy(
-        np.random.default_rng(0).standard_normal((1, 1, DIM, DIM), dtype=np.float32) * input_scale,
-        ttnn.Layout.TILE,
-        ttnn.DataType.BFLOAT16,
-    )
-    opt.zero_grad()
-    loss = ttml.ops.unary.mean(model(x))
-    loss.backward(False)
-    opt.step()
-    ctx.reset_graph()
 
 
 def _placement_key(p) -> tuple:
@@ -216,31 +200,13 @@ def _assert_checkpoint_round_trips(path: str, params: "ttml.NamedParameters", op
 # --- TP -------------------------------------------------------------------------------------------------------
 
 
-class TPBlock(AbstractModuleBase):
-    """Replicated linear -> column-parallel -> row-parallel: sharded weights on dims 2 and 3, a sharded bias
-    (column-parallel, dim 3) and replicated params (the first linear, the row-parallel bias)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.inp = LinearLayer(DIM, DIM)
-        self.up = ColumnParallelLinear(DIM, DIM, has_bias=True)
-        self.down = RowParallelLinear(DIM, DIM, has_bias=True, input_is_parallel=True)
-
-    def forward(self, x):
-        return self.down(self.up(self.inp(x)))
-
-
 def _fresh_tp(name: str):
-    """An untrained TPBlock and its optimizer: (model, params, opt)."""
-    model = TPBlock()
-    params = model.parameters()
-    return model, params, _make_optimizer(name, params)
+    """An untrained ``TPBlock(DIM)`` and the optimizer ``name``: (model, params, opt)."""
+    return fresh_tp(DIM, lambda params: _make_optimizer(name, params))
 
 
 def _trained_tp(name: str):
-    model, params, opt = _fresh_tp(name)
-    _train_step(model, opt)
-    return params, opt
+    return trained_tp(DIM, lambda params: _make_optimizer(name, params))
 
 
 class TestTP:
@@ -417,7 +383,7 @@ class TestFSDP:
         model = _build_fsdp_model(init)
         params = model.parameters()
         opt = _make_optimizer(opt_name, params)
-        _train_step(model, opt, input_scale=FSDP_INPUT_SCALE)
+        train_step(model, opt, DIM, input_scale=FSDP_INPUT_SCALE)
 
         expected = _assert_fsdp_layout(model, fsdp_mesh)
         mismatches = _moment_mismatches(opt, expected)
@@ -430,7 +396,7 @@ class TestFSDP:
         model = _build_fsdp_model(init)
         params = model.parameters()
         opt = _make_optimizer("AdamW", params)
-        _train_step(model, opt, input_scale=FSDP_INPUT_SCALE)
+        train_step(model, opt, DIM, input_scale=FSDP_INPUT_SCALE)
         _assert_fsdp_layout(model, fsdp_mesh)  # steady state: the parameters are the shards again
 
         path = str(tmp_path / f"fsdp_adamw_{init}.ckpt")
@@ -448,7 +414,7 @@ class TestFSDP:
         model = _build_fsdp_model("eager")
         params = model.parameters()
         opt = _make_optimizer("AdamW", params)
-        _train_step(model, opt, input_scale=FSDP_INPUT_SCALE)
+        train_step(model, opt, DIM, input_scale=FSDP_INPUT_SCALE)
         expected = _assert_fsdp_layout(model, fsdp_mesh)
 
         model.block.unshard()
