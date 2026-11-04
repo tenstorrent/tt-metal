@@ -274,7 +274,7 @@ def launch_done_address() -> int | None:
     """Wormhole and Blackhole: the overlay register BRISC marks a launch done in (None on ttsim, which waits on L1)."""
     index = _HOST_SIGNAL_SCRATCH_INDEX.get(get_chip_architecture())
     target = TestTargetConfig._instance
-    if index is None or (target is not None and target.runs_on_ttsim()):
+    if index is None or (target is not None and target.runs_on_ttsim()) or os.environ.get("TT_LLK_DISABLE_ASSERTS") != "1":
         return None
     return _NOC_OVERLAY_START_ADDR + index * 4
 

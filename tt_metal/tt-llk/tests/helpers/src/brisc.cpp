@@ -65,7 +65,7 @@ int main()
 #endif
     clear_trisc_soft_reset();
 
-#if defined(TT_METAL_TTSIM) // ttsim models no BRISC reads of the TRISC PC buffers, and nothing there is timed: wait on L1
+#if defined(TT_METAL_TTSIM) || defined(ENABLE_LLK_ASSERT) // experiment: assert builds wait on L1 too
     for (const mailbox_t mailbox : {mailbox_unpack, mailbox_math, mailbox_pack})
     {
         do
