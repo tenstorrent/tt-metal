@@ -292,6 +292,18 @@ FlatRoutedExpertPlan make_plan(
         lo.gu_read_pieces < 0 || lo.gu_read_pieces == 1 || lo.gu_read_pieces == 2 || lo.gu_read_pieces == 4,
         "flat layout gu_read_pieces {}: 1, 2 or 4",
         lo.gu_read_pieces);
+    // the pieces a gate/up weight block is read as: the most (1 / 2 / 4) of at least 6 KB each. bfp4 16-column-unit
+    // blocks of 3 tiles a row (13.5 KB: K3, V4.1-Flash, M3) as 2 pieces, pair blocks (9 KB: GLM-5.3 / -Flash, K2.7)
+    // whole (flat us at Galaxy loads, 1 / 2 / 4 pieces: K3 1328.3 / 1294.1 / 1347.5, V4.1-Flash 634.6 / 609.3 / -,
+    // GLM-5.3 532.0 / 569.1 / 596.3, GLM-5.3-Flash 407.4 / 435.6 / -)
+    const uint32_t block_bytes = kKBlk * p.gwt * p.w_tile;
+    p.gu_pieces = 1;
+    for (uint32_t k : {4u, 2u}) {
+        if (block_bytes / k >= 6 * 1024 && (kKBlk * p.gwt) % k == 0) {
+            p.gu_pieces = k;
+            break;
+        }
+    }
     if (lo.gu_read_pieces > 0) {
         p.gu_pieces = lo.gu_read_pieces;
     }

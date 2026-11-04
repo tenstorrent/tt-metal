@@ -67,7 +67,8 @@ struct FlatRoutedExpertPlan {
     Core spare{0, 0};
     // weight slots (one per reader cell, slot r in bank r % banks)
     uint32_t n_slots = 0;
-    // weight reads in flight a gate/up core (pieces), and the pieces a weight block is read as (layout.gu_read_pieces)
+    // weight reads in flight a gate/up core (pieces), and the pieces a weight block is read as (the most of at least
+    // 6 KB each, or layout.gu_read_pieces)
     static constexpr uint32_t gu_depth = 2;
     uint32_t gu_pieces = 1;
     // down

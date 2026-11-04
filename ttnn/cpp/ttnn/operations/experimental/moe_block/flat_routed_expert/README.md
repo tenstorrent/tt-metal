@@ -63,7 +63,7 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 |---|---|---|
 | `pin_ratio` | 8 | pin an expert only at this many times the next one's rows |
 | `arena_bytes` | -1 (the L1 bank) | the arena's L1 budget a core (the MoE block: the combine's arena, when the plan does not fit it as it is) |
-| `gu_read_pieces` | -1 (1) | each weight block read as 1 / 2 / 4 reads (more, smaller reads are slower in the op on GLM shapes; K3 in the MoE block takes 2) |
+| `gu_read_pieces` | -1 (the plan's) | each weight block read as 1 / 2 / 4 reads; the plan takes the most pieces of at least 6 KB (bfp4: 3-tile unit blocks of 13.5 KB in 2, pair blocks of 9 KB whole) |
 
 ## Tests
 

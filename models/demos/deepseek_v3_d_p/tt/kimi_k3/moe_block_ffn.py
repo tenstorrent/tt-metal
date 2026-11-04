@@ -53,15 +53,12 @@ class MoEBlockFfnOptions:
     words_slab_bytes: the persistent words' packed L1_SMALL slab, bytes a core (0: a tensor a word set); None: the
         MoEBlockConfig default.
     accumulators: the combine's accumulator count; None: the model's (GLM-5.3 11, Kimi-K3 15).
-    gu_read_pieces: each gate/up weight block read as this many pieces (FlatLayoutOptions.gu_read_pieces); None: the
-        model's (Kimi-K3 2, GLM-5.3 1).
     gather_experts: a layer's routed-expert sources go to DRAM this many local experts at a time while their faces are
         gathered into the flat layout (all of them next to the laid-out weights held a K3 layer twice: 65 MB a bank)."""
 
     combine_snap: Optional[float] = None
     words_slab_bytes: Optional[int] = None
     accumulators: Optional[int] = None
-    gu_read_pieces: Optional[int] = None
     gather_experts: int = 4
 
 
@@ -222,12 +219,6 @@ def device_sources(mesh, layer_idx: int, epc: int, cache, experts=None):
 class TtK3MoEBlockFfn:
     """One MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
 
-    def _default_gu_read_pieces(self) -> int:
-        """The gate/up reads' pieces (FlatLayoutOptions.gu_read_pieces): the fastest choice a model - Kimi-K3 2 (L1-L4
-        golden, traced, full block: 1 piece +3.0%), GLM-5.3 1 (L78 chunked prefill, traced: 302.4 ms a chunk; 2 / 4
-        pieces 305.1 / 304.9)."""
-        return 2 if self.model_name == "KimiK3Config" else 1
-
     def __init__(
         self,
         mesh_device,
@@ -275,9 +266,9 @@ class TtK3MoEBlockFfn:
                 accumulators=acc,
                 max_tokens_per_expert=max(chunk, 256),
                 activation=flat_weights_module().ACTS[self.act],
-                # (every gate/up core reads its own weight blocks on NOC0, each block as gu_read_pieces reads; the
-                # combine fits the sub-blocks into its arena)
-                layout=mb.FlatLayoutOptions(gu_read_pieces=opts.gu_read_pieces or self._default_gu_read_pieces()),
+                # (the flat plan's own choices: the gate/up read pieces from its weight block's bytes, the sub-blocks
+                # fitted into the combine's arena)
+                layout=mb.FlatLayoutOptions(),
             )
             logger.info(f"MoE block: {opts}, flat layout {block.expert_kw['layout']}")
             logger.info(
