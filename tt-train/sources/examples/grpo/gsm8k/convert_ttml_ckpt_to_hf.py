@@ -5,8 +5,8 @@
 
 """Convert a ttml GRPOTrainer checkpoint to HuggingFace safetensors layout.
 
-The ``save_checkpoint`` path in ``ttml.trainers.grpo_trainer`` writes ttml-side
-keys (``Qwen3/blocks/{i}/self_attn/q_proj/weight`` ...) with a fused
+The ``save_checkpoint`` path in ``ttml.trainers.grpo_trainer`` writes ``checkpoint.pkl``, with ttml-side
+keys (``Qwen3/blocks/{i}/self_attn/q_proj/weight`` ...) and a fused
 ``kv_proj`` in the meta-permuted Q/K row layout ``[r0, i0, r1, i1, ...]`` (per
 head). ``AutoModelForCausalLM.from_pretrained`` expects the standard HF Qwen3
 layout: ``model.layers.{i}.self_attn.q_proj.weight``, separate ``k_proj`` and
@@ -18,29 +18,25 @@ Q/K-Norm gammas so eval can consume GRPO checkpoints.
 Usage:
     python convert_ttml_ckpt_to_hf.py <src_ckpt_dir> <dst_dir> [--dtype bf16|fp32]
 
-Example (each GRPO checkpoint of the current run):
-    for step in 100 200 300; do
+Example (each GRPO checkpoint of a run):
+    for step in 20 40 60 80 100; do
         python convert_ttml_ckpt_to_hf.py \\
             generated/tt-train/grpo_gsm8k_run/<utc>/checkpoints/grpo_step_${step} \\
-            /localdev/ichovpan/converted/grpo-ckpt-${step}/qwen3-0.6b-base-think-sft
+            generated/tt-train/converted/grpo-ckpt-${step}
     done
-
-The destination directory's basename is intentionally set to
-``qwen3-0.6b-base-think-sft`` so ``ModelArgs.model_name`` (derived from the last
-path segment of ``HF_MODEL``) hits the existing ``LOCAL_HF_PARAMS`` entry when
-eval_gsm8k.py points at the converted directory.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import pickle
 import shutil
 from pathlib import Path
 from typing import Iterable
 
+import numpy as np
 import torch
-from safetensors import safe_open
 from safetensors.torch import save_file
 
 
@@ -76,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--root-prefix",
         default=DEFAULT_ROOT_PREFIX,
-        help=f"ttml top-level prefix in the safetensors keys (default: {DEFAULT_ROOT_PREFIX}).",
+        help=f"ttml top-level prefix in the checkpoint keys (default: {DEFAULT_ROOT_PREFIX}).",
     )
     return p.parse_args()
 
@@ -127,11 +123,10 @@ def _squeeze2d(t: torch.Tensor, key: str) -> torch.Tensor:
 
 
 def _load_ttml_state(path: Path) -> dict[str, torch.Tensor]:
-    state: dict[str, torch.Tensor] = {}
-    with safe_open(str(path), framework="pt") as f:
-        for k in f.keys():
-            state[k] = f.get_tensor(k)
-    return state
+    """Read the model parameters of a ttml ``checkpoint.pkl``: a header record, then one array per tensor."""
+    with open(path, "rb") as f:
+        names = pickle.load(f)["manifest"]["model"]["named_parameters"]
+        return {name: torch.from_numpy(np.asarray(pickle.load(f), dtype=np.float32)) for name in names}
 
 
 def _copy_side_files(src: Path, dst: Path, files: Iterable[str]) -> None:
@@ -144,7 +139,7 @@ def _copy_side_files(src: Path, dst: Path, files: Iterable[str]) -> None:
 def convert(src: Path, dst: Path, dtype: torch.dtype, root_prefix: str) -> None:
     if not src.is_dir():
         raise SystemExit(f"src {src} is not a directory")
-    st_path = src / "model.safetensors"
+    st_path = src / "checkpoint.pkl"
     cfg_path = src / "config.json"
     if not st_path.exists():
         raise SystemExit(f"missing {st_path}")
@@ -169,7 +164,7 @@ def convert(src: Path, dst: Path, dtype: torch.dtype, root_prefix: str) -> None:
     print(f"[convert] output dtype: {dtype}")
 
     ttml = _load_ttml_state(st_path)
-    print(f"[convert] loaded {len(ttml)} ttml tensors from safetensors")
+    print(f"[convert] loaded {len(ttml)} ttml tensors from checkpoint.pkl")
 
     def get(key: str) -> torch.Tensor:
         if key not in ttml:

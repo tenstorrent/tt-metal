@@ -12,7 +12,7 @@ tags exactly once, and the <think>/<answer> format regex. Rows follow the order
 of ``--models``.
 
 Every ``--models`` entry must be a HuggingFace-format checkpoint directory or
-repo id; ttml GRPO checkpoints are not directly loadable here.
+repo id; convert a ttml GRPO checkpoint with convert_ttml_ckpt_to_hf.py first.
 
 Usage:
     python eval_gsm8k.py \\
