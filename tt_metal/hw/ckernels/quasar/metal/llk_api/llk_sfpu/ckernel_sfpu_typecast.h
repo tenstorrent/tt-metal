@@ -157,9 +157,7 @@ inline void _calculate_typecast_arith_sfp_rows_() {
         }
         _typecast_store_<DST_FMT>(value);
     } else if constexpr (src_float && !dst_float) {
-        // SFPCAST to int32 keeps 8 fraction bits, so a value in (k+0.5, k+0.5+1/256) for even k
-        // rounds to k. The narrow SFP_STOCH_RND modes round the whole float and saturate.
-        // The unsigned modes drop the sign, so the ReLU stays in front of them.
+        // Narrow modes round the whole float and saturate. Unsigned modes drop the sign, so the ReLU stays.
         sfpi::vFloat value = _typecast_load_<sfpi::vFloat, SRC_FMT>();
 
         if constexpr (_typecast_is_unsigned_int_<DST_FMT>()) {

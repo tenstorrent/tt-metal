@@ -41,10 +41,8 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
-    // Int16 is MOV-only on the Quasar FPU and is not a 32-bit Dest source. The ELWADD this init
-    // programs for a 32-bit Dest writes bad data. Unpack-to-Dest skips that copy; SFPU typecast
-    // is the path that uses it, because the SFPU overwrites Dest. This operand is the input, so
-    // an Int16 output circular buffer does not trip it.
+    // Int16 is MOV-only, so this 32-bit Dest datacopy writes bad data. Unpack-to-Dest skips it.
+    // LLK_ASSERT only: a normal build does not check. ProgramSpec rejects this input.
     if constexpr (EN_32BIT_DEST && !unpack_to_dest) {
         LLK_ASSERT(
             srcA_format != DataFormat::Int16,
