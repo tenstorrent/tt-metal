@@ -31,6 +31,10 @@ and can be selected individually with pytest ``-k``:
                                        aligned to within ±20µs on the Tracy
                                        timeline (host anchor versus Tracy
                                        message stamp plus CI variance on WH).
+* ``test_kernel_from_long_source_string`` - Run a kernel created from a
+                                       source string over 64 KiB under Tracy
+                                       capture and verify its zone shows the
+                                       kernel's name, not its source text.
 """
 
 from __future__ import annotations
@@ -69,6 +73,7 @@ CORRELATION_WORKLOAD = WORKLOAD_DIR / "host_device_correlation_workload.py"
 SYNC_WORKLOAD = WORKLOAD_DIR / "realtime_profiler_sync_workload.py"
 CROSS_REFERENCE_WORKLOAD = WORKLOAD_DIR / "cross_reference_workload.py"
 MATMUL_WORKLOAD = WORKLOAD_DIR / "matmul_workload.py"
+LONG_KERNEL_SOURCE_WORKLOAD = WORKLOAD_DIR / "long_kernel_source_workload.py"
 
 # Every test in this module runs its device-touching work in a subprocess.
 # The UMD ``CHIP_IN_USE_*_PCIe`` lock is held for the lifetime of the first
@@ -823,3 +828,57 @@ def test_sync_accuracy(tmp_path):
         f"\nAll {len(pairs)} sync pairs within ±{SYNC_DIFF_THRESHOLD_NS}ns "
         f"(min={min(diffs):+.0f}ns, max={max(diffs):+.0f}ns, mean={sum(diffs)/len(diffs):+.0f}ns)."
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. Kernel created from a long source string (runs workload under Tracy capture)
+# ---------------------------------------------------------------------------
+
+# tt-metal's name for every kernel created from a source string.
+SOURCE_STRING_KERNEL_NAME = "Kernel_Source_Code"
+# Must match the padding text in long_kernel_source_workload.py.
+LONG_KERNEL_SOURCE_PADDING = "Padding that makes this kernel source longer than 64 KiB."
+
+
+@pytest.mark.timeout(600)
+def test_kernel_from_long_source_string(tmp_path):
+    """
+    Run a kernel created from a source string longer than 64 KiB under Tracy
+    capture. The program's Tracy zone must show the kernel's name, not its
+    source text.
+    """
+    assert CAPTURE_TOOL.exists(), f"Tracy capture tool not found: {CAPTURE_TOOL}"
+    assert CSVEXPORT_TOOL.exists(), f"Tracy csvexport tool not found: {CSVEXPORT_TOOL}"
+    assert LONG_KERNEL_SOURCE_WORKLOAD.exists(), f"Workload script not found: {LONG_KERNEL_SOURCE_WORKLOAD}"
+
+    tracy_file = tmp_path / "trace.tracy"
+    zones_csv = tmp_path / "zones.csv"
+    workload_log = tmp_path / "workload_output.log"
+
+    rc, stdout = _run_under_tracy(LONG_KERNEL_SOURCE_WORKLOAD, tracy_file, log_path=workload_log, timeout_s=300)
+    print(f"\n--- Workload output (tail) ---\n{stdout[-4000:]}\n--- End workload output ---")
+    if rc == 5:
+        pytest.skip("Real-time profiler not active on this dispatch config (workload exit code 5)")
+    assert rc == 0, f"Workload failed (rc={rc})"
+    assert tracy_file.exists(), f"Tracy trace file not generated: {tracy_file}"
+
+    _export_zones_unwrapped(tracy_file, zones_csv)
+    _save_artifacts(
+        "test_kernel_from_long_source_string",
+        **{
+            "trace.tracy": tracy_file,
+            "zones.csv": zones_csv,
+            "workload_output.log": workload_log,
+        },
+    )
+
+    zones_text = zones_csv.read_text(errors="replace")
+    assert LONG_KERNEL_SOURCE_PADDING not in zones_text, "The kernel's source text appears in the Tracy capture"
+
+    program_zones = [
+        row
+        for row in csv.DictReader(zones_text.splitlines(), delimiter=";")
+        if (row.get("name") or "").startswith("Program_") and row.get("src_file") == SOURCE_STRING_KERNEL_NAME
+    ]
+    assert program_zones, f"No Program_ zone has src_file '{SOURCE_STRING_KERNEL_NAME}' in the Tracy capture"
+    print(f"\n{len(program_zones)} Program_ zone(s) have src_file '{SOURCE_STRING_KERNEL_NAME}'.")
