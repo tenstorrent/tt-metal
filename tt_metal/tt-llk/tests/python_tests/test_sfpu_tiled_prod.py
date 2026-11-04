@@ -1,38 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bit-exact regression for Wormhole's ``calculate_tiled_prod`` (metal ``llk_sfpu``).
-
-The kernel keeps one running fp32 product per SFPU lane through the 32 elements the lane sees in
-faces 0-3 and stores every partial product in place. It records a two-element body in the replay
-buffer and replays it, and seeds the product with 1.0 so that the first element still goes through
-an SFPMUL. The kernel runs on two tiles, called back to back, and the check is word for word
-against a host model of the same chain over both tiles and over a guard tile that follows them in
-Dest and must come back unchanged:
-
-- a replay window or replay count that does not match the body sfpi emits stores the wrong
-  products, or none, in part of a tile, or stores past it into the next tile;
-- sfpi records repeated instruction sequences into the replay buffer on its own; a recording of
-  its own that spans the kernel's ``lltt::record`` (back-to-back calls give it the repetition)
-  nests one recording in another and hangs or corrupts the second tile;
-- dropping the first SFPMUL (sfpi folds a literal ``1.0f * v`` to ``v``) stores a -0.0 first
-  element as -0.0 instead of +0, which only the Float32 cells can see: the bf16 unpack hands the
-  SFPU +0 for -0.0;
-- NaN, infinity, denormal and over/underflowing products follow Wormhole's SFPMUL, modelled from
-  ``fma_model_wh`` in tt-isa-documentation (Miscellaneous/FMA/fma.c).
-
-The shared ``UnarySFPUGolden._tiled_prod`` is not used: it compares through tilize/untilize and
-fp32 floats, which cannot express NaN payloads.
-
-Wormhole only. Blackhole's kernel is a separate sfpi loop with a different SFPMUL (canonical NaN);
-Quasar has its own implementation, covered by the fuser YAMLs.
+"""Bit-exact check of Wormhole's ``calculate_tiled_prod`` on two back-to-back tiles plus an untouched
+guard tile, word for word against a host model of WH SFPMUL (``fma_model_wh``).
 """
 
 import struct
 
 import pytest
 import torch
-from conftest import skip_for_blackhole, skip_for_quasar
+from conftest import wormhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import ApproximationMode, DestAccumulation
@@ -40,7 +17,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import APPROX_MODE, generate_input_dim
 
-pytestmark = [skip_for_blackhole, skip_for_quasar]
+pytestmark = [wormhole_only]
 
 ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 FACES = 4
@@ -66,11 +43,8 @@ SIGNED_ZERO_FIRST_LANES = range(SFPU_LANE_COLS)
 
 
 def _lane_elements() -> list[list[int]]:
-    """Face-order index of every element of each SFPU lane, in the order the kernel visits them.
-
-    Lane (r, c) reads row r of each four-row group, column 2c on even steps and 2c + 1 on odd
-    steps; a step advances two Dest rows, so two steps make one four-row group.
-    """
+    """Face-order index of each SFPU lane's 32 elements, in kernel order: row r of each four-row
+    group, column 2c on even steps and 2c + 1 on odd steps."""
     lanes = []
     for lane_row in range(SFPU_LANE_ROWS):
         for lane_col in range(SFPU_LANE_COLS):
@@ -88,11 +62,8 @@ LANE_ELEMENTS = _lane_elements()
 
 
 def _sfpmul_wh(x: int, y: int) -> int:
-    """fp32 bits of Wormhole's SFPMUL x * y, i.e. fma_model_wh(x, y, +0.0).
-
-    Denormal operands and results flush to +0, a zero product is +0 (the +0 addend), and a NaN
-    result is ``product_sign | 0x7f800001`` with product mantissa bits OR-ed in when they do not
-    carry out.
+    """fp32 bits of Wormhole's SFPMUL x * y, i.e. ``fma_model_wh(x, y, +0.0)``: denormals flush to
+    +0, and a NaN result keeps the product sign (``0x7f800001`` | carried mantissa bits).
     """
 
     def unpack(v):
