@@ -539,6 +539,7 @@ class _BankStreamOp:
         defines=(),
         reader_common=None,
         compute_defines=(),
+        compute_rt=None,
     ) -> list:
         """The three kernel descriptors of one streaming program on this placement's cores. ``defines``: the E1
         preprocessor variants of the data-movement kernels (``("ROUTING_FOLD", "1")`` ...); empty = today's kernels
@@ -572,7 +573,7 @@ class _BankStreamOp:
                 kernel_source=str(KERNEL_DIR / f"compute_{name}.cpp"),
                 core_ranges=self.cores,
                 compile_time_args=compute_ct,
-                runtime_args=[],
+                runtime_args=compute_rt if compute_rt is not None else [],
                 config=ttnn.ComputeConfigDescriptor(
                     math_fidelity=fidelity, fp32_dest_acc_en=True, math_approx_mode=False
                 ),
@@ -673,8 +674,10 @@ class ExpertGateUpStream(_BankStreamOp):
         scan_words: bool = False,
         exclude: set[tuple[int, int]] | None = None,
         regions_src: bool = False,
+        split_k: bool = False,
     ):
         super().__init__(device, groups, exclude=exclude)
+        self.split_k = bool(split_k)  # the K-split stream (``_descriptors_splitk``): every core on every expert
         self.E, self.K, self.I = E, K, I
         self.kt = K // TILE
         self.i_tiles = I // TILE
@@ -695,10 +698,121 @@ class ExpertGateUpStream(_BankStreamOp):
             self.page_bytes = _packet_bytes(self.kt, self.w_tile)
         self.routing_fold, self.scan_words = bool(routing_fold), bool(scan_words)
 
+    SPLITK_SEM0 = 0  # the split-K owners' arrival counters: two slots (ids 0, 1) on the gate|up cores
+    SPLITK_CB = (6, 7)  # the partial-tile CB and the owners' receive CB (both fp32)
+
+    def extra_semaphores(self) -> list:
+        """The program semaphores this op needs besides the fused arrival counters: the split-K slots."""
+        if not self.split_k:
+            return []
+        return [ttnn.SemaphoreDescriptor(self.SPLITK_SEM0 + i, ttnn.CoreType.WORKER, self.cores, 0) for i in range(2)]
+
+    def splitk_slices(self) -> list[tuple[int, int]]:
+        """Per bank rank r: (k0, ks) K tiles of its slice (the first ``kt % groups`` ranks take one more)."""
+        base, rem = divmod(self.kt, self.groups)
+        out, k0 = [], 0
+        for r in range(self.groups):
+            ks = base + (1 if r < rem else 0)
+            out.append((k0, ks))
+            k0 += ks
+        return out
+
+    def _descriptors_splitk(self, x, routing, w13, act, base, cb, fused_rt):
+        """The split-K program (``kernels/*_gate_up_splitk.cpp``): the bank's cores share every active expert's
+        column pair by K, the partials meet on the expert's owner (rank i % groups). Not bit-identical to the plain
+        stream (the fp32 accumulation order)."""
+        cb_x, cb_w, cb_r0, cb_r1, cb_d, cb_h, cb_out = cb
+        cb_part, cb_recv = self.SPLITK_CB
+        assert (base is not None) == self.routing_fold, "routing_fold takes the chip's base page"
+        assert self.ppb == 1, "split-K streams one column pair per bank"
+        src = _regions_source(w13, self.regions_src, self.E, self.K, self.I)
+        w_addr = 0 if src is not None else w13.buffer_address()
+        e_tiles = -(-self.E // TILE)
+        r_pages = fold_r_tiles(self.E) + 1 if self.routing_fold else e_tiles
+        G = self.groups
+        ks_max = -(-self.kt // G)
+        fp32_tile = 4096
+        cbs = [
+            self._cb(cb_x, ttnn.bfloat16, BF16_TILE_BYTES, ks_max),
+            self._cb(cb_w, self.w_dtype, self.w_tile, 3 * ks_max),
+            self._cb(cb_r0, ttnn.bfloat16, BF16_TILE_BYTES, r_pages),
+            self._cb(cb_r1, ttnn.bfloat16, BF16_TILE_BYTES, r_pages),
+            self._cb(cb_d, ttnn.bfloat16, BF16_TILE_BYTES, 2),
+            self._cb(cb_h, ttnn.bfloat16, BF16_TILE_BYTES, 2),
+            self._cb(cb_out, ttnn.bfloat16, BF16_TILE_BYTES, 2),
+            self._cb(cb_part, ttnn.float32, fp32_tile, 4),
+            self._cb(cb_recv, ttnn.float32, fp32_tile, 2 * 2 * G),
+        ]
+        base_rt = [base.buffer_address()] if self.routing_fold else []
+        tail = list(fused_rt or [])
+        slices = self.splitk_slices()
+        bank_xy: dict[int, dict[int, int]] = {}
+        for core, bank, r, vc in self.assignments:
+            n = self.device.worker_core_from_logical_core(core)
+            bank_xy.setdefault(bank, {})[r] = (int(n.x) << 16) | int(n.y)
+        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for core, bank, r, vc in self.assignments:
+            k0, ks = slices[r]
+            xy = [bank_xy[bank][j] for j in range(G)]
+            reader_rt[core.x][core.y] = [w_addr, routing.buffer_address(), bank, vc, r] + base_rt + [k0, ks]
+            writer_rt[core.x][core.y] = (
+                [x.buffer_address(), routing.buffer_address(), act.buffer_address(), bank, r]
+                + base_rt
+                + [k0, ks]
+                + xy
+                + tail
+            )
+            compute_rt[core.x][core.y] = [r, ks]
+        reader_ct = [
+            cb_w,
+            cb_r0,
+            self.kt,
+            self.E,
+            TILE,
+            self.groups,
+            self.expert_stride,
+            self.w_tile,
+            self.page_bytes,
+            self.ppb,
+        ]
+        reader_ct += ttnn.TensorAccessorArgs(routing).get_compile_time_args()
+        writer_ct = [cb_x, cb_r1, cb_d, cb_out, self.kt, self.E, TILE, self.groups, self.i_tiles, self.ppb]
+        for t in (x, routing, act):
+            writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        if self.routing_fold:
+            reader_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
+            writer_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
+        compute_ct = [cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb, self.groups]
+        sk = [
+            ("SPLITK_KS_MAX", str(ks_max)),
+            ("SPLITK_CB_PART", str(cb_part)),
+            ("SPLITK_CB_RECV", str(cb_recv)),
+            ("SPLITK_SEM0", str(self.SPLITK_SEM0)),
+        ]
+        defines = _e1_defines(self.routing_fold, self.scan_words, "FUSED_SIGNAL" if fused_rt is not None else None)
+        defines = list(defines) + sk
+        if src is not None:
+            defines.append(REGIONS_DEFINE)
+        kernels = self._kernels(
+            "gate_up_splitk",
+            reader_ct,
+            reader_rt,
+            writer_ct,
+            writer_rt,
+            compute_ct,
+            defines=defines,
+            reader_common=src.gate_up_addrs if src is not None else None,
+            compute_defines=sk,
+            compute_rt=compute_rt,
+        )
+        return cbs, kernels
+
     def descriptors(self, x, routing, w13, act, base=None, cb=(0, 1, 2, 3, 4, 5, 16), fused_rt=None):
         """(cbs, kernels) of the gate|up program. ``cb``: the CB indices (x, w, r0, r1, d, h, out); ``fused_rt``:
         the FUSED_SIGNAL runtime tail of the writer (``ExpertStreamFused``). ``w13``: the stacked tensor, or the
         ``RegionsSource`` under ``regions_src``."""
+        if self.split_k:
+            return self._descriptors_splitk(x, routing, w13, act, base, cb, fused_rt)
         cb_x, cb_w, cb_r0, cb_r1, cb_d, cb_h, cb_out = cb
         assert (base is not None) == self.routing_fold, "routing_fold takes the chip's base page"
         src = _regions_source(w13, self.regions_src, self.E, self.K, self.I)
@@ -764,7 +878,7 @@ class ExpertGateUpStream(_BankStreamOp):
 
     def __call__(self, x, routing, w13, act, base=None):
         cbs, kernels = self.descriptors(x, routing, w13, act, base=base)
-        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=self.extra_semaphores(), cbs=cbs)
         ttnn.generic_op(self.io(x, routing, w13, act, base), program)
         return act
 
@@ -920,6 +1034,7 @@ class ExpertStreamFused:
         routing_fold: bool = False,
         scan_words: bool = False,
         regions_src: bool = False,
+        split_k: bool = False,
     ):
         grid = device.compute_with_storage_grid_size()
         banks = device.dram_grid_size().x
@@ -947,6 +1062,7 @@ class ExpertStreamFused:
             scan_words=scan_words,
             exclude=self.down.core_set,
             regions_src=regions_src,
+            split_k=split_k,
         )
         assert not (self.gate_up.core_set & self.down.core_set), "fused placement: the two kernel sets overlap"
         self.E, self.K, self.I, self.H = E, K, I, H
@@ -978,7 +1094,7 @@ class ExpertStreamFused:
         sems = [
             ttnn.SemaphoreDescriptor(self.SEM_BASE + i, ttnn.CoreType.WORKER, self.down.cores, 0)
             for i in range(self.n_sems)
-        ]
+        ] + self.gate_up.extra_semaphores()
         program = ttnn.ProgramDescriptor(kernels=gu_kernels + dn_kernels, semaphores=sems, cbs=gu_cbs + dn_cbs)
         if isinstance(w13, RegionsSource):
             weights = w13.tensors()  # w2 is the same source
@@ -1013,6 +1129,7 @@ class ExpertStream:
         fused_groups: int | None = None,
         fused_down_readers: int | None = None,
         regions_src: bool = False,
+        split_k: bool = False,
     ):
         self.fused = bool(fused)
         self.routing_fold = bool(routing_fold)
@@ -1030,6 +1147,7 @@ class ExpertStream:
                 routing_fold=routing_fold,
                 scan_words=scan_words,
                 regions_src=regions_src,
+                split_k=split_k,
             )
             self.gate_up, self.down = self.fused_op.gate_up, self.fused_op.down
         else:

@@ -1240,6 +1240,7 @@ class TtRoutedExperts(LightweightModule):
             fused=self.stream_fused,
             fused_groups=self._fused_groups(down_readers),
             fused_down_readers=down_readers,
+            split_k=os.environ.get("GLM53_STREAM_SPLITK", "0") == "1",  # the K-split gate|up stream (fused op)
         )
 
     def _fused_groups(self, down_readers):

@@ -115,9 +115,20 @@ def test_moe_persistent(mesh_device, weights):
     knobs = e1_stream_knobs(os.environ)
     assert knobs["fused"] and knobs["routing_fold"], knobs
     groups = persistent_fused_groups(device, E_LOC, I, H)
+    split_k = os.environ.get("GLM53_STREAM_SPLITK", "0") == "1"
     op = ExpertStream(
-        device, E_LOC, K, I, H, fused=True, fused_groups=groups, routing_fold=True, scan_words=knobs["scan_words"]
+        device,
+        E_LOC,
+        K,
+        I,
+        H,
+        fused=True,
+        fused_groups=groups,
+        routing_fold=True,
+        scan_words=knobs["scan_words"],
+        split_k=split_k,
     )
+    logger.info(f"expert op: {groups} groups, split_k={split_k}")
     base = mesh.upload(fold_base_host(COLS, E_LOC), ttnn.uint16, cols=1, layout=ttnn.ROW_MAJOR_LAYOUT)
     x_host, r_host = _x(ROWS, 1), _routing(ROWS, 2)
     xd, rd = mesh.upload(x_host, ttnn.bfloat16, rows=0), mesh.upload(r_host, ttnn.bfloat16, rows=0)

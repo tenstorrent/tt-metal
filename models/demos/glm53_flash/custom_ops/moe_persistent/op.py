@@ -368,7 +368,7 @@ class MoePersistent:
         )
         sems = [
             ttnn.SemaphoreDescriptor(ex.SEM_BASE + i, ttnn.CoreType.WORKER, ex.down.cores, 0) for i in range(ex.n_sems)
-        ]
+        ] + ex.gate_up.extra_semaphores()
         return gu_cbs + dn_cbs, gu_kernels + dn_kernels, sems
 
     def __call__(self, x, routing, w13, w2, act, out, base, xg, wg, comb_out):
