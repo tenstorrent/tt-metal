@@ -606,16 +606,27 @@ def test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program(de
     )
 
 
+@pytest.mark.parametrize(
+    ("math_fidelity", "packer_l1_acc", "message"),
+    [
+        pytest.param(ttnn.MathFidelity.HiFi4, True, "packer_l1_acc=true is unsupported", id="packer-l1-acc"),
+        pytest.param(ttnn.MathFidelity.HiFi3, False, "math_fidelity must be HiFi4", id="hifi3"),
+    ],
+)
 def test_prepare_chunk_recurrence_rejects_unsupported_compute_config(
-    device: ttnn.Device, expect_error: Callable
+    device: ttnn.Device,
+    expect_error: Callable,
+    math_fidelity: ttnn.MathFidelity,
+    packer_l1_acc: bool,
+    message: str,
 ) -> None:
     case = _UNIT_TEST_CASE
     inputs = _device_inputs(_case_host_inputs(case, seed=819), device)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        packer_l1_acc=True,
+        math_fidelity=math_fidelity,
+        packer_l1_acc=packer_l1_acc,
     )
-    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+    with expect_error(RuntimeError, message):
         _run(inputs, case.num_heads, compute_kernel_config=unsupported_config)
 
 
