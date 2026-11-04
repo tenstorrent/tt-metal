@@ -5182,5 +5182,5 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   a new golden); `PYTHONPATH=$PWD python /scratch/dnijemcevic/fix19/predict.py`; gate `gate FIX.19 --check`.
 
 ## P.26 perf (8x4, 2026-11-01): WINDOW_KV_FORMAT=bf16_tiles; contract err_*_wkv_* diagnostics
-- Detail: known_issues_detail.md "P.26 WINDOW_KV_BF16" (this file is at the 500 KB hook limit, DS41-194).
-## FIX.20/P.27-31: known_issues_detail.md
+- Detail: known_issues_detail.md "P.26 WINDOW_KV_BF16" (file at the 500 KB limit, DS41-194).
+## FIX.20-22/P.27-31: known_issues_detail.md
