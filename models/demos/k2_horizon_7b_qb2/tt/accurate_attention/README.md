@@ -1,8 +1,25 @@
-This model-local binding reuses the installed SDPA descriptor, paged reader,
-causal mask, and writer. It changes only accumulator storage and arithmetic in
-a generated private compute kernel. No TTNN or Metal source is modified.
+Accurate attention for the long-context paths.
 
-Build once during model setup, before measurements or trace capture:
+Prefill (and the chunked decode fallback) run TTNN's paged chunked SDPA with the ACCURATE precision recipe
+(`precision=ttnn.SDPAPrecision.ACCURATE`): HiFi4 QK and PV, FP32 scores, row maxima, sums and output
+recurrence, an accurate FP32 correction exp, and one final conversion to BF16
+(tech_reports/FlashAttention/SDPAPrecisionRecipes.md).
+
+```python
+from models.demos.k2_horizon_7b_qb2.tt.accurate_attention import accurate_attention
+
+output = accurate_attention(
+    q, k_cache, v_cache, page_table,
+    chunk_start_idx=start,  # or chunk_start_idx_tensor=offset (device scalar, trace-safe)
+    q_chunk_size=64,
+    k_chunk_size=1024,      # 0 / 0 leaves the blocking to the op
+    grid=(11, 10),
+)
+```
+
+Decode uses a model-local binding (below) that reuses the installed SDPA decode descriptor, reader, writer and
+work split, and changes only accumulator storage and arithmetic in a generated private compute kernel. No TTNN or
+Metal source is modified. Build it once during model setup, before measurements or trace capture:
 
 ```bash
 python -m models.demos.k2_horizon_7b_qb2.tt.accurate_attention.build
@@ -14,35 +31,6 @@ Generated kernel sources and the extension stay in `.build/`. Exact source
 substitutions fail if the upstream call sites change. Build provenance records
 source/library SHA256 values and compiler arguments; loading rejects stale
 artifacts.
-
-```python
-from models.demos.k2_horizon_7b_qb2.tt.accurate_attention import accurate_attention
-
-output = accurate_attention(
-    q, k_cache, v_cache, page_table,
-    chunk_start_idx_tensor=offset,
-    q_chunk_size=32,
-    k_chunk_size=128,
-)
-```
-
-Either a scalar `chunk_start_idx` or a device `chunk_start_idx_tensor` is required.
-The latter retains stock SDPA's device-read offset and replay behavior. Scalar
-offsets participate in the program cache key. Input and output tensor contracts
-and validation come from the production SDPA operation.
-
-The recurrence keeps numerator and denominator in FP32. Aliases of their
-circular buffers enable `UnpackToDestFp32`; SFPU multiply/add therefore avoids
-TF32 source-register truncation between key chunks. The alias read pointers
-follow the production CBs, as in TTNN's matmul partial-reload implementation.
-The final output is converted to BF16 once. Maxima and correction factors retain
-the production BF16 format, and the final denominator row reduction and
-reciprocal retain two isolated TF32 reloads. These bounded final conversions do
-not repeat with context length.
-
-`fp32_output_accumulator=False` is an isolated diagnostic switch: denominator
-arithmetic stays repaired while numerator storage remains BF16. Production
-callers should use the default `True`.
 
 ## Accurate flash decode
 
@@ -62,5 +50,4 @@ The generated kernel `.build/<fingerprint>/sdpa_flash_decode.cpp` comes from the
 model uses it beyond the stock decode bound. Evidence: `tests/check_accurate_flash_decode.py` and
 `tests/check_accurate_prefill_attention.py` (relative L2 against an FP64 oracle).
 
-`accurate_attention(..., grid=(x, y), math_fidelity=...)` selects the worker grid and fidelity for single-offset
-calls. Per-request offsets keep the pinned 8x8 grid.
+`accurate_attention(..., grid=(x, y))` selects the worker grid of the recipe call.

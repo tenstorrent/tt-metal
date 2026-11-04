@@ -79,7 +79,8 @@ def main():
                 qt, kt, vt, pt, chunk_start_idx=start, compute_kernel_config=compute["HiFi2"], program_config=cfg
             )
 
-        def acc(grid, q_chunk, k_chunk, fidelity="HiFi4"):
+        def acc(grid, q_chunk, k_chunk):
+            # ACCURATE precision recipe; zero chunk sizes leave the blocking to the op.
             return lambda: accurate_attention(
                 qt,
                 kt,
@@ -89,7 +90,6 @@ def main():
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 grid=grid,
-                math_fidelity=fidelity,
             )
 
         fns = {
@@ -105,12 +105,10 @@ def main():
             "acc_11x10_k1024": acc((11, 10), 128, 1024),
             "acc_11x10_q64_k512": acc((11, 10), 64, 512),
             "acc_11x10_q64_k1024": acc((11, 10), 64, 1024),
-            "acc_11x10_q64_k1024_hifi2": acc((11, 10), 64, 1024, "HiFi2"),
-            "acc_11x10_q64_k1024_hifi3": acc((11, 10), 64, 1024, "HiFi3"),
-            "acc_11x10_q64_k1024_lofi": acc((11, 10), 64, 1024, "LoFi"),
             "acc_11x10_q64_k256": acc((11, 10), 64, 256),
             "acc_11x10_q32_k512": acc((11, 10), 32, 512),
             "acc_11x10_q32_k1024": acc((11, 10), 32, 1024),
+            "acc_11x10_auto": acc((11, 10), 0, 0),
         }
         for path in a.paths:
             fn = fns[path]
