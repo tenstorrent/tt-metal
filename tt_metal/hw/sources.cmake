@@ -282,6 +282,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/scoped_lock_cache_ops.h
     inc/internal/template_string.h
     inc/internal/tensix_functions.h
+    inc/internal/token_with_llk_metadata.h
     inc/internal/vptr_uint.h
     inc/internal/dataflow/dataflow_api_addrgen.h
     inc/internal/dataflow/dataflow_api_common.h
