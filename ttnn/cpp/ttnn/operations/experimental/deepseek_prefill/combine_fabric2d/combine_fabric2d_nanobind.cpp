@@ -32,8 +32,7 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
             expert_offsets        where each ORIGIN chip's run starts inside each expert's region.
                                   Must be REPLICATED along the dispatch-group axis, since every chip
                                   needs every origin chip's boundaries for the experts it hosts.
-            fwd_vc_pages          pages one forwarding channel holds, at least 4. A page count, not a
-                                  divisor: the old COMBINE_FWD_REDUCTION values (8, 16) do not carry over.
+            fwd_vc_pages          pages one forwarding channel holds, at least 4.
                                   No value can deadlock the ring -- the region is split by movement
                                   class -- so this trades DRAM against throughput and nothing else.
                                   Where that curve bends differs per model, so it comes from the model
@@ -61,13 +60,12 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("expert_token_counts"),
         nb::arg("expert_region_offsets"),
         nb::arg("expert_offsets"),
-        nb::kw_only(),
         nb::arg("experts_per_chip"),
         nb::arg("num_experts_per_tok"),
         nb::arg("seq_len_per_chip"),
         nb::arg("cluster_axis"),
         nb::arg("num_links"),
-        nb::arg("fwd_vc_pages") = 64,
+        nb::arg("fwd_vc_pages"),
         nb::arg("topology"),
         nb::arg("memory_config"));
 }
