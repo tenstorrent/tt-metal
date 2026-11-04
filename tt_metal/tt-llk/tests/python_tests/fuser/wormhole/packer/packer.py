@@ -11,6 +11,7 @@ from fuser.golden.pack.pack import pack_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
+from helpers.tile_shape import cpp_tensor_shape
 
 
 class Packer(BasePacker):
@@ -30,11 +31,9 @@ class Packer(BasePacker):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        face_r_dim = pack_node.output.tile_shape.face_r_dim
-        num_faces = pack_node.output.tile_shape.total_num_faces()
         return (
             f"    _llk_pack_init_<PackMode::Default, false /* zero_output */>(\n"
-            f"        {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
+            f"        {config.sentinel.pack_dst_format}, {cpp_tensor_shape(pack_node.output.tile_shape)}\n"
             f"    );\n"
         )
 

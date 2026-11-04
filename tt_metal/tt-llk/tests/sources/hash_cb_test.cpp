@@ -19,6 +19,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -103,8 +104,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Raw INT32 bitcast pack (pack_src == pack_dst == Int32): the packer copies
     // DEST datums without a numeric (FP32) conversion.
     constexpr std::uint32_t int32_fmt = static_cast<std::uint32_t>(DataFormat::Int32);
+    // 32x32 INT32 tile: 2x2 grid of 16x16 faces. (The legacy call passed (FACE_R_DIM, 4), which on
+    // Blackhole bound tile_c_dim=4 — an unused value in PackMode::Default, but not expressible as a
+    // TensorShape; passing the intended full-tile geometry explicitly keeps the effect identical.)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
-        int32_fmt, int32_fmt, 32 * 32 * 4 /* INT32 tile size in bytes */, FACE_R_DIM, 4 /* num_faces */);
+        int32_fmt, int32_fmt, 32 * 32 * 4 /* INT32 tile size in bytes */, ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, 2, 2));
     // The hw-configure above established the packer strides, so the wrapper skips re-programming them;
     // it still programs the X (datum) counter, which configure_pack does not touch.
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(int32_fmt, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
