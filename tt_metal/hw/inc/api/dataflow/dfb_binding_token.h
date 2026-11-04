@@ -163,15 +163,15 @@ constexpr uint32_t get_tile_num_faces(const DFBBindingToken<P, C>& token) {
     return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns whether the tile height is less than 32 elements.
+// Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
-constexpr bool get_partial_face(const DFBBindingToken<P, C>& token) {
+constexpr uint32_t get_partial_face(const DFBBindingToken<P, C>& token) {
     return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns whether the tile width is less than 32 elements.
+// Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
-constexpr bool get_narrow_tile(const DFBBindingToken<P, C>& token) {
+constexpr uint32_t get_narrow_tile(const DFBBindingToken<P, C>& token) {
     return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
