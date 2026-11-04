@@ -39,6 +39,7 @@ from models.demos.glm53_flash.tt.mesh import mesh_device_params
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
 B = int(os.environ.get("GLM53_MK_B", "4"))  # user slots = one 4-row chunk
 SEQ = int(os.environ.get("GLM53_MK_SEQ", "2048"))
+POS = int(os.environ.get("GLM53_MK_POS", "0"))  # decode position of every row (ISL: the DSA indexer scores 0..POS)
 N_REPLAY = int(os.environ.get("GLM53_MK_N", "20"))
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1264512"))
@@ -183,6 +184,11 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     kv = backend.allocate_kv_cache(max_batch=B, max_seq_len=SEQ)
     io = backend.allocate_decode_io(kv)
     logger.info(f"kv cache + decode io allocated in {time.perf_counter() - t0:.0f} s (max_seq_len {SEQ})")
+    assert POS + N_REPLAY + 4 < SEQ, (POS, SEQ)
+    # the physical page table (row b = blocks b * bps .. ; the sequence-sharded pool maps it to every chip's local
+    # table) and the rows' positions: the step decodes at POS over the (zero) cache of positions 0 .. POS - 1
+    backend.write(io.page_table, torch.arange(B * kv.blocks_per_seq, dtype=torch.int32).reshape(B, kv.blocks_per_seq))
+    backend.write(io.cur_pos, torch.full((B,), POS, dtype=torch.int32))
     t0 = time.perf_counter()
     backend.decode(io, kv, B)  # one eager step (compiles)
     ttnn.synchronize_device(mesh_device)
@@ -199,7 +205,8 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     ttnn.synchronize_device(mesh_device)
     step_us = (time.perf_counter() - t0) / N_REPLAY * 1e6
     logger.info(
-        f"MK_BACKEND_PROBE: mesh {MESH} layers {len(layers)} ({layers[0]}-{layers[-1]}) B {B} native_t {native}: traced decode step "
+        f"MK_BACKEND_PROBE: mesh {MESH} layers {len(layers)} ({layers[0]}-{layers[-1]}) B {B} native_t {native} pos {POS} "
+        f"dsa_shard {os.environ.get('GLM53_DSA_SHARD', '0')}: traced decode step "
         f"{step_us:.1f} us = {step_us / len(layers):.1f} us per layer"
     )
     assert step_us > 0
