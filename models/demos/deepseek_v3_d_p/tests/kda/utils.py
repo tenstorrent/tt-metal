@@ -5,11 +5,14 @@
 from __future__ import annotations
 
 import json
+import statistics
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
@@ -39,6 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
 
@@ -58,6 +62,79 @@ def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     else:
         profile = fabric2d_device_params
     return profile(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, **overrides)
+
+
+def kda_mesh_param(shape: tuple[int, int], topology: str, case_id: str, device_params: dict | None = None):
+    """A (mesh_device, device_params) case on ``shape``, run only where the cluster has ``topology``."""
+    return pytest.param(
+        shape,
+        kda_device_params(shape) if device_params is None else device_params,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=topology),
+        id=case_id,
+    )
+
+
+def closed_form_tensor(*shape: int, offset: float = 0.0, scale: float = 1e-3) -> torch.Tensor:
+    """Cheap finite values with no generator, for determinism checks (accuracy is checked elsewhere)."""
+    count = 1
+    for size in shape:
+        count *= size
+    return ((torch.arange(count, dtype=torch.float32) % 251) * scale + offset).reshape(shape)
+
+
+class DeviceMismatch:
+    """Bit-exact comparisons kept on device: each reduces its elementwise mismatch to one value per chip, and
+    ``assert_none`` reads them back once at the end."""
+
+    def __init__(self, mesh_device: ttnn.MeshDevice):
+        self._tp_size = tuple(mesh_device.shape)[1]
+        self._markers: list[tuple[str, ttnn.Tensor, set[int] | None]] = []
+
+    def compare(self, reference: ttnn.Tensor, actual: ttnn.Tensor, name: str, ranks: set[int] | None = None):
+        """Record whether ``actual`` differs from ``reference`` anywhere; only SP ``ranks`` count, if given (mesh axis
+        0 is SP)."""
+        self._markers.append((name, ttnn.max(ttnn.ne(reference, actual, dtype=ttnn.bfloat16)), ranks))
+
+    def assert_none(self) -> None:
+        differing = []
+        for name, marker, ranks in self._markers:
+            for index, shard in enumerate(ttnn.get_device_tensors(ttnn.from_device(marker))):
+                rank = index // self._tp_size
+                if (ranks is None or rank in ranks) and ttnn.to_torch(shard).float().item() != 0:
+                    differing.append(f"{name} (device {index})")
+            ttnn.deallocate(marker)
+        self._markers.clear()
+        assert not differing, f"outputs differ between identical calls: {differing}"
+
+
+def median_device_us(mesh_device: ttnn.MeshDevice, call: Callable, kernel: str, samples: int) -> float:
+    """Median device time of ``kernel``'s program (its slowest chip, under the realtime profiler) over single calls,
+    each after a discarded first: ``call`` runs the op once, synchronizes and returns the tensors to free."""
+
+    def once() -> float:
+        outputs, programs = profile_realtime_program_merged(mesh_device, call)
+        for tensor in outputs:
+            ttnn.deallocate(tensor)
+        matched = [
+            program["duration_ns"]
+            for program in programs.values()
+            if any(kernel in source.replace("\\", "/") for source in program["kernel_sources"])
+        ]
+        assert len(matched) == 1, f"expected one program running {kernel}, got {len(matched)}"
+        return matched[0] / 1e3
+
+    once()  # exclude first-call jitter
+    measured = [once() for _ in range(samples)]
+    logger.info(f"{kernel}: median {statistics.median(measured):.1f} us device, samples {measured}")
+    return statistics.median(measured)
+
+
+def assert_device_time(median_us: float, reference_us: float, margin: float, label: str) -> None:
+    lower, upper = reference_us * (1 - margin), reference_us * (1 + margin)
+    assert lower <= median_us <= upper, (
+        f"{label}: {median_us:.1f} us outside [{lower:.1f}, {upper:.1f}] "
+        f"(reference {reference_us} us, margin +/- {margin * 100:.0f}%)"
+    )
 
 
 @dataclass(frozen=True)
