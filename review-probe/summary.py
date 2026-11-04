@@ -3,6 +3,8 @@
   summary.py modules '<json>'                 check the modules input, print "func|perf" per module
   summary.py rerun <log> <junit.xml> <module> print what to rerun after a functional run, one per line: its failing
                                               ids (the first RERUN_MAX), or the module when the run crashed, or nothing
+  summary.py patch <base64> <file>           decode a gzip+base64 patch input into <file> (the mutant side); prints its size,
+                                              exits 1 with the reason when it is empty, not base64+gzip, or over PATCH_MAX
   summary.py summary <out dir> <fail>         print summary.json from the files run.sh left in <out dir>
                                               (env ARCH, REPS, SIDES, MODULES, <SIDE>_SHA)
 
@@ -11,6 +13,10 @@ summary.json: {"arch", "runner", "reps", "fail", "sides": {side: {"sha", "setup_
    "func": {"summary", "rc", "failed_ids", "crashed", "rerun_truncated",
             "rerun": {"summary", "rc", "failed_ids", "crashed"} or null} or null,
    "perf_build": {"summary", "rc"} or null, "perf": [{"rep", "summary", "rc"}]}}}]}
+Optional extra sides "merged" (head's changes on current main) and "patch" (a mutant applied to head) have the
+same "func" shape and no perf ("perf_build": null, "perf": []); the patch side has no rerun. When asked for, the
+top level also has "merged" and "patch": "applied" or "not applied: <why>" (a side that did not apply has no entry
+in "sides"), and "patch_sha256" for an applied patch. Without those inputs the file is as before.
 "summary" is pytest's last summary line ("16 passed, 22 skipped in 3.28s"), "rc" its exit code, null when the
 step did not run. "failed_ids" lists the ids that failed or errored, null when the run left no junit xml.
 "crashed": no junit xml and an rc other than 0, 4 (usage) or 5 (nothing collected), i.e. pytest died or was
@@ -18,6 +24,9 @@ killed; a crashed run is rerun as the whole module, a failed one as its failing 
 first ones; "rerun_truncated" when there were more). The rerun's failed_ids still fail; a crash reproduces
 when the rerun crashed too.
 """
+import base64
+import binascii
+import gzip
 import json
 import os
 import re
@@ -26,6 +35,8 @@ import sys
 import xml.etree.ElementTree as ET
 
 RERUN_MAX = 50
+PATCH_MAX = 20000  # bytes of the decoded patch (the dispatcher refuses more first; this is the runner's own check)
+EXTRA_SIDES = ("merged", "patch")  # functional only
 NOT_A_CRASH = (0, 4, 5)  # pytest rc: passed, usage error, no tests collected
 MODULE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*\.py")
 SUMMARY = re.compile(r"^=*\s*((?:\d+ \w+|no tests ran)(?:, \d+ \w+)* in [0-9.]+s(?: \([0-9:]+\))?)\s*=*$")
@@ -72,6 +83,28 @@ def failed_ids(xml_path, module):
         if nid not in ids:
             ids.append(nid)
     return ids
+
+
+def decode_patch(text):
+    """The patch bytes of a gzip+base64 input; ValueError with the reason when unusable."""
+    try:
+        raw = gzip.decompress(base64.b64decode(text, validate=True))
+    except (binascii.Error, OSError, EOFError, ValueError) as e:
+        raise ValueError(f"the patch input is not gzip+base64: {e}") from None
+    if not raw.strip():
+        raise ValueError("the patch is empty")
+    if len(raw) > PATCH_MAX:
+        raise ValueError(f"patch too large ({len(raw)} bytes > {PATCH_MAX})")
+    return raw
+
+
+def notes(out):
+    """{key: value} of run.sh's notes.txt (key, tab, value per line)."""
+    try:
+        with open(f"{out}/notes.txt", errors="replace") as f:
+            return dict(line.rstrip("\n").split("\t", 1) for line in f if "\t" in line)
+    except OSError:
+        return {}
 
 
 def step(log):
@@ -123,13 +156,17 @@ def summary(out, fail):
            "sides": {s: {"sha": os.environ.get(f"{s.upper()}_SHA"),
                          "setup_rc": (step(f"{out}/setup_{s}.log") or {}).get("rc")} for s in sides},
            "modules": []}
+    note = notes(out)
+    for key in ("merged", "patch", "patch_sha256"):
+        if key in note:
+            doc[key] = note[key]
     for i, (func, perf) in enumerate(modules(os.environ["MODULES"]), 1):
         per_side = {}
         for s in sides:
             per_side[s] = {"func": func_result(f"{out}/m{i}_func_{s}", func) if func else None,
-                           "perf_build": step(f"{out}/m{i}_perf_build_{s}.log") if perf else None,
+                           "perf_build": step(f"{out}/m{i}_perf_build_{s}.log") if perf and s not in EXTRA_SIDES else None,
                            "perf": [{"rep": r, **(step(f"{out}/m{i}_perf_{s}_r{r}.log") or {"summary": None, "rc": None})}
-                                    for r in range(1, reps + 1)] if perf else []}
+                                    for r in range(1, reps + 1)] if perf and s not in EXTRA_SIDES else []}
         doc["modules"].append({"func": func, "perf": perf, "sides": per_side})
     return doc
 
@@ -143,6 +180,14 @@ def main(argv):
         sys.stdout.write("".join(f"{f}|{p}\n" for f, p in pairs))
     elif argv[:1] == ["rerun"] and len(argv) == 4:
         sys.stdout.write("".join(f"{i}\n" for i in rerun_args(*argv[1:])))
+    elif argv[:1] == ["patch"] and len(argv) == 3:
+        try:
+            raw = decode_patch(argv[1])
+        except ValueError as e:
+            sys.exit(str(e))
+        with open(argv[2], "wb") as f:
+            f.write(raw)
+        print(f"{len(raw)} bytes")
     elif argv[:1] == ["summary"] and len(argv) == 3:
         print(json.dumps(summary(argv[1], int(argv[2])), indent=1))
     else:
