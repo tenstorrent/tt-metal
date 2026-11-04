@@ -100,7 +100,10 @@ FORCE_INLINE void local_inline_write(uint64_t dst_noc_addr, uint32_t value) {
     local_write_init();
 }
 
-// Send types without a direct arm, out of line (rare: inline writes, multicast, sparse multicast).
+// Send types without a direct arm, out of line. An inline write is issued here, then the local-write command buffer's
+// preset is restored (an inline write to L1 reprograms that buffer). Any other type goes through
+// execute_chip_unicast_to_local_chip_impl, which delivers a sparse multicast write; the NoC multicast types never
+// reach local delivery (the impl asserts).
 __attribute__((noinline)) void deliver_other(
     tt_l1_ptr PACKET_HEADER_TYPE* header,
     uint16_t payload_size,
