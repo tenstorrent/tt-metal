@@ -11,10 +11,10 @@ cores so the dump has a multi-downstream core to report. They exist only to be i
 records a socket when it is created, not when it is used. Nothing reaches their receivers, so those stay
 at zero.
 
-The full fifo comes from the host sockets instead, seen from each side:
+The traffic comes from the host sockets instead, one in each direction:
 
-    H2D   The host writes fifo_size bytes and nothing on the chip reads them, so this receiver's
-          bytes_sent sits at fifo_size.
+    H2D   The host writes half a fifo and nothing on the chip reads it, so this receiver's
+          bytes_sent sits at fifo_size / 2.
 
     D2H   send_async_d2h sends more than the fifo holds and the host never reads, so the sender kernel
           fills the fifo, then wedges in socket_reserve_pages waiting for acks that never come
@@ -61,9 +61,8 @@ def main(fifo_size: int) -> int:
     h2d = ttnn.H2DSocket(mesh, on_chip(H2D_CORE), ttnn.BufferType.L1, fifo_size, ttnn.H2DMode.HOST_PUSH)
     d2h = ttnn.D2HSocket(mesh, on_chip(D2H_CORE), fifo_size)
 
-    # Full H2D fifo: it is empty, so this fills it without blocking.
     h2d.set_page_size(PAGE_SIZE)
-    h2d.write_tensor(torch.zeros(fifo_size, dtype=torch.uint8))
+    h2d.write_tensor(torch.zeros(fifo_size // 2, dtype=torch.uint8))
 
     # Full D2H fifo: two fifos' worth of pages, so the kernel wedges halfway. The only op, and it goes
     # last: the sockets write their config through the command queue, and nothing queued behind this

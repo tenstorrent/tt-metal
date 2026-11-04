@@ -960,13 +960,13 @@ class TestMeshSocketTriage:
             # Node is the core's own fabric node, so it agrees with the device the row came from.
             assert row.node == f"chip{device_of[id(row)]}/mesh0"
 
-        # The host sockets: the host filled the H2D fifo, and the D2H kernel wedged on its full fifo
+        # The host sockets: the host wrote half the H2D fifo, and the D2H kernel wedged on its full fifo
         # because the host never reads it.
         h2d = [row for row in rows if row.peer == "host" and row.role == "receiver"]
         d2h = [row for row in rows if row.peer == "host" and row.role == "sender"]
         assert len(h2d) == 1, f"Expected 1 H2D receiver row, got {len(h2d)}"
         assert len(d2h) == 1, f"Expected 1 D2H sender row, got {len(d2h)}"
-        assert h2d[0].sent_at_receiver == MESH_SOCKET_FIFO_SIZE, "Expected the host to have filled the H2D fifo"
+        assert h2d[0].sent_at_receiver == MESH_SOCKET_FIFO_SIZE // 2, "Expected the host to write half the H2D fifo"
         assert h2d[0].acked_at_receiver == 0, "Expected no acks, since nothing on the chip reads the H2D fifo"
         # A D2H downstream is a host address, so Downstream Addr reads N/A. wr_off comes from the kernel's
         # locals, which triage cannot read for this kernel, so it is not checked.
