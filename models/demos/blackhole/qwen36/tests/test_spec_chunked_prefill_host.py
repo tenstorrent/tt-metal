@@ -181,10 +181,8 @@ def test_non_final_without_cache_or_b1_raises(fake_ttnn, expect_error):
         MTPSpecEngine._prefill_row(e1, 0, tokens[:4096], _row(NB), None, start_pos=0, final=False)
 
 
-def test_non_final_unaligned_end_and_mm_assert(fake_ttnn, expect_error):
+def test_non_final_mm_assert(fake_ttnn, expect_error):
     tokens, e = _prompt(5000), _setup([], _cache())
-    with expect_error(AssertionError, "multiple of 128"):
-        MTPSpecEngine._prefill_row(e, SLOT, tokens[:4100], _row(NB), None, start_pos=0, final=False)
     with expect_error(AssertionError, "multimodal"):
         MTPSpecEngine._prefill_row(e, SLOT, tokens[:4096], _row(NB), None, start_pos=0, vision_tokens="V", final=False)
 
@@ -667,3 +665,93 @@ def test_exact_counters_and_summary_line_every_1000_prefills(fake_ttnn, fake_pt)
     assert len(line) == 1
     for key in ("pinned_saves=2", "skipped_saves=0", "evictions=0", "exact_resumes=2", "refusals=0"):
         assert key in line[0], line[0]
+
+
+# --------------------------------------------------------------------------- #
+# non-final chunk ends off the 128 grid (prod 2026-11-03: [54080, 70464) of a resumed request): Option A chunk, no assert
+# --------------------------------------------------------------------------- #
+TL64 = (128, 40, 768, 1920, 64, 1)  # + the 64-token (and 1-token) tails of the off-grid chunks
+
+
+def _warns(fn):
+    msgs = []
+    sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
+    try:
+        out = fn()
+    finally:
+        logger.remove(sink)
+    return out, msgs
+
+
+@pytest.mark.parametrize("mode", ["exact", "optA"])
+def test_unaligned_non_final_end_is_served_not_asserted(fake_ttnn, fake_pt, monkeypatch, mode):
+    monkeypatch.setenv("QWEN36_SPEC_CHUNK_EXACT_RESUME", "1" if mode == "exact" else "0")
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache, trace_lengths=TL64)
+    out, msgs = _warns(lambda: _run(e, tokens, 4160, 0, final=False))  # 4160 = 64 mod 128 (a 64-token vLLM block)
+    assert out.shape == (VOCAB,) and not bool(out.any())
+    assert cache._positions == [4096]  # floor(4157/128)*128: never the off-grid end itself
+    assert e._prompts == {} and e._fresh == {} and e._active == set()
+    assert SLOT not in e._chunk_prog()  # no Option B progress: the next chunk takes the normal resume path
+    assert not any(c[0] in ("slot_write", "capture_last_row") for c in calls)
+    assert fake_ttnn["to_torch"] == []
+    assert e.chunk_unaligned_ends == 1 and cache.stats.get("unaligned_ends") == 1
+    assert any("ends off the 128 grid" in m and "GDN snapshot at 4096" in m for m in msgs), msgs
+    # the whole chunk [0, 4160) was computed (vLLM counts its KV as done)
+    segs = _segments(calls)
+    assert segs[0][0] == 0 and max(a + n for a, n in segs) == 4160, segs
+
+
+@pytest.mark.parametrize("mode", ["exact", "optA"])
+def test_unaligned_chunk_then_next_chunks_resume_below_it(fake_ttnn, fake_pt, monkeypatch, mode):
+    """[0, 2048) aligned, [2048, 4160) off-grid (the prod shape), [4160, 8192) non-final, [8192, 9000) final."""
+    monkeypatch.setenv("QWEN36_SPEC_CHUNK_EXACT_RESUME", "1" if mode == "exact" else "0")
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache, trace_lengths=TL64)
+    _run(e, tokens, 2048, 0, final=False)
+    _run(e, tokens, 4160, 2048, final=False)
+    assert 4096 in cache._positions and 4160 not in cache._positions
+    calls.clear()
+    out = _run(e, tokens, 8192, 4160, final=False)
+    assert not bool(out.any())
+    segs = _segments(calls)
+    assert segs[0][0] == 4096, segs  # spec_resume_cap(4160) = 4096: restores the forced snapshot, recomputes [4096, 4160)
+    assert max(a + n for a, n in segs) == 8192, segs
+    assert getattr(e, "resume_fallbacks", 0) == 0
+    assert not any(c[0] == "warm_last" for c in calls)  # no exact resume across the off-grid end
+    out = _run(e, tokens, 9000, 8192, final=True)
+    assert bool(out.any()) and e._fresh == {SLOT: 9000} and e._active == {SLOT}
+    assert e.chunk_unaligned_ends == 1
+
+
+def test_unaligned_end_one_past_grid_snapshots_one_block_lower(fake_ttnn, fake_pt, monkeypatch):
+    monkeypatch.setenv("QWEN36_SPEC_CHUNK_EXACT_RESUME", "1")
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache, trace_lengths=TL64)
+    _run(e, tokens, 4097, 0, final=False)  # p <= Tp-3: 3968, not 4096
+    assert cache._positions == [3968]
+    calls.clear()
+    _run(e, tokens, 8192, 4097, final=False)
+    assert _segments(calls)[0][0] == 3968
+
+
+def test_unaligned_chunk_inside_one_block_saves_nothing_and_next_resumes_lower(fake_ttnn, fake_pt, monkeypatch):
+    monkeypatch.setenv("QWEN36_SPEC_CHUNK_EXACT_RESUME", "1")
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache, trace_lengths=TL64)
+    _run(e, tokens, 4096, 0, final=False)  # Option B: snapshot at 4096, progress 4096
+    out, msgs = _warns(lambda: _run(e, tokens, 4160, 4096, final=False))  # [4096, 4160): no grid point inside
+    assert not bool(out.any())
+    assert cache._positions == [4096]
+    assert any("no snapshot inside the chunk" in m for m in msgs), msgs
+    calls.clear()
+    _run(e, tokens, 9000, 4160, final=True)
+    assert _segments(calls)[0][0] == 4096 and e._fresh == {SLOT: 9000}
+
+
+def test_aligned_non_final_paths_untouched_by_the_guard(fake_ttnn, fake_pt):
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache, trace_lengths=TL64)
+    _run(e, tokens, 4096, 0, final=False)
+    _run(e, tokens, 8192, 4096, final=False)
+    assert getattr(e, "chunk_unaligned_ends", 0) == 0 and "unaligned_ends" not in cache.stats
