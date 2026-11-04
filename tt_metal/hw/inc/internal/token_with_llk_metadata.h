@@ -90,11 +90,15 @@ public:
         return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
     }
 
-    // Returns whether the tile height is less than 32 elements.
-    friend constexpr bool get_partial_face(const TokenWithLLKMetadata& token) { return get_tile_r_dim(token) < 32; }
+    // Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
+    friend constexpr uint32_t get_partial_face(const TokenWithLLKMetadata& token) {
+        return static_cast<uint32_t>(get_tile_r_dim(token) < 32);
+    }
 
-    // Returns whether the tile width is less than 32 elements.
-    friend constexpr bool get_narrow_tile(const TokenWithLLKMetadata& token) { return get_tile_c_dim(token) < 32; }
+    // Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
+    friend constexpr uint32_t get_narrow_tile(const TokenWithLLKMetadata& token) {
+        return static_cast<uint32_t>(get_tile_c_dim(token) < 32);
+    }
 
 protected:
     constexpr TokenWithLLKMetadata() noexcept = default;

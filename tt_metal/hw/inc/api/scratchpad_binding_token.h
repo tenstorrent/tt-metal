@@ -134,12 +134,12 @@ constexpr uint32_t get_tile_num_faces(const ScratchpadBindingToken& token) {
     return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns whether the tile height is less than 32 elements.
-constexpr bool get_partial_face(const ScratchpadBindingToken& token) {
+// Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
+constexpr uint32_t get_partial_face(const ScratchpadBindingToken& token) {
     return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns whether the tile width is less than 32 elements.
-constexpr bool get_narrow_tile(const ScratchpadBindingToken& token) {
+// Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
+constexpr uint32_t get_narrow_tile(const ScratchpadBindingToken& token) {
     return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
