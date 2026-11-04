@@ -44,7 +44,8 @@
 //   buffer_A (SrcB, in0/A): kt*2 faces of [M,16], face-column order along K, contiguous.
 //   buffer_B (SrcA, in1/B): kt*ct [32,32] or [32,16] tiles, k-major / c-minor (the order the
 //                           SrcA CFGSHIFTMASK walk reads them with read_transposed=false,
-//                           block_increment = inner_increment = tile_size).
+//                           block_increment = inner_increment = tile_size). With
+//                           CUSTOM_MM_TRANSPOSE each tile holds B^T instead ([32,32] or [16,32]).
 //
 // The single unpack call issues one MOP covering the whole kt walk; the single math call
 // loops kt internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own
@@ -77,6 +78,11 @@ static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly acro
 static_assert(CUSTOM_MM_LAYOUT <= static_cast<std::uint8_t>(ckernel::CustomMmDestLayout::Compact), "CUSTOM_MM_LAYOUT is not a CustomMmDestLayout");
 constexpr auto dest_layout = static_cast<ckernel::CustomMmDestLayout>(CUSTOM_MM_LAYOUT);
 constexpr bool split_acc   = ckernel::custom_mm_split_acc(dest_layout);
+
+// CUSTOM_MM_TRANSPOSE: each in1 tile holds B^T ([N, 32], or [16, 32] for a narrow tile), and the unpacker transposes
+// each face back. It only selects the init's face transpose and face order; the weight tiles are still walked
+// k-major, so read_transposed stays false.
+constexpr bool transpose = CUSTOM_MM_TRANSPOSE;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -116,8 +122,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // unpB_face_r_dim = in0 (SrcB) face rows in {1,2,4,8}; unpA_dst_format tunes the
-    // instruction sequence (post1 only for Bfp4_b). transpose=false.
-    _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM, params.num_faces_B);
+    // instruction sequence (post1 only for Bfp4_b).
+    _llk_unpack_AB_custom_mm_init_<transpose, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM, params.num_faces_B);
 
     // SrcA=buffer_B (B matrix, [32,32] or [32,16] tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
     // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
@@ -160,8 +166,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         math::_configure_preserve_zero_flag_state_();
     }
 
-    // transpose=false. operandB_face_r_dim = in0 M.
-    _llk_math_custom_mm_init_<false /* transpose */, dest_layout>(params.in0_face_r_dim, CT_DIM, params.num_faces_B);
+    // operandB_face_r_dim = in0 M.
+    _llk_math_custom_mm_init_<transpose, dest_layout>(params.in0_face_r_dim, CT_DIM, params.num_faces_B);
 
     LLK_ASSERT((custom_mm_fits_dest<dest_sync, dest_layout>(0 /* dst_index */, CT_DIM)), "custom_mm: CT_DIM output tiles overrun the DEST sync region");
 
