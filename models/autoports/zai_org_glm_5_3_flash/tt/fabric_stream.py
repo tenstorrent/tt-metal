@@ -138,14 +138,16 @@ def _sem_cores(s_) -> set:
     }
 
 
-def fabric_connect(me, peer, link: int, prog, core) -> list:
+def fabric_connect(me, peer, link: int, prog, core, base: int | None = None) -> list:
     """ttnn.setup_fabric_connection(me, peer, link, prog, core) with the connection's two worker words on semaphore ids
-    >= FAB_SEM_BASE of `core` (see FAB_SEM_BASE): the runtime args to append to the sender's list"""
+    >= FAB_SEM_BASE of `core` (see FAB_SEM_BASE): the runtime args to append to the sender's list. `base`: a lower
+    first id for a core that keeps no local words of its own (the fabric_ar lanes: 4 connections on the 8x4)"""
+    base = FAB_SEM_BASE if base is None else int(base)
     core = core if isinstance(core, ttnn.CoreCoord) else ttnn.CoreCoord(*core)
     xy = (int(core.x), int(core.y))
     sems = list(prog.semaphores)
     have = {int(s_.id) for s_ in sems if xy in _sem_cores(s_)}
-    pad = [i for i in range(FAB_SEM_BASE) if i not in have]
+    pad = [i for i in range(base) if i not in have]
     if pad:
         prog.semaphores = sems + [ttnn.SemaphoreDescriptor(id=i, core_ranges=_crs([xy]), initial_value=0) for i in pad]
     n0 = len(list(prog.semaphores))
@@ -153,8 +155,8 @@ def fabric_connect(me, peer, link: int, prog, core) -> list:
     if CONNECT_LOG is not None:
         CONNECT_LOG.append((xy, int(link), str(peer)))
     new = [int(s_.id) for s_ in list(prog.semaphores)[n0:]]
-    assert len(new) == 2 and min(new) >= FAB_SEM_BASE, (f"fabric connection words on core {xy} at semaphore ids {new}, "
-                                                          f"expected 2 ids >= FAB_SEM_BASE {FAB_SEM_BASE}")  # fmt: skip
+    assert len(new) == 2 and min(new) >= base, (f"fabric connection words on core {xy} at semaphore ids {new}, "
+                                                 f"expected 2 ids >= {base}")  # fmt: skip
     return fab
 
 

@@ -30,7 +30,9 @@ import os
 import torch
 
 import ttnn
-from models.autoports.zai_org_glm_5_3_flash.tt.fabric_stream import fabric_connect  # reserved fabric semaphore ids
+from models.autoports.zai_org_glm_5_3_flash.tt.fabric_stream import (  # reserved fabric semaphore ids, FAB_SEM_BASE
+    fabric_connect,
+)
 
 KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "fabric_ar")
 TB = 2048
@@ -339,12 +341,17 @@ class FabricPhase:
         up2, dn2 = self.n2 - 1 - c, c
         me = mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, c))
         nbrs = [((r + 1, c), up1), ((r - 1, c), dn1), ((r, c + 1), up2), ((r, c - 1), dn2)]
+        conns = [(nbr, rng) for nbr, rng in nbrs if rng]
+        # 16 semaphore ids per core, 2 per connection: a lane in the middle of an 8-chip axis (the 8x4 as one replica)
+        # has 4 (both ways on both axes), so its words start below FAB_SEM_BASE; the lane cores keep no local words
+        # (their kernels only inc the owners' / readers' semaphores)
+        base = min(FAB_SEM_BASE, 16 - 2 * len(conns))
         for h, lane in enumerate(self.lanes):
             core = ttnn.CoreCoord(*lane)
-            for (nr, nc), rng in nbrs:
-                if rng:
-                    fab = fabric_connect(me, mesh.get_fabric_node_id(ttnn.MeshCoordinate(nr, nc)), h, prog, core)
-                    prog.kernels[send_kernel_index].runtime_args[lane[0]][lane[1]].extend(fab)
+            for (nr, nc), rng in conns:
+                fab = fabric_connect(me, mesh.get_fabric_node_id(ttnn.MeshCoordinate(nr, nc)), h, prog, core,
+                                     base=base)  # fmt: skip
+                prog.kernels[send_kernel_index].runtime_args[lane[0]][lane[1]].extend(fab)
 
     def release(self):
         for t in self.io():
