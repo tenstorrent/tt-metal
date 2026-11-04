@@ -36,7 +36,6 @@ Tensor sum(
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
-    bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 sum runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false,
@@ -51,7 +50,6 @@ Tensor mean(
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
-    bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 mean runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false,
@@ -65,7 +63,6 @@ Tensor max(
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
-    bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 max runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false);
@@ -77,7 +74,6 @@ Tensor min(
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
-    bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 min runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false);
