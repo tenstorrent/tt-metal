@@ -5,10 +5,56 @@
 Branch A: paged prefill (chunk_page_table is not None) — no memory_config, no cur_pos_tensor.
 Branch C: concat prefill (else) — uses memory_config, past_key/past_value; returns new_key/new_value.
 """
+import contextlib
+
+import ttnn
+
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import gated_attention_forward_ttnn
 
 
-def prefill_forward(
+@contextlib.contextmanager
+def _q_proj_program_config(x, q_w):
+    """Prefill B=1, T=2048 only: give the Q(+gate) projection (5120x12288) the swept
+    1D mcast_in0 program config. The call lives in an off-limits file that passes no
+    program_config, so ttnn.linear is wrapped for the duration of this call and only
+    the call whose weight is this q_proj gets the config."""
+    shape = tuple(x.shape)
+    use = len(shape) == 3 and shape[0] == 1 and shape[1] == 2048 and tuple(q_w.shape)[-2:] == (5120, 12288)
+    if not use:
+        yield
+        return
+    orig_linear = ttnn.linear
+
+    def _linear(a, b, *args, **kwargs):
+        if b is q_w and kwargs.get("program_config") is None:
+            kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                in0_block_w=1,
+                out_subblock_h=4,
+                out_subblock_w=1,
+                out_block_h=64,
+                out_block_w=3,
+                per_core_M=64,
+                per_core_N=3,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        return orig_linear(a, b, *args, **kwargs)
+
+    ttnn.linear = _linear
+    try:
+        yield
+    finally:
+        ttnn.linear = orig_linear
+
+
+def prefill_forward(x, cos, sin, weights, config, device, ckc, *args, **kwargs):
+    with _q_proj_program_config(x, weights.q_proj):
+        return _prefill_forward_impl(x, cos, sin, weights, config, device, ckc, *args, **kwargs)
+
+
+def _prefill_forward_impl(
     x,
     cos,
     sin,
