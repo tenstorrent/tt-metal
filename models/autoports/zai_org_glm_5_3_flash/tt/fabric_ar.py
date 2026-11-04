@@ -107,7 +107,12 @@ class FabricPhase:
             return ttnn.from_torch(torch.zeros(1, 1, 64 * self.pt, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16,
                                    layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=mc, mesh_mapper=rep)  # fmt: skip
 
-        assert self.n1 in (1, 2), "mesh axis 0 = the on-board pair (1 or 2 chips)"
+        # mesh axis 0: the on-board pair in the reference's 2x4; on the Galaxy's 8x4 a row of 8 chips. The lane kernels
+        # sum N1 round-1 slots (an even count); "cb" mode places slot q at creation position q on every chip (this
+        # chip's own partial at its own index), so the address of a sender's own slot is its landing address on every
+        # axis-0 peer. "tensor" mode keeps the pair (one landing buffer).
+        assert self.n1 == 1 or self.n1 % 2 == 0, "round 1 adds slot pairs (an even axis-0 size)"
+        assert mode != "tensor" or self.n1 in (1, 2), "tensor mode: mesh axis 0 = the on-board pair"
         # L1 per lane core (B = 32: 128 KiB per buffer): own (the producers' partial) + round-1 landing (a 2-chip axis
         # has ONE peer, so one buffer at one address: the peer always writes there) + n2 round-2 landing slots (slot q =
         # sender position q, the same address on every receiver of a line multicast; a chip's own index slot is never
@@ -148,9 +153,11 @@ class FabricPhase:
         rounds (`self.alias`): SEND / OWN2 are ALIASES of this chip's own-index round-2 slot instead (one CB allocation
         with three indices, as "tensor" mode binds all three to land2[p2]; no peer writes the own index): 7 instead of
         9 x 128 KiB on the 2x4 mesh, which otherwise end above the layer's L1 tensors at B = 32."""
-        roles = [("own", CB_OWN)]
-        if self.n1 > 1:
-            roles.append(("land1", CB_L1 + (1 - r)))
+        if self.n1 > 1:  # round-1 slots in index order, this chip's own partial at its own index (same positions
+            # on every chip: slot q's base address is the same everywhere; a peer writes slot p1 = its own index)
+            roles = [("own", CB_OWN) if q == r else (f"land1_{q}", CB_L1 + q) for q in range(self.n1)]
+        else:
+            roles = [("own", CB_OWN)]
         roles += [(f"land2_{q}", CB_L2 + q) for q in range(self.n2 if self.n2 > 1 else 0)]
         roles.append(("res", CB_RES))
         if self.n1 > 1 and self.n2 > 1 and not self.alias:
@@ -194,8 +201,11 @@ class FabricPhase:
                 seen.add(tuple(int(w[lane, W_CB_ADDR + i]) for i in range(len(names))))
         if len(seen) != 1:
             raise RuntimeError(f"fabric lane CB addresses differ across chips / lanes: {seen}")
-        a = dict(zip(names, next(iter(seen))))
-        self.addr = dict(own=a["own"], res=a["res"], land1=[a["land1"]] if "land1" in a else [],
+        addrs = list(next(iter(seen)))
+        a = dict(zip(names, addrs))
+        # slot1[q] = the base address of creation position q = round-1 slot q on every chip (n1 > 1)
+        self.addr = dict(own=a["own"], res=a["res"], slot1=addrs[: self.n1] if self.n1 > 1 else [],
+                         land1=[addrs[q] for q in range(1, self.n1)] if self.n1 > 1 else [],
                          land2=[a[f"land2_{q}"] for q in range(self.n2)] if self.n2 > 1 else [])  # fmt: skip
         return a
 
@@ -246,7 +256,13 @@ class FabricPhase:
         sync = self.sync_lane.buffer_address()
         assert self.addr is not None, "cb mode: probe() first"
         own = self.addr["own"]
-        land1 = self.addr["land1"][0] if self.n1 > 1 else 0
+        # the round-1 destination on the axis-0 peers = slot p1 = (cb mode) the address of creation position p1, which
+        # is this chip's own slot; (tensor mode, a pair) the one landing buffer
+        land1 = (
+            (self.addr["slot1"][p1] if "slot1" in self.addr and self.addr["slot1"] else self.addr["land1"][0])
+            if self.n1 > 1
+            else 0
+        )
         land2 = self.addr["land2"][p2] if self.n2 > 1 else 0
         ct_send = [self.pt, self.pkt_tiles, self.n1, self.n2, CB_SEND, self.grp]
         ct_recv = [self.pt, self.pkt_tiles, self.n1, self.n2, CB_L1, CB_L2, CB_RES, self.grp, CB_OWN]
