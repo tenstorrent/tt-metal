@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <vector>
@@ -157,6 +158,23 @@ TEST_F(MeshDispatchFixture, GlobalSemaphoresWithExplicitQueue) {
         for (const auto& core : cores_vec) {
             EXPECT_EQ(read_value(core), 8u);
         }
+    }
+}
+
+// Runs in both fast and slow dispatch: a command queue id the device does not have is rejected even with slow
+// dispatch, where the queue would not be used for the write.
+TEST_F(MeshDispatchFixture, GlobalSemaphoresRejectOutOfRangeCqId) {
+    CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
+    for (const auto& mesh_device : devices_) {
+        const uint8_t out_of_range_cq_id = mesh_device->num_hw_cqs();
+        EXPECT_ANY_THROW(
+            tt::tt_metal::GlobalSemaphore(*mesh_device, cores, /*initial_value=*/1, BufferType::L1, out_of_range_cq_id));
+
+        auto global_semaphore = tt::tt_metal::GlobalSemaphore(*mesh_device, cores, /*initial_value=*/1);
+        EXPECT_ANY_THROW(global_semaphore.reset_semaphore_value(2, out_of_range_cq_id));
+
+        EXPECT_ANY_THROW(tt::tt_metal::experimental::CreateGlobalSemaphore(
+            *mesh_device, cores, /*initial_value=*/3, BufferType::L1, global_semaphore.address(), out_of_range_cq_id));
     }
 }
 

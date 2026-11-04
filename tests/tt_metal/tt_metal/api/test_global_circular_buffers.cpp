@@ -69,6 +69,18 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBufferWithExplicitQueue) {
     distributed::Synchronize(*mesh_device, std::nullopt);
 }
 
+// Runs in both fast and slow dispatch: a command queue id the device does not have is rejected in either mode.
+TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferRejectsOutOfRangeCqId) {
+    CoreRangeSet receivers(CoreRange({1, 1}, {1, 1}));
+    auto mesh_device = devices_[0];
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), receivers}};
+    const uint8_t out_of_range_cq_id = mesh_device->num_hw_cqs();
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::GlobalCircularBuffer(
+        *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1, out_of_range_cq_id));
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::CreateGlobalCircularBuffer(
+        *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1, out_of_range_cq_id));
+}
+
 TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
