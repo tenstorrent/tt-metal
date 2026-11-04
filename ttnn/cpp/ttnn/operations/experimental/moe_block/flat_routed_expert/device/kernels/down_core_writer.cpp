@@ -25,7 +25,7 @@
 //     let fast down cores stand in for a slow one); the coordinator zeroes them again at the end.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
+#include "flat_accessors.hpp"
 #include "expert_schedule.hpp"
 #include "combine_done.hpp"
 #ifdef SE_Y_RM
@@ -73,7 +73,7 @@ void kernel_main() {
 #else
     constexpr uint32_t out_page = 1088;
 #endif
-    const DramPages y = dram_pages(get_arg_val<uint32_t>(6), out_page);
+    const auto y = TensorAccessor(flat_acc::y, get_arg_val<uint32_t>(6), out_page);
     const uint32_t e2e_args = 10 + n_gu;
     // Dynamic counts (with SE_E2E): the active experts' sub-blocks; RT 10 + N_GU.. are the expert_schedule.hpp args (CT
     // 22 NUM_E), CB 7 this RISC's scratch; the compute gets them in CB 6. Output rows come from the experts' regions.

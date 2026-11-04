@@ -98,7 +98,7 @@ def _sentinel_prog(mesh, out, target, words, cycles, coord):
     k = ttnn.KernelDescriptor(
         kernel_source=KDIR + "sentinel.cpp",
         core_ranges=crs,
-        compile_time_args=[],
+        compile_time_args=list(ttnn.TensorAccessorArgs(out).get_compile_time_args()),
         runtime_args=rt,
         config=ttnn.WriterConfigDescriptor(),
     )

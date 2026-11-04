@@ -9,7 +9,6 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
 #include "combine_zero_gate.hpp"
 
 constexpr uint32_t cb_row = get_compile_time_arg_val(0);
@@ -32,6 +31,7 @@ constexpr uint32_t ALBASE = get_compile_time_arg_val(18);   // (101, or 103 when
 constexpr uint32_t LOC_OFF = get_compile_time_arg_val(19);  // the local ring (arena-relative)
 constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(20);
 constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(21);
+constexpr auto plan_args = TensorAccessorArgs<CMB_PLAN_CT>();  // (the device plan)
 constexpr uint32_t LASTPB = row_bytes;  // the row's 32 B trailer (one fabric packet a row)
 
 void kernel_main() {
@@ -69,7 +69,7 @@ void kernel_main() {
     uint32_t n_local = 0;
     {  // (the device plan: n_local and want[] of this accumulator)
         const uint32_t sc = (get_write_ptr(cb_tab) + 63) & ~63u;
-        const uint64_t plan_noc = dram_pages(plan, 4096).get_noc_addr(0);
+        const uint64_t plan_noc = TensorAccessor(plan_args, plan, 4096).get_noc_addr(0);
         noc_async_read(plan_noc + 64, sc, 64);                        // n_local[16]
         noc_async_read(plan_noc + (32 + me * 32) * 4, sc + 64, 128);  // want[me][32]
         noc_async_read_barrier();

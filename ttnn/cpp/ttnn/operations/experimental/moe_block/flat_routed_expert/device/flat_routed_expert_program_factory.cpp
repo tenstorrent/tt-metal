@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <unordered_map>
 
 namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
@@ -225,12 +226,24 @@ FlatProgramHandles add_flat_routed_expert_program(
             sv.patches.push_back({k, c, i, s, off});
         }
     };
+    // Every data-movement kernel's compile-time args end with the op's DRAM tensors' accessor args, from SE_ACC_CT on,
+    // in flat_accessors.hpp's order: x, y, counts, regions, expert ids, token index, the combine's y-row tables (the
+    // last two interleaved DRAM placeholders when this program has none).
+    std::vector<uint32_t> acc_ct;
+    for (const Tensor* tensor : {&t.x, &t.output, &t.counts, &t.regions, &t.global_expert_ids}) {
+        TensorAccessorArgs(*tensor->buffer()).append_to(acc_ct);
+    }
+    (t.token_index ? TensorAccessorArgs(*t.token_index->buffer()) : TensorAccessorArgs::create_dram_interleaved())
+        .append_to(acc_ct);
+    TensorAccessorArgs::create_dram_interleaved().append_to(acc_ct);
     auto dm = [&](const std::string& name,
                   const std::vector<CoreCoord>& cores,
                   DataMovementProcessor proc,
                   NOC noc,
-                  const std::vector<uint32_t>& ct,
-                  const Defines& defs) {
+                  std::vector<uint32_t> ct,
+                  Defines defs) {
+        defs["SE_ACC_CT"] = std::to_string(ct.size());
+        ct.insert(ct.end(), acc_ct.begin(), acc_ct.end());
         return CreateKernel(
             program,
             std::string(KDIR) + name,

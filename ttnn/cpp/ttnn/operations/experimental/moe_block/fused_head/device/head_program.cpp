@@ -1177,6 +1177,26 @@ private:
     std::vector<uint32_t> next_hop(uint32_t s, uint32_t d, uint32_t i) const;
     Args y_args(const SendKey& k, const CoreCoord& core);
     void routing_defines(KernelDescriptor& k) const;
+    // The routing kernels' DRAM tensors (ra_accessors.hpp): their accessor args after the kernel's own compile-time
+    // args, from RA_ACC_CT on - plan, counts, regions, token index, table, slots, forwarding slots, the padded chunk's
+    // start / end scalars (an interleaved DRAM placeholder for one this call has none of).
+    void routing_accessors(KernelDescriptor& k) const {
+        define(k, "RA_ACC_CT", iv(k.compile_time_args.size()));
+        for (HeadSrc s :
+             {SRC_PLAN,
+              SRC_COUNTS,
+              SRC_REGIONS,
+              SRC_TOKEN_INDEX,
+              SRC_TABLE,
+              SRC_SLOTS,
+              SRC_FSLOTS,
+              SRC_START,
+              SRC_END}) {
+            (bufs[s] ? tt::tt_metal::TensorAccessorArgs(*bufs[s])
+                     : tt::tt_metal::TensorAccessorArgs::create_dram_interleaved())
+                .append_to(k.compile_time_args);
+        }
+    }
     void planner_defines(KernelDescriptor& k, uint32_t ct0) const;
     std::function<Args(uint32_t)> planner_args() const;
     Args ra_args(uint32_t j) const;
@@ -1995,6 +2015,7 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
     define(sender, "LA_CHL", la_chl);
     define(sender, "RS_NPASS", uv(npass));
     routing_defines(sender);
+    routing_accessors(sender);
     for (const auto& [d, v, core] : ch.ports) {
         auto pl = h.port_plan(coord, d, v);
         const bool fence = !pl.mine.empty();
@@ -2106,6 +2127,7 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
         add(wl, tail);
     }
     set_rt(watcher, h.watcher, wl);
+    routing_accessors(watcher);
     std::vector<KernelDescriptor> ks;
     push(ks, reader);
     push(ks, sender);
@@ -2261,6 +2283,7 @@ std::vector<KernelDescriptor> ChipProgram::y_kernels() {
         auto y =
             kernel("dataflow/ra_y_send.cpp", cells({core}), dm(DataMovementProcessor::RISCV_0, NOC::RISCV_0_default));
         routing_defines(y);
+        routing_accessors(y);
         set_rt(y, core, y_args(k, core));
         push(ks, y);
         break;  // (the first Y direction; the second rides the watcher's NCRISC)
@@ -2538,6 +2561,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
             define(nk, "RT_VALID");
         }
         set_common(nk, common_v);
+        routing_accessors(nk);
         auto ck = kernel("compute/router_compute.cpp", hcrs, comp);
         eng_defs(ck);
         if (h.cfg.sqrtsoftplus) {
@@ -2577,6 +2601,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
             define(bk, "RT_VALID");
         }
         set_common(bk, common_v);
+        routing_accessors(bk);
         push(ks, nk);
         push(ks, ck);
         push(ks, bk);

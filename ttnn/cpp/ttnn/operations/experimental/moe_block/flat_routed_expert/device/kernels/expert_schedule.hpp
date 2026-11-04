@@ -13,7 +13,7 @@
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
+#include "flat_accessors.hpp"
 #include "schedule_meta.hpp"
 
 // bytes of scratch per table (counts + the local experts' global ids, regions); a RISC owns 2 * SE_DYN_HALF of CB 7
@@ -241,6 +241,7 @@ inline void se_dyn_build(
 // Reads the counts / regions rows and the global expert id table into SCRATCH (two SE_DYN_HALF halves of L1 this RISC
 // owns: counts then the ids, regions) and fills d. The sub-block size is SE_RPS rows when defined (every kernel must
 // build the same schedule), else ROWS_PER_SUB.
+#ifdef SE_ACC_CT  // (the data-movement kernels: the tensors' accessor args, flat_accessors.hpp)
 template <uint32_t num_e>
 inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows_per_sub) {
     static_assert(num_e <= SE_MAX_E);
@@ -253,9 +254,9 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
     const uint32_t gidx_addr = get_arg_val<uint32_t>(dyn0 + 5), gidx_bytes = get_arg_val<uint32_t>(dyn0 + 6);
     const uint32_t rd = (row_bytes + 63) / 64 * 64;
     const uint32_t ids_l1 = scratch + rd;  // after the counts row (host: SE_DYN_HALF >= rd + the ids, rounded)
-    const DramPages cg = dram_pages(counts_addr, row_bytes);
-    const DramPages rg = dram_pages(regions_addr, row_bytes);
-    const DramPages ig = dram_pages(gidx_addr, gidx_bytes);
+    const auto cg = TensorAccessor(flat_acc::counts, counts_addr, row_bytes);
+    const auto rg = TensorAccessor(flat_acc::regions, regions_addr, row_bytes);
+    const auto ig = TensorAccessor(flat_acc::ids, gidx_addr, gidx_bytes);
     noc_async_read(cg.get_noc_addr(0), scratch, rd);
     noc_async_read(rg.get_noc_addr(0), scratch + SE_DYN_HALF, rd);
     noc_async_read(ig.get_noc_addr(0), ids_l1, (gidx_bytes + 63) / 64 * 64);
@@ -276,6 +277,7 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
 #endif
     se_dyn_regions(d);  // plain order: always consistent (region l % NREG)
 }
+#endif
 
 inline uint32_t se_dyn_rps(const SeDyn& d) { return d.rps; }
 

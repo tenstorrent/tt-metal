@@ -21,7 +21,7 @@
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
 #endif
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
+#include "flat_accessors.hpp"
 #include "expert_schedule.hpp"
 
 void kernel_main() {
@@ -36,7 +36,7 @@ void kernel_main() {
     // every row over the 8 DRAM banks); a segment is one read (page >= seg) or seg / page reads
     constexpr uint32_t ppr = get_compile_time_arg_val(8);
     constexpr uint32_t pread = row_bytes < seg ? row_bytes : seg;
-    const DramPages xg = dram_pages(get_arg_val<uint32_t>(0), row_bytes);
+    const auto xg = TensorAccessor(flat_acc::x, get_arg_val<uint32_t>(0), row_bytes);
     auto read_seg = [&](uint32_t row, uint32_t j, uint32_t dst) {
         const uint32_t b = j * seg;
         for (uint32_t q = 0; q < seg; q += pread) {
@@ -45,7 +45,8 @@ void kernel_main() {
     };
 #ifdef XRD_INDEXED
     // one page holds the whole [1, rows] index row: address it as bank 0's page 0 plus a byte offset
-    const uint64_t idx_base = dram_pages(get_arg_val<uint32_t>(get_compile_time_arg_val(7)), 4).get_noc_addr(0);
+    const uint64_t idx_base =
+        TensorAccessor(flat_acc::token_index, get_arg_val<uint32_t>(get_compile_time_arg_val(7)), 4).get_noc_addr(0);
     const uint32_t idx_l1 = get_write_ptr(tt::CBIndex::c_7);  // MT x 32 words (<= 512 B <= 2 SE_DYN_HALF)
 #endif
     uint32_t in_batch = 0, l1 = 0;

@@ -12,7 +12,7 @@
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
+#include "flat_accessors.hpp"
 #include "expert_schedule.hpp"
 
 template <uint32_t out_cb, uint32_t pcd, uint32_t mt, uint32_t ht>
@@ -28,7 +28,7 @@ struct SeYRmWriter {
     // the y writes' NoC: this RISC's
     static constexpr uint8_t ynoc = noc_index;
     static_assert(rows >= 1 && trid0 + rows <= 16);
-    DramPages yg;
+    decltype(TensorAccessor(flat_acc::y, 0u, 0u)) yg;
     uint32_t col_off;
     uint32_t base = 0;  // the out CB's start (its read pointer before anything is consumed)
     // issue cursor (entry, sub-block, row tile) and the in-order retire cursor
@@ -65,7 +65,7 @@ struct SeYRmWriter {
 #endif
 
     SeYRmWriter(uint32_t y_addr, uint32_t col0) :
-        yg(dram_pages(y_addr, ht * 64)), col_off(col0 * 64), base(get_read_ptr(out_cb)) {
+        yg(TensorAccessor(flat_acc::y, y_addr, ht * 64)), col_off(col0 * 64), base(get_read_ptr(out_cb)) {
 #ifdef SE_Y_L1
         constexpr uint32_t A0 = SE_Y_L1;
         nd = get_arg_val<uint32_t>(A0 + 0);
@@ -149,7 +149,7 @@ struct SeYRmWriter {
             // this tile's table page: (destination, header word) per row
             const uint32_t page = row0 / 32, tabl = words + 256;
             if (page != tab_tile) {
-                noc_async_read(dram_pages(tab_base, 256).get_noc_addr(page), tabl, 256);
+                noc_async_read(TensorAccessor(flat_acc::y_table, tab_base, 256).get_noc_addr(page), tabl, 256);
                 noc_async_read_barrier();
                 tab_tile = page;
             }

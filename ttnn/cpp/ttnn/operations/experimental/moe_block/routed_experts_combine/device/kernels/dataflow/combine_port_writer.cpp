@@ -11,7 +11,6 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -45,6 +44,11 @@ constexpr uint32_t HW = sizeof(PACKET_HEADER_TYPE) / 4;
 // increments that chip's ports. A chip's ports increment only after its zeroing (combine_zero_gate.hpp).
 constexpr uint32_t MRTOT = get_compile_time_arg_val(22), MRDONE = get_compile_time_arg_val(23);
 constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(24);
+constexpr auto plan_args = TensorAccessorArgs<CMB_PLAN_CT>();  // (the device plan)
+constexpr auto hc_args = TensorAccessorArgs<CMB_HC_CT>();      // (the routed-header cache)
+#ifdef REC_ACC_LUT
+constexpr auto lut_args = TensorAccessorArgs<CMB_LUT_CT>();  // (the per-chip accumulator LUT)
+#endif
 constexpr uint32_t ZERO = get_compile_time_arg_val(25);  // 1: this kernel zeroes the core's state [0, RINGS)
 constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(26);
 constexpr uint32_t LUT_OFF = get_compile_time_arg_val(27);
@@ -73,7 +77,7 @@ void kernel_main() {
     {  // (the device plan: this port's counts at its id)
         const uint32_t plan = get_arg_val<uint32_t>(a++), pid = get_arg_val<uint32_t>(a++);
         const uint32_t sc = (area + MISC + 832 + 63) & ~63u;
-        noc_async_read(dram_pages(plan, 4096).get_noc_addr(0), sc, 64);  // n_inj[8], n_ret[8]
+        noc_async_read(TensorAccessor(plan_args, plan, 4096).get_noc_addr(0), sc, 64);  // n_inj[8], n_ret[8]
         noc_async_read_barrier();
         n_inj = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[pid];
         n_ret = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[8 + pid];
@@ -86,7 +90,7 @@ void kernel_main() {
     // (per-chip roles: a home chip's accumulator cells differ - its table entry home * A + o, x | y << 8, copied here)
     const uint32_t lut_dram = get_arg_val<uint32_t>(a++), lut_l1 = area + LUT_OFF;
     {
-        noc_async_read(dram_pages(lut_dram, LUT_BYTES).get_noc_addr(0), lut_l1, LUT_BYTES);
+        noc_async_read(TensorAccessor(lut_args, lut_dram, LUT_BYTES).get_noc_addr(0), lut_l1, LUT_BYTES);
         noc_async_read_barrier();
     }
     volatile tt_l1_ptr uint16_t* acc_lut = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(lut_l1);
@@ -120,7 +124,7 @@ void kernel_main() {
     // the block back
     {
         constexpr uint32_t HBLK = N * NH * HSZ;
-        const DramPages hcg = dram_pages(hc_addr, HBLK + 64);
+        const auto hcg = TensorAccessor(hc_args, hc_addr, HBLK + 64);
         volatile tt_l1_ptr uint32_t* kw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC) + 224;
         const uint32_t key = 0x48C00000u ^ (me << 8) ^ (lnk << 16) ^ N;
         noc_async_read(hcg.get_noc_addr(hc_page, HBLK), reinterpret_cast<uint32_t>(kw), 64);

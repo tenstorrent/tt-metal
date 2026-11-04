@@ -7,7 +7,7 @@
 // kernel).
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_accessors.hpp"
 
 // one packet's way on: to the next hop (kind 0: the destination's DRAM slot page par N + src, its arrival counter on
 // planner core 0; kind 1: the next forwarding port's DRAM slot page (fbase: the forward slots tensor, slot | page <<
@@ -39,10 +39,10 @@ FORCE_INLINE void ra_hop(
                    slot = get_arg_val<uint32_t>(a + 4);
     uint64_t dst, inc;
     if (kind == 0) {
-        dst = dram_pages(sl, PCAP).get_noc_addr(par * RA_N + srcid);
+        dst = TensorAccessor(ra_acc::slots, sl, PCAP).get_noc_addr(par * RA_N + srcid);
         inc = get_noc_addr(px, py, par ? c1 : c0);
     } else {
-        dst = dram_pages(fbase, PCAP).get_noc_addr(slot >> 8);
+        dst = TensorAccessor(ra_acc::fslots, fbase, PCAP).get_noc_addr(slot >> 8);
         inc = get_noc_addr(nx, ny, flags + 16 * (slot & 0xFF));
     }
     for (uint32_t off = 0; off < bytes; off += MAXP) {
@@ -163,7 +163,7 @@ struct RASend {
                     RA_N,
                     MAXP);
             } else {  // (SELF: my own chip's packet)
-                noc_async_write(pb, dram_pages(sl, PCAP).get_noc_addr(par * RA_N + RA_ME), bytes);
+                noc_async_write(pb, TensorAccessor(ra_acc::slots, sl, PCAP).get_noc_addr(par * RA_N + RA_ME), bytes);
                 noc_async_write_barrier();
                 noc_semaphore_inc(get_noc_addr(px, py, par ? c1 : c0), 1);
             }
@@ -230,7 +230,7 @@ struct RAFwd {
                 DeviceZoneScopedN("SE-RAFWD");
                 const uint32_t pb = fb + k * PCAP;
                 {
-                    noc_async_read(dram_pages(fd, PCAP).get_noc_addr(pg0 + k), pb, PCAP);
+                    noc_async_read(TensorAccessor(ra_acc::fslots, fd, PCAP).get_noc_addr(pg0 + k), pb, PCAP);
                     noc_async_read_barrier();
                     invalidate_l1_cache();
                 }

@@ -454,11 +454,20 @@ CombineHandles add_combine_program(
 
     std::vector<uint32_t> o_ct;
     tt::tt_metal::TensorAccessorArgs(*bufs[CombineBuf::Out]).append_to(o_ct);
+    // a buffer's accessor args at the end of a kernel's compile-time args, their first index as the define `name`
+    auto accessor =
+        [&](std::vector<uint32_t>& ct, std::map<std::string, std::string>& defs, const char* name, CombineBuf b) {
+            defs[name] = std::to_string(ct.size());
+            tt::tt_metal::TensorAccessorArgs(*bufs[b]).append_to(ct);
+        };
 
     // port readers (ports apart only: fused ports run the hand-off on the sender)
     if (!plan.fused) {
         std::vector<uint32_t> ct = {kCbInj, kCbTab, st.MISC, words_off, r_slot};
-        const auto k = dm_kernel(program, "dataflow/combine_port_reader.cpp", pset, std::move(ct), r_riscv0);
+        std::map<std::string, std::string> defs;
+        accessor(ct, defs, "CMB_PLAN_CT", CombineBuf::Plan);
+        const auto k =
+            dm_kernel(program, "dataflow/combine_port_reader.cpp", pset, std::move(ct), r_riscv0, std::move(defs));
         for (uint32_t pid = 0; pid < n_pid; ++pid) {
             Args a;
             a.buf(CombineBuf::Arena);
@@ -511,6 +520,11 @@ CombineHandles add_combine_program(
         }
         if (plan.perchip) {
             defs["REC_ACC_LUT"] = "1";
+        }
+        accessor(ct, defs, "CMB_PLAN_CT", CombineBuf::Plan);
+        accessor(ct, defs, "CMB_HC_CT", CombineBuf::Hcache);
+        if (plan.perchip) {
+            accessor(ct, defs, "CMB_LUT_CT", CombineBuf::Lut);
         }
         const auto k =
             dm_kernel(program, "dataflow/combine_port_writer.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
@@ -589,33 +603,33 @@ CombineHandles add_combine_program(
 
     // accumulators: reader, compute, writer
     {
-        const auto rd = dm_kernel(
-            program,
-            "dataflow/accumulator_reader.cpp",
-            aset,
-            {kCbRow,
-             kCbMeta,
-             kCbTab,
-             pc.row_bytes,
-             SLOT,
-             plan.PSL,
-             A,
-             NT,
-             N,
-             L,
-             st.RET,
-             st.MISC,
-             st.RINGS,
-             st.LAYO,
-             kCbW,
-             kMiscTaken,
-             kMiscRtot,
-             plan.fused ? 160u : 128u,
-             plan.fused ? 103u : 101u,
-             plan.loc_off,
-             words_off,
-             r_slot},
-            r_riscv0);
+        std::vector<uint32_t> rd_ct = {
+            kCbRow,
+            kCbMeta,
+            kCbTab,
+            pc.row_bytes,
+            SLOT,
+            plan.PSL,
+            A,
+            NT,
+            N,
+            L,
+            st.RET,
+            st.MISC,
+            st.RINGS,
+            st.LAYO,
+            kCbW,
+            kMiscTaken,
+            kMiscRtot,
+            plan.fused ? 160u : 128u,
+            plan.fused ? 103u : 101u,
+            plan.loc_off,
+            words_off,
+            r_slot};
+        std::map<std::string, std::string> rd_defs;
+        accessor(rd_ct, rd_defs, "CMB_PLAN_CT", CombineBuf::Plan);
+        const auto rd =
+            dm_kernel(program, "dataflow/accumulator_reader.cpp", aset, std::move(rd_ct), r_riscv0, std::move(rd_defs));
         // (the fp32 sums unpacked straight to DEST: the default narrows a Float32 CB to TF32 on its way)
         std::vector<tt::tt_metal::UnpackToDestMode> u2d(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         u2d[kCbAcc] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;

@@ -17,7 +17,7 @@
 #include "api/compute/common.h"
 #else
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_accessors.hpp"
 #endif
 
 #ifdef RT_ENG_ON
@@ -43,8 +43,8 @@ FORCE_INLINE uint32_t rt_valid_slot(uint32_t a) { return (a + 63) & ~63u; }
 // actual_start's 16 B into l1, actual_end's into l1 + 64 (l1 rt_valid_slot's): issue only - noc_async_read_barrier +
 // invalidate_l1_cache before reading them
 FORCE_INLINE void rt_valid_issue(uint32_t l1) {
-    noc_async_read(dram_pages(get_common_arg_val<uint32_t>(2), 64).get_noc_addr(0), l1, 16);
-    noc_async_read(dram_pages(get_common_arg_val<uint32_t>(3), 64).get_noc_addr(0), l1 + 64, 16);
+    noc_async_read(TensorAccessor(ra_acc::start, get_common_arg_val<uint32_t>(2), 64).get_noc_addr(0), l1, 16);
+    noc_async_read(TensorAccessor(ra_acc::end, get_common_arg_val<uint32_t>(3), 64).get_noc_addr(0), l1 + 64, 16);
 }
 // positions in [base, base + len) below end
 FORCE_INLINE uint32_t rt_prefix_count(uint32_t end, uint32_t base, uint32_t len) {
