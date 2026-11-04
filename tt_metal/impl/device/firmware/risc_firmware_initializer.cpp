@@ -509,14 +509,17 @@ void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId devi
 }
 
 void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId device_id) {
+    // A Quasar Ethernet core is a Keraunos CCE: no base firmware to return to or to keep ERISC0 for.
+    const bool quasar_ethernet = quasar_device_has_ethernet_cores(cluster_, device_id);
     for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        if (rtoptions_.get_enable_2_erisc_mode()) {
+        if (rtoptions_.get_enable_2_erisc_mode() && !quasar_ethernet) {
             llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(
                 descriptor_->env_impl(), device_id, virtual_core);
         }
-        tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
+        tt::umd::RiscType reset_val = quasar_ethernet ? tt::umd::RiscType::ALL_NEO_DMS
+                                                      : tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
         cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
     }
 }
@@ -1424,7 +1427,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                     }
                 }
             }
-            launch_msg.kernel_config().mode() = (!rtoptions_.get_fast_dispatch() or is_idle_eth)
+            launch_msg.kernel_config().mode() = (!rtoptions_.get_fast_dispatch() or is_idle_eth or quasar_ethernet)
                                                     ? dev_msgs::DISPATCH_MODE_HOST
                                                     : dev_msgs::DISPATCH_MODE_DEV;
             prepare_initial_launch_msg();
@@ -1679,20 +1682,23 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     const bool has_quasar_ethernet = quasar_device_has_ethernet_cores(cluster_, device_id);
     std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
 
-    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
-        static std::vector<uint32_t> zero_vec_erisc_init(
-            hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) /
-                sizeof(uint32_t),
-            0);
+    // APP_SYNC_INFO is base Ethernet firmware's; a Quasar Ethernet core (a Keraunos CCE) has none.
+    if (!has_quasar_ethernet) {
+        for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+            static std::vector<uint32_t> zero_vec_erisc_init(
+                hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) /
+                    sizeof(uint32_t),
+                0);
 
-        CoreCoord virtual_core =
-            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+            CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
 
-        cluster_.write_core_immediate(
-            device_id,
-            virtual_core,
-            zero_vec_erisc_init,
-            hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
+            cluster_.write_core_immediate(
+                device_id,
+                virtual_core,
+                zero_vec_erisc_init,
+                hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
+        }
     }
 
     log_debug(tt::LogMetal, "Initializing active ethernet cores");
