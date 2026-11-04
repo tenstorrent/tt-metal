@@ -79,8 +79,9 @@ inline void _llk_pack_dest_section_done_()
             TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
         }
 
-        // Tell math that it can write again
-        _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        // Tell math that it can write again, but only once the ZEROACC above has finished in the matrix unit, so math's
+        // next DEST writes cannot land in the same cycle as the clear and lose their zero-flag clear (budabackend#2730).
+        _llk_packer_set_math_semaphore_<p_stall::MATH>();
     }
     else
     {
