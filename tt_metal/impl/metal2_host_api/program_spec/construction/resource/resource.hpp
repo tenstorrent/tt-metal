@@ -18,7 +18,6 @@
 #include "impl/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_settings.hpp"
-#include "llrt/hal.hpp"
 
 namespace tt::tt_metal::experimental {
 

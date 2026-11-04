@@ -37,7 +37,6 @@
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <taskflow/core/async.hpp>
 
 #include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
