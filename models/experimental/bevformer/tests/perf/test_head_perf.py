@@ -50,8 +50,12 @@ def test_head_perf(device, reset_seeds):
     tt_bev_embed = to_device(bev_embed, device)
 
     def run():
+        # The head, its decoder and the coder in one region; the traced replay below records no
+        # signposts, so the eager run before it carries the per-stage regions.
+        signpost(header="TTNN Head Decoder Coder Start")
         cls_scores, bbox_preds = tt_model(tt_bev_embed)
         coder.topk(cls_scores[-1], bbox_preds[-1])
+        signpost(header="TTNN Head Decoder Coder End")
         return cls_scores, bbox_preds
 
     check_head_outputs(torch_outputs, run())

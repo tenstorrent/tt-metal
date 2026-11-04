@@ -69,7 +69,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 
@@ -174,23 +174,21 @@ def _build_custom_mm(
             ]
             # Face-major (tilized) layout inside each 32x32 tile. Tilize in the input
             # format so the returned dtype matches the packer (pack_fp32 rejects a
-            # bfloat16 tensor, which is tilize's default Float16_b dtype).
-            tiled_blk = tilize(
-                blk.reshape(-1),
+            # bfloat16 tensor, which is tilize_block's default Float16_b dtype).
+            tiled_blk = tilize_block(
+                blk,
+                dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
                 stimuli_format=in1_format,
-                tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
-            )
+            ).flatten()
             packed_tile = in1_packer(tiled_blk)
             packed_b += packed_tile
             if in1_format in _BFP_UNPACKERS:
                 golden_b[
                     r * DEFAULT_TILE_R_DIM : (r + 1) * DEFAULT_TILE_R_DIM,
                     c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
-                ] = untilize(
+                ] = untilize_block(
                     _BFP_UNPACKERS[in1_format](packed_tile),
-                    tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
-                ).reshape(
-                    DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM
+                    dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
                 )
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
