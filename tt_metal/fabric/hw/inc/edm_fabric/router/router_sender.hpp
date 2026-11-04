@@ -1074,7 +1074,8 @@ FORCE_INLINE void set_up_channels(const std::array<size_t, MAX_NUM_SENDER_CHANNE
 constexpr uint32_t POLLS_PER_ROUTING_RUN = 100000;
 
 // Waits until an upstream router asks to connect on `connection_semaphore`, or termination. One body for every channel.
-__attribute__((noinline)) void wait_for_connect_request(volatile tt_l1_ptr uint32_t* connection_semaphore) {
+// Cold (optimized for size): it runs only until that router connects.
+__attribute__((noinline, cold)) void wait_for_connect_request(volatile tt_l1_ptr uint32_t* connection_semaphore) {
     uint32_t polls = 0;
     while (!connect_is_requested(*connection_semaphore) && !terminating()) {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();

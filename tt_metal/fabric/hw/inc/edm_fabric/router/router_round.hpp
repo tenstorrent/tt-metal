@@ -152,7 +152,8 @@ void run_retrain(tt_l1_ptr RouterStateManager* state) {
     }
 }
 
-__attribute__((noinline)) void run_router_command() {
+// Cold (GCC: optimized for size, placed apart): it runs only when the host sends a router command.
+__attribute__((noinline, cold)) void run_router_command() {
     auto* state = router_state();
     if (state->command == RouterCommand::PAUSE) {
         with_other_erisc_parked([state] {

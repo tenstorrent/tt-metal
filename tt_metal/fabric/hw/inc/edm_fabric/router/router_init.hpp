@@ -392,7 +392,8 @@ FORCE_INLINE void wait_for_channel_transactions() {
     }
 }
 
-__attribute__((noinline)) void teardown() {
+// Cold (optimized for size): it runs once, at termination.
+__attribute__((noinline, cold)) void teardown() {
     sync_erisc(Phase::TEARDOWN_START);
     for_each_index<NUM_RECEIVER_CHANNELS>([](auto ch) { wait_for_channel_transactions<decltype(ch)::value>(); });
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Dynamic noc mode not supported");
