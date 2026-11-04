@@ -40,6 +40,24 @@ def _q_proj_program_config(x, q_w):
                 fused_activation=None,
                 fuse_batch=True,
             )
+        elif kwargs.get("program_config") is None and list(b.shape)[-2:] == [6144, 5120]:
+            m = 1
+            for d in list(a.shape)[:-1]:
+                m *= d
+            if m == 2048:
+                kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=7,
+                    out_block_w=13,
+                    per_core_M=7,
+                    per_core_N=13,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=True,
+                )
         return orig_linear(a, b, *args, **kwargs)
 
     ttnn.linear = _linear
