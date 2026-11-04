@@ -23,9 +23,7 @@ def _plan(directory, arch="blackhole", group=1, groups=1, ran=None):
     nodes = ["perf_x.py::test_x[a]", "perf_x.py::test_x[b c]"]
     plan = {"arch": arch, "group": group, "groups": groups, "nodes": nodes}
     (directory / "plan.json").write_text(json.dumps(plan))
-    (directory / "ran.txt").write_text(
-        "".join(f"{n}\n" for n in (nodes if ran is None else ran))
-    )
+    (directory / "ran.txt").write_text("".join(f"{n}\n" for n in (nodes if ran is None else ran)))
 
 
 def _csv(path, cycles, sol="False", run_type="L1_TO_L1"):
@@ -105,15 +103,10 @@ def test_a_regression_is_reported_and_fails_only_when_it_blocks(tmp_path):
 
 def test_the_module_threshold_of_the_policy_applies(tmp_path):
     """Wormhole matmul is allowed 25 % in the merge gate; other modules 13 %."""
-    assert (
-        _run(tmp_path / "x", arch="wormhole", current=(1200, 2000))["status"]
-        == "regression"
-    )
+    assert _run(tmp_path / "x", arch="wormhole", current=(1200, 2000))["status"] == "regression"
     _csv(tmp_path / "cur" / "perf_matmul.csv", (1200, 2000))
     _csv(tmp_path / "base" / "perf_matmul.csv", (1000, 2000))
-    assert (
-        _run(tmp_path, arch="wormhole", current=None, baseline=None)["status"] == "pass"
-    )
+    assert _run(tmp_path, arch="wormhole", current=None, baseline=None)["status"] == "pass"
 
 
 @pytest.mark.parametrize(
@@ -252,10 +245,7 @@ def test_replay_with_a_stage2_crash_still_decides(tmp_path):
     next(stage2.rglob("stage2.json")).write_text("{not json")
     v = _replay(tmp_path, "--stage2", f"{stage2}/**/stage2.json")
     assert v["status"] == "pass" and "error" in v["stage2"]
-    assert (
-        "Stage 2 could not build its report"
-        in (tmp_path / "perf_gate_report.md").read_text()
-    )
+    assert "Stage 2 could not build its report" in (tmp_path / "perf_gate_report.md").read_text()
 
 
 def test_replay_with_a_leg_that_left_no_stage2_says_so(tmp_path):
@@ -292,10 +282,7 @@ def test_replay_with_a_leg_cut_short_is_incomplete(tmp_path):
     ran.write_text(ran.read_text().splitlines()[0] + "\n")
     v = _replay(tmp_path, current=current)
     assert v["status"] == "incomplete"
-    assert (
-        "leg 4/4 ran 1 of 2 tests (first not run: perf_sfpu_ema.py::test_perf_sfpu_ema)"
-        in v["reason"]
-    )
+    assert "leg 4/4 ran 1 of 2 tests (first not run: perf_sfpu_ema.py::test_perf_sfpu_ema)" in v["reason"]
 
 
 def test_replay_with_a_short_baseline_fails(tmp_path):
@@ -305,9 +292,7 @@ def test_replay_with_a_short_baseline_fails(tmp_path):
     base = tmp_path / "baseline"
     base.mkdir()
     frame = pd.read_csv(REPLAY / "baseline" / "baseline.csv", low_memory=False)
-    frame[frame.test_module.isin(["perf_bcast", "perf_fast_untilize"])].to_csv(
-        base / "b.csv", index=False
-    )
+    frame[frame.test_module.isin(["perf_bcast", "perf_fast_untilize"])].to_csv(base / "b.csv", index=False)
     argv = [
         "compare",
         "--gate",
@@ -331,15 +316,10 @@ def test_replay_with_a_short_baseline_fails(tmp_path):
 
 def test_replay_names_the_points_that_stopped_running(tmp_path):
     current = _replay_copy(tmp_path, "current")
-    (
-        current / "41816768387-blackhole-6" / "perf_sfpu_ema" / "perf_sfpu_ema.csv"
-    ).unlink()
+    (current / "41816768387-blackhole-6" / "perf_sfpu_ema" / "perf_sfpu_ema.csv").unlink()
     v = _replay(tmp_path, current=current)
     assert v["counts"]["missing"] > 0
-    assert (
-        "were not measured now, in perf_sfpu_ema"
-        in (tmp_path / "perf_gate_report.md").read_text()
-    )
+    assert "were not measured now, in perf_sfpu_ema" in (tmp_path / "perf_gate_report.md").read_text()
 
 
 def _render(tmp_path, *extra):
@@ -365,10 +345,7 @@ def test_render_one_comment_for_both_arches(tmp_path, monkeypatch):
     _report(tmp_path, "wormhole", current=(1300, 2000))
     comment, slack = _render(tmp_path)
     assert comment.startswith(gate.COMMENT_MARKER)
-    assert (
-        "Blackhole: ✅ no regressions" in comment
-        and "Wormhole: ❌ REGRESSIONS FOUND" in comment
-    )
+    assert "Blackhole: ✅ no regressions" in comment and "Wormhole: ❌ REGRESSIONS FOUND" in comment
     assert "regression on wormhole" in slack.splitlines()[0]
     assert "_Threshold: a point regresses when it is slower by more than 13%" in slack
 
@@ -439,10 +416,7 @@ def test_a_waiver_accepts_a_regression_up_to_its_max_delta(tmp_path):
     v = _run(tmp_path, current=(1100, 2000), waivers=[_WAIVER])
     assert v["status"] == "pass" and v["counts"]["waived"] == 1
     report = (tmp_path / "perf_gate_report.md").read_text()
-    assert (
-        "## Waived regressions (waivers.yaml)" in report
-        and "#1 | One more pass" in report
-    )
+    assert "## Waived regressions (waivers.yaml)" in report and "#1 | One more pass" in report
 
 
 def test_a_waiver_does_not_accept_more_than_its_max_delta(tmp_path):
@@ -458,9 +432,7 @@ def test_a_waiver_matches_on_arch_marker_and_config(tmp_path):
             {"config": {"math_fidelity": "HiFi1"}},
         )
     ):
-        v = _run(
-            tmp_path / str(i), current=(1100, 2000), waivers=[{**_WAIVER, **extra}]
-        )
+        v = _run(tmp_path / str(i), current=(1100, 2000), waivers=[{**_WAIVER, **extra}])
         assert v["status"] == "regression", extra
     v = _run(
         tmp_path / "x",
@@ -473,3 +445,11 @@ def test_a_waiver_matches_on_arch_marker_and_config(tmp_path):
 def test_a_waiver_without_a_reason_fails_the_gate(tmp_path):
     v = _run(tmp_path, current=(1100, 2000), waivers=[{**_WAIVER, "reason": ""}])
     assert v["status"] == "no-compare" and "entry 1 lacks reason" in v["reason"]
+
+
+def test_the_verdict_lists_each_leg_and_its_time(tmp_path):
+    leg = {"arch": "blackhole", "group": 1, "minutes": 9, "timeout_minutes": 15}
+    (tmp_path / "cur").mkdir()
+    (tmp_path / "cur" / "leg.json").write_text(json.dumps(leg))
+    v = _run(tmp_path)
+    assert v["legs"] == [{"group": 1, "groups": 1, "minutes": 9, "timeout_minutes": 15, "complete": True}]

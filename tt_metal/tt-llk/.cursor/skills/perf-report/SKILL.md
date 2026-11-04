@@ -58,8 +58,8 @@ CHIP_ARCH=<arch> pytest --compile-consumer -n 15 -m perf ./python_tests/perf_[op
 ```
 
 Prefer the `run-test` workflow where it applies; it serializes simulator
-access and diagnoses hangs. `tests/run_llk_perf_wormhole.sh` and
-`tests/run_llk_perf_blackhole.sh` show the exact CI invocation.
+access and diagnoses hangs. `tests/run_llk_perf.sh <arch> <group> <n_groups>`
+shows the exact CI invocation.
 
 Rules:
 

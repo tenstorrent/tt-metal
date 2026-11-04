@@ -11,7 +11,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 3
+    ./tests/run_llk_perf.sh wormhole {split_group} 3
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -29,7 +29,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 3
+    ./tests/run_llk_perf.sh wormhole {split_group} 3
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -47,7 +47,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 3
+    ./tests/run_llk_perf.sh wormhole {split_group} 3
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -65,7 +65,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 4
+    ./tests/run_llk_perf.sh blackhole {split_group} 4
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -83,7 +83,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 4
+    ./tests/run_llk_perf.sh blackhole {split_group} 4
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -101,7 +101,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 4
+    ./tests/run_llk_perf.sh blackhole {split_group} 4
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -119,7 +119,7 @@
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 4
+    ./tests/run_llk_perf.sh blackhole {split_group} 4
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15

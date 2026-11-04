@@ -55,7 +55,7 @@ def summary(lines):
 
 
 def shard_of(cmd: str) -> tuple[int, int]:
-    m = re.search(r"run_llk_perf_\w+\.sh\s+(\d+)\s+(\d+)", cmd)
+    m = re.search(r"run_llk_perf\.sh\s+\w+\s+(\d+)\s+(\d+)", cmd)
     if not m:
         sys.exit(f"cannot find '<group> <n_groups>' in the matrix cmd: {cmd!r}")
     return int(m.group(1)), int(m.group(2))
@@ -70,9 +70,9 @@ def describe(cmd: str) -> dict:
         text=True,
         check=True,
     ).stdout.strip()
-    compiler = subprocess.run(
-        [str(GXX), "--version"], capture_output=True, text=True, check=True
-    ).stdout.splitlines()[0]
+    compiler = subprocess.run([str(GXX), "--version"], capture_output=True, text=True, check=True).stdout.splitlines()[
+        0
+    ]
     return {
         "commit": commit,
         "compiler": compiler,
@@ -155,9 +155,7 @@ def cmd_pack(args):
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
     )
-    zstd = subprocess.Popen(
-        ["zstd", "-3", "-T0", "-q", "-f", "-o", str(out)], stdin=tar.stdout
-    )
+    zstd = subprocess.Popen(["zstd", "-3", "-T0", "-q", "-f", "-o", str(out)], stdin=tar.stdout)
     tar.stdout.close()
     tar.stdin.write(listing.encode())
     tar.stdin.close()
@@ -201,22 +199,14 @@ def cmd_unpack(args):
     bad = [k for k in MUST_MATCH if shipped.get(k) != here[k]]
     if bad:
         for k in bad:
-            print(
-                f"::error::manifest {k}: shipped {shipped.get(k)!r}, this job {here[k]!r}"
-            )
+            print(f"::error::manifest {k}: shipped {shipped.get(k)!r}, this job {here[k]!r}")
         sys.exit("the shipped build does not match this job; not opening the device")
 
     files = shipped_files(root)
     if len(files) != shipped["file_count"]:
-        sys.exit(
-            f"archive has {len(files)} files, manifest says {shipped['file_count']}"
-        )
+        sys.exit(f"archive has {len(files)} files, manifest says {shipped['file_count']}")
     sums = read_sums(meta / "SHA256SUMS")
-    mismatched = [
-        rel
-        for rel, digest in sums.items()
-        if not (root / rel).is_file() or sha256(root / rel) != digest
-    ]
+    mismatched = [rel for rel, digest in sums.items() if not (root / rel).is_file() or sha256(root / rel) != digest]
     if mismatched:
         sys.exit(f"{len(mismatched)} files missing or bad, e.g. {mismatched[:5]}")
     t2 = time.monotonic()

@@ -4,17 +4,14 @@
 
 # ci-quiet log mode is hard-coded.
 #
-# The env below is only read by this gate, not by llk-perf-impl itself: it mirrors
-# what llk-perf-gate.yaml's nightly-measure job passes -- the non-speed-of-light
-# nightly (llk-perf.yaml's own schedule trigger always runs speed-of-light).
-# SPEED_OF_LIGHT stays false -- a speed-of-light leg is 2-4h per change and nothing
-# compares it. LLK_PERF_RUN_TYPES mirrors ALL_MODES, which nightly-measure uses to
-# skip L1_CONGESTION (ungated, a fifth of the build); blank would keep it. PIPELINE
-# is "pr" since this runs on a pull_request, not the schedule.
+# The env below is read only by verify-changed-tests, when a PR edits this list; llk-perf-impl
+# sets the same variables from its inputs. It mirrors the non speed-of-light nightly
+# (llk-perf.yaml, 05:00 UTC): a speed-of-light leg is 2-4 h per change. LLK_PERF_RUN_TYPES
+# mirrors ALL_MODES, which skips L1_CONGESTION (ungated, a fifth of the build).
 #
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
-# tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh
+# tt_metal/tt-llk/tests/: run_llk_perf.sh <arch>
 # (both shard with --perf-splits / --perf-group).
 
 - name: llk_perf_wormhole group 1/5
@@ -23,7 +20,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -41,7 +38,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -59,7 +56,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -77,7 +74,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -95,7 +92,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -113,7 +110,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240
@@ -131,7 +128,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240
@@ -149,7 +146,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240
@@ -167,7 +164,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240
@@ -185,7 +182,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240

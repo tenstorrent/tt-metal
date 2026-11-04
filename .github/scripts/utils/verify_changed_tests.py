@@ -102,7 +102,7 @@ PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium"
 
 # An undeclared SPEED_OF_LIGHT does not crash these -- the script defaults it, so
 # the leg silently measures the wrong mode. See check_llk_perf_env.
-LLK_PERF_SCRIPT = re.compile(r"run_llk_perf_\w*\.sh")
+LLK_PERF_SCRIPT = re.compile(r"run_llk_perf\w*\.sh")
 
 # What `export` accepts. A name it rejects would kill the run step under set -e,
 # after the leg has already claimed a runner.
@@ -647,7 +647,7 @@ def entry_workdir(entry, path):
 
     Declared on the entry, like `env`, because it is a property of the test rather
     than of this gate: the LLK cmds open with `cd tests/python_tests` or call
-    `./tests/run_llk_perf_*.sh`, both relative to the tree their pipeline sets as
+    `./tests/run_llk_perf.sh`, both relative to the tree their pipeline sets as
     its working-directory. Empty means the checkout root, which is everything else.
     """
     workdir = entry.get("workdir")
