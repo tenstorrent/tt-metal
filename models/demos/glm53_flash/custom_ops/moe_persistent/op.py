@@ -74,7 +74,11 @@ def persistent_fused_groups(device, E_loc: int, I_loc: int, H: int, *, down_read
             plan = fused_core_plan((grid.x, grid.y), E_loc, I_loc, H, banks=banks, groups=g, down_readers=down_readers)
         except AssertionError:
             continue
-        if grid.x * grid.y - plan["gate_up_cores"] - plan["down_cores"] >= need:
+        # the block's own semaphores (PSEM0.. on the full grid) sit above the fused op's arrival counters
+        if (
+            grid.x * grid.y - plan["gate_up_cores"] - plan["down_cores"] >= need
+            and plan["semaphores"] <= MoePersistent.PSEM0
+        ):
             return g
     raise ValueError(f"no fused group count leaves {need} cores on {grid.x}x{grid.y} (E_loc {E_loc}, H {H})")
 
