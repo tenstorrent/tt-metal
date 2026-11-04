@@ -25,7 +25,7 @@ python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha
 # candidates, which stage 2 does not reproduce.
 BASE_SHA="${LLK_STAGE2_BASE_REF:-$(cat "$OUT/stage2.base")}"
 
-COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles 30 --module-threshold "${MODULE_THRESHOLDS:-}")
+COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles 1 --module-threshold "${MODULE_THRESHOLDS:-}")
 
 python3 "$LLK/perf/regression_compare.py" "${COMPARE[@]}" \
   --current "$LLK/perf_data/runs/**/*.csv" --baseline "$BASELINE/**/*.csv" \
