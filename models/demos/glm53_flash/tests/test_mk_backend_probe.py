@@ -193,6 +193,16 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     backend.decode(io, kv, B)  # one eager step (compiles)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"first eager step {time.perf_counter() - t0:.1f} s")
+    if os.environ.get("GLM53_STACK_PROBE") == "1":  # the stacks' per-phase probe marks (chip 0) after the eager step
+        for r, stk in kv.stacks[0]:
+            if stk is None or not hasattr(stk, "probe_marks") or getattr(stk, "probe", None) is None:
+                continue
+            for j, i in enumerate(r):
+                try:
+                    _, marks = stk.probe_marks(j)
+                    logger.info(f"MK_BACKEND_MARKS: layer {layers[i]} ({backend.seq[i]['sparse']}): {marks}")
+                except Exception as e:  # noqa: BLE001
+                    logger.info(f"MK_BACKEND_MARKS: layer {layers[i]}: unreadable ({e})")
     t0 = time.perf_counter()
     tr = backend.capture_decode(io, kv, B)
     ttnn.synchronize_device(mesh_device)
