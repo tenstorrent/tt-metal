@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
-#include <map>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -19,7 +18,6 @@
 #include <utility>
 #include <vector>
 
-#include "tracy/Tracy.hpp"
 #include "common/core_coord.hpp"
 
 namespace tt::tt_metal {

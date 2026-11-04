@@ -181,7 +181,7 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     # state as configs 1 and 2 this way (models/demos/deepseek_v3_d_p/tt/kda/KDA_STATE_MIGRATION.md).
     # If a layer's cache is not on the token axis, also override `layer_position_range(layer_idx,
     # real_len)` (default `(0, real_len)`): the driver issues one /migrate per run of consecutive layers
-    # with equal ranges and byte-verifies that range. Kimi-K3 returns the KDA version window there.
+    # with equal ranges and byte-verifies that range. Kimi-K3 returns its KDA window there.
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
