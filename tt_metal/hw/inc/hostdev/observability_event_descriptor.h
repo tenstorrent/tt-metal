@@ -26,7 +26,8 @@
 // expanded there is one handle and one record for it; TT_PROFILER_TU_ID (this TU's index in its link, from
 // jit_build/build.cpp) keeps labels apart when LTO merges a link's TUs into one assembly. .tt_event_descriptor_str is
 // "MS" so __FILE__ is stored once per file. Each .tt_event_descriptor_meta record carries the event's metadata struct,
-// which emit_event() below marshals; the struct's rules are in observability/api/observability_event_meta.h.
+// which emit_event() below marshals; the struct's rules are in observability/api/observability_event_meta.h. The whole
+// path, with diagrams: tools/profiler/EVENT_DESCRIPTOR_IDS.md.
 #pragma once
 
 #include <stddef.h>

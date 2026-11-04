@@ -1,0 +1,605 @@
+# Observability event descriptor ids: a worked example
+
+This is a framework for giving ids to observability events in device-side code. Each event's descriptor id is
+hard-coded into a load-immediate instruction. When the instruction is executed, it puts the id into a CPU register
+without reading any memory. That lets the rest of the event-reporting code write the id from the register to the
+event's place in L1. The event's metadata never reaches the device. The linker script,
+`tt_metal/hw/toolchain/main.ld`, tags the tables that hold it, and the strings they point to, with `(INFO)`, so
+they are kept in the ELF but never allocated on the device. The host reads them, and the device only ever sees the
+id. Generating and placing that hard-coded instruction takes several steps, listed below.
+
+| step | stage | action | the id is |
+|---|---|---|---|
+| 1 | source | the observability event is written, with its metadata struct | — |
+| 2 | preprocess | the macro names the event's handle `__tt_observability_event_0_6_8a905e60814d8ac4` (a name, not the id) | not yet a number |
+| 3 | compile | the metadata struct becomes assembler directives, plus `lui`/`addi` | not yet a number |
+| 4 | link | the linker places the handle | `0x06800005` |
+| 5 | link | the linker fills in the instructions | `0x06800005` |
+| 6 | link | the linker fills in the record | `0x06800005` |
+| 7 | link | the relocations are kept | `0x06800005` |
+| 8 | cache | the ELF is stored; nothing of this is loadable | `0x06800005` |
+| 9 | load | the host reserves a block for the image | `51` |
+| 10 | load | the host rewrites the instructions | `51` |
+| 11 | load | the host rewrites the record | `51` |
+| 12 | load | the host registers the event and decodes its metadata | `51` |
+| 13 | run | the device packs the id into a marker | `51` |
+| 14 | decode | the host names the marker | `51` → `T1_Zone5`, colour `0x42D4F4`, unit microseconds |
+
+This page follows one observability event through every stage, from the line of device-side source that declares it, through
+compile, link and load, to the device sending its id and the host turning that id back into the event's name and
+metadata.
+
+**The event.** For this example we picked a scoped event that carries three fields of metadata, a name, a colour and a
+time unit: `DeviceZoneScopedNCU("T1_Zone5", 0x42D4F4, kernel_profiler::TimeUnit::Microseconds)`. The unit is how a consumer should
+present the zone's duration; the device and the host still count in cycles. It marks the start and end of a region of code. It sits
+in the demo compute kernel next to nine others (`T1_Zone0` … `T1_Zone9`), which carry the two-field `ZoneColorMeta`. We
+chose it because it is in the middle of the kernel, so its numbers are not zeros. Every other kind of observability event gets
+its id the same way.
+
+**The data.** Every value below is real. It was read from the JIT-built ELF and the loader's output on a Blackhole
+p100a, running the demo program:
+
+```
+test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1
+```
+
+Why it works this way is in [the design document](EVENT_DESCRIPTOR_IDS.md); the metadata rules are in
+`tt_metal/observability/api/observability_event_meta.h` and the record layout in
+`tt_metal/hw/inc/hostdev/observability_event_descriptor.h`. This page only shows each step and where each number comes
+from.
+
+## Before you start: the fixed numbers
+
+These are constants, chosen once in the source. Every other number on this page is derived from them or from
+the kernel.
+
+| value | name | defined in | what it is |
+|---|---|---|---|
+| `0x06600000` | `TT_EVENT_DESCRIPTOR_STR_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_event_descriptor_str` (the strings) |
+| `0x06700000` | `TT_EVENT_DESCRIPTOR_META_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_event_descriptor_meta` (the records) |
+| `0x06800000` | `TT_EVENT_DESCRIPTOR_IDS_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_event_descriptor_ids` (the handles) |
+| `16` | `kRecordHeaderBytes` | `tt_metal/hw/inc/hostdev/observability_event_descriptor.h` | bytes of a record's fixed header; the event's metadata fields follow it |
+| `0xFFFF` | `TT_ZONE_STALL_ID` | `tt_metal/hw/inc/hostdev/observability_event_descriptor.h` | reserved id; the space handed out is `0 … 0xFFFE` |
+
+The three addresses are **made up**. None of these sections is ever loaded onto the device, so their addresses
+do not refer to real memory; they only have to exist so the linker can compute pointers between the sections.
+They continue a pattern already in `main.ld` (DPRINT's string sections sit at `0x06400000` and `0x06500000`): 1 MB
+apart, well away from the device's real memory map. `0x06800000` has one extra requirement, explained in step 10.
+
+**Reading hex dumps.** RISC-V stores a 32-bit number lowest byte first ("little-endian"), and `readelf -x` prints
+bytes in file order. So the number `0x06800005` is stored as the bytes `05 00 80 06` and shows up in a dump as
+`05008006`. To read a dumped word as a number, reverse its byte pairs.
+
+---
+
+## 1. Source: the observability event
+
+The event is **line 126** of `test_streaming_profiler_zones/kernels/zones_compute.cpp`; the host reports that line
+at the end. It is the sixth of the kernel's ten scoped events, `T1_Zone0` … `T1_Zone9`:
+
+```cpp
+ZONE_U(ZTAG "_Zone5", 30000u, 0x42D4F4u, kernel_profiler::TimeUnit::Microseconds);  // ~12 us, cyan, in us
+```
+
+`ZONE_U` is the demo kernel's own macro. On TRISC1 (math), where `ZTAG` is `"T1"`, it opens the event and then
+spins on the wall clock for 30000 ticks:
+
+```cpp
+{
+    DeviceZoneScopedNCU("T1_Zone5", 0x42D4F4u, kernel_profiler::TimeUnit::Microseconds);
+    // spin on the wall clock for 30000 ticks, ~12 us
+}
+```
+
+**The event's metadata is a struct.** Each zone macro takes exactly the fields of one fixed type and passes the event
+a constant value of it; the host gets that value back, field by field. `DeviceZoneScopedN(name)` passes
+`EventMeta{name}`, `DeviceZoneScopedNC(name, color)` passes `ZoneColorMeta{name, color}`, which the other nine zones
+use, and `DeviceZoneScopedNCU(name, color, unit)` passes this one:
+
+```cpp
+// tt_metal/observability/api/observability_event_meta.h
+enum class TimeUnit : uint8_t { Cycles, Nanoseconds, Microseconds, Milliseconds };
+
+struct ZoneUnitMeta {
+    const char* name;
+    uint32_t color;  // 0xRRGGBB
+    TimeUnit unit;
+};
+```
+
+Underneath, every macro hands its value to `TT_OBSERVABILITY_EVENT`, the metadata API in
+`tt_metal/hw/inc/hostdev/observability_event_descriptor.h`. That takes any **simple aggregate**, a struct with public data members
+only, so a new macro with a new type needs no change below it:
+
+- each field is a string literal (`const char*`), an integer, enum or `bool` of 1, 2, 4 or 8 bytes, or a nested
+  struct that follows the same rules;
+- 1 to 8 fields per struct;
+- the first field is the event's name;
+- every value is a compile-time constant.
+
+Breaking a rule (an array, a `float`, a base class, …) fails the build with one readable error. The device never sees
+any of this: it only ever has the event's descriptor id.
+
+## 2. Preprocess: the event gets a label name
+
+> **None of the numbers below is the descriptor id, and none is part of it.** They only spell the *name* of an
+> assembler label, so the next steps can refer to the handle. The id is the label's *address*, which the
+> linker (step 4) and the loader (step 9) decide. The name is gone once the file is assembled.
+
+`DeviceZoneScopedNCU(name, color, unit)` expands to `TT_OBSERVABILITY_EVENT(hash, ZoneUnitMeta{name, color, unit})`,
+which spells the label name from three parts:
+
+| part | value | from | why it is in the name |
+|---|---|---|---|
+| `TT_PROFILER_TU_ID` | `0` | the JIT compile command: `-DTT_PROFILER_TU_ID=0`, the source's index in its link | two sources of one link can be merged into one assembly by LTO; this keeps their names apart |
+| `__COUNTER__` | `6` | the seventh event in this source: `0` is `STACK-OVERFLOW` (in `kernel_profiler_streaming.hpp`), `1`–`5` are `T1_Zone0`–`T1_Zone4` | keeps the names of different events in one source apart |
+| hash of the value | `8a905e60814d8ac4` | an FNV-1a hash of the metadata value: its type and every field, here `"T1_Zone5"`, `0x42D4F4` and `TimeUnit::Microseconds` | an event inside a template can be instantiated with different values (a colour from a template parameter); they share the counter, so the hash keeps them apart |
+
+Label name: **`__tt_observability_event_0_6_8a905e60814d8ac4`**. Two different events, or one event with two different values, must
+not share a name; nothing else depends on it.
+
+> **Naming the label is an optimization, not a requirement.** An event could give its handle an anonymous local label,
+> and every copy would still get a correct, unique id with its own record. What a fixed name buys is deduplication:
+> when the compiler expands one event many times (an event in an `inline` function called from ten places), every copy
+> carries the same label, and the `.ifndef` from step 3 emits the handle and the record only for the first. The event
+> gets one id and one record however many copies of its code exist, which saves id space and keeps the host's table to
+> one entry per event. Sharing a name is also what makes the value hash necessary: copies may share one record only if
+> they carry the same value.
+>
+> The deduplication works within one source file. An event in a header that two sources include still gets two ids,
+> one per source: `TT_PROFILER_TU_ID` is part of the name precisely to keep those two apart.
+
+**Why the TU id and the counter are not enough.** They give a number per *place in the source*, and one place can
+carry several values:
+
+```cpp
+template <uint32_t Color>
+void colored_zone() {
+    // __COUNTER__ is expanded here, once
+    DeviceZoneScopedNCU("Zone", Color, kernel_profiler::TimeUnit::Microseconds);
+}
+
+void kernel_main() {
+    colored_zone<0xFF0000>();   // red
+    colored_zone<0x00FF00>();   // green
+}
+```
+
+The preprocessor runs before templates are instantiated, so `__COUNTER__` becomes one number when the template is
+read, and both instantiations emit the same label. Without the hash, the `.ifndef` from step 3 would skip the second
+copy's handle and record, and its `lui`/`addi` would load the first copy's id: one id, one record holding red, and
+green zones silently reported as red. With the hash, red and green get two labels, so two ids and two records, while
+copies with the same value still share one label and are deduplicated:
+
+| label made of | same value | different values |
+|---|---|---|
+| TU id + counter | one event (right) | one event, wrong values |
+| TU id + counter + value hash | one event (right) | one event per value (right) |
+
+**Collision odds.** Only values of the *same* event compete, since the TU id and counter already separate different
+events. For a 64-bit hash, k distinct values of one event collide with probability about k² / 2⁶⁵: for **1,000**
+distinct values that is about **3 × 10⁻¹⁴** (real template events have a handful of values). A collision would
+behave like the case without the hash, so it is not checked for.
+
+## 3. Compile: the struct becomes directives, plus two instructions
+
+**How a struct becomes assembler text.** The event is one `asm` statement whose text is not written out by hand but
+computed by the compiler:
+
+```cpp
+static constexpr auto tt_event_meta = ::tt::observability_event::ZoneUnitMeta{
+    "T1_Zone5",
+    0x42D4F4,
+    kernel_profiler::TimeUnit::Microseconds};
+asm((::tt::observability_event::detail::emit_event(
+        tt_event_meta, "__tt_observability_event_0_6", __FILE__, __LINE__))
+    : "=r"(v));
+```
+
+`emit_event` is a `constexpr` function, so GCC runs it **during compilation** and uses the text it returns as the asm
+template. It walks the struct's fields with a C++17 structured binding, here `auto& [name, color, unit] = meta;`,
+finding how many fields there are by testing how many initializers `T{...}` accepts, and writes one directive per
+field. A binding needs a fixed number of names, so the field walk (`for_each_field`, in
+`observability/api/observability_event_meta.h`) checks the field count and uses the binding written for it; those are
+written out for 1 to 8 fields, which is where the limit of 8 fields per struct comes from. Nothing of it runs on the
+device. The text it returns for this event:
+
+```asm
+.ifndef __tt_observability_event_0_6_8a905e60814d8ac4
+.pushsection .tt_event_descriptor_ids,"",@progbits
+__tt_observability_event_0_6_8a905e60814d8ac4:	.byte 0                        # the handle: exactly one byte
+.popsection
+.pushsection .tt_event_descriptor_meta,"",@progbits
+.balign 4
+.long __tt_observability_event_0_6_8a905e60814d8ac4                            # header: id slot
+.pushsection .tt_event_descriptor_str,"MS",@progbits,1
+8880:	.asciz "tt::observability_event::ZoneUnitMeta:sii"
+.popsection
+.long 8880b                                                     # header: signature
+.pushsection .tt_event_descriptor_str,"MS",@progbits,1
+8880:	.asciz "/localdev/…/kernels/zones_compute.cpp"
+.popsection
+.long 8880b                                                     # header: file
+.long 126                                                       # header: line
+.pushsection .tt_event_descriptor_str,"MS",@progbits,1
+8880:	.asciz "T1_Zone5"
+.popsection
+.long 8880b                                                     # field 1, name: a pointer to the string
+.quad 4379892                                                   # field 2, color: 0x42D4F4, 8 bytes
+.quad 2                                                         # field 3, unit: Microseconds, 8 bytes
+.balign 4                                                       # a no-op: every field is a multiple of 4
+.popsection
+.endif
+	lui %0, %%hi(__tt_observability_event_0_6_8a905e60814d8ac4)
+	addi %0, %0, %%lo(__tt_observability_event_0_6_8a905e60814d8ac4)
+```
+
+The compiler replaces `%0` with a register (`a0` in this kernel).
+
+- `.byte 0` puts one byte in `.tt_event_descriptor_ids`. Its value is irrelevant; its **address** will be the id.
+- **The record** is a 16-byte header (id slot, signature, file, line) followed by the struct's fields in declaration
+  order: a string becomes a 4-byte pointer, and an integer, enum or bool, whatever its width, an 8-byte value,
+  sign-extended from a signed type. Every field is a multiple of 4 bytes, so nothing is padded. `ZoneUnitMeta` gives
+  **16 + 4 + 8 + 8 = 36 bytes**; `ZoneColorMeta` gives 28 and `EventMeta` 20. Records differ in size by type. The
+  section is never loaded on the device, so the wider integers cost no device memory.
+- **The signature** makes every record self-describing: `"<type name>:<field codes>"`, one code per field (`s` string,
+  `i` integer, enum or bool, braces around a nested struct's codes). `tt::observability_event::ZoneUnitMeta:sii` is
+  the name (a string), then the colour and the unit (two integers); the header's own four words are not in it. The
+  codes do not say how wide an integer is, because the two compilers disagree: a `long` is 4 bytes on the device and 8
+  on the host, and both must name the type alike. The host sizes and reads any record from its signature, without
+  knowing the type; the type name lets a reader ask for the struct back by name, and the reader narrows each value
+  into its own field's type.
+- `126` is `__LINE__` from step 1.
+
+**A richer struct works the same way.** A new macro can give its events any number of attributes, grouped however
+suits them, by passing its own type to the metadata API. A type with the style in a nested struct and a further
+field:
+
+```cpp
+struct Style { uint32_t color; uint8_t width; };
+struct MyZoneMeta { const char* name; Style style; uint16_t flags; };
+
+TT_OBSERVABILITY_EVENT(event, MyZoneMeta{"T1_Zone5", {0x42D4F4, 2}, 0x0001});
+```
+
+`emit_event` flattens the nested struct in place and marks its bounds with braces in the signature. The record body
+it writes after the same 16-byte header (the text `emit_event` returns for this value):
+
+| bytes | directive | field |
+|---|---|---|
+| 16–19 | `.long 8880b` → `"T1_Zone5"` | `name` |
+| 20–27 | `.quad 4379892` (`0x42D4F4`) | `style.color` |
+| 28–35 | `.quad 2` | `style.width` |
+| 36–43 | `.quad 1` | `flags` |
+
+Signature `"MyZoneMeta:s{ii}i"`, 44 bytes in all. The host reads it with no code of its own for this type, and
+`event.meta->as<MyZoneMeta>()` gives the struct back.
+
+Nothing is a number yet: the id is "wherever `__tt_observability_event_0_6_8a905e60814d8ac4` ends up".
+
+## 4. Link: the handle is placed
+
+The linker gathers every `.tt_event_descriptor_ids` byte of this image into one section and puts it at `TT_EVENT_DESCRIPTOR_IDS_VMA`,
+**`0x06800000`**. The bytes are laid end to end, one per event, in link order (each label also ends in its value's
+hash, shortened to `_…` here):
+
+```
+offset  address   label             event
+  0     06800000  __tt_observability_event_0_1_…   T1_Zone0
+  1     06800001  __tt_observability_event_0_2_…   T1_Zone1
+  2     06800002  __tt_observability_event_0_3_…   T1_Zone2
+  3     06800003  __tt_observability_event_0_4_…   T1_Zone3
+  4     06800004  __tt_observability_event_0_5_…   T1_Zone4
+  5     06800005  __tt_observability_event_0_6_…   T1_Zone5     ← this event
+  6     06800006  __tt_observability_event_0_7_…   T1_Zone6
+   …
+  9     06800009  __tt_observability_event_0_10_…  T1_Zone9
+ 10     0680000a  __tt_observability_event_0_11_…  TRISC-KERNEL (the whole-kernel event, opened by `trisck.cc`)
+ 11     0680000b  __tt_observability_event_0_0_…   STACK-OVERFLOW
+```
+
+`T1_Zone5` is the byte at **offset 5**, so its address, and its link-time id, is
+`0x06800000 + 5 =` **`0x06800005`**. The section is 12 bytes long because the image has 12 events (one byte each).
+
+## 5. Link: the instructions are filled in
+
+A 32-bit value cannot fit in one RISC-V instruction, so the id is split across two:
+
+| instruction | carries | for `0x06800005` |
+|---|---|---|
+| `lui` | the upper 20 bits | `0x06800` |
+| `addi` | the lower 12 bits | `0x005` = 5 |
+
+`lui` puts its 20 bits at the top of the register and `addi` adds the low 12, giving back `0x06800005`.
+
+The linker writes them into the kernel's code:
+
+```
+address  word      instruction
+7ee4:    06800537  lui  a0, 0x6800
+7ee8:    00550513  addi a0, a0, 5
+```
+
+- **`7ee4` / `7ee8`**: where the linker placed these two instructions. A kernel's code is linked right after its
+  RISC's firmware code (`.text __fw_export_text_end` in `main.ld`), which for TRISC1 ends at `0x7910`; this event
+  falls `0x5d4` bytes into the kernel.
+- **Reading the words**: in a `lui` word the immediate is the first 5 hex digits (`06800|537`); in an `addi`
+  word it is the first 3 (`005|50513`). The rest encodes the register (`a0`) and the opcode, and never changes.
+
+## 6. Link: the record is filled in
+
+`.tt_event_descriptor_meta` sits at `TT_EVENT_DESCRIPTOR_META_VMA`, **`0x06700000`**. Records are in the same order as the handles, and the
+five before ours are all 28-byte `ZoneColorMeta` records, so `T1_Zone5`'s record starts at
+`0x06700000 + 5 × 28 = 0x06700000 + 0x8c =` **`0x0670008c`**. Its 36 bytes, as `readelf -x` prints them:
+
+```
+0x0670008c:  05008006  d3006006  2a006006  7e000000  fd006006  f4d44200  00000000  02000000  00000000
+```
+
+The nine groups are the record's nine 4-byte words from step 3, in file byte order; each integer field takes two.
+Reversing each field's bytes gives the number:
+
+| word | bytes in file | as a number | meaning |
+|---|---|---|---|
+| id slot | `05 00 80 06` | `0x06800005` | the handle's address from step 4; it becomes the id at load (step 11) |
+| signature | `d3 00 60 06` | `0x066000d3` | where `"tt::observability_event::ZoneUnitMeta:sii"` starts in `.tt_event_descriptor_str` |
+| file | `2a 00 60 06` | `0x0660002a` | where the file path starts in `.tt_event_descriptor_str` |
+| line | `7e 00 00 00` | `0x7e` = 126 | the line from step 1 |
+| field 1, `name` | `fd 00 60 06` | `0x066000fd` | where `"T1_Zone5"` starts in `.tt_event_descriptor_str` |
+| field 2, `color` | `f4 d4 42 00 00 00 00 00` | `0x42d4f4` | the colour, stored as the value itself, in 8 bytes |
+| field 3, `unit` | `02 00 00 00 00 00 00 00` | `2` | `TimeUnit::Microseconds`, in 8 bytes like every integer |
+
+**Where `0x066000fd` comes from.** `.tt_event_descriptor_str` sits at `TT_EVENT_DESCRIPTOR_STR_VMA`, `0x06600000`, and is just the
+strings of all events packed back to back, each ending in a `\0` byte, in the order the events were emitted:
+
+| starts at | offset | string | its size (with `\0`) |
+|---|---|---|---|
+| `0x06600000` | 0 | `tt::observability_event::ZoneColorMeta:si` (the other zones' signature) | 42 |
+| `0x0660002a` | 42 | `/localdev/…/zones_compute.cpp` | 124 |
+| `0x066000a6` | 166 | `T1_Zone0` | 9 |
+| `0x066000af` | 175 | `T1_Zone1` | 9 |
+| … | | | |
+| `0x066000d3` | 211 | `tt::observability_event::ZoneUnitMeta:sii` (this event's signature) | 42 |
+| **`0x066000fd`** | **253** | **`T1_Zone5`** | 9 |
+
+`253` is how many bytes of strings came **before** it: `42 + 124 + 5 × 9 + 42 = 253`. Strings that several events
+share appear only once: the section is marked mergeable (`"MS"` in step 3), so the linker keeps one copy of the file
+path and of the `ZoneColorMeta:si` signature, and every `T1_ZoneN` record points at it.
+
+The host turns a pointer back into a string by subtracting the section's address: `0x066000fd − 0x06600000 = 253`,
+then reads from byte 253 up to the next `\0`.
+
+## 7. Link: the relocations are kept
+
+A relocation is the linker's note to itself: "the word at address X holds symbol S, encoded as type T". The link
+command has `-Wl,--emit-relocs`, which tells the linker to leave these notes in the ELF instead of discarding them.
+The three that mention this handle:
+
+```
+at address  type            symbol
+00007ee4    R_RISCV_HI20    __tt_observability_event_0_6_8a905e60814d8ac4
+                            ↑ the lui from step 5 (upper 20 bits)
+00007ee8    R_RISCV_LO12_I  __tt_observability_event_0_6_8a905e60814d8ac4
+                            ↑ the addi from step 5 (lower 12 bits)
+0670008c    R_RISCV_32      __tt_observability_event_0_6_8a905e60814d8ac4
+                            ↑ the record's id slot from step 6 (all 32 bits)
+```
+
+These three lines are exactly the list of places the host will change in steps 10 and 11. They sit among 19,674
+relocations in this ELF (910 of them for `.text`).
+
+## 8. Cache: nothing of it is loadable
+
+The ELF goes into the JIT cache as `kernels/zones_compute/15341671668945772599/trisc1/trisc1.elf`. Only two of its
+segments are copied to the device:
+
+```
+01  .text
+02  .data .bss
+```
+
+No `.tt_event_descriptor_*` section is in either, so the device never receives a byte of them. The file on disk is never
+modified again; every process rebases its own in-memory copy.
+
+## 9. Load: the image gets a block
+
+When the program is launched, the host reads each kernel ELF (`llrt::get_risc_binary`) and gives it the next free block of
+the process's id space, starting from 0.
+
+**How many ids an image needs.** Every event emitted exactly one byte into `.tt_event_descriptor_ids` (step 3), so the
+section's size in bytes is the number of events. The loader reads that size from the section header. This image's
+section is 12 bytes, so it needs 12 ids.
+
+The images this run loaded, in load order. The streaming profiler's own kernels load first: its clock-sync kernel
+(`tile_sync`) has 2 events. Next come the two data-movement kernels, with
+15 events each because `--markers 1` compiles three point markers into them (`_Event`, `_Data`, `_Iter`). The compute
+kernels have 12:
+
+| load order | image | `.tt_event_descriptor_ids` size = events | block |
+|---|---|---|---|
+| 1st–2nd | the profiler's kernels: `tile_sync` on BRISC and on a DRAM core | 2, 2 | `[0, 4)` |
+| 3rd | `zones_dm/…/ncrisc.elf` | 15 | `[4, 19)` |
+| 4th | `zones_dm/…/brisc.elf` | 15 | `[19, 34)` |
+| 5th | `zones_compute/…/trisc0.elf` | 12 | `[34, 46)` |
+| **6th** | **`zones_compute/…/trisc1.elf`** | **12** | **`[46, 58)`** |
+| 7th | `zones_compute/…/trisc2.elf` | 12 | `[58, 70)` |
+
+`base = 4 + 15 + 15 + 12 = 46`. Our event was at offset 5 in step 4, so its id becomes **`46 + 5 = 51`**. In all,
+70 of the 65,535 ids are assigned. Which profiler kernels load, and so where the demo's blocks start, depends on the
+card; on a p300a, the Ethernet clock and relay kernels load too, and the profiler's kernels take 13 ids.
+
+## 10. Load: the instructions are rewritten
+
+The id is now 51 (step 9). The loader takes the two `.text` relocations from step 7 and writes 51 into them,
+split the same way the linker split `0x06800005` in step 5:
+
+| instruction | carries | for `51` (`0x00000033`) |
+|---|---|---|
+| `lui` | upper 20 bits, rounded: `(51 + 0x800) >> 12` | `0` |
+| `addi` | lower 12 bits: `51 & 0xfff` | `0x033` = 51 |
+
+(The `+ 0x800` is there because `addi` treats its 12 bits as signed; it only matters for values whose bit 11 is
+set, and 51 is not one of them.)
+
+```
+         on disk                           in memory
+7ee4:  06800537  lui  a0, 0x6800     →   00000537  lui  a0, 0x0
+7ee8:  00550513  addi a0, a0, 5      →   03350513  addi a0, a0, 51
+```
+
+Only the immediate digits change (`06800 → 00000`, `005 → 033`). The `lui` now loads 0, because 51 fits in the
+`addi` alone; it stays anyway, since the loader rewrites numbers in place and never removes an instruction.
+
+**Why the linker script uses a high address.** At link time the `lui` is only kept if it has something to load.
+Had the section been linked at a small address (below 4096), the `lui` would have loaded 0 and the linker would
+have deleted it, leaving just the `addi`, which can hold at most 2047. The loader could then never give that event
+an id above 2047. Linking at the high address `0x06800000` guarantees every event keeps its `lui`, so the loader
+can write any id up to `0xFFFE`.
+
+## 11. Load: the record is rewritten
+
+The third relocation from step 7 points at `0x0670008c`, the id slot of `T1_Zone5`'s record in `.tt_event_descriptor_meta`. That
+address is *where* the value sits and does not change; the loader replaces the value inside it with the same 51, as
+the whole 32-bit word (`R_RISCV_32`, stored as the bytes `33 00 00 00`). The rest of the record is untouched:
+
+```
+0x0670008c:  05008006 d3006006 …   →   33000000 d3006006 …
+```
+
+**Getting from `0x0670008c` to 51:**
+
+```
+id slot at 0x0670008c holds        0x06800005      (step 6)
+minus where .tt_event_descriptor_ids was linked − 0x06800000   = 5, the event's offset
+plus this image's block start      + 46            (step 9)
+                                   = 51
+```
+
+**After steps 10 and 11, the same 51 is in three places:**
+
+| section | what holds 51 | who uses it |
+|---|---|---|
+| `.tt_event_descriptor_ids` | the handle's address: the section now starts at 46, and this is byte 5 | the loader (it is where the 51 came from) |
+| `.text` | the `lui`/`addi` pair, which together produce 51 | the device, which puts it in the marker (step 13) |
+| `.tt_event_descriptor_meta` | the record's id slot | the host, which maps 51 to the event (step 12) |
+
+The device and the host never consult each other; they agree because both were filled in from the same symbol.
+
+## 12. Load: the event and its metadata are registered
+
+The registry walks `.tt_event_descriptor_meta` from the start, one record at a time. For each record it reads the 16-byte
+header, follows the signature pointer, and lets the field codes after the `:` say how many bytes follow and what
+they are. For `T1_Zone5`, `sii` means a 4-byte string pointer, then two 8-byte integers; the record is 36 bytes, and
+the next one starts right after it. It turns every string pointer back
+into a string (subtract `0x06600000`, read up to `\0`, as in step 6) and publishes:
+
+```
+descriptors[51] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 126,
+                   meta = "tt::observability_event::ZoneUnitMeta:sii" { "T1_Zone5", 0x42d4f4, Microseconds } }
+```
+
+A reader gets the struct back by asking for its type. `as<T>()` checks the signature against `T`'s and walks `T`'s
+fields with the same structured binding the compiler used in step 3, filling each one in and narrowing each integer
+into its field's type. The host includes `observability/api/observability_event_meta.h` and the device the copy of it
+that the JIT build stages, so both name the type alike. If a record has `T`'s name but not its fields, or a value that
+does not fit `T`'s field, the type differs between the two sides; `as<T>()` then logs a warning naming both
+signatures and returns nothing:
+
+```cpp
+if (auto v = event.meta->as<tt::observability_event::ZoneUnitMeta>()) {
+    // v->name == "T1_Zone5", v->color == 0x42D4F4, v->unit == TimeUnit::Microseconds
+}
+```
+
+This happens before the image's bytes are copied to the device, so the event is known before the event can fire.
+
+## 13. Run: the device packs the marker
+
+**The id is already decided.** It was fixed at load time (step 10): 51 is written into the bytes of the kernel's
+code before the kernel is copied to the device. Nothing the device does at run time chooses, computes or looks up
+the id.
+
+What the device does need is the value *in a register*, to store it into the marker. So when the event closes, the
+two instructions from step 10 copy that constant into register `a0`, the same way a kernel loads any literal
+number such as `x = 51`:
+
+```
+7ee4:  lui  a0, 0x0         a0 = 0
+7ee8:  addi a0, a0, 51      a0 = 0 + 51 = 51
+```
+
+They read no memory and depend on nothing at run time; they would produce 51 on any core, every time.
+
+**Building the marker word.** The first word of an event packet holds two things side by side: a packet type in the
+top 5 bits and the descriptor id in the bottom 27 bits. The source line that builds it is `ppfmt::w0` in
+`kernel_profiler_streaming.hpp`:
+
+```cpp
+word0 = (type << 27) | (id & 0x7FFFFFF);      // 0x7FFFFFF = the low 27 bits set
+```
+
+For this event, `type` is 3 (`ZONE_S`, the short 2-word packet for a scoped event) and `id` is 51:
+
+```
+type << 27        = 3 << 27   = 0x18000000
+id & 0x7FFFFFF    = 51        = 0x00000033     (51 is far below 2^27, so the mask changes nothing)
+word0 = OR of the two         = 0x18000033
+```
+
+The compiler turns that line into these instructions:
+
+```
+7f34:  slli a0, a0, 5          ┐ id & 0x7FFFFFF: shifting left by 5 and back right by 5 pushes the top 5 bits
+7f3c:  srli a0, a0, 5          ┘ out and brings zeros in, leaving the low 27 bits. a0 = 51.
+7f38:  lui  a1, 0x18000        a1 = 0x18000 << 12 = 0x18000000 = 3 << 27   (the type, already in position)
+7f40:  or   a0, a0, a1         a0 = 0x18000000 | 51 = 0x18000033
+7f54:  sw   a0, -2048(t1)      store word0 into this RISC's ring buffer
+```
+
+> The `5` in `slli`/`srli` is the **width of the type field** (32 − 27 = 5 bits). It has nothing to do with our
+> event being at offset 5; that is a coincidence of this example.
+
+word0 = **`0x18000033`**: type 3 in the top 5 bits, id 51 (`0x33`) in the bottom 27. An event too long for the
+2-word packet ships type 2 (`ZONE_ATOMIC`) instead, giving `0x10000033`; the id part is the same.
+
+The metadata adds nothing here: the packet is the same two words whatever struct the event carries.
+
+## 14. Decode: the host names it
+
+The relay carries the ring buffer to the host. The decoder masks off the type to recover the id,
+`0x18000033 & 0x7FFFFFF = 51` (`0x7FFFFFF` is 27 one-bits), and calls `descriptor_of(51)`, which is one array load:
+
+```
+descriptors[51]  →  "T1_Zone5"  zones_compute.cpp:126  ZoneUnitMeta{ color 0x42d4f4, unit Microseconds }
+```
+
+A consumer reads the metadata from there with `as<ZoneUnitMeta>()`: it can draw `T1_Zone5` in its own colour and
+show its duration in microseconds. A run of this program that completes its capture receives every event: 105 scoped events
+and 12 point events, with 0 stalls.
+
+---
+
+**Next run.** Another process may load the images in a different order and give `trisc1.elf` a different block.
+The ELF on disk still says `0x06800005`; only the in-memory copy, and so the id on the wire, changes. Names and
+metadata never change.
+
+## Reproduce
+
+```sh
+R=runtime/sfpi/compiler/bin/riscv-tt-elf-readelf
+O=runtime/sfpi/compiler/bin/riscv-tt-elf-objdump
+E=<cache>/kernels/zones_compute/<hash>/trisc1/trisc1.elf  # as linked
+X=$E.xip.elf                                              # as loaded, written by the loader
+
+$R -s -W $E | grep __tt_observability_event_              # step 4: handles and their addresses
+$O -d --start-address=0x7ee4 --stop-address=0x7eec $E     # step 5
+$R -x .tt_event_descriptor_meta $E                        # step 6: records (T1_Zone5's at 0x0670008c)
+$R -p .tt_event_descriptor_str $E                         # step 6: strings and their offsets
+$R -r -W $E | grep __tt_observability_event_0_6_          # step 7
+$R -l -W $E | grep -A3 "Segment Sections"                 # step 8
+$R -S -W $X | grep tt_event_descriptor_ids                # step 9: section address = base, size = events
+$O -d --start-address=0x7ee4 --stop-address=0x7eec $X     # step 10
+$R -x .tt_event_descriptor_meta $X                        # step 11
+```
+
+The `.xip.elf` is rewritten on every load, so it shows the block the *last* process gave the image.
