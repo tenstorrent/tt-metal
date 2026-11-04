@@ -36,8 +36,9 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 # Since 1127.3: QKV, the head split and rotary as one generated op (nomic_qkv_rotary_heads, about
 # 1292 alone) and the layer norms as one generated op on its own ND layout, the residual stream
 # moved onto it (nomic_residual_layer_norm; router_front_end and routed_combine take the batch
-# unflattened), 2026-11-04.
-EXPECTED_SEQUENCES_PER_S = 1336.2
+# unflattened), 2026-11-04. Since 1336.2: the MoE dispatch and combine as two generated ops
+# (nomic_moe_dispatch, nomic_moe_combine), 2026-11-04.
+EXPECTED_SEQUENCES_PER_S = 1380.2
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
