@@ -24,6 +24,8 @@ replays alternate CCL slots (`layer_forward(twice=True)`).
 
 from __future__ import annotations
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -292,23 +294,73 @@ def test_full_size_encoder_trace(mesh_device, sp_axis, num_links, config, refere
         trace.time_replays(f"full-size patch embed + {config.num_hidden_layers}-layer encoder")
 
 
+def model_inputs(mesh_device, sp_axis, num_links, config, reference):
+    """`(model, pixels, grid_thws)`: the full model with the checkpoint's weights, and the pixels
+    `goldens.py` used."""
+    sequence_parallel, ccl = ring_parallel(mesh_device, sp_axis, num_links)
+    tt = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=sequence_parallel, ccl=ccl)
+    tt.load_torch_state_dict(reference.state_dict())
+    pixels, grid_thws = random_patches(config, [(1, H, W)], SEED)
+    return tt, pixels, grid_thws
+
+
+def check_model(saved, out, config, parallel, label=""):
+    check_quality(
+        saved("mm_projector"),
+        out,
+        ENCODER_PCC,
+        MODEL_RELATIVE_RMSE,
+        config,
+        parallel.sp_factor,
+        f"{label}model",
+        merged=True,
+    )
+
+
 @RING
 @CHECKPOINT
 def test_full_size_model(mesh_device, sp_axis, num_links, config, reference, saved):
     """The full model (patch embed, all 27 blocks, final norm, patch merger, projector) on the pixels
     `goldens.py` used, against the saved `mm_projector` output."""
-    sequence_parallel, ccl = ring_parallel(mesh_device, sp_axis, num_links)
-    tt = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=sequence_parallel, ccl=ccl)
-    tt.load_torch_state_dict(reference.state_dict())
-    golden = saved("mm_projector")
-    pixels, grid_thws = random_patches(config, [(1, H, W)], SEED)
-    check_quality(
-        golden,
-        tt.run(pixels, grid_thws),
-        ENCODER_PCC,
-        MODEL_RELATIVE_RMSE,
-        config,
-        tt.parallel.sp_factor,
-        "model",
-        merged=True,
-    )
+    tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference)
+    check_model(saved, tt.run(pixels, grid_thws), config, tt.parallel)
+
+
+@RING_TRACE
+@CHECKPOINT
+def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, reference, saved):
+    """`test_full_size_model` traced: the device forward (patch embed through projector) in one trace.
+    Host prep, the input writes and the gather stay outside it. Logs the traced device time, then one
+    host-in, host-out run that rewrites the inputs, replays and gathers (`run` with the trace)."""
+    tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference)
+    merged_n = H * W // config.merge_area
+    inputs = tt.prepare_inputs(pixels, grid_thws)
+
+    def forward():
+        return tt(**inputs)
+
+    out = forward()
+    untraced = tt.gather_output(out, logical_n=merged_n)
+    ttnn.deallocate(out)
+
+    with Trace(mesh_device, forward) as trace:
+        out = tt.gather_output(trace.replay(), logical_n=merged_n)
+        assert_same_as_untraced(untraced, out, "model")
+        check_model(saved, out, config, tt.parallel, "traced ")
+        trace.time_replays(f"full-size model ({config.num_hidden_layers} layers, merger, projector)")
+
+        # Host in, host out. The inputs are rewritten in place, so the trace reads the new values.
+        start = time.perf_counter()
+        prepared = tt.prepare_inputs(pixels, grid_thws)
+        written = time.perf_counter()
+        replayed = trace.replay()
+        ran = time.perf_counter()
+        out = tt.gather_output(replayed, logical_n=merged_n)
+        done = time.perf_counter()
+        assert all(prepared[k] is inputs[k] for k in ("patches", "pos_emb", "logical_n"))
+        assert_same_as_untraced(untraced, out, "model, host in, host out")
+        logger.info(
+            f"full-size model host in, host out: {(done - start) * 1e3:.1f} ms "
+            f"(host prep + input writes {(written - start) * 1e3:.1f} ms, traced replay "
+            f"{(ran - written) * 1e3:.1f} ms, gather {(done - ran) * 1e3:.1f} ms)"
+        )
