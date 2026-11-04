@@ -25,7 +25,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
-    convolution_page_channels,
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
@@ -168,9 +167,12 @@ def reconstruct_convolution_at_sp_rank(
     tp_axis: int,
     sp_rank: int,
     config: KDAConfig,
+    page_channels: int | None,
 ) -> torch.Tensor:
-    """Reconstruct grouped Q/K/V convolution state at one sequence rank, as ``[1, K-1, W]`` rows."""
-    page_channels = convolution_page_channels(config)
+    """Reconstruct grouped Q/K/V convolution state at one sequence rank, as ``[1, K-1, W]`` rows.
+
+    ``page_channels`` is the layer's ``convolution_page_channels``, the layout of ``tensor``.
+    """
     shards = [decode_tail(shard, page_channels) for shard in _device_shards(tensor)]
     local_width = config.num_heads // tuple(mesh_device.shape)[tp_axis] * config.head_k_dim
     columns = tuple(mesh_device.shape)[1]
@@ -231,6 +233,7 @@ def check_kimi_k3_accuracy(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     *,
+    page_channels: int | None,
     pcc_threshold: float,
     nrmse: LayerNrmseThresholds,
     valid_length: int | None = None,
@@ -272,6 +275,7 @@ def check_kimi_k3_accuracy(
             tensor_parallel_axis,
             sp_rank,
             case.config,
+            page_channels,
         )
         recurrent_pcc, recurrent_failures = compare_cpu_device(
             f"{name} sp_rank={sp_rank} recurrent state",
@@ -511,6 +515,7 @@ def build_layer(
     *,
     active_seq_len: int,
     summary_group_chunks: int | None = None,
+    convolution_page_channels: int | None = None,
 ) -> ttKDA:
     if summary_group_chunks is None:
         # Explicit small-model configurations preserve the established geometry coverage.
@@ -527,6 +532,7 @@ def build_layer(
             recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
             gated_rms_output_dtype=ttnn.bfloat16,
             output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+            convolution_page_channels=convolution_page_channels,
         ),
         active_seq_len=active_seq_len,
     )
@@ -562,6 +568,7 @@ def assert_matches_reference(
     sp_axis: int,
     tp_axis: int,
     config: KDAConfig,
+    page_channels: int | None,
     label: str,
     nrmse: LayerNrmseThresholds,
     state_linf_threshold: float | None = 0.6,
@@ -596,7 +603,9 @@ def assert_matches_reference(
         )
         assert_accurate(
             expected_convolution,
-            reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, config),
+            reconstruct_convolution_at_sp_rank(
+                state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, config, page_channels
+            ),
             name=f"{label} sp_rank={sp_rank} convolution",
             pcc_threshold=pcc_threshold,
             nrmse_threshold=nrmse.convolution,

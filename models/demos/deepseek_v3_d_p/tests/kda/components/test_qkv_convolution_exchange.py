@@ -22,11 +22,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_page_channels
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -39,8 +38,6 @@ pytestmark = [run_for_blackhole()]
 
 _CHANNEL_CHUNK_SIZE = 64
 _HISTORY_ROWS = 3
-# The layer's convolution tail layout at Kimi-K3's heads.
-_PAGE_CHANNELS = convolution_page_channels(kimi_k3_kda_config())
 _NRMSE_THRESHOLD = 0.008
 
 
@@ -199,7 +196,7 @@ class _Exchange:
         )
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         self.history_tt = ttnn.from_torch(
-            encode_tail(self.history, _PAGE_CHANNELS),
+            encode_tail(self.history, KDA_CONVOLUTION_PAGE_CHANNELS),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
@@ -226,7 +223,7 @@ class _Exchange:
             actual_end=actual_end,
             sequence_parallel_axis=self.sp_axis,
             memory_config=self.output_memory_config,
-            page_channels=_PAGE_CHANNELS,
+            page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
         )
 
     def to_host(self, outputs: tuple[ttnn.Tensor, ...]) -> list[list[torch.Tensor]]:
@@ -235,7 +232,7 @@ class _Exchange:
         return [
             [
                 torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0],
-                decode_tail(ttnn.to_torch(final), _PAGE_CHANNELS),
+                decode_tail(ttnn.to_torch(final), KDA_CONVOLUTION_PAGE_CHANNELS),
             ]
             for *parts, final in zip(q, k, v, carry, strict=True)
         ]

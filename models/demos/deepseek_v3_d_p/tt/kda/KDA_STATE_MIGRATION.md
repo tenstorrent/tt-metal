@@ -27,7 +27,8 @@ maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 
 * `recurrent`: `[1, H_local, D, D]` FP32 TILE, interleaved DRAM, stored `[k, v]`
 * `convolution`: `[1, SEG, (K-1) * 64]` BF16 ROW_MAJOR, interleaved DRAM, channel-paged with one
-  64-channel segment per page (`convolution_page_channels(config)` in `tt/kda/config.py`): page `c`
+  64-channel segment per page (`KDAProgramConfig.convolution_page_channels` = `KDA_CONVOLUTION_PAGE_CHANNELS`,
+  `tt/kda/state_contract.py`): page `c`
   holds the `K-1` history rows of channels `[64c, 64c + 64)`, history row `r` at element `64r`; channels run
   `[q_local | k_local | v_local]`, `D` per head inside a branch, `SEG = 3 * H_local * D / 64`
 

@@ -37,7 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config, kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
@@ -53,8 +53,8 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_page_channels
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
@@ -275,7 +275,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             columns = tuple(mesh_device.shape)[1]
             tp_size = tuple(mesh_device.shape)[TP_AXIS]
             history = KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE - 1
-            page_channels = convolution_page_channels(kimi_k3_kda_config())
+            page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
             per_chip = KimiK3Config.KDA_NUM_HEADS * KimiK3Config.KDA_HEAD_DIM // tp_size
             tp_shards = []
             for t in range(tp_size):

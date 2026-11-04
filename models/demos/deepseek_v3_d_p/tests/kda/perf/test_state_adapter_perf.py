@@ -221,6 +221,7 @@ def test_kimi_k3_state_adapter_cost(
             output,
             mesh_device,
             tensor_parallel_axis,
+            page_channels=layer.convolution_page_channels,
             pcc_threshold=_PCC_THRESHOLD,
             nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
         )

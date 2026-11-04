@@ -3,9 +3,9 @@
 """The KDA state migration contract: segment geometry, contract layouts, per-layer export/import.
 
 ``ttKDA`` reads and writes its state in the *native* form: ``recurrent`` ``[1, H_local, D, D]`` FP32
-TILE and ``convolution`` ``[1, SEG, (K-1)*64]`` BF16 ROW_MAJOR, channel-paged with 64-channel pages
-(``convolution_page_channels(config)`` in ``tt/kda/config.py``), both interleaved DRAM, heads sharded across TP and the complete
-state replicated across SP. The kernels accept nothing else, so a layer runs on one native scratch
+TILE and ``convolution`` ``[1, SEG, (K-1)*64]`` BF16 ROW_MAJOR, channel-paged with 64-channel pages (the layer's
+``KDAProgramConfig.convolution_page_channels`` set to ``KDA_CONVOLUTION_PAGE_CHANNELS``), both interleaved DRAM, heads
+sharded across TP and the complete state replicated across SP. The kernels accept nothing else, so a layer runs on one native scratch
 carry, loaded from and stored back to the *contract* form, which is the carries' only store and what
 migration reads.
 
@@ -60,11 +60,10 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_page_channels, convolution_tail_shape
+from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_shape
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS, KDA_RECURRENT_BAND_WIDTH
 
-KDA_RECURRENT_BAND_WIDTH = 32
-KDA_CONVOLUTION_HALF_WIDTH = 64
 KDA_RECURRENT_DTYPE = ttnn.float32
 KDA_CONVOLUTION_DTYPE = ttnn.bfloat16
 _RECURRENT_ELEMENT_BYTES = 4
@@ -90,8 +89,9 @@ class KdaContractGeometry:
             raise ValueError("KDA contract geometry needs positive SP and TP sizes")
         if self.num_heads % self.tensor_parallel_size != 0:
             raise ValueError(f"{self.num_heads} heads cannot be divided over TP{self.tensor_parallel_size}")
-        if self.head_dim % KDA_CONVOLUTION_HALF_WIDTH != 0:
-            raise ValueError(f"head_dim {self.head_dim} must be a multiple of {KDA_CONVOLUTION_HALF_WIDTH}")
+        # Whole convolution pages per head; this also gives whole recurrent bands.
+        if self.head_dim % KDA_CONVOLUTION_PAGE_CHANNELS != 0:
+            raise ValueError(f"head_dim {self.head_dim} must be a multiple of {KDA_CONVOLUTION_PAGE_CHANNELS}")
 
     @classmethod
     def from_kda_config(
@@ -102,12 +102,6 @@ class KdaContractGeometry:
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
         if config.head_k_dim != config.head_v_dim:
             raise ValueError("the KDA state contract assumes head_k_dim == head_v_dim")
-        page_channels = convolution_page_channels(config)
-        if page_channels != KDA_CONVOLUTION_HALF_WIDTH:
-            raise ValueError(
-                f"the KDA state contract needs the channel-paged convolution tail with {KDA_CONVOLUTION_HALF_WIDTH}"
-                f"-channel pages (one segment each); head_dim {config.head_k_dim} gives page_channels={page_channels}"
-            )
         return cls(
             num_heads=config.num_heads,
             head_dim=config.head_k_dim,
@@ -131,8 +125,11 @@ class KdaContractGeometry:
 
     @property
     def convolution_shape(self) -> tuple[int, int, int]:
-        """The native tail, channel-paged with one segment per page."""
-        return convolution_tail_shape(self.conv_history, self.convolution_width, KDA_CONVOLUTION_HALF_WIDTH)
+        """The native tail, channel-paged with one segment per page.
+
+        ``TtK3KdaAttention`` rejects a layer built with other ``convolution_page_channels``.
+        """
+        return convolution_tail_shape(self.conv_history, self.convolution_width, KDA_CONVOLUTION_PAGE_CHANNELS)
 
     # --- segments ---
     @property
@@ -141,7 +138,7 @@ class KdaContractGeometry:
 
     @property
     def halves(self) -> int:
-        return self.head_dim // KDA_CONVOLUTION_HALF_WIDTH
+        return self.head_dim // KDA_CONVOLUTION_PAGE_CHANNELS
 
     @property
     def recurrent_segment_bytes(self) -> int:
@@ -536,7 +533,7 @@ def convolution_segment_to_torch(raw: bytes, geometry: KdaContractGeometry) -> t
     if len(raw) != geometry.convolution_segment_bytes:
         raise ValueError(f"expected {geometry.convolution_segment_bytes} bytes, got {len(raw)}")
     return torch.frombuffer(bytearray(raw), dtype=torch.bfloat16).reshape(
-        geometry.conv_history, KDA_CONVOLUTION_HALF_WIDTH
+        geometry.conv_history, KDA_CONVOLUTION_PAGE_CHANNELS
     )
 
 
@@ -557,6 +554,6 @@ def assemble_convolution(segments: Mapping[int, torch.Tensor], geometry: KdaCont
     for segment, rectangle in segments.items():
         branch, tp_col, h_local, half = geometry.decompose_convolution(segment)
         head = tp_col * geometry.local_heads + h_local
-        start = (branch * geometry.num_heads + head) * geometry.head_dim + half * KDA_CONVOLUTION_HALF_WIDTH
-        out[:, start : start + KDA_CONVOLUTION_HALF_WIDTH] = rectangle
+        start = (branch * geometry.num_heads + head) * geometry.head_dim + half * KDA_CONVOLUTION_PAGE_CHANNELS
+        out[:, start : start + KDA_CONVOLUTION_PAGE_CHANNELS] = rectangle
     return out

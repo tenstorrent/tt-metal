@@ -17,8 +17,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
-    convolution_page_channels,
     convolution_tail_shape,
+    validate_convolution_page_channels,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -46,13 +46,13 @@ def _forward(layer: ttKDA, hidden: torch.Tensor, state: KdaState) -> tuple[ttnn.
         return layer.forward(_hidden_to_device(hidden, layer.device), state, make_actual_start(layer.device))
 
 
-def _assert_state_metadata(state: KdaState, config) -> None:
+def _assert_state_metadata(state: KdaState, config, page_channels: int | None) -> None:
     assert tuple(state.recurrent.shape) == (1, config.num_heads, config.head_k_dim, config.head_v_dim)
     assert state.recurrent.dtype == ttnn.float32
     assert state.recurrent.layout == ttnn.TILE_LAYOUT
     assert state.recurrent.memory_config() == ttnn.DRAM_MEMORY_CONFIG
     assert tuple(state.convolution.shape) == convolution_tail_shape(
-        config.conv_kernel_size - 1, config.q_dim + config.k_dim + config.v_dim, convolution_page_channels(config)
+        config.conv_kernel_size - 1, config.q_dim + config.k_dim + config.v_dim, page_channels
     )
     assert state.convolution.dtype == ttnn.bfloat16
     assert state.convolution.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -61,11 +61,22 @@ def _assert_state_metadata(state: KdaState, config) -> None:
 
 @pytest.mark.parametrize(
     ("head_k_dim", "head_v_dim", "page_channels"),
-    [(128, 128, 64), (64, 64, 32), (32, 32, None), (128, 64, None)],
+    [(128, 128, 64), (64, 64, 64), (256, 256, 64), (32, 32, None), (128, 96, None)],
 )
-def test_convolution_page_channels(head_k_dim: int, head_v_dim: int, page_channels: int | None) -> None:
+def test_convolution_page_channels_accepted(head_k_dim: int, head_v_dim: int, page_channels: int | None) -> None:
     config = replace(make_small_kda_test_config(), head_k_dim=head_k_dim, head_v_dim=head_v_dim)
-    assert convolution_page_channels(config) == page_channels
+    validate_convolution_page_channels(page_channels, config)
+
+
+# A page must be a positive whole number of tiles inside one head of Q, K and V.
+@pytest.mark.parametrize(
+    ("head_k_dim", "head_v_dim", "page_channels"),
+    [(32, 32, 64), (128, 96, 64), (128, 128, 0), (128, 128, -64), (128, 128, 16)],
+)
+def test_convolution_page_channels_rejected(head_k_dim: int, head_v_dim: int, page_channels: int, expect_error) -> None:
+    config = replace(make_small_kda_test_config(), head_k_dim=head_k_dim, head_v_dim=head_v_dim)
+    with expect_error(ValueError, "convolution_page_channels must be a positive multiple of 32"):
+        validate_convolution_page_channels(page_channels, config)
 
 
 def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> None:
@@ -100,7 +111,7 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
     )
     assert_accurate(
         golden_convolution,
-        decode_tail(ttnn.to_torch(convolution_tt), convolution_page_channels(config)),
+        decode_tail(ttnn.to_torch(convolution_tt), layer.convolution_page_channels),
         name="layer convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.003,
@@ -114,20 +125,28 @@ def test_allocate_state_contract(device: ttnn.Device) -> None:
     first = layer.allocate_state()
     second = layer.allocate_state()
 
-    _assert_state_metadata(first, config)
-    _assert_state_metadata(second, config)
+    _assert_state_metadata(first, config, None)
+    _assert_state_metadata(second, config, None)
     assert first.recurrent.buffer_address() != second.recurrent.buffer_address()
     assert first.convolution.buffer_address() != second.convolution.buffer_address()
 
 
-# head_dim 32 keeps the convolution tail token-paged; 128 and 64 make KDA page it by half a head.
-@pytest.mark.parametrize("head_dim", [32, 128, 64], ids=["head-32", "head-128", "head-64"])
-def test_forward_contract(device: ttnn.Device, head_dim: int) -> None:
+# The token-paged default, and the state contract's 64-channel pages at half a head and a whole head.
+@pytest.mark.parametrize(
+    ("head_dim", "page_channels"), [(32, None), (128, 64), (64, 64)], ids=["head-32", "head-128", "head-64"]
+)
+def test_forward_contract(device: ttnn.Device, head_dim: int, page_channels: int | None) -> None:
     config = make_small_kda_test_config(head_dim=head_dim)
     weights = random_weights(config)
     hidden = torch.randn(1, 64, config.hidden_size, generator=torch.Generator().manual_seed(109)).to(torch.bfloat16)
     golden_output, golden_state = kda_forward_reference(hidden, weights, config)
-    layer = ttKDA(device, config, weights, active_seq_len=32)
+    layer = ttKDA(
+        device,
+        config,
+        weights,
+        program_config=KDAProgramConfig(convolution_page_channels=page_channels),
+        active_seq_len=32,
+    )
     input_state = layer.allocate_state()
     input_recurrent_before = ttnn.to_torch(input_state.recurrent)
     input_convolution_before = ttnn.to_torch(input_state.convolution)
@@ -145,7 +164,7 @@ def test_forward_contract(device: ttnn.Device, head_dim: int) -> None:
     assert first_output.dtype == ttnn.float32
     assert first_output.layout == ttnn.TILE_LAYOUT
     assert first_output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-    _assert_state_metadata(final_state, config)
+    _assert_state_metadata(final_state, config, page_channels)
     assert next_state.recurrent is not input_state.recurrent
     assert next_state.convolution is not input_state.convolution
     assert input_state.recurrent.buffer_address() == recurrent_address
@@ -166,7 +185,7 @@ def test_forward_contract(device: ttnn.Device, head_dim: int) -> None:
     )
     assert_accurate(
         golden_convolution,
-        decode_tail(ttnn.to_torch(final_state.convolution), convolution_page_channels(config)),
+        decode_tail(ttnn.to_torch(final_state.convolution), page_channels),
         name="segmented convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.004,

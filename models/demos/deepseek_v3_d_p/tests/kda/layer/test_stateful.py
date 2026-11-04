@@ -9,7 +9,6 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_page_channels
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -70,7 +69,7 @@ def test_segmented_prefill_matches_reference_and_reuses_program(
     )
     assert_accurate(
         golden_convolution,
-        decode_tail(ttnn.to_torch(state.convolution), convolution_page_channels(config)),
+        decode_tail(ttnn.to_torch(state.convolution), layer.convolution_page_channels),
         name="segmented convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.004,

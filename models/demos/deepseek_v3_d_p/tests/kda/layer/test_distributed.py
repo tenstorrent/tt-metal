@@ -126,6 +126,7 @@ def test_sp_explicit_grouping_matches_reference(
             tensor_parallel_axis,
             sp_rank,
             config,
+            layer.convolution_page_channels,
         )
         assert_accurate(
             expected_state.recurrent,
@@ -206,6 +207,7 @@ def test_sp_segmented_prefill_matches_one_shot(
         tensor_parallel_axis,
         sp_rank=0,
         config=config,
+        page_channels=layer.convolution_page_channels,
     )
 
     chunked_state = layer.allocate_state(batch_size=1)
@@ -254,6 +256,7 @@ def test_sp_segmented_prefill_matches_one_shot(
         tensor_parallel_axis,
         sp_rank=0,
         config=config,
+        page_channels=chunk_layer.convolution_page_channels,
     )
     label = f"tp_axis={tensor_parallel_axis} group={summary_group_chunks}"
     assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.9999, nrmse_threshold=9e-06)
@@ -335,6 +338,7 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
             tensor_parallel_axis,
             sp_rank,
             config,
+            layer.convolution_page_channels,
         )
         assert_accurate(
             expected_state.recurrent.to(actual_recurrent.dtype),

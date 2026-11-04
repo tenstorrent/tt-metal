@@ -10,6 +10,7 @@ from typing import Literal
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 
 KDA_CHUNK_SIZE = ttnn.TILE_SIZE
 KDA_QKV_DTYPE = ttnn.bfloat16
@@ -60,18 +61,25 @@ KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 
-def convolution_page_channels(config: KDAConfig) -> int | None:
-    """Channels per page of KDA's convolution tail (``KdaState.convolution``), or None when it is token-paged.
+def validate_convolution_page_channels(page_channels: int | None, config: KDAConfig) -> None:
+    """Reject a convolution tail page that is not a positive multiple of a tile dividing both head dims.
 
-    The tail is ``qkv_causal_conv1d_silu``'s three-row history: token-paged ``[1, K-1, W]``, or channel-paged
-    ``[1, W / P, (K-1) * P]`` with ``P`` channels per page. KDA pages it by half a head when that is tile aligned, so at
-    Kimi-K3's head_dim 128 a page is one 64-channel convolution segment of the state migration contract and the slab copy
-    is a page copy. Other head sizes are token-paged, and so are non-square heads: a page must tile Q, K and V alike.
+    The tail is ``qkv_causal_conv1d_silu``'s three-row history: token-paged ``[1, K-1, W]`` (``page_channels`` None),
+    or channel-paged ``[1, W / P, (K-1) * P]`` with ``P`` channels per page. Dividing ``head_k_dim`` and ``head_v_dim``
+    keeps every page inside one head of Q, K or V.
     """
-    half_head = config.head_k_dim // 2
-    if config.head_k_dim != config.head_v_dim or half_head % ttnn.TILE_SIZE != 0:
-        return None
-    return half_head
+    if page_channels is None:
+        return
+    if (
+        page_channels <= 0
+        or page_channels % ttnn.TILE_SIZE
+        or config.head_k_dim % page_channels
+        or config.head_v_dim % page_channels
+    ):
+        raise ValueError(
+            f"convolution_page_channels must be a positive multiple of {ttnn.TILE_SIZE} dividing head_k_dim "
+            f"{config.head_k_dim} and head_v_dim {config.head_v_dim}, got {page_channels}"
+        )
 
 
 def convolution_tail_shape(history_rows: int, width: int, page_channels: int | None) -> tuple[int, int, int]:
@@ -136,6 +144,8 @@ class KDAProgramConfig:
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
+    # Channels per page of the convolution tail (``KdaState.convolution``); None keeps it token-paged.
+    convolution_page_channels: int | None = None
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -234,6 +244,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # The state migration contract's segment, so a slab copy of the convolution tail is a page copy.
+        convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
     )
 
 

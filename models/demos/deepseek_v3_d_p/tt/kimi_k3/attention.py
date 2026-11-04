@@ -29,6 +29,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state, device_scalar
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
@@ -197,6 +198,13 @@ class TtK3KdaAttention(LightweightModule):
     writes_kv = False
 
     def __init__(self, kda, layer_idx: int, tp_axis: int, num_links: int, tp_topology, scratch: KdaState):
+        # The scratch carry and the slabs hold the contract's convolution pages; a shape check alone cannot tell a
+        # token-paged tail from them when a device holds one 64-channel head.
+        if kda.convolution_page_channels != KDA_CONVOLUTION_PAGE_CHANNELS:
+            raise ValueError(
+                f"KDA layer {layer_idx} pages its convolution tail by {kda.convolution_page_channels} channels, but "
+                f"the state contract's slabs need convolution_page_channels={KDA_CONVOLUTION_PAGE_CHANNELS}"
+            )
         self.kda = kda
         self.layer_idx = layer_idx
         # BORROWED from the model and shared by its KDA layers: the only state `ttKDA.forward` reads.

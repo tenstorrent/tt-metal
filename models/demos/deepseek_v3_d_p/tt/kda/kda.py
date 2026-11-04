@@ -24,11 +24,11 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
-    convolution_page_channels,
     convolution_tail_shape,
     decay_projection_program_config,
     l1_when_it_fits,
     tuned_projection_matmul_configs,
+    validate_convolution_page_channels,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
@@ -138,7 +138,7 @@ class KdaState:
 
     ``recurrent`` is TP-local and must be replicated across the SP axis.
     ``convolution`` is the BF16 row-major DRAM stream tail, the last ``kernel_size - 1`` rows of
-    ``Q_local + K_local + V_local`` channels, token- or channel-paged as ``convolution_page_channels(config)``
+    ``Q_local + K_local + V_local`` channels, token- or channel-paged as ``KDAProgramConfig.convolution_page_channels``
     (``tt/kda/config.py``) chooses. Its channels are sharded across TP and the complete tail is replicated across SP. This history
     seeds the logical sequence start; the halo exchange supplies predecessor
     histories from projected tokens for the other segments. Construct state with
@@ -228,10 +228,11 @@ class ttKDA:
         self._recurrent_state_shape = ttnn.Shape(
             [1, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim]
         )
-        self._convolution_page_channels = convolution_page_channels(self.config)
+        validate_convolution_page_channels(program_config.convolution_page_channels, self.config)
+        self.convolution_page_channels = program_config.convolution_page_channels
         self._convolution_state_shape = ttnn.Shape(
             convolution_tail_shape(
-                self.config.conv_kernel_size - 1, self._convolution_width, self._convolution_page_channels
+                self.config.conv_kernel_size - 1, self._convolution_width, self.convolution_page_channels
             )
         )
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
@@ -607,7 +608,7 @@ class ttKDA:
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
             memory_config=self.qkv_memory_config,
-            page_channels=self._convolution_page_channels,
+            page_channels=self.convolution_page_channels,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(
