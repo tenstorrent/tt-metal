@@ -649,9 +649,11 @@ class GLM53MeshModel:
         for T in todo:
             inp = self._wave_ready.pop(T)
             t0 = time.perf_counter()
+            self.mesh.set_capturing(True)
             inp.trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
             inp.streams = self._wave_graph(inp)
             ttnn.end_trace_capture(self.device, inp.trace_id, cq_id=cq_id)
+            self.mesh.set_capturing(False)
             self.mesh.allocations_frozen[0] = True
             ttnn.synchronize_device(self.device)
             self.wave_traces[T] = inp
@@ -798,9 +800,11 @@ class GLM53MeshModel:
             logger.info(f"traced prefill: T={T} compiled in {time.perf_counter() - t0:.1f} s")
         for T, inp in new.items():
             t0 = time.perf_counter()
+            self.mesh.set_capturing(True)
             inp.trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
             inp.streams = self._prefill_graph(inp)
             ttnn.end_trace_capture(self.device, inp.trace_id, cq_id=cq_id)
+            self.mesh.set_capturing(False)
             self.mesh.allocations_frozen[0] = True  # no lazily allocated constants from here on (tt/kda.py)
             ttnn.synchronize_device(self.device)
             self.prefill_traces[T] = inp
@@ -853,9 +857,11 @@ class GLM53MeshModel:
         """Warm-up (compile) + capture one decode step on persistent inputs; returns the trace id and the
         captured output tensors. The warm-up and the capture both consume the token (state advances twice)."""
         self.warmup_decode(ids, host_positions)
+        self.mesh.set_capturing(True)
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
         outs = self.decode_step(self.ids_dev, self.positions)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=cq_id)
+        self.mesh.set_capturing(False)
         self.mesh.allocations_frozen[0] = True  # no lazily allocated constants from here on (tt/kda.py)
         return trace_id, outs
 
@@ -1012,8 +1018,10 @@ class GLM53MeshModel:
         returns ``(trace id, (logits, ids, draft ids, hn))``, transient outputs read after each ``replay``. Both
         passes consume the token (the KDA states advance twice; the MTP cache row at the position is rewritten)."""
         self.warmup_decode_with_draft(ids, host_positions)
+        self.mesh.set_capturing(True)
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
         outs = self.decode_step_with_draft(self.ids_dev, self.positions, self.mtp_positions)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=cq_id)
+        self.mesh.set_capturing(False)
         self.mesh.allocations_frozen[0] = True  # no lazily allocated constants from here on (tt/kda.py)
         return trace_id, outs

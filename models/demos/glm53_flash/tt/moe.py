@@ -1961,7 +1961,7 @@ class TtRoutedExperts(LightweightModule):
         rows' contributions in fp32 DST (one rounding) into [1,1,T,H] (rows past T zero)."""
         op = self._row_exchange("reduce", (int(y.padded_shape[-1]),), T)
         (out,) = op([y])
-        if self._rowx_checks_left > 0 and not self.mesh.allocations_frozen[0]:
+        if self._rowx_checks_left > 0 and not self.mesh.allocations_frozen[0] and not self.mesh.capturing:
             # diagnostic (GLM53_ROWX_CHECK=1: the first 64 eager calls = the warm-up step before any capture, where
             # the host may read back): the composite combine on the same y, compared per chip
             self._rowx_checks_left -= 1

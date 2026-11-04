@@ -103,7 +103,8 @@ def _allocated(t) -> bool:
 
 def _runtime_state(device) -> dict:
     return _RUNTIME.setdefault(
-        _runtime_key(device), {"frozen": [False], "transients": [], "memo": {}, "logged": set(), "fabric_ar": {}}
+        _runtime_key(device),
+        {"frozen": [False], "transients": [], "memo": {}, "logged": set(), "fabric_ar": {}, "capturing": [False]},
     )
 
 
@@ -417,6 +418,16 @@ class GLMMesh:
     @property
     def in_prefill(self) -> bool:
         return self._prefill_depth[0] > 0
+
+    @property
+    def capturing(self) -> bool:
+        """True between ``begin_trace_capture`` and ``end_trace_capture`` of a decode capture (``MeshModel.capture``
+        and ``capture_with_draft`` set it): host reads of device tensors are refused by the device then, so
+        diagnostics that read back (``GLM53_ROWX_CHECK``) skip the captured pass."""
+        return bool(_runtime_state(self.device)["capturing"][0])
+
+    def set_capturing(self, on: bool) -> None:
+        _runtime_state(self.device)["capturing"][0] = bool(on)
 
     @property
     def tp_allreduce_gather(self) -> bool:
