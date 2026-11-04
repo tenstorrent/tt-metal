@@ -135,9 +135,15 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
                                 output_memory_config.shard_spec()->shape[0] == output_height;
     bool output_width_and_height_fully_in_shard =
         output_height_sharded && output_memory_config.shard_spec()->shape[0] % output_height == 0;
+    // Second disjunct is TILE-only; the RM branch below dispatches on use_sharded_wh_rm, not use_sharded_wh.
     bool use_sharded_wh =
         native && ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
                    (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
+    // RM factory hardcodes num_hw_blocks_per_core = shard_height/H and writes each core's output shard from its own
+    // input shard, so RM demands the fully-in-shard subset with both shards assigned to cores in the same order.
+    bool use_sharded_wh_rm = native && input_width_and_height_fully_in_shard &&
+                             output_width_and_height_fully_in_shard &&
+                             input_tensor.shard_spec()->orientation == output_memory_config.shard_spec()->orientation;
 
     bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
 
@@ -145,10 +151,11 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
 
     switch (parallelization_strategy) {
         case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
-            if (use_sharded_wh) {
-                if (is_row_major) {
+            if (is_row_major) {
+                if (use_sharded_wh_rm) {
                     return TransposeWHShardedRMProgramFactory{};
                 }
+            } else if (use_sharded_wh) {
                 return TransposeWHShardedProgramFactory{};
             }
             return TransposeWHProgramFactory{};
