@@ -96,6 +96,36 @@ protected:
     distributed::MeshDevice& fixture_device() { return *mesh_device_; }
 };
 
+constexpr const char* kNonPublicMetadataGetterNames[] = {
+    "get_dataformat",
+    "get_tile_size",
+    "get_face_r_dim",
+    "get_face_c_dim",
+    "get_num_faces_r_dim",
+    "get_num_faces_c_dim",
+    "get_tile_r_dim",
+    "get_tile_c_dim",
+    "get_tile_hw",
+    "get_tile_num_faces",
+    "get_partial_face",
+    "get_narrow_tile"};
+
+// Metadata getters are available through each token's public API namespace.
+TEST_P(BindingTokenTileSizeBlackhole, QualifiedMetadataGetters) {
+    const TileSizeCase size = GetParam();
+    std::string source = "void kernel_main() {\n";
+    for (const char* getter : kNonPublicMetadataGetterNames) {
+        source += fmt::format(
+            "static_assert(::{0}(dfb::input_dfb) == {0}(dfb::input_dfb));\n"
+            "static_assert(::{0}(scratch::pad) == {0}(scratch::pad));\n"
+            "static_assert(tensor_accessor::{0}(tensor::local) == {0}(tensor::local));\n",
+            getter);
+    }
+    source += "}\n";
+    ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, source);
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
 // Resource tokens expose tile storage bytes independently of DFB entries and scratchpad allocation sizes.
 TEST_P(BindingTokenTileSizeBlackhole, TileStorageBytes) {
     const TileSizeCase size = GetParam();
@@ -165,6 +195,20 @@ class BindingTokenTileSizeMetadata : public test_helpers::ProgramSpecTestBlackho
 protected:
     distributed::MeshDevice& fixture_device() { return *mesh_device_; }
 };
+
+// Resource metadata queries take precedence over conversion to a legacy CB ID.
+TEST_F(BindingTokenTileSizeMetadata, TokenMetadataWinsOverCbIdConversion) {
+    const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
+    const std::string source = R"(
+namespace cb_compatibility {
+constexpr uint32_t get_tile_size(int32_t) { return 0; }
+constexpr uint32_t token_tile_size() { return get_tile_size(dfb::input_dfb); }
+}
+void kernel_main() { static_assert(cb_compatibility::token_tile_size() == 2048); }
+)";
+    ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, source);
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
 
 // A kernel's cache key includes the resolved byte count emitted into its resource token.
 TEST_F(BindingTokenTileSizeMetadata, StorageBytesAffectKernelHash) {
