@@ -106,9 +106,7 @@ and an integer answer.
 [`gsm8k/run_remote_rollout.sh`](gsm8k/run_remote_rollout.sh) uses the rank
 bindings in [`gsm8k/configurations/split_1_1/`](gsm8k/configurations/split_1_1/)
 (one P150 per rank) and takes the same `--config`, `--script`, `--hostfile` and
-`--rank-bindings` overrides as the BoolQ launcher. The rollout rank boots with
-dummy weights, so the checkpoint must be registered in tt-transformers'
-`LOCAL_HF_PARAMS` (`qwen3-0.6b-base-think-sft` is).
+`--rank-bindings` overrides as the BoolQ launcher.
 
 [`gsm8k/eval_gsm8k.py`](gsm8k/eval_gsm8k.py) prints pass@k tables (correct
 answer, tags present, tags exactly once, format regex) on the GSM8K test split

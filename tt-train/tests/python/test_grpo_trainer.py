@@ -1146,6 +1146,23 @@ def test_validate_remote_inputs_rejects(tmp_path, expect_error, model_type, enab
         )
 
 
+def test_register_hub_config_downloads_only_unregistered_names(monkeypatch, tmp_path):
+    from ttml.trainers.grpo_trainer.remote_rollout import ttt_rollout_sampler
+
+    downloads = []
+    monkeypatch.setattr(ttt_rollout_sampler.ModelArgs, "LOCAL_HF_PARAMS", {"Llama-3.2-1B-Instruct": "registered"})
+    monkeypatch.setattr(ttt_rollout_sampler, "snapshot_download", lambda **kw: downloads.append(kw) or str(tmp_path))
+
+    ttt_rollout_sampler._register_hub_config("unsloth/Llama-3.2-1B-Instruct")
+    ttt_rollout_sampler._register_hub_config("Qwen/Qwen3-0.6B")
+
+    assert downloads == [{"repo_id": "Qwen/Qwen3-0.6B", "allow_patterns": ["config.json"]}]
+    assert ttt_rollout_sampler.ModelArgs.LOCAL_HF_PARAMS == {
+        "Llama-3.2-1B-Instruct": "registered",
+        "Qwen3-0.6B": str(tmp_path),
+    }
+
+
 def test_ttt_stop_and_pad_delegates_to_shared_stop_token_resolver(monkeypatch):
     from ttml.trainers.grpo_trainer.remote_rollout import ttt_presets
 
