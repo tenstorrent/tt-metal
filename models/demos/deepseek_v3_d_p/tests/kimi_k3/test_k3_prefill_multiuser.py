@@ -21,6 +21,9 @@ tests pin that down device against device, so they need the TTNN weight cache bu
 * test_k3_packed_traced_matches_eager: the same schedule through TtKimiK3Runtime.prefill_forward with use_trace
   (one capture, replayed per forward; each chunk position's slot and bounds and the MoE padding config read on
   device) must leave the same KDA carries and KV as the eager packed forward.
+* test_k3_packed_pipeline_matches_one_rank: the model split over two pipeline ranks on one mesh, packed forwards
+  handed rank to rank, must match one rank: bit-exact with the plain residual stream, at PIPELINE_PCC under AttnRes;
+  traced must match eager on both ranks.
 
 Depth: 4 layers hold every Kimi-K3 layer kind: 0 KDA + dense FFN, 1-2 KDA + MoE, 3 MLA + MoE.
 
@@ -28,7 +31,7 @@ What packing may change: only rounding in AttnRes. With the plain residual strea
 bisection arm) a packed forward is bit-exact against one chunk per forward at every layer, KDA carry and KV slab,
 MoE layers included (no #63555 effect here). TtAttnRes rounds a row differently depending on where the row sits in
 the call: a chunk at position 1 of a forward differs from the same chunk at position 0 by ~1e-3 in ~1% of rows
-after layer 0 (job 169400), which then compounds. So the packed test runs both: plain asserts bit-exact everywhere,
+after layer 0, which then compounds. So the packed test runs both: plain asserts bit-exact everywhere,
 AttnRes asserts PCC bars.
 """
 
@@ -65,16 +68,14 @@ SP_AXIS, TP_AXIS = 0, 1
 CHUNK = 5120
 N_CHUNKS = 3
 NUM_USERS = 3
-# Two chunks per forward: 1,280 MoE rows per chip. At four, the MoE's shared-expert matmuls (TtSharedExpert's
-# get_program_configs, per_core_M = ceil(80 M-tiles / 9 rows) = 9) need 1,714,112 B of static circular buffers on
-# Kimi-K3's widths, past the 1,572,864 B of L1; that program-config change belongs to the shared MoE.
+# Two chunks per forward: 1,280 MoE rows per chip, inside MAX_PACKED_ROWS_PER_CHIP (see transformer.py).
 FORWARD_CHUNKS = 2
 GATE_MODE = GateComputeMode.DEVICE_FP32
 
 # Interleaving changes only the order of whole forward() calls: bit-exact up to a reduction-order tie.
 INTERLEAVED_PCC = 0.9999
 # The AttnRes packed case (module docstring): bars with margin over the measured output PCC >= 0.99705 and KDA carry /
-# KV PCC >= 0.99985 (job 168987), tight enough to catch a packing error. The plain-residual case is asserted bit-exact.
+# KV PCC >= 0.99985 on galaxy 8x4, tight enough to catch a packing error. The plain-residual case is asserted bit-exact.
 PACKED_STATE_PCC = 0.998
 PACKED_OUTPUT_PCC = 0.995
 # Two different users must NOT agree; catches a comparison that reads the same slot twice.
@@ -532,7 +533,7 @@ def test_k3_packed_traced_matches_eager(variant, config_only, mesh_device, devic
             runtime.prefill_forward(forward_input(chunks, lambda s: s), caches, chunks)
         ttnn.synchronize_device(mesh_device)
 
-        # Eager reference on the same model: forward_packed called directly runs the host-scalar programs.
+        # Eager reference on the same model: an untraced packed forward runs the host-scalar programs.
         for chunks in forwards:
             ref = [
                 c if c.is_empty else PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end) for c in chunks
@@ -572,8 +573,8 @@ D2H_READ_TIMEOUT_S = 120
 # call shape at the boundary. In one rank, layer 11's output is still a pending write when layer 12's read runs, and
 # attn_res_gather_softmax(pending=...) scores the stream with that addend folded in inside the kernel. At a split,
 # rank 0's handoff settles it first with a separate ttnn.add (TtAttnResStream.detach), so rank 1's first read scores an
-# already-materialized sum. Everything after it follows. Rank 0 stays bit-exact; rank 1 measured PCC >= 0.999743 (job
-# 169741). This is a serving property of any Kimi-K3 split, packed or not -- its own one-chunk split test
+# already-materialized sum. Everything after it follows. Rank 0 stays bit-exact; rank 1 measured PCC >= 0.999743 on
+# galaxy 8x4. This is a serving property of any Kimi-K3 split, packed or not -- its own one-chunk split test
 # (test_transformer_pipeline_split.py) gates on PCC too -- and handing the pending addend over as its own plane would
 # remove it. With the plain residual stream there is no deferred write, and the split is asserted bit-exact.
 PIPELINE_PCC = 0.9995

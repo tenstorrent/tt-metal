@@ -46,7 +46,7 @@ from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 # The most MoE rows per chip one packed forward can carry. The MoE's shared-expert down projection (TtSharedExpert's
 # get_program_configs: in0_block_w 16, per_core_N 19 on Kimi-K3's 224-tile width, a 9-row sub-device grid) grows its
 # static circular buffers by 104,448 B per per_core_M: per_core_M 9 (2,560 rows) measured 1,714,112 B of the
-# 1,572,864 B of L1 (job 168840), so 8 fails and 7 fits -- 63 M-tiles, 2,016 rows. A shared-MoE program-config change
+# 1,572,864 B of L1 on Blackhole, so 8 fails and 7 fits -- 63 M-tiles, 2,016 rows. A shared-MoE program-config change
 # (an L1-aware in0_block_w, or a row-blocked shared expert) would lift it.
 MAX_PACKED_ROWS_PER_CHIP = 2016
 
@@ -491,6 +491,16 @@ class TtKimiK3Transformer(LightweightModule):
             def attn_input_tap(local_idx, hidden):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
+        if return_intermediates:
+            raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
+        if (
+            mtp_union is not None
+            or on_mtp_complete is not None
+            or input_is_embedded
+            or provided_levels
+            or mtp_geometry is not None
+        ):
+            raise ValueError("Kimi-K3 has no MTP predictor; MTP forward arguments must be left at their defaults")
         if chunks is not None:
             if metadata is not None or metadata_msg is not None:
                 raise ValueError("a Kimi-K3 packed forward reads no single-chunk metadata")
@@ -509,16 +519,6 @@ class TtKimiK3Transformer(LightweightModule):
             )
         if index_kv_cache is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
-        if return_intermediates:
-            raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
-        if (
-            mtp_union is not None
-            or on_mtp_complete is not None
-            or input_is_embedded
-            or provided_levels
-            or mtp_geometry is not None
-        ):
-            raise ValueError("Kimi-K3 has no MTP predictor; MTP forward arguments must be left at their defaults")
         # The constructor argument is the channel `TtPrefillTransformer` uses (it reads
         # `self.padding_side` and takes no per-call value), so defaulting the keyword to "right"
         # here made a `padding_side="left"` model mask the wrong end of every chunk.

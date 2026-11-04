@@ -23,6 +23,7 @@ import inspect
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.prefill_chunk import validate_chunks
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import validate_kda_bounds
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
@@ -338,11 +339,20 @@ class TtKimiK3Runtime(TtPrefillRuntime):
     def prefill_forward(self, input_tensor, kv_caches, chunks, *args, **kwargs):
         """Reset the KDA carries of every chunk that starts a request, then run the shared packed forward.
 
-        The per-chunk counterpart of `prefill_chunk`'s reset: each non-empty chunk is validated against the KDA
-        bounds contract (32-aligned start, end past it), and a chunk at `actual_start == 0` zeroes its own slot's
+        The per-chunk counterpart of `prefill_chunk`'s reset: the chunks are validated against the shared chunk
+        rules (validate_chunks) and each non-empty chunk against the KDA bounds contract (32-aligned start, end
+        past it), and a chunk at `actual_start == 0` zeroes its own slot's
         carries, outside any capture, before the forward that continues them. Validation runs for every chunk
         before any reset, so a bad chunk leaves every carry as it was.
         """
+        cfg = self.config
+        validate_chunks(
+            chunks,
+            chunk_size=cfg.chunk_size,
+            forward_chunks=cfg.forward_chunks,
+            num_users=cfg.num_users,
+            max_seq_len=cfg.max_seq_len,
+        )
         live = [c for c in chunks if not c.is_empty]
         for c in live:
             validate_kda_bounds(c.actual_start, c.actual_end)

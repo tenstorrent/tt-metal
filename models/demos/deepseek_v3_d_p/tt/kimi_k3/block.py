@@ -407,8 +407,8 @@ class TtKimiK3Block(LightweightModule):
                 metadata=None if ctx is None else ctx.metadata,
                 # Kimi-K3 is the model the routing dump exists for, so this must not default to 0:
                 # with two KV slots in flight both would be written under slot0 at the same
-                # layer/start key and one would silently overwrite the other. A packed forward's rows
-                # belong to several slots; it dumps under slot 0.
+                # layer/start key and one would silently overwrite the other. A packed forward (ctx None)
+                # skips the dump in TtMoe, so slot 0 is never written for it.
                 cache_user_id=0 if ctx is None else ctx.cache_user_id,
                 padding_real_rows=padding_real_rows,
                 packed_padding_config=packed_padding_config,
