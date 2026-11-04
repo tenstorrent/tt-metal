@@ -157,6 +157,50 @@ def test_index_fill_height_sharded(device, shape, dim, num_indices, value):
     assert_equal(ttnn.to_torch(tt_out), golden)
 
 
+def _height_sharded_cfg(shard_h: int, width: int, num_cores: int) -> ttnn.MemoryConfig:
+    """HEIGHT_SHARDED L1 config over a 1 x num_cores grid with an explicit shard height."""
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (shard_h, width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+@pytest.mark.parametrize(
+    "dim, num_indices, value",
+    [
+        (0, 2, 1.5),
+        (2, 3, -0.5),
+        (3, 8, 2.0),  # last dim
+    ],
+    ids=["dim0", "dim2", "dim3-last"],
+)
+@pytest.mark.parametrize("out_layout", ["height", "interleaved"])
+def test_index_fill_height_sharded_partial_last_shard(device, dim, num_indices, value, out_layout):
+    """HEIGHT_SHARDED input whose final shard is only partially populated."""
+    # num_rows = 3*3*5 = 45 over 8 cores of 6 rows: the last core holds 3 of its 6 rows.
+    shape = (3, 3, 5, 32)
+    in_cfg = _height_sharded_cfg(shard_h=6, width=shape[-1], num_cores=8)
+    out_cfg = (
+        in_cfg
+        if out_layout == "height"
+        else ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    )
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_index = torch.randint(0, shape[dim], (num_indices,), dtype=torch.int32)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+    )
+    tt_index = _make_index_tensor(torch_index, device)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
+
+    golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
+    assert_equal(ttnn.to_torch(tt_out), golden)
+
+
 @pytest.mark.parametrize(
     "shape, dim, num_indices, value",
     [
