@@ -34,6 +34,11 @@ DRAM = ttnn.DRAM_MEMORY_CONFIG
 # tp_mla_mesh_vs_full, rev 24 at 2026-10-20 05:43Z: the rev-24 defaults + dev_mk_tp_mesh.py's shard K blocks / rings)
 MLA_KB_SHARD = (8, 16, 8, 16, 16)
 MLA_RINGS_SHARD = (140, 105, 128, 280)
+# the 32-chip replica (2 MLA heads per chip): q_b / W_uk / W_uv stream 1 column tile per reader, so their K blocks no
+# longer match TP8's 32-tile blocks and each would take a bfp8 ring of its own (the ring key is (format, block tiles):
+# +140 KB of reader CBs, 8 KB above the step's L1 floor at the first DSA step on the 8x4). W_uv at K block 8 shares
+# W_uk's 8-tile ring and q_b (block 16) shares q_a's: the same ring set and bytes as TP8.
+MLA_KB_SHARD_WIDE = (8, 16, 8, 8, 16)
 
 
 def mhc_host_args(source, cfg, layer: int, sub: str) -> dict:
@@ -337,7 +342,8 @@ class TPDsaLayer:
             cls = TPDS.TPMlaShard
         if cls is not TPM.TPMla:  # (GLM53_DSA_SHARD_SHARE_SYNC: the first layer's stream sync tensors)
             ix = dict(ix, stream_share=share.mla if share is not None and isinstance(share.mla, cls) else None)
-        mla = cls(mesh, mhc_host_args(source, cfg, layer, "attn"), attn, kb=MLA_KB_SHARD,
+        kb_mla = MLA_KB_SHARD if int(mesh.get_num_devices()) <= 8 else MLA_KB_SHARD_WIDE
+        mla = cls(mesh, mhc_host_args(source, cfg, layer, "attn"), attn, kb=kb_mla,
                   rings=rings, fabrics=share.mla.fabrics if share else None,
                   ts=ts, host_full=host_full, keep_full=keep_full, **ix)  # fmt: skip
         _real_head_weights(mla.shard, source, layer)
