@@ -50,7 +50,6 @@ FORCE_INLINE uint32_t se_arg(uint32_t i) {
 }
 constexpr uint32_t XIN = 0, WIN = 1, HOWN = 2, HALL = 3, OUT = 4, ACC = 5;
 // (runtime args: the column's gate / up pass widths [NPG], then down pass widths [NPD])
-#ifdef SE_RTR
 // the router's matmul at HiFi3 (the engine runs HiFi2: the routing picks need HiFi3) - matmul_block's LLK calls with
 // the fidelity fixed
 ALWI void rmm_init(uint32_t in0, uint32_t in1, uint32_t ct, uint32_t kt) {
@@ -63,10 +62,8 @@ ALWI void rmm(uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t ids
     UNPACK((llk_unpack_AB_matmul(in0, in1, i0, i1, ct, 1, kt)));
     MATH((llk_math_matmul<MathFidelity::HiFi3, MM_THROTTLE>(idst, ct, 1)));
 }
-#endif
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(XIN, WIN, HOWN);
-#ifdef SE_RTR
     {  // the router's logits first (every chain starts here): my expert tiles x my MT rows over the chip's K slice
         DeviceZoneScopedN("SE-RTRMM");
         constexpr uint32_t etc = SE_ETC;  // (every core the same count; past the experts: unused tiles)
@@ -104,7 +101,6 @@ void kernel_main() {
             reconfig_data_format(WIN, XIN);  // (back to gate / up's formats)
         }
     }
-#endif
 #ifdef SE_GLU
 #if SE_GLU == 2
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));

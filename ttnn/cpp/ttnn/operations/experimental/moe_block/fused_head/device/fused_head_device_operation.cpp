@@ -41,7 +41,6 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         c.lay.MT,
         c.lay.NCH,
         c.lay.KB,
-        c.lay.on_engine,
         c.lay.GX,
         c.lay.compact,
         c.lay.xdram,

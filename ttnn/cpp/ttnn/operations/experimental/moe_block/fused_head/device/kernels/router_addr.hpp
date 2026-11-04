@@ -5,11 +5,9 @@
 // The router-core kernels' addresses, as common runtime args (the program hash then holds none). Every router kernel
 // (NCRISC, compute, BRISC) gets the same two common args:
 //   [0] the router cores' arena base (the CB range's address on the router cores)
-//   [1] the engine-done semaphore address (0 when the logits are on the router cores)
-// and the host defines the switches / offsets the macros below build the addresses from:
-//   RT_ENG_ON       RT_ENG = common arg 1, only with the logits on the matmul cores
+//   [1] the engine-done semaphore address (the matmul cores count their partial logits tiles into it): RT_ENG
+// and the host defines the offset the macro below builds an address from:
 //   RT_MSYNC_OFF    RT_MSYNC = arena base + RT_MSYNC_OFF
-// The kernels test RT_ENG with #ifdef: it is defined exactly when its switch is set.
 #pragma once
 
 // (get_common_arg_val must be declared before router_rows.hpp, which the kernels include ahead of their API headers)
@@ -20,9 +18,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_accessors.hpp"
 #endif
 
-#ifdef RT_ENG_ON
 #define RT_ENG (get_common_arg_val<uint32_t>(1))
-#endif
 #ifdef RT_MSYNC_OFF
 #define RT_MSYNC (get_common_arg_val<uint32_t>(0) + RT_MSYNC_OFF)
 #endif

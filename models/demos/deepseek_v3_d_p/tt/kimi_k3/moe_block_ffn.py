@@ -279,8 +279,8 @@ class TtK3MoEBlockFfn:
             if fit.ok and len(fit.planned):
                 p, lay = fit.planned[0], fit.planned[0].lay
                 logger.info(
-                    f"MoE block: head engine {lay.GX}x{lay.GY}, MT {lay.MT}, {lay.NCH} chunk(s), KB {lay.KB}, router on "
-                    f"the engine {lay.on_engine}, x in DRAM {lay.xdram}, predicted {p.t:.0f} us {fit.note}"
+                    f"MoE block: head engine {lay.GX}x{lay.GY}, MT {lay.MT}, {lay.NCH} chunk(s), KB {lay.KB}, "
+                    f"x in DRAM {lay.xdram}, predicted {p.t:.0f} us {fit.note}"
                 )
             hit = _BLOCKS[key] = (self.mesh, res, block)
         return hit[2]
@@ -476,7 +476,7 @@ class TtK3MoEBlockFfn:
                 str(block.dtypes.shared_weights),
                 str(block.dtypes.router_weights),
                 str(block.dtypes.projection_weights),
-                None if lay is None else (lay.GX, lay.GY, lay.MT, lay.NCH, lay.KB, lay.on_engine, lay.xdram),
+                None if lay is None else (lay.GX, lay.GY, lay.MT, lay.NCH, lay.KB, lay.xdram),
             )
         )
         return Path(root) / hashlib.sha1(key.encode()).hexdigest()[:16] / f"layer_{self.layer_idx}"

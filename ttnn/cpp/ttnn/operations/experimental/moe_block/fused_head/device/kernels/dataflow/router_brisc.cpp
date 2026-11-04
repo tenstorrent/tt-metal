@@ -13,40 +13,21 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/kernel_profiler.hpp"
-constexpr uint32_t ET = get_compile_time_arg_val(1), K = get_compile_time_arg_val(4);
-constexpr auto o_args = TensorAccessorArgs<5>();
-constexpr uint32_t HOLD = 2, BIAS = 5, FINC = 7, BEST = 9;
+constexpr uint32_t ET = get_compile_time_arg_val(1), K = get_compile_time_arg_val(3);
+constexpr auto o_args = TensorAccessorArgs<4>();
+constexpr uint32_t HOLD = 2, BIAS = 5, BEST = 9;
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_rows.hpp"
 
-// args: nh, per hand-off (entry, port x, port y, port L1 offset of the sub-block, port word address); the out address,
-// my owner page, route scale bits, the joint rows' L1 scratch, the done word, the BEST page
+// args: the out address, my owner page, route scale bits, the joint rows' L1 scratch, the done word, the BEST page
 void kernel_main() {
-    const uint32_t nh = get_arg_val<uint32_t>(0), h0 = 1;
-    const uint32_t hold = get_read_ptr(HOLD);
 #if defined(RT_ROUTE) && defined(RT_VALID)
     // (a padded chunk's actual_start / actual_end, for the route words: into the route words' L1 (256 B) - the compute
     // writes them only after word 80, by when they are read - early, read once the rows are written, long after)
-    const uint32_t vl1 = rt_valid_slot(get_arg_val<uint32_t>(h0 + 6 * nh + 6));
+    const uint32_t vl1 = rt_valid_slot(get_arg_val<uint32_t>(6));
     rt_valid_issue(vl1);
     uint32_t sv = 0;  // (my real tokens, read below)
 #endif
-    for (uint32_t j = 0; j < nh; ++j) {
-        DeviceZoneScopedN("SE-RHAND");
-        cb_wait_front(FINC, j + 1);
-        const uint32_t e = get_arg_val<uint32_t>(h0 + 6 * j), px = get_arg_val<uint32_t>(h0 + 6 * j + 1);
-        const uint32_t py = get_arg_val<uint32_t>(h0 + 6 * j + 2), sw = get_arg_val<uint32_t>(h0 + 6 * j + 5);
-        if (sw) {  // (the port's sub-block slot is shared with an earlier core of my link: once the port sent its)
-            volatile tt_l1_ptr uint32_t* f = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sw);
-            while (*f == 0) {
-                invalidate_l1_cache();
-            }
-            *f = 0;  // (re-arm: one a call - the next comes after this call's hand-offs)
-        }
-        noc_async_write(hold + e * ET * 4096, get_noc_addr(px, py, get_arg_val<uint32_t>(h0 + 6 * j + 3)), ET * 4096);
-        noc_async_write_barrier();
-        noc_semaphore_inc(get_noc_addr(px, py, get_arg_val<uint32_t>(h0 + 6 * j + 4)), 1);
-    }
-    const uint32_t t0 = h0 + 6 * nh;
+    constexpr uint32_t t0 = 0;
     const uint32_t o_addr = get_arg_val<uint32_t>(t0), page = get_arg_val<uint32_t>(t0 + 1);
     const uint32_t o_l1 = get_arg_val<uint32_t>(t0 + 3);
     const uint32_t words = get_arg_val<uint32_t>(t0 + 4);

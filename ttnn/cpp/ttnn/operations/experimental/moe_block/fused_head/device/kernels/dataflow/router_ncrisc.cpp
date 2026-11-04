@@ -14,23 +14,16 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_rows.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/kernel_profiler.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
-using namespace dataflow_kernel_lib;
-constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
-constexpr uint32_t KBR = get_compile_time_arg_val(3);
-constexpr auto x_args = TensorAccessorArgs<5>();
-constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
-constexpr auto b_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+constexpr uint32_t ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
+constexpr auto b_args = TensorAccessorArgs<4>();
 constexpr auto i_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
-constexpr uint32_t XR = 0, WR = 1, ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11, K = get_compile_time_arg_val(4), RDY = 12;
-// args: x, W_r^T, bias^T, expert index tiles; my rows [G]; the arrivals (na: every other chip's partial of my owner
+constexpr uint32_t ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11, K = get_compile_time_arg_val(3), RDY = 12;
+// args: bias^T, expert index tiles; my rows [G]; the arrivals (na: every other chip's partial of my owner
 // rows, slot = its source index) and their words (a word a slot, 16 B apart); the slots in their fixed sum order [G -
 // 1]
 void kernel_main() {
-    const uint32_t x_addr = get_arg_val<uint32_t>(0), w_addr = get_arg_val<uint32_t>(1),
-                   b_addr = get_arg_val<uint32_t>(2);
-    const uint32_t i_addr = get_arg_val<uint32_t>(3);
-    const uint32_t r0 = 4, na = get_arg_val<uint32_t>(r0 + G);
+    const uint32_t b_addr = get_arg_val<uint32_t>(0), i_addr = get_arg_val<uint32_t>(1);
+    const uint32_t r0 = 2, na = get_arg_val<uint32_t>(r0 + G);
     volatile tt_l1_ptr uint32_t* ctr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(r0 + G + 1));
     const uint32_t ab0 = r0 + G, nab = G - 1;  // (the order: ab0 + 2 ..; the tail: ab0 + nab + 2 ..)
@@ -42,8 +35,6 @@ void kernel_main() {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w0 + 16 * i) = 0;
         }
     }
-    const auto xg = TensorAccessor(x_args, x_addr, 2048);
-    const auto wg = TensorAccessor(w_args, w_addr, 2048);
     const auto bg = TensorAccessor(b_args, b_addr, 4096);
     const auto ig = TensorAccessor(i_args, i_addr, 2048);
     cb_reserve_back(BIAS, ET);
@@ -57,7 +48,6 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(BIAS, ET);
     cb_push_back(IDX, ET);
-#ifdef RT_ENG
     {  // the engine computed my partial logits (every engine core its expert tiles x its rows, written into my HOLD
        // with an increment of this counter a tile): all G x ET in -> the compute (RDY)
         DeviceZoneScopedN("SE-RENGWAIT");
@@ -72,51 +62,6 @@ void kernel_main() {
         // planner overlay in it, K3's picks 99.10%)
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 2) + 112) = 1;
     }
-#else
-    // W_r^T is read from DRAM once: K block kb by the column's rotating sender kb % RB, multicast down the router
-    // column into every core's WR slot (the kernel_lib family's handshake: a core is ready once its slot is reserved)
-#ifndef RT_RW_SOLO  // (one router core: it reads every K block itself - no family)
-    constexpr auto mw =
-        McastArgs<get_named_compile_time_arg_val("rw_ct_offset"), get_named_compile_time_arg_val("rw_rt_offset")>();
-    Noc noc;
-    auto sw = mw.optional_sender(noc);
-    auto rw = mw.optional_receiver(noc);
-#endif
-    for (uint32_t kb = 0; kb < KT / KBR;
-         ++kb) {  // K block kb: x [KBR][G] (k-major: the matmul's in1) and W_r^T [ET][KBR]
-        cb_reserve_back(XR, G * KBR);
-        cb_reserve_back(WR, KBR * ET);
-        const uint32_t xl = get_write_ptr(XR), l1 = get_write_ptr(WR);
-        for (uint32_t e = 0; e < G; ++e) {
-            const uint32_t R = get_arg_val<uint32_t>(r0 + e);
-            for (uint32_t k = 0; k < KBR; ++k) {
-                noc_async_read(xg.get_noc_addr(R * KT + kb * KBR + k), xl + (k * G + e) * 2048, 2048);
-            }
-        }
-#ifdef RT_RW_SOLO
-        for (uint32_t e = 0; e < ET; ++e) {
-            for (uint32_t k = 0; k < KBR; ++k) {
-                noc_async_read(wg.get_noc_addr(e * KT + kb * KBR + k), l1 + (e * KBR + k) * 2048, 2048);
-            }
-        }
-#else
-        if (mw.should_send(kb)) {
-            for (uint32_t e = 0; e < ET; ++e) {
-                for (uint32_t k = 0; k < KBR; ++k) {
-                    noc_async_read(wg.get_noc_addr(e * KT + kb * KBR + k), l1 + (e * KBR + k) * 2048, 2048);
-                }
-            }
-            noc_async_read_barrier();
-            sw->send(l1, l1, KBR * ET * 2048);
-        } else {
-            rw->receive(kb);
-        }
-#endif
-        noc_async_read_barrier();
-        cb_push_back(XR, G * KBR);
-        cb_push_back(WR, KBR * ET);
-    }
-#endif
     if (na) {  // the sources' partials as they land (a fused increment of the source slot's own word, 16 B apart): each
                // slot to the compute in a fixed order (RT_ARR_ORDERED: the order args - the predicted landing order, so
                // the same sum every run at ~no wait), else in landing order (ARRB) - it sums the early ones while the

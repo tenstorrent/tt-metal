@@ -87,8 +87,9 @@ class Head:
         fit = mb.plan_fused_head(self.res, self.dtypes, self.A, self.l1)
         assert fit.ok, fit.why
         lay = fit.planned[0].lay
-        got = {k: getattr(lay, k) for k in ("GY", "MT", "NCH", "KB", "on_engine", "GX", "compact", "split", "xdram")}
-        assert cfg["layout"] is None or got == cfg["layout"], f"planned {got}, the reference built {cfg['layout']}"
+        got = {k: getattr(lay, k) for k in ("GY", "MT", "NCH", "KB", "GX", "compact", "xdram")}
+        want = None if cfg["layout"] is None else {k: cfg["layout"][k] for k in got}
+        assert want is None or got == want, f"planned {got}, the reference built {cfg['layout']}"
         assert not lay.xdram, "the DRAM fallback's cases need x_full (not dumped yet)"
         w = torch.load(hz.case_dir("fused_head", meta["case"]) / "weights.pt")
         host = lambda k: ttnn.from_torch(w[k].float(), dtype=ttnn.float32) if k in w else None  # noqa: E731

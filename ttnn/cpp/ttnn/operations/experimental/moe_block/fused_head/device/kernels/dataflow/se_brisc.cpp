@@ -18,9 +18,7 @@ constexpr uint32_t POMAX = get_compile_time_arg_val(6), S0 = get_compile_time_ar
                    S1 = get_compile_time_arg_val(8);
 constexpr uint32_t XREADY = get_compile_time_arg_val(9);
 constexpr auto x_args = TensorAccessorArgs<10>();
-#ifdef SE_RTR
 constexpr auto brx_args = TensorAccessorArgs<SE_RTR_BCT0>();  // (the router's x: the chip's x shard [rows, H / TP])
-#endif
 constexpr uint32_t CB_XIN = 0, CB_HOWN = 2, CB_HALL = 3;
 constexpr uint32_t NF = NSG / 2, NOWN0 = NF / S0, NOWN1 = NF / S1;  // (steps a family a pass; per owner)
 // x position j (the j-th K step this chip processes: its own shard's first, then each shard as it lands): family j % 2,
@@ -61,7 +59,6 @@ void kernel_main() {
         const uint32_t slot = (j & 1) ? (i0 < GX ? NOWN0 : 0) + own_slot(j) : own_slot(j);
         return xown + (((m % SE_XRING) * nown + slot) * MT) * KB * 2048;
     };
-#ifdef SE_RTR
     auto rtrx = [&]() {  // (called after my own-shard x load: the gather's ports wait on every matmul core's - a row
         // lead's x load behind its ~20 us of router x held the gather back that long: GLM-5.3 ring 640 235.8 -> 219.2
         // us)
@@ -122,7 +119,6 @@ void kernel_main() {
             }
         }
     };
-#endif
     const auto xg = TensorAccessor(x_args, x_addr, 2048);
     const uint32_t xports = se_ra(ord0 + g);         // (the gather's ports read my own shard from here)
     auto xload_step = [&](uint32_t m, uint32_t j) {  // (one owned step of chunk m from DRAM x [rows, x_ct])
@@ -153,15 +149,13 @@ void kernel_main() {
         for (uint32_t i = 0; i < nports; ++i) {
             noc_semaphore_inc(get_noc_addr(se_ra(np0 + 2 + 2 * i), se_ra(np0 + 3 + 2 * i), xl_addr), 1);
         }
-#if defined(SE_RTR) && defined(SE_RTRX_L1)
+#ifdef SE_RTRX_L1
         noc_semaphore_inc(get_noc_addr(se_ra(vx0), ry, SE_EW + XRL_ID), 1);  // (and on my row's lead: the router's x)
 #endif
         noc_async_atomic_barrier();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(se_ra(np0 + 2 + 2 * nports))) = 1;
     }
-#ifdef SE_RTR
     rtrx();  // (the router's x after my own x)
-#endif
     constexpr auto mx0 =
         McastArgs<get_named_compile_time_arg_val("x0_ct_offset"), get_named_compile_time_arg_val("x0_rt_offset")>();
     constexpr auto mx1 =

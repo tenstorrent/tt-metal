@@ -17,5 +17,6 @@
 
 // SE_EW: the router-phase words (a persistent L1 tensor a core). The BRISC / NCRISC read its address from the common
 // runtime args right past the shared span: their common args are [span start, span length n, n words] ([0, 0] when
-// nothing is shared), then this address at index 2 + n. Only expanded under SE_RTR, by the dataflow kernels (the compute never names it).
+// nothing is shared), then this address at index 2 + n. Only expanded by the dataflow kernels (the compute never names
+// it).
 #define SE_EW (get_common_arg_val<uint32_t>(2 + get_common_arg_val<uint32_t>(1)))

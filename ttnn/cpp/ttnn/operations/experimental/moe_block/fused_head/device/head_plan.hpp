@@ -63,7 +63,6 @@ struct HeadLayout {
     uint32_t MT = 0;
     uint32_t NCH = 0;
     uint32_t KB = 0;
-    bool on_engine = false;
     uint32_t GX = 11;
     bool compact = false;  // compact RS arrival zones
     bool xdram = false;    // the DRAM fallback: x gathered into DRAM ahead of the program, reloaded a chunk at a time
@@ -142,8 +141,5 @@ std::pair<double, Parts> head_cost(
     const HeadShape& shape, const HeadLayout& lay, const SeEngineSizing& eng, const HeadCost& c = {});
 std::vector<HeadPlanned> head_plan_layouts(
     const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit = false, bool xdram = false);
-
-// fused_head.router_rect: the columns of a rectangle of nrt router cores in `rows` free rows of `cols` cells, or 0.
-uint32_t router_rect(uint32_t nrt, uint32_t cols, uint32_t rows);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

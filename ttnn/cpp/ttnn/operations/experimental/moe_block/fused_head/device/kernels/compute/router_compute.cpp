@@ -28,8 +28,8 @@
 #endif
 #include "api/debug/kernel_profiler.hpp"
 constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
-constexpr uint32_t KBR = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4);
-constexpr uint32_t XR = 0, WR = 1, HOLD = 2, ARRF = 3, ARRB = 4, BIAS = 5, SC = 6, FINC = 7, PSYNC = 8;
+constexpr uint32_t K = get_compile_time_arg_val(3);
+constexpr uint32_t HOLD = 2, ARRF = 3, ARRB = 4, BIAS = 5, SC = 6, PSYNC = 8;
 constexpr uint32_t BEST = 9, IDX = 11;
 constexpr uint32_t EM = rows_::em_of(ET);
 #ifdef TRISC_MATH
@@ -53,16 +53,14 @@ inline void rt_key() {
 }
 }  // namespace ckernel::sfpu
 #endif
-// args: nops, ops (kind | entry << 8: 1 hand, 2 fin), per entry: arrivals to add (the fin: G - 1, from the zone's
-// slots 0 ..; a hand-off: 0); then the top-K's done word. Every tile here is TRANSPOSED: logits^T [ET][32 tokens] - a
+// args: nops, ops (entry << 8 | 2: a fin), per entry: arrivals to add (the fin: G - 1, from the zone's slots 0 ..);
+// then the top-K's done word. Every tile here is TRANSPOSED: logits^T [ET][32 tokens] - a
 // token is a column.
 void kernel_main() {
     // (the PACK -> MATH word: zero before anything - L1 scratch, PACK sets it only after the top-K)
     MATH((*reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 0));
-    compute_kernel_hw_startup<SrcOrder::Reverse>(WR, XR, HOLD);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(PSYNC, PSYNC, HOLD);  // (bf16 sources, as the logits matmul had)
     pack_reconfig_data_format(HOLD);
-#ifdef RT_ENG
-    // (the matmul below is the router cores' own path: off here)
     cb_wait_front(12, 1);  // (the engine's partial logits are in my HOLD: RDY - UNPACK; PACK on word 112)
     PACK(({
         volatile uint32_t* hw =
@@ -71,35 +69,6 @@ void kernel_main() {
         }
         *hw = 0;  // (re-arm)
     }));
-    if (false)
-#endif
-    {
-        DeviceZoneScopedN("SE-RMMUL");
-        for (uint32_t kb = 0; kb < KT / KBR; ++kb) {  // K-outer: every token tile's partial accumulated in L1 (fp32)
-            cb_wait_front(XR, G * KBR);
-            cb_wait_front(WR, KBR * ET);
-            PACK((llk_pack_reconfig_l1_acc(kb > 0 ? 1 : 0)));
-            for (uint32_t e0 = 0; e0 < ET;
-                 ++e0) {                    // (logits^T [e0] x [G token tiles]: W_r^T x x^T; half-sync DEST: the
-                constexpr uint32_t re = 1;  // packs of one block under the next block's math)
-                matmul_block_init(WR, XR, 1, G, re, KBR);
-                tile_regs_acquire();
-                for (uint32_t kk = 0; kk < KBR; ++kk) {
-                    matmul_block(WR, XR, e0 * KBR + kk, kk * G, 0, true, G, re, KBR);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t r = 0; r < re; ++r) {
-                    for (uint32_t g = 0; g < G; ++g) {
-                        pack_tile<true>(r * G + g, HOLD, g * ET + e0 + r);
-                    }
-                }
-                tile_regs_release();
-            }
-            cb_pop_front(XR, G * KBR);
-            cb_pop_front(WR, KBR * ET);
-        }
-    }
     PACK((llk_pack_reconfig_l1_acc(0)));
     DeviceZoneScopedN("SE-RFIN");
     cb_reserve_back(PSYNC, 1);
@@ -109,12 +78,7 @@ void kernel_main() {
     cb_wait_front(BIAS, ET);
     const uint32_t nops = get_arg_val<uint32_t>(0), et0 = 1 + nops;
     for (uint32_t o = 0; o < nops; ++o) {
-        const uint32_t op = get_arg_val<uint32_t>(1 + o), kind = op & 0xFF, e = op >> 8;
-        if (kind == 1) {
-            cb_reserve_back(FINC, 1);
-            cb_push_back(FINC, 1);
-            continue;
-        }
+        const uint32_t e = get_arg_val<uint32_t>(1 + o) >> 8;
         const uint32_t na = get_arg_val<uint32_t>(et0 + e);  // (the one fin: the owner's - G - 1 sources)
         cb_reserve_back(SC, ET);
         cb_wait_front(IDX, ET);

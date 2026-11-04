@@ -90,7 +90,7 @@ enum XgCt : uint32_t {
 
 // ---------------------------------------------------------------------------------------------------------------------
 // se_engine3 matmul-core kernels. BRISC compile-time args (`bct`), then x's TensorAccessorArgs at SE_B_CT_COUNT
-// (xa_ct), then (SE_RTR) the router x's at SE_RTR_BCT0.
+// (xa_ct), then the router x's at SE_RTR_BCT0.
 enum SeBriscCt : uint32_t {
     SE_B_CT_GX = 0,
     SE_B_CT_MT,
@@ -104,8 +104,8 @@ enum SeBriscCt : uint32_t {
     SE_B_CT_XREADY,  // semaphore id XREADY = 0
     SE_B_CT_COUNT,   // x TensorAccessorArgs from here
 };
-// NCRISC compile-time args (`nct`), then w, y TensorAccessorArgs, xbuf's at SE_PREP_CT0, (SE_RTR) the router x and
-// W_r^T at SE_RTR_CT0.
+// NCRISC compile-time args (`nct`), then w, y TensorAccessorArgs, xbuf's at SE_PREP_CT0, the router x and W_r^T at
+// SE_RTR_CT0.
 enum SeNcriscCt : uint32_t {
     SE_N_CT_GY = 0,
     SE_N_CT_MT,
@@ -150,7 +150,7 @@ enum SeComputeCt : uint32_t {
 //     SE_FFREE 20, SE_FIN_ROWS (if _fin_rows()), SE_ZF / SE_ZB (rs.zone_tiles), SE_RS_PM (rs.npass,
 //     `u`, if rs.pm);
 //   with a latent: SE_LAT 13, SE_NGU, SE_LWMAX, SE_LATP;
-//   with the router on the engine: SE_RTR, SE_RX 17, SE_RW 18, SE_RO 19, SE_KTO, SE_ETC, SE_MTR (MT NCH),
+//   the router logits (on the matmul cores): SE_RX 17, SE_RW 18, SE_RO 19, SE_KTO, SE_ETC, SE_MTR (MT NCH),
 //     SE_RG, SE_RD 3, XACK_ID 128, WACK_ID 144, RXR_ID 0,
 //     RWR_ID 16, SE_RDONE (if rtr_overlay), RXS_ID 32, SE_KC, SE_RTRX_L1 + XRL_ID 96 (if not xring),
 //     SE_RTR_BCT0 (len(bct + xa_ct)), SE_RTR_CT0 (NCRISC accessor offset);
@@ -163,21 +163,20 @@ enum SeComputeCt : uint32_t {
 // chip shares moved to the common args by _common_span (b_span = (7, 12 + GX + len(sor) + len(tail)), n_span =
 // (5 + len(rtr_a) + len(wg[c]) + len(wd[c]), 7 + GY + len(sor) + len(tail))): per core [args before the span] +
 // [args after it]; common args [span start, span length n, the n shared words] (or [0, 0] and the full lists per
-// core), then at common index 2 + n: the ewords address (SE_EW; only read with SE_RTR - pass 0 otherwise).
+// core), then at common index 2 + n: the ewords address (SE_EW).
 // Compute: common args = wg + wd + h0 + [HT] + the RS / prep args every core of the group shares; per core the rest
 // ([0] if none) - SE_NC = len(common).
 constexpr uint32_t kSeEwordsCommonArgAfterSpan = 2;  // SE_EW = common[2 + common[1]]
 
 // ---------------------------------------------------------------------------------------------------------------------
 // router_stream router-core kernels: compile-time args `ct`, then per kernel the accessors:
-//   NCRISC: ct + x, w, b, ix TensorAccessorArgs (at 5) + (routing) router_out, slots accessors (ra::plan's RAP_CT0 =
-//           their offset); compute: ct; BRISC: ct + out accessor (at 5) + (routing) router_out, slots (RAP_CT0)
+//   NCRISC: ct + b, ix TensorAccessorArgs (at 4) + (routing) router_out, slots accessors (ra::plan's RAP_CT0 =
+//           their offset); compute: ct; BRISC: ct + out accessor (at 4) + (routing) router_out, slots (RAP_CT0)
 //           + (route words) the route tensor's (RT_CT0).
 enum RouterCt : uint32_t {
     RT_CT_KT = 0,  // H / TP / 32
     RT_CT_ET,      // expert tiles (E / 32)
     RT_CT_G,
-    RT_CT_KBR,
     RT_CT_K,
     RT_CT_COUNT,
 };
@@ -185,7 +184,7 @@ enum RouterCt : uint32_t {
 // only) appends its scalars and the chip's place in main's rotated layout:
 enum RouterCommonArg : uint32_t {
     RT_CRTA_ARENA_BASE = 0,  // RouterStream.base (the router cores' arena range)
-    RT_CRTA_ENG_SEM = 1,     // RouterStream.arr[1] (the engine-done semaphore; 0 without RT_ENG_ON)
+    RT_CRTA_ENG_SEM = 1,     // RouterStream.arr[1] (the engine-done semaphore: RT_ENG)
     RT_CRTA_COUNT,
     RT_CRTA_START = 2,       // RT_VALID: actual_start's address (one uint32, DRAM)
     RT_CRTA_END = 3,         // actual_end's address
@@ -197,9 +196,8 @@ enum RouterCommonArg : uint32_t {
     RT_CRTA_VALID_COUNT,
 };
 // Defines:
-//   NCRISC and compute (`eng`): RT_ENG_ON (on_engine; RT_ENG = common arg 1), RT_MSYNC_OFF (off["msync"], `u`;
-//     RT_MSYNC = arena base + it), RT_FOLD (fold, `u`), RT_RW_SOLO (logits on the router cores and
-//     one router core), RT_ARR_ORDERED (RouterSpec.ordered = MoEBlockConfig.deterministic);
+//   NCRISC and compute (`eng`): RT_MSYNC_OFF (off["msync"], `u`; RT_MSYNC = arena base + it), RT_FOLD (fold, `u`),
+//     RT_ARR_ORDERED (RouterSpec.ordered = MoEBlockConfig.deterministic);
 //   compute: RT_SQRTSOFTPLUS + INP_FLOAT32 1 (score_func sqrtsoftplus); RT_ROUTE + the
 //     route-word defines RW_R, RW_C, RW_ME (r C + c), RW_K, RW_RW (route_words(N): 1, 2 past 16 chips), RW_E
 //     (ET 32 / fold), RW_WRAPX / RW_WRAPY (true / false: torus and the axis > 2), RW_XRING_INIT / RW_YRING_INIT
@@ -211,16 +209,14 @@ enum RouterCommonArg : uint32_t {
 //     ra::plan's RAP_* (RoutingStream.kernel_subs: RAP_S, RAP_K, RAP_EPC, RAP_R, RAP_C, RAP_ME, RAP_A, RAP_L,
 //     RAP_P (nps[coord]), RAP_TPP 32, RAP_M, RAP_HBP, RAP_BB, RAP_BBP, RAP_PCAP, RAP_NPORT, RAP_ROWS_CAP,
 //     RAP_ENT_CAP, RAP_WX, RAP_WY (ties always by parity), RAP_CT0 -
-//     NCRISC len(ct + x, w, b, ix accessors), BRISC len(ct + out accessor)).
-// Runtime args (RouterStream.pieces): NCRISC [x, w, b, ix addrs] + [bb RB + j % RB for bb < G] + [G - 1, arr[0]]
+//     NCRISC len(ct + b, ix accessors), BRISC len(ct + out accessor)).
+// Runtime args (RouterStream.pieces): NCRISC [b, ix addrs] + [bb RB + j % RB for bb < G] + [G - 1, arr[0]]
 // + _arrival_order(p) + tail [words, best, out (arena offsets + base), scale bits] + [sv] + (routing) _ra_args2;
-// compute [len(ops)] + ops + [G - 1 if bb == p else 0 for bb < G] + tail + [sv, base + off["route"], 32 (j % RB)];
-// BRISC [nh] + hand-offs (bb, port x, port y, port sub-block, port word, shared-slot word) x nh + [out addr | partner
-// NoC, jr] + [scale bits, out, words] + [best, route L1, route addr, 32 jr, sv] + (routing) _ra_args.
+// compute [1, the fin op (p << 8 | 2)] + [G - 1 if bb == p else 0 for bb < G] + tail + [sv, base + off["route"],
+// 32 (j % RB)]; BRISC [out addr | partner NoC, jr] + [scale bits, out, words] + [best, route L1, route addr, 32 jr, sv]
+// + (routing) _ra_args.
 // kernel_lib mcast families (named compile-time args "<name>_ct_offset" / "<name>_rt_offset", main's Mcast::attach):
 //   se BRISC: "x0" (rotating over fam0's columns, or a fixed sender when one column), "x1" (fam1), "h" (rotating) -
-//     NOC0, handshake, one receiver group a row (GX); semaphore ids from NSEM_OWN = 2 + 2 NWS on;
-//   router NCRISC: "rw" (rotating, handshake, NOC0; ColumnMajor for a column of router cores, RowMajor for a row,
-//     a group a row for a rectangle) - absent with RT_RW_SOLO or the logits on the engine.
+//     NOC0, handshake, one receiver group a row (GX); semaphore ids from NSEM_OWN = 2 + 2 NWS on.
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head::kernels

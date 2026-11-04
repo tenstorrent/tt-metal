@@ -38,7 +38,6 @@ void bind_head_plan(nb::module_& mod) {
         .def_ro("MT", &HeadLayout::MT)
         .def_ro("NCH", &HeadLayout::NCH)
         .def_ro("KB", &HeadLayout::KB)
-        .def_ro("on_engine", &HeadLayout::on_engine)
         .def_ro("GX", &HeadLayout::GX)
         .def_ro("compact", &HeadLayout::compact)
         .def_ro("xdram", &HeadLayout::xdram)

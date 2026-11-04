@@ -19,13 +19,11 @@ constexpr uint32_t WV = get_compile_time_arg_val(12), WFREE = get_compile_time_a
 constexpr auto w_args = TensorAccessorArgs<14>();
 constexpr auto y_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 constexpr auto p_args = TensorAccessorArgs<SE_PREP_CT0>();  // (the dispatch buffer [N S, W] row-major)
-#ifdef SE_RTR
 FORCE_INLINE volatile tt_l1_ptr uint32_t* ew(uint32_t o) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + o);
 }
 constexpr auto rx_args = TensorAccessorArgs<SE_RTR_CT0>();  // (the chip's x shard [rows, H / TP], DRAM)
 constexpr auto rw_args = TensorAccessorArgs<rx_args.next_compile_time_args_offset()>();  // (W_r^T [E, H / TP])
-#endif
 constexpr uint32_t CB_WIN = 1, NB = NPG * NSG + NPD * NSD;  // (W blocks a chunk)
 constexpr uint32_t NSD1 = NSD ? NSD : 1;                    // (never divided by 0)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
@@ -47,10 +45,8 @@ void kernel_main() {
     const uint32_t cy = se_ra(a++), cxv = se_ra(a++);
     const uint32_t wbase = se_ra(a++), n0d = se_ra(a++);
     const uint32_t wbank = se_ra(a++);  // (the DRAM bank holding my W-own region)
-#ifdef SE_RTR
     const uint32_t R0 = a;  // (the router logits' args)
     a += 10 + SE_RD * SE_MTR;
-#endif
     const uint32_t wg0 = a, wd0 = wg0 + NPG;  // pass widths (gate / up, down)
     a = wd0 + NPD;
     const uint32_t ty = se_ra(a++), by = se_ra(a++);
@@ -85,7 +81,6 @@ void kernel_main() {
     // my blocks from DRAM, once: my W-own is one contiguous region in one bank (per-bank layout, wbase its offset),
     // read block by block in large bursts, every read issued now - the k-th block's under transaction id
     // min(k, 14) + 1; a block is sent once its reads landed (the column streams while the weights are still arriving)
-#ifdef SE_RTR
     // the router's logits on the engine: the row's first core reads the row's x (MT row tiles, the chip's K slice) and
     // multicasts it along the row; the column's first core reads the column's W_r^T expert tiles and multicasts them
     // down the column; then the compute's partial logits go to the router cores' HOLD (the main loop below)
@@ -185,7 +180,6 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(se_ra(t0 + 2 + 2 * i), se_ra(t0 + 3 + 2 * i), rdw), 1);
         }
     }
-#endif
 #endif
     {
         {  // (after my core's x load: the DRAM serves the x first - the gather is waiting on it)

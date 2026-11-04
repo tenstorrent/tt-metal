@@ -1164,8 +1164,8 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
                 o = al64(o + hold);
             }
         }
-        if (a.router) {
-            const auto [ET, KTO] = *a.router;
+        {  // the router logits on the engine
+            const auto [ET, KTO] = a.router;
             ETC = ceil_div(ET, GX);
             const uint32_t MTR = MT * NCH;
             RG = ETC * MTR <= DT ? MTR : (ETC * MT <= DT ? MT : 1);
@@ -1234,7 +1234,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
     for (const auto& [k_, v] : off) {
         sizes.emplace_back(k_, v < o ? *ends.upper_bound(v) - v : 0);
     }
-    if (a.router) {  // (the router's buffers over a region another chip writes: those writes wait for "router done")
+    {  // (the router's buffers over a region another chip writes: those writes wait for "router done")
         const int64_t lo = at("rx"), hi = at("ro") + int64_t(ETC) * MT * NCH * 4096;
         auto over = [&](const std::string& k, int64_t v) { return v > 0 && at(k) < hi && lo < at(k) + v; };
         rtr_zones = over("arrf", region(rs_sizes, "arrf")) || over("arrb", region(rs_sizes, "arrb"));
@@ -1300,11 +1300,9 @@ bool SeEngineSizing::fin_rows() const {
 // ---------------------------------------------------------------------------------------------------------------------
 // RouterStream / routing_a2a
 
-std::pair<Regions, int64_t> router_layout(uint32_t G, uint32_t ET, uint32_t K, uint32_t kbr, uint32_t ETF) {
+std::pair<Regions, int64_t> router_layout(uint32_t G, uint32_t ET, uint32_t K, uint32_t ETF) {
     ETF = ETF ? ETF : ET;
     Regions spec = {
-        {"xr", int64_t(2) * G * kbr * 2048},
-        {"wr", int64_t(2) * kbr * ET * 2048},
         {"hold", int64_t(G) * ET * 4096},
         {"sc", int64_t(ET) * 4096},
         {"idx", int64_t(ET) * 2048},
@@ -1334,7 +1332,7 @@ std::pair<Regions, int64_t> router_layout(uint32_t G, uint32_t ET, uint32_t K, u
 
 int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K) {
     const uint32_t ET = E / 32;
-    return router_layout(G, ET, K, 1, ET).second;
+    return router_layout(G, ET, K, ET).second;
 }
 
 int64_t routing_header_bytes(uint32_t EPC, uint32_t M) {

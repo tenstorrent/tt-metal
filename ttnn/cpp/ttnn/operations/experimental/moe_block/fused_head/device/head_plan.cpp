@@ -73,10 +73,6 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
     if (rs.P >= 256 || (G > 4 && rs.scatter != -2)) {
         return "reduce-scatter counts word: blocks of < 256 tiles (P " + s(rs.P) + "), past TP 4 the rows scatter only";
     }
-    if (G > 4 && !lay.on_engine) {
-        return "TP " + s(G) +
-               " > 4: the router's logits on the router cores differ call to call - on the matmul cores only";
-    }
     if (kPortGroup + 1 > kHeaders) {
         return "packet headers";
     }
@@ -96,32 +92,20 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
     }
     if (nrt + 2 * L + 1 > gy) {
         const int64_t free = (int64_t(gy) - lay.GY) * lay.GX;
-        const bool rect = lay.xdram && !lay.on_engine && router_rect(nrt, lay.GX, gy - lay.GY) != 0;
-        if (lay.GY >= gy || !(nrt <= lay.GX || (lay.on_engine && nrt <= free) || rect)) {
+        if (lay.GY >= gy || !(nrt <= lay.GX || nrt <= free)) {
             return "router cores: " + s(nrt) +
                    " (a row tile each of a chip's owned rows) fit neither the mover column (" + s(gy) + " cells less " +
                    s(2 * L) + " ports and the watcher) nor the " + s(free) + " free cells under the matmul cores (" +
-                   s(lay.GX) + "x" + s(lay.GY) + (!lay.on_engine ? ", one row: the logits on the router cores" : "") +
-                   ")";
+                   s(lay.GX) + "x" + s(lay.GY) + ")";
         }
     }
     const uint32_t nc = nrt;
-    const uint32_t ET = shape.E / 32, KT = shape.H / G / 32;
-    auto layout = [&](uint32_t kbr) { return router_layout(G, ET, shape.K, kbr, ET); };
-    uint32_t best = 0;
-    for (uint32_t d = 1; d < 5; ++d) {
-        if (KT % d == 0 && layout(d).second <= arena) {
-            best = d;
-        }
-    }
-    const auto [roff, rbytes] = layout(best ? best : 1);
+    const uint32_t ET = shape.E / 32;
+    const auto [roff, rbytes] = router_layout(G, ET, shape.K, ET);
     if (rbytes > arena) {
         return "router cores: " + kb0(rbytes) + " KB > the arena's " + kb0(arena) + " KB";
     }
-    int64_t ns = ceil_div(nc, L);
-    while (!lay.on_engine && ns > 1 && int64_t(G - 1) * ns * ET * 4096 > arena / 2) {
-        --ns;
-    }
+    const int64_t ns = ceil_div(nc, L);
     const int64_t pbuf = int64_t(G - 1) * ns * ET * 4096;
     if (pbuf > arena) {
         return "the ports' logits sub-blocks: " + kb0(pbuf) + " KB > the arena's " + kb0(arena) + " KB";
@@ -170,11 +154,10 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
                kb0(arena) + " KB";
     }
     const int64_t plen = 26 + 5 * int64_t(M) + 3 * int64_t(N) + 3 * int64_t(nsend);
-    const int64_t hand = lay.on_engine ? 0 : G - 1;
     const std::vector<std::pair<std::string, int64_t>> nargs = {
-        {"BRISC", 1 + 6 * hand + 10 + 3 + 2 * int64_t(nc) + plen},
+        {"BRISC", 1 + 10 + 3 + 2 * int64_t(nc) + plen},
         {"NCRISC", 2 * int64_t(G) + 10 + (nc < M ? 2 + plen : 2)},
-        {"compute", hand + G + 9},
+        {"compute", G + 9},
     };
     std::string big;
     for (const auto& [k, v] : nargs) {
@@ -265,10 +248,6 @@ std::string degradation(const HeadPlanned& chosen, const std::optional<HeadPlann
     if (a.GY != b.GY || a.MT != b.MT) {
         d.push_back("matmul core rows x MT " + s(b.GY) + "x" + s(b.MT) + " -> " + s(a.GY) + "x" + s(a.MT));
     }
-    if (a.on_engine != b.on_engine) {
-        auto mr = [](bool on) { return std::string(on ? "matmul" : "router"); };
-        d.push_back("router logits " + mr(b.on_engine) + " cores -> " + mr(a.on_engine) + " cores");
-    }
     if (a.compact != b.compact) {
         d.push_back("compact RS zones");
     }
@@ -296,15 +275,6 @@ ArenaMax arena_max_of(int64_t l1_free, uint32_t payload, int64_t cb_floor) {
 
 ArenaMax arena_max_fixed(int64_t bytes) {
     return [bytes](uint32_t) { return bytes; };
-}
-
-uint32_t router_rect(uint32_t nrt, uint32_t cols, uint32_t rows) {
-    for (int64_t c = std::min(cols, nrt); c > 1; --c) {
-        if (nrt % c == 0 && nrt / c <= rows) {
-            return c;
-        }
-    }
-    return 0;
 }
 
 uint32_t engine_width(const HeadShape& shape) {
@@ -355,8 +325,7 @@ std::vector<uint32_t> k_steps(const HeadShape& shape) {
 
 std::string describe_layout(const HeadLayout& lay) {
     return "matmul cores " + s(lay.GX) + "x" + s(lay.GY) + " MT " + s(lay.MT) + ", " + s(lay.NCH) + " row chunk" +
-           (lay.NCH > 1 ? "s" : "") + ", K step " + s(lay.KB) + ", router " +
-           (lay.on_engine ? "on the matmul cores" : "cores");
+           (lay.NCH > 1 ? "s" : "") + ", K step " + s(lay.KB);
 }
 
 HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) {
@@ -387,9 +356,7 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) 
         if (shape.latent) {
             a.latent = *shape.latent / 32 / shape.G;
         }
-        if (lay.on_engine) {
-            a.router = std::make_pair(shape.E / 32, shape.H / shape.G / 32);
-        }
+        a.router = std::make_pair(shape.E / 32, shape.H / shape.G / 32);  // (the logits on the matmul cores)
         a.arena_max = cap;
         a.w_dtype = shape.w_dtype;
         a.xring = lay.xdram ? 2 : 0;
@@ -469,17 +436,11 @@ std::pair<double, Parts> head_cost(
         t_se += t_xd;
     }
     const int64_t ET = shape.E / 32;
-    const double t_rc = double(ET * KT) * c.rtr_tile / c.clk;
     const double chain = c.chain_us + c.chain_ek * double(ET) * double(shape.K);
     const int64_t etc = ceil_div(ET, lay.GX);
     const double t_eng = kEngOverhead * double(n) * double(MT) * double(etc) * double(KT / G) * c.rtr_tile / c.clk;
-    double t_chain;
-    if (lay.on_engine) {
-        t_se += t_eng;
-        t_chain = t_eng + chain;
-    } else {
-        t_chain = t_rc + chain;
-    }
+    t_se += t_eng;  // (the logits on the matmul cores)
+    const double t_chain = t_eng + chain;
     const double t = c.base_us + std::max(t_se, t_chain);
     Parts parts = {
         {"gu", round_us(t_gu)},
@@ -504,26 +465,14 @@ std::vector<HeadPlanned> head_plan_layouts(
     const uint32_t GXe = engine_width(shape);
     for (const auto& [GY, MT, NCH] : head_layouts(shape)) {
         for (uint32_t kb : k_steps(shape)) {
-            // (both router placements - the logits on the matmul cores or on router cores - scored by the cost model)
-            const Cells cells = router_cells(shape, GY, GXe);
-            for (bool on : {false, true}) {
-                if (cells == Cells::Rows && !on && !xdram) {
-                    continue;
-                }
+            {
                 const std::vector<bool> compacts =
                     shape.rs_dim() == -2 && shape.G <= 4 ? std::vector<bool>{false, true} : std::vector<bool>{false};
                 HeadLayout lay;
                 HeadSized sized;
                 for (bool compact : compacts) {
                     lay = HeadLayout{
-                        .GY = GY,
-                        .MT = MT,
-                        .NCH = NCH,
-                        .KB = kb,
-                        .on_engine = on,
-                        .GX = GXe,
-                        .compact = compact,
-                        .xdram = xdram};
+                        .GY = GY, .MT = MT, .NCH = NCH, .KB = kb, .GX = GXe, .compact = compact, .xdram = xdram};
                     sized = head_size(shape, lay, arena_max(kb));
                     if (sized.eng) {
                         break;

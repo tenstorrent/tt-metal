@@ -65,20 +65,7 @@ constexpr uint8_t kRtrRx = 17, kRtrRw = 18, kRtrRo = 19;
 constexpr uint32_t kIncEvery = 8;
 constexpr uint8_t kXgCb = 0;
 // router_stream's CB ids
-enum RtCb : uint8_t {
-    XR = 0,
-    WR = 1,
-    RT_HOLD = 2,
-    ARRF = 3,
-    ARRB = 4,
-    BIAS = 5,
-    SC = 6,
-    FINC = 7,
-    PSYNC = 8,
-    BEST = 9,
-    IDX = 11,
-    RDY = 12
-};
+enum RtCb : uint8_t { RT_HOLD = 2, ARRF = 3, ARRB = 4, BIAS = 5, SC = 6, PSYNC = 8, BEST = 9, IDX = 11, RDY = 12 };
 constexpr uint32_t kPlanWords = 1024;
 
 uint32_t u32(size_t v) { return static_cast<uint32_t>(v); }
@@ -233,10 +220,9 @@ public:
     std::map<std::pair<uint32_t, uint32_t>, XDir> ties;  // (p, b) of a ring's far side -> the fabric's way
     // router
     std::vector<CoreCoord> rcores;
-    uint32_t RB = 0, KT = 0, ET = 0, K = 0, KBR = 1, NS = 1;
+    uint32_t RB = 0, KT = 0, ET = 0, K = 0, NS = 1;
     Regions roff;
     int64_t rbytes = 0, pbuf_sub = 0;
-    bool on_engine = false;
     // the mailbox words
     uint32_t HS = 16, fslots = 16, lw_off = 0, port_words = 16, zw_off = 0, mbox_words = 0;
     // routing
@@ -347,7 +333,7 @@ public:
         if (cfg.shape.latent && ring) {
             return false;
         }
-        return ring || !cfg.shape.latent || on_engine;
+        return true;
     }
     XDir rdir(uint32_t p, uint32_t b) const { return ring ? ring_dir(p, b) : (b > p ? XDir::Fwd : XDir::Bwd); }
     uint32_t hops(uint32_t p, uint32_t b) const {
@@ -633,9 +619,7 @@ std::shared_ptr<const HeadModel> make_head_model(
     if (sh.latent) {
         ea.latent = *sh.latent / 32 / G;
     }
-    if (lay.on_engine) {
-        ea.router = std::make_pair(sh.E / 32, sh.H / G / 32);
-    }
+    ea.router = std::make_pair(sh.E / 32, sh.H / G / 32);  // (the router logits on the matmul cores)
     ea.arena_max = arena_cap_of(config.l1_free, lay.KB, sh.payload, config.cb_floor);
     ea.w_dtype = sh.w_dtype;
     ea.xring = lay.xdram ? 2 : 0;
@@ -644,7 +628,6 @@ std::shared_ptr<const HeadModel> make_head_model(
 
     // the movers: ports, the watcher, the router cores (HeadSE3)
     const uint32_t nrt = sh.rows / 32 / G;
-    h.on_engine = lay.on_engine;
     if (nrt + 2 * h.L + 1 <= h.grid.y) {
         for (uint32_t cy = h.grid.y - nrt; cy < h.grid.y; ++cy) {
             h.rcores.emplace_back(h.MX, cy);
@@ -657,19 +640,8 @@ std::shared_ptr<const HeadModel> make_head_model(
                 free.emplace_back(c, y);
             }
         }
-        const uint32_t rect = router_rect(nrt, GX, h.grid.y - GY);
-        if (nrt <= GX || lay.on_engine) {
-            TT_FATAL(nrt <= free.size(), "fused_head: no cells for {} router cores", nrt);
-            h.rcores.assign(free.begin(), free.begin() + nrt);
-        } else if (lay.xdram && rect) {
-            for (uint32_t r = 0; r < nrt / rect; ++r) {
-                for (uint32_t c = 0; c < rect; ++c) {
-                    h.rcores.emplace_back(c, GY + r);
-                }
-            }
-        } else {
-            TT_THROW("fused_head: {} router cores fit neither one free row nor the mover column", nrt);
-        }
+        TT_FATAL(nrt <= free.size(), "fused_head: no cells for {} router cores", nrt);
+        h.rcores.assign(free.begin(), free.begin() + nrt);
         h.watcher = CoreCoord(h.MX, h.grid.y - 1);
     }
 
@@ -812,19 +784,10 @@ std::shared_ptr<const HeadModel> make_head_model(
     TT_FATAL(h.rcores.size() >= h.RB, "fused_head: {} router cores < {}", h.rcores.size(), h.RB);
     h.rcores.resize(h.RB);
     {
-        h.KBR = 1;
-        for (uint32_t d = 1; d < 5; ++d) {
-            if (h.KT % d == 0 && router_layout(G, h.ET, h.K, d, h.ET).second <= h.arena_bytes) {
-                h.KBR = d;
-            }
-        }
-        std::tie(h.roff, h.rbytes) = router_layout(G, h.ET, h.K, h.KBR, h.ET);
+        std::tie(h.roff, h.rbytes) = router_layout(G, h.ET, h.K, h.ET);
         TT_FATAL(
             h.rbytes <= h.arena_bytes, "fused_head: router cores need {} B of the arena's {}", h.rbytes, h.arena_bytes);
         h.NS = u32(cdiv(h.rcores.size(), h.L));
-        while (!h.on_engine && h.NS > 1 && int64_t(G - 1) * h.NS * h.ET * 4096 > h.arena_bytes / 2) {
-            --h.NS;
-        }
         h.pbuf_sub = int64_t(G - 1) * h.NS * h.ET * 4096;
     }
 
@@ -938,9 +901,7 @@ std::vector<HeadWordsSpec> head_words(const HeadModel& h) {
         {"ra_s", cells(pw), 4 * 4},
         {"yhello", cells({h.watcher}), 16},
     };
-    if (h.on_engine) {
-        out.push_back({"ewords", h.engine_cores(), 64});
-    }
+    out.push_back({"ewords", h.engine_cores(), 64});
     return out;
 }
 
@@ -1494,11 +1455,9 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     if (e.xfree) {
         cb(kXfreeCb, "xfree", 16 * e.NCH, bf16, 16);
     }
-    if (h.on_engine) {
-        cb(kRtrRx, "rx", 2 * e.KC * MT * e.NCH * 2048, bf16, 2048);
-        cb(kRtrRw, "rw", 2 * e.ETC * e.KC * 2048, bf16, 2048);
-        cb(kRtrRo, "ro", e.ETC * MT * e.NCH * 4096, fp32, 4096);
-    }
+    cb(kRtrRx, "rx", 2 * e.KC * MT * e.NCH * 2048, bf16, 2048);
+    cb(kRtrRw, "rw", 2 * e.ETC * e.KC * 2048, bf16, 2048);
+    cb(kRtrRo, "ro", e.ETC * MT * e.NCH * 4096, fp32, 4096);
     cb(ACC, "acc", e.acc_pages * 4096, fp32, 4096);
 
     std::vector<uint32_t> xa_ct, w_ct, y_ct;
@@ -1523,7 +1482,7 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
         ftab.push_back(n0 + (e.in_fam1(c) ? nf / e.S1 : 0));
         ftab.push_back(n0);
     }
-    const auto dests = h.on_engine ? engine_dests() : std::vector<Args>{};
+    const auto dests = engine_dests();
     const uint32_t nbank = u32(h.mesh->dram_grid_size().x);
     std::vector<std::pair<CoreCoord, Args>> bl, nl;
     size_t b_span0 = 0, b_spann = 0, n_span0 = 0, n_spann = 0;
@@ -1543,12 +1502,8 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
                     A("hall"),
                     u32(h.evirt(0, cy).x),
                     u32(h.evirt(GX - 1, cy).x)});
-            if (h.on_engine) {
-                add(b, S(SRC_X));
-                add(b, A("rx"));
-            } else {
-                add(b, Args{0, 0});
-            }
+            add(b, S(SRC_X));
+            add(b, A("rx"));
             add(b, ftab);
             for (uint32_t cc = 0; cc < GX; ++cc) {
                 add(b, u32(h.evirt(cc, cy).x));
@@ -1559,23 +1514,22 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
             add(b, rs_brisc(c, cy));
             add(b, la_brisc(c, cy));
             Args rtr_a;
-            if (h.on_engine) {  // (se_engine3._rtr_args)
-                const uint32_t e0 = c * e.ETC;
-                const uint32_t nv = u32(std::max<int64_t>(0, std::min<int64_t>(e.ETC, int64_t(h.ET) - e0)));
-                rtr_a = {
-                    S(SRC_X),
-                    S(SRC_RW),
-                    nv,
-                    e0,
-                    A("rx"),
-                    A("rw"),
-                    u32(h.evirt(GX - 1, cy).x),
-                    u32(h.evirt(0, cy).x),
-                    u32(h.evirt(0, cy).y),
-                    u32(nv > 0)};
-                for (uint32_t rr = 0; rr < MT * e.NCH; ++rr) {
-                    add(rtr_a, dests[e.grow(rr / MT, cy * MT + rr % MT)]);
-                }
+            // (se_engine3._rtr_args)
+            const uint32_t e0 = c * e.ETC;
+            const uint32_t nv = u32(std::max<int64_t>(0, std::min<int64_t>(e.ETC, int64_t(h.ET) - e0)));
+            rtr_a = {
+                S(SRC_X),
+                S(SRC_RW),
+                nv,
+                e0,
+                A("rx"),
+                A("rw"),
+                u32(h.evirt(GX - 1, cy).x),
+                u32(h.evirt(0, cy).x),
+                u32(h.evirt(0, cy).y),
+                u32(nv > 0)};
+            for (uint32_t rr = 0; rr < MT * e.NCH; ++rr) {
+                add(rtr_a, dests[e.grow(rr / MT, cy * MT + rr % MT)]);
             }
             Args n = {
                 cy,
@@ -1608,7 +1562,7 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     }
     auto [b_rt, b_crt] = common_span(bl, b_span0, b_spann);
     auto [n_rt, n_crt] = common_span(nl, n_span0, n_spann);
-    const Arg ew = h.on_engine ? word("ewords") : Arg(0u);
+    const Arg ew = word("ewords");
     b_crt.emplace_back(ew);  // (SE_EW: common[2 + n])
     n_crt.emplace_back(ew);
 
@@ -1663,33 +1617,30 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
         nd.emplace_back("SE_LATP", iv(e.LATP));
     }
     const size_t prep_ct0 = nct.size() + w_ct.size() + y_ct.size();
-    if (h.on_engine) {
-        const size_t nct_len = prep_ct0 + accessor_len(bufs[SRC_XBUF]);
-        nd.emplace_back("SE_RTR", "");
-        nd.emplace_back("SE_RX", iv(kRtrRx));
-        nd.emplace_back("SE_RW", iv(kRtrRw));
-        nd.emplace_back("SE_RO", iv(kRtrRo));
-        nd.emplace_back("SE_KTO", iv(h.KT));
-        nd.emplace_back("SE_ETC", iv(e.ETC));
-        nd.emplace_back("SE_MTR", iv(MT * e.NCH));
-        nd.emplace_back("SE_RG", iv(e.RG));
-        nd.emplace_back("SE_RD", iv(3));
-        nd.emplace_back("XACK_ID", iv(kXack));
-        nd.emplace_back("WACK_ID", iv(kWack));
-        nd.emplace_back("RXR_ID", iv(kRxr));
-        nd.emplace_back("RWR_ID", iv(kRwr));
-        if (e.rtr_overlay) {
-            nd.emplace_back("SE_RDONE", "");
-        }
-        nd.emplace_back("RXS_ID", iv(kRxs));
-        nd.emplace_back("SE_KC", iv(e.KC));
-        if (!e.xring) {
-            nd.emplace_back("SE_RTRX_L1", "");
-            nd.emplace_back("XRL_ID", iv(kXrl));
-        }
-        nd.emplace_back("SE_RTR_BCT0", iv(bct.size() + xa_ct.size()));
-        nd.emplace_back("SE_RTR_CT0", iv(nct_len));
+    const size_t nct_len = prep_ct0 + accessor_len(bufs[SRC_XBUF]);
+    nd.emplace_back("SE_RX", iv(kRtrRx));
+    nd.emplace_back("SE_RW", iv(kRtrRw));
+    nd.emplace_back("SE_RO", iv(kRtrRo));
+    nd.emplace_back("SE_KTO", iv(h.KT));
+    nd.emplace_back("SE_ETC", iv(e.ETC));
+    nd.emplace_back("SE_MTR", iv(MT * e.NCH));
+    nd.emplace_back("SE_RG", iv(e.RG));
+    nd.emplace_back("SE_RD", iv(3));
+    nd.emplace_back("XACK_ID", iv(kXack));
+    nd.emplace_back("WACK_ID", iv(kWack));
+    nd.emplace_back("RXR_ID", iv(kRxr));
+    nd.emplace_back("RWR_ID", iv(kRwr));
+    if (e.rtr_overlay) {
+        nd.emplace_back("SE_RDONE", "");
     }
+    nd.emplace_back("RXS_ID", iv(kRxs));
+    nd.emplace_back("SE_KC", iv(e.KC));
+    if (!e.xring) {
+        nd.emplace_back("SE_RTRX_L1", "");
+        nd.emplace_back("XRL_ID", iv(kXrl));
+    }
+    nd.emplace_back("SE_RTR_BCT0", iv(bct.size() + xa_ct.size()));
+    nd.emplace_back("SE_RTR_CT0", iv(nct_len));
     nd.emplace_back("SE_PU", iv(kPrepPu));
     nd.emplace_back("SE_PO", iv(kPrepPo));
     nd.emplace_back("SE_PREP_FULL", iv(e.PFULL));
@@ -1704,9 +1655,7 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     auto brisc = kernel("dataflow/se_brisc.cpp", allc, dm(DataMovementProcessor::RISCV_0, NOC::NOC_0));
     brisc.compile_time_args = bct;
     brisc.compile_time_args.insert(brisc.compile_time_args.end(), xa_ct.begin(), xa_ct.end());
-    if (h.on_engine) {
-        append_accessor(brisc.compile_time_args, bufs[SRC_X]);
-    }
+    append_accessor(brisc.compile_time_args, bufs[SRC_X]);
     brisc.defines = KernelDescriptor::Defines(nd.begin(), nd.end());
     for (const auto& [c, a] : b_rt) {
         set_rt(brisc, c, a);
@@ -1718,10 +1667,8 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     nca.insert(nca.end(), w_ct.begin(), w_ct.end());
     nca.insert(nca.end(), y_ct.begin(), y_ct.end());
     append_accessor(nca, bufs[SRC_XBUF]);
-    if (h.on_engine) {
-        append_accessor(nca, bufs[SRC_X]);
-        append_accessor(nca, bufs[SRC_RW]);
-    }
+    append_accessor(nca, bufs[SRC_X]);
+    append_accessor(nca, bufs[SRC_RW]);
     ncrisc.defines = brisc.defines;
     for (const auto& [c, a] : n_rt) {
         set_rt(ncrisc, c, a);
@@ -1947,7 +1894,7 @@ Args ChipProgram::port_block(XDir d, uint32_t v) const {
              rt_arr0,
              h.ET,
              rpl,
-             h.on_engine ? h.ET : 1u,
+             h.ET,
              std::min<uint32_t>(h.NS, u32(js.size())),
              sfree + 64 * static_cast<uint32_t>(d)}) {
         out.push_back(x);
@@ -2396,39 +2343,25 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
     auto cb = [&](uint8_t i, const std::string& key, uint32_t size, tt::DataFormat dt, uint32_t page) {
         cbs.push_back(arena_cb(i, region_of_router(key), size, dt, page, crs));
     };
-    cb(XR, "xr", 2 * G * h.KBR * 2048, bf16, 2048);
-    cb(WR, "wr", 2 * h.KBR * ET * 2048, bf16, 2048);
     cb(RT_HOLD, "hold", G * ET * 4096, fp32, 4096);
     cb(ARRF, "arr", (G - 1) * ET * 4096, fp32, 4096);
     cb(BIAS, "bias", h.ET * 4096, fp32, 4096);
     cb(SC, "sc", ET * 4096, fp32, 4096);
     cb(IDX, "idx", ET * 2048, tt::DataFormat::UInt16, 2048);
     cb(BEST, "best", 4096, fp32, 4096);
-    cb(FINC, "finc", 16 * 8, bf16, 16);
     cb(PSYNC, "psync", 16 * 2, bf16, 16);
     cb(ARRB, "arrb", 16 * std::max<uint32_t>(1, G - 1), tt::DataFormat::UInt32, 16);
-    if (h.on_engine) {
-        cb(RDY, "rdy", 16 * 2, bf16, 16);
-    }
+    cb(RDY, "rdy", 16 * 2, bf16, 16);
     float scale = h.cfg.route_scale;
     uint32_t scale_bits;
     std::memcpy(&scale_bits, &scale, 4);
     const Args tail = {RA("words"), RA("best"), RA("out"), scale_bits};
-    std::vector<uint32_t> hand;
-    if (!h.on_engine) {
-        for (XDir d : {XDir::Fwd, XDir::Bwd}) {
-            for (uint32_t b : h.dests(p, d)) {
-                hand.push_back(b);
-            }
-        }
-        std::stable_sort(hand.begin(), hand.end(), [&](uint32_t a, uint32_t b) { return h.hops(p, a) > h.hops(p, b); });
-    }
     const Arg sv_ = RA("hold") + p * ET * 4096;
     const auto order = h.arrival_order(p);
     std::vector<std::pair<CoreCoord, Args>> n_rt, c_rt, b_rt;
     for (uint32_t j = 0; j < h.rcores.size(); ++j) {
         const CoreCoord core = h.rcores[j];
-        Args n = {S(SRC_X), S(SRC_RW), S(SRC_RB), S(SRC_RIX)};
+        Args n = {S(SRC_RB), S(SRC_RIX)};
         for (uint32_t bb = 0; bb < G; ++bb) {
             add(n, bb * RB + j % RB);
         }
@@ -2438,43 +2371,15 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         add(n, sv_);
         add(n, ra_args2(j));
         n_rt.emplace_back(core, n);
-        std::vector<uint32_t> ops;
-        for (uint32_t bb : hand) {
-            ops.push_back(1 | bb << 8);
-        }
-        ops.push_back(2 | p << 8);
-        Args c = {u32(ops.size())};
-        add(c, ops);
+        Args c = {1u, 2 | p << 8};  // (one op: the fin of my owner block)
         for (uint32_t bb = 0; bb < G; ++bb) {
             add(c, bb == p ? G - 1 : 0u);
         }
         add(c, tail);
         add(c, Args{sv_, RA("route"), 32 * (j % RB)});
         c_rt.emplace_back(core, c);
-        Args hs;
-        const uint32_t l = j % h.L;
-        const auto js = h.port_layout(l);
-        const uint32_t i = u32(std::find(js.begin(), js.end(), j) - js.begin());
-        for (uint32_t bb : hand) {
-            const XDir d = h.rdir(p, bb);
-            const auto ds = h.dests(p, d);
-            const uint32_t u = u32(std::find(ds.begin(), ds.end(), bb) - ds.begin());
-            const auto& pcv = pc.at({d, l});
-            const uint32_t ns = std::min<uint32_t>(h.NS, u32(js.size()));
-            const Arg sw = i >= ns ? sfree + 64 * static_cast<uint32_t>(d) + 16 * u : Arg(0u);
-            add(hs,
-                Args{
-                    bb,
-                    u32(pcv.x),
-                    u32(pcv.y),
-                    base + (u * ns + i % ns) * ET * 4096,
-                    mbox + 4 * h.lw_off + 16 * (u * u32(js.size()) + i),
-                    sw});
-        }
         const uint32_t jr = j % RB;
-        Args b = {u32(hs.size() / 6)};
-        add(b, hs);
-        add(b, S(SRC_ROWS));
+        Args b = {S(SRC_ROWS)};
         add(b, jr);
         add(b, Args{scale_bits, RA("out"), RA("words"), RA("best"), RA("route")});
         b.push_back(S(SRC_ROUTE));
@@ -2487,12 +2392,12 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
             TT_FATAL(a.size() <= 341, "fused_head: router core runtime args {} > 341", a.size());
         }
     }
-    const std::vector<uint32_t> ct = {h.KT, ET, G, h.KBR, K};
+    const std::vector<uint32_t> ct = {h.KT, ET, G, K};
     std::vector<uint32_t> ra_ct;
     append_accessor(ra_ct, bufs[SRC_ROWS]);
     append_accessor(ra_ct, bufs[SRC_SLOTS]);
     std::vector<uint32_t> n_ct = ct;
-    for (Buffer* bb : {bufs[SRC_X], bufs[SRC_RW], bufs[SRC_RB], bufs[SRC_RIX]}) {
+    for (Buffer* bb : {bufs[SRC_RB], bufs[SRC_RIX]}) {
         append_accessor(n_ct, bb);
     }
     const uint32_t n_ra0 = u32(n_ct.size());
@@ -2512,7 +2417,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
     for (uint8_t i : {SC, BEST, RT_HOLD, ARRF, BIAS}) {
         comp.unpack_to_dest_mode[i] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    const Args common = {base, h.on_engine ? rt_arr1 : Arg(0u)};
+    const Args common = {base, rt_arr1};
     // a padded chunk (router_addr.hpp RT_VALID): the planners and the route words' writer read actual_start /
     // actual_end (common [2], [3]) and bound this chip's tokens by its SP row's real rows (main's rotated layout: [4]
     // the SP row r, [5] SP rows, [6] tokens a row) less the row's tokens before mine ([7] p S, my owned block p), [8]
@@ -2524,14 +2429,8 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
             Args{S(SRC_START), S(SRC_END), Arg(coord.first), Arg(h.R), Arg(h.S * h.C), Arg(p * h.S), Arg(h.S)});
     }
     auto eng_defs = [&](KernelDescriptor& k) {
-        if (h.on_engine) {
-            define(k, "RT_ENG_ON");
-        }
         define(k, "RT_MSYNC_OFF", uv(region_of_router("msync")));
         define(k, "RT_FOLD", uv(h.cfg.shape.fold));
-        if (!h.on_engine && h.rcores.size() == 1) {
-            define(k, "RT_RW_SOLO");
-        }
         if (h.cfg.ordered) {
             define(k, "RT_ARR_ORDERED");
         }
@@ -2655,24 +2554,6 @@ ProgramDescriptor ChipProgram::build(HeadPatches* patches) {
         const std::array kernels{std::ref(ke[0])};
         mc.attach(desc, name, kernels, next_id);
         next_id = mc.next_semaphore_id();
-    }
-    // the router cores' W_r family (logits on the router cores, more than one core) on the NCRISC of half 0
-    if (!h.on_engine && h.rcores.size() > 1) {
-        const CoreCoord lo = h.rcores.front(), hi = h.rcores.back();
-        const bool col = lo.x == hi.x && hi.y - lo.y + 1 == h.rcores.size();
-        const bool row = lo.y == hi.y && hi.x - lo.x + 1 == h.rcores.size();
-        const uint32_t nx = hi.x - lo.x + 1, ny = hi.y - lo.y + 1;
-        const bool rect2d = !(col || row) && nx * ny == h.rcores.size() && nx > 1;
-        TT_FATAL(col || row || rect2d, "fused_head: the router cores must be one column, one row or a rectangle");
-        kh::Mcast mc(
-            *h.mesh,
-            kh::McastConfig{.noc = NOC::NOC_0, .handshake = true},
-            CoreRangeSet(CoreRange(lo, hi)),
-            rect2d ? nx : u32(h.rcores.size()),
-            kh::McastRotatingSenderConfig{},
-            col ? kh::McastCoreOrder::ColumnMajor : kh::McastCoreOrder::RowMajor);
-        const std::array kernels{std::ref(kr[0])};
-        mc.attach(desc, "rw", kernels, 0);
     }
     for (auto [v, p] : {std::pair{&kx, &px}, std::pair{&kr, &pr}, std::pair{&ky, &py}, std::pair{&ke, &pe}}) {
         for (size_t i = 0; i < v->size(); ++i) {
