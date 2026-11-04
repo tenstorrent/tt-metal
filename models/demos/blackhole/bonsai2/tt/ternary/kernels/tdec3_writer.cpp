@@ -6,6 +6,10 @@
 #ifndef OUT_PER_NT
 #define OUT_PER_NT 1
 #endif
+// SPLIT_NT > 0: output tile columns from SPLIT_NT on go to a second tensor (runtime arg 5), at column - SPLIT_NT.
+#ifndef SPLIT_NT
+#define SPLIT_NT 0
+#endif
 
 void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(0);
@@ -16,6 +20,9 @@ void kernel_main() {
     constexpr uint32_t NB = get_compile_time_arg_val(1);
     constexpr auto w_args = TensorAccessorArgs<2>();
     constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+#if SPLIT_NT > 0
+    constexpr auto out2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#endif
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     // No weight reads until this core's x' and scales have landed (NCRISC pushes c_2 after both): with every core's
@@ -30,9 +37,18 @@ void kernel_main() {
 
     const uint32_t bytes = get_tile_size(cb_out);
     const auto out = TensorAccessor(out_args, out_addr, bytes);
+#if SPLIT_NT > 0
+    const auto out2 = TensorAccessor(out2_args, get_arg_val<uint32_t>(5), bytes);
+#endif
     for (uint32_t i = 0; i < num_nt * OUT_PER_NT; ++i) {
         cb_wait_front(cb_out, 1);
-        noc_async_write(get_read_ptr(cb_out), out.get_noc_addr(first_nt + i), bytes);
+        const uint32_t nt = first_nt + i;
+#if SPLIT_NT > 0
+        const uint64_t dst = nt < SPLIT_NT ? out.get_noc_addr(nt) : out2.get_noc_addr(nt - SPLIT_NT);
+#else
+        const uint64_t dst = out.get_noc_addr(nt);
+#endif
+        noc_async_write(get_read_ptr(cb_out), dst, bytes);
         noc_async_write_barrier();
         cb_pop_front(cb_out, 1);
     }

@@ -87,4 +87,15 @@ def swap_in_ternary_mlp(model) -> None:
     for layer in model.layers:
         layer.feed_forward.ternary = TernaryMLP(device, packed[layer.layer_num], rotations)
     model._ternary_mlp = None
+    if os.environ.get("BONSAI_TERNARY_GDN") == "1":
+        from models.demos.blackhole.bonsai2.tt.ternary.gdn import swap_in_ternary_gdn
+        from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import BonsaiGGUF
+
+        swap_in_ternary_gdn(
+            model,
+            BonsaiGGUF(
+                os.environ.get("BONSAI_GGUF", "/local/ttuser/jerrywang/bonsai/gguf/Ternary-Bonsai-2-27B-PQ2_0.gguf")
+            ),
+            os.environ.get("BONSAI_TERNARY_CACHE", "/local/ttuser/jerrywang/bonsai/ternary_cache"),
+        )
     print(f"BONSAI_TERNARY_MLP_SWAP_S={time.time() - t0:.1f}", flush=True)

@@ -146,8 +146,10 @@ class TernaryDecodeLinear3:
         extra_defines=(),
         dm_defines=(),
         lead=(1, 1, TILE),
-    ) -> ttnn.Tensor:
-        """x_rot: [C, K] bf16 ROW_MAJOR, C copies of the rotated activation (one per DRAM bank: page c is in bank
+        split=0,
+    ):
+        """split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
+        x_rot: [C, K] bf16 ROW_MAJOR, C copies of the rotated activation (one per DRAM bank: page c is in bank
         c mod 8) -> [32, N] bf16 TILE, row 0 = y."""
         device = x_rot.device()
         K, N = self.K, self.N
@@ -155,10 +157,17 @@ class TernaryDecodeLinear3:
         ppr = self.ppr if self.inline_scales else Kt * 256 // PAGE_BYTES
         # lead: the output's leading logical dims; any of them tile-pad to one 32-row tile row, so the pages match.
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(list(lead) + [N * (3 if dbg else 1)]),
+            ttnn.Shape(list(lead) + [(split or N) * (3 if dbg else 1)]),
             ttnn.float32 if dbg else ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             device,
+        )
+        out2 = (
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape(list(lead) + [N - split]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
+            )
+            if split
+            else None
         )
         grid = device.compute_with_storage_grid_size()
         cores = min(self.cores, Nt)
@@ -193,13 +202,18 @@ class TernaryDecodeLinear3:
                 n,
                 (cc.x + cc.y * grid.x) % x_rot.shape[0],
             ]
-            wr[cc.x][cc.y] = [self.w.buffer_address(), out.buffer_address(), s, n]
+            wr[cc.x][cc.y] = [self.w.buffer_address(), out.buffer_address(), s, n, 0] + (
+                [out2.buffer_address()] if split else []
+            )
             cp[cc.x][cc.y] = [n]
         rd_ct = [Kt, KB, ppr, inflight]
         for t in (x_rot, self.w if self.inline_scales else self.s, self.w):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         wr_ct = [ppr, inflight] + ttnn.TensorAccessorArgs(self.w).get_compile_time_args()
         wr_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
+        if split:
+            assert split % TILE == 0, split
+            wr_ct += ttnn.TensorAccessorArgs(out2).get_compile_time_args()
         program = ttnn.ProgramDescriptor(
             kernels=[
                 ttnn.KernelDescriptor(
@@ -219,7 +233,7 @@ class TernaryDecodeLinear3:
                     compile_time_args=wr_ct,
                     defines=list(dm_defines)
                     + ([("INLINE_SCALES", "1")] if self.inline_scales else [])
-                    + [("OUT_PER_NT", "3" if dbg else "1")]
+                    + [("OUT_PER_NT", "3" if dbg else "1"), ("SPLIT_NT", str(split // TILE))]
                     + [("S_PER_NT", str(-(-KB // 32) if self.group16 else KB))],
                     runtime_args=wr,
                     config=ttnn.WriterConfigDescriptor(),
@@ -251,4 +265,7 @@ class TernaryDecodeLinear3:
                 cb(16, ttnn.float32 if dbg else ttnn.bfloat16, 4096 if dbg else 2048, max_n * (3 if dbg else 1)),
             ],
         )
-        return ttnn.generic_op([x_rot] + ([] if self.inline_scales else [self.s]) + [self.w, out], program)
+        res = ttnn.generic_op(
+            [x_rot] + ([] if self.inline_scales else [self.s]) + [self.w, out] + ([out2] if split else []), program
+        )
+        return (out, out2) if split else res  # generic_op returns the last tensor of its list

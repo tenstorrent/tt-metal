@@ -82,6 +82,7 @@ def test_bonsai_perf(mesh_device, device_params):
             ttnn.synchronize_device(device)
             signpost("PREFILL_END")
             return
+        after_prefill(model)  # the decode-path swaps (no prefill runs in this profile)
         generator = make_generator(model, device)
         decode_step(generator, cont[0], P, page_table, trace=False, read=False)  # compiles the decode programs
         ttnn.synchronize_device(device)

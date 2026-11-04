@@ -14,10 +14,12 @@ KERNELS = "models/demos/blackhole/bonsai2/tt/ternary/kernels/"
 
 
 class DecodeRotation:
-    def __init__(self, device, signs: np.ndarray, copies: int = 8):
+    def __init__(self, device, signs: np.ndarray, copies: int = 8, chunk_src=None):
+        """chunk_src[c]: the input tile (32 values) that feeds rotated position chunk c (identity when None)."""
         K = signs.shape[0]
         assert K % 1024 == 0, K
         self.K, self.B, self.copies = K, K // 1024, copies
+        self.chunk_src = list(range(K // 32)) if chunk_src is None else [int(c) for c in chunk_src]
         h32 = hadamard(32) * np.sqrt(32)  # +-1
         h = np.stack([h32, h32 / 32.0]).astype(np.float32)  # H32, H32 / 32: product = H_1024 factors, exact in bf16
         self.h = ttnn.from_torch(torch.from_numpy(h), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -50,7 +52,9 @@ class DecodeRotation:
 
         rd, wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for b, c in enumerate(coords):
-            rd[c.x][c.y] = [x.buffer_address(), self.m.buffer_address(), self.h.buffer_address(), b]
+            rd[c.x][c.y] = [x.buffer_address(), self.m.buffer_address(), self.h.buffer_address(), b] + self.chunk_src[
+                32 * b : 32 * b + 32
+            ]
             wr[c.x][c.y] = [out.buffer_address(), b]
         rd_ct = []
         for t in (x, self.m, self.h):

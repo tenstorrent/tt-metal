@@ -7,22 +7,41 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 `gdn.cfg`, mirrored scalar attrs + runtime state from `gdn`. Every ttnn op,
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
+import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet as _gdn_mod
 import ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet as _gdn_mod
 
 
 class _DecodeOProjTtnn:
     """ttnn shim for the decode path only: injects a swept program config into the o_proj
     ttnn.linear inside gated_deltanet_forward_ttnn (that module is outside the editable tree)."""
 
-    def __init__(self, o_w):
+    def __init__(self, o_w, gdn=None):
         self._o_w = o_w
+        self._gdn = gdn
 
     def __getattr__(self, name):
         return getattr(ttnn, name)
 
+    def deallocate(self, t, *args, **kwargs):
+        from models.demos.blackhole.bonsai2.tt.ternary.gdn import MegaSplit
+
+        if isinstance(t, MegaSplit):
+            return None
+        return ttnn.deallocate(t, *args, **kwargs)
+
     def linear(self, a, b, *args, **kwargs):
+        ternary = getattr(self._gdn, "ternary", None)
+        if ternary is not None:
+            # One-token decode in Bonsai's own ternary weights (models/demos/blackhole/bonsai2/tt/ternary/gdn.py).
+            w = self._gdn.weights
+            if b is w.mega_fused_weight:
+                from models.demos.blackhole.bonsai2.tt.ternary.gdn import MegaSplit
+
+                parts = ternary.in_proj(a, kwargs.get("compute_kernel_config"))
+                return MegaSplit(parts, [w.mega_qkv_dim, w.mega_a_dim, w.mega_b_dim, w.mega_g_dim])
+            if b is self._o_w:
+                return ternary.out_proj(a)
         if b is self._o_w and kwargs.get("program_config") is None:
             shp = list(a.shape)
             m = 1
@@ -141,7 +160,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             _gdn_mod.ttnn = _orig_ttnn
     if mode == "recurrent":
         _orig_ttnn = _gdn_mod.ttnn
-        _gdn_mod.ttnn = _DecodeOProjTtnn(gdn.weights.o_proj_weight)
+        _gdn_mod.ttnn = _DecodeOProjTtnn(gdn.weights.o_proj_weight, gdn)
         try:
             return _recurrent_forward_impl(gdn, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
         finally:

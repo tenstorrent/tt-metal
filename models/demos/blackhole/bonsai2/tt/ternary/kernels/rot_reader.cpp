@@ -12,6 +12,7 @@ void kernel_main() {
     const uint32_t m_addr = get_arg_val<uint32_t>(1);
     const uint32_t h_addr = get_arg_val<uint32_t>(2);
     const uint32_t b = get_arg_val<uint32_t>(3);
+    // args 4 .. 35: the activation tile each of the block's 32 rows reads (32b + jh unless the input is permuted)
     constexpr auto x_args = TensorAccessorArgs<0>();
     constexpr auto m_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto h_args = TensorAccessorArgs<m_args.next_compile_time_args_offset()>();
@@ -34,7 +35,7 @@ void kernel_main() {
     cb_reserve_back(cb_scratch, 1);
     const uint32_t sc = get_write_ptr(cb_scratch);
     for (uint32_t jh = 0; jh < 32; ++jh) {
-        const uint64_t t = xs.get_noc_addr(32 * b + jh);
+        const uint64_t t = xs.get_noc_addr(get_arg_val<uint32_t>(4 + jh));
         noc_async_read(t, sc + jh * 128, 64);
         noc_async_read(t + 512, sc + jh * 128 + 64, 64);
     }
