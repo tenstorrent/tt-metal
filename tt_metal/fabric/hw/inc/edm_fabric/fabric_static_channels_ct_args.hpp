@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 #include "api/compile_time_args.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
@@ -11,7 +12,7 @@
 // Each entry contains 4 args: base_address, num_slots, remote_address, remote_num_slots.
 template <size_t CT_ARG_IDX_BASE>
 struct ChannelBufferEntry {
-    static constexpr size_t base_address = get_compile_time_arg_val(CT_ARG_IDX_BASE);
+    static constexpr size_t base_address = router_l1(get_compile_time_arg_val(CT_ARG_IDX_BASE));
     static constexpr size_t num_slots = get_compile_time_arg_val(CT_ARG_IDX_BASE + 1);
     static constexpr size_t remote_address = get_compile_time_arg_val(CT_ARG_IDX_BASE + 2);
     static constexpr size_t remote_num_slots = get_compile_time_arg_val(CT_ARG_IDX_BASE + 3);

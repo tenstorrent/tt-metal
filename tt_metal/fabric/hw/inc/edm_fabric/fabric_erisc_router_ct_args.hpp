@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/fabric_common.h"
@@ -175,7 +176,7 @@ constexpr bool enable_deadlock_avoidance = NAMED_CT_ARG("ENABLE_DEADLOCK_AVOIDAN
 constexpr bool enable_speedy_vc0 = NAMED_CT_ARG("ENABLE_SPEEDY_VC0") != 0;
 constexpr bool is_intermesh_router = NAMED_CT_ARG("IS_INTERMESH_ROUTER");
 constexpr bool is_handshake_sender = NAMED_CT_ARG("IS_HANDSHAKE_SENDER") != 0;
-constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
+constexpr size_t handshake_addr = router_l1(NAMED_CT_ARG("HANDSHAKE_ADDR"));
 
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 
@@ -260,31 +261,42 @@ static_assert(
 // ============================================================================
 // Sender channel connection info addresses (named args)
 // ============================================================================
-constexpr size_t local_sender_channel_0_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_0_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_1_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_1_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_2_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_2_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_3_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_3_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_4_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_4_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_5_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_5_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_6_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR");
-constexpr size_t local_sender_channel_9_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_9_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_0_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_0_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_1_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_1_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_2_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_2_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_3_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_3_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_4_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_4_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_5_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_5_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_6_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_6_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_7_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_8_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR"));
+constexpr size_t local_sender_channel_9_connection_info_addr =
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_CH_9_CONN_INFO_ADDR"));
 
 // ============================================================================
 // Status pointers
 // ============================================================================
 // TODO: CONVERT TO SEMAPHORE
-constexpr uint32_t termination_signal_addr = NAMED_CT_ARG("TERMINATION_SIGNAL_ADDR");
-constexpr uint32_t edm_local_sync_ptr_addr = wait_for_host_signal ? NAMED_CT_ARG("EDM_LOCAL_SYNC_PTR_ADDR") : 0;
-constexpr uint32_t edm_local_tensix_sync_ptr_addr = NAMED_CT_ARG("EDM_LOCAL_TENSIX_SYNC_PTR_ADDR");
-constexpr uint32_t edm_status_ptr_addr = NAMED_CT_ARG("EDM_STATUS_PTR_ADDR");
+constexpr uint32_t termination_signal_addr = router_l1(NAMED_CT_ARG("TERMINATION_SIGNAL_ADDR"));
+constexpr uint32_t edm_local_sync_ptr_addr =
+    wait_for_host_signal ? router_l1(NAMED_CT_ARG("EDM_LOCAL_SYNC_PTR_ADDR")) : 0;
+constexpr uint32_t edm_local_tensix_sync_ptr_addr = router_l1(NAMED_CT_ARG("EDM_LOCAL_TENSIX_SYNC_PTR_ADDR"));
+constexpr uint32_t edm_status_ptr_addr = router_l1(NAMED_CT_ARG("EDM_STATUS_PTR_ADDR"));
 
 // for blackhole we need to disable the noc flush in inline writes to L1 for better perf. For wormhole this flag is not
 // used.
 constexpr bool enable_read_counter_update_noc_flush = false;
 constexpr uint32_t notify_worker_of_read_counter_update_src_address =
-    NAMED_CT_ARG("NOTIFY_WORKER_OF_READ_COUNTER_UPDATE_SRC_ADDR");
+    router_l1(NAMED_CT_ARG("NOTIFY_WORKER_OF_READ_COUNTER_UPDATE_SRC_ADDR"));
 
 // ============================================================================
 // Channel servicing flags
@@ -641,21 +653,22 @@ constexpr bool FABRIC_TELEMETRY_ANY_DYNAMIC_STAT = FABRIC_TELEMETRY_ROUTER_STATE
 constexpr PerfTelemetryRecorderType perf_telemetry_mode =
     static_cast<PerfTelemetryRecorderType>(NAMED_CT_ARG("PERF_TELEMETRY_MODE"));
 
-constexpr size_t perf_telemetry_buffer_addr = NAMED_CT_ARG("PERF_TELEMETRY_BUFFER_ADDR");
+constexpr size_t perf_telemetry_buffer_addr = router_l1(NAMED_CT_ARG("PERF_TELEMETRY_BUFFER_ADDR"));
 
 // ============================================================================
 // Code Profiling
 // ============================================================================
 constexpr uint32_t code_profiling_enabled_timers_bitfield = NAMED_CT_ARG("CODE_PROFILING_ENABLED_TIMERS");
-constexpr size_t code_profiling_buffer_base_addr = NAMED_CT_ARG("CODE_PROFILING_BUFFER_ADDR");
+constexpr size_t code_profiling_buffer_base_addr = router_l1(NAMED_CT_ARG("CODE_PROFILING_BUFFER_ADDR"));
 
 // ============================================================================
 // Receiver-to-sender credit counters: multi-TXQ, express VC1, or no stream registers (always available; 0 when
 // inactive)
 // ============================================================================
-constexpr size_t to_sender_remote_ack_counters_base_address = NAMED_CT_ARG("TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR");
+constexpr size_t to_sender_remote_ack_counters_base_address =
+    router_l1(NAMED_CT_ARG("TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR"));
 constexpr size_t to_sender_remote_completion_counters_base_address =
-    NAMED_CT_ARG("TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR");
+    router_l1(NAMED_CT_ARG("TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR"));
 
 // To optimize for CPU bottleneck instructions, instead of sending acks individually, based on the specific credit
 // addresses, the router instead will send all credits at once. This eliminates a handful of instructions per ack. This
@@ -664,9 +677,10 @@ constexpr size_t to_sender_remote_completion_counters_base_address =
 constexpr size_t to_senders_credits_base_address =
     std::min(to_sender_remote_ack_counters_base_address, to_sender_remote_completion_counters_base_address);
 
-constexpr size_t local_receiver_ack_counters_base_address = NAMED_CT_ARG("LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR");
+constexpr size_t local_receiver_ack_counters_base_address =
+    router_l1(NAMED_CT_ARG("LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR"));
 constexpr size_t local_receiver_completion_counters_base_address =
-    NAMED_CT_ARG("LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR");
+    router_l1(NAMED_CT_ARG("LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR"));
 
 constexpr size_t local_receiver_credits_base_address =
     std::min(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address);
@@ -696,9 +710,9 @@ static_assert(
 // Packets-sent credits without stream registers: one 16-byte slot per receiver channel. The sender's
 // total is the source of each update (local) and lands in the receiver's slot at the same address.
 constexpr size_t to_receiver_packets_sent_counters_base_address =
-    NAMED_CT_ARG("TO_RECEIVER_PACKETS_SENT_COUNTERS_BASE_ADDR");
+    router_l1(NAMED_CT_ARG("TO_RECEIVER_PACKETS_SENT_COUNTERS_BASE_ADDR"));
 constexpr size_t local_sender_packets_sent_counters_base_address =
-    NAMED_CT_ARG("LOCAL_SENDER_PACKETS_SENT_COUNTERS_BASE_ADDR");
+    router_l1(NAMED_CT_ARG("LOCAL_SENDER_PACKETS_SENT_COUNTERS_BASE_ADDR"));
 // Every software-counter slot another agent writes: one Ethernet word.
 constexpr size_t software_counter_slot_bytes = ETH_WORD_SIZE_BYTES;
 static_assert(
@@ -708,7 +722,8 @@ static_assert(
 
 // Downstream free slots without stream registers: one 16-byte slot per downstream router adapter, VC0's
 // VC0_DOWNSTREAM_EDM_SIZE first, then VC1's. The downstream router writes its read count there.
-constexpr size_t local_downstream_read_counters_base_address = NAMED_CT_ARG("LOCAL_DOWNSTREAM_READ_COUNTERS_BASE_ADDR");
+constexpr size_t local_downstream_read_counters_base_address =
+    router_l1(NAMED_CT_ARG("LOCAL_DOWNSTREAM_READ_COUNTERS_BASE_ADDR"));
 static_assert(
     stream_registers_available || local_downstream_read_counters_base_address != 0,
     "downstream read counter address must be valid when STREAM_REGISTERS_AVAILABLE is 0");
