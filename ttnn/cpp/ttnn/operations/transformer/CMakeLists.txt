@@ -17,6 +17,7 @@ file(
     GLOB_RECURSE kernels
     sdpa/device/kernels/*.cpp
     sdpa/device/kernels/*.hpp
+    sdpa/device/kernels/*.inc
     sdpa_decode/device/kernels/*.cpp
     sdpa_decode/device/kernels/*.hpp
     gated_delta_attn/device/kernels/*.cpp

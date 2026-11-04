@@ -6,8 +6,11 @@
 #include <utility>
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
@@ -19,6 +22,8 @@
 
 namespace ttnn::transformer {
 
+namespace numeric = operations::transformer::sdpa::detail;
+
 namespace {
 // Empty joint (0 elements) == "no joint". Normalize to nullopt so self-attention callers passing
 // zero-length dummy joints don't create duplicate input Buffer*s -> resolve_bindings() bails and the
@@ -29,6 +34,29 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
         return std::nullopt;
     }
     return t;
+}
+
+// Ring and exp ring recipes, after blocking. Unfused STANDARD processes Q tile rows in pairs: an odd Q chunk rounds
+// up to the next even one, so that kernel never builds the single-row group (outputs are per row, so the chunking
+// does not change them beyond accumulation order).
+void finalize_ring_recipe_config(
+    numeric::RecipeOp op,
+    const numeric::PrecisionPolicy& policy,
+    operations::transformer::SDPAProgramConfig& program_config,
+    std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t head_dim) {
+    // Validate the caller's chunks before rounding, so an unaligned Q chunk is rejected rather than floored.
+    numeric::validate_recipe_geometry(op, program_config.q_chunk_size, program_config.k_chunk_size, head_dim);
+    program_config.q_chunk_size =
+        numeric::recipe_compute_q_tiles(policy, program_config.q_chunk_size / 32, program_config.k_chunk_size / 32) *
+        32;
+    numeric::validate_recipe_geometry(op, program_config.q_chunk_size, program_config.k_chunk_size, head_dim);
+    // Read only by the op perf model; the recipe kernels fix their own fidelities.
+    compute_kernel_config = BlackholeComputeKernelConfig{
+        .math_fidelity = policy.pv_fidelity,
+        .math_approx_mode = true,
+        .fp32_dest_acc_en = policy.fp32_destination,
+    };
 }
 }  // namespace
 
@@ -48,7 +76,47 @@ ttnn::Tensor scaled_dot_product_attention(
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
     bool output_concat_heads,
-    const std::optional<ttnn::Tensor>& attn_mask_block_map) {
+    const std::optional<ttnn::Tensor>& attn_mask_block_map,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        TT_FATAL(
+            !is_causal && !sliding_window_size && !attention_sink && !cu_window_seqlens &&
+                windowed_q_token_offset == 0 && !windowed_q_token_offset_tensor && !output_concat_heads,
+            "Named SDPA recipes currently support dense noncausal attention with an optional additive attn_mask only");
+        TT_FATAL(!memory_config || *memory_config == DRAM_MEMORY_CONFIG, "SDPA recipes require DRAM output");
+        // The recipes apply the whole mask; a block map only lets the legacy reader skip fully masked blocks,
+        // so it does not change the result and the recipes ignore it.
+        TT_FATAL(!attn_mask_block_map || attn_mask, "attn_mask_block_map requires attn_mask");
+        const auto policy = numeric::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        // Same mask contract as legacy SDPA below: the recipe kernels fold the softmax scale into
+        // the exponent, so the additive mask is pre-multiplied by 1/scale (0 and -inf are exact).
+        // FP32-state recipes (BALANCED/ACCURATE) hold FP32 scores, so their mask is pre-scaled in FP32
+        // (and added exactly); BF16-score recipes keep the legacy mask-dtype pre-scale.
+        std::optional<ttnn::Tensor> recipe_mask = attn_mask;
+        if (attn_mask) {
+            // Reject an unsupported mask before the pre-scale dispatches anything.
+            numeric::validate_recipe_mask(input_tensor_q, input_tensor_k, *attn_mask, policy);
+            const float recipe_scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
+            recipe_mask = ttnn::multiply(
+                policy.fp32_destination && attn_mask->dtype() != DataType::FLOAT32
+                    ? ttnn::typecast(*attn_mask, DataType::FLOAT32)
+                    : *attn_mask,
+                1.0f / recipe_scale);
+        }
+        // Op-selected blocking when program_config leaves chunks unset; the chooser budgets the
+        // mask CB (at least one row group) so a masked call never picks a blocking that overflows L1.
+        const auto blocking = numeric::resolve_dense_recipe_blocking(
+            policy,
+            input_tensor_q,
+            input_tensor_k,
+            nullptr,
+            nullptr,
+            program_config,
+            recipe_mask ? &*recipe_mask : nullptr);
+        return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, policy, blocking, recipe_mask);
+    }
+    numeric::reject_auto_blocking_without_recipe(program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -191,7 +259,25 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const std::string& joint_strategy,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        TT_FATAL(joint_strategy == "rear", "SDPA recipes require rear joint strategy");
+        const auto policy = numeric::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        const auto blocking = numeric::resolve_dense_recipe_blocking(
+            policy, input_tensor_q, input_tensor_k, &joint_tensor_q, &joint_tensor_k, program_config);
+        return numeric::run_joint_recipe(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            joint_tensor_q,
+            joint_tensor_k,
+            joint_tensor_v,
+            policy,
+            blocking);
+    }
+    numeric::reject_auto_blocking_without_recipe(program_config);
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
@@ -244,7 +330,41 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    std::optional<SDPAPrecision> precision) {
+    const std::size_t ring_size =
+        (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
+    if (precision) {
+        const auto policy = numeric::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        TT_FATAL(
+            !is_causal && !is_balanced && !attention_sink && !sliding_window_size && !circular_kv_cache &&
+                !kv_cache_batch_idx && !kv_actual_isl && !slot_id && !kv_actual_isl_tensor,
+            "Named ring recipes currently require noncausal attention without indexed/cache/window/sink features");
+        TT_FATAL(!kv_valid_end_tensor, "Ring SDPA recipes do not support kv_valid_end_tensor");
+        program_config = numeric::resolve_ring_recipe_blocking(
+            policy,
+            input_tensor_q,
+            input_tensor_k,
+            joint_tensor_q,
+            joint_tensor_k,
+            static_cast<uint32_t>(ring_size),
+            program_config);
+        TT_FATAL(
+            input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
+                input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
+            "Named ring recipes require matching Q/K/V head dims");
+        TT_FATAL(
+            input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
+            "Named ring recipes require BF16 Q and matching KV types");
+        TT_FATAL(
+            is_cross || input_tensor_q.logical_shape()[2] == input_tensor_k.logical_shape()[2],
+            "Named ring recipes do not yet support chunked prefill; use is_cross for noncausal cross attention");
+        finalize_ring_recipe_config(
+            numeric::RecipeOp::Ring, policy, program_config, compute_kernel_config, input_tensor_q.logical_shape()[3]);
+    } else {
+        numeric::reject_auto_blocking_without_recipe(program_config);
+    }
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -252,8 +372,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
 
     // Split each logical length into (scalar attribute, optional device tensor); on the tensor path the
     // attribute becomes the worst-case placeholder (see RingJointSDPAInputs).
-    const std::size_t ring_size =
-        (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
     const std::size_t padded_ring_n = static_cast<std::size_t>(input_tensor_k.logical_shape()[2]) * ring_size;
     const std::size_t padded_ring_l =
         joint_k.has_value() ? static_cast<std::size_t>(joint_k->logical_shape()[2]) * ring_size : 0;
@@ -312,7 +430,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         circular_kv_cache,
         logical_n_tensor,
         logical_l_tensor,
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        precision);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
@@ -413,15 +532,39 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    std::optional<SDPAPrecision> precision) {
+    const std::size_t ring_size =
+        (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
+    if (precision) {
+        // resolve_recipe_policy rejects an explicit compute_kernel_config, exp_approx_mode=False, a
+        // non-default scale; the recipe owns those numerical decisions.
+        const auto policy = numeric::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        program_config = numeric::resolve_exp_ring_recipe_blocking(
+            policy, input_tensor_q, input_tensor_k, joint_tensor_q, static_cast<uint32_t>(ring_size), program_config);
+        TT_FATAL(
+            input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
+                input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
+            "Named exp ring recipes require matching Q/K/V head dims");
+        TT_FATAL(
+            input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
+            "Named exp ring recipes require BF16 Q and matching KV types");
+        finalize_ring_recipe_config(
+            numeric::RecipeOp::ExpRing,
+            policy,
+            program_config,
+            compute_kernel_config,
+            input_tensor_q.logical_shape()[3]);
+    } else {
+        numeric::reject_auto_blocking_without_recipe(program_config);
+    }
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
     const std::optional<ttnn::Tensor> joint_v = drop_if_empty(joint_tensor_v);
 
     // Tensor path: the scalar attribute becomes the worst-case placeholder (see ExpRingJointSDPAInputs).
-    const std::size_t ring_size =
-        (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
     const std::size_t padded_ring_n = static_cast<std::size_t>(input_tensor_k.logical_shape()[2]) * ring_size;
     std::size_t logical_n_scalar = padded_ring_n;
     std::optional<ttnn::Tensor> logical_n_tensor;
@@ -454,7 +597,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         compute_kernel_config,
         num_workers_per_link,
         num_buffers_per_channel,
-        logical_n_tensor);
+        logical_n_tensor,
+        precision);
     return {
         output_tensors[prim::EXP_RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
