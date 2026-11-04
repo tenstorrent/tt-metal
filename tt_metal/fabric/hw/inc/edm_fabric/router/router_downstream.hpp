@@ -323,11 +323,19 @@ struct PartialPresetForwards {
             CQ_NOC_wait,
             /*update_counter=*/is_blackhole_arch,
             /*posted=*/true>(Traits::noc, src_addr, node, dst, size_bytes);
-        noc_inline_dw_write_to_node_with_state</*update_counter=*/false, /*posted=*/true, /*skip_cmdbuf_chk=*/true>(
-            node,
+        noc_inline_dw_write_with_state<
+            /*update_addr_lo=*/true,
+            /*update_counter=*/false,
+            /*posted=*/true,
+            /*update_addr_hi=*/true,
+            /*update_val=*/false,
+            InlineWriteDst::REG,
+            /*skip_cmdbuf_chk=*/true>(
+            0,
             get_stream_reg_write_addr<Traits::template remote_credit_stream<ENTRY>>(),
             Traits::sync_cmd_buf,
-            Traits::noc);
+            Traits::noc,
+            node);
     }
 
 private:
