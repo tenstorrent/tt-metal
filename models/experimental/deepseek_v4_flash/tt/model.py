@@ -2924,7 +2924,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self._capture_traces(token_id, pos)
         # Kick the traces before the host packet so execute_trace is already on the
         # command queue (device parked on in-trace recv) while this thread writes PCIe.
-        self.replay_traced(pos)
+        self.replay_traced(pos, token_id)
         self.write_step_packet(token_id, pos)
 
     # A step's three host-side stages, each split out so a pipelined caller can drive
@@ -3038,13 +3038,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
             assert posted == pos, f"eager decode: packet for pos {pos}, but pos {posted} was posted next"
             self._execute_traces(pos)
 
-    def replay_traced(self, pos: int) -> None:
+    def replay_traced(self, pos: int, token_id=None) -> None:
         """Stage 2 of a step: queue the traces for a step at ``pos`` on the replay thread.
 
         Returns immediately; ``execute_trace`` runs on that thread (``blocking=False``
         on the device), producing that submesh's ``[B, 1, N]`` trace output. Call this
         *before* :meth:`write_step_packet` so the traces can already be waiting on
         in-trace recv when the packet lands.
+
+        ``token_id`` is what the step will be fed, when the caller knows it already (``None`` otherwise). V4's
+        traces do not depend on it; a model whose do (V4.1's image-token trace) picks the trace from it.
 
         Requires the traces to already be captured: dispatch one blocking
         :meth:`decode_traced` first (the compile/capture path).
@@ -3057,15 +3060,23 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._ensure_replay_thread()
         self._replay_queue.put(pos)
 
-    def replay_traced_ahead(self, positions) -> None:
+    def replay_traced_ahead(self, positions, token_ids=None) -> None:
         """Queue ``execute_trace`` for every ``pos`` in ``positions`` on the replay thread.
 
         Call once before feeding packets so the command queues already hold the
         traces (device parked on in-trace recv, each step producing a ``[B, 1, N]``
-        trace output) while the host writes H2D data.
+        trace output) while the host writes H2D data. ``token_ids``, when known, are what the steps will be fed,
+        one per position (see :meth:`replay_traced`).
         """
-        for pos in positions:
-            self.replay_traced(int(pos))
+        if token_ids is None:
+            for pos in positions:
+                self.replay_traced(int(pos))
+            return
+        positions = list(positions)
+        if len(token_ids) != len(positions):
+            raise ValueError(f"{len(token_ids)} tokens for {len(positions)} positions")
+        for pos, token_id in zip(positions, token_ids):
+            self.replay_traced(int(pos), token_id)
 
     def decode_prompt_traced(
         self, token_ids, start_pos: int, on_output: Optional[Callable[[int, torch.Tensor], None]] = None
@@ -3101,7 +3112,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             first = 0
         positions = range(start_pos + first, start_pos + first + len(ids))
         self.ensure_session_capacity(positions[-1])
-        self.replay_traced_ahead(positions)
+        self.replay_traced_ahead(positions, ids)
 
         error: list[BaseException] = []
 

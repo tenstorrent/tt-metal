@@ -35,8 +35,10 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     DEFAULT_MODEL_DIR,
     VISION_STAGE,
     dequantized,
+    load_config,
     load_vision_config,
 )
+from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
 from models.experimental.deepseek_v41_flash.tt.vision import (
     IMAGE,
     SDPA_CHUNK,
@@ -45,6 +47,7 @@ from models.experimental.deepseek_v41_flash.tt.vision import (
     EmbeddingRowWriter,
     _bucket,
     image_processor,
+    open_image_sockets,
 )
 from models.experimental.deepseek_v4_flash.demo.chat_cli import open_mesh_device
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -194,8 +197,8 @@ def _check(tower, vit, aligner, snapshot, vision_config):
 @pytest.mark.timeout(3600)
 @torch.no_grad()
 def test_vision_traced():
-    """The traced tower (:meth:`DeepSeekV41Vision.capture`) and row write (:class:`EmbeddingRowWriter`) against the
-    eager ones, replaying with nothing allocated on the device. Two images share the 3072 bucket and two the 9216
+    """The traced tower (:meth:`DeepSeekV41Vision.capture`) and row write (:class:`EmbeddingRowWriter`), their data
+    over the image sockets, against the eager ones, replaying with nothing allocated on the device. Two images share the 3072 bucket and two the 9216
     one, so a replay that kept the previous image's inputs shows. ``DEEPSEEK_V4_TRACE_REGION_SIZE`` sizes the trace
     region (default 256 MiB)."""
     snapshot = _snapshot()
@@ -224,6 +227,10 @@ def test_vision_traced():
     trace_region = int(os.environ.get("DEEPSEEK_V4_TRACE_REGION_SIZE", 256 << 20))
     with open_mesh_device(trace_region, mesh_shape=(rows, TP_SIZE)) as mesh_device:
         device = mesh_device.create_submesh(ttnn.MeshShape(1, TP_SIZE), ttnn.MeshCoordinate(VISION_STAGE, 0))
+        # The tower and the table share the device here, as the server's would with the vision stage at 0; the row
+        # writes take Engram-page rows sockets, as the server's (stage 0's Engram layer's) do.
+        table_sockets = open_rows_sockets(device, rows_page_bytes(load_config(snapshot)), socket_core=(1, 5))
+        sockets = open_image_sockets(vision_config, device, table_sockets)
         tower = DeepSeekV41Vision(vision_config, loader, device, cache=WeightCache(CACHE_DIR) if CACHE_DIR else None)
         tower.warmup()
         eager = [tower.encode(patches, n_h, n_w).float() for patches, n_h, n_w in images]
@@ -237,8 +244,8 @@ def test_vision_traced():
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
-        tower.capture()
-        writer = EmbeddingRowWriter(table, vocab)
+        tower.capture(sockets)
+        writer = EmbeddingRowWriter(table, vocab, sockets)
         allocated = len(ttnn._ttnn.reports.get_buffers(device))
 
         failures = []
@@ -262,4 +269,6 @@ def test_vision_traced():
         after = len(ttnn._ttnn.reports.get_buffers(device))
         if after != allocated:
             failures.append(f"{after - allocated} device buffers allocated by the traced replays")
+        # A socket frees its device buffers when collected, which must happen while the mesh is open.
+        del writer, tower, sockets, table_sockets
     assert not failures, "; ".join(failures)

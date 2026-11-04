@@ -373,6 +373,10 @@ class ChatEngine:
     # Held around every packet write. Here they are all on the caller's thread; an engine that writes them
     # from a thread of its own too (the V4.1 server's) replaces it with a lock.
     packet_lock = contextlib.nullcontext()
+    # Most decode steps the server keeps posted ahead for a lone decoding turn. Past one, a turn that stops
+    # early leaves posted steps that must be fed without being taken (``repeat_traced``); V4's CSA
+    # window-closing step retires its window into ``prev_*``, so it cannot be run twice at a position.
+    max_decode_ahead = 1
 
     def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack):
         from transformers import AutoTokenizer
@@ -523,21 +527,22 @@ class ChatEngine:
         return self.model.session_tokens_left()
 
     # -- decode ---------------------------------------------------------------- #
-    def post_traced(self, user: "UserSession", positions) -> None:
+    def post_traced(self, user: "UserSession", positions, token_ids=None) -> None:
         """Seat ``user`` and queue ``execute_trace`` for each pos, with no packet yet.
 
         Same ahead-of-time dispatch as ``test_full_model_decode_demo``: the traces land
         on the command queue (device parked on in-trace recv) before
         :meth:`write_traced` writes PCIe. ``positions`` must later be fed in this order.
         Capacity is grown here while the session is resident -- the replay thread may
-        run these entries after another user has been seated.
+        run these entries after another user has been seated. ``token_ids`` are the tokens
+        they will be fed, when known (prompt tokens), which V4.1 picks its image trace from.
         """
         user.activate()
         positions = [int(p) for p in positions]
         if not positions:
             return
         self.model.ensure_session_capacity(positions[-1])
-        self.model.replay_traced_ahead(positions)
+        self.model.replay_traced_ahead(positions, token_ids)
         self._replay_q.extend(positions)
 
     def write_traced(self, token_id: int, pos: int) -> None:
@@ -672,7 +677,7 @@ class UserSession:
         # demo's replay_traced_ahead path.
         positions = list(range(self.pos, self.pos + len(ids)))
         try:
-            engine.post_traced(self, positions)
+            engine.post_traced(self, positions, ids)
             for done, (token_id, pos) in enumerate(zip(ids, positions), start=1):
                 engine.write_traced(token_id, pos)
                 next_id = engine.read_decoded_token()
