@@ -85,6 +85,55 @@ size_t FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(tt::ARC
  * @param is_receiver_channel_serviced Output parameter for receiver channel service flags
  */
 namespace {
+// The router's support matrix (fabric_erisc_router.cpp; the kernel keeps only the invariants every build has): the
+// configurations the router is built and validated for. Every router kernel's compile-time args pass through here, so
+// a configuration outside the matrix fails on the host, with its reason, instead of building a router for it.
+void validate_router_config(tt::ARCH arch, const std::unordered_map<std::string, uint32_t>& named_args) {
+    const auto arg = [&](const char* name) { return named_args.at(name); };
+    const bool is_2d = arg("IS_2D_FABRIC") != 0;
+    const bool udm_mode = arg("UDM_MODE") != 0;
+    const bool tensix_mux_mode = arg("FABRIC_TENSIX_EXTENSION_MUX_MODE") != 0 && !udm_mode;
+    const bool has_vc1 = arg("ACTUAL_VC1_SENDER_CHANNELS") > 0;
+    const uint32_t vc2_sender_channels = arg("ACTUAL_VC2_SENDER_CHANNELS");
+    const uint32_t num_active_eriscs = arg("NUM_ACTIVE_ERISCS");
+    const bool deadlock_avoidance = arg("ENABLE_DEADLOCK_AVOIDANCE") != 0;
+    const uint32_t local_tensix_connections = arg("NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS");
+
+    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "the router supports Blackhole only");
+    // VC1 traffic would go router to router around the muxes, but the host gives VC1's sender channels no slots there.
+    TT_FATAL(!(tensix_mux_mode && has_vc1), "VC1 with the Tensix mux extension is not supported");
+    // VC2 as FabricBuilderConfig builds it (Blackhole 2D, not UDM or the mux), with or without VC1: one worker channel
+    // into a receiver channel of its own that only delivers (neighbour exchange), counter credits.
+    TT_FATAL(
+        vc2_sender_channels == 0 || (is_2d && vc2_sender_channels == 1 && arg("DISABLE_RX_CH2_FORWARDING") != 0 &&
+                                     arg("VC2_USES_COUNTER_CREDITS") != 0),
+        "VC2 is supported as neighbour exchange on 2D routers");
+    TT_FATAL(
+        arg("ENABLE_FIRST_LEVEL_ACK_VC1") == 0 && arg("ENABLE_FIRST_LEVEL_ACK_VC2") == 0,
+        "first-level acks on VC1 / VC2 are not supported");
+    TT_FATAL(arg("VC2_CROSSOVER_TO_VC1") == 0, "VC2's crossover onto VC1 is not supported");
+    // UDM as connect_to_local_tensix_builder builds it: one ERISC, 2D meshes, one local Tensix connection (the relay).
+    TT_FATAL(
+        !udm_mode || (num_active_eriscs == 1 && is_2d && !has_vc1 && !deadlock_avoidance && !tensix_mux_mode &&
+                      local_tensix_connections == 1),
+        "UDM is supported on one-ERISC 2D meshes with one relay");
+    // The speedy path as ENABLE_SPEEDY_VC0 selects it: no bubble flow control or first-level acks on VC0, VC0's
+    // receiver forwarding off.
+    TT_FATAL(
+        arg("ENABLE_SPEEDY_VC0") == 0 || (!deadlock_avoidance && arg("ENABLE_FIRST_LEVEL_ACK_VC0") == 0 &&
+                                         arg("DISABLE_RX_CH0_FORWARDING") != 0 && !udm_mode),
+        "the speedy path needs VC0 without bubble flow control, first-level acks or receiver forwarding");
+    TT_FATAL(arg("ENABLE_RISC_CPU_DATA_CACHE") == 0, "the CPU data cache is not supported");
+    TT_FATAL(arg("ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA") == 0, "the TX queue's spin-wait send is not supported");
+    TT_FATAL(
+        arg("PERF_TELEMETRY_MODE") == 0 || arg("PERF_TELEMETRY_MODE") == 1,
+        "the perf recorder supports low-resolution bandwidth only");
+    TT_FATAL(!tensix_mux_mode || num_active_eriscs == 1, "Tensix mux mode is supported on one ERISC");
+    TT_FATAL(
+        local_tensix_connections == 0 || tensix_mux_mode || udm_mode,
+        "local Tensix connections are supported in mux mode and UDM only");
+}
+
 // Returns true when fabric 2-ERISC should be considered enabled for builders.
 // This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
 // and if we are not building with the tensix mux extension (due to stack size issue).
@@ -1551,6 +1600,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     receiver_channel_to_downstream_adapter->emit_ct_args(ct_args, config.num_fwd_paths);
     ct_args.push_back(0xabaddad9);
 
+    validate_router_config(config.arch, named_args);
     return {std::move(ct_args), std::move(named_args)};
 }
 

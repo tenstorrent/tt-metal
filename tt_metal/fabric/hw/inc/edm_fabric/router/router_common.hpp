@@ -325,49 +325,13 @@ static_assert(
 //   - channel trimming: the capture, and a replay's routers with channels compiled out (an ERISC left with nothing to
 //     service runs rounds only, router_round.hpp's run_idle).
 
-// UDM as the host builds it (compute_mesh_router_builder.cpp, connect_to_local_tensix_builder): one ERISC (any Tensix
-// extension), 2D meshes, one local Tensix connection (the relay), mux mode off.
-constexpr bool udm_config_supported = NUM_ACTIVE_ERISCS == 1 && is_2d && !has_vc1 && !enable_deadlock_avoidance &&
-                                      !tensix_mux_mode && num_ds_or_local_tensix_connections == 1;
-
-// VC2 as the host builds it (FabricBuilderConfig: Blackhole 2D, not UDM or the mux), with or without VC1: one worker
-// channel into a receiver channel of its own that only delivers (neighbour exchange), counter credits.
-constexpr bool vc2_config_supported = is_2d && ACTUAL_VC2_SENDER_CHANNELS == 1 && is_vc_forwarding_disabled[2] &&
-                                      receiver_channel_uses_counter_credits(VC2_RECEIVER_CHANNEL);
-
-// The speedy path as the host selects it (ENABLE_SPEEDY_VC0): no bubble flow control or first-level acks on VC0, VC0's
-// receiver forwarding off. Its credit amortization args do not apply here (credits
-// go back per completion group, as everywhere).
-constexpr bool speedy_config_supported =
-    !enable_deadlock_avoidance && !ENABLE_FIRST_LEVEL_ACK_VC0 && disable_rx_ch0_forwarding && !udm_mode;
-
-static_assert(is_blackhole_arch, "the router supports Blackhole only");
+// The host checks a router's configuration against this list before it builds one (validate_router_config,
+// erisc_datamover_builder.cpp). The kernel keeps the invariants every build has:
 static_assert(NUM_ACTIVE_ERISCS == 1 || NUM_ACTIVE_ERISCS == 2, "the router runs on one ERISC or two");
 static_assert(NUM_ACTIVE_ERISCS == 1 || multi_txq_enabled, "on two ERISCs each role needs a TX queue of its own");
 static_assert(
     NUM_ACTIVE_ERISCS == 1 || !(is_sender_role && is_receiver_role), "on two ERISCs each ERISC runs one role");
 static_assert(NUM_RECEIVER_CHANNELS == 1 + (has_vc1 ? 1 : 0) + (has_vc2 ? 1 : 0), "one receiver channel per VC");
 static_assert(!has_vc1 || is_2d, "VC1 needs a 2D fabric");
-// VC1 traffic would go router to router around the muxes, but the host gives VC1's sender channels no slots there.
-static_assert(!(tensix_mux_mode && has_vc1), "VC1 with the Tensix mux extension is not supported");
-static_assert(!has_vc2 || vc2_config_supported, "VC2 is supported as neighbour exchange on 2D routers");
-static_assert(
-    !ENABLE_FIRST_LEVEL_ACK_VC1 && !ENABLE_FIRST_LEVEL_ACK_VC2, "first-level acks on VC1 / VC2 are not supported");
-static_assert(!is_vc_crossover_to_vc1[2], "VC2's crossover onto VC1 is not supported");
-static_assert(!udm_mode || udm_config_supported, "UDM is supported on one-ERISC 2D meshes with one relay");
-static_assert(
-    !super_speedy_mode || speedy_config_supported,
-    "the speedy path needs VC0 without bubble flow control, "
-    "first-level acks or receiver forwarding");
-static_assert(!ENABLE_RISC_CPU_DATA_CACHE, "the CPU data cache is not supported");
-static_assert(!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA, "the TX queue's spin-wait send is not supported");
-static_assert(
-    perf_telemetry_mode == PerfTelemetryRecorderType::NONE ||
-        perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH,
-    "the perf recorder supports low-resolution bandwidth only");
-static_assert(!tensix_mux_mode || NUM_ACTIVE_ERISCS == 1, "Tensix mux mode is supported on one ERISC");
-static_assert(
-    num_ds_or_local_tensix_connections == 0 || tensix_mux_mode || udm_mode,
-    "local Tensix connections are supported in mux mode and UDM only");
 
 }  // namespace fabric_router
