@@ -798,7 +798,7 @@ struct SenderChannelStates {
     }
 
     // After a later VC's visit: its remote receiver progress put back where it changed (`remote`, taken as `taken` at
-    // the visit's start), and its state kept in memory. (The loop-local VC is visited on its state in place.)
+    // the visit's start). (The loop-local VC is visited on its state in place.)
     template <size_t VC>
     FORCE_INLINE void after_visit(
         SenderVcState<VC>& send_state,
@@ -808,7 +808,6 @@ struct SenderChannelStates {
         if (remote != taken) {
             send_state.remote = remote;
         }
-        keep_in_memory(send_state);
     }
 };
 
