@@ -126,3 +126,15 @@ The Blackhole validation list, run on WH systems (N150/N300, T3K, WH Galaxy/TG):
 torus sanity yamls, the fabric unit-test fixtures (1D, 2D, mux), inline-write and flushed-atomic fixtures, and UDM
 where Wormhole supports it. Then the CCL suites listed for T3K / WH Galaxy in TEST_PLAN.md. TEST_PLAN.md marks which
 WH tests run only in CI (the exabox Slurm cluster is Blackhole-only).
+
+## Tools
+
+`tt_metal/fabric/tools/router_bringup/` (temporary like this file: drop before merge) holds the study's performance
+and code-shape tools, packaged for Wormhole. See its README.md for how to run each one and what it needs.
+- **Main vs new A/B** (`ab_run.sh`, `ab_report.py`): cycles/packet per row with pass noise; the clock is recovered
+  per run. WH-ready.
+- **Offline code shape** (`offline_build.py`, `elf_size.py`, `codegen_diff.py`, `line_compare.py`, `loopvars.py`):
+  rebuild the router ELFs from the JIT's logged commands and compare them by size, by source line and by spills.
+  WH-ready.
+- **PC sampling** (`pc_sampler.py`, `pcs_lines.py`, `pcs_profile.py`): Blackhole only. The README lists what a
+  Wormhole port needs.
