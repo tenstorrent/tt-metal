@@ -11,7 +11,8 @@
 # without them is unchanged and the extra cost is one more functional pass): "merged" (env MERGED=true, needs main:
 # head's diff against base applied onto main's tree, 3-way; a conflict leaves the side out) and "patch" (env PATCH_B64,
 # gzip+base64 of a unified diff against head, a mutant: applied to a copy of head after `git apply --check`; a patch
-# that does not apply leaves the side out; no rerun of its failing ids, a failing test is the expected result and does
+# that does not apply leaves the side out (an empty diff of head against base: the side is main itself, "applied (no head
+# changes)"; a setup that fails on an extra side fails the job); no rerun of its failing ids, a failing test is the expected result and does
 # not fail the job). summary.json gets "merged"/"patch": "applied" or "not applied: <why>" when asked for.
 set -u
 WS=$GITHUB_WORKSPACE; P=$WS/probe/review-probe; OUT=$WS/out; rm -rf "$OUT"; mkdir -p "$OUT"
@@ -63,11 +64,12 @@ if [ "${MERGED:-}" = true ]; then
             && git fetch -q --depth=1 "$WS/base" HEAD 2>&1 && B=$(git rev-parse FETCH_HEAD) \
             && git fetch -q --depth=1 "$WS/main" HEAD 2>&1 && M=$(git rev-parse FETCH_HEAD) \
             && git diff --binary "$B" "$H" > "$WS/pr.diff" \
-            && git checkout -q -f "$M" 2>&1 && git apply --3way --index "$WS/pr.diff" 2>&1 \
+            && git checkout -q -f "$M" 2>&1 \
+            && { [ ! -s "$WS/pr.diff" ] || git apply --3way --index "$WS/pr.diff" 2>&1; } \
             && echo "$H+$M" > "$WS/merged.sha") || why="${why:-git failed}"
         if [ -s "$WS/merged.sha" ] && [ -z "$(cd "$WS/merged" && git diff --name-only --diff-filter=U)" ]; then
             export MERGED_SHA=$(cat "$WS/merged.sha")
-            if setup_side merged; then SIDES="$SIDES merged"; note merged applied; else note merged "not applied: setup failed"; fi
+            if setup_side merged; then SIDES="$SIDES merged"; if [ -s "$WS/pr.diff" ]; then note merged applied; else note merged "applied (no head changes)"; fi; else note merged "not applied: setup failed"; fi
         else
             note merged "not applied: $why"
             rm -rf "$WS/merged"

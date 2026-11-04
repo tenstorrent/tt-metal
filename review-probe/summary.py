@@ -14,7 +14,8 @@ summary.json: {"arch", "runner", "reps", "fail", "sides": {side: {"sha", "setup_
             "rerun": {"summary", "rc", "failed_ids", "crashed"} or null} or null,
    "perf_build": {"summary", "rc"} or null, "perf": [{"rep", "summary", "rc"}]}}}]}
 Optional extra sides "merged" (head's changes on current main) and "patch" (a mutant applied to head) have the
-same "func" shape and no perf ("perf_build": null, "perf": []); the patch side has no rerun. When asked for, the
+same "func" shape (the patch side's also has "assertion_ids", the failing ids whose failure is an assertion, and
+"other_failed_ids", the rest: a build error or exception; "caught" needs an assertion id and "crashed" false) and no perf ("perf_build": null, "perf": []); the patch side has no rerun. When asked for, the
 top level also has "merged" and "patch": "applied" or "not applied: <why>" (a side that did not apply has no entry
 in "sides"), and "patch_sha256" for an applied patch. Without those inputs the file is as before.
 "summary" is pytest's last summary line ("16 passed, 22 skipped in 3.28s"), "rc" its exit code, null when the
@@ -135,7 +136,38 @@ def rerun_args(log, xml_path, module):
     return ids[:RERUN_MAX]
 
 
-def func_result(base, module):
+ASSERTION = re.compile(r"AssertionError|^\s*assert\b", re.M)
+
+
+def failure_kinds(xml_path, module):
+    """({"assertion": ids, "other": ids}) of a junit xml's failing testcases (same ids as failed_ids): a failure whose
+    message or text is an assertion (AssertionError, a bare assert) is a mismatch the test found; anything else (a
+    compile error, an exception in the test, a collection error) is "other". None without the xml."""
+    try:
+        root = ET.parse(xml_path).getroot()
+    except (OSError, ET.ParseError):
+        return None
+    dotted = module[:-3].replace("/", ".")
+    out = {"assertion": [], "other": []}
+    for case in root.iter("testcase"):
+        bad = case.find("failure") if case.find("failure") is not None else case.find("error")
+        if bad is None:
+            continue
+        cls, name = case.get("classname", ""), case.get("name", "")
+        if cls == dotted:
+            nid = f"{module}::{name}"
+        elif cls.startswith(dotted + "."):
+            nid = f"{module}::{cls[len(dotted) + 1:].replace('.', '::')}::{name}"
+        else:
+            nid = module
+        kind = "assertion" if bad.tag == "failure" and ASSERTION.search((bad.get("message") or "") + "\n"
+                                                                        + (bad.text or "")[:2000]) else "other"
+        if nid not in out["assertion"] + out["other"]:
+            out[kind].append(nid)
+    return out
+
+
+def func_result(base, module, kinds=False):
     """The functional step at <base>.log/.xml and its rerun at <base>.rerun.log/.xml, or None."""
     f = step(f"{base}.log")
     if f is None:
@@ -147,6 +179,10 @@ def func_result(base, module):
         rids = failed_ids(f"{base}.rerun.xml", module)
         rerun.update(failed_ids=rids, crashed=crashed(rerun, rids))
     f["rerun"] = rerun
+    if kinds:  # the patch side: a mutant that breaks the build or crashes pytest is no "caught"
+        k = failure_kinds(f"{base}.xml", module)
+        f["assertion_ids"] = k["assertion"] if k else None
+        f["other_failed_ids"] = k["other"] if k else None
     return f
 
 
@@ -163,7 +199,7 @@ def summary(out, fail):
     for i, (func, perf) in enumerate(modules(os.environ["MODULES"]), 1):
         per_side = {}
         for s in sides:
-            per_side[s] = {"func": func_result(f"{out}/m{i}_func_{s}", func) if func else None,
+            per_side[s] = {"func": func_result(f"{out}/m{i}_func_{s}", func, kinds=s == "patch") if func else None,
                            "perf_build": step(f"{out}/m{i}_perf_build_{s}.log") if perf and s not in EXTRA_SIDES else None,
                            "perf": [{"rep": r, **(step(f"{out}/m{i}_perf_{s}_r{r}.log") or {"summary": None, "rc": None})}
                                     for r in range(1, reps + 1)] if perf and s not in EXTRA_SIDES else []}
