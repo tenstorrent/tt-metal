@@ -457,15 +457,16 @@ std::shared_ptr<const TailEnginePlan> make_tail_engine_plan(
     auto& mesh = resources.mesh_device();
     const auto& topo = resources.topology();
     const auto grid = mesh.compute_with_storage_grid_size();
-    TT_FATAL(
-        grid.x >= 2 && grid.y >= kGY, "fused_tail (engine): a {}x{} grid (the engine is {} rows)", grid.x, grid.y, kGY);
+    // (the engine: every row of the grid, an even count of them, and every column but the last)
+    const uint32_t GY = grid.y / 2 * 2;
+    TT_FATAL(grid.x >= 2 && GY >= 4, "fused_tail (engine): a {}x{} grid (at least 2 columns, 4 rows)", grid.x, grid.y);
     TT_FATAL(
         resources.config().num_links == 2,
         "fused_tail (engine): {} links (a link a K half)",
         resources.config().num_links);
     const uint32_t GX = grid.x - 1;  // (the last column: the gather's ports)
     auto plan = std::make_shared<TailEnginePlan>();
-    plan->geom = TailEngineGeometry::make(rows, Hr, Ho, topo.C, GX, kGY, wtb, cap_bytes);
+    plan->geom = TailEngineGeometry::make(rows, Hr, Ho, topo.C, GX, GY, wtb, cap_bytes);
     plan->ring = topo.wrap_x;
     plan->num_links = 2;
     plan->nbank = mesh.dram_grid_size().x;
@@ -474,7 +475,7 @@ std::shared_ptr<const TailEnginePlan> make_tail_engine_plan(
     plan->links = row_links(resources.mesh_plan());
     // (the ports' column has no row with room for a placement search: placed down it - fwd above, bwd below, a link
     // apart)
-    const std::array<uint32_t, 4> port_rows = {kGY / 10, 3 * kGY / 10, 6 * kGY / 10, 8 * kGY / 10};
+    const std::array<uint32_t, 4> port_rows = {GY / 10, 3 * GY / 10, 6 * GY / 10, 8 * GY / 10};
     std::vector<CoreRange> ranges;
     for (uint32_t i = 0; i < 2; ++i) {
         for (uint32_t l = 0; l < 2; ++l) {
@@ -484,7 +485,7 @@ std::shared_ptr<const TailEnginePlan> make_tail_engine_plan(
         }
     }
     plan->port_cores = CoreRangeSet(ranges);
-    plan->engine_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(GX - 1, kGY - 1)));
+    plan->engine_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(GX - 1, GY - 1)));
     const auto& g = plan->geom;
     // (a port core holds the landing CB (its base names the engine's landing slots), its staging (three groups: one
     // sending, one landing, one being issued), the group counts and the poll words)
