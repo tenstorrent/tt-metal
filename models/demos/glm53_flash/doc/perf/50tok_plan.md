@@ -397,3 +397,6 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   the down cores' per-expert serial work and the reader imbalance, not by DRAM bandwidth (45 MB would be 100 us).
   Knob A/B queued (`chain_dr4`): `GLM53_STREAM_DOWN_READERS=4` (32 down cores) at 8 and 32 users, today's path
   and the block (the persistent placement then takes 8 gate|up groups).
+- 2026-11-04 07:46 down-split A/B (`GLM53_STREAM_DOWN_READERS=4`, 32 down cores): 8 users 33.01 vs 32.95 ms, 32 users
+  37.38 vs 37.69 / 37.34 ms, ids identical both: neutral. The expert phase's per-expert chain is not the down cores'
+  W2 bytes; the zone profile (`tracy_zones_t1`) breaks the gate|up side down next.
