@@ -306,3 +306,11 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   all-reduce become the defaults (`GLM53_HYBRID_GATHER=fabric`, `GLM53_HYBRID_COMBINE=fabric`,
   `GLM53_TP_ALLREDUCE=fabric`; the composites stay behind the knobs). Step on the (8, 4) at 32 users: **37.7 ms,
   26.5 tok/s per user** (tip 44.2 / 22.6); served decode at 32 users 19.5 tok/s per user (tip 16-17).
+
+- 2026-11-04 04:52 `gate84_B4_persist` (step 1) failed at construction: on the Galaxy chips' 12x10 compute grid the
+  fused expert op (12 gate|up groups x 8 banks + 16 down cores) leaves 8 free cores; the exchange needs 10 (1 + 8 x
+  chunks + 1 routing chunk at H = 4096, E_loc = 72). Fix 4bb7e41c2c7: `persistent_fused_groups` picks the largest
+  group count (cap 12) whose placement leaves the cores -> 11 groups (88 + 16, 16 free) when `GLM53_MOE_PERSIST=1`.
+  Re-gated as `gate84_B4_persist_g11`, with `gate84_B4_fabar_g11` (same tree, no persistent program, 11 groups) as the
+  ids reference in case the group count moves the expert rounding, then `tracy_l4_b4_persist_g11`. The chained
+  `tracy_l4_b4_persist` (rc=0) profiled the non-persistent fallback: void.
