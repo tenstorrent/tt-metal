@@ -194,6 +194,8 @@ MatmulReduceScatterPrefillParams resolve_params(
         .tW = static_cast<uint32_t>(weight.buffer()->aligned_page_size()),
         .scatter_dim = canonical_dim,
         .budget = l1_bank - headroom,
+        .w_dram_sharded = weight.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                          weight.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
     };
     if (forced_grid.has_value()) {
         switch (*forced_grid) {

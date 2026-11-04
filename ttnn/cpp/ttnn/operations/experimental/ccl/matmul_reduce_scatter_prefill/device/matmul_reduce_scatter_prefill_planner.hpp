@@ -127,6 +127,7 @@ struct PlanInputs {
     // exactly): the footprint counts the staging at this size, and only plans whose staging fits in it qualify
     uint64_t staging_floor = 0;
     std::optional<Flow> forced_flow;  // the caller's grid: the only one every plan may take
+    bool w_dram_sharded = false;      // W is DRAM width-sharded (keeps the smaller unchunked K-window cap)
 };
 
 // Planner constants the factory needs too.

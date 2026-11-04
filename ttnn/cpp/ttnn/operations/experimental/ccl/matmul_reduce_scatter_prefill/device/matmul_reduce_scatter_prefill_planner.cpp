@@ -43,7 +43,22 @@ constexpr uint32_t kSuperBlockExtra = 2;  // look-ahead windows beyond a super-b
 constexpr uint32_t kDepthHold = 2;        // fp32 hold slots when some entry lags
 constexpr uint32_t kZoneSets = 2;         // chunks' arrivals the zones hold at once
 constexpr uint32_t kMaxAutoChunks = 256;
-constexpr uint32_t kKbMax = 16;
+// Unchunked K-window cap. Fewer, larger windows mean fewer multicast handshakes per entry (QB2 1x4 ring, traced:
+// GLM-5.3 indexer wk 640x1536x128 28.0 -> 23.7 us at kb 24, Qwen3 down M=128 198 -> 152 us, K3 dense batched decode
+// 4-7% faster). Two kinds of plan keep kKbMaxSmall: a DRAM width-sharded W (K3 dense M=96 ran 12% slower at 24), and a
+// resident plan whose cores each hold >= kComputeBoundCoreTiles output tiles. Only the streamed operand moves per
+// window, and with that much matmul per K-tile the compute outpaces the window delivery: the compute never waits for a
+// window after the first block (K3 o_proj 640x3072x7168, 2x7 tiles per core, profiled), so fewer handshakes save
+// nothing there.
+// A larger window only lengthens the call's start: every core waits for its first window, the resident fill's DRAM
+// reads and multicasts at once, ~4 us + 0.4 us per K-tile, and nothing overlaps it. The 4 output blocks cannot make
+// that up: K3 o_proj ran 1% slower at 24 (first window 10.0 -> 13.8 us, blocks 2-4 0.5 us faster each), DSV3 MLP
+// prefill (3x7) 1%. A plan with less matmul per core waits on the window handshakes (GLM wk, 2x1: compute idle 51-56%
+// of every block) and gains from 24; a streaming plan moves both operands per window and gains too (K3 dense prefill,
+// 2x7: 4%).
+constexpr uint32_t kKbMax = 24;
+constexpr uint32_t kKbMaxSmall = 16;
+constexpr uint32_t kComputeBoundCoreTiles = 8;
 constexpr uint32_t kKbMaxChunked = 32;
 constexpr uint32_t kKbMinResident = 8;
 constexpr uint32_t kDestTilesFp32FullSync = 8;  // subblock area cap
@@ -434,7 +449,14 @@ Plan plan_on_grid(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in, cons
         geo.hold_depths[r] = hold_depth(sched_of[r]);
         geo.slots[r] = sched_of[r].slots;
     }
-    const KBlock kblk = choose_k_block(in.Kt, in.budget, chunks == 1 ? kKbMax : kKbMaxChunked, geo);
+    const uint32_t kb_cap = chunks == 1 ? (in.w_dram_sharded ? kKbMaxSmall : kKbMax) : kKbMaxChunked;
+    KBlock kblk = choose_k_block(in.Kt, in.budget, kb_cap, geo);
+    if (chunks == 1 && kblk.resident && kb_cap > kKbMaxSmall && gd.core_m * gd.core_n >= kComputeBoundCoreTiles) {
+        const KBlock small = choose_k_block(in.Kt, in.budget, kKbMaxSmall, geo);
+        if (small.resident) {
+            kblk = small;
+        }
+    }
     pl.resident = kblk.resident;
     pl.kb = kblk.kb;
     // super_block_plan
@@ -719,7 +741,8 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.scatter_dim,
         in.budget,
         in.staging_floor,
-        in.forced_flow);
+        in.forced_flow,
+        in.w_dram_sharded);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
     const std::lock_guard<std::mutex> lock(solved_mutex);
