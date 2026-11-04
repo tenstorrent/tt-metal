@@ -41,7 +41,11 @@ def write_header(buf: memoryview, h: Header) -> None:
 def read_header(buf: memoryview) -> Header:
     if len(buf) < HEADER_BYTES:
         raise ValueError(f"stored value of {len(buf)} B is shorter than its header")
+    if any(buf[_HEADER.size : HEADER_BYTES]):
+        raise ValueError("stored value's reserved header bytes are not zero")
     h = Header(*_HEADER.unpack_from(buf))
+    if not (h.n_tokens and h.hidden):
+        raise ValueError(f"{h}: no embeddings")
     if h.n_tokens != h.grid_h * h.grid_w:
         raise ValueError(f"{h}: n_tokens is not grid_h * grid_w")
     if len(buf) != value_size(h.n_tokens, h.hidden):
