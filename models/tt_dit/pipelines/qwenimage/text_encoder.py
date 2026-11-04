@@ -112,7 +112,8 @@ class TextEncoder:
         self._parallel_config = parallel_config
         self._format = prompt_format
         self._offload = offload and not use_torch
-        self._offload_vision = offload_vision and not use_torch
+        # Only the edit formats have a vision tower to offload.
+        self._offload_vision = offload_vision and not use_torch and prompt_format.image_prompt is not None
         if (self._offload or self._offload_vision) and not cache.cache_dir_is_set():
             msg = "offloading the text encoder needs the TT_DIT_CACHE_DIR cache"
             raise ValueError(msg)
