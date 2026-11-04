@@ -58,6 +58,4 @@ Counters only count up or are re-armed by their waiters: traced replays need no 
 ## Tests
 
 `tests/ttnn/unit_tests/operations/experimental/moe_block/fused_tail/`:
-- `test_fused_tail_host.py`: the host plans against the reference Python (no device).
-- `test_fused_tail.py`: bit-exact against saved reference cases (`$MOE_BLOCK_REFS`), and the host cost of a call.
-- `dump_ref_fused_tail.py`: saves the reference cases (run in the reference tree).
+- `test_fused_tail.py`: bit-exact against saved reference cases (`$MOE_BLOCK_REFS`).

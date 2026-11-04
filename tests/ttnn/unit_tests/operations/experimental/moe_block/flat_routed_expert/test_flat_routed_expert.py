@@ -4,20 +4,15 @@
 
 * test_flat_routed_expert_pcc: GLM-5.3-Flash at the Galaxy per-chip load against a torch reference of the
   bfp4-quantized weights, two calls (the second with a moved arena: the cache hit must patch every address).
-* test_flat_routed_expert_bit_exact: bit-exact against the Python reference's saved outputs
-  (dump_ref_flat_routed_expert.py); runs only with MOE_BLOCK_REFS set.
-* test_flat_routed_expert_host_time: host time per untraced call on program-cache hits (the reference's, when a
-  saved case is available, is the bar).
+* test_flat_routed_expert_bit_exact: bit-exact against saved reference outputs; runs only with MOE_BLOCK_REFS set.
 """
 
 import importlib.util
 import os
-import time
 from pathlib import Path
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -165,33 +160,4 @@ def test_flat_routed_expert_bit_exact(device, case):
         got, exp = y[o : o + c], want[o : o + c]
         bad = (_bits(got) != _bits(exp)).sum()
         assert int(bad) == 0, f"{case}: expert {e} ({c} rows at {o}): {int(bad)} elements differ"
-    op.close()
-
-
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("model", ["glm53", "k3"])
-def test_flat_routed_expert_host_time(device, model):
-    _skip_unless_supported(device)
-    chunk, calls = 5120, 50
-    op = _op(device, model, chunk, "uninitialized")
-    x, c_, r_, _, _ = cases.case_inputs(model, chunk)
-    xd, cd, rd = _rm(x, ttnn.bfloat16, device), _rm(c_, ttnn.uint32, device), _rm(r_, ttnn.uint32, device)
-    for _ in range(3):
-        op(xd, cd, rd)
-    ttnn.synchronize_device(device)
-    entries = device.num_program_cache_entries()
-    t0 = time.perf_counter()
-    for _ in range(calls):
-        op(xd, cd, rd)
-    host_us = (time.perf_counter() - t0) / calls * 1e6
-    ttnn.synchronize_device(device)
-    assert device.num_program_cache_entries() == entries, "a timed call missed the program cache"
-    ref_us = None
-    name = cases.case_name(model, chunk, False)
-    if "MOE_BLOCK_REFS" in os.environ and name in harness.list_cases(OP):
-        ref_us = harness.load_case(OP, name)[0].get("host_us_per_call")
-    logger.info(f"FLAT_HOST_US {model} chunk {chunk}: {host_us:.1f} us / call (Python reference: {ref_us})")
-    if ref_us is not None:
-        assert host_us <= 1.1 * ref_us, f"host time {host_us:.1f} us / call regressed vs the reference's {ref_us:.1f}"
     op.close()

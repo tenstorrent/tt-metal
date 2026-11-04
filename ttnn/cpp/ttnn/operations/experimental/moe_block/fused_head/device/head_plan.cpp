@@ -9,13 +9,12 @@
 #include <limits>
 #include <map>
 #include <set>
-#include <sstream>
 #include <tuple>
 
 namespace ttnn::operations::experimental::moe_block::fused_head {
 
-// The cost model's arithmetic as the reference's Python evaluates it: every operation rounded on its own, no fused
-// multiply-add (a contracted a * b + c moved predictions by an ulp and reordered tied layouts).
+// The cost model's arithmetic with every operation rounded on its own, no fused multiply-add: the ranking of close
+// layouts does not depend on what the compiler contracts.
 #if defined(__clang__)
 #define HEAD_PLAN_NO_FP_CONTRACT _Pragma("clang fp contract(off)")
 #else
@@ -43,34 +42,7 @@ using head_math::ceil_div;
 std::string kb0(double bytes) { return fmt_fixed(bytes / 1024, 0); }
 std::string s(int64_t v) { return std::to_string(v); }
 
-// CPython's float floor division.
-double py_floordiv(double a, double b) {
-    HEAD_PLAN_NO_FP_CONTRACT
-    double mod = std::fmod(a, b);
-    double div = (a - mod) / b;
-    if (mod != 0 && ((b < 0) != (mod < 0))) {
-        div -= 1.0;
-    }
-    if (div == 0) {
-        return std::copysign(0.0, a / b);
-    }
-    double fl = std::floor(div);
-    if (div - fl > 0.5) {
-        fl += 1.0;
-    }
-    return fl;
-}
-
-int64_t py_round(double v) { return static_cast<int64_t>(std::nearbyint(v)); }
-
-std::string collapse(const std::string& text) {
-    std::istringstream in(text);
-    std::string w, out;
-    while (in >> w) {
-        out += (out.empty() ? "" : " ") + w;
-    }
-    return out;
-}
+int64_t round_us(double v) { return static_cast<int64_t>(std::nearbyint(v)); }
 
 enum class Cells : uint8_t { None, Column, Row, Rows };
 
@@ -262,7 +234,7 @@ std::string summary(const std::vector<HeadPlanned>& unfit, const ArenaMax& arena
         out.push_back(
             "L1: the least arena any layout needs is " + kb0(least->arena) + " KB (" + describe_layout(least->lay) +
             "), a core has " + kb0(arena_max(least->lay.KB)) + " KB; tried K steps " +
-            py_list({kbs.begin(), kbs.end()}) + ", row chunks " + py_list({nchs.begin(), nchs.end()}) +
+            list_str({kbs.begin(), kbs.end()}) + ", row chunks " + list_str({nchs.begin(), nchs.end()}) +
             ", W rings off / 5 / 4 / 3");
     }
     if (!other.empty()) {
@@ -498,8 +470,8 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) 
         return {
             std::nullopt, err.need, {}, "arena " + kb0(err.need) + " KB > " + kb0(cap) + " KB (W ring at the least)"};
     } catch (const SizingError& err) {
-        std::string why = collapse(err.what()).substr(0, 240);
-        return {std::nullopt, 0, {}, why.empty() ? "AssertionError" : why};
+        const std::string why = err.what();
+        return {std::nullopt, 0, {}, why.empty() ? "sizing failed" : why};
     }
     const int64_t need = al64(router_min_bytes(shape.G, shape.E, shape.K, lay.split));
     if (need > cap) {
@@ -539,9 +511,9 @@ std::pair<double, Parts> head_cost(
     double t_x, t_lat = 0.0;
     if (fhops) {
         const double hops = double(G - 1) / 2;
-        t_x = py_floordiv(hops * shape.rows * shape.H, double(G)) * 2 / rate;
+        t_x = std::floor(hops * shape.rows * shape.H / double(G)) * 2 / rate;
         if (shape.latent) {
-            t_lat = py_floordiv(py_floordiv(hops * shape.rows * *shape.latent, double(G)), double(G)) * 2 / rate;
+            t_lat = std::floor(std::floor(hops * shape.rows * *shape.latent / double(G)) / double(G)) * 2 / rate;
         }
     } else {
         const int64_t hops = G - 1;
@@ -558,9 +530,8 @@ std::pair<double, Parts> head_cost(
     const double t_xm = double(n * eng.NPG) * (double(KT) / 2) * double(MT) * 2048 / double(std::min(eng.S0, eng.S1)) /
                         (c.xmc_gbs * 1e3);
     const double comp = std::max({t_math, t_wn, t_xm}) / double(n) + c.chunk_us * (n > 1 ? 1 : 0);
-    const double hidden = c.overlap * std::min({t_gu, t_x, comp * double(n)}) / double(n);
     const double steady = std::max({comp, (t_x + t_lat + t_rs) / double(n), t_w / double(n)});
-    double t_se = (t_x + t_lat) / double(n) + double(n - 1) * steady + comp - hidden + t_rs / double(n);
+    double t_se = (t_x + t_lat) / double(n) + double(n - 1) * steady + comp + t_rs / double(n);
     if (n == 1) {
         t_se = std::max(t_se, t_w + t_dn + t_rs);
     }
@@ -573,7 +544,7 @@ std::pair<double, Parts> head_cost(
     const double t_rc = double(ET * KT) * c.rtr_tile / c.clk;
     const double chain = c.chain_us + c.chain_ek * double(ET) * double(shape.K);
     const int64_t etc = ceil_div(ET, lay.GX);
-    const double t_eng = c.eng_overhead * double(n) * double(MT) * double(etc) * double(KT / G) * c.rtr_tile / c.clk;
+    const double t_eng = kEngOverhead * double(n) * double(MT) * double(etc) * double(KT / G) * c.rtr_tile / c.clk;
     double t_chain;
     if (lay.on_engine) {
         t_se += t_eng;
@@ -583,18 +554,18 @@ std::pair<double, Parts> head_cost(
     }
     const double t = c.base_us + std::max(t_se, t_chain);
     Parts parts = {
-        {"gu", py_round(t_gu)},
-        {"down", py_round(t_dn)},
-        {"x", py_round(t_x)},
-        {"rs", py_round(t_rs)},
-        {"w", py_round(t_w)},
-        {"wnoc", py_round(t_wn)},
-        {"xmc", py_round(t_xm)},
+        {"gu", round_us(t_gu)},
+        {"down", round_us(t_dn)},
+        {"x", round_us(t_x)},
+        {"rs", round_us(t_rs)},
+        {"w", round_us(t_w)},
+        {"wnoc", round_us(t_wn)},
+        {"xmc", round_us(t_xm)},
         {"owners", int64_t(std::min(eng.S0, eng.S1))},
-        {"se", py_round(t_se)},
-        {"chain", py_round(t_chain)},
+        {"se", round_us(t_se)},
+        {"chain", round_us(t_chain)},
         {"wring", int64_t(eng.WRING)},
-        {"xdram", py_round(t_xd)},
+        {"xdram", round_us(t_xd)},
     };
     return {t, parts};
 }

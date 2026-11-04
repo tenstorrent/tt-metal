@@ -13,7 +13,6 @@
 #pragma once
 
 #include <array>
-#include <map>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -115,24 +114,6 @@ const FusedHeadSetup& setup_fused_head(
 // cores (head_arena_cores, a shard of at least arena_bytes each) the head runs in - e.g. one the block shares between
 // its ops; default one the resources keep.
 FusedHeadOutputs fused_head(
-    const Tensor& x,
-    const FusedHeadWeights& weights,
-    MoEBlockResources& resources,
-    const MoEDtypes& dtypes,
-    uint32_t accumulators,
-    const std::optional<Tensor>& x_full = std::nullopt,
-    std::optional<int64_t> l1_free = std::nullopt,
-    const std::optional<Tensor>& arena = std::nullopt);
-
-// The per-chip program descriptors fused_head would launch (no launch): tests compare them with the reference's.
-struct FusedHeadPrograms {
-    std::vector<std::pair<ttnn::MeshCoordinate, tt::tt_metal::ProgramDescriptor>> programs;
-    // every buffer the programs address: name -> (address, bytes) - the arena, the persistent words, the tensors
-    std::map<std::string, std::pair<uint32_t, uint32_t>> addresses;
-    // "r,c,kernel file,x,y" -> where the core's fabric connection args start (main's; the reference's differ)
-    std::map<std::string, uint32_t> fabric_starts;
-};
-FusedHeadPrograms fused_head_programs(
     const Tensor& x,
     const FusedHeadWeights& weights,
     MoEBlockResources& resources,

@@ -1088,8 +1088,6 @@ public:
     }
 
     ProgramDescriptor build(HeadPatches* patches);
-    // (kernel file, core, the index its fabric connection's args start at): tests skip main's fabric args
-    std::vector<std::tuple<std::string, CoreCoord, uint32_t>> fabric_starts;
 
 private:
     const HeadModel& h;
@@ -2114,7 +2112,6 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
             add(args, ent_s);
             add(args, h.tables(*peer));
             add(args, blocks);
-            fabric_starts.emplace_back("xg_sender.cpp", core, u32(args.size()));
             add(args, fabric(*peer, rg.links[static_cast<int>(d)][v], core));
         } else {
             add(args, std::vector<uint32_t>(11, 0));
@@ -2172,11 +2169,6 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
         routing_defines(watcher);
         define(watcher, "W_RA0", iv(wl.size()));
         const auto tail = y_args(ykeys[1], h.watcher, "xg_watcher.cpp");
-        for (auto& [f, c, at] : fabric_starts) {
-            if (f == "xg_watcher.cpp") {
-                at += u32(wl.size());
-            }
-        }
         add(wl, tail);
     }
     set_rt(watcher, h.watcher, wl);
@@ -2319,7 +2311,6 @@ Args ChipProgram::y_args(const SendKey& k, const CoreCoord& core, const std::str
         add(args, Args{u32(h.node(peer).chip_id), u32(*h.node(peer).mesh_id)});
         const auto links = tt::tt_fabric::get_forwarding_link_indices(*h.mesh, h.node(coord), h.node(peer));
         TT_FATAL(!links.empty(), "fused_head: no link toward the Y neighbour");
-        fabric_starts.emplace_back(file, core, u32(args.size()));
         add(args, fabric(peer, links[0], core));
         // (after the connection's args: the hellos to wait for - ra_y_send's, the first Y direction's; the watcher's
         // second direction sends none and ignores it)
@@ -2810,8 +2801,7 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
     const HeadModel& model,
     const HeadBuffers& buffers,
     const std::vector<ttnn::MeshCoordinate>& coords,
-    std::vector<HeadPatches>* patches,
-    std::map<std::string, uint32_t>* fabric_starts) {
+    std::vector<HeadPatches>* patches) {
     // (the arena: an L1 tensor of the arena cores, a shard of at least arena_bytes each - the CBs over its regions bind
     // to it, the kernels take base + offset)
     const Buffer* arena = buffers[SRC_ARENA];
@@ -2830,11 +2820,6 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
         ChipProgram cp(model, buffers, {c[0], c[1]});
         workload.programs.push_back(
             {ttnn::MeshCoordinateRange(c, c), cp.build(patches ? &(*patches)[c[0] * model.C + c[1]] : nullptr)});
-        if (fabric_starts) {
-            for (const auto& [f, core, at] : cp.fabric_starts) {
-                (*fabric_starts)[fmt::format("{},{},{},{},{}", c[0], c[1], f, core.x, core.y)] = at;
-            }
-        }
     }
     return workload;
 }

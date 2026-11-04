@@ -118,16 +118,6 @@ std::string key_of(uint32_t accumulators, int64_t l1, DataType w) {
            std::to_string(static_cast<int>(w));
 }
 
-std::vector<ttnn::MeshCoordinate> all_coords(const tt::tt_metal::distributed::MeshDevice& mesh) {
-    std::vector<ttnn::MeshCoordinate> out;
-    for (uint32_t r = 0; r < mesh.shape()[0]; ++r) {
-        for (uint32_t c = 0; c < mesh.shape()[1]; ++c) {
-            out.emplace_back(r, c);
-        }
-    }
-    return out;
-}
-
 // The head's persistent tensors (its outputs and the routing exchange's), in an inputs template.
 FusedHeadInputs persistent_inputs(MoEBlockResources& res, const HeadModel& model) {
     const auto s = head_tensor_shapes(model);
@@ -316,66 +306,6 @@ FusedHeadOutputs fused_head(
         .table = in.table,
         .plan = in.plan};
     ttnn::prim::moe_block_fused_head(params, std::move(in));
-    return out;
-}
-
-FusedHeadPrograms fused_head_programs(
-    const Tensor& x,
-    const FusedHeadWeights& weights,
-    MoEBlockResources& resources,
-    const MoEDtypes& dtypes,
-    uint32_t accumulators,
-    const std::optional<Tensor>& x_full,
-    std::optional<int64_t> l1_free,
-    const std::optional<Tensor>& arena) {
-    using namespace fused_head_entry_detail;
-    const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
-    const auto in = call_inputs(setup, x, weights, x_full);
-    const FusedHeadParams params{
-        .config = setup.config,
-        .plan_key = resources.plan_key(),
-        .model = setup.model,
-        .words = setup.words,
-        .arena = arena ? *arena : default_arena(resources, setup),
-        .patches = setup.patches};
-    FusedHeadPrograms out;
-    auto w = build_head_workload(
-        *setup.model, head_buffers(params, in), all_coords(resources.mesh_device()), nullptr, &out.fabric_starts);
-    for (auto& [range, desc] : w.programs) {
-        out.programs.emplace_back(range.start_coord(), std::move(desc));
-    }
-    const auto shapes = head_tensor_shapes(*setup.model);
-    out.addresses["arena"] = {static_cast<uint32_t>(params.arena.buffer()->address()), shapes.arena_bytes};
-    const auto specs = head_words(*setup.model);
-    for (size_t i = 0; i < specs.size(); ++i) {
-        out.addresses[specs[i].name] = {setup.words[i], 4 * specs[i].words};
-    }
-    const std::vector<std::pair<std::string, const Tensor*>> ts = {
-        {"x", &in.x},
-        {"w", &in.w},
-        {"rw", &in.w_router},
-        {"rb", &in.router_bias},
-        {"rix", &in.router_index},
-        {"y", &in.y},
-        {"rows", &in.rows},
-        {"xbuf", &in.xbuf},
-        {"route", &in.route},
-        {"slots", &in.slots},
-        {"fslots", &in.fslots},
-        {"counts", &in.counts},
-        {"regions", &in.regions},
-        {"token_index", &in.token_index},
-        {"table", &in.table},
-        {"plan", &in.plan}};
-    for (const auto& [n, t] : ts) {
-        out.addresses[n] = {static_cast<uint32_t>(t->buffer()->address()), 1u << 30};
-    }
-    if (in.latent) {
-        out.addresses["latent"] = {static_cast<uint32_t>(in.latent->buffer()->address()), 1u << 30};
-    }
-    if (in.x_full) {
-        out.addresses["x_full"] = {static_cast<uint32_t>(in.x_full->buffer()->address()), 1u << 30};
-    }
     return out;
 }
 

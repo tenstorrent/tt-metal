@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The fused head's layout planner (reference: models/demos/moe_block/tt/head_plan.py on mstaletovic/moe-trim): every
-// candidate layout of the shape (matmul cores GX x GY, MT row tiles a core row, NCH row chunks, K step KB, the
-// router's logits on the matmul cores or on router cores, P-tile or compact RS zones, the DRAM fallback), the ones
-// whose L1 fits and whose per-core requirements hold (head_sizing.hpp), ranked by a cost model calibrated on measured
-// heads. fit() is the head's whole host plan: a shape it accepts builds; a shape it refuses says which requirement
-// failed, with the numbers and what would fit. Host only; tests/.../fused_head/test_head_plan_parity.py checks it
-// against the reference's answers.
+// The fused head's layout planner: every candidate layout of the shape (matmul cores GX x GY, MT row tiles a core row,
+// NCH row chunks, K step KB, the router's logits on the matmul cores or on router cores, P-tile or compact RS zones, the
+// DRAM fallback), the ones whose L1 fits and whose per-core requirements hold (head_sizing.hpp), ranked by a cost model
+// calibrated on measured heads. fit() is the head's whole host plan: a shape it accepts builds; a shape it refuses says which requirement
+// failed, with the numbers and what would fit. Host only.
 
 #pragma once
 
@@ -55,7 +53,7 @@ struct HeadShape {
     bool operator==(const HeadShape&) const = default;
 };
 
-// A layout of the head (head_plan.HeadLayout); ordered as the reference's dataclass(order=True).
+// A layout of the head; ordered field by field (the planner's tie order).
 struct HeadLayout {
     uint32_t GY = 0;
     uint32_t MT = 0;
@@ -80,8 +78,6 @@ struct HeadCost {
     double chain_us = 83.11;
     double chunk_us = 48.04;
     double base_us = 26.21;
-    double eng_overhead = 3.0;
-    double overlap = 0.0;
     double noc_gbs = 11.69;
     double chain_ek = 0.1852;
     double xmc_gbs = 43.98;

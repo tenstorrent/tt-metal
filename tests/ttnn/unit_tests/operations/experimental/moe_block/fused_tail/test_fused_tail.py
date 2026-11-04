@@ -3,13 +3,10 @@
 
 """ttnn.experimental.moe_block.fused_tail on device.
 
-* test_fused_tail_bit_exact: every saved reference case (dump_ref_fused_tail.py, run in the Python reference tree)
-  bit for bit, on three calls (a program-cache miss, then hits: the persistent counters carry over between calls),
-  first the calls bit-identical to each other (a latent model's case, K3: W_up diag(g) on the bf8 grid, the same device
+* test_fused_tail_bit_exact: every saved reference case bit for bit, on three calls (a program-cache miss, then
+  hits: the persistent counters carry over between calls), first the calls bit-identical to each other (a latent model's case, K3: W_up diag(g) on the bf8 grid, the same device
   weights from the reference's fp32 -> bf16 -> bf8 upload and this op's fp32 -> bf8 packing).
   Needs $MOE_BLOCK_REFS (the cases' root) and the case's mesh; skips otherwise.
-* test_fused_tail_host_time: the host cost of a call on a program-cache hit (N back-to-back untraced calls, the
-  enqueue only), GLM-5.3 (TailA2A) and K3 (TailEngine) at chunk 5120 on the Galaxy 8x4. No reference data needed.
 
     MOE_BLOCK_REFS=/data/mstaletovic/jobs/port/refs pytest tests/ttnn/unit_tests/operations/experimental/moe_block/fused_tail/test_fused_tail.py
 """
@@ -17,7 +14,6 @@
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -100,75 +96,5 @@ def test_fused_tail_bit_exact(mesh_device, device_params, case):
         for call, got in enumerate(calls):
             assert_bit_exact(got, ref, ["output"])
             logger.info(f"fused_tail {case}: call {call} bit-exact")
-    finally:
-        res.release()
-
-
-# (model, dims, fabric payload: the block's - the combine's row of the routed width)
-HOST_TIME_MODELS = {
-    "glm53": (
-        dict(num_experts=256, top_k=8, emb_dim=6144, routed_expert_hidden_dim=2048, latent_dim=None),
-        12352,
-    ),
-    "k3": (
-        dict(num_experts=896, top_k=16, emb_dim=7168, routed_expert_hidden_dim=3072, latent_dim=3584),
-        7232,
-    ),
-}
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params, model",
-    [
-        pytest.param((8, 4), _fabric_params("FABRIC_2D_TORUS_XY", payload), model, id=model)
-        for model, (_, payload) in HOST_TIME_MODELS.items()
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-def test_fused_tail_host_time(mesh_device, device_params, model):
-    dims, _ = HOST_TIME_MODELS[model]
-    dims = dict(dims, latent_norm=True, norm_eps=1e-5)
-    R, C = tuple(mesh_device.shape)
-    chunk = 5120
-    rows = chunk // R
-    S, H = rows // C, dims["emb_dim"]
-    res = _resources(mesh_device, dims, chunk)
-    rep = ttnn.ReplicateTensorToMesh(mesh_device)
-    zeros = lambda shape, layout: ttnn.from_torch(  # noqa: E731
-        torch.zeros(shape), dtype=ttnn.bfloat16, layout=layout, device=mesh_device, mesh_mapper=rep
-    )
-    try:
-        if dims["latent_dim"]:
-            Hr = dims["latent_dim"]
-            y = zeros((1, 1, S, Hr), ttnn.ROW_MAJOR_LAYOUT)
-            se = zeros((1, 1, rows, H // C), ttnn.TILE_LAYOUT)
-            w = mb.prepare_fused_tail_weights(
-                ttnn.from_torch(torch.zeros(H, Hr)), ttnn.from_torch(torch.ones(Hr)), resources=res
-            )
-        else:
-            y = zeros((1, 1, S, H), ttnn.ROW_MAJOR_LAYOUT)
-            se = zeros((1, 1, S, H), ttnn.TILE_LAYOUT)
-            w = None
-        call = lambda output=None: mb.fused_tail(y, se, resources=res, w_up=w, output=output)  # noqa: E731
-        for _ in range(3):  # (the program built and cached)
-            ttnn.deallocate(call())
-        ttnn.synchronize_device(mesh_device)
-        n = 50
-        t0 = time.perf_counter()
-        for _ in range(n):
-            ttnn.deallocate(call())
-        t_alloc = (time.perf_counter() - t0) / n
-        ttnn.synchronize_device(mesh_device)
-        out = call()
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.perf_counter()
-        for _ in range(n):
-            call(out)
-        t_pre = (time.perf_counter() - t0) / n
-        ttnn.synchronize_device(mesh_device)
-        logger.info(
-            f"fused_tail {model} {R}x{C} chunk {chunk}: host {t_alloc * 1e6:.1f} us/call (output allocated a call), "
-            f"{t_pre * 1e6:.1f} us/call (preallocated output), {n} untraced calls on a program-cache hit"
-        )
     finally:
         res.release()

@@ -9,8 +9,7 @@
 //  * router_layout / router_min_bytes (router_stream.RouterStream.layout_of / min_bytes).
 //  * routing_a2a_sizes / worst_rows / slot_bytes (combine_rf/routing_a2a.py).
 //  * routing_paths (head_plan.routing_paths: the routing exchange's senders and forwarding slots).
-// Reference tree: mstaletovic/moe-trim, models/demos/moe_block/tt/. Every failure the reference raises inside the
-// planner's try block (ValueError / AssertionError / KeyError) is a SizingError carrying the reference's str(err).
+// A requirement a layout does not meet is a SizingError saying which one, with its numbers.
 
 #pragma once
 
@@ -33,7 +32,7 @@ inline int64_t al16(int64_t v) { return (v + 15) / 16 * 16; }
 inline int64_t ceil_div(int64_t a, int64_t b) { return (a + b - 1) / b; }
 }  // namespace head_math
 
-// A requirement of the build failed (the reference's ValueError / AssertionError / KeyError: what() is its str()).
+// A requirement of the build failed (what(): which one, with its numbers).
 struct SizingError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -45,7 +44,7 @@ struct ArenaTooLarge : SizingError {
     int64_t cap;
 };
 
-// Ordered (name, bytes) regions, in arena order (the reference's dict insertion order).
+// Ordered (name, bytes) regions, in arena order.
 using Regions = std::vector<std::pair<std::string, int64_t>>;
 
 inline constexpr int64_t kArenaMax = 1344 * 1024;  // se_engine3.ARENA_MAX
@@ -245,8 +244,8 @@ struct RoutingPaths {
 // The routing exchange's paths on an R x C mesh, or why they do not build.
 std::variant<RoutingPaths, std::string> routing_paths(uint32_t R, uint32_t C, bool ring, bool wrap_y, uint32_t links);
 
-// Python-compatible "%.<p>f" (exact-value rounding, ties to even) and list repr.
+// "%.<p>f" of v, and "[a, b, ...]" of a list (the planner's messages).
 std::string fmt_fixed(double v, int precision);
-std::string py_list(const std::vector<uint32_t>& v);
+std::string list_str(const std::vector<uint32_t>& v);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

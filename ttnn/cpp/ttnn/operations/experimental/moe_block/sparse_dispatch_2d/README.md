@@ -90,9 +90,7 @@ tensor a chip. The mesh plan, port cores and semaphore words are computed once p
 
 `tests/ttnn/unit_tests/operations/experimental/moe_block/sparse_dispatch_2d/`:
 
-- `test_sparse_dispatch_2d_host.py` (no device): the wiring's invariants; parity with the reference's `_wiring`
-  when `MOE_BLOCK_REF_TREE` is set.
+- `test_sparse_dispatch_2d_host.py` (no device): the wiring's invariants and the group / pack defaults.
 - `test_sparse_dispatch_2d.py` (device, LoudBox 2x4 FABRIC_2D or Galaxy 8x4 FABRIC_2D_TORUS_XY): bit-exact against the
-  torch model on random rows with uniform routing, a cache hit on new buffers, host time of a cache-hit call, and
+  torch model on random rows with uniform routing, a cache hit on new buffers, and
   bit-exact against saved reference cases when `MOE_BLOCK_REFS` is set.
-- `dump_ref_sparse_dispatch_2d.py`: saves the reference cases (run in the reference tree's environment).

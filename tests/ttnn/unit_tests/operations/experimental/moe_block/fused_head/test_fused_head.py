@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.experimental.moe_block.fused_head on device, bit-exact against the reference's outputs (dump_ref_fused_head.py,
-models/demos/moe_block FusedHead on mstaletovic/moe-trim, on the reference's default fabric tie rule: parity, as main's),
-and its host cost a call. A Galaxy (the cases' mesh); skipped without one or without the saved cases
+"""ttnn.experimental.moe_block.fused_head on device, bit-exact against saved reference outputs (fabric ties split by
+the source's parity, as main's). A Galaxy (the cases' mesh); skipped without one or without the saved cases
 ($MOE_BLOCK_REFS/fused_head/<case>/):
 
     MOE_BLOCK_REFS=/data/mstaletovic/jobs/port/refs pytest tests/ttnn/unit_tests/operations/experimental/moe_block/fused_head/test_fused_head.py
@@ -11,13 +10,12 @@ and its host cost a call. A Galaxy (the cases' mesh); skipped without one or wit
 Compared per chip, bit for bit: the shared expert's output se, rows, route, the combine plan (counts, regions,
 token_index, table, plan) and the chip's own slots of the dispatch buffer xbuf (the head writes only those; a latent
 model's are the latent rows); not the latent output (with the dispatch prep the head never writes it: the latent rows go
-to xbuf). The cases' bf8 weights are on the bf8 grid (dump_ref_fused_head.py): the reference's fp32 -> bf16 -> bf8
-upload and this op's fp32 -> bf8 packing give the same device weights. Run to run, every output bit-identical
+to xbuf). The cases' bf8 weights are on the bf8 grid: the reference's fp32 -> bf16 -> bf8 upload and this op's
+fp32 -> bf8 packing give the same device weights. Run to run, every output bit-identical
 (test_fused_head_deterministic)."""
 
 import importlib.util
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -168,19 +166,3 @@ def test_fused_head_deterministic(case):
         calls.append(got)
     for call in (1, 2):
         hz.assert_bit_exact(calls[call], calls[0])
-
-
-def test_fused_head_host_time(case):
-    """The op's host cost a call (enqueue, untraced): the first call builds and caches the program; then N calls
-    patch the tensors' addresses only. Reported for the lead's comparison with the reference (~1.7-1.9 ms a layer for
-    the whole Python block)."""
-    _, _, head = case
-    head()
-    ttnn.synchronize_device(head.mesh)
-    n = 50
-    t0 = time.perf_counter()
-    for _ in range(n):
-        head()
-    t_host = (time.perf_counter() - t0) / n * 1e6
-    ttnn.synchronize_device(head.mesh)
-    print(f"fused_head: {t_host:.0f} us a call (host, enqueue), {n} calls")

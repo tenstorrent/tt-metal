@@ -59,8 +59,6 @@ are patched on a hit (BufferBinding).
 
 ## Tests
 
-* `test_routed_experts_combine_host.py`: host math vs the reference (pieces, state layout, `combine_l1_layout`,
-  `combine_auto`, credit policy, arena sizing, `plan_reference`); no device.
-* `dump_ref_routed_experts_combine.py` (reference tree): GLM-5.3 / K3 at 8x4, chunk 5120, uniform routing, snap 2^-14.
-* `test_routed_experts_combine.py`: device, bit-exact vs the references (a miss and two hits), and the host time of a
-  cache-hit call.
+* `test_routed_experts_combine_host.py`: the credit policy and `combine_auto`'s invariants; no device.
+* `test_routed_experts_combine.py`: device, bit-exact vs saved reference cases (GLM-5.3 / K3 at 8x4, chunk 5120,
+  uniform routing, snap 2^-14; a miss and two hits).

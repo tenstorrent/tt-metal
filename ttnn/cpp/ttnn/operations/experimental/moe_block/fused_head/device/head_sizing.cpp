@@ -89,10 +89,10 @@ std::pair<uint32_t, uint32_t> subsets(uint32_t nf, uint32_t GX) {
     return best;
 }
 
-std::string py_nested(const std::vector<std::vector<uint32_t>>& v) {
+std::string nested_str(const std::vector<std::vector<uint32_t>>& v) {
     std::string s = "[";
     for (size_t i = 0; i < v.size(); ++i) {
-        s += (i ? ", " : "") + py_list(v[i]);
+        s += (i ? ", " : "") + list_str(v[i]);
     }
     return s + "]";
 }
@@ -126,7 +126,7 @@ std::string fmt_fixed(double v, int precision) {
     return buf;
 }
 
-std::string py_list(const std::vector<uint32_t>& v) {
+std::string list_str(const std::vector<uint32_t>& v) {
     std::string s = "[";
     for (size_t i = 0; i < v.size(); ++i) {
         s += (i ? ", " : "") + std::to_string(v[i]);
@@ -995,7 +995,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
         NPD = wd[0].size();
         for (const auto& x : wd) {
             if (x.size() != NPD) {
-                fail("se_engine3: uneven down passes " + py_nested(wd));
+                fail("se_engine3: uneven down passes " + nested_str(wd));
             }
         }
     }

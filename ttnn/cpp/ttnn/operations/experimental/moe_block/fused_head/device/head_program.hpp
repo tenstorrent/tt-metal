@@ -194,13 +194,12 @@ HeadDeviceWeights prepare_head_weights(
 CoreRangeSet head_arena_cores(const HeadModel& model);
 
 // The per-chip programs (one per mesh coordinate of `coords`). patches: per coordinate (r C + c) where the address
-// arguments sit. fabric_starts (tests): "r,c,kernel file,x,y" -> the index the core's fabric connection args start at.
+// arguments sit.
 tt::tt_metal::WorkloadDescriptor build_head_workload(
     const HeadModel& model,
     const HeadBuffers& buffers,
     const std::vector<ttnn::MeshCoordinate>& coords,
-    std::vector<HeadPatches>* patches = nullptr,
-    std::map<std::string, uint32_t>* fabric_starts = nullptr);
+    std::vector<HeadPatches>* patches = nullptr);
 
 // Rewrites the address arguments (and the arena CBs) of one chip's cached program whose sources moved.
 void patch_head_program(

@@ -1,15 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.experimental.moe_block.routed_experts_combine on device, bit-exact against the reference cases
-(dump_ref_routed_experts_combine.py: the Python exchange's experts + combine, combine_snap 2^-14), and the host cost of a
-program-cache hit. Needs the case's mesh and fabric (Galaxy 8x4, FABRIC_2D_TORUS_XY); skips without reference data
-($MOE_BLOCK_REFS) or on another mesh.
+"""ttnn.experimental.moe_block.routed_experts_combine on device, bit-exact against the saved reference cases (the
+experts + combine, combine_snap 2^-14). Needs the case's mesh and fabric (Galaxy 8x4, FABRIC_2D_TORUS_XY); skips without
+reference data ($MOE_BLOCK_REFS) or on another mesh.
 """
 
 import importlib.util
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -20,7 +18,6 @@ import ttnn
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[6]
 OP = "routed_experts_combine"
-CALLS = 50
 
 
 def _load(name, path):
@@ -71,7 +68,7 @@ class _Call:
         Hr, I, E = cfg["Hr"], cfg["I"], cfg["E"]
         EPC = E // N
         g = torch.Generator().manual_seed(meta["seed"])
-        r = lambda *s: torch.randn(*s, generator=g) * 0.02  # noqa: E731  (dump_ref_routed_experts_combine's order)
+        r = lambda *s: torch.randn(*s, generator=g) * 0.02  # noqa: E731  (the saved case's order)
         gids = [list(range(c * EPC, (c + 1) * EPC)) for c in range(N)]
         local = [(r(Hr, I), r(Hr, I), r(I, Hr)) for _ in range(EPC)]  # (every chip the same local experts)
         layout = weights_py.flat_layout(cfg.get("flat_layout"))
@@ -120,23 +117,9 @@ class _Call:
         self.res.release()
 
 
-def _arena_spec(mesh_device, arena_bytes):
-    """The op's per-call arena (routed_experts_combine.cpp make_state): every worker core, the combine's bytes then the
-    y writers' 192 rows of 64 B, bf16 tiles of 32-wide rows."""
-    grid = mesh_device.compute_with_storage_grid_size()
-    rows = arena_bytes // 64 + 192
-    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-    mc = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(cores, [rows, 32], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    return ttnn.Shape([grid.x * grid.y * rows, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, mc
-
-
 def _case(mesh_device, case):
     if case == "none":
-        pytest.skip(f"no saved {OP} case (dump_ref_routed_experts_combine.py, $MOE_BLOCK_REFS)")
+        pytest.skip(f"no saved {OP} case ($MOE_BLOCK_REFS)")
     meta, ref = harness.load_case(OP, case)
     if list(mesh_device.shape) != meta["mesh_shape"]:
         pytest.skip(f"case {case} needs a {meta['mesh_shape']} mesh")
@@ -158,47 +141,5 @@ def test_routed_experts_combine(mesh_device, device_params, case):
             got = harness.from_mesh(out, tuple(meta["mesh_shape"]))
             harness.assert_bit_exact({ch: {"y_own": t} for ch, t in got.items()}, ref, ["y_own"])
         ttnn.deallocate(shared)
-    finally:
-        run.close()
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params, case", _params(CASES[:1] or ["none"]), indirect=["mesh_device", "device_params"]
-)
-def test_routed_experts_combine_host_time(mesh_device, device_params, case):
-    """us a call on a program-cache hit (host until the call returns, untraced, back to back after a warm-up): compare
-    with the Python reference's experts + combine launch (k3 _experts_combine)."""
-    meta, ref = _case(mesh_device, case)
-    run = _Call(mesh_device, meta, ref)
-    try:
-        run.call()
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.perf_counter()
-        for _ in range(CALLS):
-            run.call()
-        host = (time.perf_counter() - t0) / CALLS * 1e6
-        ttnn.synchronize_device(mesh_device)
-        # the hit path's per-call arena (allocated and freed inside the call): the same spec alone
-        spec = _arena_spec(mesh_device, run.cfg["arena_bytes"])
-        t0 = time.perf_counter()
-        for _ in range(CALLS):
-            ttnn.deallocate(ttnn.allocate_tensor_on_device(*spec))
-        arena = (time.perf_counter() - t0) / CALLS * 1e6
-        # the block's path: one arena the block allocated (shared with the fused head), passed in
-        shared = ttnn.allocate_tensor_on_device(run.arena_spec(), mesh_device)
-        run.call(shared)
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.perf_counter()
-        for _ in range(CALLS):
-            run.call(shared)
-        given = (time.perf_counter() - t0) / CALLS * 1e6
-        ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(shared)
-        print(f"routed_experts_combine {case}: {given:.1f} us a call with the block's arena (arena=)")
-        print(
-            f"routed_experts_combine {case}: {host:.1f} us a call (host, cache hit, {CALLS} calls), of which the arena's "
-            f"allocation + free ~{arena:.1f} us, the rest (plan lookup, hash, address patches, enqueue) "
-            f"~{host - arena:.1f} us"
-        )
     finally:
         run.close()

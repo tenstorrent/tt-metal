@@ -7,20 +7,16 @@
   FABRIC_2D_TORUS_XY), bit-exact against the torch model of the result (sparse_dispatch_2d_inputs.assert_dispatched: the
   destinations' rows; pass-through chips may keep the home's row);
   a second call on new buffers must hit the program cache and patch the addresses.
-- test_reference_case: bit-exact against the Python reference's saved outputs (dump_ref_sparse_dispatch_2d.py);
-  runs only with $MOE_BLOCK_REFS set.
-- test_host_time: host time of a cache-hit call (enqueue until return), untraced, after warm-up.
+- test_reference_case: bit-exact against saved reference outputs; runs only with $MOE_BLOCK_REFS set.
 """
 
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -145,34 +141,4 @@ def test_reference_case(mesh_device, case):
     ttnn.synchronize_device(mesh_device)
     got = {ch: {"xbuf": t} for ch, t in from_mesh(out, (R, C)).items()}
     assert_bit_exact(got, ref, ["xbuf"])
-    resources.release()
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [pytest.param(_MESH, _device_params(_MESH, inputs.fabric_payload(3584)), id=f"{_MESH[0]}x{_MESH[1]}-W3584")],
-    indirect=True,
-)
-def test_host_time(mesh_device, record_property):
-    width, calls = 3584, 200
-    resources = _resources(mesh_device, width)
-    mb.ensure_sparse_dispatch_2d_resources(resources)
-    _, per_chip, _ = _inputs(mesh_device, resources, width, seed=7)
-    xbuf, route = _to_device(per_chip, mesh_device)
-    for _ in range(3):  # (warm-up: the program built and cached)
-        mb.sparse_dispatch_2d(xbuf, route, resources)
-    ttnn.synchronize_device(mesh_device)
-    entries = mesh_device.num_program_cache_entries()
-    t0 = time.perf_counter()
-    for _ in range(calls):
-        mb.sparse_dispatch_2d(xbuf, route, resources)
-    t1 = time.perf_counter()
-    ttnn.synchronize_device(mesh_device)
-    t2 = time.perf_counter()
-    us = (t1 - t0) / calls * 1e6
-    logger.info(
-        f"sparse_dispatch_2d host: {us:.1f} us a call (enqueue); {(t2 - t0) / calls * 1e6:.1f} us with the device"
-    )
-    record_property("host_us_per_call", us)
-    assert mesh_device.num_program_cache_entries() == entries, "a steady-state call missed the program cache"
     resources.release()

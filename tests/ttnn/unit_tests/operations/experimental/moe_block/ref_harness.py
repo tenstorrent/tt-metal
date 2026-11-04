@@ -1,22 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reference outputs for the MoE block's C++ ops: saved from the Python reference tree (mstaletovic/moe-trim), compared
-bit-exact against the C++ op on the same inputs.
+"""Saved reference outputs for the MoE block's C++ ops, compared bit-exact against the C++ op on the same inputs.
 
 Layout (root: $MOE_BLOCK_REFS; unset: no reference data - list_cases() is empty and the reference-data tests skip,
 so CI needs no saved cases; the lead's cases are at /data/mstaletovic/jobs/port/refs):
 
-    <root>/<op>/<case>/meta.json        what the case is (see save_case)
+    <root>/<op>/<case>/meta.json        what the case is: op, case, mesh_shape, seed, model, config (the op's
+                                        arguments), inputs, outputs, tensors
     <root>/<op>/<case>/chip_<r>_<c>.pt  torch.save({name: torch.Tensor}) of chip (r, c): every input and output of
                                         that chip, exactly as ttnn.to_torch reads the chip's shard back (the device
                                         tensor's per-chip view, dtype and layout as on device, no padding removed)
 
-A dump script (run in the reference tree's environment) builds the inputs from a seed, runs the Python op, and calls
-save_case. The C++ op's device test loads the case, puts each chip's inputs on its chip (to_mesh), runs the op and
-compares each output per chip with assert_bit_exact. This module imports neither ttnn nor the reference at import
-time: it runs in both environments. Tests under this directory import it as `import ref_harness` (conftest.py puts this
-directory on sys.path).
+A device test loads the case, puts each chip's inputs on its chip (to_mesh), runs the op and compares each output per
+chip with assert_bit_exact. This module imports ttnn only inside the functions that need it. Tests under this
+directory import it as `import ref_harness` (conftest.py puts this directory on sys.path).
 """
 
 from __future__ import annotations
@@ -28,7 +26,6 @@ from pathlib import Path
 import torch
 
 REFS_ROOT: Path | None = Path(os.environ["MOE_BLOCK_REFS"]) if os.environ.get("MOE_BLOCK_REFS") else None
-REFERENCE_TREE = Path(os.environ.get("MOE_BLOCK_REF_TREE", "/data/mstaletovic/tt-metal-trimb"))
 
 
 def refs_available(root: Path | None = None) -> bool:
@@ -45,47 +42,6 @@ def _root(root: Path | None) -> Path:
 
 def case_dir(op: str, case: str, root: Path | None = None) -> Path:
     return _root(root) / op / case
-
-
-def save_case(
-    op: str,
-    case: str,
-    mesh_shape: tuple[int, int],
-    per_chip: dict[tuple[int, int], dict[str, torch.Tensor]],
-    *,
-    inputs: list[str],
-    outputs: list[str],
-    seed: int,
-    model: str,
-    config: dict,
-    root: Path | None = None,
-    extra: dict | None = None,
-) -> Path:
-    """Write one case. per_chip[(r, c)][name]: that chip's tensor. config: the op's arguments / MoEBlockConfig fields
-    as plain values (enums by name), enough for the C++ test to build the same call."""
-    d = case_dir(op, case, root)
-    d.mkdir(parents=True, exist_ok=True)
-    R, C = mesh_shape
-    assert set(per_chip) == {(r, c) for r in range(R) for c in range(C)}, "one entry per chip"
-    for (r, c), tensors in per_chip.items():
-        missing = set(inputs + outputs) - set(tensors)
-        assert not missing, f"chip {(r, c)} lacks {missing}"
-        torch.save({k: v.detach().cpu().contiguous() for k, v in tensors.items()}, d / f"chip_{r}_{c}.pt")
-    meta = dict(
-        op=op,
-        case=case,
-        mesh_shape=[R, C],
-        seed=seed,
-        model=model,
-        config=config,
-        inputs=inputs,
-        outputs=outputs,
-        tensors={k: dict(dtype=str(v.dtype), shape=list(v.shape)) for k, v in per_chip[(0, 0)].items()},
-        reference=dict(tree=str(REFERENCE_TREE), commit=_git_head(REFERENCE_TREE)),
-        **(extra or {}),
-    )
-    (d / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
-    return d
 
 
 def load_case(op: str, case: str, root: Path | None = None):
@@ -152,57 +108,6 @@ def assert_bit_exact(actual: dict, expected: dict, names: list[str] | None = Non
     assert not bad, "not bit-exact:\n" + "\n".join(bad)
 
 
-def assert_pcc(actual: dict, expected: dict, names: list[str], pcc: float):
-    """actual / expected: per_chip[(r, c)][name]. Every named tensor's Pearson correlation with the expected one at
-    least pcc on every chip (same shape and dtype)."""
-    bad = []
-    for ch in sorted(expected):
-        for name in names:
-            a, e = actual[ch][name], expected[ch][name]
-            if a.shape != e.shape or a.dtype != e.dtype:
-                bad.append(f"chip {ch} {name}: {a.dtype}{list(a.shape)} vs expected {e.dtype}{list(e.shape)}")
-                continue
-            got = torch.corrcoef(torch.stack([a.double().flatten(), e.double().flatten()]))[0, 1].item()
-            if not got >= pcc:
-                bad.append(f"chip {ch} {name}: PCC {got:.6f} < {pcc}")
-    assert not bad, "not close:\n" + "\n".join(bad)
-
-
-def bf8_grid(w: torch.Tensor, dim: int = 0) -> torch.Tensor:
-    """fp32 w with every value replaced by its bfloat8_b value, as the host packer encodes fp32 straight to bf8
-    (bfp_simd.hpp row_scalar): groups of 16 consecutive values along dim (a tile face row: a weight [out, in] stored
-    as [in, out] tiles groups along out, dim 0) share their largest exponent; each significand is shifted to it,
-    rounded to 7 bits (ties to even, the shifted-out bits dropped first) and saturated.
-
-    The result is a fixed point of both packing paths: its values have at most 7 significant bits, so bf16 holds them
-    exactly and ttnn.from_torch's bf16 host buffer for a sharded bf8 target (py_to_tt_tensor.cpp compute_host_dtype)
-    leaves them as they are; packing them again gives them back. A reference dump uploads such weights, the C++ op's
-    test packs the same values from fp32: the device weights are the same bits on both sides."""
-    t = w.float().movedim(dim, -1).contiguous()
-    assert t.shape[-1] % 16 == 0, f"bf8_grid: {t.shape[-1]} values along dim {dim} is not whole groups of 16"
-    u = t.view(torch.int32).reshape(-1, 16).to(torch.int64) & 0xFFFFFFFF
-    exp = (u >> 23) & 0xFF
-    shared = exp.amax(1, keepdim=True)
-    diff = shared - exp
-    m = ((u & 0x7FFFFF) | 0x800000) >> diff.clamp(max=31)
-    m = torch.where(diff >= 32, torch.zeros_like(m), m)
-    shift = 24 - 7
-    m = (m + ((1 << (shift - 1)) - 1) + ((m >> shift) & 1)) >> shift
-    m = torch.where(exp == 0, torch.zeros_like(m), m.clamp(max=(1 << 7) - 1))
-    sign = torch.where((u >> 31) == 1, -1.0, 1.0).double()
-    out = sign * m.double() * torch.pow(2.0, (shared - 127 - 6).double())
-    return out.float().reshape(t.shape).movedim(-1, dim).contiguous()
-
-
 def _bits(t: torch.Tensor) -> torch.Tensor:
     views = {torch.float32: torch.int32, torch.bfloat16: torch.int16, torch.float16: torch.int16}
     return t.view(views[t.dtype]) if t.dtype in views else t
-
-
-def _git_head(tree: Path) -> str | None:
-    try:
-        import subprocess
-
-        return subprocess.check_output(["git", "-C", str(tree), "rev-parse", "HEAD"], text=True).strip()
-    except Exception:
-        return None
