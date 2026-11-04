@@ -104,13 +104,15 @@ class TtPrefillRuntime:
     prefill_chunk(chunk, kv_cache). Owns the SP=8 × TP=4 ``Model``; the KV cache is engine-owned and
     passed into every call."""
 
-    def __init__(self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig, media_reader=None):
-        """media_reader: the first rank's EmbeddingReader (models/common/multimedia_store/reader.py), which media
+    def __init__(
+        self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig, media_embedding_reader=None
+    ):
+        """media_embedding_reader: the first rank's EmbeddingReader (models/common/multimedia_store/reader.py), which media
         embedding injection reads; None without multimodal input."""
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.config = config
-        self.media_reader = media_reader
+        self.media_embedding_reader = media_embedding_reader
 
         assert (
             config.max_seq_len % config.chunk_size == 0

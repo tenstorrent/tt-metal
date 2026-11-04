@@ -255,5 +255,5 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             hf_config=hf_config,
             state_dict=state_dict,
             config=runtime_config,
-            media_reader=media_embedding_reader,
+            media_embedding_reader=media_embedding_reader,
         )

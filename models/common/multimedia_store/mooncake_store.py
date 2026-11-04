@@ -10,7 +10,7 @@
   looks those keys up again). ``fetch(media_key)`` is a batch of one whole value; ``size(media_key)`` returns a
   value's length.
 - A value in this host's segment comes back in place, read-only. A value in another host's segment is read into this
-  reader's registered read buffer, which grows on demand, and copied out.
+  reader's registered read buffer, which grows on demand, and comes back as a read-only view into it.
 - A missing key raises ``Missing`` and any other store failure ``StoreUnavailable``; in a batch, the first failing
   request fails the whole batch. A malformed call (a key that is not ASCII, a range outside the value) raises
   ``ValueError``.
@@ -236,8 +236,10 @@ class MooncakeEmbeddingReader:
         A value in this host's segment comes back in place. The lookup gives this client a lease on the object: for
         the master's --default_kv_lease_ttl (10 s by default) after the call, the master refuses to remove or evict
         it. After the lease it stays only while the writer's soft pin holds it (with allow_evict_soft_pinned_objects
-        =false, the master does not evict it) and nothing removes it, so copy what you need before the lease ends. A
-        value in another host's segment comes back as a copy that the caller owns."""
+        =false, the master does not evict it) and nothing removes it, so copy what you need before the lease ends.
+
+        A value in another host's segment comes back as a view into this reader's read buffer, valid until the next
+        fetch on this reader overwrites it. Callers copy the rows out (to device staging) before fetching again."""
         if not requests:
             return []
         t0 = time.perf_counter()
@@ -298,7 +300,7 @@ class MooncakeEmbeddingReader:
         if nbytes <= self._read_buffer.nbytes:
             return
         size = max(nbytes, 2 * self._read_buffer.nbytes)
-        if self._read_buffer.nbytes:
+        if self._read_buffer.nbytes:  # views a caller still holds keep the old buffer alive; it is only unregistered
             self._client.unregister_buffer(self._read_buffer.ctypes.data)
             self._read_buffer = np.empty(0, dtype=np.uint8)
             self.stats.read_buffer_bytes = 0
@@ -311,8 +313,8 @@ class MooncakeEmbeddingReader:
         logger.info(f"[media_embedding_reader] read buffer is now {size} B")
 
     def _read_remote(self, remote: list[tuple[int, str, int, int]], results: list) -> None:
-        """Reads the remote requests' ranges in one batched transfer and stores a copy of each in results. Mooncake
-        rejects empty ranges, so those are not read and come back empty."""
+        """Reads the remote requests' ranges in one batched transfer into the read buffer and stores a view of each in
+        results. Mooncake rejects empty ranges, so those are not read and come back empty."""
         by_key: dict[str, list[tuple[int, int, int, int]]] = {}  # key -> [(request index, dst, offset, length)]
         dst = 0
         for i, key, offset, length in remote:
@@ -341,7 +343,7 @@ class MooncakeEmbeddingReader:
                         raise Missing(key)
                     if rc != length:
                         raise StoreUnavailable(f"{key}: read {rc} of {length} B at {offset}")
-                    results[i] = memoryview(self._read_buffer[d : d + length].copy())
+                    results[i] = memoryview(self._read_buffer[d : d + length]).toreadonly()
 
 
 def open_media_embedding_reader_from_env(

@@ -235,10 +235,16 @@ def test_batch_of_several_requests(cluster):
 
 
 def test_many_values_from_both_stores(cluster):
-    """Values read in place and transferred stay intact while more are written and read."""
+    """Values read in place stay intact while more are written and read. A value from the other host is read before
+    the next fetch, which reuses the read buffer."""
     written = [cluster.put(seg, 1 << 20) for seg in [cluster.store.segment, cluster.other.segment] * 4]
-    views = [cluster.store.fetch(k) for k, _ in written]
-    for view, (_, value) in zip(views, written):
+    local_views = []
+    for (key, value), seg in zip(written, [cluster.store.segment, cluster.other.segment] * 4):
+        view = cluster.store.fetch(key)
+        assert bytes(view) == value.tobytes()
+        if seg == cluster.store.segment:
+            local_views.append((view, value))
+    for view, value in local_views:
         assert bytes(view) == value.tobytes()
 
 

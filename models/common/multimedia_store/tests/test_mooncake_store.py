@@ -146,9 +146,11 @@ def test_local_value_is_read_in_place_with_one_lookup(setup):
     assert (s["local_hits"], s["remote_hits"], s["bytes_read"]) == (1, 0, local.nbytes)
 
 
-def test_remote_value_is_copied(setup):
+def test_remote_value_is_a_view_into_the_read_buffer(setup):
     client, reader, _, remote = setup
-    assert bytes(reader.fetch(_key(2))) == remote.tobytes()
+    view = reader.fetch(_key(2))
+    assert bytes(view) == remote.tobytes() and view.readonly
+    assert np.frombuffer(view, np.uint8).ctypes.data in client.registered  # no copy out of the read buffer
     assert client.lookups == 3  # the batched lookup, then get_into_ranges' own two
     s = reader.stats.snapshot()
     assert (s["local_hits"], s["remote_hits"], s["bytes_read"]) == (0, 1, remote.nbytes)
