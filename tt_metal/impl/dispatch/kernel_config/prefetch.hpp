@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <optional>
 
-#include "core_coord.hpp"
 #include "fd_kernel.hpp"
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/context_descriptor.hpp"
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
