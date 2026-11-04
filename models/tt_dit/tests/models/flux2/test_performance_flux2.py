@@ -124,6 +124,7 @@ def test_flux2_performance(
         topology=topology,
         width=width,
         height=height,
+        resolutions=[(width, height)],
         dynamic_load=dynamic_load,
         is_fsdp=is_fsdp,
         trace_warmup=True,
