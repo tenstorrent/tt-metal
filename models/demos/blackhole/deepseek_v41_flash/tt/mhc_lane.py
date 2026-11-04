@@ -12,7 +12,7 @@ import os
 import struct
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import _acc, _cb, _hash, _kernel
+from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import _acc, _cb, _hash, _kernel, compact_extra
 
 f32, bf16 = ttnn.float32, ttnn.bfloat16
 _PRE_MAX = int(
@@ -130,6 +130,9 @@ def mhc_expand_front(
     h = mk([1, 1, T, D], bf16)
     rm = mk([T, 1, 1, D], bf16, ttnn.ROW_MAJOR_LAYOUT) if emit_rm else None
     rm_t = rm if emit_rm else h
+    _cx = (
+        compact_extra(mesh, T, h) if ff else ([0, 160, 14] + _acc(h), [h.buffer_address()])
+    )  # compact h for the skinny chains (DSV41_SKINNY_HC)
     pns = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(*pc)) for pc in post_cores]
     pn = pns[0]
     SEMID = 0
@@ -315,11 +318,11 @@ def mhc_expand_front(
         _kernel(
             "mhc_cn2_writer.cpp" if ff else "mhc_cn_writer.cpp",
             c_set,
-            [O, RMB, int(emit_rm), T, D * 2, ONES_, gpc] + _acc(h) + _acc(rm_t),
+            [O, RMB, int(emit_rm), T, D * 2, ONES_, gpc] + _acc(h) + _acc(rm_t) + _cx[0],
             rt,
             None,
             ttnn.WriterConfigDescriptor(),
-            common=[h.buffer_address(), rm_t.buffer_address()],
+            common=[h.buffer_address(), rm_t.buffer_address()] + _cx[1],
         ),
         _kernel(
             "mhc_cn_compute.cpp",
@@ -333,6 +336,7 @@ def mhc_expand_front(
     prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
     prog.custom_program_hash = _hash(
         0x5D3,
+        tuple(_cx[0]),
         int(par),
         int(ff),
         int(merged),

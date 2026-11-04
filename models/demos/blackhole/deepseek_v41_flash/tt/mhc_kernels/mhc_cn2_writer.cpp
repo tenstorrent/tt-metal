@@ -20,6 +20,12 @@ void kernel_main() {
     constexpr uint32_t GPC = get_compile_time_arg_val(6);
     constexpr auto o_args = TensorAccessorArgs<7>();
     constexpr auto m_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    // compact output for the skinny chains (DSV41_SKINNY_HC=1): tiny 8x32 tiles in a RM buffer of 1<<PBSH byte pages,
+    // row tile m at tile m * KSTRIDE
+    constexpr uint32_t CMP = get_compile_time_arg_val(m_args.next_compile_time_args_offset());
+    constexpr uint32_t KSTRIDE = get_compile_time_arg_val(m_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t PBSH = get_compile_time_arg_val(m_args.next_compile_time_args_offset() + 2);
+    constexpr auto c_args = TensorAccessorArgs<m_args.next_compile_time_args_offset() + 3>();
     const uint32_t k = get_arg_val<uint32_t>(0);
     const uint32_t j0 = k * GPC;
     const uint32_t o_addr = get_common_arg_val<uint32_t>(0);
@@ -27,6 +33,7 @@ void kernel_main() {
     Noc noc;
     const auto o_acc = TensorAccessor(o_args, o_addr, 2048);
     const auto m_acc = TensorAccessor(m_args, m_addr, ROWBYTES);
+    const auto c_acc = TensorAccessor(c_args, CMP ? get_common_arg_val<uint32_t>(2) : 0u, 1u << PBSH);
     experimental::CB out(cb_out), rm(cb_rm), ones(cb_ones);
 
     DeviceZoneScopedN("CW_ALL");
@@ -46,6 +53,26 @@ void kernel_main() {
     }
     for (uint32_t g = 0; g < ng; ++g) {
         noc.async_write(out, o_acc, 2048, {.offset_bytes = g * 2048}, {.page_id = j0 + g, .offset_bytes = 0});
+    }
+    if constexpr (CMP != 0) {
+        constexpr uint32_t MTC = T > 8 ? 2 : 1;
+        for (uint32_t g = 0; g < ng; ++g) {
+            for (uint32_t m = 0; m < MTC; ++m) {
+                const uint32_t flat = (m * KSTRIDE + j0 + g) * 512;
+                noc.async_write(
+                    out,
+                    c_acc,
+                    256,
+                    {.offset_bytes = g * 2048 + m * 256},
+                    {.page_id = flat >> PBSH, .offset_bytes = flat & ((1u << PBSH) - 1)});
+                noc.async_write(
+                    out,
+                    c_acc,
+                    256,
+                    {.offset_bytes = g * 2048 + 512 + m * 256},
+                    {.page_id = (flat + 256) >> PBSH, .offset_bytes = (flat + 256) & ((1u << PBSH) - 1)});
+            }
+        }
     }
     if (EMIT_RM) {
         // bf16 row-major [T,1,1,D]: this core's ng tiles of token t are ng * 64 contiguous bytes of page t: stage

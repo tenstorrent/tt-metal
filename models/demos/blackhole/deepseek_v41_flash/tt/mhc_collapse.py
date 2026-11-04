@@ -295,3 +295,23 @@ def mhc_collapse_norm(x, pre, w4, eps, emit_rm=False):
     )
     ttnn.generic_op([x, pre, w4, out, rm_t], prog)
     return (out, rm) if emit_rm else out
+
+
+WANT = False  # set by the layer around the program that produces the FFN-side h (only that one needs the compact copy)
+LAST_COMPACT = None  # the compact (tiny-tile) copy of h written by the last collapse+norm program when DSV41_SKINNY_HC=1 (consumers: tt/skinny_shared.py)
+
+
+def compact_extra(mesh, T, h):
+    """-> (ct args to append to the cn2 writer, address list to append to its common args): the compact output buffer (DSV41_SKINNY_HC=1) or placeholders. Sets LAST_COMPACT."""
+    global LAST_COMPACT
+    if not WANT or os.environ.get("DSV41_SKINNY_HC") != "1" or T > 16:
+        LAST_COMPACT = None
+        return [0, 160, 14] + _acc(h), [h.buffer_address()]
+    pb = int(os.environ.get("DSV41_SKINNY_XPAGE", "16384"))
+    mt = 1 if T <= 8 else 2
+    mem = ttnn.L1_MEMORY_CONFIG if os.environ.get("DSV41_SKINNY_XL1") == "1" else ttnn.DRAM_MEMORY_CONFIG
+    hc = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([81920 * mt // pb, pb // 2]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, mem
+    )
+    LAST_COMPACT = hc
+    return [1, 160, pb.bit_length() - 1] + _acc(hc), [hc.buffer_address()]

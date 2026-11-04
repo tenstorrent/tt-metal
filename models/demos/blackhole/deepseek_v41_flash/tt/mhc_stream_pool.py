@@ -14,6 +14,8 @@ identical in eager and traced execution). ``tag`` separates independent chains o
 Buffers are allocated on first use: call the layer once eagerly (warm-up / compile run, which every trace capture has) BEFORE begin_trace_capture so
 the buffers are not allocated inside a trace. ``capturing`` can be set by a caller to make a first use during capture an error."""
 
+import os
+
 import torch
 
 import ttnn
@@ -25,7 +27,9 @@ capturing = False  # set True by a caller while a trace is being captured: first
 def get(mesh, T, D, tag, role):
     key = (id(mesh), tag, int(T), int(D), role)
     t = _POOL.get(key)
-    if t is not None and not t.is_allocated():  # a caller freed the pooled stream (must not happen in a traced model): re-create, never inside a capture
+    if (
+        t is not None and not t.is_allocated()
+    ):  # a caller freed the pooled stream (must not happen in a traced model): re-create, never inside a capture
         t = None
     if t is None:
         if capturing:
@@ -37,7 +41,9 @@ def get(mesh, T, D, tag, role):
             device=mesh,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG
+            if os.environ.get("DSV41_MHC_POOL_L1") == "1"
+            else ttnn.DRAM_MEMORY_CONFIG,  # DSV41_MHC_POOL_L1=1: the residual stream buffers in L1 interleaved (persistent, 43 KB per core per buffer)
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
         _POOL[key] = t

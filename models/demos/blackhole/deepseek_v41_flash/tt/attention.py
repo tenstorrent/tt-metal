@@ -208,6 +208,13 @@ class DSV41Attention:
         self.wo_b = up(
             w["wo_b"].T.reshape(1, 1, N_GROUPS * O_LORA, DIM), dtype=wdt, mapper=col_shard(2)
         )  # [8*1024, 5120]
+        # DSV41_SKINNY_ARM=1 / DSV41_SKINNY_WOAB=1 (init-time: build the weights; DSV41_SKINNY_WOAB=1 at call time: use them): the attention tail wo_a -> wo_b as ONE program on the 8 DRAM-bank cores
+        # (tt/skinny.py SkinnyWoAB; extra bank-sharded bfp8 copies of wo_a (without the 512 zero rows) and wo_b: 10 MB per chip per layer, call-time switch only)
+        self._skin = None
+        if os.environ.get("DSV41_SKINNY_ARM") == "1" or os.environ.get("DSV41_SKINNY_WOAB") == "1":
+            from models.demos.blackhole.deepseek_v41_flash.tt.skinny import SkinnyWoAB
+
+            self._skin = SkinnyWoAB(md, wo_a.float(), w["wo_b"].T.reshape(N_GROUPS * O_LORA, DIM).float())
         if os.environ.get("DSV41_ATTN_BFP4_ARM") == "1":
             # call-time arm of the single-layer loop (DSV41_ATTN_BFP4=1): the same four projections stored as bfp4, next to the bfp8 ones (OPT-007: reduced-weight attention projections)
             b4 = ttnn.bfloat4_b
@@ -497,6 +504,9 @@ class DSV41Attention:
             max_cores_per_head_batch=mc,
         )
 
+    def _skin_on(self):
+        return self._skin is not None and os.environ.get("DSV41_SKINNY_WOAB") == "1" and self.T <= 16
+
     def _finish(self, o, st):
         """o [1,T,9,512] attention output -> inverse RoPE, grouped output projection, all-reduce -> [1,1,T,5120]."""
         if self.T > 32:  # spec verify with > 32 rows: nlp_concat_heads_decode takes <= 32 users per call
@@ -516,12 +526,22 @@ class DSV41Attention:
         if (
             o.layout == ttnn.ROW_MAJOR_LAYOUT
         ):  # DSV41_ATTN_POSTFUSE: the raw SDPA output [1,32,T,512] -> inverse RoPE + head concat in one program
-            c = AF.rope_concat(o, st["Ch"], st["nSh"], self.T, NH)
+            c = AF.rope_concat(
+                o,
+                st["Ch"],
+                st["nSh"],
+                self.T,
+                NH,
+                compact=self._skin_on() and os.environ.get("DSV41_SKINNY_COMPACT", "1") == "1",
+            )
         else:
             o = self._rope_inv(o, st)
             c = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=NH)  # [1,1,32,9*512], L1 width sharded
             c = ttnn.to_memory_config(c, ttnn.DRAM_MEMORY_CONFIG)  # wo_a is 2x faster from interleaved DRAM
-        part = self._lin(self._lin(c, self.wo_a, "OA"), self.wo_b, "OB")
+        if self._skin_on() and (c.layout == ttnn.ROW_MAJOR_LAYOUT or tuple(c.shape) == (1, 1, 32, 4608)):
+            part = self._skin(c, self.T)
+        else:
+            part = self._lin(self._lin(c, self.wo_a, "OA"), self.wo_b, "OB")
         if getattr(
             self, "_ft_defer", False
         ):  # DSV41_FUSE_TAIL: the layer fuses the all-reduce with the mHC post (tt/fuse_tail_ar.py)

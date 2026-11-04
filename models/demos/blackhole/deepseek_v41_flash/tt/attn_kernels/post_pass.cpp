@@ -13,13 +13,16 @@ void kernel_main() {
     constexpr uint32_t ROW = get_compile_time_arg_val(2);
     constexpr auto o_args = TensorAccessorArgs<3>();
     constexpr auto d_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    constexpr uint32_t COMPACT = get_compile_time_arg_val(d_args.next_compile_time_args_offset());
+    constexpr uint32_t KSTRIDE = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t PBSH = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 2);
     const uint32_t u0 = get_arg_val<uint32_t>(0);
     const uint32_t cnt = get_arg_val<uint32_t>(1);
     const uint32_t o_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t d_addr = get_common_arg_val<uint32_t>(1);
     Noc noc;
     const auto o_acc = TensorAccessor(o_args, o_addr, ROW);
-    const auto d_acc = TensorAccessor(d_args, d_addr, 2048);
+    const auto d_acc = TensorAccessor(d_args, d_addr, COMPACT ? (1u << PBSH) : 2048);
     experimental::CB cbp(cb_p);
     cbp.reserve_back(1);
     for (uint32_t u = u0; u < u0 + cnt; ++u) {
@@ -28,9 +31,25 @@ void kernel_main() {
         noc.async_read_barrier();
         const uint32_t dst = ((t >> 4) << 10) + ((t & 15) << 5);
         for (uint32_t k = 0; k < 14; ++k) {
-            noc.async_write(cbp, d_acc, 32, {.offset_bytes = k * 64}, {.page_id = h * 16 + k, .offset_bytes = dst});
-            noc.async_write(
-                cbp, d_acc, 32, {.offset_bytes = k * 64 + 32}, {.page_id = h * 16 + k, .offset_bytes = dst + 512});
+            if constexpr (COMPACT) {
+                const uint32_t flat = ((t >> 3) * KSTRIDE + h * 16 + k) * 512 + (t & 7) * 32;
+                noc.async_write(
+                    cbp,
+                    d_acc,
+                    32,
+                    {.offset_bytes = k * 64},
+                    {.page_id = flat >> PBSH, .offset_bytes = flat & ((1u << PBSH) - 1)});
+                noc.async_write(
+                    cbp,
+                    d_acc,
+                    32,
+                    {.offset_bytes = k * 64 + 32},
+                    {.page_id = (flat + 256) >> PBSH, .offset_bytes = (flat + 256) & ((1u << PBSH) - 1)});
+            } else {
+                noc.async_write(cbp, d_acc, 32, {.offset_bytes = k * 64}, {.page_id = h * 16 + k, .offset_bytes = dst});
+                noc.async_write(
+                    cbp, d_acc, 32, {.offset_bytes = k * 64 + 32}, {.page_id = h * 16 + k, .offset_bytes = dst + 512});
+            }
         }
         noc.async_write_barrier();
     }

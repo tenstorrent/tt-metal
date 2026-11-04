@@ -22,6 +22,7 @@ import time
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import fuse_tail_ar as _FT
+from models.demos.blackhole.deepseek_v41_flash.tt import mhc_collapse as _MC
 from models.demos.blackhole.deepseek_v41_flash.tt import mhc_stream_pool
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC, _flag, _odd_t, _pad_rows, _slice_rows
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import DSV41MoEBlock
@@ -116,6 +117,16 @@ class DSV41Layer:
             from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_tp import DSV41SharedExpertColTP
 
             self.shared_tp = DSV41SharedExpertColTP(
+                mesh_device, moe_weights["shared_w0"][sid], moe_weights["shared_w1"][sid], moe_weights["shared_w2"][sid]
+            )
+        # DSV41_SKINNY_ARM=1 / DSV41_SKINNY_SHARED=1 (init): build the bank-sharded shared-expert chain weights (tt/skinny_shared.py); DSV41_SKINNY_SHARED=1 at call time uses it (replaces linear, slice, slice, multiply, linear)
+        self.skin_sh = None
+        if self.shared_tp is not None and (
+            os.environ.get("DSV41_SKINNY_ARM") == "1" or os.environ.get("DSV41_SKINNY_SHARED") == "1"
+        ):
+            from models.demos.blackhole.deepseek_v41_flash.tt.skinny_shared import SkinnyShared
+
+            self.skin_sh = SkinnyShared(
                 mesh_device, moe_weights["shared_w0"][sid], moe_weights["shared_w1"][sid], moe_weights["shared_w2"][sid]
             )
         up = lambda t: ttnn.from_torch(
@@ -277,6 +288,11 @@ class DSV41Layer:
             self.attention._ft_defer = True
         a = self.attention.forward(h, st)  # [1,1,T,D] bf16, replicated (a FusedPartial with DSV41_FUSE_TAIL)
         mark("attention")
+        _MC.WANT = (
+            getattr(self, "skin_sh", None) is not None
+            and os.environ.get("DSV41_SKINNY_SHARED") == "1"
+            and os.environ.get("DSV41_SKINNY_HC") == "1"
+        )
         # a: bf16 [1,1,T,D], consumed as is; expand + the FFN-side mixes are one program with DSV41_MHC_EP=1
         if isinstance(
             a, _FT.FusedPartial
@@ -327,12 +343,25 @@ class DSV41Layer:
             )  # h [1,1,Tp,D] bf16, h_tok [Tp,1,1,D] bf16 row-major
             h, h_tok = S2(h), S0(h_tok)
         mark("mhc_ffn_collapse+norm")
+        _MC.WANT = False
         tp = getattr(self, "shared_tp", None)
         use_tp = tp is not None and getattr(self.moe, "can_fold", lambda: False)() and h.shape[2] < 32
         if use_tp:
-            part = tp.forward(
-                h
-            )  # this column's slice of the shared expert; summed with the routed partial by the MoE reduce_scatter
+            if (
+                getattr(self, "skin_sh", None) is not None
+                and os.environ.get("DSV41_SKINNY_SHARED") == "1"
+                and int(h.shape[2]) <= 8
+            ):
+                hcm = (
+                    _MC.LAST_COMPACT
+                )  # compact copy of h written by the collapse+norm program (DSV41_SKINNY_HC=1), freed right after this consumer
+                part = self.skin_sh(hcm if hcm is not None else h, int(h.shape[2]))
+                if hcm is not None:
+                    ttnn.deallocate(hcm)
+                    _MC.LAST_COMPACT = None
+            else:
+                part = tp.forward(h)
+            # this column's slice of the shared expert; summed with the routed partial by the MoE reduce_scatter
             mark("shared_expert_tp")
             _ft_moe = (
                 (not sbf)
@@ -390,6 +419,10 @@ class DSV41Layer:
         mark("mhc_ffn_expand")
         # hand DRAM-resident tensors to the caller (the next layer): an L1-sharded `ffn_pre` kept alive across
         # calls overlaps the static buffers of the next norm kernel.
+        if (
+            os.environ.get("DSV41_MHC_POOL_L1") == "1"
+        ):  # the stream buffers are pooled (persistent) L1 tensors: hand them on as they are (no copy, no L1 -> DRAM op); ffn_pre is a small DRAM / L1 tensor
+            return x3, ttnn.to_memory_config(S0o(ffn_pre), ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG), ttnn.to_memory_config(
             S0o(ffn_pre), ttnn.DRAM_MEMORY_CONFIG
         )

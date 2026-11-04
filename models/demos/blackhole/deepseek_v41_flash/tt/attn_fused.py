@@ -94,7 +94,15 @@ def _crs(cores):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores])
 
 
-def rope_concat(o, c, s, users, nh):
+COMPACT_KSTRIDE = 160  # tiles per row tile of the compact layout (5 pages of 16 KiB, a multiple of the page; the 144 real tiles + 16 pad)
+
+
+def compact_pb():
+    """page bytes of the compact buffer (env DSV41_SKINNY_XPAGE, power of two, default 16384)"""
+    return int(os.environ.get("DSV41_SKINNY_XPAGE", "16384"))
+
+
+def rope_concat(o, c, s, users, nh, compact=False):
     """Post-SDPA glue (DSV41_ATTN_POSTFUSE): o = SDPA output [1,32,T,512] bf16 ROW_MAJOR (page = h*T + t, ``users`` = T <= 32), c / s = the
     [1,T,1,512] bf16 TILE cos / negated-sin tables -> [1,1,32,nh*512] bf16 TILE DRAM (row t = user t, columns h*512 + d), the dims 448..511 of
     every head rotated exactly like ``rope_inplace`` (x @ R).  Replaces permute + tilize + rope_inplace + to_memory_config + nlp_concat_heads_decode
@@ -116,13 +124,26 @@ def rope_concat(o, c, s, users, nh):
     rc = allc[: 2 * T]
     npass = min(nh * T, len(allc) - 2 * T)
     pc = allc[2 * T : 2 * T + npass]
-    out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 32, nh * 512]),
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        mesh,
-        ttnn.L1_MEMORY_CONFIG if os.environ.get("DSV41_RC_L1") == "1" else ttnn.DRAM_MEMORY_CONFIG,
-    )
+    if compact:
+        # skinny chains (tt/skinny.py): tiny 8 x 32 tiles, row tile m = t >> 3 at tile m * COMPACT_KSTRIDE, as a ROW_MAJOR buffer of 16 KiB pages (one contiguous 80 KiB read per row tile)
+        assert nh * 16 <= COMPACT_KSTRIDE and T <= 16
+        mt = 1 if T <= 8 else 2
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([81920 * mt // compact_pb(), compact_pb() // 2]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh,
+            ttnn.L1_MEMORY_CONFIG if os.environ.get("DSV41_SKINNY_XL1") == "1" else ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 32, nh * 512]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            mesh,
+            ttnn.L1_MEMORY_CONFIG if os.environ.get("DSV41_RC_L1") == "1" else ttnn.DRAM_MEMORY_CONFIG,
+        )
+    cmp_args = [int(compact), COMPACT_KSTRIDE, compact_pb().bit_length() - 1]
     bf = ttnn.bfloat16
     X, R, SC, XS, O, P, R2, RI, M, PP = range(10)
     unf = T > 8 and T % 8 != 0  # the stock spec _finish rotates these T with the unfused addcmul formula
@@ -158,7 +179,12 @@ def rope_concat(o, c, s, users, nh):
         [o.buffer_address(), c.buffer_address(), s.buffer_address()],
     )
     writer = _kernel(
-        "post_writer.cpp", rset, [O, nh] + _acc(out), rt, ttnn.WriterConfigDescriptor(), [out.buffer_address()]
+        "post_writer.cpp",
+        rset,
+        [O, nh] + _acc(out) + cmp_args,
+        rt,
+        ttnn.WriterConfigDescriptor(),
+        [out.buffer_address()],
     )
     compute = _kernel(
         "post_compute.cpp",
@@ -171,14 +197,14 @@ def rope_concat(o, c, s, users, nh):
     passk = _kernel(
         "post_pass.cpp",
         pset,
-        [P, T, ROW] + _acc(o) + _acc(out),
+        [P, T, ROW] + _acc(o) + _acc(out) + cmp_args,
         prt,
         ttnn.ReaderConfigDescriptor(),
         [o.buffer_address(), out.buffer_address()],
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute, passk], semaphores=[], cbs=cbs)
     prog.custom_program_hash = _hash(
-        0xA71, T, nh, unf, tuple(_acc(o)), tuple(_acc(c)), tuple(_acc(s)), tuple(_acc(out))
+        0xA71, T, nh, unf, compact, tuple(_acc(o)), tuple(_acc(c)), tuple(_acc(s)), tuple(_acc(out))
     )
     ttnn.generic_op([o, c, s, out], prog)
     return out
