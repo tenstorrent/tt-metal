@@ -17,6 +17,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -1807,6 +1808,9 @@ INSTANTIATE_TEST_SUITE_P(
             .sequence_length = 512U},
         // Q kernel with its K/V loop but no u_scaler; KV kernel with grad_V alone.
         SDPABackwardSkipCase{.name = "FrozenK", .grad_k = false},
+        // Q kernel as in the full backward, u_scaler included; KV kernel with grad_K alone. Its Q call and KV inputs
+        // match the full backward's, so the new program it needs comes from the KV flags alone.
+        SDPABackwardSkipCase{.name = "FrozenV", .grad_v = false},
         // OnlyQ and FrozenK reading a DRAM mask: the Q kernel's masked K/V loop without u_scaler or a gate.
         SDPABackwardSkipCase{
             .name = "OnlyQ_Arbitrary",
@@ -1891,6 +1895,17 @@ INSTANTIATE_TEST_SUITE_P(
         SDPABackwardSkipCase{.name = "Gate_FrozenK", .grad_k = false, .use_gate = true},
         // Q kernel with its K/V loop and grad_gate, but no gated dO output and no u_scaler; no KV kernel.
         SDPABackwardSkipCase{.name = "Gate_QAndGate", .grad_k = false, .grad_v = false, .use_gate = true},
+        // As Gate_QAndGate on balanced row pairs (the OnlyQ_Balanced shape): the balanced Q kernel with a gate and
+        // only some of its outputs.
+        SDPABackwardSkipCase{
+            .name = "Gate_QAndGate_Balanced",
+            .grad_k = false,
+            .grad_v = false,
+            .use_gate = true,
+            .batch_size = 2U,
+            .num_query_heads = 8U,
+            .num_kv_heads = 8U,
+            .sequence_length = 512U},
         // Q kernel without its K/V loop computing u_scaler, grad_gate and the gated dO for the KV kernel.
         SDPABackwardSkipCase{.name = "Gate_FrozenQ", .grad_q = false, .use_gate = true},
         // As Gate_FrozenQ without grad_gate.
@@ -1912,6 +1927,59 @@ INSTANTIATE_TEST_SUITE_P(
             .use_gate = true,
             .v_head_dim = 32U}),
     [](const ::testing::TestParamInfo<SDPABackwardSkipCase>& info) { return info.param.name; });
+
+// The Q op called without `outputs` produces grad_Q and u_scaler, plus grad_gate and the gated dO when given a gate:
+// a gated caller that then feeds the KV op the gated dO, as sdpa_bw does, must get it. The defaulted call has to
+// build the same program as the explicit request, so the second call hits the cache and returns the same values.
+TEST_F(SDPABackwardTest, QOp_UnsetOutputsFollowGate) {
+    using namespace ttml;
+    using QOutputs = metal::ops::sdpa_bw::device::q::SDPABackwardQOutputs;
+    constexpr std::array<const char*, 4> kNames{"grad_Q", "u_scaler", "grad_gate", "gated_grad_output"};
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    for (const bool use_gate : {false, true}) {
+        SCOPED_TRACE(use_gate ? "with a gate" : "without a gate");
+        const SDPABackwardSkipCase c{.name = "QOpDefaults", .use_gate = use_gate};
+        const auto in = make_sdpa_bw_skip_inputs(c, autograd::ctx().get_generator()());
+        const auto run_q = [&](const std::optional<QOutputs>& outputs) {
+            auto [dQ, u_scaler, dG, gated_dO] = ttnn::prim::ttml_sdpa_q_bw(
+                in.grad_output,
+                in.attn_output,
+                in.query,
+                in.key,
+                in.value,
+                c.mask_type,
+                in.attn_mask,
+                in.intermediates,
+                /*dropout_probability=*/0.0F,
+                outputs,
+                /*preallocated_grad_query=*/std::nullopt,
+                /*preallocated_u_scaler=*/std::nullopt,
+                in.gate);
+            return std::array<std::optional<ttnn::Tensor>, 4>{
+                std::move(dQ), std::move(u_scaler), std::move(dG), std::move(gated_dO)};
+        };
+
+        const auto defaulted = run_q(std::nullopt);
+        const auto entries = device->num_program_cache_entries();
+        const auto requested =
+            run_q(QOutputs{.grad_query = true, .u_scaler = true, .grad_gate = use_gate, .gated_grad_output = use_gate});
+        EXPECT_EQ(device->num_program_cache_entries(), entries)
+            << "the defaulted call built a different program from the explicit request";
+
+        const std::array<bool, 4> expected{true, true, use_gate, use_gate};
+        for (size_t i = 0; i < expected.size(); ++i) {
+            ASSERT_EQ(defaulted[i].has_value(), expected[i]) << kNames[i];
+            ASSERT_EQ(requested[i].has_value(), expected[i]) << kNames[i];
+            if (expected[i]) {
+                EXPECT_TRUE(
+                    xt::all(xt::equal(core::to_xtensor(defaulted[i].value()), core::to_xtensor(requested[i].value()))))
+                    << kNames[i] << " differs from the explicit request's";
+            }
+        }
+    }
+}
 
 TEST_F(SDPABackwardTest, Validation_RejectsMalformedIntermediates) {
     using namespace ttml;

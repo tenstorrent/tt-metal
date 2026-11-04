@@ -354,19 +354,26 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability,
-    const ttml::metal::ops::sdpa_bw::device::q::SDPABackwardQOutputs& outputs,
+    const std::optional<ttml::metal::ops::sdpa_bw::device::q::SDPABackwardQOutputs>& outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_u_scaler,
     const std::optional<ttnn::Tensor>& gate,
     const std::optional<ttnn::Tensor>& preallocated_grad_gate) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation;
+    using Outputs = ttml::metal::ops::sdpa_bw::device::q::SDPABackwardQOutputs;
 
-    // A gate output requested without a gate is rejected by validation rather than dropped.
+    // An unset `outputs` follows the gate: a gated caller gets grad_gate and the gated dO, which the KV op must then
+    // consume in place of grad_output. A gate output requested without a gate is rejected by validation rather than
+    // dropped.
     auto operation_attributes = OperationType::operation_attributes_t{
         .mask_type = mask_type,
         .dropout_probability = dropout_probability,
         .has_gate = gate.has_value(),
-        .outputs = outputs};
+        .outputs = outputs.value_or(Outputs{
+            .grad_query = true,
+            .u_scaler = true,
+            .grad_gate = gate.has_value(),
+            .gated_grad_output = gate.has_value()})};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

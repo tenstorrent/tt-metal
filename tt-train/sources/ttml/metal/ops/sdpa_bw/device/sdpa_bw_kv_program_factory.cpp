@@ -144,7 +144,7 @@ void assign_per_core_runtime_args_balanced(
              value_buffer->address(),
              0U,  // mask_addr unused for balanced causal
              intermediates_buffer->address(),
-             u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0U,
+             get_address_or_zero(u_scaler_buffer),
              num_pairs,
              start_pair_idx});
 
@@ -154,8 +154,8 @@ void assign_per_core_runtime_args_balanced(
             kernels.writer,
             core,
             {
-                grad_key_buffer != nullptr ? grad_key_buffer->address() : 0U,
-                grad_value_buffer != nullptr ? grad_value_buffer->address() : 0U,
+                get_address_or_zero(grad_key_buffer),
+                get_address_or_zero(grad_value_buffer),
                 num_pairs,
                 start_pair_idx,
             });
@@ -587,17 +587,17 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
                      query_buffer->address(),
                      key_buffer->address(),
                      value_buffer->address(),
-                     mask_buffer != nullptr ? mask_buffer->address() : 0U,
+                     get_address_or_zero(mask_buffer),
                      intermediates_buffer->address(),
-                     u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0U,
+                     get_address_or_zero(u_scaler_buffer),
                      num_rows,
                      start_row});
                 SetRuntimeArgs(
                     program,
                     kernels.writer,
                     core,
-                    {grad_key_buffer != nullptr ? grad_key_buffer->address() : 0U,
-                     grad_value_buffer != nullptr ? grad_value_buffer->address() : 0U,
+                    {get_address_or_zero(grad_key_buffer),
+                     get_address_or_zero(grad_value_buffer),
                      num_rows,
                      start_row});
                 SetRuntimeArgs(
@@ -655,15 +655,15 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
             runtime_args[kReaderQueryIdx] = query_buffer->address();
             runtime_args[kReaderKeyIdx] = key_buffer->address();
             runtime_args[kReaderValueIdx] = value_buffer->address();
-            runtime_args[kReaderMaskIdx] = mask_buffer != nullptr ? mask_buffer->address() : 0;
+            runtime_args[kReaderMaskIdx] = get_address_or_zero(mask_buffer);
             runtime_args[kReaderIntermediatesIdx] = intermediates_buffer->address();
-            runtime_args[kReaderUScalerIdx] = u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0;
+            runtime_args[kReaderUScalerIdx] = get_address_or_zero(u_scaler_buffer);
         }
 
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kGradKeyBufferIdx] = grad_key_buffer != nullptr ? grad_key_buffer->address() : 0U;
-            runtime_args[kGradValueBufferIdx] = grad_value_buffer != nullptr ? grad_value_buffer->address() : 0U;
+            runtime_args[kGradKeyBufferIdx] = get_address_or_zero(grad_key_buffer);
+            runtime_args[kGradValueBufferIdx] = get_address_or_zero(grad_value_buffer);
         }
     });
 }

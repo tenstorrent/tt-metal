@@ -39,7 +39,8 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability = 0.0F,
-    const ttml::metal::ops::sdpa_bw::device::q::SDPABackwardQOutputs& outputs = {},
+    // Unset: grad_query and u_scaler, plus grad_gate and the gated dO when a gate is given.
+    const std::optional<ttml::metal::ops::sdpa_bw::device::q::SDPABackwardQOutputs>& outputs = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_u_scaler = std::nullopt,
     const std::optional<ttnn::Tensor>& gate = std::nullopt,
