@@ -223,25 +223,20 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
         ids = tok.encode_chat([{"role": "user", "content": prompt}])
         gen = int(os.environ.get("GLM53_MK_GEN", "24"))
         assert len(ids) + gen < SEQ, (len(ids), gen, SEQ)
-        kv2 = backend.allocate_kv_cache(max_batch=B, max_seq_len=SEQ)  # fresh state / cache / page table
-        io2 = backend.allocate_decode_io(kv2)
-        backend.write(io2.cur_pos, torch.zeros(B, dtype=torch.int32))
+        # the SAME cache, io and decode trace (a second cache's L1 tensors lower the L1 floor under the DSA readers'
+        # CBs on the 32-chip replica): every slot reset, positions back to 0, the prompt tokens written between replays
+        backend.reset_all(kv)
+        backend.write(io.cur_pos, torch.zeros(B, dtype=torch.int32))
         t0 = time.perf_counter()
-        # the first prompt token runs eagerly: the new cache's tables / programs are written on the first step, and
-        # host writes are refused under a trace capture
-        backend.write(io2.tokens, torch.full((B,), int(ids[0]), dtype=torch.int32))
-        backend.decode(io2, kv2, B)
-        ttnn.synchronize_device(mesh_device)
-        tr2 = backend.capture_decode(io2, kv2, B)
         out = []
-        for t in ids[1:]:
-            backend.write(io2.tokens, torch.full((B,), int(t), dtype=torch.int32))
-            backend.replay(tr2)
-        sampled = backend.read(io2.sampled)
+        for t in ids:
+            backend.write(io.tokens, torch.full((B,), int(t), dtype=torch.int32))
+            backend.replay(tr)
+        sampled = backend.read(io.sampled)
         out.append(int(sampled[0]))
         for _ in range(gen - 1):
-            backend.replay(tr2)  # the device sampler feeds io.tokens
-            sampled = backend.read(io2.sampled)
+            backend.replay(tr)  # the device sampler feeds io.tokens
+            sampled = backend.read(io.sampled)
             out.append(int(sampled[0]))
             if tok.is_stop_token(out[-1]):
                 break
