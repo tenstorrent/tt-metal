@@ -29,6 +29,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -52,6 +53,62 @@ ttnn::Tensor pad_lse_to_intermediates_layout(const ttnn::Tensor& lse) {
 }
 
 }  // namespace
+
+namespace detail {
+
+// Online-softmax merge in four device ops. At short sequence lengths ring attention is
+// host-dispatch bound, so every op issued per ring step counts. With
+//   L = running_lse, l_i = this step's lse, O = output_accum, O_i = step_output:
+//   L' = logaddexp(L, l_i)
+//   w  = exp(l_i - L')                    the share of the combined normalizer this step holds
+//   O' = O * exp(L - L') + O_i * w        = O + w * (O_i - O),   since exp(L - L') = 1 - w
+// i.e. the update is a lerp from the accumulator towards the step output.
+//
+// "No contribution" is an lse of -inf (the running lse starts there, and steps the causal
+// schedule skips keep the -inf the caller pre-filled):
+//   L = -inf, l_i finite:  L' = l_i, w = exp(0) = 1, O' = O_i (O is the zero-initialized accumulator)
+//   l_i = -inf, L finite:  L' = L,   w = exp(-inf) = 0, O' = O exactly
+// Both -inf gives L' = -inf and a NaN O'; the ring schedule never produces it, since step 0
+// always computes the diagonal block.
+void merge_partial_into(
+    ttnn::Tensor& output_accum,
+    ttnn::Tensor& running_lse,
+    const ttnn::Tensor& step_output,
+    const ttnn::Tensor& step_intermediates) {
+    // 1. lse of this step: column 0 of the (B, H, S, 32) FP32 intermediates.
+    const auto [batch, heads, seq_len, width] = step_intermediates.logical_shape().to_array_4D();
+    const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
+    const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
+    const ttsl::SmallVector<uint32_t> lse_end = {batch, heads, seq_len, 1};
+    const ttnn::Tensor lse_chunk = ttnn::slice(step_intermediates, lse_start, lse_end, slice_step);
+
+    // 2. L' = logaddexp(L, l_i). A single fused SFPU kernel evaluating the stable form
+    //    max(a, b) + log1p(exp(-|a - b|)) (no overflow for large lse), with
+    //    logaddexp(-inf, x) = x.
+    ttnn::Tensor new_lse = ttnn::logaddexp(running_lse, lse_chunk);
+
+    // 3. w = exp(l_i - L'): subtract with exp fused as a post-activation (one kernel; 0.0f
+    //    selects the accurate exp, ttnn::exp's default).
+    using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
+    const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, 0.0F};
+    const ttnn::Tensor new_weight = ttnn::subtract(
+        lse_chunk,
+        new_lse,
+        /*output_dtype=*/std::nullopt,
+        /*memory_config=*/std::nullopt,
+        /*output=*/std::nullopt,
+        /*post_activations=*/ttsl::Span<const EltwiseUnary>(&exp_act, 1));
+
+    // 4. O' = O + w * (O_i - O). The ternary lerp kernel broadcasts the (B, H, S, 1) weight
+    //    along the head dim and takes the bf16 step output as is: every operand is unpacked
+    //    into an FP32 Dest (bf16 -> FP32 is exact) and the output takes the accumulator's FP32
+    //    dtype, so the whole combine stays FP32 without a separate typecast. The FP32
+    //    accumulator matters: backward consumes the saved O in u = rowsum(dO * O).
+    output_accum = ttnn::lerp(output_accum, step_output, new_weight);
+    running_lse = std::move(new_lse);
+}
+
+}  // namespace detail
 
 autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& query,
@@ -146,32 +203,8 @@ autograd::TensorPtr ring_attention_sdpa(
             output_tensor,
             intermediate_tensor);
 
-        // Extract logsumexp from column 0 of intermediate
-        // Intermediate shape: (B, H, S, 32) FP32, logsumexp in column 0
-        const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-        const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
-        const ttsl::SmallVector<uint32_t> lse_end = {batch_num, heads, seq_len_local, 1};
-        ttnn::Tensor lse_chunk = ttnn::slice(intermediate_tensor, lse_start, lse_end, slice_step);
-
-        // Combine via logaddexp: new_lse = log(exp(global_lse) + exp(lse_chunk))
-        // Numerically stable form: m = max(a,b); result = m + log(exp(a-m) + exp(b-m))
-        ttnn::Tensor m = ttnn::maximum(global_lse, lse_chunk);
-        ttnn::Tensor exp_global = ttnn::exp(ttnn::subtract(global_lse, m));
-        ttnn::Tensor exp_chunk = ttnn::exp(ttnn::subtract(lse_chunk, m));
-        ttnn::Tensor new_lse = ttnn::add(m, ttnn::log(ttnn::add(exp_global, exp_chunk)));
-
-        // Weights for combining outputs: w = exp(lse - new_lse) = Z_i / Z_combined
-        ttnn::Tensor old_weight = ttnn::exp(ttnn::subtract(global_lse, new_lse));
-        ttnn::Tensor new_weight = ttnn::exp(ttnn::subtract(lse_chunk, new_lse));
-
-        // Weighted combination of accumulated output and this step's output.
-        // The step output is upcast so the whole combine stays FP32; mixed-dtype
-        // binary ops would otherwise round the products back to bf16.
-        ttnn::Tensor step_output_fp32 = ttnn::typecast(output_tensor, ttnn::DataType::FLOAT32);
-        output_accum =
-            ttnn::add(ttnn::multiply(output_accum, old_weight), ttnn::multiply(step_output_fp32, new_weight));
-
-        global_lse = new_lse;
+        // Fold this step's partial result into the FP32 accumulator and the running lse.
+        detail::merge_partial_into(output_accum, global_lse, output_tensor, intermediate_tensor);
 
         if (step < ring_size - 1) {
             k_current = ttnn_fixed::distributed::ring_shift(

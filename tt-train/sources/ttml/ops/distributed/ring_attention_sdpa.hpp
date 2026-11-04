@@ -52,4 +52,23 @@ autograd::TensorPtr ring_attention_sdpa(
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
     const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
 
+namespace detail {
+
+/**
+ * Online-softmax merge of one ring step's partial attention result (exposed for testing).
+ *
+ * @param output_accum (B, H, S, D) FP32 accumulator, updated in place
+ * @param running_lse (B, H, S, 1) FP32 running logsumexp (-inf = nothing merged yet), updated in place
+ * @param step_output (B, H, S, D) this step's normalized attention output (any float dtype)
+ * @param step_intermediates (B, H, S, 32) FP32 SDPA intermediates, logsumexp in column 0
+ *             (-inf = the step contributes nothing)
+ */
+void merge_partial_into(
+    ttnn::Tensor& output_accum,
+    ttnn::Tensor& running_lse,
+    const ttnn::Tensor& step_output,
+    const ttnn::Tensor& step_intermediates);
+
+}  // namespace detail
+
 }  // namespace ttml::ops::distributed
