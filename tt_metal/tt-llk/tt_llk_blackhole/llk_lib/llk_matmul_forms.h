@@ -1876,6 +1876,9 @@ inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
     // LoFi, 32-bit DEST, a 2x2 block of one k step of a Float32 input to Float16_b (static throttle 2): the per-row unpack reads 0.30 cycles behind main, the
     // hoisted tile form 0.08 ahead
     {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 2, 2, 2, true, 'h', false, 1, 2},
+    // LoFi, 32-bit DEST, a 2x1 block of one k step against a Bfp8_b in0 to Bfp4_b: the table's hoisted rows form reads 0.4 cycles behind main at every code
+    // position, the hoisted tile form 0.4 ahead
+    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 1, 2, false, 'h', false, 1, 2, true},
 };
 
 template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, int sync, std::uint32_t h, std::uint32_t w, bool several_blocks = false, std::uint32_t dest_sections = 1>
