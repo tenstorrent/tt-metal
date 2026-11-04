@@ -129,18 +129,13 @@ void kernel_main() {
 #else
             uint32_t src = expert_base + c * col_bytes + k0 * src_step;
 #endif
-            // the slice is contiguous: at most two packets per column (8 tiles = 8704 B fits a NOC burst, then the
-            // rest)
+            // the slice is contiguous: packets of PKT_TILES tiles (8 x 1088 B fits a NOC burst), the last one shorter
             noc_async_read_set_trid(trid);
-            {
-                const uint32_t t1 = ks < PKT_TILES ? ks : PKT_TILES;
-                noc_async_read_one_packet_set_state<true>(w_base, t1 * tile_bytes, vc);
-                noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
-                if (ks > PKT_TILES) {
-                    noc_async_read_one_packet_set_state<true>(w_base, (ks - PKT_TILES) * tile_bytes, vc);
-                    noc_async_read_one_packet_with_state_with_trid(
-                        w_base, src + PKT_TILES * tile_bytes, l1_write + PKT_TILES * tile_bytes, trid);
-                }
+            for (uint32_t t = 0; t < ks; t += PKT_TILES) {
+                const uint32_t nt = (ks - t < PKT_TILES) ? ks - t : PKT_TILES;
+                noc_async_read_one_packet_set_state<true>(w_base, nt * tile_bytes, vc);
+                noc_async_read_one_packet_with_state_with_trid(
+                    w_base, src + t * tile_bytes, l1_write + t * tile_bytes, trid);
             }
             l1_write += slot_bytes;
             ++issued;
