@@ -1889,7 +1889,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         TT_FATAL(sum_df == tt::DataFormat::Float32, "fp32_output_accumulation requires FP32 softmax sums");
         unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         const auto add_alias = [&](uint32_t primary_cb, const char* define_name) {
-            auto it = std::find_if(desc.cbs.begin(), desc.cbs.end(), [&](const CBDescriptor& cb) {
+            auto* it = std::find_if(desc.cbs.begin(), desc.cbs.end(), [&](const CBDescriptor& cb) {
                 return cb.format_descriptors[0].buffer_index == primary_cb;
             });
             TT_FATAL(it != desc.cbs.end(), "SDPA CB {} not found for its FP32 alias", primary_cb);
