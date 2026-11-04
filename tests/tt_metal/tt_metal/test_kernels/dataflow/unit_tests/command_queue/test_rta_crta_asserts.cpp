@@ -21,6 +21,7 @@
 
 #ifdef ARCH_QUASAR
 #include "risc_common.h"
+#include "internal/local_mem/address_access.h"
 thread_local extern uint32_t rta_count;
 thread_local extern uint32_t crta_count;
 #else
@@ -64,7 +65,8 @@ static FORCE_INLINE void write_args_to_l1(uint32_t l1_write_addr) {
     }
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    flush_l2_cache_line(reinterpret_cast<uintptr_t>(ptr.get_address()));
+    // Raw address: flush_l2_cache_line is kept on purpose (single-line flush of the raw address).
+    flush_l2_cache_line(static_cast<uintptr_t>(local_mem::detail::AddressAccess::address(ptr)));
 #endif
 }
 
@@ -81,8 +83,8 @@ void core_agnostic_main() {
     constexpr uint32_t num_dms = get_arg(args::num_dms);
     constexpr uint32_t l1_sync_addr = get_arg(args::l1_sync_addr);
     CoreLocalMem<uint32_t> l1_sync_ptr(l1_sync_addr);
-    __atomic_add_fetch(l1_sync_ptr.get_unsafe_ptr(), 1, __ATOMIC_RELAXED);
-    while (__atomic_load_n(l1_sync_ptr.get_unsafe_ptr(), __ATOMIC_ACQUIRE) != num_dms) {
+    __atomic_add_fetch(&l1_sync_ptr[0], 1, __ATOMIC_RELAXED);
+    while (__atomic_load_n(&l1_sync_ptr[0], __ATOMIC_ACQUIRE) != num_dms) {
     }
 #elif defined(MAX_RTA_IDX) || defined(MAX_CRTA_IDX)
     // Assert test: only specified dm_id executes, others exit early
