@@ -413,3 +413,7 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   Structural fix (next build): split K over each bank's 11 cores -- every core streams a 372-row slice of every
   active expert's pair (x slice 23 KB per core, 11x less x traffic, no expert-rank imbalance, 11x parallel streaming
   per expert) and the bank's partial [32 x 64] products are summed on an owner core before the SwiGLU.
+- 2026-11-04 07:54 note: `test_moe_persistent.py` at T = 1 fails its three-op golden on chip 6 with a NaN in the
+  device output (chips 0-5 pass; the model's 8-user gates are bit-exact). Likely an expert-output row of a user with
+  no routed expert on that chip left uninitialised in `out` and summed by the reduce; to be checked (the fused op's
+  `out` initialisation) before the split-K build, since split-K rewrites that path.
