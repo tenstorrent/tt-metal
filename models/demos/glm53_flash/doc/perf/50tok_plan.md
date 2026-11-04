@@ -276,3 +276,11 @@ DP discovery on the Galaxy's columns, one rank served, then four.
 * 01:59 **fused DSA decode state on top** (`gate84_B4_dsastate`: fabric gather + all-reduce + `GLM53_DSA_DECODE_STATE=1`):
   38.27 ms (-0.84 vs the same knobs with the composite state), S = 32 chain pcc 0.891 (0.913 composite: inside the
   band), prefill chain unchanged. A -0.8 ms rounding-moving candidate for the same eval gate as the combine.
+* 02:08 **the S = 32 chain's noise band** (`gate84_B4_ccl`: the fabric gather with the composite's generic
+  `ttnn.all_reduce` combine instead of the reduce-scatter + all-gather form): pcc min 0.809, median 0.862, max 0.863
+  (per-user spread, the generic composite is not bit-identical across rows), and the same decode ids as the fabric
+  combine. Summation-order variants of the same math span 0.79-0.91 on this metric (rs + ag 0.878, generic 0.81-0.86,
+  fabric combine 0.826, fabric all-reduce 0.913, all three fabric 0.794), so it does not grade rounding-moving
+  programs. Verdict for the fabric exchange: correct to one bf16 ulp per call (1386 calls), prefill chain unchanged,
+  served smoke coherent; the served GPQA Diamond run with the three knobs (`served_fabric_gpqa`, reference 90 on the
+  tip) decides the defaults.
