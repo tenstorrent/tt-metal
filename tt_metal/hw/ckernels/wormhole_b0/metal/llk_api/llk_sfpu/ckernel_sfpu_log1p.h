@@ -134,8 +134,28 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  * @tparam ITERATIONS Number of iterations for given face
  */
+bool bf16_dest_log1p();
+template <int ITERATIONS>
+void calculate_log1p_bf16();
+void init_log1p_bf16();
+// Whether BF16 DEST runs the generated log1p kernel as one call over the whole tile.
+inline constexpr bool log1p_bf16_whole_tile = true;
+// Sets up the generated BF16 log1p kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void log1p_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_log1p_bf16();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
+    if constexpr (!is_fp32_dest_acc_en && !FAST_APPROX && ITERATIONS == 32) {
+        if (bf16_dest_log1p()) {
+            calculate_log1p_bf16<ITERATIONS>();
+            return;
+        }
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
@@ -175,3 +195,5 @@ inline void log1p_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#include "ckernel_sfpu_log1p_bf16.h"
