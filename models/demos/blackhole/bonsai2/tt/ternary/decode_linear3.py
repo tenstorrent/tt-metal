@@ -92,6 +92,7 @@ def reference(x_rot: torch.Tensor, t_kn: np.ndarray, s_nb: np.ndarray) -> torch.
 # (17408 x 4160: 68.9 vs 67.6 us; the stream reaches 356 GB/s either way), and the gate/up GLU pairs built on it
 # were slower (162.7 us vs 2 x 75).
 PAGE_SPLIT = os.environ.get("BONSAI_PAGE_SPLIT", "0") == "1"
+COMMON_ARGS = os.environ.get("BONSAI_COMMON_ARGS", "1") == "1"  # one set of runtime args for all cores
 BATCH4 = os.environ.get("BONSAI_BATCH4", "1") == "1"  # 4 kbs per SFPU pass: 17408 x 5120 89.7 -> 78.2 us
 
 
@@ -237,6 +238,17 @@ class TernaryDecodeLinear3:
                 [out2.buffer_address()] if split else []
             )
             cp[cc.x][cc.y] = [n]
+        rd_c, wr_c, cp_c = [], [], []
+        if COMMON_ARGS:
+            # Same args on every core (kernels/core_span.hpp): the dispatcher writes them once, not once per core.
+            s_addr = 0 if self.inline_scales else self.s.buffer_address()
+            span = [Nt, cores, grid.x, unit]
+            rd_c = [x_rot.buffer_address(), s_addr, self.w.buffer_address()] + span + [x_rot.shape[0]]
+            wr_c = [self.w.buffer_address(), out.buffer_address()] + span + [out2.buffer_address() if split else 0]
+            cp_c = span
+            rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            dm_defines = list(dm_defines) + [("COMMON_ARGS", "1")]
+            extra_defines = list(extra_defines) + [("COMMON_ARGS", "1")]
         rd_ct = [Kt, KB, ppr, inflight]
         for t in (x_rot, self.w if self.inline_scales else self.s, self.w):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -256,6 +268,7 @@ class TernaryDecodeLinear3:
                     + [("S_TILE_BYTES", "128" if self.scale_fp32 else "64")]
                     + ([("S_RECORD_BYTES", str(-(-KB // 32) * 2048))] if self.group16 else []),
                     runtime_args=rd,
+                    common_runtime_args=rd_c,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -267,6 +280,7 @@ class TernaryDecodeLinear3:
                     + [("OUT_PER_NT", "3" if dbg else "1"), ("SPLIT_NT", str(split // TILE))]
                     + [("S_PER_NT", str(-(-KB // 32) if self.group16 else KB))],
                     runtime_args=wr,
+                    common_runtime_args=wr_c,
                     config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -280,6 +294,7 @@ class TernaryDecodeLinear3:
                     + list(extra_defines)
                     + ([("DBG_FIRST_KB", "1")] if dbg else []),
                     runtime_args=cp,
+                    common_runtime_args=cp_c,
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, dst_full_sync_en=True
                     ),

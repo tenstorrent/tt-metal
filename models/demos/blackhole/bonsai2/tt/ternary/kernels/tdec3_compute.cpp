@@ -11,6 +11,7 @@
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/pack.h"
+#include "core_span.hpp"
 #include "api/compute/compute_kernel_api.h"  // silu_tile_init
 #include "api/debug/kernel_profiler.hpp"
 
@@ -229,7 +230,19 @@ ALWI void scale_srca() {
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t KB = get_compile_time_arg_val(1);
+#ifdef COMMON_ARGS
+    // common args: Nt, ncores, grid_x, unit
+    uint32_t first_nt_unused, num_nt;
+    core_span(
+        get_common_arg_val<uint32_t>(0),
+        get_common_arg_val<uint32_t>(1),
+        get_common_arg_val<uint32_t>(2),
+        get_common_arg_val<uint32_t>(3),
+        first_nt_unused,
+        num_nt);
+#else
     const uint32_t num_nt = get_arg_val<uint32_t>(0);
+#endif
 
     {
         DeviceZoneScopedN("TD-START");

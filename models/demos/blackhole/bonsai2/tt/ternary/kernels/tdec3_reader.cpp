@@ -5,14 +5,31 @@
 // bank took 18.7 us) into c_0 and this core's fp16 scale records (KB tiles of [1,32] per output tile column) into
 // c_2, then streams the even output-tile weight records into c_1 (tdec_stream.hpp).
 #include "tdec_stream.hpp"
+#include "core_span.hpp"
 
 void kernel_main() {
+#ifdef COMMON_ARGS
+    // common args: x, s, w, Nt, ncores, grid_x, unit, copies
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t s_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(2);
+    uint32_t first_nt, num_nt;
+    core_span(
+        get_common_arg_val<uint32_t>(3),
+        get_common_arg_val<uint32_t>(4),
+        get_common_arg_val<uint32_t>(5),
+        get_common_arg_val<uint32_t>(6),
+        first_nt,
+        num_nt);
+    const uint32_t x_copy = core_index(get_common_arg_val<uint32_t>(5)) % get_common_arg_val<uint32_t>(7);
+#else
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t s_addr = get_arg_val<uint32_t>(1);
     const uint32_t w_addr = get_arg_val<uint32_t>(2);
     const uint32_t first_nt = get_arg_val<uint32_t>(3);
     const uint32_t num_nt = get_arg_val<uint32_t>(4);
     const uint32_t x_copy = get_arg_val<uint32_t>(5);  // which DRAM-bank copy of x' this core reads
+#endif
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t KB = get_compile_time_arg_val(1);
     constexpr uint32_t ppr = get_compile_time_arg_val(2);
@@ -54,6 +71,6 @@ void kernel_main() {
 #ifdef PAGE_SPLIT
     stream_pages<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0);
 #else
-    stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0);
+    stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy);
 #endif
 }

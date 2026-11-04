@@ -3,6 +3,7 @@
 // Ternary decode linear v3, writer (BRISC): streams the odd output-tile weight records into c_6 (tdec_stream.hpp),
 // then writes this core's output tiles.
 #include "tdec_stream.hpp"
+#include "core_span.hpp"
 #ifndef OUT_PER_NT
 #define OUT_PER_NT 1
 #endif
@@ -12,10 +13,26 @@
 #endif
 
 void kernel_main() {
+#ifdef COMMON_ARGS
+    // common args: w, out, Nt, ncores, grid_x, unit, out2
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
+    uint32_t first_nt, num_nt;
+    core_span(
+        get_common_arg_val<uint32_t>(2),
+        get_common_arg_val<uint32_t>(3),
+        get_common_arg_val<uint32_t>(4),
+        get_common_arg_val<uint32_t>(5),
+        first_nt,
+        num_nt);
+#define OUT2_ADDR get_common_arg_val<uint32_t>(6)
+#else
     const uint32_t w_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t first_nt = get_arg_val<uint32_t>(2);
     const uint32_t num_nt = get_arg_val<uint32_t>(3);
+#define OUT2_ADDR get_arg_val<uint32_t>(5)
+#endif
     constexpr uint32_t ppr = get_compile_time_arg_val(0);
     constexpr uint32_t NB = get_compile_time_arg_val(1);
     constexpr auto w_args = TensorAccessorArgs<2>();
@@ -42,7 +59,7 @@ void kernel_main() {
     const uint32_t bytes = get_tile_size(cb_out);
     const auto out = TensorAccessor(out_args, out_addr, bytes);
 #if SPLIT_NT > 0
-    const auto out2 = TensorAccessor(out2_args, get_arg_val<uint32_t>(5), bytes);
+    const auto out2 = TensorAccessor(out2_args, OUT2_ADDR, bytes);
 #endif
 #ifdef GLU_PAIRS
     // One output tile per (gate, up) record pair.

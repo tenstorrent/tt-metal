@@ -10,7 +10,8 @@
 #include "api/dataflow/dataflow_api.h"
 
 template <uint32_t ppr, uint32_t NB, typename Accessor>
-FORCE_INLINE void stream_records(uint32_t cb, const Accessor& w, uint32_t first_nt, uint32_t num_nt, uint32_t parity) {
+FORCE_INLINE void stream_records(
+    uint32_t cb, const Accessor& w, uint32_t first_nt, uint32_t num_nt, uint32_t parity, uint32_t bank = 0) {
     constexpr uint32_t PAGE = 4096;
     constexpr uint32_t CBP = PAGE / 256;
     const uint32_t cb_base = get_write_ptr(cb);
@@ -29,7 +30,12 @@ FORCE_INLINE void stream_records(uint32_t cb, const Accessor& w, uint32_t first_
             cb_reserve_back(cb, (count + 1) * CBP);
             noc_async_read_set_trid(trid + 1);
 #ifndef FAKE_STREAM
+#ifdef BANK_TEST
+            // timing only: every page from one DRAM bank (pages bank, bank + 8, ...); the data is wrong
+            noc_async_read(w.get_noc_addr(bank + 8 * ((page0 + j) / 8)), l1, PAGE);
+#else
             noc_async_read(w.get_noc_addr(page0 + j), l1, PAGE);
+#endif
 #endif
             trid = (trid + 1) % NB;
             ++count;

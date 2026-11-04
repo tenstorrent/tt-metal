@@ -134,7 +134,7 @@ def test_tdec3_bal(device, K, N):
         x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
     for _ in range(10):
-        lin(act, extra_defines=ed, dm_defines=[d for d in ed if d[0] == "FAKE_STREAM"])
+        lin(act, extra_defines=ed, dm_defines=[d for d in ed if d[0] in ("FAKE_STREAM", "BANK_TEST")])
     ttnn.synchronize_device(device)
     print(f"reinit=bal K={K} N={N}")
 
