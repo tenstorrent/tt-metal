@@ -17,7 +17,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
-from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
+from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer, sharded_decode_rms_norm
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
@@ -608,6 +608,9 @@ class Qwen36Model:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
             return self.norm(x, mode=Mode.DECODE, norm_config=nc)
+        if x.shape[-2] <= ttnn.TILE_SIZE:
+            # One chip: the same single-core norm; sharded over 40 cores, DRAM out as the LM head read it before.
+            return sharded_decode_rms_norm(self.norm, x, self.args.dim, ttnn.DRAM_MEMORY_CONFIG)
         return self.norm(x, mode=Mode.DECODE)
 
     @classmethod

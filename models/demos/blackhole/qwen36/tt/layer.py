@@ -15,6 +15,49 @@ from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
+_DECODE_NORM_CORES = 40
+_decode_norm_cfgs = {}
+
+
+def sharded_decode_rms_norm(norm, x, dim, out_memory_config=ttnn.L1_MEMORY_CONFIG):
+    """RMSNorm of a one-tile-row decode activation on one chip, width-sharded over 40 cores.
+
+    The interleaved rms_norm runs a single tile row on one core (81 us at dim 5120). 40 cores x 4 tiles: the
+    32-core act_shard_hidden layout (5 tiles each) computes the same norm to 4e-5 in mean logits correlation
+    but flipped top-1 at 4 of the accuracy gate's 100 positions (79 vs 84). Returns `out_memory_config`
+    (interleaved) so the consumers' layouts are unchanged."""
+    if dim not in _decode_norm_cfgs:
+        shard = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, dim // _DECODE_NORM_CORES),
+            core_grid=ttnn.CoreGrid(x=8, y=_DECODE_NORM_CORES // 8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        block_w = dim // _DECODE_NORM_CORES // ttnn.TILE_SIZE
+        program = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, _DECODE_NORM_CORES // 8),
+            subblock_w=next(w for w in (4, 3, 2, 1) if block_w % w == 0),
+            block_h=1,
+            block_w=block_w,
+            inplace=False,
+        )
+        _decode_norm_cfgs[dim] = (shard, program)
+    shard, program = _decode_norm_cfgs[dim]
+    xs = ttnn.to_memory_config(x, shard)
+    out = norm(
+        xs,
+        mode=Mode.DECODE,
+        in_sharded=True,
+        out_sharded=True,
+        norm_config={"sharded_program_config": program, "sharded_output_config": shard},
+    )
+    if xs is not x:
+        ttnn.deallocate(xs)
+    inter = ttnn.sharded_to_interleaved(out, out_memory_config)
+    ttnn.deallocate(out)
+    return inter
+
 
 class _FusedDistRMSNorm(RMSNorm):
     """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
@@ -281,7 +324,11 @@ class Qwen36DecoderLayer:
             _attn_norm_config = _ff_norm_config = (
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+        single_decode = self.num_devices == 1 and mode == "decode" and x.shape[-2] <= ttnn.TILE_SIZE
+        if single_decode:
+            attn_input = sharded_decode_rms_norm(self.attention_norm, x, self.args.dim)
+        else:
+            attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
@@ -385,7 +432,11 @@ class Qwen36DecoderLayer:
             h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
-        ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
+        if single_decode:
+            # Interleaved L1: the single-device MLP's decode matmuls mcast an interleaved in0.
+            ff_input = sharded_decode_rms_norm(self.ffn_norm, h, self.args.dim)
+        else:
+            ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
         ttnn.deallocate(ff_input)
