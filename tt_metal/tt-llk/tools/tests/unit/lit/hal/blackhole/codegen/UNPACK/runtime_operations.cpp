@@ -2,75 +2,190 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %t/codegen.cpp -o %t/codegen.o
+// RUN: %{blackhole_objdump} -drz %t/codegen.o > %t/codegen.dump
+// RUN: %{blackhole_compare_codegen} %t/codegen.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %t/asserts.cpp -o %t/assert.o
+// RUN: %{blackhole_objdump} -d %t/assert.o | FileCheck %s --check-prefix=ASSERT
+
+// Compare each HAL function with its adjacent reference_ function. Disable
+// identical-code folding so both bodies are emitted independently.
+// codegen.cpp is compiled without LLK_ASSERT so runtime paths contain only the
+// issued instruction; asserts.cpp checks the runtime operand asserts.
+
+//--- common.h
+#pragma once
+
+#include <cstdint>
 
 #include "hal/unpack.h"
 
 namespace unpack = hal::unpack;
 
-// A runtime descriptor is encoded in a register and pushed through the
-// instruction buffer; the UNPACR engine select lands in bit 23.
+//--- codegen.cpp
+#include "common.h"
 
+// A constant descriptor passed to the runtime overload still folds to an
+// immediate instruction.
 extern "C" __attribute__((noinline, used)) void run_constant_descriptor()
 {
     unpack::run(unpack::DataTransfer {.engine = unpack::Engine::Unpacker1, .handoff = unpack::SourceHandoff::Keep});
 }
 
-// CHECK-LABEL: <run_constant_descriptor>:
-// CHECK-DAG: lui [[OP:a[0-7]]],0x42800
-// CHECK-DAG: addi [[OP]],[[OP]],129
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: sw [[OP]],0({{a[0-7]}})
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_run_constant_descriptor()
+{
+    TTI_UNPACR(
+        1 /*Unpack_block_selection*/,
+        0 /*AddrMode*/,
+        0 /*CfgContextCntInc*/,
+        0 /*CfgContextId*/,
+        0 /*AddrCntContextId*/,
+        1 /*OvrdThreadId*/,
+        0 /*SetDatValid*/,
+        0 /*srcb_bcast*/,
+        0 /*ZeroWrite2*/,
+        0 /*AutoIncContextID*/,
+        0 /*RowSearch*/,
+        0 /*SearchCacheFlush*/,
+        1 /*Last*/);
+}
 
-// An out-of-range engine reaches the LLK assertion before the instruction is issued.
-extern "C" __attribute__((noinline, used)) void run_runtime_engine(unpack::Engine engine)
+// Runtime descriptors are encoded in a register and pushed through the
+// instruction buffer.
+
+extern "C" __attribute__((noinline, used)) void run_runtime_engine(const unpack::Engine engine)
 {
     unpack::run(unpack::DataTransfer {.engine = engine, .handoff = unpack::SourceHandoff::FlipAndSetDataValid});
 }
 
-// CHECK-LABEL: <run_runtime_engine>:
-// CHECK: li [[MAX:a[0-7]]],1
-// CHECK-NEXT: bltu [[MAX]],a0,{{[0-9a-f]+}} <[[ASSERT:.L[0-9]+]]>
-// CHECK-DAG: lui [[BASE:a[0-7]]],0x42000
-// CHECK-DAG: addi [[OP:a[0-7]]],[[BASE]],193
-// CHECK-DAG: slli [[ENGINE:a[0-7]]],a0,0x17
-// CHECK-DAG: add [[WORD:a[0-7]]],[[ENGINE]],[[OP]]
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: sw [[WORD]],0({{a[0-7]}})
-// CHECK-NEXT: ret
-// CHECK: <[[ASSERT]]>:
-// CHECK-NEXT: ebreak
+extern "C" __attribute__((noinline, used)) void reference_run_runtime_engine(const unpack::Engine engine)
+{
+    TT_UNPACR(
+        static_cast<std::uint32_t>(engine),
+        0 /*AddrMode*/,
+        0 /*CfgContextCntInc*/,
+        0 /*CfgContextId*/,
+        0 /*AddrCntContextId*/,
+        1 /*OvrdThreadId*/,
+        1 /*SetDatValid*/,
+        0 /*srcb_bcast*/,
+        0 /*ZeroWrite2*/,
+        0 /*AutoIncContextID*/,
+        0 /*RowSearch*/,
+        0 /*SearchCacheFlush*/,
+        1 /*Last*/);
+}
 
-extern "C" __attribute__((noinline, used)) void run_runtime_context_counter_increment(unpack::Engine engine)
+extern "C" __attribute__((noinline, used)) void run_runtime_context_counter_increment(const unpack::Engine engine)
 {
     unpack::run(unpack::ContextCounterIncrement {engine});
 }
 
-// CHECK-LABEL: <run_runtime_context_counter_increment>:
-// CHECK: li [[MAX:a[0-7]]],1
-// CHECK-NEXT: bltu [[MAX]],a0,{{[0-9a-f]+}} <[[ASSERT:.L[0-9]+]]>
-// CHECK-DAG: slli [[ENGINE:a[0-7]]],a0,0x17
-// CHECK-DAG: lui [[OP:a[0-7]]],0x42002
-// CHECK-DAG: add [[WORD:a[0-7]]],[[ENGINE]],[[OP]]
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: sw [[WORD]],0({{a[0-7]}})
-// CHECK-NEXT: ret
-// CHECK: <[[ASSERT]]>:
-// CHECK-NEXT: ebreak
+extern "C" __attribute__((noinline, used)) void reference_run_runtime_context_counter_increment(const unpack::Engine engine)
+{
+    TT_UNPACR(
+        static_cast<std::uint32_t>(engine),
+        0 /*AddrMode*/,
+        1 /*CfgContextCntInc*/,
+        0 /*CfgContextId*/,
+        0 /*AddrCntContextId*/,
+        0 /*OvrdThreadId*/,
+        0 /*SetDatValid*/,
+        0 /*srcb_bcast*/,
+        0 /*ZeroWrite2*/,
+        0 /*AutoIncContextID*/,
+        0 /*RowSearch*/,
+        0 /*SearchCacheFlush*/,
+        0 /*Last*/);
+}
 
-// The flush scope is the multi-context-mode field at bit 7.
-extern "C" __attribute__((noinline, used)) void run_runtime_row_start_cache_flush(unpack::CacheScope scope)
+// The flush scope is the multi-context-mode field.
+extern "C" __attribute__((noinline, used)) void run_runtime_row_start_cache_flush(const unpack::CacheScope scope)
 {
     unpack::run(unpack::RowStartCacheFlush {unpack::Engine::Unpacker1, scope});
 }
 
-// CHECK-LABEL: <run_runtime_row_start_cache_flush>:
-// CHECK-DAG: lui [[BASE:a[0-7]]],0x42800
-// CHECK-DAG: addi [[OP:a[0-7]]],[[BASE]],2
-// CHECK-DAG: slli [[SCOPE:a[0-7]]],a0,0x7
-// CHECK-DAG: add [[WORD:a[0-7]]],[[SCOPE]],[[OP]]
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: sw [[WORD]],0({{a[0-7]}})
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_run_runtime_row_start_cache_flush(const unpack::CacheScope scope)
+{
+    TT_UNPACR(
+        1 /*Unpack_block_selection*/,
+        0 /*AddrMode*/,
+        0 /*CfgContextCntInc*/,
+        0 /*CfgContextId*/,
+        0 /*AddrCntContextId*/,
+        static_cast<std::uint32_t>(scope),
+        0 /*SetDatValid*/,
+        0 /*srcb_bcast*/,
+        0 /*ZeroWrite2*/,
+        0 /*AutoIncContextID*/,
+        0 /*RowSearch*/,
+        1 /*SearchCacheFlush*/,
+        0 /*Last*/);
+}
+
+//--- asserts.cpp
+#include "common.h"
+
+// Invalid runtime operands must trap before the instruction is issued; valid
+// boundaries must not trap.
+
+extern "C" void check_runtime_engine(const unpack::Engine engine)
+{
+    unpack::run(unpack::DataTransfer {.engine = engine, .handoff = unpack::SourceHandoff::FlipAndSetDataValid});
+}
+
+// ASSERT-LABEL: <check_runtime_engine>:
+// ASSERT: li [[LIMIT:a[0-7]]],1{{$}}
+// ASSERT-NEXT: bltu [[LIMIT]],a0,
+// ASSERT: ebreak
+
+extern "C" void reject_invalid_engine()
+{
+    unpack::run(unpack::DataTransfer {.engine = static_cast<unpack::Engine>(2), .handoff = unpack::SourceHandoff::FlipAndSetDataValid});
+}
+
+// ASSERT-LABEL: <reject_invalid_engine>:
+// ASSERT-NOT: {{[[:space:]]tt}}
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void check_runtime_context_counter_increment(const unpack::Engine engine)
+{
+    unpack::run(unpack::ContextCounterIncrement {engine});
+}
+
+// ASSERT-LABEL: <check_runtime_context_counter_increment>:
+// ASSERT: li [[LIMIT:a[0-7]]],1{{$}}
+// ASSERT-NEXT: bltu [[LIMIT]],a0,
+// ASSERT: ebreak
+
+extern "C" void reject_invalid_context_counter_engine()
+{
+    unpack::run(unpack::ContextCounterIncrement {static_cast<unpack::Engine>(2)});
+}
+
+// ASSERT-LABEL: <reject_invalid_context_counter_engine>:
+// ASSERT-NOT: {{[[:space:]]tt}}
+// ASSERT: ebreak
+// ASSERT: ret
+
+// A bool-backed scope has no invalid runtime value, so it adds no assert.
+extern "C" void accept_runtime_row_start_cache_flush(const unpack::CacheScope scope)
+{
+    unpack::run(unpack::RowStartCacheFlush {unpack::Engine::Unpacker1, scope});
+}
+
+// ASSERT-LABEL: <accept_runtime_row_start_cache_flush>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret
+
+extern "C" void accept_runtime_engine_boundaries()
+{
+    unpack::run(unpack::DataTransfer {.engine = unpack::Engine::Unpacker1, .handoff = unpack::SourceHandoff::FlipAndSetDataValid});
+    unpack::run(unpack::ContextCounterIncrement {unpack::Engine::Unpacker1});
+}
+
+// ASSERT-LABEL: <accept_runtime_engine_boundaries>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret

@@ -2,8 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -c %s -o %t.o
-// RUN: %{blackhole_objdump} -d %t.o | FileCheck %s --enable-var-scope
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -c %t/compile_time.cpp -o %t/compile_time.o
+// RUN: %{blackhole_objdump} -d %t/compile_time.o | FileCheck %s
+// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %t/codegen.cpp -o %t/codegen.o
+// RUN: %{blackhole_objdump} -drz %t/codegen.o > %t/codegen.dump
+// RUN: %{blackhole_compare_codegen} %t/codegen.dump
+
+// Compare each HAL function in codegen.cpp with its adjacent reference_
+// function. Disable identical-code folding so both bodies are emitted
+// independently.
+
+//--- common.h
+#pragma once
 
 #include <cstdint>
 
@@ -11,13 +22,16 @@
 
 namespace pack = hal::pack;
 
+//--- compile_time.cpp
+#include "common.h"
+
 extern "C" __attribute__((noinline, used)) void transfer_defaults()
 {
     pack::run<pack::DataTransfer {}>();
 }
 
 // CHECK-LABEL: <transfer_defaults>:
-// CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,0,0,0
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,0,0,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void transfer_every_field()
@@ -39,7 +53,7 @@ extern "C" __attribute__((noinline, used)) void transfer_every_field()
 }
 
 // CHECK-LABEL: <transfer_every_field>:
-// CHECK-NEXT: ttpacr 3,7,1,3,2,1,15,1,1,3,0,1
+// CHECK-NEXT: ttpacr 3,7,1,3,2,1,15,1,1,3,0,1{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void transfer_context_controls()
@@ -51,10 +65,10 @@ extern "C" __attribute__((noinline, used)) void transfer_context_controls()
 }
 
 // CHECK-LABEL: <transfer_context_controls>:
-// CHECK-NEXT: ttpacr 0,0,0,0,0,0,5,0,0,1,0,0
-// CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,2,0,0
-// CHECK-NEXT: ttpacr 0,1,0,0,0,0,0,0,0,0,0,1
-// CHECK-NEXT: ttpacr 0,6,0,0,0,0,0,0,0,0,0,0
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,5,0,0,1,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,2,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,1,0,0,0,0,0,0,0,0,0,1{{$}}
+// CHECK-NEXT: ttpacr 0,6,0,0,0,0,0,0,0,0,0,0{{$}}
 // CHECK-NEXT: ret
 
 // The value is staged in two 16-bit halves before the write consumes it.
@@ -65,10 +79,12 @@ extern "C" __attribute__((noinline, used)) void register_write()
     pack::run<pack::RegisterWrite {.address_slot = 3, .stream_id = 63}>();
 }
 
+// The load flavor's value (bits 18:3) and half select (bit 2) overlap the
+// write flavor's StreamId..Unused fields; objdump decodes them as those.
 // CHECK-LABEL: <register_write>:
-// CHECK-NEXT: 29024681 ttpacrsetreg
-// CHECK-NEXT: 291579b1 ttpacrsetreg
-// CHECK-NEXT: ttpacrsetreg 1,0,0,0,3,63,1,0
+// CHECK-NEXT: ttpacrsetreg 0,1,9,0,1,40,0,0{{$}}
+// CHECK-NEXT: ttpacrsetreg 0,1,85,3,2,27,0,0{{$}}
+// CHECK-NEXT: ttpacrsetreg 1,0,0,0,3,63,1,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void edge_window()
@@ -77,7 +93,7 @@ extern "C" __attribute__((noinline, used)) void edge_window()
 }
 
 // CHECK-LABEL: <edge_window>:
-// CHECK-NEXT: ttsetpkedgof 15,3,2,1
+// CHECK-NEXT: ttsetpkedgof 15,3,2,1{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void flush_and_clear()
@@ -87,9 +103,12 @@ extern "C" __attribute__((noinline, used)) void flush_and_clear()
 }
 
 // CHECK-LABEL: <flush_and_clear>:
-// CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,0,1,0
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,0,1,0{{$}}
 // CHECK-NEXT: ttclrexphist
 // CHECK-NEXT: ret
+
+//--- codegen.cpp
+#include "common.h"
 
 extern "C" __attribute__((noinline, used)) void store_encoded_operations(std::uint32_t* words)
 {
@@ -105,20 +124,38 @@ extern "C" __attribute__((noinline, used)) void store_encoded_operations(std::ui
     words[5]                         = pack::clear_exponent_histogram_operation();
 }
 
-// CHECK-LABEL: <store_encoded_operations>:
-// CHECK-DAG: lui [[PACR:a[0-7]]],0x41000
-// CHECK-DAG: addi [[TRANSFER:a[0-7]]],[[PACR]],769
-// CHECK-DAG: lui [[WRITE:a[0-7]]],0x4a800
-// CHECK-DAG: addi [[WRITE]],[[WRITE]],258
-// CHECK-DAG: lui [[VALUE:a[0-7]]],0x4a480
-// CHECK-DAG: addi [[VALUE]],[[VALUE]],-8
-// CHECK-DAG: lui [[WINDOW:a[0-7]]],0x1d001
-// CHECK-DAG: addi [[FLUSH:a[0-7]]],[[PACR]],2
-// CHECK-DAG: lui [[CLEAR:a[0-7]]],0x21000
-// CHECK-DAG: sw [[TRANSFER]],0(a0)
-// CHECK-DAG: sw [[WRITE]],4(a0)
-// CHECK-DAG: sw [[VALUE]],8(a0)
-// CHECK-DAG: sw [[WINDOW]],12(a0)
-// CHECK-DAG: sw [[FLUSH]],16(a0)
-// CHECK-DAG: sw [[CLEAR]],20(a0)
-// CHECK: ret
+// Value 0xffff sits in bits 18:3, which the write-flavor macro splits into
+// Unused = 0x7f, DisableStall = 3, AddrSel = 3 and StreamId = 0x3e.
+extern "C" __attribute__((noinline, used)) void reference_store_encoded_operations(std::uint32_t* words)
+{
+    words[0] = TT_OP_PACR(
+        0 /*CfgContext*/,
+        0 /*RowPadZero*/,
+        0 /*DstAccessMode*/,
+        0 /*AddrMode*/,
+        0 /*AddrCntContext*/,
+        0 /*ZeroWrite*/,
+        0b0011 /*ReadIntfSel*/,
+        0 /*OvrdThreadId*/,
+        0 /*Concat*/,
+        0 /*CtxtCtrl*/,
+        0 /*Flush*/,
+        1 /*Last*/);
+    words[1] = TT_OP_PACR_SETREG(1 /*Push*/, 0 /*ModeSel*/, 0 /*Unused*/, 0 /*DisableStall*/, 1 /*AddrSel*/, 0 /*StreamId*/, 1 /*Flush*/, 0 /*Last*/);
+    words[2] = TT_OP_PACR_SETREG(0 /*Push*/, 1 /*ModeSel*/, 0x7f /*Unused*/, 3 /*DisableStall*/, 3 /*AddrSel*/, 0x3e /*StreamId*/, 0 /*Flush*/, 0 /*Last*/);
+    words[3] = TT_OP_SETPKEDGOF(1 /*y_end*/, 0 /*y_start*/, 0 /*x_end*/, 0 /*x_start*/);
+    words[4] = TT_OP_PACR(
+        0 /*CfgContext*/,
+        0 /*RowPadZero*/,
+        0 /*DstAccessMode*/,
+        0 /*AddrMode*/,
+        0 /*AddrCntContext*/,
+        0 /*ZeroWrite*/,
+        0 /*ReadIntfSel*/,
+        0 /*OvrdThreadId*/,
+        0 /*Concat*/,
+        0 /*CtxtCtrl*/,
+        1 /*Flush*/,
+        0 /*Last*/);
+    words[5] = TT_OP_CLREXPHIST;
+}
