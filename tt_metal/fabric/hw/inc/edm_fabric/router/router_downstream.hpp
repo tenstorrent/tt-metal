@@ -108,29 +108,39 @@ constexpr uint32_t live_downstreams() {
 //   - several destinations: the buffers keep only what no forward changes (PartialPresetForwards);
 //   - no presets (CommandBuffers::forward_presets false): every forward writes its whole commands (StatelessForwards).
 
-// Whether VC's forwards can use VC0's destination preset: VC forwards to no router here, or it shares VC0's two
-// buffers and goes to VC0's downstreams.
+// Whether VC's forwards can use the destination preset of their forward buffer pair: no receiver channel here
+// forwards on VC (any_forwards_on_vc), or VC goes to the same downstreams as the VC that presets the pair (the lowest
+// VC forwarded on it, CommandBuffers::presets_forward_pair).
 template <size_t VC>
-constexpr bool shares_vc0_destination() {
+constexpr bool shares_pair_destination() {
     if constexpr (!any_forwards_on_vc(VC)) {
         return true;
     } else {
-        return ((CommandBuffers::vcs_on_forward_pair(0) >> VC) & 1u) != 0 &&
-               live_downstreams<VC>() == live_downstreams<0>();
+        constexpr size_t owner = lowest_bit(CommandBuffers::vcs_on_forward_pair(VC));
+        return live_downstreams<VC>() == live_downstreams<owner>();
+    }
+}
+// Whether VC's forwards go to one live downstream, the one its pair's preset holds (true where nothing forwards on VC).
+template <size_t VC>
+constexpr bool has_one_destination() {
+    if constexpr (!any_forwards_on_vc(VC)) {
+        return true;
+    } else {
+        return popcount(live_downstreams<VC>()) == 1 && shares_pair_destination<VC>();
     }
 }
 template <size_t... VCs>
-constexpr bool all_share_vc0_destination(std::index_sequence<VCs...>) {
-    return (shares_vc0_destination<VCs>() && ...);
+constexpr bool all_have_one_destination(std::index_sequence<VCs...>) {
+    return (has_one_destination<VCs>() && ...);
 }
 
-// Whether every forward here goes to one destination for the whole run: VC0 has one live downstream (every 1D router;
-// an E/W-facing 2D router inside a mesh), the router picks no downstream at run time (not intermesh, not on a mesh's
-// edge), and every forwarding VC shares VC0's destination. Otherwise every forwarding VC is partially preset, so no
-// VC's commands overwrite another's preset.
+// Whether every forward here goes to one destination for the whole run: the router picks no downstream at run time
+// (not intermesh, not on a mesh's edge), and every VC forwarded on has one live downstream (every 1D router; an
+// E/W-facing 2D router inside a mesh), the same as its forward buffer pair's preset. Otherwise every forwarding VC is
+// partially preset, so no VC's commands overwrite another's preset.
 constexpr bool forwards_have_one_destination = !is_intermesh_router && !is_intermesh_router_on_edge &&
-                                               !is_intramesh_router_on_edge && popcount(live_downstreams<0>()) == 1 &&
-                                               all_share_vc0_destination(std::make_index_sequence<MAX_NUM_VCS>{});
+                                               !is_intramesh_router_on_edge &&
+                                               all_have_one_destination(std::make_index_sequence<MAX_NUM_VCS>{});
 
 // Set once at init from the runtime args.
 struct DownstreamLink {
