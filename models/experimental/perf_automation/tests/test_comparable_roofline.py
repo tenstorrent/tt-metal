@@ -43,6 +43,14 @@ def test_inflation_still_rejected_regardless_of_floor():
     assert ok is False and "op_count_inflated" in reason
 
 
+def test_inflation_accepted_with_higher_tolerance():
+    # Structural edits that decompose ops legitimately inflate op count.
+    # The caller passes a higher tol to accept this.
+    inflated = _prof(40.0, 6000)  # 1.49x baseline ops
+    ok, reason = _comparable(BASE, inflated, tol=2.0, floor_ms=15.3)
+    assert ok is True and reason is None
+
+
 def test_backward_compat_no_floor_uses_op_count_heuristic():
     # with no roofline floor, the old conservative op-count-drop heuristic still guards.
     dropped = _prof(0.46, 5)

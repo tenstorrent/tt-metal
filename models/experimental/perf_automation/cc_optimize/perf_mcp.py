@@ -2672,7 +2672,12 @@ def measure_candidate() -> dict:
         floor_ms = roofline.residual_report(baseline, _ENV).get("modeled_floor_ms")
     except Exception:
         pass
-    ok, reason = _rm._comparable(baseline, prof, floor_ms=floor_ms, tp_regime=_TP_REGIME)
+    _tgt = _load_target()
+    _tgt_rung = (_tgt.get("rung") or "").lower()
+    _structural_tol = _tgt_rung in _STRUCTURAL_RUNGS or _tgt_rung in _GATE_KINDS
+    ok, reason = _rm._comparable(
+        baseline, prof, tol=2.0 if _structural_tol else 0.25, floor_ms=floor_ms, tp_regime=_TP_REGIME
+    )
     if not ok:
         return {"verdict": "REJECTED", "reason": reason, "device_ms": dev, "baseline_ms": base_dev}
     delta = round(base_dev - dev, 4)
