@@ -256,6 +256,11 @@ def soft_reset_bits(location: str = "0,0") -> int:
     return get_register_store(location, 0).read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
 
 
+# Quasar kernels mirror their completion flags into cluster control scratch registers (host_signal in boot.h), so
+# waiting on a kernel never reads its L1. ttsim keeps the L1 path.
+_QUASAR_HOST_SIGNAL_BASE = 0x030000B0  # TT_CLUSTER_CTRL_SCRATCH_28
+
+
 # boot.h host_signal on Wormhole and Blackhole: STREAM_SCRATCH_0 of overlay stream 0, where BRISC marks a launch done.
 _NOC_OVERLAY_START_ADDR = 0xFFB40000
 _HOST_SIGNAL_SCRATCH_INDEX = {
@@ -272,6 +277,25 @@ def launch_done_address() -> int | None:
     if index is None or (target is not None and target.run_simulator):
         return None
     return _NOC_OVERLAY_START_ADDR + index * 4
+
+
+def host_signal_address(slot: int) -> int | None:
+    """Quasar emulator and RTL simulator: the cluster control register the TRISC at mailbox word `slot` signals done
+    in. None elsewhere: ttsim keeps the L1 mailboxes, and Wormhole and Blackhole silicon use launch_done_address().
+    """
+    return None  # experiment: host side off everywhere
+    if get_chip_architecture() != ChipArchitecture.QUASAR:
+        return None
+    # The emulator models the cluster control registers; ttsim (a shared library) does not
+    target = TestTargetConfig._instance
+    sim = (
+        os.environ.get("TT_METAL_SIMULATOR")
+        or os.environ.get("TT_UMD_SIMULATOR_PATH")
+        or ""
+    )
+    if target is not None and target.run_simulator and sim.endswith(".so"):
+        return None
+    return _QUASAR_HOST_SIGNAL_BASE + slot * 4
 
 
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):
@@ -378,19 +402,20 @@ def reset_mailboxes(location: str = "0,0"):
     """Reset all core mailboxes (Unpacker, Math, Packer, Sfpu for Quasar, Unpacker, Math, Packer for Wormhole/Blackhole) before each test."""
 
     # Use 0xA3, because it's a non-zero value that we don't use anywhere else - it's good for triaging hangs.
+    MAILBOX_RESET = 0xA3
     MAILBOX_START_BLOCK = Mailboxes.Unpacker.value
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        write_words_to_device(
-            location=location,
-            addr=MAILBOX_START_BLOCK,
-            data=[0xA3] * len(Mailboxes),  # All 4 TRISC mailboxes on Quasar
-        )
-    else:
-        write_words_to_device(
-            location=location,
-            addr=MAILBOX_START_BLOCK,
-            data=[0xA3, 0xA3, 0xA3],  # All 3 TRISC mailboxes on Wormhole/Blackhole
-        )
+    # All 4 TRISC mailboxes on Quasar, all 3 on Wormhole/Blackhole
+    write_words_to_device(
+        location=location,
+        addr=MAILBOX_START_BLOCK,
+        data=[MAILBOX_RESET] * len(Mailboxes),
+    )
+    for slot in range(len(Mailboxes)):
+        addr = host_signal_address(slot)
+        if addr is not None:
+            write_words_to_device(
+                location=location, addr=addr, data=[MAILBOX_RESET], safe_mode=False
+            )
 
 
 def pull_coverage_stream_from_tensix(

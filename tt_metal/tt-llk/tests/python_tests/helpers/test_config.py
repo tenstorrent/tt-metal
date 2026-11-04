@@ -2102,7 +2102,7 @@ class TestConfig:
             self._write_launch_word(getattr(self, "counted_zones", 0))
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            # A failed load or start address update leaves the TRISCs on two variants
+            # A failed load leaves the TRISCs on two variants
             TestConfig.LAST_LOADED_ELFS = Path()
 
             TestConfig.TRISC_START_VALUES = []
@@ -2194,8 +2194,17 @@ class TestConfig:
                 if words[word_index[mailbox]] == KERNEL_COMPLETE
             }
 
-        # BRISC boot: BRISC puts itself and the TRISCs back in soft reset once every TRISC is done (brisc.cpp), so the
-        # wait polls that register and never reads L1 while a kernel runs.
+        # Quasar kernels also signal completion in registers outside L1 (host_signal in boot.h), so the wait never
+        # reads their L1. The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
+        signal_addrs = {
+            mailbox: device_module.host_signal_address(word_index[mailbox])
+            for mailbox in mailboxes
+        }
+        if not all(addr is not None for addr in signal_addrs.values()):
+            signal_addrs = None
+
+        # BRISC boot: BRISC marks the launch done and puts itself and the TRISCs back in soft reset once every TRISC is
+        # done (brisc.cpp). Silicon polls the launch done register, simulators the soft reset register; neither reads L1.
         brisc_launch = self.resolved_boot_mode() == BootMode.BRISC
         if brisc_launch:
             brisc_done_mask = get_soft_reset_mask([RiscCore.BRISC, *TRISC_CORES])
@@ -2205,26 +2214,24 @@ class TestConfig:
         end_time = time.time() + timeout
         while time.time() < end_time:
             if brisc_launch and launch_done is not None:
+                # BRISC puts the cores in reset right after marking the launch done: read that only once it is marked.
                 done = (
-                    np.frombuffer(
-                        read_from_device(
-                            TestConfig.TENSIX_LOCATION, launch_done, num_bytes=4
-                        ),
-                        dtype=np.uint32,
-                    )[0]
+                    read_word_from_device(TestConfig.TENSIX_LOCATION, launch_done)
                     & device_module.HOST_SIGNAL_MASK
                     == KERNEL_COMPLETE
+                    and soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
+                    == brisc_done_mask
                 )
-                # BRISC puts the cores in reset right after marking the launch done.
-                while done and (
-                    soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
-                    != brisc_done_mask
-                ):
-                    pass
             elif brisc_launch:
                 done = (
                     soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
                     == brisc_done_mask
+                )
+            elif signal_addrs is not None:
+                done = all(
+                    read_word_from_device(TestConfig.TENSIX_LOCATION, addr)
+                    == KERNEL_COMPLETE
+                    for addr in signal_addrs.values()
                 )
             else:
                 done = completed_mailboxes() == mailboxes
