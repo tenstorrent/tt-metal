@@ -162,7 +162,7 @@ void synchronize_gradients_along(
         if (axes_for_param.empty()) {
             continue;
         }
-        // all_reduce labels its own result.
+        // The collective that finishes the sum, all_reduce or the reduce-scatter route's all_gather, labels the result.
         tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes_for_param, reduce_dtype));
     }
 }
