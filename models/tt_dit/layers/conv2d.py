@@ -371,6 +371,7 @@ class Conv2d(Module):
         out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
         use_barrier: bool = True,
+        config_tensors_in_dram: bool = False,
     ) -> None:
         """
         Initialize the Conv2d layer. Set mesh_axis to None to disable mesh parallelism. Only TP is supported currently.
@@ -386,6 +387,9 @@ class Conv2d(Module):
             in_mesh_axis: Axis to shard input channels across mesh devices.
             out_mesh_axis: Axis to shard output channels across mesh devices.
             ccl_manager: CCL manager to use.
+            config_tensors_in_dram: Keep the conv's halo and sliding-window config tensors in DRAM
+                rather than L1_SMALL, as ``slice_fallback`` does. Each input shape keeps its own,
+                so a module run at several shapes can exhaust L1_SMALL otherwise.
             torch_ref: Reference to the torch layer. Parameters from this will be used to initialize the layer
 
         The arguments in_mesh_axis and out_mesh_axis control how weights and biases are sharded
@@ -443,6 +447,7 @@ class Conv2d(Module):
         self.out_mesh_axis_size = out_mesh_axis_size
         self.ccl_manager = ccl_manager
         self.use_barrier = use_barrier
+        self.config_tensors_in_dram = config_tensors_in_dram
 
         # Prepared (device-resident) weight/bias tensors, one pair per conv configuration:
         # the prepared layout depends on the input size and slice config, so weights prepared
@@ -561,7 +566,7 @@ class Conv2d(Module):
         conv_config = ttnn.Conv2dConfig(
             act_block_h_override=32,
             weights_dtype=self.weight.dtype,
-            config_tensors_in_dram=self.slice_fallback,
+            config_tensors_in_dram=self.slice_fallback or self.config_tensors_in_dram,
         )
 
         prepared_key = (b, h, w, num_slices)

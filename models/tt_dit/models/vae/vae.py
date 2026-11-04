@@ -43,6 +43,7 @@ class VaeContext:
     w_mesh_axis: int | None = None
     w_factor: int = 1
     use_conv3d: bool = False
+    conv_config_tensors_in_dram: bool = False
 
 
 @dataclass(frozen=True)
@@ -353,6 +354,7 @@ class VaeConv2d(Module):
                 in_mesh_axis=ctx.tp_axis if tensor_parallel and not out_is_greater else None,
                 out_mesh_axis=ctx.tp_axis if tensor_parallel and out_is_greater else None,
                 ccl_manager=ctx.ccl_manager,
+                config_tensors_in_dram=ctx.conv_config_tensors_in_dram,
             )
         self._ctx = ctx
 

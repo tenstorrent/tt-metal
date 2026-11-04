@@ -84,6 +84,7 @@ def test_pipeline(
         topology=topology,
         width=width,
         height=height,
+        resolutions=[(width, height)],
         is_fsdp=is_fsdp,
         dynamic_load=dynamic_load,
         trace_warmup=traced,
