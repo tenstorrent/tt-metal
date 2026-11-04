@@ -103,3 +103,11 @@ def test_prepare_host_inputs(config, tower):
     }
     for key, value in raster.items():
         torch.testing.assert_close(inputs[key][:n], host_prep.to_window_order(value, h, w, config.merge_kernel_size))
+
+
+@pytest.mark.parametrize("extra", [-1, 1], ids=["fewer", "more"])
+def test_prepare_host_inputs_rejects_wrong_row_count(config, tower, expect_error, extra):
+    h, w = 4, 6
+    pixels, _ = random_patches(config, [(1, h * w + extra, 1)])
+    with expect_error(ValueError, "pixel_values"):
+        host_prep.prepare_host_inputs(config, tower.patch_embed.pos_emb.weight, pixels, torch.tensor([[1, h, w]]))

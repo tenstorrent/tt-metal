@@ -19,7 +19,8 @@ Activations are bf16 except the encoder's residual stream, which is fp32 (`tt/vi
 
 ## Structure
 
-The TT code depends only on `ttnn` and `torch`, and imports nothing from `reference/`. The reference
+The TT code depends only on `ttnn` and `torch` (plus numpy and Pillow in `tt/image_prep.py`), and
+imports nothing from `reference/`. The reference
 needs `transformers`, as upstream does; tests also use `models.common.utility_functions`.
 
 | Path | Contents |
@@ -29,7 +30,9 @@ needs `transformers`, as upstream does; tests also use `models.common.utility_fu
 | `reference/kimi_k3_vision.py` | `KimiK3VisionModel`: the vision path of `KimiK3ForConditionalGeneration` (tower, then `mm_projector`), and `load_vision_config`, which selects upstream's `eager` attention |
 | `reference/checkpoint.py` | Reads `vision_tower.*` and `mm_projector.*` from a Kimi-K3 HF checkpoint |
 | `reference/config.json`, `LICENSE-Kimi-K3` | The K3 `vision_config` and the license of the vendored code |
-| `tt/host_prep.py` | Host prep for the device, torch only: patch rows, position embeddings, RoPE cos/sin, window order, padding |
+| `reference/media_utils.py`, `reference/kimi_k3_vision_processing.py`, `reference/preprocessor_config.json` | Upstream's image processor (`KimiK3VisionProcessor`) and its config, unchanged: the golden for `tt/image_prep.py` |
+| `tt/image_prep.py` | A PIL image to `(pixel_values, grid_thws)` as the HF processor makes them: resize, black padding to a multiple of 28 px, normalize, patchify |
+| `tt/host_prep.py` | Host prep for the device, torch only: patch rows, position embeddings, RoPE cos/sin, window order, padding to `max_patches` rows |
 | `tt/model_config.py` | `MoonViTConfig`, the grid check, `VisionParallel`, the compute kernel config |
 | `tt/module.py` | `Module`, `ModuleList`, `Parameter`, state-dict loading, `save`/`load`, `load_cached` |
 | `tt/linear.py`, `tt/rms_norm.py` | The leaf layers |
@@ -52,8 +55,26 @@ standard deviation) are asserted; CCC and the largest element differences are lo
 ccl = TT_CCL(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
 tt_model = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=ParallelFactor(4, 1), ccl=ccl)
 tt_model.load_torch_state_dict(reference.state_dict())
+pixel_values, grid_thws = image_to_patches(Image.open(path), config)  # tt/image_prep.py
 out = tt_model.run(pixel_values, grid_thws)  # (h*w, 3, 14, 14), [[1, h, w]] -> (h*w/4, 7168)
 ```
+
+Image limit: an image is accepted when the HF processor's grid fits `max_patches` (65,536 patches).
+That rejects nearly every image over about 12.8 MP, and some smaller ones that the 28 px padding
+pushes over (3590x3590 -> 258x258). Over-limit images are rejected, never shrunk, because shrinking
+would diverge from HF. Only RGB images are accepted; other modes (including anything with
+transparency, which HF composites onto a chessboard) raise `ValueError`.
+
+TODO (image pre-processing, `tt/image_prep.py`):
+
+- Handle non-RGB images as HF does, instead of rejecting them: convert other modes to RGB *after*
+  the resize (Pillow resizes P and 1 with nearest neighbour and RGBA with premultiplied alpha, so
+  converting first does not match HF). Test against `reference/kimi_k3_vision_processing.py` for
+  RGBA, LA, PA, L, P, 1, CMYK and I;16.
+- Handle `transparent_bg_config` and `transparent_bg_fill_stage` (`reference/preprocessor_config.json`):
+  composite images with alpha (RGBA, LA, PA, and P or L with `tRNS`) onto an 8 px chessboard
+  (white 255, gray 180, white square top left), after the resize and before the black pad. Read the
+  values from the config rather than hard-coding them.
 
 ## Weights
 
@@ -74,8 +95,9 @@ Per-layer tests (attention, MLP, block, encoder linears and norms) take a `layer
 ## Tests
 
 ```bash
-# CPU: reference, host prep, checkpoint loader, TT module names (device upload stubbed)
+# CPU: reference, image and host prep, checkpoint loader, TT module names (device upload stubbed)
 pytest models/experimental/kimi_k3_moonvit_v2/tests/test_reference.py \
+       models/experimental/kimi_k3_moonvit_v2/tests/test_image_prep.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_host_prep.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_load_checkpoint.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_module.py
