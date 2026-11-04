@@ -48,6 +48,7 @@ nb::dict last_plan_dict() {
     out["hold_depth"] = plan.depth_hold;
     out["grid"] = nb::make_tuple(plan.grid.grid_m, plan.grid.grid_n);
     out["strip"] = plan.grid.strip == detail::Strip::Row ? "row" : "col";
+    out["orient"] = plan.grid.orient == detail::Orient::MOnX ? "m_on_x" : "m_on_y";
     out["flow"] = plan.grid.flow == detail::Flow::FoldedN   ? "folded_n"
                   : plan.grid.flow == detail::Flow::FoldedM ? "folded_m"
                                                             : "grid_2d";

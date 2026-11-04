@@ -476,8 +476,9 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
 
     const uint32_t nkb = Kt / kb;
     const bool resident = plan.resident;
-    // Per-regime fill levers: resident 2 senders per line, W reads on NoC1, look-ahead after the read
-    // barrier, disjoint diagonal senders; stream 1 sender, both reads on NoC0, look-ahead before, diagonal senders.
+    // Per-regime fill levers: resident 2 senders per line, W reads on NoC1 (NoC0 on a thin wide grid, below),
+    // look-ahead after the read barrier, disjoint diagonal senders; stream 1 sender, both reads on NoC0, look-ahead
+    // before, diagonal senders.
     const uint32_t senders = resident ? 2 : 1;
     const uint32_t a_split = senders >= 2 && win_m >= 2 ? tt::div_up(win_m, 2u) : win_m;
     const uint32_t w_split = senders >= 2 && kb >= 2 ? tt::div_up(kb, 2u) : kb;
@@ -539,8 +540,20 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     // both NoCs (decode rows, measured: W on NoC1 alone 1.3-1.8x slower)
     reader_ct[args::reader_ct::LOOKAHEAD_AFTER_BARRIER] = (resident && !folded) ? 1 : 0;
     reader_ct[args::reader_ct::A_READ_NOC] = fold_m ? args::read_noc::ALTERNATE : args::read_noc::NOC0;
-    reader_ct[args::reader_ct::W_READ_NOC] = folded ? (fold_m ? args::read_noc::NOC0 : args::read_noc::ALTERNATE)
-                                                    : (resident ? args::read_noc::NOC1 : args::read_noc::NOC0);
+    // A resident 2D plan scattering on N streams W through every entry while A is read once, so on a thin grid W is
+    // nearly all the DRAM traffic. With N along x (>= 10 columns, M on <= 4 rows) W reads on NoC0: NoC1 ran it 1.4-3x
+    // slower (QB2 1x4 ring, traced, M=32/64 K=3584: N=2560-7168 at 0.33-0.72x the NoC1 time; Kimi K2.7 o_proj
+    // decode forced 2D 181 -> 62 us). With N along y (the planner's M-on-x grids, N=1024-3072 on 6-8 lines) NoC1 stays
+    // faster (NoC0 1.01-1.59x slower), and on taller grids, where A's reads are as heavy, the NoC split is neutral:
+    // both keep NoC1. N along x on fewer than 10 columns is unmeasured and keeps NoC1.
+    // The row (<= 4) and column (>= 10) bounds are empirical: the envelope of the shapes measured so far, not a
+    // derived rule (the likely mechanism, each NoC's dimension order funnelling the DRAM responses into the W senders'
+    // rows or columns, is unverified). Subject to change as more grid shapes are measured.
+    const bool w_noc0_thin_wide =
+        !folded && resident && scatter_dim == -1 && !m_on_x && gd.grid_m <= 4 && gd.grid_n >= 10;
+    reader_ct[args::reader_ct::W_READ_NOC] =
+        folded ? (fold_m ? args::read_noc::NOC0 : args::read_noc::ALTERNATE)
+               : ((resident && !w_noc0_thin_wide) ? args::read_noc::NOC1 : args::read_noc::NOC0);
     reader_ct[args::reader_ct::NUM_WAVES] = W;
     reader_ct[args::reader_ct::NUM_CHUNKS] = num_chunks;
     reader_ct[args::reader_ct::N_INNER] = n_inner;
