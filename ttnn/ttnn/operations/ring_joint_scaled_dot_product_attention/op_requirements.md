@@ -123,7 +123,7 @@ the unit-test files each imported the session fabric-mesh fixture, giving one se
 **Done when**: those five axis values are in SUPPORTED, the golden suite (incl. `test_ring_mock.py` causal-balanced cells and `test_regression.py`) shows 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode, and no regression on prior cells.
 **Outcome**: all five values in SUPPORTED. Busiest chip, GQA 8:1, n=2048/chip, 4-chip ring, bf8b K/V, bf16 DEST: contiguous 1.23 ms (chips 1.23/0.86/0.55/0.35) → balanced 1.04 ms (0.84/0.89/1.04/0.97). Balancing does not reach the mean (~0.75 ms) at this size because each core holds about one unit and the round-robin split assumes equal-cost units, so the costliest unit sets the wall. Next lever: causal-cost-aware unit assignment (pair early and late units per core); left for the perf rounds.
 
-### [ ] Refinement 3 — Speed up the perf-flagged Wan2.2 case: local compute (attention) — the measured dominant part
+### [x] Refinement 3 — Speed up the perf-flagged Wan2.2 case: local compute (attention) — the measured dominant part
 
 **Type**: perf
 
@@ -138,6 +138,8 @@ the unit-test files each imported the session fabric-mesh fixture, giving one se
 No SUPPORTED change.
 
 **Done when**: measured device time (eval `ccl_perf` protocol: fastest chip, slowest chip guarded) improves on the perf-flagged case toward `target_us` with its soft precision gate still holding, the golden suite is green, and there is no regression across the config-spanning guard set (one representative per distinct kernel path × placement: no-joint / replicated-joint, Linear G=2 / Ring G=4, fp32 / bf16 DEST).
+
+**Outcome**: focus 52.81 → 42.64 ms fastest chip / 42.80 ms slowest (1.24x; key block 66.6 → 53.2 us), soft gate holds, guard set flat. Landed at bf16 DEST: single l / O accumulators (a on the pack thread in a spare exp-chunk slot; ELWMUL a·l_acc / a·O_acc accumulated onto the fresh row sum / P·V in S2, packed back in place; no rescale pass, cb_sum_blk / cb_out_blk dropped from the plan), plus ping-pong running max (no m copy). Bottleneck now: the streamed block is balanced across MATH / PACK / UNPACK. Single-payload ablations move it ≤ 6 us, the matmuls alone 39.8 us (≈ 21 us HiFi2 FPU), every payload stubbed 16.3 us, and inits are ≈ 16 ns each. Still 2.36x roofline. Next: subblock height 2 (row-pair streaming: unpacks per block 1216 → 768, fewer sections) and a key-split tail (the r = 2 tail is 4 %). Not done here: the row-pair rewrite restructures the whole pipeline, and its target resource is not shown to bind. The co-tune is closed at the focus (Sq 16 × Sk 16 needs 1.58 MB > 1.33 MB even after the fold-in).
 
 ### [ ] Refinement 4 — DiT joint / cross variants: sharded joint, non-aligned replicated joint, cross-attention
 

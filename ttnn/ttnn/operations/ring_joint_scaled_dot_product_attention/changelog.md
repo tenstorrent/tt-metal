@@ -328,3 +328,72 @@ The focus is **1.45x faster on every chip (76.48 → 52.69 ms)**, with no guard 
   - Unit dir: acceptance 15/15, placement_switch + debug 13/13, new causal_heads 12/12.
 - Issues encountered: a local `g` shadowed the DRAM-grid variable in the descriptor (renamed to `qh`). Finding, not filed: zig-zag balancing cut the busiest chip from 1.23 ms to 1.04 ms on GQA 8:1, n=2048/chip, 4-chip ring, bf16 DEST (per chip, contiguous 1.23/0.86/0.55/0.35 ms; balanced 0.84/0.89/1.04/0.97 ms). It falls short of the ~0.75 ms mean because at about one unit per core the round-robin split assumes equal-cost units, and the costliest unit (the latest rows) sets the wall. A causal-cost-aware unit assignment (pair early and late units per core) is the next lever for the perf rounds.
 - Tests added: `tests/ttnn/unit_tests/operations/ring_joint_scaled_dot_product_attention/test_ring_joint_scaled_dot_product_attention_causal_heads.py` (4-chip ring, GQA 8:1 n=2048, GQA 2:1, MLA dh 320; contiguous / balanced; fp32 / bf16 DEST; bf8b K/V).
+
+## Refinement 3 — Speed up the perf-flagged Wan2.2 case: local compute (attention) — the measured dominant part
+- Date: 2026-11-04
+- Focus, exact config (`LOOSE_CASES[0]`): Wan2.2 (1, 40, 8192, 128) per device, bf16 / bf16, fp32_dest_acc_en=False,
+  HiFi2, 1x4 ring, 2 links, logical_n 32760. Probe: `probes/perf_breakdown.py` (device-profiler KERNEL spans + zones),
+  one fresh-cache call per variant.
+- **Result: 52.81 → 42.64 ms fastest chip, 52.81 → 42.80 ms slowest chip (1.24x)**. Per key block 66.6 → 53.2 us
+  (stream 47.8 + rescale 18.1 + copy 0.7 → stream 53.2). Now 2.36x the 18.08 ms roofline; the 24.1 ms target is 1.77x
+  away.
+- What was done (bf16-DEST streamed block only; the fp32-DEST helper body is unchanged):
+  1. **Single l / O accumulators (pv_rescale_fusion, re-targeted as the S2-section fusion Perf 2 named)**:
+     52.81 → 43.53 ms.
+     - a_i = exp(s(m_acc_i − m_blk_i)) is computed in a spare DEST slot of row i's first exp chunk, by the same
+       pack-thread `PackThreadScaledExp` stream. It goes to its own one-tile section when the chunk fills DEST. No
+       MATH-thread SFPU op is added, so it does not race the pack-thread exp.
+     - In S2 the row sum and the P·V matmul run into fresh DEST slots. ELWMUL (`mul_tiles_bcast_cols`, which
+       accumulates into DEST) then adds a·l_acc and a·O_acc on top, and the result packs back over
+       cb_sum_acc / cb_out_acc. The CB rotates per row / per pv_w chunk (pop the front, push back), in place for a
+       full accumulator and into the free window for a tail piece.
+     - This removes cb_sum_blk, cb_out_blk and the 96-tile rescale pass.
+  2. **Running max ping-pongs between cb_max_acc / cb_max_blk** (runtime CB ids swapped per block) instead of the
+     per-block m copy: 43.53 → 42.73 ms.
+  3. **Ledger fold-in**: `compute_cb_plan` drops cb_sum_blk / cb_out_blk when T_acc is 16-bit, freeing 160 KB per core
+     at the focus (1,190 → 1,030 KiB).
+  - Reused: the streamed block, its CBs, the pack-thread exp, cb_row_factor (α role), the finalize. Added: the a slot
+    in exp_chunk, the ELWMUL corrections in S2, the CB rotation, the m swap.
+- Levers weighed (measured on the focus, block = compute_stream zone; FOCUS_HEADS=8 gives the same per-block time):
+  - Single-payload ablations of the new block: none moves it much. exp stubbed 53.3 → 48.9 us, rowmax → 53.0,
+    rowsum → 49.9, ELWMUL corrections → 50.3, sub (S − m) → 52.2, Q·Kᵀ matmul → 51.5, P·V matmul → 47.3.
+  - Combined ablations: both matmuls stubbed 46.0 us; everything except the matmuls stubbed 39.8 us; every payload
+    stubbed 16.3 us median (then K/V-wait bound: mean 22.8, max 110). The stages are **balanced**: the MATH, PACK and
+    UNPACK threads all carry comparable work, so no single stage holds the wall.
+  - Fidelity: LoFi cuts the matmul-only block 39.8 → 29.1 us (≈ 21 us of HiFi2 FPU math, at the 1024 tile-matmul
+    estimate) but the full block only 53.3 → 48.4 us.
+  - compute_block_size (init churn): doubling ~80 inits per block costs +1.3 us (≈ 16 ns each), so the per-section
+    inits are not the bound. No change.
+  - Block co-tune Sq × Sk: even with the freed L1, Sq 16 × Sk 16 needs 1.58 MB and Sq 32 × Sk 8 1.85 MB, against the
+    1.33 MB budget, so the focus stays at (16, 8). The fold-in still lowers other shapes' footprints.
+  - Partial last wave: the tail-piece model still picks r = 2 against the new per-block cost (~6 us fixed + 3.3 us per
+    row). r = 1 is DRAM-bound (64 pieces) and r = 4 slower. The tail is 1.7 ms (4 %).
+  - matmul_output_subblock (height 2): not implemented. It reorganises the whole row pipeline (QK / max / exp / PV
+    per row pair; DEST cannot hold 2 rows of P·V plus the stats). With balanced stages, the unpack it saves
+    (1216 → 768 tile unpacks per block) is not shown to be the binding resource. This is the next candidate for the
+    perf rounds.
+- Accuracy achieved: unchanged within noise. bf16-DEST large logits rel-RMS 0.0667 / 0.0847 (out / joint), as at
+  Refinement 1. Precision baseline: all bf16-DEST cases PCC ≥ 0.99984, rel-RMS 0.012–0.018. `test_op_loose` (Wan2.2
+  focus, 0.995 / 0.05 gate) passes.
+- Golden test progress (slices; the harness runs the full suite):
+  - 1-in-8 sample of the bf16-DEST self-attention TILE cells (incl. MLA, GQA, causal, joint), plus `test_regression`
+    and `test_op_loose`: 127 passed, 132 skipped (INVALID), 0 failed.
+  - Unit dir: 103/103.
+- Guard set (same session A/B against 5940d0d, 1 compile + 8 measured calls, median slowest / fastest chip, us):
+
+  | case | base | new |
+  |---|---|---|
+  | joint L128 bf16 DEST (1,6,1024,128) | 1052.9 / 862 | 1030.3 / 862 |
+  | joint L128 fp32 DEST | 958.3 / 899 | 959.5 / 895 |
+  | (1,10,512,128) bf16 DEST | 686.1 / 604 | 676.8 / 601 |
+  | (1,8,1024,128) fp32 Linear | 1492.6 / 1093 | 1531.2 / 1098 |
+  | (1,2,128,64) bf16 exact | 66.8 / 24.8 | 62.5 / 24.2 |
+
+  - The fp32 code path is behaviourally unchanged; its Linear slowest-chip span ranges 1163–1547 us within each run
+    (noise).
+- Issues encountered:
+  - The first build hung: cb_max_acc had been popped by the removed rescale chain, so the stream must pop it itself.
+  - `--dev` overflows the 70 656 B kernel config buffer on this kernel (watcher instrumentation); triage ran in
+    default mode.
+- Tests added: none (existing precision-baseline / causal-heads / acceptance files cover the bf16-DEST path).
+  `probes/perf_breakdown.py` gained `FOCUS_FID` (fidelity ablation).

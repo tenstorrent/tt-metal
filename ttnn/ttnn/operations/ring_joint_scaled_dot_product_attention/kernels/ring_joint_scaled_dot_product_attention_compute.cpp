@@ -22,12 +22,15 @@
 //
 // Per key block (R rows, skv valid key tiles, sbw = DEST-half column chunk), steps i = -2 .. R:
 //   E0  exp chunk 0 of row i: sub (S_i - m_i) on MATH -> exp(s .) on PACK -> pack in place      [overlaps S2]
-//   S2  m_blk(i+1) = max(m_acc, rowmax S_{i+1}); l(i-1) = rowsum P_{i-1}; O(i-1) = P_{i-1}.V     [MATH, FPU]
+//       + (block > 0) a_i = exp(s (m_acc_i - m_blk_i)) in a spare slot of the same section -> cb_row_factor
+//   S2  m_blk(i+1) = max(m_acc, rowmax S_{i+1}); l(i-1) = rowsum P_{i-1} [+ a*l_acc];
+//       O(i-1) = P_{i-1}.V [+ a*O_acc]: ELWMUL accumulates into DEST (DST += A*B), packed back over the single
+//       accumulators (CB rotation per row / pv_w chunk). No l_blk / O_blk scratch, no rescale pass (Refinement 3).
+//       The running max ping-pongs between cb_max_acc / cb_max_blk per block (no m copy).
 //   E1  exp chunk 1 of row i (a one-section row is exp'd in two halves)                 [overlaps QK]
 //   QK  S_{i+2} = Q_{i+2} . K^T (+ key-tail mask via dest-reuse add)                             [MATH, FPU]
 // P rows are written in place; a credit-only token CB (cb_p_tok) orders "P row packed" (pack) before "P row
 // unpacked" (P.V / rowsum). Score rows are made visible with push-and-hold-wr_ptr (the CB holds exactly one block).
-// Output is bit-identical to the op's kernel (all regimes tested).
 
 #include <cstdint>
 #include <type_traits>

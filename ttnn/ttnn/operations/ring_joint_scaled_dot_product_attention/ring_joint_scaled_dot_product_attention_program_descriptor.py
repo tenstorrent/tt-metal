@@ -105,8 +105,12 @@ def compute_cb_plan(Sq, Sk, *, DHt, DVt, q_dtype, kv_dtype, acc_dtype, mask_tile
     """The compute-core CB inventory as (index, pages, dtype) — the single source of every compute CB's size.
 
     choose_block_extents() sums it for the L1 fit and the program descriptor allocates exactly it, so a change to a
-    CB (or a buffer-depth knob) lands in one place (ledger: l1_ledger.md)."""
-    return [
+    CB (or a buffer-depth knob) lands in one place (ledger: l1_ledger.md).
+
+    16-bit DEST (acc_dtype != float32) runs the streamed block, which corrects l_acc / O_acc in place (single
+    accumulators), so the per-block scratch cb_sum_blk / cb_out_blk exist only for the fp32-DEST body."""
+    single_acc = acc_dtype != ttnn.float32
+    plan = [
         (CB_Q_BLOCK, Q_BLOCK_DEPTH * Sq * DHt, q_dtype),
         (CB_K_BLOCK, KV_BLOCK_DEPTH * Sk * DHt, kv_dtype),
         (CB_V_BLOCK, KV_BLOCK_DEPTH * Sk * DVt, kv_dtype),
@@ -123,6 +127,9 @@ def compute_cb_plan(Sq, Sk, *, DHt, DVt, q_dtype, kv_dtype, acc_dtype, mask_tile
         (CB_OUT_ACC, Sq * DVt, acc_dtype),
         (CB_OUT_TILES, OUT_BLOCK_DEPTH * Sq * DVt, ttnn.bfloat16),
     ]
+    if single_acc:
+        plan = [e for e in plan if e[0] not in (CB_SUM_BLK, CB_OUT_BLK)]
+    return plan
 
 
 def choose_block_extents(

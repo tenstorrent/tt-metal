@@ -7,7 +7,8 @@ logical_n = 32760), from the device profiler's KERNEL spans and the op's MaybeDe
   TT_METAL_DEVICE_PROFILER=1 scripts/run_safe_pytest.sh tests/.../probes/perf_breakdown.py -s
   python tests/.../probes/perf_breakdown.py [out.json]     # host-side analysis (the CSV is flushed at mesh close)
 
-Env: FOCUS_HEADS (40), FOCUS_N (8192 rows per device), FOCUS_LINKS (2), FOCUS_FP32 (0), PERF_OUT (json path).
+Env: FOCUS_HEADS (40), FOCUS_N (8192 rows per device), FOCUS_LINKS (2), FOCUS_FP32 (0), FOCUS_FID (HiFi2; fidelity
+ablation only), PERF_OUT (json path).
 Prints per chip: op span (first kernel start -> last kernel end), compute-core span quantiles, port spans, and per
 zone (count, mean / median ns per execution, per RISC).
 """
@@ -33,6 +34,7 @@ JOINT_L = int(os.environ.get("FOCUS_JOINT_L", "0"))  # replicated joint tokens (
 TOPO = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}[os.environ.get("FOCUS_TOPO", "ring")]
 PAD = int(os.environ.get("FOCUS_PAD", "8"))  # logical_n = G * N - PAD
 REPS = int(os.environ.get("FOCUS_REPS", "1"))  # measured calls (each read separately; see spans())
+FID = getattr(ttnn.MathFidelity, os.environ.get("FOCUS_FID", "HiFi2"))  # ablation only: the focus is HiFi2
 FREQ_GHZ = 1.35
 LOG = "generated/profiler/.logs/profile_log_device.csv"
 
@@ -115,7 +117,7 @@ def test_perf_breakdown(mesh_shape, fabric_config, mesh_device):
             )
             for _ in range(3)
         ]
-    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=FP32)
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=FID, fp32_dest_acc_en=FP32)
     call = lambda: ring_joint_scaled_dot_product_attention(  # noqa: E731
         q,
         k,
