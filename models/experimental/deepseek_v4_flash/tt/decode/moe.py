@@ -637,8 +637,10 @@ FUSE_SHARED_EXPERT = os.environ.get("DEEPSEEK_V4_FUSE_SHARED_EXPERT", "1") not i
 # ``DEEPSEEK_V4_FUSE_ROUTER=0`` keeps the router as its own ops.
 FUSE_ROUTER = os.environ.get("DEEPSEEK_V4_FUSE_ROUTER", "1") not in ("0", "", "false", "False")
 # All-reduce the TP partial over every TP axis inside ``fused_experts`` wherever its output is the
-# width-sharded partial (see ``output_memory_config``); TP12's two axes go in one pass over its 3x4
-# mesh. ``DEEPSEEK_V4_FUSE_ALL_REDUCE=0`` leaves them to ``width_sharded_all_reduce``, one per axis.
+# width-sharded partial (see ``output_memory_config``) and TP spans both mesh axes: TP12's two go in
+# one pass over its 3x4 mesh. Single-axis TP (TP4) keeps ``width_sharded_all_reduce``: the op's
+# all-reduce scratch has no room left in L1 there, beside the full model's static CBs.
+# ``DEEPSEEK_V4_FUSE_ALL_REDUCE=0`` leaves every TP size to ``width_sharded_all_reduce``, one per axis.
 FUSE_ALL_REDUCE = os.environ.get("DEEPSEEK_V4_FUSE_ALL_REDUCE", "1") not in ("0", "", "false", "False")
 # How many cores of that row run the router (the op's kRouterCores): its gate's tile columns are dealt
 # round-robin over them.
@@ -1021,7 +1023,9 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         # The mesh axes the TP partials are summed over, in order.
         self.tp_axes = _tp_cluster_axes(device, tp_size) if tp_size > 1 else ()
         self.fused_all_reduce_axes = (
-            self.tp_axes if self.tp_axes and self.output_memory_config is not None and FUSE_ALL_REDUCE else None
+            self.tp_axes
+            if len(self.tp_axes) > 1 and self.output_memory_config is not None and FUSE_ALL_REDUCE
+            else None
         )
         self.limit = config.swiglu_limit
         # Applied inside the op on the sparse path, where the weights are derived here
