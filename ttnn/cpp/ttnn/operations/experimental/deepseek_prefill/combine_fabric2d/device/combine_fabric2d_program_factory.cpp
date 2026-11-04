@@ -165,7 +165,7 @@ void validate_allocations(
           std::pair{&tensor_args.expert_region_offsets, "expert_region_offsets"},
           std::pair{&tensor_args.expert_offsets, "expert_offsets"},
           std::pair{&output, "output"}}) {
-        TT_FATAL(tensor->buffer() != nullptr, "combine_fabric2d: {} has no device buffer", name);
+        TT_FATAL(tensor->is_allocated(), "combine_fabric2d: {} has no device buffer", name);
     }
     TT_FATAL(
         output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),

@@ -14,6 +14,7 @@ else 1 -- never assume ``alpha == rank``. Unmapped keys and ``.diff`` deltas rai
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import torch
@@ -140,15 +141,20 @@ def h3_host_deltas(path: str, prefixes: tuple[str, ...], *, scale: float = 1.0) 
 
     For fp32 device weights, which ``register_lora``'s bf16 upload would round.
     """
+    return dict(iter_h3_host_deltas(path, prefixes, scale=scale))
+
+
+def iter_h3_host_deltas(
+    path: str, prefixes: tuple[str, ...], *, scale: float = 1.0
+) -> Iterator[tuple[str, torch.Tensor]]:
+    """`h3_host_deltas` one target at a time, so only one dense delta is alive."""
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = dict(handle.metadata() or {})
         raw = {key: handle.get_tensor(key) for key in handle.keys() if _strip_prefixes(key).startswith(prefixes)}
     pairs, alphas = _collect_pairs(raw)
     file_alpha = _file_alpha(metadata)
-    return {
-        f"{base}.weight": scale * _scale_of(base, ab, alphas, file_alpha) * (ab["B"].float() @ ab["A"].float())
-        for base, ab in sorted(pairs.items())
-    }
+    for base, ab in sorted(pairs.items()):
+        yield f"{base}.weight", scale * _scale_of(base, ab, alphas, file_alpha) * (ab["B"].float() @ ab["A"].float())
 
 
 def _read(path: str) -> tuple[dict[str, torch.Tensor], dict[str, str]]:

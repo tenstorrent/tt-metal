@@ -5,13 +5,15 @@
 // Compute for the multi-core DRAM-sharded decode matmul (num_workers_per_dram_bank >= 2); the work decode and
 // the block order match reader_dram_sharded_multicore.cpp.
 //
-// fp32_dest_acc_en: the whole K of a column pass stays in fp32 Dest (full sync, at most 8 tiles), with
+// For one M tile, fp32_dest_acc_en keeps the whole K of a column pass in fp32 Dest (at most 8 tiles), with
 // no partial sums in L1. Without it (DSMC_L1ACC) the pass accumulates G streamed blocks at a time in
 // 16-bit Dest and the packer adds each group into a Float16_b accumulator in L1, the numerics of the
 // single-reader path's packer L1 accumulation; the accumulator is copied into the output at the end. A core's columns
 // are taken in P passes; the activation is resident for all of them and each pass re-streams only its own weight
 // columns. With CK > 1 the core's partials go to L1 once, are exchanged inside the column group by the stream-1 kernel,
 // and the owner of each column range adds the CK slices.
+// Multiple M tiles instead stream bounded activation/weight blocks, reuse each weight across M,
+// and pack partials in the requested precision while the next Dest half computes.
 
 #include <cstdint>
 
@@ -29,6 +31,7 @@
 #endif
 
 namespace {
+constexpr uint32_t MT = get_arg(args::MT);
 constexpr uint32_t Nbt = get_arg(args::Nbt);
 constexpr uint32_t KT = get_arg(args::KT);
 constexpr uint32_t KB = get_arg(args::KB);
@@ -41,12 +44,116 @@ constexpr uint32_t ROT = get_arg(args::ROT);
 constexpr uint32_t GX = get_arg(args::GX);
 constexpr uint32_t MAXOWN = get_arg(args::MAXOWN);
 constexpr uint32_t BT = KB * NCP;
-constexpr uint32_t DST_TILES = 8;  // full-sync Dest tiles used per pass
+constexpr uint32_t DST_TILES = get_arg(args::DST_TILES);
 #ifdef DSMC_L1ACC
 constexpr uint32_t G = get_arg(args::G);  // streamed blocks per packer L1 accumulation step
 #endif
 constexpr uint8_t kRole[] = {DSMC_ROLE};
 }  // namespace
+
+#ifdef DSMC_STREAMING
+// A K block stays live until every M/N subblock has used it. Only a bounded activation
+// window is resident; partials are row-major so the writer can coalesce output shard runs.
+void compute_multirow(uint32_t nc, uint32_t rows, uint32_t nblk, uint32_t rot, uint32_t kidx) {
+    DataflowBuffer x(dfb::x), w0(dfb::w0), out(dfb::out);
+#ifdef DSMC_TWO_STREAMS
+    DataflowBuffer w1(dfb::w1);
+#endif
+#ifdef DSMC_REDUCE
+    constexpr uint32_t sink = dfb::part;
+#else
+    constexpr uint32_t sink = dfb::acc;
+#endif
+    DataflowBuffer acc(sink);
+    acc.reserve_back(MT * NCP);
+    pack_reconfig_data_format(sink);
+    // The row shape and K stride stay fixed across blocks. WH/BH can pass a
+    // shorter final column span to matmul_block without rebuilding the MOP.
+    matmul_block_init(dfb::x, dfb::w0, false, nc < DST_TILES ? nc : DST_TILES, 1, KB);
+    for (uint32_t p = 0; p < nblk; ++p) {
+        const uint32_t j = (p + rot) % nblk;
+        const uint32_t rb = (rows - j * KB) < KB ? rows - j * KB : KB;
+#ifdef DSMC_TWO_STREAMS
+        DataflowBuffer& w = (p & 1) ? w1 : w0;
+        const uint32_t w_id = (p & 1) ? static_cast<uint32_t>(dfb::w1) : static_cast<uint32_t>(dfb::w0);
+#else
+        DataflowBuffer& w = w0;
+        constexpr uint32_t w_id = dfb::w0;
+#endif
+        x.wait_front(MT * KB);
+        w.wait_front(BT);
+        pack_reconfig_l1_acc(p != 0);
+        for (uint32_t m = 0; m < MT; ++m) {
+            for (uint32_t n0 = 0; n0 < nc; n0 += DST_TILES) {
+                const uint32_t width = (nc - n0) < DST_TILES ? nc - n0 : DST_TILES;
+                tile_regs_acquire();
+                for (uint32_t r = 0; r < rb; ++r) {
+                    matmul_block(dfb::x, w_id, m * KB + r, r * nc + n0, 0, false, width, 1, KB);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t n = 0; n < width; ++n) {
+                    pack_tile<true>(n, sink, m * NCP + n0 + n);
+                }
+                tile_regs_release();
+            }
+        }
+        w.pop_front(BT);
+        x.pop_front(MT * KB);
+    }
+    pack_reconfig_l1_acc(0);
+    acc.push_back(MT * NCP);
+
+#ifdef DSMC_REDUCE
+    DataflowBuffer source(dfb::recv);
+    constexpr uint32_t source_id = dfb::recv;
+    constexpr uint32_t source_stride = MAXOWN;
+    const uint32_t nown = nc * (kidx + 1) / CK - nc * kidx / CK;
+    source.wait_front(CK * MT * MAXOWN);
+#else
+    DataflowBuffer& source = acc;
+    constexpr uint32_t source_id = sink;
+    constexpr uint32_t source_stride = NCP;
+    const uint32_t nown = nc;
+    source.wait_front(MT * NCP);
+#endif
+    out.reserve_back(MT * MAXOWN);
+    reconfig_data_format_srca(dfb::w0, source_id);
+    reconfig_data_format_srcb(dfb::x, source_id);
+    pack_reconfig_data_format(dfb::out);
+    for (uint32_t m = 0; m < MT; ++m) {
+        for (uint32_t n0 = 0; n0 < nown; n0 += DST_TILES) {
+            const uint32_t width = (nown - n0) < DST_TILES ? nown - n0 : DST_TILES;
+            tile_regs_acquire();
+            copy_init(source_id);
+            for (uint32_t n = 0; n < width; ++n) {
+                copy_tile(source_id, m * source_stride + n0 + n, n);
+            }
+#ifdef DSMC_REDUCE
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(source_id);
+            for (uint32_t q = 1; q < CK; ++q) {
+                for (uint32_t n = 0; n < width; ++n) {
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        source_id, (q * MT + m) * MAXOWN + n0 + n, n);
+                }
+            }
+#endif
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t n = 0; n < width; ++n) {
+                pack_tile<true>(n, dfb::out, m * MAXOWN + n0 + n);
+            }
+            tile_regs_release();
+        }
+    }
+    out.push_back(MT * MAXOWN);
+#ifdef DSMC_REDUCE
+    source.pop_front(CK * MT * MAXOWN);
+#else
+    source.pop_front(MT * NCP);
+#endif
+}
+#endif
 
 void kernel_main() {
     const uint32_t role = kRole[get_absolute_logical_y() * GX + get_absolute_logical_x()];
@@ -67,6 +174,11 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::x, dfb::w0, dfb::out);
+
+#ifdef DSMC_STREAMING
+    compute_multirow(nc, rows, nblk, rot, kidx);
+#else
+    static_assert(MT == 1, "multiple tile rows require the streaming schedule");
 
 #ifndef DSMC_REDUCE
 #ifdef DSMC_L1ACC
@@ -239,4 +351,5 @@ void kernel_main() {
     dfb_recv.pop_front(CK * MAXOWN);
 #endif
     dfb_x.pop_front(nblk * KB);
+#endif
 }
