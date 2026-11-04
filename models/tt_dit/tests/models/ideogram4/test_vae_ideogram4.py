@@ -25,6 +25,7 @@ import ttnn
 from ....models.vae.vae_ideogram4 import Ideogram4VAEDecoder
 from ....parallel.config import ParallelFactor, VAEParallelConfig
 from ....parallel.manager import CCLManager
+from ....pipelines.ideogram4.pipeline_ideogram4 import _resolve_weights_dir
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
 from ....utils.test import line_params, ring_params
@@ -49,7 +50,8 @@ def _make_akl(weights: str, torch_dtype) -> AutoencoderKL:
         norm_num_groups=32,
     )
     if weights == "real":
-        vae_sd = load_file(f"{FP8}/vae/diffusion_pytorch_model.safetensors")  # diffusers layout, not fp8
+        weights_dir = _resolve_weights_dir(FP8)  # a local directory or a HuggingFace repo id
+        vae_sd = load_file(f"{weights_dir}/vae/diffusion_pytorch_model.safetensors")  # diffusers layout, not fp8
         # bn.* are checkpoint-only batchnorm running stats absent from diffusers AutoencoderKL.
         incompat = akl.load_state_dict({k: v for k, v in vae_sd.items() if not k.startswith("bn.")}, strict=False)
         # Prove the shipped weights actually landed; otherwise random init passes PCC without
