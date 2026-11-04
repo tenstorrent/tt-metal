@@ -5024,6 +5024,15 @@ def test_zero_volume_op_skips_launch(device, op):
     assert ttnn.to_torch(result).numel() == 0
 
 
+@pytest.mark.parametrize("out_shape", [(1, 1, 0, 32), (1, 1, 32, 0), (1, 0, 32, 32)])
+def test_zero_volume_output_tensor_still_validated(device, out_shape, expect_error):
+    a = ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    c = ttnn.from_torch(torch.empty(out_shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not match the broadcasted output shape"):
+        ttnn.add(a, b, output_tensor=c)
+
+
 @pytest.mark.parametrize(
     "shape, layout",
     [
