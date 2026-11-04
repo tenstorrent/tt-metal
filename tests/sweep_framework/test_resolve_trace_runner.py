@@ -43,7 +43,7 @@ def test_alias_resolves_to_sku():
     assert resolve_sku("BH-LoudBox", SKUS)[0] == "bh_loudbox"
 
 
-@pytest.mark.parametrize("label", ["N150", "N300", "P100a", "P150b"])
+@pytest.mark.parametrize("label", ["N150", "N300", "P100a", "P150b", "n300-llmbox"])
 def test_retired_label_names_both_pools(label, expect_error):
     with expect_error(ValueError, r"no longer accepted.*CIv1.*CIv2"):
         resolve_sku(label, SKUS)

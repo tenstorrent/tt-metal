@@ -16,7 +16,7 @@ on:
         description: >-
           Hardware to trace on, shared by every model in the batch: a SKU from .github/sku_config.yaml
           (e.g. wh_n150, wh_llmbox_perf, bh_p150, bh_p150b_civ2, bh_quietbox_2) or one of the aliases
-          n300-llmbox, topology-6u, BH-LoudBox.
+          topology-6u, BH-LoudBox.
         required: true
         type: string
         default: "wh_n150"

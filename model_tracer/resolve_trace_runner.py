@@ -25,7 +25,6 @@ import yaml
 
 # Old runner-label choices that still name the same pool as their SKU.
 LABEL_ALIASES = {
-    "n300-llmbox": "wh_llmbox",
     "topology-6u": "wh_galaxy",
     "BH-LoudBox": "bh_loudbox",
 }
@@ -37,6 +36,7 @@ RETIRED_LABELS = {
     "N300": ("wh_n300", "wh_n300_civ2"),
     "P100a": ("bh_p100", "bh_p100a_civ2_viommu"),
     "P150b": ("bh_p150", "bh_p150b_civ2"),
+    "n300-llmbox": ("wh_llmbox", "wh_llmbox_civ2_viommu"),
 }
 
 ONLINE_MODES = ("local-disk", "lfc")
