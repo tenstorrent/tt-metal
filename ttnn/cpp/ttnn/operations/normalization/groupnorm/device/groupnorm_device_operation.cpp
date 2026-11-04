@@ -11,6 +11,7 @@
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_program_utils.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -457,7 +458,7 @@ tt::tt_metal::TensorSpec GroupNormDeviceOperation::compute_output_specs(
             auto mem_config = args.output_mem_config;
             return tt::tt_metal::TensorSpec(
                 input_tensor.logical_shape(),
-                TensorLayout::fromPaddedShape(
+                tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                     program_config.out_data_format,
                     PageConfig(program_config.output_layout),
                     mem_config,

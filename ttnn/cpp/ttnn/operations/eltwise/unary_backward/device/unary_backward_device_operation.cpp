@@ -10,6 +10,7 @@
 
 #include "unary_backward_op_utils.hpp"
 #include "unary_backward_program_factory.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -219,7 +220,7 @@ UnaryBackwardDeviceOperation::spec_return_value_t UnaryBackwardDeviceOperation::
     // than the page count written into it, and the writer would run past its end.
     return TensorSpec(
         tensor_args.input.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype,
             PageConfig(tensor_args.input.layout()),
             args.output_memory_config,

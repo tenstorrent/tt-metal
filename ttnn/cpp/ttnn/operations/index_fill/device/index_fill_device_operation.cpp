@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::index_fill {
 
@@ -91,7 +92,7 @@ IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs
     const auto& old_spec = tensor_args.input.tensor_spec();
     return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
-        tt::tt_metal::TensorLayout(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             operation_attributes.memory_config,
