@@ -79,7 +79,7 @@ mkdir -p "$OUT_DIR"
 # Device-free tests
 # ---------------------------------------------------------------------------
 echo "== Device-free tests"
-"$BIN" --gtest_filter='ManifestNames.*:ManifestTypeRegistry.*:ManifestArgs.*:ManifestPublishedChips.*:ManifestWriter.*:ManifestDocs.*'
+"$BIN" --gtest_filter='ManifestNames.*:ManifestTypeRegistry.*:ManifestArgs.*:ManifestRouterArgs.*:ManifestPublishedChips.*:ManifestWriter.*:ManifestDocs.*'
 
 # ---------------------------------------------------------------------------
 # Single rank

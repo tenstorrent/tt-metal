@@ -27,7 +27,6 @@ namespace tt::tt_fabric {
 
 namespace {
 
-using manifest::direction_letter;
 using manifest::router_key;
 
 // The router on `peer_chan`, or nullopt when ControlPlane has no active router there (the channel was trimmed from
@@ -73,12 +72,41 @@ bool is_wrap_link(
     return delta == mesh_shape[axis] - 1;
 }
 
-// The router the builder, to the router on `chan`, that faces `direction`: the other end of the chip's
-// connected pair that holds both.
-manifest::Router& get_connected_sibling(
+using RoutersByChan = std::map<chan_id_t, const manifest::Router*>;
+
+RoutersByChan index_routers_by_chan(const std::vector<manifest::Router>& routers) {
+    RoutersByChan by_chan;
+    for (const auto& router : routers) {
+        by_chan.emplace(router.identity.eth_chan, &router);
+    }
+    return by_chan;
+}
+
+// The router the builder connected the router on `chan` to, that faces `direction`, or null when it connected it to
+// none.
+//
+// Siblings are routers on the same chip, wired to each other inside it. A router's downstream edge only names the
+// direction it forwards to (edge.target.direction); this finds which router that is.
+//
+// Example: E0 (on chan 0) has a downstream edge toward N, so the call is chan = 0, direction = N.
+//
+//                    +-----------+
+//                    | N0 (ch 4) |
+//                    +-----------+
+//                     /         \
+//          { 4, 9 }  /           \  { 0, 4 }
+//                   /             \
+//       +-----------+             +-----------+
+//       | W0 (ch 9) |-------------| E0 (ch 0) |  <-- `chan`
+//       +-----------+  { 0, 9 }   +-----------+
+//
+//   Only the pairs holding chan 0 are considered. The other end of each is checked against `direction`:
+//
+//       { 0, 4 }  other end = ch 4 = N0, faces N     N == direction (N)  ->  match, return N0
+//       { 0, 9 }  other end = ch 9 = W0, faces W     W != direction (N)  ->  no match, try the next pair
+const manifest::Router* find_connected_sibling(
     const std::vector<manifest::ConnectedRouters>& connected_routers,
-    const std::map<chan_id_t, manifest::Router*>& routers_by_chan,
-    FabricNodeId node,
+    const RoutersByChan& routers_by_chan,
     chan_id_t chan,
     eth_chan_directions direction) {
     for (const auto& pair : connected_routers) {
@@ -87,21 +115,11 @@ manifest::Router& get_connected_sibling(
         }
         const auto other = static_cast<chan_id_t>(pair.eth_chan1 == chan ? pair.eth_chan2 : pair.eth_chan1);
         const auto it = routers_by_chan.find(other);
-        TT_FATAL(
-            it != routers_by_chan.end(),
-            "Fabric manifest: {} channel {} is connected to channel {}, which published no router",
-            node,
-            chan,
-            other);
-        if (it->second->identity.direction == direction) {
-            return *it->second;
+        if (it != routers_by_chan.end() && it->second->identity.direction == direction) {
+            return it->second;
         }
     }
-    TT_THROW(
-        "Fabric manifest: {} channel {} has an edge to the router facing {}, but the builder connected it to none",
-        node,
-        chan,
-        direction_letter(direction));
+    return nullptr;
 }
 
 tt::tt_metal::CoreCoord get_router_logical_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
@@ -116,6 +134,30 @@ tt::tt_metal::CoreCoord get_router_virtual_core(const tt::Cluster& cluster, Chip
 
 // Resolves each collected router's identity from its Ethernet channel: its key (direction and routing plane, ie. E0)
 // and cores. Returns the routers in the order ControlPlane lists the chip's active channels.
+//
+// The router hooks only know which Ethernet channel a router runs on, so each collected router starts with just
+// its eth_chan. ControlPlane knows what each active channel means on the chip, and the cluster knows where it sits.
+//
+// Example: a chip with two E links, one N link and one W link.
+//
+//   collected (eth_chan only, in the order the hooks ran):
+//
+//       ch 0          ch 1          ch 4          ch 9
+//       dir   ?       dir   ?       dir   ?       dir   ?
+//       plane ?       plane ?       plane ?       plane ?
+//       cores ?       cores ?       cores ?       cores ?
+//
+//   ControlPlane::get_active_fabric_eth_channels(node), in its order, with get_routing_plane_id per channel:
+//
+//       (ch 9, W)    (ch 0, E)    (ch 1, E)    (ch 4, N)
+//        plane 0      plane 0      plane 1      plane 0
+//
+//   Each active channel claims its collected router and fills in the identity, so the result is reordered to match:
+//
+//       ch 9          ch 0          ch 1          ch 4
+//       W0            E0            E1            N0         <-- router_key(direction, routing_plane)
+//       logical core  logical core  logical core  logical core  <-- from the cluster's soc descriptor
+//       virtual core  virtual core  virtual core  virtual core
 std::vector<manifest::Router> resolve_router_identities(
     std::vector<manifest::Router> collected,
     const ControlPlane& control_plane,
@@ -185,6 +227,37 @@ manifest::RouterRef get_master_router(
 }
 
 // Resolves the router's link to the peer router on its other end, and whether the link crosses hosts or wraps.
+//
+// Unlike sibling routers, that are on the same chip, the peer is on a different chip. ControlPlane reports that far end
+// as a (chip, channel), and this turns it into the router living there.
+//
+// Example: a 1x4 ring of chips (a torus along the east-west axis), resolving the router on chip 0, ch 9 (W0).
+//
+//   Each router sits on the chip edge it faces, so W0 is on the west edge and E0 on the east edge.
+//
+//         +---------------------------------------------------------------------+
+//         |                                                                     |
+//         v                                                                     v
+//    +----------------+   +----------------+   +----------------+   +----------------+
+//    | +----+  +----+ |   | +----+  +----+ |   | +----+  +----+ |   | +----+  +----+ |
+//    | | W0 |  | E0 | |   | | W0 |  | E0 | |   | | W0 |  | E0 | |   | | W0 |  | E0 | |
+//    | |ch 9|  |ch 0|-------|ch 9|  |ch 0|-------|ch 9|  |ch 0|-------|ch 9|  |ch 0| |
+//    | +----+  +----+ |   | +----+  +----+ |   | +----+  +----+ |   | +----+  +----+ |
+//    |     chip 0     |   |     chip 1     |   |     chip 2     |   |     chip 3     |
+//    +----------------+   +----------------+   +----------------+   +----------------+
+//
+//   W0 on chip 0 is the router being resolved. Its cable runs around the ring to E0 on chip 3. The other cables
+//   are ordinary links between neighbours, for comparison.
+//
+//   1. peer:        ControlPlane says chip 0 ch 9 is cabled to (chip 3, ch 0). That channel is an active router
+//                   facing E on plane 0, so link.peer = chip 3 E0. If the channel was trimmed from chip 3's
+//                   routing planes there is no router there, and link.peer stays empty.
+//   2. cross_host:  true when the cable leaves this host (the peer chip is owned by another host's process).
+//   3. wrap:        true when the link closes the ring. Chip 0 and chip 3 sit at coordinates 0 and 3 along the
+//                   east-west axis, and their delta (3) is the mesh length (4) minus one, so the link is a wrap.
+//                   The chip 0 to chip 1 link has delta 1, so it is not.
+//
+//   result:  link = { peer = chip 3 E0, cross_host = false, wrap = true }
 void resolve_link_peer(
     manifest::Router& router,
     const ControlPlane& control_plane,
@@ -200,41 +273,62 @@ void resolve_link_peer(
     router.link.wrap = is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.identity.direction, peer);
 }
 
-// Resolves each downstream edge to the sibling router it lands on: the router the builder connected this one to, facing
-// the edge's direction. An edge on a VC the sibling's tensix mux owns ends at the mux, by the rule the builder places
-// the connection with (builder_type_for_vc). Any other edge makes this router the producer of the sender channel it
-// lands on.
-void resolve_edge_siblings(
-    std::vector<manifest::Router>& routers,
+// Resolves whether each of `router`'s downstream edges ends at the tensix mux of the sibling it lands on.
+//
+// A downstream edge names a sibling and a sender channel on it, but a sibling built with the tensix extension does not
+// take every VC straight into its erisc router: VC0 goes through a tensix mux first.
+//
+// Example: W0 (ch 9) has one downstream edge on each of VC0 and VC1, both toward E (the east router, E0 on ch 0),
+// which has the tensix extension. Routers sit on the chip edge they face, with the tensix mux in front of E0.
+//
+//    +---------------------------------------------------------------------------------------+
+//    |                                                                                       |
+//    |  +-------------+                                                +-----------------+   |
+//    |  | W0 (ch 9)   |  VC0 edge        +------------+  feeds E0      | E0 (ch 0)       |   |
+//    |  | (`router`)  |----------------->| tensix mux |--------------->| has tensix ext  |   |
+//    |  |             |  lands on mux    +------------+                |                 |   |
+//    |  |             |                                                |                 |   |
+//    |  |             |  VC1 edge, lands on erisc router directly      |                 |   |
+//    |  |             |----------------------------------------------->| erisc router    |   |
+//    |  +-------------+                                                +-----------------+   |
+//    |                                                                                       |
+//    | chip                                                                                  |
+//    +---------------------------------------------------------------------------------------+
+void resolve_edges_through_tensix_mux(
+    manifest::Router& router,
     const std::vector<manifest::ConnectedRouters>& connected_routers,
-    FabricNodeId node) {
-    // Create (eth channel, router) mapping
-    std::map<chan_id_t, manifest::Router*> by_chan;
-    for (auto& router : routers) {
-        by_chan.emplace(router.identity.eth_chan, &router);
+    const RoutersByChan& routers_by_chan) {
+    const chan_id_t chan = router.identity.eth_chan;
+    for (uint32_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
+        for (auto& edge : router.intra_chip_downstream_edges[vc]) {
+            const auto* sibling =
+                find_connected_sibling(connected_routers, routers_by_chan, chan, edge.target.direction);
+            edge.through_tensix_mux =
+                sibling != nullptr &&
+                builder_type_for_vc(vc, sibling->shape.has_tensix_extension) == BuilderType::TENSIX;
+        }
     }
+}
 
-    for (auto& router : routers) {
-        const chan_id_t chan = router.identity.eth_chan;
-        for (uint32_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
-            for (auto& edge : router.intra_chip_downstream_edges[vc]) {
-                auto& sibling = get_connected_sibling(connected_routers, by_chan, node, chan, edge.target.direction);
-                const auto num_senders = sibling.shape.senders_per_vc.at(vc);
-                TT_FATAL(
-                    edge.landing_channel < num_senders,
-                    "Fabric manifest: {} channel {}'s VC{} edge {} lands on channel {}, but channel {} has {}",
-                    node,
-                    chan,
-                    vc,
-                    edge.edge,
-                    edge.landing_channel,
-                    sibling.identity.eth_chan,
-                    num_senders);
-                edge.through_tensix_mux =
-                    builder_type_for_vc(vc, sibling.shape.has_tensix_extension) == BuilderType::TENSIX;
-                if (!edge.through_tensix_mux) {
-                    sibling.channels.senders.at(vc).at(edge.landing_channel).producer =
-                        manifest::SiblingRouterRef{.direction = router.identity.direction};
+// Resolves which sibling feeds each of `router`'s sender channels: the one whose downstream edge lands on the channel,
+// excluding edges that end at this router's tensix mux.
+void resolve_sibling_producers(
+    manifest::Router& router,
+    const std::vector<manifest::Router>& routers,
+    const std::vector<manifest::ConnectedRouters>& connected_routers,
+    const RoutersByChan& routers_by_chan) {
+    for (const auto& sibling : routers) {
+        if (&sibling == &router) {
+            continue;
+        }
+        for (uint32_t vc = 0; vc < sibling.intra_chip_downstream_edges.size(); ++vc) {
+            for (const auto& edge : sibling.intra_chip_downstream_edges[vc]) {
+                const auto* lands_on = find_connected_sibling(
+                    connected_routers, routers_by_chan, sibling.identity.eth_chan, edge.target.direction);
+                auto& senders = router.channels.senders.at(vc);
+                if (lands_on == &router && !edge.through_tensix_mux && edge.landing_channel < senders.size()) {
+                    senders[edge.landing_channel].producer =
+                        manifest::SiblingRouterRef{.direction = sibling.identity.direction};
                 }
             }
         }
@@ -250,14 +344,27 @@ manifest::Chip resolve_chip_routers(
     FabricType fabric_type,
     FabricNodeId node,
     ChipId physical_chip_id) {
+    // Get the router's routing plane and facing direction
     chip.routers = resolve_router_identities(std::move(chip.routers), control_plane, cluster, node, physical_chip_id);
+
     if (chip.local_sync.has_value()) {
         chip.local_sync->master = get_master_router(chip.routers, node, chip.local_sync->master_eth_chan);
     }
+
+    // Resolve each router's link to its off-chip peer router (sender -> receiver)
     for (auto& router : chip.routers) {
         resolve_link_peer(router, control_plane, fabric_type, node, physical_chip_id);
     }
-    resolve_edge_siblings(chip.routers, chip.connected_routers, node);
+
+    // Each router resolves only its own edges, then only its own sender channels' producers, from the edges.
+    const RoutersByChan routers_by_chan = index_routers_by_chan(chip.routers);
+    for (auto& router : chip.routers) {
+        resolve_edges_through_tensix_mux(router, chip.connected_routers, routers_by_chan);
+    }
+    for (auto& router : chip.routers) {
+        resolve_sibling_producers(router, chip.routers, chip.connected_routers, routers_by_chan);
+    }
+
     return chip;
 }
 

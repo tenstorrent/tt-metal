@@ -231,7 +231,6 @@ json make_router_shape_json(const manifest::RouterShape& shape) {
     out["receivers_per_vc"] = shape.receivers_per_vc;
     out["num_active_eriscs"] = shape.num_active_eriscs;
     out["channel_trimming_overrides_applied"] = shape.channel_trimming_overrides_applied;
-    out["vc0_bubble_flow_control"] = shape.vc0_bubble_flow_control;
     out["has_tensix_extension"] = shape.has_tensix_extension;
     return out;
 }
@@ -302,6 +301,21 @@ json make_fields_json(const std::vector<manifest::Field>& fields) {
     return out;
 }
 
+// One entry per ERISC, keyed erisc<N>, each written by `entry_json`.
+template <typename Entry, typename EntryJson>
+json make_by_erisc_json(const std::vector<Entry>& entries_by_erisc, EntryJson entry_json) {
+    json out = json::object();
+    for (size_t risc_id = 0; risc_id < entries_by_erisc.size(); ++risc_id) {
+        out[fmt::format("erisc{}", risc_id)] = entry_json(entries_by_erisc[risc_id]);
+    }
+    return out;
+}
+
+// Each ERISC's fields, keyed erisc<N>.
+json make_fields_by_erisc_json(const manifest::FieldsByErisc& fields_by_erisc) {
+    return make_by_erisc_json(fields_by_erisc, [](const std::vector<manifest::Field>& fields) { return make_fields_json(fields); });
+}
+
 json make_serviced_by_json(const std::vector<uint32_t>& risc_ids) {
     json out = json::array();
     for (const auto risc_id : risc_ids) {
@@ -329,19 +343,20 @@ json make_sender_producer_json(
 
 json make_sender_channel_json(
     const manifest::SenderChannel& sender, FabricNodeId node, const manifest::RouterIdentity& identity) {
-    json credits;
-    if (sender.credits.acked.has_value()) {
-        credits["acked"] = make_credit_ref_json(*sender.credits.acked);
-    }
-    credits["completed"] = make_credit_ref_json(sender.credits.completed);
-
     json out;
     out["status"] = lower_enum_name(sender.status);
     out["serviced_by"] = make_serviced_by_json(sender.serviced_by);
     out["producer"] = make_sender_producer_json(sender.producer, node, identity);
     out["ring_buffer"] = make_optional_l1_json(sender.ring_buffer);
-    out["credits"] = std::move(credits);
-    out["fields"] = make_fields_json(sender.fields);
+    out["credits"] = make_by_erisc_json(sender.credits_by_erisc, [](const manifest::SenderChannelCredits& credits) {
+        json entry;
+        if (credits.acked.has_value()) {
+            entry["acked"] = make_credit_ref_json(*credits.acked);
+        }
+        entry["completed"] = make_credit_ref_json(credits.completed);
+        return entry;
+    });
+    out["fields"] = make_fields_by_erisc_json(sender.fields_by_erisc);
     return out;
 }
 
@@ -350,9 +365,11 @@ json make_receiver_channel_json(const manifest::ReceiverChannel& receiver) {
     out["status"] = lower_enum_name(receiver.status);
     out["serviced_by"] = make_serviced_by_json(receiver.serviced_by);
     out["forwards_on"] =
-        receiver.forwards_on.has_value() ? json(fmt::format("vc{}", *receiver.forwards_on)) : json(nullptr);
+        make_by_erisc_json(receiver.forwards_on_by_erisc, [](const std::optional<uint32_t>& forwards_on) {
+            return forwards_on.has_value() ? json(fmt::format("vc{}", *forwards_on)) : json(nullptr);
+        });
     out["ring_buffer"] = make_optional_l1_json(receiver.ring_buffer);
-    out["fields"] = make_fields_json(receiver.fields);
+    out["fields"] = make_fields_by_erisc_json(receiver.fields_by_erisc);
     return out;
 }
 
@@ -392,7 +409,7 @@ json make_downstream_edges_json(const manifest::Router& router, FabricNodeId nod
                 vc,
                 edge.landing_channel);
             entry["through_tensix_mux"] = edge.through_tensix_mux;
-            entry["fields"] = make_fields_json(edge.fields);
+            entry["fields"] = make_fields_by_erisc_json(edge.fields_by_erisc);
             vc_json[fmt::format("edge{}", edge.edge)] = std::move(entry);
         }
         out[fmt::format("vc{}", vc)] = std::move(vc_json);
@@ -409,7 +426,6 @@ json make_eriscs_json(const std::vector<manifest::Erisc>& eriscs) {
         json& erisc = out[fmt::format("erisc{}", risc_id)];
         erisc["processor"] = lower_enum_name(eriscs[risc_id].processor);
         erisc["physical_erisc"] = eriscs[risc_id].physical_erisc;
-        erisc["fields"] = make_fields_json(eriscs[risc_id].fields);
     }
     return out;
 }
@@ -457,7 +473,7 @@ json make_router_json(const manifest::Router& router, FabricNodeId node) {
         router.channels.receivers,
         [&](const manifest::ReceiverChannel& receiver) { return make_receiver_channel_json(receiver); });
     out["intra_chip_downstream_edges"] = make_downstream_edges_json(router, node);
-    out["fields"] = make_fields_json(router.fields);
+    out["fields"] = make_fields_by_erisc_json(router.fields_by_erisc);
     out["eriscs"] = make_eriscs_json(router.eriscs);
     out["leftover_l1"] = make_optional_l1_json(router.leftover_l1);
     return out;

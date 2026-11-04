@@ -10,8 +10,9 @@ read, and how the tables make sure nothing the kernel is fed goes unaccounted fo
 
 ## A field in the manifest
 
-A field is keyed by name, and says what kind of value it holds. One of each kind, from router `E0` on a T3K's chip
-`C0`:
+A field is keyed by name, and says what kind of value it holds. Each ERISC a router runs on has its own fields, since
+the builder gives each ERISC its own arguments, so a `fields` object is keyed by ERISC first. One field of each kind,
+from ERISC0 of router `E0` on a T3K's chip `C0`:
 
 ```json
 "edm_status":                      { "category": "lifecycle", "kind": "l1", "address": 98624, "num_elements": 1,
@@ -34,16 +35,20 @@ argument on a 1D run, is left out.
 
 ## The tables
 
-There's one table per place a field sits. Each is read once per router, ERISC, channel or edge, from the argument
-values the builder fed to the kernel ([BUILDER_HOOKS.md](BUILDER_HOOKS.md) covers how those are recorded):
+There's one table per place a field sits. Each is read once per router, channel or edge, and within that once per
+ERISC, from the arguments the builder gave that ERISC ([BUILDER_HOOKS.md](BUILDER_HOOKS.md) covers how those are
+recorded). Each ERISC's values are recorded as given: two ERISCs can differ, such as on which channels each runs, and
+nothing checks that they agree.
 
-| Table | Entries | Sits at | Read from |
-| --- | --- | --- | --- |
-| `k_router_fields` | 26 | `routers.<key>.fields` | Every ERISC's arguments, which must agree |
-| `k_erisc_fields` | 10 | `routers.<key>.eriscs.erisc<n>.fields` | That ERISC's arguments |
-| `k_sender_channel_fields` | 8 | `routers.<key>.channels.senders.vc<v>.ch<c>.fields` | The arguments of the ERISCs that run the channel. An ERISC that doesn't run it may have the same value or 0 |
-| `k_receiver_channel_fields` | 8 | `routers.<key>.channels.receivers.vc<v>.ch<c>.fields` | Every ERISC's arguments, which must agree |
-| `k_downstream_edge_fields` | 2 | `routers.<key>.intra_chip_downstream_edges.vc<v>.edge<e>.fields` | Every ERISC's arguments, which must agree |
+| Table | Entries | Sits at |
+| --- | --- | --- |
+| `k_router_fields` | 37 | `routers.<key>.fields.erisc<r>` |
+| `k_sender_channel_fields` | 8 | `routers.<key>.channels.senders.vc<v>.ch<c>.fields.erisc<r>` |
+| `k_receiver_channel_fields` | 8 | `routers.<key>.channels.receivers.vc<v>.ch<c>.fields.erisc<r>` |
+| `k_downstream_edge_fields` | 2 | `routers.<key>.intra_chip_downstream_edges.vc<v>.edge<e>.fields.erisc<r>` |
+
+The router table includes what differs between a router's ERISCs by design, such as each one's role in the startup
+sync and which channels it services.
 
 ## An entry
 
@@ -124,13 +129,13 @@ enumerator's name.
 
 ## Reading a table
 
-The router pass reads each table with `collect_fields`, once per router, ERISC, channel or edge. For each entry:
+The router pass reads each table with `collect_fields_by_erisc`, once per router, channel or edge, and within that once
+per ERISC. For each entry:
 
 1. **Skip it if it isn't emitted.** A `NamedArg` the builder doesn't emit on this run, such as a 2D-only argument on
    1D, is left out.
-2. **Read the value.** The argument's name gets the channel's or edge's indices in its `{}`, and is read from the
-   ERISCs the table says ("The tables" above). A value read from more than one ERISC must agree, or the router pass
-   fails naming the ERISC that differs.
+2. **Read the value.** The argument's name gets the channel's or edge's indices in its `{}`, and is read from this
+   ERISC's arguments.
 3. **Make the field** (`make_field`), by the entry's content:
 
 | Content | What the value becomes |
@@ -160,10 +165,10 @@ channel's. Defines match exactly.
 
 The other checks:
 
-- **The router pass can't read an unlisted argument.** Its argument reader (`get_named_arg`) fails for a name no table
+- **The router pass can't read an unlisted argument.** Every name it reads goes through `check_arg_is_listed`, which fails for a name no table
 reads and `k_router_pass_args` doesn't list, so the lists stay true to the code.
-- **A read argument must exist.** One the builder didn't feed fails: "missing fabric router named compile-time
-argument".
+- **A read argument must exist.** `RouterArgs` fails for one the builder didn't feed: "... reads ..., but ERISC<n>
+wasn't given it".
 - **At compile time** (`static_assert` in `fabric_manifest_fields.hpp`): an argument's `{}` count matches its
 `ArgIndex`, only per-channel and per-edge tables use indices or builder members, and nothing is both read and listed
 as unrecorded.
