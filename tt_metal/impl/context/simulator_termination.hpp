@@ -6,9 +6,8 @@
 
 namespace tt::tt_metal {
 
-// Makes SIGINT/SIGTERM exit through atexit when TT_METAL_SIMULATOR is set. Dying from the signal
-// skips MetalContext teardown, so the simulator is never told to exit. Only installed over a
-// default disposition. Call before registering the teardown atexit handler.
+// Makes SIGINT/SIGTERM exit through atexit when TT_METAL_SIMULATOR is set, so teardown still
+// releases the simulator. Only installed over a default disposition. Call before the teardown handler.
 void install_simulator_termination_handler();
 
 // Marks the process as exiting, so a later signal bounds that teardown instead of starting a second

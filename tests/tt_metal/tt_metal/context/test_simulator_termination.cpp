@@ -206,7 +206,7 @@ void kill_and_reap(pid_t pid) {
 }
 
 // Runs a scenario in a fresh image and checks it wrote the marker from atexit and then exited with
-// the expected status. Returns false (with the failure already recorded) if anything went wrong.
+// the expected status.
 void expect_marker_and_exit_status(const char* mode, int expected_status) {
     int pipe_fds[2];
     ASSERT_EQ(pipe(pipe_fds), 0);

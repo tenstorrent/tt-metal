@@ -197,9 +197,8 @@ void restore_default_disposition(int signal_number) {
     (void)::sigaction(signal_number, &action, nullptr);
 }
 
-// A forked child shares the parent's simulator session but does not own it, and fork() does not
-// copy the shutdown thread. Running teardown there would release the parent's session, so restore
-// what the child had before this handler existed. Only async-signal-safe calls until exec.
+// A forked child does not own the parent's session, so teardown there would release it. Restore
+// what the child had before this handler existed, using only async-signal-safe calls.
 void restore_defaults_in_fork_child() {
     if (!handlers_installed) {
         return;

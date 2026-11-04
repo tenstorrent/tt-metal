@@ -207,9 +207,8 @@ class SimulationServer:
         self.stop()
         pytest.exit(returncode=1)
 
-    # Aether/zrun lines that mean the Zebu job has died. "zServer : ERROR" is the runtime failure;
-    # the others are the job exiting while the host is still waiting for an ack. "child process
-    # exited abnormally" is the generic Tcl exec error, so match only the two lines it appears in.
+    # Aether/zrun lines that mean the Zebu job has died while the host is still waiting. The Tcl
+    # "child process exited abnormally" is generic, so match only the two lines it appears in.
     EMU_ERROR_PATTERNS = (
         "zServer : ERROR",
         "Error reading pytest exit code",
