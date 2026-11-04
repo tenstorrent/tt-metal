@@ -271,10 +271,9 @@ class MooncakeEmbeddingReader:
         first key that has no readable value."""
         if self._closed:
             raise StoreUnavailable(f"the store on segment {self.segment} is closed")
-        try:
-            found = self._client.batch_get_replica_desc(keys)
-        except Exception as e:  # the binding raises on RPC failures in some versions
-            raise StoreUnavailable(f"looking up {len(keys)} keys: {e}") from e
+        # Mooncake reports failures in its results, not by raising: an unreachable master leaves keys out of the
+        # lookup and gives transfers a negative code.
+        found = self._client.batch_get_replica_desc(keys)
         out = {}
         for key in keys:
             replicas = found.get(key, [])
@@ -327,16 +326,13 @@ class MooncakeEmbeddingReader:
         with self._read_lock:
             self._grow_read_buffer(dst)
             keys = list(by_key)
-            try:
-                got = self._client.get_into_ranges(
-                    [self._read_buffer.ctypes.data],
-                    [keys],
-                    [[[d for _, d, _, _ in by_key[k]] for k in keys]],
-                    [[[o for _, _, o, _ in by_key[k]] for k in keys]],
-                    [[[n for _, _, _, n in by_key[k]] for k in keys]],
-                )[0]
-            except Exception as e:  # the binding raises on RPC failures in some versions
-                raise StoreUnavailable(f"reading {len(keys)} values from other hosts: {e}") from e
+            got = self._client.get_into_ranges(
+                [self._read_buffer.ctypes.data],
+                [keys],
+                [[[d for _, d, _, _ in by_key[k]] for k in keys]],
+                [[[o for _, _, o, _ in by_key[k]] for k in keys]],
+                [[[n for _, _, _, n in by_key[k]] for k in keys]],
+            )[0]
             if len(got) != len(keys) or any(len(rcs) != len(by_key[k]) for k, rcs in zip(keys, got)):
                 raise StoreUnavailable(f"Mooncake returned an incomplete result for {len(keys)} values")
             for key, rcs in zip(keys, got):

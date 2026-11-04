@@ -260,12 +260,10 @@ def test_plain_tuples_and_an_empty_batch(setup):
     assert reader.fetch_batch([]) == [] and client.lookups == lookups
 
 
-def test_failed_remote_read_is_unavailable(setup):
+@pytest.mark.parametrize("rc", [-800, -900], ids=["peer_gone", "master_gone"])
+def test_failed_remote_read_is_unavailable(setup, rc):
+    """The codes Mooncake 0.3.13.post1 returns when the host holding the value, or the master, has died."""
     client, reader, _, _ = setup
-
-    def broken(*args):
-        raise RuntimeError("transfer failed")
-
-    client.get_into_ranges = broken
-    with pytest.raises(StoreUnavailable, match="transfer failed"):
+    client.get_into_ranges = lambda *args: [[[rc]]]
+    with pytest.raises(StoreUnavailable, match=f"read {rc} of"):
         reader.fetch_batch([FetchRequest(_key(1), 0, 8), FetchRequest(_key(2), 0, 8)])
