@@ -382,3 +382,11 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   loss elsewhere, step 2 is shelved: step 1's x path stays.
 - 2026-11-04 07:10 `tracy_l4_b4_persist2`: the block = 382.7 us vs 305.4 (step 1): the multicast landing itself.
   Step 2 shelved (design doc). Current best persistent variant = step 1 (wt_persist @8afb4a2b941), a wash vs today.
+- 2026-11-04 07:14 `tracy_l4_b1_fab` = the per-op budget at 8 users (layer 4, chip (0,0), device time 699 us +
+  12 us of gaps): MHC 52.6 + 18.8 + 53.1 + 18.7 = 143; ATTN qkv 68.3, small matmuls 13.8 + 9.3, KDA 53.1, o-proj
+  27.5, all-reduce 36.5 = 208; MoE router 17.5 + 11.9, gather 50.8, experts 189.6, reduce 21.3, shared 16.1 + 1.6
+  + 1.6 + 4.7 + 9.1, add 3.2, all-reduce 17.5 = 348. The experts op barely shrinks from 32 users (215 -> 190 us with
+  ~3x fewer active experts): at ~2 active experts per bank only ~2 of 11 readers stream, ~240 GB/s of the 450.
+  The floor (440 us/layer) needs ~270 us off: experts at few active experts (-70..90), the exchanges and all-reduces
+  (-60), MHC (-60), shared expert + router overlapped in the block (-50). First experiment: the expert op's streaming
+  knobs at 8 users (`test_stream_knobs_chip0` calibration), then the folds into the persistent block.
