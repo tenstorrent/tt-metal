@@ -39,6 +39,8 @@ What V4.1 imposes on the serving side:
   names the user's slot. The scheduler interleaves the active users' steps through the stages, so up to one
   decoding user per stage (``DEEPSEEK_V4_NUM_STAGES``, default eight) keeps every stage busy; seating and posting,
   trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
+  A user decoding alone keeps ``--decode-ahead`` (32) steps posted, as the decode demo does; a reply that stops
+  early feeds the steps still posted a rerun of its last one (:meth:`V41ChatEngine.repeat_traced`).
   Speculative decode is single-user.
 * Context. ``--max-context`` is 1048576 tokens by default (prompt + reply), the model's full context. The pools
   hold ``--total-context`` tokens, by default 204800 per user (64 x 204800 is what fits in device DRAM), and are
@@ -58,7 +60,8 @@ What V4.1 imposes on the serving side:
   :class:`_ImageBook`); prefill and decode then read them like any token's, and the router picks the image tokens'
   experts with ``bias_vl``. Speculative decode does not take images. The whole image path is traced: the tower (one
   trace per ViT bucket) and the row write (one trace on stage 0) are captured at the end of startup, after every
-  other allocation, and an image only copies its inputs in and replays them (:meth:`V41ChatEngine.capture_vision`).
+  other allocation, and an image only replays them, its inputs streamed in and its rows read back over host sockets
+  the model opens before its decode rings (:meth:`V41ChatEngine.capture_vision`, :class:`~..tt.vision.ImageSockets`).
 * Files, as `DeepSeek's Files API <https://api-docs.deepseek.com/api/create-file>`_ (also under ``/v1``):
   ``POST /files`` (multipart ``file``, ``purpose=user_data``, optional ``expires_after[anchor]`` /
   ``expires_after[seconds]``), ``GET /files`` (``after``, ``limit``, ``order``), ``GET /files/<id>`` and
@@ -169,6 +172,9 @@ _MAX_CONTEXT = 1048576
 # stages 4-7, so 64 users x 1048576 tokens would not fit; 64 x 204800 take ~16 GB of the ~17 GB free. The pools
 # are paged, so any one user can still grow to --max-context while the others leave the blocks free.
 _KV_TOKENS_PER_USER = 204800
+# Default and most --decode-ahead: the decode steps a lone decoding turn keeps posted, the window
+# tests/decode/test_full_model_decode_demo.py keeps (its ``replay_ahead``).
+_DECODE_AHEAD = 32
 
 # The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
 # "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
@@ -963,6 +969,10 @@ class V41ChatEngine(ChatEngine):
     """
 
     chat_format = V41_CHAT_FORMAT
+    # A turn that stops early reruns its newest step in the steps still posted (repeat_traced).
+    max_decode_ahead = _DECODE_AHEAD
+    # Every posted step keeps the session it was posted for, so decoding turns can each keep one posted.
+    interleave_ahead = True
 
     def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack):
         from transformers import AutoTokenizer
@@ -1009,6 +1019,7 @@ class V41ChatEngine(ChatEngine):
             use_prefetcher=getattr(args, "use_prefetcher", None),
             layer_submesh_ids=plan_layer_placement(num_layers, num_stages, 1),
             image_rows=args.image_rows if vision else 0,
+            vision_stage=VISION_STAGE if vision else None,
         )
         self.lm_head = DeepSeekV41LMHead(
             dequantized(loader, "lm_head.weight", translate=True),
@@ -1079,12 +1090,15 @@ class V41ChatEngine(ChatEngine):
                 f"(temperature {self.temperature}, seed {self.seed}); requests cannot set their own"
             )
 
+        if self.model._eager_decode:
+            # An eager step runs as its packet is written, at the position it was posted for.
+            self.max_decode_ahead = 1
         self.users = [UserSession(self, i, args) for i in range(args.num_users)]
         self.active = 0
         self.users[0].activate()
         self._replay_q: deque[int] = deque()
         self._packets: queue.Queue = queue.Queue()
-        # The server's output reader also writes a lone turn's posted step (_OutputReader.arm).
+        # The server's output reader also writes decoding turns' posted steps (_OutputReader.arm, write_prefed).
         self.packet_lock = threading.Lock()
         self._packet_error: BaseException | None = None
         self._packet_writer = threading.Thread(target=self._write_packets, name="decode-packets", daemon=True)
@@ -1096,13 +1110,16 @@ class V41ChatEngine(ChatEngine):
         """Capture the vision traces: one per ViT bucket on the vision stage, and the embedding-row write on stage 0.
         The last device allocations of startup, after the KV pools, the prefill and decode traces and the resident
         snapshot: a trace's buffers must not land under one allocated after it. An image then replays them only,
-        so serving allocates nothing for it and compiles nothing (no CCL semaphores taken out of L1_SMALL)."""
+        so serving allocates nothing for it and compiles nothing (no CCL semaphores taken out of L1_SMALL), and its
+        data moves over the model's image sockets only."""
         if self.vision is None:
             return
         t0 = time.perf_counter()
         with self.model._cq_lock:
-            self.vision.capture()
-            self.row_writer = EmbeddingRowWriter(self.model.embed_tokens.embedding_weight, self.config.vocab_size)
+            self.vision.capture(self.model.image_sockets)
+            self.row_writer = EmbeddingRowWriter(
+                self.model.embed_tokens.embedding_weight, self.config.vocab_size, self.model.image_sockets
+            )
         logger.info(
             f"vision traces captured in {time.perf_counter() - t0:.1f}s: {len(self.vision.traces)} ViT buckets on "
             f"stage {VISION_STAGE}, the row write on stage 0"
@@ -1118,15 +1135,44 @@ class V41ChatEngine(ChatEngine):
             raise RuntimeError(f"traced packet pos {pos} does not match queued replay {queued}")
         self._packets.put((int(token_id), int(pos)))
 
+    def repeat_traced(self, token_id: int, pos: int) -> None:
+        """Feed the oldest :meth:`post_traced` step the packet of ``pos``, the session's newest step, fed
+        ``token_id``, instead of its own: a turn that stops early cannot take its posted steps, and fed at their
+        own positions they would overwrite rows of the sliding window. The caller then ends the session at
+        ``pos + 1`` (:meth:`DeepSeekV41Model.end_session_at`)."""
+        if self._packet_error is not None:
+            raise RuntimeError("the decode packet writer failed") from self._packet_error
+        queued = self._replay_q.popleft()
+        if queued <= int(pos):
+            raise RuntimeError(f"rerunning pos {pos} in the step posted for pos {queued}, which is not after it")
+        self._packets.put((int(token_id), int(pos)))
+
+    def write_prefed(self, token_id: int, pos: int) -> None:
+        """The output reader's packet write (:class:`_OutputReader`): straight to the socket, as it is on the
+        token path, once this thread has written every packet queued before it, so they land in posting order."""
+        self._packets.join()
+        if self._packet_error is not None:
+            raise RuntimeError("the decode packet writer failed") from self._packet_error
+        with self.packet_lock:
+            self.model.write_step_packet(token_id, pos)
+
     def _write_packets(self) -> None:
-        for token_id, pos in iter(self._packets.get, None):
+        # Every item is marked done, written or not, so write_prefed never waits on a dead writer.
+        while True:
+            item = self._packets.get()
+            if item is None:
+                self._packets.task_done()
+                return
+            token_id, pos = item
             try:
-                with self.packet_lock:
-                    self.model.write_step_packet(token_id, pos)
+                if self._packet_error is None:
+                    with self.packet_lock:
+                        self.model.write_step_packet(token_id, pos)
             except BaseException as e:  # noqa: BLE001 - surfaced by the next write_traced
                 logger.exception(f"writing the decode packet for pos {pos} failed: {e}")
                 self._packet_error = e
-                return
+            finally:
+                self._packets.task_done()
 
     def _stop_packet_writer(self) -> None:
         self._packets.put(None)
@@ -1225,6 +1271,7 @@ def parse_args(argv: list[str] | None = None):
         # --device-sampling this is the temperature the device sampler is left at, since a request cannot
         # set its own there.
         temperature=1.0,
+        decode_ahead=_DECODE_AHEAD,
         device_sampling=os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "1") not in ("0", "", "false", "False"),
     )
     p.add_argument(
@@ -1256,6 +1303,11 @@ def parse_args(argv: list[str] | None = None):
             action.help = (
                 "sampling temperature for requests that send none (default: 1); "
                 "a request's own temperature overrides it, and 0 asks for greedy"
+            )
+        elif "--decode-ahead" in action.option_strings:
+            action.help = (
+                "decode steps a lone decoding turn keeps posted before their tokens are known, as "
+                f"test_full_model_decode_demo.py keeps them (default and most: {_DECODE_AHEAD})"
             )
         elif action.dest == "l1_small_size":
             action.default = None

@@ -49,6 +49,13 @@ step's logits, or with ``DEEPSEEK_V4_DEVICE_SAMPLING=1`` on the output stage, wh
 ``DEEPSEEK_V4_BALANCE_DRAM_BANKS`` (default 1) builds the routed experts with K-split gate_up shards spread over
 every DRAM bank (``layers.N.ffn.experts.E.gate_up_fused.tp4.k4``; ``tools/fill_expert_cache.py`` writes them ahead
 of time); ``0`` keeps whole-K shards.
+
+``DEEPSEEK_V4_SERVER_BUILD=1`` builds what ``demo/server.py`` serves instead, from that server's own flags
+(``DEEPSEEK_V4_SERVER_ARGS``, e.g. ``"--no-vision --num-users 1"``; its defaults when unset): its
+``V41ChatEngine`` (every user's session, the KV pools, the image rows of the embedding table, the device sampler),
+the traced prefill model and the vision traces, with the server's ``L1_SMALL`` (10240) and GIL switch interval. The
+prompt and the timed loop are this test's, so its tok/s is the server's build and traces without the server's
+scheduler, threads or HTTP layer: the baseline the server's per-user rate compares against.
 """
 
 from __future__ import annotations
@@ -113,6 +120,9 @@ _TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_TEMPERATURE", "0"))
 _SEED = int(os.environ.get("DEEPSEEK_V4_SEED", "1234"))
 _BALANCE_DRAM_BANKS = os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "1") not in ("0", "", "false", "False")
 _USE_PREFETCHER = os.environ.get("DEEPSEEK_V4_USE_PREFETCHER", "1") not in ("0", "", "false", "False")
+_SERVER_BUILD = os.environ.get("DEEPSEEK_V4_SERVER_BUILD", "0") not in ("0", "", "false", "False")
+# The server's default is its _L1_SMALL_SIZE (demo/server.py imports this module, so it is not imported here).
+_L1_SMALL_SIZE = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "10240" if _SERVER_BUILD else "8192"))
 
 
 def _pad_to_tile(n: int) -> int:
@@ -421,6 +431,92 @@ def _build_and_prefill(
     }
 
 
+def _build_like_server(
+    mesh_device,
+    text: str,
+    prefetcher: contextlib.ExitStack,
+    *,
+    tp_size: int,
+    num_stages: int,
+):
+    """Build the model as ``demo/server.py``'s ``serve`` does, from that server's flags (``DEEPSEEK_V4_SERVER_ARGS``),
+    then prefill ``text`` one token at a time into user 0's session, returning what :func:`_build_and_prefill` does.
+
+    Sampling is the server's too (on device at ``--temperature`` unless ``--no-device-sampling``); the
+    ``DEEPSEEK_V4_DEVICE_SAMPLING``/``_TEMPERATURE`` knobs then only pick the host sampler's temperature.
+    """
+    import shlex
+    import sys
+
+    from models.experimental.deepseek_v41_flash.demo import server
+    from models.experimental.deepseek_v4_flash.demo.server import _GIL_SWITCH_SECONDS
+
+    args = server.parse_args(shlex.split(os.environ.get("DEEPSEEK_V4_SERVER_ARGS", "")))
+    args.tp_size, args.num_stages = tp_size, num_stages
+    if args.prefill:
+        if args.l1_small_size != _L1_SMALL_SIZE:
+            logger.warning(
+                f"the server opens the mesh with L1_SMALL {args.l1_small_size}, this test with {_L1_SMALL_SIZE} "
+                "(DEEPSEEK_V4_L1_SMALL_SIZE)"
+            )
+        os.environ["DEEPSEEK_V4_DSPARK"] = "0"
+        os.environ.setdefault("DEEPSEEK_V4_GCB_HEADROOM", "16384")
+        args.submeshes = [
+            mesh_device.create_submesh(ttnn.MeshShape(1, tp_size), ttnn.MeshCoordinate(i, 0)) for i in range(num_stages)
+        ]
+    logger.info(
+        f"server build: {args.num_users} users x {args.max_context} tokens (pool {args.total_context}), "
+        f"prefill {'on' if args.prefill else 'off'}, vision {'on' if args.vision else 'off'}, "
+        f"device sampling {'on' if args.device_sampling else 'off'}"
+    )
+
+    engine = server.V41ChatEngine(mesh_device, args, prefetcher)
+    prefiller = server._V41Prefiller(engine, args, prefetcher) if args.prefill else None
+    engine.warmup()
+    if prefiller is not None:
+        prefiller.snapshot()
+    engine.capture_vision()
+    switch_interval = sys.getswitchinterval()
+    sys.setswitchinterval(_GIL_SWITCH_SECONDS)
+    prefetcher.callback(sys.setswitchinterval, switch_interval)
+
+    model, tokenizer = engine.model, engine.tokenizer
+    max_new_tokens = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "2560"))
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    start_pos = int(os.environ.get("DEEPSEEK_V4_START_POS", "0"))
+    if start_pos < 0:
+        raise ValueError(f"DEEPSEEK_V4_START_POS must be nonnegative, got {start_pos}")
+    prompt_ids: list[int] = _tokenize_chat(tokenizer, text)
+    real_len = len(prompt_ids)
+    generator = torch.Generator().manual_seed(_SEED)
+    if model.device_sampler is None:
+        logger.info(f"sampling: host, temperature {_TEMPERATURE}, seed {_SEED}")
+
+    engine.users[0].activate()
+    next_id = pad_id
+    for prompt_idx in range(real_len):
+        next_id = _next_token(model.decode_traced(prompt_ids[prompt_idx], start_pos + prompt_idx), generator)
+    logger.info(f"prefill ({real_len} tokens at pos {start_pos}) -> token id {next_id} {tokenizer.decode([next_id])!r}")
+    logger.info(f"pool usage after prefill: {model.session_usage()}")
+
+    return {
+        "model": model,
+        "lm_head": engine.lm_head,
+        "tokenizer": tokenizer,
+        "config": engine.config,
+        "rope": engine.rope,
+        "prompt_ids": prompt_ids,
+        "real_len": real_len,
+        "start_pos": start_pos,
+        "max_seq": engine.max_seq,
+        "max_new_tokens": max_new_tokens,
+        "eos_id": tokenizer.eos_token_id,
+        "next_id": next_id,
+        "tp_size": tp_size,
+        "generator": generator,
+    }
+
+
 class _InterruptFlag:
     """Record SIGINT instead of raising it, for the duration of the generation loop.
 
@@ -468,7 +564,7 @@ class _InterruptFlag:
             # The CCL semaphores and width_sharded_all_reduce's scratch live as long as their cached programs.
             # Without L1_SMALL they land in L1 wherever the first layer's temporaries leave the allocator, and
             # cap the circular buffers of every later program on the stage (fused_experts clashes at 40 layers).
-            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
+            "l1_small_size": _L1_SMALL_SIZE,
         }
     ],
     indirect=["device_params"],
@@ -495,7 +591,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
     # The prefetcher session spans prefill and generation both, so it is opened inside
     # ``_build_and_prefill`` (once the model exists) against this stack.
     with contextlib.ExitStack() as prefetcher:
-        state = _build_and_prefill(
+        state = (_build_like_server if _SERVER_BUILD else _build_and_prefill)(
             mesh_device,
             text,
             prefetcher,
