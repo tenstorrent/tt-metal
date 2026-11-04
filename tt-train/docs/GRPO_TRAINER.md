@@ -164,6 +164,8 @@ Rules and limitations of `ttt_remote_sync`:
 
 - **Llama or Qwen3, no FSDP**, and `model_source` must be a HuggingFace Hub id
   (rank 0 loads its weights from it, rank 1 its config and tokenizer; a local path raises `ValueError`).
+- **Tested layouts:** one device on each rank (GSM8K, Qwen3) and two devices on each rank (BoolQ, Llama).
+  Other layouts, for example a mixed split or a Qwen3 rank 0 with more than one device, are not tested.
 - **Rank 1 boots with dummy weights**, and rank 0 pushes its weights as
   version 0 before training starts. Rank 1 starts at weight_version -1 and
   refuses to generate until that push arrives. A batch generated before a push carries
