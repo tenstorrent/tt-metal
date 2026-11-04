@@ -201,15 +201,15 @@ def test_build_kda_scalars_rejects_invalid_host_bounds_before_upload(monkeypatch
     upload.assert_not_called()
 
 
-def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkeypatch):
+def test_kda_forward_runs_the_whole_layer_on_its_slot_through_the_shared_scratch(monkeypatch):
     kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
     for kda in kdas:
-        kda.forward.return_value = object(), SimpleNamespace(recurrent=object(), convolution=object())
+        kda.forward_slot.return_value = object()
     slot, start, end = object(), object(), object()
-    from_torch, deallocate = Mock(), Mock()
+    from_torch, deallocate, gather = Mock(), Mock(), Mock()
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
     monkeypatch.setattr(ttnn, "deallocate", deallocate)
-    monkeypatch.setattr(ttnn, "all_gather", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "all_gather", gather)
     monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
     monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
     slabs, scratch = Mock(), object()
@@ -219,18 +219,83 @@ def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkey
     )
     hidden = object()
     for layer_idx, kda in enumerate(kdas):
-        output, new_state = kda.forward.return_value
-        slabs.reset_mock()
+        output = kda.forward_slot.return_value
         assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, scratch).forward(hidden, ctx) is output
-        # The carry is selected by the device slot, so a capture never pins the slot it was recorded on:
-        # load slot -> scratch, run on the scratch, store the replacement at the slot, free it.
-        slabs.import_layer.assert_called_once_with(scratch, slot, layer_idx)
-        kda.forward.assert_called_once_with(hidden, scratch, actual_start=start, actual_end=end)
-        slabs.export_layer.assert_called_once_with(new_state, slot, layer_idx)
-        assert [c.args for c in deallocate.call_args_list][-2:] == [(new_state.recurrent,), (new_state.convolution,)]
+        # The whole per-chunk layer (import, TP all-gather, KDA, export) is ttKDA.forward_slot, on the TP-sharded
+        # input and the shared scratch. The carry is selected by the device slot, so a capture never pins the slot
+        # it was recorded on.
+        kda.forward_slot.assert_called_once_with(
+            hidden, scratch, slabs, slot, layer_idx, actual_start=start, actual_end=end
+        )
+        kda.forward.assert_not_called()
+    # The wrapper itself moves nothing: no gather, no slab copy, no free of the block's input.
+    gather.assert_not_called()
+    slabs.import_layer.assert_not_called()
+    slabs.export_layer.assert_not_called()
+    deallocate.assert_not_called()
     from_torch.assert_not_called()
-    # The caller owns the scalars and frees them once per chunk, after its last KDA layer.
-    assert all(call.args not in ((slot,), (start,), (end,)) for call in deallocate.call_args_list)
+
+
+def _mocked_layer(monkeypatch, tensor_parallel_size: int):
+    """A ttKDA whose device work is mocks recording one call order."""
+    calls = Mock()
+    layer = object.__new__(ttKDA)
+    layer.tensor_parallel_size = tensor_parallel_size
+    layer.tensor_parallel_axis = 1
+    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1)
+    layer.weights = SimpleNamespace(convolution_taps=())
+    for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
+        setattr(layer, name, None)
+    layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
+    layer._validate_forward = Mock()
+    layer._validate_runtime_bound = Mock()
+    projected = SimpleNamespace(projected=object(), decay_rank_offset=0, output_gate_offset=0, beta_offset=0)
+    layer._project_inputs = calls.project_inputs
+    calls.project_inputs.return_value = projected
+    layer._compute_decay = calls.compute_decay
+    layer.recurrence = calls.recurrence
+    calls.recurrence.return_value = SimpleNamespace(output=object(), final_state="final_recurrent")
+    layer._kda_rms_norm = calls.norm
+    layer._project_output = calls.project_output
+    calls.project_output.return_value = "output"
+    monkeypatch.setattr(ttnn, "all_gather", calls.all_gather)
+    calls.all_gather.return_value = "gathered"
+    monkeypatch.setattr(ttnn, "deallocate", calls.deallocate)
+    monkeypatch.setattr(ttnn.experimental.kda, "qkv_causal_conv1d_silu_with_carry", calls.conv)
+    calls.conv.return_value = (object(), object(), object(), "new_convolution")
+    return layer, calls
+
+
+def test_kda_forward_slot_imports_gathers_runs_and_exports_in_order(monkeypatch):
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    slabs, slot, scratch, start, end = Mock(), object(), Mock(), object(), object()
+    calls.attach_mock(slabs, "slabs")
+    tp_shard = SimpleNamespace(shape=(1, 64, 64))  # 256 / TP 4: the model's TP-sharded residual
+    assert layer.forward_slot(tp_shard, scratch, slabs, slot, 7, start, end) == "output"
+    order = [c[0] for c in calls.mock_calls if not c[0].startswith("project_inputs().")]
+    # import -> TP all-gather -> projection -> ... -> output projection -> export, then free the replacement carry.
+    assert order.index("slabs.import_layer") < order.index("all_gather") < order.index("project_inputs")
+    assert order.index("project_output") < order.index("slabs.export_layer")
+    calls.slabs.import_layer.assert_called_once_with(scratch, slot, 7)
+    calls.all_gather.assert_called_once_with(tp_shard, dim=-1, cluster_axis=1)
+    calls.project_inputs.assert_called_once_with("gathered")
+    exported = calls.slabs.export_layer.call_args.args
+    assert (exported[0].recurrent, exported[0].convolution, exported[1:]) == (
+        "final_recurrent",
+        "new_convolution",
+        (slot, 7),
+    )
+    freed = [c.args[0] for c in calls.deallocate.call_args_list]
+    assert "gathered" in freed and freed[-2:] == ["final_recurrent", "new_convolution"]
+
+
+def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkeypatch):
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    full = SimpleNamespace(shape=(1, 64, 256))
+    output, state = layer.forward(full, Mock(), object())
+    calls.all_gather.assert_not_called()
+    calls.project_inputs.assert_called_once_with(full)
+    assert output == "output" and (state.recurrent, state.convolution) == ("final_recurrent", "new_convolution")
 
 
 @pytest.mark.parametrize(

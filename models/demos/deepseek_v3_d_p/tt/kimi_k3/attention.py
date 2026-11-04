@@ -28,7 +28,7 @@ from typing import Optional, Protocol
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state, device_scalar
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, device_scalar
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
@@ -173,8 +173,9 @@ class TtK3KdaAttention(LightweightModule):
     host in the loop. That somewhere is the migration slab itself, the way MLA's KV cache is its own
     migration format: per chunk the layer loads its slot's carry into the model's one scratch carry,
     runs, and stores the replacement back, every copy a device program that reads the slot on
-    device and belongs inside the captured region. That is why load and store happen here in
-    `forward` rather than being left to the caller.
+    device and belongs inside the captured region. `ttKDA.forward_slot` is that whole per-chunk
+    layer (load, TP all-gather, KDA, reduce-scatter, store), so it is what the layer's perf test
+    measures; `ttKDA.forward` stays the functional core.
     """
 
     writes_kv = False
@@ -202,22 +203,20 @@ class TtK3KdaAttention(LightweightModule):
         # The slot is a device tensor on every path, so the carry a capture touches is chosen when it
         # replays, not when it is recorded; the bounds likewise change per replay without a host read.
         slot, actual_start, actual_end = ctx.kda_scalars
-        gathered = ttnn.all_gather(
-            normed,
-            dim=-1,
-            cluster_axis=self._tp_axis,
-            num_links=self._num_links,
-            topology=self._tp_topology,
+        # `[1, 1, T, d/tp]` -> `[1, T, d/tp]`: ttKDA takes three dimensions, and the leading one is batch.
+        # The squeeze is a view over `normed`, which the block frees after this returns.
+        hidden = ttnn.squeeze(normed, dim=0)
+        # The whole per-chunk layer: import this slot's carry into the scratch, TP all-gather, KDA, output projection
+        # + reduce-scatter, export the replacement carry.
+        output = self.kda.forward_slot(
+            hidden,
+            self._scratch,
+            ctx.kda_states,
+            slot,
+            self.layer_idx,
+            actual_start=actual_start,
+            actual_end=actual_end,
         )
-        # `[1, 1, T, d]` -> `[1, T, d]`: ttKDA takes three dimensions, and the leading one is batch.
-        # The squeeze is a view over `gathered`'s buffer, so `gathered` must stay allocated until the
-        # forward is done; the `ttnn.deallocate(hidden)` below frees it.
-        hidden = ttnn.squeeze(gathered, dim=0)
-        ctx.kda_states.import_layer(self._scratch, slot, self.layer_idx)
-        output, new_state = self.kda.forward(hidden, self._scratch, actual_start=actual_start, actual_end=actual_end)
-        ttnn.deallocate(hidden)
-        ctx.kda_states.export_layer(new_state, slot, self.layer_idx)
-        deallocate_state(new_state)
 
         # `_project_output` reduce-scatters on the TP axis and returns `[B, T, d/tp]`, so the only
         # thing left is the leading axis the block's residual expects.
