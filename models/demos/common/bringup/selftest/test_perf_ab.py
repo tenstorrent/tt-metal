@@ -813,3 +813,46 @@ def test_every_real_time_profile_records_op_rows(fx, monkeypatch):
     assert not want_ops(Spec.load(fx(perf={"op_profile": False})), rt=True)
     monkeypatch.setenv("BRINGUP_PROFILE_OPS", "1")
     assert want_ops(s)
+
+
+def test_ab_nonlast_times_each_position_as_a_non_last_chunk_too(mk):
+    """F248 (DeepSeek-V4.1 P.30): the decoder skip changes only chunks that are not the request's last, but every A/B
+    position timed a last chunk, so both sides measured the same full path. ab_nonlast adds, per position, the same
+    chunk with BRINGUP_CHUNK_LAST=0; tasks without it keep their items and their A/B key."""
+    o = mk([pick(ab_positions=[51200])], CHANGE)
+    t = o.led.task("P.1")
+    key = o.ab_key(t)
+    names = [n for n, _, _, _ in o.ab_position_items(t)]
+    assert names == ["p51200"]
+    t2 = dict(t, ab_nonlast=True)
+    items = {n: (c, e) for n, _, c, e in o.ab_position_items(t2)}
+    assert list(items) == ["p51200", "p51200_nonlast"]
+    assert "BRINGUP_CHUNK_LAST=0" in items["p51200_nonlast"][0] and items["p51200_nonlast"][1] == {
+        "BRINGUP_CHUNK_LAST": "0"
+    }
+    assert o.ab_key(t2) != key and o.ab_key(dict(t)) == key
+
+
+def test_begin_chunk_passes_last_only_to_a_model_that_takes_it(monkeypatch):
+    """F248: BRINGUP_CHUNK_LAST=0 reaches begin_chunk(..., last=False); a model without the argument refuses rather
+    than timing the full chunk as if it were a non-last one."""
+    from models.demos.common.bringup.testing import harness
+
+    got = []
+
+    class WithLast:
+        def begin_chunk(self, tokens, start, last=True):
+            got.append(last)
+
+    class Without:
+        def begin_chunk(self, tokens, start):
+            got.append("plain")
+
+    monkeypatch.delenv(harness.CHUNK_LAST_ENV, raising=False)
+    harness.begin_chunk(WithLast(), [], 0)
+    harness.begin_chunk(Without(), [], 0)
+    monkeypatch.setenv(harness.CHUNK_LAST_ENV, "0")
+    harness.begin_chunk(WithLast(), [], 0)
+    with pytest.raises(RuntimeError):
+        harness.begin_chunk(Without(), [], 0)
+    assert got == [True, "plain", False]
