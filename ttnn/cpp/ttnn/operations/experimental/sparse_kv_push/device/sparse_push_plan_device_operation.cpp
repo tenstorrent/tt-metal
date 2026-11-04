@@ -43,13 +43,38 @@ uint32_t plan_cores(tt::tt_metal::distributed::MeshDevice* device) {
     return grid.x * grid.y;
 }
 
+// What the program hash leaves out, checked on every dispatch: buffers (their addresses are patched in) and the devices
+// they live on.
+void validate_runtime(const SparsePushPlanInputs& args) {
+    const auto& idx = args.indices;
+    TT_FATAL(
+        idx.storage_type() == StorageType::DEVICE && idx.buffer() != nullptr &&
+            idx.buffer()->buffer_type() == BufferType::DRAM,
+        "indices must be allocated in DRAM");
+    if (!args.chunk_start.has_value()) {
+        return;
+    }
+    const auto& start = *args.chunk_start;
+    TT_FATAL(
+        start.storage_type() == StorageType::DEVICE && start.buffer() != nullptr && start.device() == idx.device(),
+        "chunk_start must be allocated on the indices' device");
+    // A chunk start sharing pages with the indices would read a top-k value as the start. Both are interleaved over
+    // the DRAM banks: they overlap exactly when their per-bank ranges do.
+    const auto* idx_buf = idx.buffer();
+    const auto* start_buf = start.buffer();
+    TT_FATAL(
+        idx_buf->address() + idx_buf->aligned_size_per_bank() <= start_buf->address() ||
+            start_buf->address() + start_buf->aligned_size_per_bank() <= idx_buf->address(),
+        "chunk_start must not overlap the indices");
+}
+
 }  // namespace
 
 void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
+    validate_runtime(args);
     const auto& idx = args.indices;
     TT_FATAL(idx.dtype() == DataType::UINT32 && idx.layout() == Layout::ROW_MAJOR, "indices must be UINT32 ROW_MAJOR");
-    TT_FATAL(idx.buffer() != nullptr && idx.buffer()->buffer_type() == BufferType::DRAM, "indices must be in DRAM");
     TT_FATAL(
         idx.padded_shape().rank() == 4 && idx.padded_shape()[0] == 1 && idx.padded_shape()[1] == 1,
         "indices must be [1, 1, rows, topk], got {}",
@@ -78,13 +103,15 @@ void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
     if (args.chunk_start.has_value()) {
         const auto& start = *args.chunk_start;
         TT_FATAL(
-            start.storage_type() == StorageType::DEVICE && start.buffer() != nullptr && start.device() == idx.device(),
-            "chunk_start must be allocated on the indices' device");
-        TT_FATAL(
             start.dtype() == DataType::UINT32 && start.logical_volume() == 1 &&
                 start.memory_config().buffer_type() == BufferType::DRAM,
             "chunk_start must be a 1-element UINT32 DRAM tensor");
     }
+}
+
+void SparsePushPlanDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t&, const tensor_args_t& args) {
+    validate_runtime(args);
 }
 
 SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation::compute_output_specs(
