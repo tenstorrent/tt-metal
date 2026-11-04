@@ -572,6 +572,192 @@ TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     }
 }
 
+// The DM0 descriptor pool packs every slot on a core to 8 B (<= 5 counters), 16 B (<= 13) or 32 B,
+// with the threshold in the slot's last byte. Each case puts real descriptors at a stride boundary,
+// rebuilds them with DM0's copy rules, and checks no counter is lost or overwritten by the threshold.
+struct DfbDm0DescriptorCase {
+    const char* name;
+    std::vector<experimental::dfb::DataflowBufferConfig> configs;
+    uint32_t expected_stride;
+    // Per DFB: counters in its {producer, consumer} descriptor; 0 = that side has no descriptor.
+    std::vector<std::pair<uint8_t, uint8_t>> expected_counters;
+};
+
+class DfbDm0DescriptorStrideTest : public UnitMeshFixture,
+                                   public ::testing::WithParamInterface<DfbDm0DescriptorCase> {};
+
+namespace {
+
+struct Dm0CopiedDescriptor {
+    dfb_dm0_txn_descriptor_image_t image;
+    uint8_t threshold;
+};
+
+// Mirrors DM0's copy in dataflow_buffer_init.h: the first 8 B always, bytes 8-15 (16 B slot) or
+// 8-23 (32 B slot) only past 6 counters, and the threshold from dfb_dm0_desc_threshold_offset.
+Dm0CopiedDescriptor dm0_copy_descriptor(const uint8_t* slot, uint32_t stride) {
+    Dm0CopiedDescriptor out{};
+    auto* image = reinterpret_cast<uint8_t*>(&out.image);
+    std::memcpy(image, slot, 8);
+    if (slot[0] > 6) {
+        std::memcpy(image + 8, slot + 8, stride == 32 ? 16 : 8);
+    }
+    out.threshold = slot[dfb_dm0_desc_threshold_offset(stride)];
+    return out;
+}
+
+// One side's tile counters in hart order, the order the ISR walks them.
+std::vector<::dfb::PackedTileCounter> side_tile_counters(
+    const experimental::dfb::detail::DataflowBufferImpl& dfb, bool is_producer) {
+    std::map<uint8_t, const experimental::dfb::detail::DFBRiscConfig*> by_risc;
+    for (const auto& rc : dfb.groups[0].hw_risc_configs) {
+        if (rc.is_producer == is_producer) {
+            by_risc[rc.risc_id] = &rc;
+        }
+    }
+    std::vector<::dfb::PackedTileCounter> tcs;
+    for (const auto& [risc_id, rc] : by_risc) {
+        const auto& counters = rc->config.packed_tile_counter;
+        tcs.insert(tcs.end(), counters.begin(), counters.begin() + rc->config.num_tcs_to_rr);
+    }
+    return tcs;
+}
+
+}  // namespace
+
+TEST_P(DfbDm0DescriptorStrideTest, RoundTripsThroughDm0Copy) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    const DfbDm0DescriptorCase& c = GetParam();
+    Program program = CreateProgram(this->device());
+    const CoreCoord logical_core(0, 0);
+    for (const auto& config : c.configs) {
+        experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+    }
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
+
+    const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), c.configs.size());
+    std::vector<uint8_t> buf(8192, 0);
+    ASSERT_GT(experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf), 0u);
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+    ASSERT_NE(ghdr->dm0_packed, 0u);
+
+    const uint32_t stride = dfb_dm0_packed_desc_stride(ghdr->dm0_packed);
+    EXPECT_EQ(stride, c.expected_stride);
+    const uint8_t* pool = buf.data() + dfb_dm0_packed_blob_offset(ghdr->dm0_packed) + DFB_DM0_CACHED_PAYLOAD_OFFSET;
+    const uint32_t all_mask =
+        dfb_dm0_packed_producer_mask(ghdr->dm0_packed) | dfb_dm0_packed_consumer_mask(ghdr->dm0_packed);
+
+    for (size_t i = 0; i < dfbs.size(); ++i) {
+        for (const bool is_producer : {true, false}) {
+            SCOPED_TRACE(fmt::format("DFB {} {}", i, is_producer ? "producer" : "consumer"));
+            const auto& desc = is_producer ? dfbs[i]->producer_txn_descriptor : dfbs[i]->consumer_txn_descriptor;
+            const uint8_t expected_counters =
+                is_producer ? c.expected_counters[i].first : c.expected_counters[i].second;
+            if (expected_counters == 0) {
+                EXPECT_EQ(desc.num_txn_ids, 0u);
+                continue;
+            }
+            ASSERT_GT(desc.num_txn_ids, 0u);
+            const auto tcs = side_tile_counters(*dfbs[i], is_producer);
+            ASSERT_EQ(tcs.size(), expected_counters);
+            for (uint8_t t = 0; t < desc.num_txn_ids; ++t) {
+                const uint32_t txn_id = desc.txn_ids[t];
+                SCOPED_TRACE(fmt::format("txn id {}", txn_id));
+                const auto copied =
+                    dm0_copy_descriptor(pool + dm0_isr_txn_slot_index(all_mask, txn_id) * stride, stride);
+                EXPECT_EQ(copied.image.num_counters, expected_counters);
+                for (uint8_t j = 0; j < expected_counters; ++j) {
+                    EXPECT_EQ(copied.image.tile_counters[j], tcs[j]) << "counter " << int(j);
+                }
+                EXPECT_EQ(copied.image.tiles_to_post_or_ack, desc.num_entries_per_txn_id_per_tc);
+                EXPECT_EQ(copied.threshold, desc.num_entries_to_process_threshold);
+            }
+        }
+    }
+}
+
+namespace {
+
+// All participants use implicit sync (a Tensix-only side still gets no descriptor); BLOCKED blocks are 1 entry.
+experimental::dfb::DataflowBufferConfig dm0_desc_config(
+    uint32_t num_entries,
+    uint16_t producer_risc_mask,
+    uint8_t num_producers,
+    dfb::AccessPattern pap,
+    uint16_t consumer_risc_mask,
+    uint8_t num_consumers,
+    dfb::AccessPattern cap) {
+    return {
+        .entry_size = 1024,
+        .num_entries = num_entries,
+        .producer_risc_mask = producer_risc_mask,
+        .num_producers = num_producers,
+        .pap = pap,
+        .producer_block_size = pap == dfb::AccessPattern::BLOCKED ? 1u : 0u,
+        .consumer_risc_mask = consumer_risc_mask,
+        .num_consumers = num_consumers,
+        .cap = cap,
+        .consumer_block_size = cap == dfb::AccessPattern::BLOCKED ? 1u : 0u,
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = true};
+}
+
+constexpr auto kStrided = dfb::AccessPattern::STRIDED;
+constexpr auto kBlocked = dfb::AccessPattern::BLOCKED;
+
+}  // namespace
+
+// Neo harts start at bit 8. A side's count is max(P, C) for STRIDED and P x C for BLOCKED<->STRIDED,
+// with at most 6 counters per hart, so 13 and 14 have no topology: 12 and 15 stand in for them.
+INSTANTIATE_TEST_SUITE_P(
+    CompactBoundaries,
+    DfbDm0DescriptorStrideTest,
+    ::testing::Values(
+        // 1 DM -> 5 DMs: 5 counters, the most an 8 B slot holds.
+        DfbDm0DescriptorCase{
+            .name = "Counters5Stride8",
+            .configs = {dm0_desc_config(20, 0x01, 1, kStrided, 0x3E, 5, kStrided)},
+            .expected_stride = 8,
+            .expected_counters = {{5, 5}}},
+        // 1 DM -> 6 DMs: 6 counters, the first 16 B count and the last DM0 copies in one word.
+        DfbDm0DescriptorCase{
+            .name = "Counters6Stride16",
+            .configs = {dm0_desc_config(24, 0x01, 1, kStrided, 0x7E, 6, kStrided)},
+            .expected_stride = 16,
+            .expected_counters = {{6, 6}}},
+        // 4 BLOCKED DMs -> 3 DMs: 12 counters per side, both words of a 16 B slot.
+        DfbDm0DescriptorCase{
+            .name = "Counters12Stride16",
+            .configs = {dm0_desc_config(24, 0x0F, 4, kBlocked, 0x70, 3, kStrided)},
+            .expected_stride = 16,
+            .expected_counters = {{12, 12}}},
+        // 5 BLOCKED DMs -> 3 DMs: 15 counters per side, three words of a 32 B slot.
+        DfbDm0DescriptorCase{
+            .name = "Counters15Stride32",
+            .configs = {dm0_desc_config(30, 0x1F, 5, kBlocked, 0xE0, 3, kStrided)},
+            .expected_stride = 32,
+            .expected_counters = {{15, 15}}},
+        // 6 BLOCKED DMs -> 3 Neos: 18 producer counters, the most a descriptor holds.
+        DfbDm0DescriptorCase{
+            .name = "Counters18Stride32",
+            .configs = {dm0_desc_config(36, 0x3F, 6, kBlocked, 0x700, 3, kStrided)},
+            .expected_stride = 32,
+            .expected_counters = {{18, 0}}},
+        // A 1-counter DFB beside an 18-counter one: the narrow descriptors take the 32 B stride.
+        DfbDm0DescriptorCase{
+            .name = "MixedWidthsStride32",
+            .configs =
+                {dm0_desc_config(36, 0x3F, 6, kBlocked, 0x700, 3, kStrided),
+                 dm0_desc_config(16, 0x40, 1, kStrided, 0x80, 1, kStrided)},
+            .expected_stride = 32,
+            .expected_counters = {{18, 0}, {1, 1}}}),
+    [](const ::testing::TestParamInfo<DfbDm0DescriptorCase>& info) { return std::string(info.param.name); });
+
 TEST_F(UnitMeshFixture, DMTest1xDFB1Sx4SConfig) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
