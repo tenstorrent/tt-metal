@@ -123,8 +123,8 @@ class HFSource(WeightSource):
                 v = v.t()
             elif "conv1d" in name:
                 v = v.reshape(v.shape[0], -1).t()
-            elif v.dim() == 2 and name.endswith(".weight"):
-                v = v.t()
+            elif v.dim() == 2 and (name.endswith(".weight") or name.endswith("index_kpool_compress_gate")):
+                v = v.t()  # HF [out, in] -> [in, out] (the indexer's compress gate [128, 4096] is a linear weight too)
         self.cache[key] = v.contiguous()
         return self.cache[key]
 
