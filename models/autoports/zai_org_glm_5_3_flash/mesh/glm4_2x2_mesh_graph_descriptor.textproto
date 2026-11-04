@@ -1,0 +1,18 @@
+# GLM-5.3-Flash, homelab-1: cards 2 + 3 (chips 4, 5, 6, 7; 2 p300a) as a 2x2 Ethernet MESH with fabric — the Stage 4
+# development sub-mesh while Stage 3 owns cards 0, 1. Edges (doc/hardware.md §3, Stage 04a link_map.json): on-board
+# 4-5 and 6-7, cables 5-6 and 4-7, 2 links each; the 4-cycle 5-6-7-4 is the middle of the 8-chip pipeline line
+# 0-2-5-6-7-4-3-1. 4 P300 chips -> ClusterType CUSTOM, which requires this file:
+#   TT_VISIBLE_DEVICES=4,5,6,7 TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/models/autoports/zai_org_glm_5_3_flash/mesh/glm4_2x2_mesh_graph_descriptor.textproto
+#   ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D); mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
+# The topology mapper picks the physical placement; read mesh.get_device_ids() for coordinate -> chip.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
