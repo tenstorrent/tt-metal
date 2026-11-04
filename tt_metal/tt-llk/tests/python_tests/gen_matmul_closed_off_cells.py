@@ -3,6 +3,7 @@
 
 A key (fidelity, A, B, output, rt, ct, kt, throttle, packer L1 accumulate) with a closed-slow row takes the per-tile pack (matmul_pack_closed_off_cells / _PACK_CLOSED_OFF) when the per-tile pack is not slower in
 any measured row of the key; otherwise the closed-slow rows (with their accumulate mode and nb) take main's whole form (matmul_grid_main_cells / _GRID_MAIN_ROWS).
+A row with a form column (pt or main) takes that form (the measured fastest form not slower than main); rows without one follow the rule above.
 usage: gen_matmul_closed_off_cells.py [--write]   (without --write: exit 1 when the committed tables differ from the generated ones)
 """
 import csv
@@ -46,7 +47,19 @@ def cells():
         slow = [r for r in rs if r["closed_slow"] == "True"]
         if not slow:
             continue
-        if any(r["pt_slow"] == "True" for r in rs):
+        if any(r.get("form") for r in slow):
+            # the measured fastest form that is not slower than main, per row (pt: per-tile pack for the key, main: main's whole form for the row)
+            if any(r["form"] == "pt" for r in slow):
+                per_tile.append(k)
+            for acc, nb in sorted(
+                {
+                    (r["acc"] == "True", int(r["nb"]))
+                    for r in slow
+                    if r["form"] == "main"
+                }
+            ):
+                main.append((k, acc, nb))
+        elif any(r["pt_slow"] == "True" for r in rs):
             for acc, nb in sorted({(r["acc"] == "True", int(r["nb"])) for r in slow}):
                 main.append((k, acc, nb))
         else:
