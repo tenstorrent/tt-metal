@@ -926,9 +926,10 @@ def test_demo_text(
     cli_paged_attention = request.config.getoption("--paged_attention")
     if cli_paged_attention is not None:
         paged_attention = cli_paged_attention
-    page_params = request.config.getoption("--page_params") or page_params
-    if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
-        page_params = json.loads(page_params)
+    cli_page_params = request.config.getoption("--page_params")
+    if cli_page_params:
+        # Keep required defaults when only one page parameter is overridden.
+        page_params = {**page_params, **cli_page_params}
     cli_sampling_params = request.config.getoption("--sampling_params")
     if cli_sampling_params:
         # Merge onto the parametrized defaults so a partial override (e.g. only
