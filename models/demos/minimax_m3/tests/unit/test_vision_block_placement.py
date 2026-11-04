@@ -241,10 +241,10 @@ def _ranges(values, step=4):
 
 
 def _sdpa_cb_bytes(config, q_shape, cores):
-    """SDPA's circular buffers per core for bf16 q, k and v with fp32 accumulation and no mask (sdpa_program_factory.cpp):
-    the q chunk, double-buffered when a core runs more than one; the k and v chunks, double-buffered; a padding mask,
-    double-buffered in bfp4, when the chunks do not divide the sequence; two scale tiles; the scores and two sums in
-    fp32; two output accumulators, two maxima, their difference and the output."""
+    """SDPA's circular buffers per core for bf16 q, k and v with fp32 accumulation and no mask
+    (sdpa_program_factory.cpp): the q chunk, double-buffered when a core runs more than one; the k and v chunks,
+    double-buffered; a padding mask, double-buffered in bfp4, when the chunks do not divide the sequence; two scale
+    tiles; the scores and two sums in fp32; two output accumulators, two maxima, their difference and the output."""
     heads, seq_len, head_tiles = q_shape[1], q_shape[2], q_shape[3] // ttnn.TILE_SIZE
     q, k = config.q_chunk_size // ttnn.TILE_SIZE, config.k_chunk_size // ttnn.TILE_SIZE
     q_buffers = 2 if math.ceil(heads * math.ceil(seq_len / config.q_chunk_size) / cores) > 1 else 1
@@ -825,8 +825,9 @@ def test_vision_l1_free_for_activations(monkeypatch):
     the top PROOF_L1_FOREIGN_BYTES of the bank, and a larger bank pass; 110 or 130 banks, a bank 2 KB short of
     PROOF_L1_BANK_BYTES, a tensor 2 KB lower and a small tensor low in the bank, which leaves the largest free block
     above it, do not. M3VLVisionModel.placement then gives DRAM_PLACEMENT at 2304 patches with "l1" and
-    "l1_interleaved" and logs a warning once, and the forward puts only the RoPE tables' copies in L1. With "dram", or
-    where the rule gives DRAM_PLACEMENT, it does not read the memory view."""
+    "l1_interleaved", logs a warning the first time and every later fallback, with its reason, at debug level, and
+    the forward puts only the RoPE tables' copies in L1. With "dram", or where the rule gives DRAM_PLACEMENT, it does
+    not read the memory view."""
     recorder = _Recorder(monkeypatch)
     model = _model(recorder, (12, 10))
     bank, foreign = PROOF_L1_BANK_BYTES, PROOF_L1_FOREIGN_BYTES
@@ -843,8 +844,13 @@ def test_vision_l1_free_for_activations(monkeypatch):
         (_memory_view(120, bank, [(bank - foreign - 2048, 2048)]), False),
         (low_tensor, False),
     ]
-    warnings = []
+    warnings, debugs = [], []
     sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    debug_sink = logger.add(
+        lambda message: debugs.append(message.record["message"]),
+        level="DEBUG",
+        filter=lambda record: record["level"].name == "DEBUG",
+    )
     try:
         for view, free in views:
 
@@ -865,7 +871,11 @@ def test_vision_l1_free_for_activations(monkeypatch):
             assert sum(event[0] == "alloc" for event in events) == 2, (activations, events)
     finally:
         logger.remove(sink)
+        logger.remove(debug_sink)
     assert len(warnings) == 1 and "110 L1 banks for 120 cores" in warnings[0], warnings
+    fallbacks = [line for line in debugs if "keep their activations in DRAM" in line]
+    for reason in ("110 L1 banks for 120 cores", "130 L1 banks for 120 cores", "per L1 bank, under", "below the top"):
+        assert any(reason in line for line in fallbacks), (reason, fallbacks)
 
     def no_memory_view(device, buffer_type):
         raise AssertionError("read the L1 memory view")
