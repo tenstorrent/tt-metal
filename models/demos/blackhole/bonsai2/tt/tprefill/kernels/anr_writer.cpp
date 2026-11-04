@@ -12,6 +12,7 @@ void kernel_main() {
     const uint32_t Kt = get_common_arg_val<uint32_t>(3);
     const uint32_t rows = get_common_arg_val<uint32_t>(4);
     const uint32_t me = get_arg_val<uint32_t>(0);
+    const uint32_t b0 = get_arg_val<uint32_t>(1), b1 = get_arg_val<uint32_t>(2);
     constexpr auto xr_args = TensorAccessorArgs<0>();
     constexpr auto n_args = TensorAccessorArgs<xr_args.next_compile_time_args_offset()>();
     constexpr auto h_args = TensorAccessorArgs<n_args.next_compile_time_args_offset()>();
@@ -28,7 +29,7 @@ void kernel_main() {
     };
 #ifdef HAS_ADD
     const auto hs = TensorAccessor(h_args, h_addr, TB);
-    for (uint32_t t = 0; t < Kt; ++t) {
+    for (uint32_t t = 32 * b0; t < 32 * b1; ++t) {
         drain(cb_hout, hs, me * Kt + t);
     }
 #endif
@@ -36,7 +37,7 @@ void kernel_main() {
 #ifdef WRITE_N
     const auto ns = TensorAccessor(n_args, n_addr, TB);
 #endif
-    for (uint32_t b = 0; b < Kt / 32; ++b) {
+    for (uint32_t b = b0; b < b1; ++b) {
 #ifdef WRITE_N
         for (uint32_t t = 0; t < 32; ++t) {
             drain(cb_n, ns, me * Kt + 32 * b + t);

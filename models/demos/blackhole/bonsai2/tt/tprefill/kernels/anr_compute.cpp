@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
-// Prefill (residual add +) RMSNorm + rotation (norm_rot.py), compute. This core: one token row tile (32 tokens) of
-// width Kt tiles.
+// Prefill (residual add +) RMSNorm + rotation (norm_rot.py), compute. This core: one token row tile (32 tokens),
+// 1024-wide blocks b0 .. b1 - 1 of its width Kt tiles (PAIRED: the row's other blocks are on a partner core; the two
+// add their sums of squares, exchanged by the readers, before the norm).
 // A. HAS_ADD: h = a + b per tile (bf16, also streamed to the writer); else the reader put h = x in c_3 directly.
 // B. Per token sum of squares: squares 8 tiles at a time (fp32), R += SQ @ ONES (R[r][c] = token r's sum for every c),
 //    accumulated in L1 by the packer.
@@ -22,7 +23,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 
 namespace {
-constexpr uint32_t cb_a = 0, cb_b = 1, cb_c = 2, cb_h = 3, cb_sq = 4, cb_r = 5, cb_inv = 6, cb_nd = 7;
+constexpr uint32_t cb_a = 0, cb_b = 1, cb_c = 2, cb_h = 3, cb_sq = 4, cb_r = 5, cb_inv = 6, cb_nd = 7, cb_rp = 8;
 constexpr uint32_t cb_out = 16, cb_n = 17, cb_hout = 18;
 constexpr uint32_t ONES = 0, HP = 1, HN = 2, VEC = 3;  // const tiles; VEC: w * d vector tiles, then w vector tiles
 ALWI void fmt(uint32_t a, uint32_t b) { reconfig_data_format(a, b); }
@@ -148,9 +149,11 @@ void kernel_main() {
     const uint32_t rows = get_common_arg_val<uint32_t>(1);  // row tiles (one per core)
     const uint32_t inv_k = get_common_arg_val<uint32_t>(2), eps = get_common_arg_val<uint32_t>(3);
     const uint32_t me = get_arg_val<uint32_t>(0);
+    const uint32_t b0 = get_arg_val<uint32_t>(1), b1 = get_arg_val<uint32_t>(2), paired = get_arg_val<uint32_t>(3);
     if (me >= rows) {
         return;
     }
+    const uint32_t T0 = 32 * b0, Kown = 32 * (b1 - b0);  // this core's tiles: global T0 .. T0 + Kown - 1
     const uint32_t NV = Kt / 8;  // vector tiles per weight
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_c, cb_h, cb_h);
 
@@ -159,7 +162,7 @@ void kernel_main() {
     fmt(cb_a, cb_b);
     add_init(cb_a, cb_b);
     pack_reconfig_data_format(cb_h);
-    for (uint32_t t = 0; t < Kt; ++t) {
+    for (uint32_t t = 0; t < Kown; ++t) {
         cb_wait_front(cb_a, 1);
         cb_wait_front(cb_b, 1);
         tile_regs_acquire();
@@ -177,13 +180,13 @@ void kernel_main() {
         cb_pop_front(cb_b, 1);
     }
 #endif
-    cb_wait_front(cb_h, Kt);
+    cb_wait_front(cb_h, Kown);
     cb_wait_front(cb_c, VEC + 2 * NV);
 
     // B. R = sum_t (h_t * h_t) @ ONES, accumulated in L1
     cb_reserve_back(cb_r, 1);
-    for (uint32_t i = 0; i < Kt; i += 8) {
-        const uint32_t n = Kt - i < 8 ? Kt - i : 8;
+    for (uint32_t i = 0; i < Kown; i += 8) {
+        const uint32_t n = Kown - i < 8 ? Kown - i : 8;
         tile_regs_acquire();
         fmt(cb_h, cb_h);
         mul_init(cb_h, cb_h);
@@ -220,9 +223,16 @@ void kernel_main() {
     // C. inv = rsqrt(R / K + eps)
     cb_wait_front(cb_r, 1);
     tile_regs_acquire();
-    fmt(cb_r, cb_r);
-    copy_init(cb_r);
-    copy_tile(cb_r, 0, 0);
+    if (paired) {  // R = own + partner's partial sums (the partner's arrive in c_8)
+        cb_wait_front(cb_rp, 1);
+        fmt(cb_r, cb_rp);
+        add_init(cb_r, cb_rp);
+        add_tiles(cb_r, cb_rp, 0, 0, 0);
+    } else {
+        fmt(cb_r, cb_r);
+        copy_init(cb_r);
+        copy_tile(cb_r, 0, 0);
+    }
     binop_with_scalar_tile_init();
     mul_unary_tile(0, inv_k);
     add_unary_tile(0, eps);
@@ -236,41 +246,45 @@ void kernel_main() {
     cb_push_back(cb_inv, 1);
     tile_regs_release();
     cb_pop_front(cb_r, 1);
+    if (paired) {
+        cb_pop_front(cb_rp, 1);
+    }
     cb_wait_front(cb_inv, 1);
 
     // D + E per 1024-wide block
-    for (uint32_t b = 0; b < Kt / 32; ++b) {
-        for (uint32_t t = 32 * b; t < 32 * b + 32; ++t) {
-            tile_regs_acquire();
-            fmt(cb_h, cb_inv);
-            mul_init(cb_h, cb_inv);
-            mul_tiles(cb_h, cb_inv, t, 0, 0);
+    for (uint32_t b = b0; b < b1; ++b) {
+        // 4 tiles per DEST pass (DEST 0..3; the 8-tile group's vector tile in DEST 7): nd = h * inv * (w * d) and,
+        // WRITE_N, a second pass n = h * inv * w
+        for (uint32_t t0 = 32 * b; t0 < 32 * b + 32; t0 += 4) {
 #ifdef WRITE_N
-            mul_tiles(cb_h, cb_inv, t, 0, 1);
+            for (uint32_t pass = 0; pass < 2; ++pass) {
+#else
+            for (uint32_t pass = 0; pass < 1; ++pass) {
 #endif
-            fmt(cb_c, cb_c);
-            copy_init(cb_c);
-            copy_tile(cb_c, VEC + t / 8, 7);  // w * d
-#ifdef WRITE_N
-            copy_tile(cb_c, VEC + NV + t / 8, 6);  // w
-#endif
-            MATH((ckernel::sfpu::vec_macro_init()));
-            scale_tile(0, 7, t % 8);
-#ifdef WRITE_N
-            scale_tile(1, 6, t % 8);
-#endif
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_nd);
-            cb_reserve_back(cb_nd, 1);
-            pack_tile(0, cb_nd);
-            cb_push_back(cb_nd, 1);
-#ifdef WRITE_N
-            cb_reserve_back(cb_n, 1);
-            pack_tile(1, cb_n);
-            cb_push_back(cb_n, 1);
-#endif
-            tile_regs_release();
+                const uint32_t out_cb = pass == 0 ? cb_nd : cb_n;
+                tile_regs_acquire();
+                fmt(cb_h, cb_inv);
+                mul_init(cb_h, cb_inv);
+                for (uint32_t i = 0; i < 4; ++i) {
+                    mul_tiles(cb_h, cb_inv, t0 - T0 + i, 0, i);
+                }
+                fmt(cb_c, cb_c);
+                copy_init(cb_c);
+                copy_tile(cb_c, VEC + pass * NV + t0 / 8, 7);
+                MATH((ckernel::sfpu::vec_macro_init()));
+                for (uint32_t i = 0; i < 4; ++i) {
+                    scale_tile(i, 7, (t0 + i) % 8);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(out_cb);
+                cb_reserve_back(out_cb, 4);
+                for (uint32_t i = 0; i < 4; ++i) {
+                    pack_tile(i, out_cb);
+                }
+                cb_push_back(out_cb, 4);
+                tile_regs_release();
+            }
         }
         // rotation of the block: per c1, DEST tile a0 = sum_a1 H4[c1, a1] nd_(8 a1 + a0) @ H32 / 32, then H8 over DEST
         cb_wait_front(cb_nd, 32);
@@ -302,6 +316,6 @@ void kernel_main() {
         cb_pop_front(cb_nd, 32);
     }
     cb_pop_front(cb_inv, 1);
-    cb_pop_front(cb_h, Kt);
+    cb_pop_front(cb_h, Kown);
     cb_pop_front(cb_c, VEC + 2 * NV);
 }

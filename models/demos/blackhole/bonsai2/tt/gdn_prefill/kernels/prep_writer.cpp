@@ -39,7 +39,7 @@ void kernel_main() {
     auto put = [&](uint64_t dst) {
         cb_wait_front(cb_out, 1);
         noc_async_write(get_read_ptr(cb_out), dst, TB);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();  // the tile has left L1: its slot can be reused (no round trip per tile)
         cb_pop_front(cb_out, 1);
     };
     for (uint32_t it = first; it < first + n; ++it) {
@@ -66,4 +66,5 @@ void kernel_main() {
             put(o7.get_noc_addr(it * 4 + k));
         }
     }
+    noc_async_write_barrier();
 }

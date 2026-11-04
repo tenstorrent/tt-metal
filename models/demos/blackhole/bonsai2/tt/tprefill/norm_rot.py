@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prefill (residual add +) RMSNorm + rotation in one op (kernels/anr_*.cpp): h = a (+ b), n = h / rms(h) * w and
 x' = blockdiag(H_1024) D n, the input the ternary prefill linears take. Replaces the residual add, the norm and the
-rotation (three DRAM round trips of the activation) with one pass. One core per 32-token row tile."""
+rotation (three DRAM round trips of the activation) with one pass. Two cores per 32-token row tile (each half of the
+1024-wide blocks; they exchange their sums of squares), one when the row tiles outnumber half the cores. Device time at
+2048 tokens: ~225 us with n, ~260 us with the add, ~157 us x' only: about 270-320 GB/s of activation traffic.
+BONSAI_NROT_P=1 forces one core per row."""
 
+import os
 import struct
 
 import numpy as np
@@ -69,11 +73,20 @@ class PrefillNormRot:
         xr = alloc()
         n = alloc() if want_n else None
         h = alloc() if b is not None else None
-        coords = [ttnn.CoreCoord(c % grid.x, c // grid.x) for c in range(Mt)]
+        nb = Kt // 32
+        P = 2 if 2 * Mt <= grid.x * grid.y and nb >= 2 else 1  # cores per row tile (block halves, sums exchanged)
+        P = min(P, int(os.environ.get("BONSAI_NROT_P", "2")))
+        coords = [ttnn.CoreCoord(c % grid.x, c // grid.x) for c in range(P * Mt)]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
-        rt = ttnn.RuntimeArgs()
+        rd, rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        half = -(-nb // 2)
+        kmax = 32 * (half if P == 2 else nb)
         for i, c in enumerate(coords):
-            rt[c.x][c.y] = [i]
+            m, j = divmod(i, P)
+            b0, b1 = (0, nb) if P == 1 else ((0, half) if j == 0 else (half, nb))
+            rt[c.x][c.y] = [m, b0, b1, P - 1]
+            p = device.worker_core_from_logical_core(coords[i ^ 1] if P == 2 else c)
+            rd[c.x][c.y] = [m, b0, b1, P - 1, p.x, p.y]
         defines = ([("HAS_ADD", "1")] if b is not None else []) + ([("WRITE_N", "1")] if want_n else [])
         bb, nn, hh = (b if b is not None else a), (n if n is not None else xr), (h if h is not None else xr)
 
@@ -95,7 +108,7 @@ class PrefillNormRot:
                     + ttnn.TensorAccessorArgs(bb).get_compile_time_args()
                     + ttnn.TensorAccessorArgs(self.consts).get_compile_time_args(),
                     defines=defines,
-                    runtime_args=rt,
+                    runtime_args=rd,
                     common_runtime_args=[
                         a.buffer_address(),
                         bb.buffer_address(),
@@ -124,19 +137,19 @@ class PrefillNormRot:
                     runtime_args=rt,
                     common_runtime_args=[Kt, Mt, _f32_bits(1.0 / K), _f32_bits(self.eps)],
                     config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("BONSAI_NROT_FIDELITY", "HiFi4")),
                         fp32_dest_acc_en=True,
                         math_approx_mode=False,
                         dst_full_sync_en=True,
                     ),
                 ),
             ],
-            semaphores=[],
+            semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=crs, initial_value=0)],
             cbs=[
-                cb(0, bf, 4),
-                cb(1, bf, 4),
+                cb(0, bf, 16),
+                cb(1, bf, 16),
                 cb(2, f32, self.nconst),
-                cb(3, bf, Kt),
+                cb(3, bf, kmax),
                 cb(4, f32, 8),
                 cb(5, f32, 1),
                 cb(6, f32, 1),
@@ -144,6 +157,7 @@ class PrefillNormRot:
                 cb(16, bf, 8),
                 cb(17, bf, 8),
                 cb(18, bf, 8),
+                cb(8, f32, 1),
             ],
         )
         ttnn.generic_op([a, bb, self.consts, xr, nn, hh], program)

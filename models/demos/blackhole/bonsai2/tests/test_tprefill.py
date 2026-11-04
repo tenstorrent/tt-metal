@@ -325,3 +325,19 @@ def test_tprefill2_split(device, N, na, ha, hb):
     eb = (ttnn.to_torch(b).float().reshape(relay(full[:, na * 32 :], hb).shape) - relay(full[:, na * 32 :], hb)).abs()
     print(f"SPLIT N={N} max diff a {ea.max().item()} b {eb.max().item()} shapes {list(a.shape)} {list(b.shape)}")
     assert ea.max().item() == 0 and eb.max().item() == 0
+
+
+def test_prefill_norm_rot_time(device):
+    from models.demos.blackhole.bonsai2.tt.tprefill.norm_rot import PrefillNormRot
+
+    T, K = 2048, 5120
+    signs = np.random.default_rng(5).choice([-1.0, 1.0], size=K).astype(np.float32)
+    op = PrefillNormRot(device, signs, torch.ones(K), 1e-6)
+    tt = lambda: ttnn.from_torch(
+        torch.randn(1, 1, T, K).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    a, b = tt(), tt()
+    print(
+        f"NROT_MS attn {_time(device, lambda: op(a, want_n=True)):.3f} ffn {_time(device, lambda: op(a, b)):.3f} "
+        f"xr-only {_time(device, lambda: op(a)):.3f}"
+    )
