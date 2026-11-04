@@ -1089,3 +1089,26 @@ def test_transpose_specless_sharded_output_grid_shrinks_block_col_major_non_squa
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+@pytest.mark.parametrize(
+    "ranges, orientation",
+    [
+        ([((1, 0), (4, 0))], ttnn.ShardOrientation.ROW_MAJOR),
+        ([((0, 1), (3, 1))], ttnn.ShardOrientation.ROW_MAJOR),
+        ([((1, 1), (2, 2))], ttnn.ShardOrientation.ROW_MAJOR),
+        ([((1, 1), (2, 2))], ttnn.ShardOrientation.COL_MAJOR),
+        ([((0, 0), (1, 0)), ((3, 1), (4, 1))], ttnn.ShardOrientation.ROW_MAJOR),
+    ],
+    ids=["offset_x", "offset_y", "offset_2x2", "offset_2x2_col_major", "non_contiguous"],
+)
+def test_transpose_wh_height_sharded_offset_grid(ranges, orientation, device):
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 256, 256).bfloat16()
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*a), ttnn.CoreCoord(*b)) for a, b in ranges})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(grid, (64, 256), orientation)
+    )
+    t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    out = ttnn.to_torch(ttnn.transpose(t, -2, -1))
+    assert torch.equal(out, x.transpose(-2, -1))
