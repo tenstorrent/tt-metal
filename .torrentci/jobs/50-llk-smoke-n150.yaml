@@ -21,8 +21,8 @@ jobs:
         image: {from-job: ci-build-image, image: tt-metal-ci-build}
         accelerator: {type: n150, count: 1}
         resources:
-          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
-          limits: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
     env:
       - {name: HOME, value: /tmp/home}
       - {name: CHIP_ARCH, value: wormhole}
