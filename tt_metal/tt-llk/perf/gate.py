@@ -33,6 +33,7 @@ import placement_check as pc  # noqa: E402
 import regression_compare as rc  # noqa: E402
 
 POLICY = Path(__file__).with_name("gate_policy.yaml")
+WAIVERS = Path(__file__).with_name("waivers.yaml")
 SCHEMA = 1
 
 
@@ -62,6 +63,62 @@ def _csvs(directory):
         for p in glob.glob(f"{directory}/**/*.csv", recursive=True)
         if not p.endswith(".post.csv")
     )
+
+
+def waivers(arch, path=WAIVERS):
+    """The waivers.yaml entries for ``arch``; a malformed entry is an error, never skipped."""
+    entries = yaml.safe_load(Path(path).read_text()).get("waivers") or []
+    for i, w in enumerate(entries, 1):
+        lacking = [k for k in ("test", "max_delta", "reason", "issue") if not w.get(k)]
+        if lacking:
+            raise ValueError(f"waivers.yaml entry {i} lacks {', '.join(lacking)}.")
+    return [w for w in entries if w.get("arch", arch) == arch]
+
+
+def _waived_by(point, entries):
+    """The first entry that accepts this regressed point, or None."""
+    config = {k: rc._short(v) for k, v in point["config"]}
+    for w in entries:
+        if (
+            w["test"] == point[rc.MODULE_COL]
+            and w.get("run_type", point["run_type"]) == point["run_type"]
+            and w.get("marker", point["marker"]) == point["marker"]
+            and all(
+                str(config.get(k)) == str(v) for k, v in (w.get("config") or {}).items()
+            )
+            and point["delta"] <= w["max_delta"]
+        ):
+            return w
+    return None
+
+
+def apply_waivers(result, entries):
+    """Move the regressions a waiver accepts to ``result["waived"]``."""
+    kept, waived = [], []
+    for point in result["regressions"]:
+        w = _waived_by(point, entries)
+        if w:
+            waived.append({**point, "waiver": w})
+        else:
+            kept.append(point)
+    result["regressions"], result["waived"] = kept, waived
+    return result
+
+
+def _waived_table(waived):
+    lines = [
+        "## Waived regressions (waivers.yaml)",
+        "",
+        "| test | marker | run type | Δ | allowed | issue | reason |",
+        "|---|---|---|--:|--:|---|---|",
+    ]
+    for p in sorted(waived, key=lambda p: -p["delta"]):
+        w = p["waiver"]
+        lines.append(
+            f"| {p[rc.MODULE_COL]} | {p['marker']} | {p['run_type']} | {p['delta'] * 100:+.1f}% | "
+            f"{w['max_delta'] * 100:.0f}% | #{w['issue']} | {w['reason']} |"
+        )
+    return "\n".join(lines)
 
 
 def complete(directory, arch):
@@ -267,6 +324,11 @@ def compare(a):
                 error = "No point was compared: the two sides share no points."
             elif not (a.baseline_commit or a.baseline_run):
                 error = _short_baseline(p, result)
+            if not error:
+                try:
+                    apply_waivers(result, waivers(a.arch, a.waivers))
+                except (OSError, ValueError, yaml.YAMLError) as e:
+                    error = f"The waivers could not be read: {e}"
 
     status, reason = decide(
         p, incomplete=incomplete, baseline=baseline, result=result, error=error
@@ -296,6 +358,8 @@ def compare(a):
             module_thresholds=p["modules"],
             arch=a.arch,
         )
+        if result.get("waived"):
+            report += "\n\n" + _waived_table(result["waived"])
         missing = result["missing_points"]
         if missing:
             names = sorted({r[rc.MODULE_COL] for r in missing})
@@ -327,6 +391,7 @@ def compare(a):
             "improvements": len(result["improvements"]) if result else 0,
             "new": len(result["new_points"]) if result else 0,
             "missing": len(result["missing_points"]) if result else 0,
+            "waived": len(result.get("waived", [])) if result else 0,
         },
         "stage2": stage2,
     }
@@ -664,6 +729,7 @@ def main(argv=None):
     c.add_argument(
         "--stage2", default="", help="glob of the legs' stage2.json (merge gate)"
     )
+    c.add_argument("--waivers", default=str(WAIVERS), help="the accepted regressions")
     c.add_argument("--current-sha", default="?")
     c.add_argument("--current-label", default="")
     c.add_argument("--out-dir", default=".")

@@ -1,0 +1,18 @@
+# Intended LLK perf regressions, accepted in review.
+#
+# The gates read this file from the tree they measure: the PR gate from the PR, the merge gate
+# from the queue head, the nightlies from main. A regressed point that matches an entry, and is
+# not slower than its max_delta, does not count; the report lists it as waived. Code owners of
+# tt_metal/tt-llk/perf/ approve every change to this file. Remove an entry when the nightly
+# baseline pin (gate_policy.yaml) moves past the change.
+#
+# - test: perf_matmul              # test module (required)
+#   arch: wormhole                 # blackhole or wormhole; omit for both
+#   run_type: L1_TO_L1             # omit for every run type
+#   marker: TILE_LOOP              # omit for every marker
+#   config: {math_fidelity: HiFi4} # sweep values the point must have; omit for all
+#   max_delta: 0.10                # the point may be up to 10 % slower than the baseline (required)
+#   reason: "One more SFPU pass for correctness of ..."  (required)
+#   issue: 12345                   # (required)
+
+waivers: []

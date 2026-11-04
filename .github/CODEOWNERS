@@ -282,6 +282,8 @@ tt_metal/tt-llk/tools/include/perf_counters/ @mvlahovicTT @skrsmanovicTT @nvelic
 tt_metal/tt-llk/tools/python/tt_llk_perf/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
 # ── LLK perf infrastructure: restricted ownership
 tt_metal/tt-llk/perf/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @skrsmanovicTT @sstanisicTT @mvlahovicTT @nstojicTT
+# An entry accepts a perf regression in every LLK perf gate: one of these must approve it.
+tt_metal/tt-llk/perf/waivers.yaml @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @skrsmanovicTT @sstanisicTT @mvlahovicTT @nstojicTT
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/hardware_free/perf/ @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
