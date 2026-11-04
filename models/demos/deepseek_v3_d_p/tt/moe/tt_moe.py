@@ -789,6 +789,7 @@ class TtMoe(LightweightModule):
             self.sd_manager_id = None
 
     _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+    _dump_packed_warned = False  # see the packed-forward branch below; warn once per process
     _overlap_forward_logged = False  # the first overlapped forward logs once per process
 
     def _dump_routing(
@@ -798,6 +799,7 @@ class TtMoe(LightweightModule):
         actual_start: int,
         cache_user_id: int,
         traced: bool,
+        packed: bool = False,
     ) -> None:
         """Env-gated (PREFILL_DUMP_ROUTING_DIR) host dump of the gate's per-token top-k selection.
 
@@ -830,6 +832,16 @@ class TtMoe(LightweightModule):
                 logger.warning(
                     "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is the traced path; "
                     "routing dump skipped for all layers (run with use_trace=False to collect it)"
+                )
+            return
+        if packed:
+            # A packed forward's rows belong to several slots at several starts, so no single
+            # (slot, start) file name describes them and the analysis script would un-rotate them wrongly.
+            if not TtMoe._dump_packed_warned:
+                TtMoe._dump_packed_warned = True
+                logger.warning(
+                    "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is a packed forward; "
+                    "routing dump skipped (run one chunk per forward to collect it)"
                 )
             return
         try:
@@ -1024,7 +1036,14 @@ class TtMoe(LightweightModule):
             input_ids=input_ids,
         )
 
-        self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
+        self._dump_routing(
+            indices,
+            scores,
+            actual_start or 0,
+            cache_user_id,
+            metadata is not None,
+            packed=padding_real_rows is not None or packed_padding_config is not None,
+        )
 
         (
             tt_expert_offsets,
