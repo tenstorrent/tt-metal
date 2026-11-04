@@ -176,9 +176,10 @@ public:
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
 
     // This coord's input counters. arrived is the bytes_sent word on its service core: the host adds every page
-    // it pushes, data and metadata alike (one step per transfer), plus any tail a wrap skips when the FIFO isn't
-    // whole pages. consumed is the consumed-counter: one step is every worker's inc for a transfer.
-    // Owner-only; TT_FATALs in connector mode.
+    // it pushes, data and metadata alike (one step per transfer). consumed is the consumed-counter: one step is
+    // every worker's inc for a transfer.
+    // Owner-only; TT_FATALs in connector mode, or when the FIFO isn't whole socket pages, since each wrap would
+    // then also add the bytes past the last page.
     StreamInputCounters get_input_counters(const distributed::MeshCoordinate& coord) const;
 
     // L1 address of the metadata destination, uniform across every worker core.

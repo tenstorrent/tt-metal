@@ -253,6 +253,7 @@ public:
     // This coord's output counters. produced is the data_ready counter: one step is every worker's inc for a
     // transfer. pushed is consumed_sem on the first worker core: the service multicasts 1 per drained transfer.
     // forwarded is the bytes_acked word in the socket config: the receiver adds 1 per consumed transfer.
+    // In relay mode the exit relay credits bytes_acked, and an exit chip's forwarded is its slot's cable_acked word.
     tt::tt_metal::StreamOutputCounters get_output_counters(
         const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
@@ -337,6 +338,7 @@ public:
 
     // This coord's input counters. arrived is the bytes_sent word in the socket config: each sender lane adds 1 per
     // landed transfer. consumed is the consumed counter: one step is every worker's inc for a transfer.
+    // In relay mode the entry relay feeds bytes_sent, and an entry chip's arrived is its slot's relay arrived word.
     tt::tt_metal::StreamInputCounters get_input_counters(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Fabric-link lease — receiver-side mirror of the sender's (only meaningful when

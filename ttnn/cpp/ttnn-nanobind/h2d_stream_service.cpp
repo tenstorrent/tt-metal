@@ -369,8 +369,7 @@ void py_module_types(nb::module_& mod) {
                 This coord's input counters. arrived is the bytes_sent word on
                 its service core: the bytes the host has pushed, each
                 transfer's data pages plus one metadata page when metadata is
-                configured, plus any FIFO tail too short for a page that a
-                wrap skips. consumed is the consumed-counter: an inc from
+                configured. consumed is the consumed-counter: an inc from
                 every worker per transfer. Owner-only.
 
                 Args:
@@ -379,7 +378,8 @@ void py_module_types(nb::module_& mod) {
 
                 Raises:
                     RuntimeError: If the coord does not participate in this
-                        service.
+                        service, or if the FIFO isn't whole socket pages (each
+                        wrap would also add the bytes past the last page).
 
                 Returns:
                     StreamInputCounters: Each word, with how far it moves per transfer.

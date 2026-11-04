@@ -1173,6 +1173,13 @@ StreamInputCounters H2DStreamService::get_input_counters(const distributed::Mesh
     require_owner(is_owner_, "H2DStreamService::get_input_counters");
     for (const auto& s : sockets_) {
         if (s->get_active_cores()[0].device_coord == coord) {
+            TT_FATAL(
+                s->get_fifo_size() % socket_page_size_ == 0,
+                "H2DStreamService::get_input_counters: fifo_size {} B is not a whole number of {} B socket pages, so "
+                "each wrap also adds the bytes past the last page to bytes_sent. Pass a multiple of the socket page "
+                "as fifo_size_bytes, or 0 to auto-size.",
+                s->get_fifo_size(),
+                socket_page_size_);
             const CoreCoord core = get_service_core(coord);
             // bytes_sent is the first word of the receiver's socket config; metadata takes one page.
             const uint32_t pages = num_socket_pages_ + (cfg_.metadata_size_bytes > 0 ? 1 : 0);

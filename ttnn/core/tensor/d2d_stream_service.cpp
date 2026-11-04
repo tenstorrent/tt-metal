@@ -1108,7 +1108,7 @@ struct D2DStreamServiceReceiver::Impl {
     // Per-coord service-core L1 words (service cores differ per device).
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> termination_addrs;
-    // Sender lanes per coord: the data-landed increments the kernel awaits per transfer.
+    // Per coord, arrived's increments per transfer: one per sender lane, or per relay lane in relay mode.
     std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t> num_lanes;
     // Fabric-link lease — mirror of the sender. Single per-coord link_grant word
     // (0 = idle/done, 1 = granted one drain); same ping-pong protocol. Always set
@@ -1311,10 +1311,19 @@ tt::tt_metal::StreamOutputCounters D2DStreamServiceSender::get_output_counters(
     const DeviceAddr config_addr = impl_->socket->get_config_buffer()->address();
     const uint32_t bytes_acked_offset =
         tt::tt_metal::distributed::MeshSocket::sender_bytes_acked_offset(tt::tt_metal::hal::get_l1_alignment());
+    DeviceAddr forwarded_addr = config_addr + bytes_acked_offset;
+    if (impl_->relay) {
+        // An exit chip runs the exit relay, which the entry relay credits in cable_acked[slot].
+        const auto& relay = *impl_->relay;
+        const auto [p, k] = relay.plan.slot_of.at(coord);
+        if (coord == relay.plan.cables[p].exit_coord) {
+            forwarded_addr = relay.words[p].acked_base + k * relay.word_stride;
+        }
+    }
     return {
         .produced = {core, get_data_ready_counter_addr(coord), impl_->num_workers},
         .pushed = {impl_->worker_cores.start_coord, get_consumed_sem_addr(), 1},
-        .forwarded = {core, config_addr + bytes_acked_offset, 1},
+        .forwarded = {core, forwarded_addr, 1},
     };
 }
 
@@ -1486,8 +1495,17 @@ tt::tt_metal::StreamInputCounters D2DStreamServiceReceiver::get_input_counters(
         it != impl_->num_lanes.end(), "D2DStreamServiceReceiver::get_input_counters: no receiver at coord {}", coord);
     const CoreCoord core = get_service_core(coord);
     // bytes_sent is the first word of the config address build_receiver_side hands the kernels.
+    DeviceAddr arrived_addr = impl_->socket->get_config_buffer()->address();
+    if (impl_->relay) {
+        // An entry chip runs the entry relay, which counts its own coord's landings in arrived[slot].
+        const auto& relay = *impl_->relay;
+        const auto [p, k] = relay.plan.slot_of.at(coord);
+        if (coord == relay.plan.cables[p].entry_coord) {
+            arrived_addr = relay.words[p].arrived_base + k * relay.word_stride;
+        }
+    }
     return {
-        .arrived = {core, impl_->socket->get_config_buffer()->address(), it->second},
+        .arrived = {core, arrived_addr, it->second},
         .consumed = {core, get_consumed_counter_addr(coord), impl_->num_workers},
     };
 }
@@ -3186,6 +3204,9 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
             CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.entry_coord));
         const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, t_node, entry_node);
         TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link from coord {} to its entry chip", c);
+        // The entry relay sends one bytes_sent increment per lane it uses for c.
+        const uint32_t lanes = CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(*mesh, relay, c, p);
+        impl.num_lanes.emplace(c, lanes);
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_receiver_program(
@@ -3202,8 +3223,7 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
                 static_cast<uint32_t>(impl.metadata_l1_addr),
                 /*share_fabric_links=*/true,
                 static_cast<uint32_t>(impl.link_grant_addrs.at(c)),
-                // The entry relay sends one bytes_sent increment per lane it uses for c.
-                CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(*mesh, relay, c, p),
+                lanes,
                 std::nullopt,
                 0u,
                 t_node,
@@ -3213,6 +3233,8 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
     // 2. Entry chips: the entry relay, in place of their receiver service.
     for (uint32_t p = 0; p < plan.cables.size(); ++p) {
         const auto e = plan.cables[p].entry_coord;
+        // The exit relay lands each of e's transfers with one increment per cable lane.
+        impl.num_lanes.emplace(e, peer.cables[p].z_lanes);
         workload->add_program(
             tm_distributed::MeshCoordinateRange(e),
             CMAKE_UNIQUE_NAMESPACE::build_entry_relay_program(

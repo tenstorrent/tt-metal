@@ -262,7 +262,8 @@ void py_module_types(nb::module_& mod) {
             R"doc(
                 This coord's output counters: produced is the data_ready counter (an inc from every worker per
                 transfer), pushed is consumed_sem on the first worker core (1 per drained transfer), forwarded is
-                the bytes_acked word in the socket config (1 per transfer the receiver consumed).
+                the bytes_acked word in the socket config (1 per transfer the receiver consumed). In relay mode
+                the exit relay credits bytes_acked, and an exit chip's forwarded is its slot's cable_acked word.
             )doc")
         .def(
             "wait_for_fabric_links",
@@ -338,7 +339,8 @@ void py_module_types(nb::module_& mod) {
             R"doc(
                 This coord's input counters: arrived is the bytes_sent word in the socket config (1 per landed
                 transfer from each sender lane), consumed is the consumed counter (an inc from every worker per
-                transfer).
+                transfer). In relay mode the entry relay feeds bytes_sent, and an entry chip's arrived is its
+                slot's relay arrived word.
             )doc")
         .def(
             "wait_for_fabric_links",
