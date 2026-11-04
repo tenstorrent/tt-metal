@@ -10,6 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -1301,6 +1302,17 @@ void py_module(nb::module_& mod) {
         &ttnn::prim::MatmulDeviceOperation::select_program_factory,
         nb::arg("operation_attributes"),
         nb::arg("tensor_args"));
+
+    mod.def(
+        "matmul_model_last_pick",
+        &ttnn::operations::matmul::matmul_model_last_pick,
+        R"doc(
+        Testing/benchmark only, not part of the public API.
+
+        What the opt-in matmul config model (ttnn.CONFIG.matmul_model_config) did on this thread's last matmul
+        called without a program_config: "model: <program config>" when the model chose the config, or
+        "default: <reason>" when the default selection ran. Empty while the flag has been off.
+    )doc");
 
     // Bind create_matmul_attributes helper
     mod.def(
