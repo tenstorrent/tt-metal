@@ -28,7 +28,10 @@ Tensor fused_experts(
     const std::optional<Tensor>& shared_down_weights,
     std::optional<float> shared_swiglu_limit,
     const std::optional<Tensor>& router_weight,
-    const std::optional<Tensor>& router_bias) {
+    const std::optional<Tensor>& router_bias,
+    std::optional<uint32_t> all_reduce_cluster_axis,
+    uint32_t all_reduce_num_links,
+    tt::tt_fabric::Topology all_reduce_topology) {
     return ttnn::prim::fused_experts(
         input_tensor,
         gate_up_weights,
@@ -49,7 +52,10 @@ Tensor fused_experts(
         shared_down_weights,
         shared_swiglu_limit,
         router_weight,
-        router_bias);
+        router_bias,
+        all_reduce_cluster_axis,
+        all_reduce_num_links,
+        all_reduce_topology);
 }
 
 }  // namespace ttnn::experimental::deepseek::moe

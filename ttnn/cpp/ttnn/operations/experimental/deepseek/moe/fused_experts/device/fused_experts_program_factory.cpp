@@ -22,21 +22,11 @@ namespace {
 constexpr std::string_view kKernelDir =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/device/kernels";
 
-// DRAM weight layout: one shard per core of the serial grid, which is kGridY rows tall and
-// num_weight_shards / kGridY columns wide (8x8 at H == 4096, 10x8 at H == 5120).
-constexpr uint32_t kGridY = 8;
-
 // Each weight shard owns kOutTilesPerCore tiles (64 columns) of the H-dim output row, so a
 // down shard is [I, 64] and there are H / 64 shards.
 constexpr uint32_t kOutTilesPerCore = 2;
 
-// 6-expert path: one 2-column group per expert on a 12-wide grid. gate_up splits I over the group's
-// first `num_producers` cores -- the largest divisor of I/32 that fits the group, so all 2x8 = 16 at
-// I/32 == 16 or 64, and 6 of them at TP12's I/32 == 6 -- on 2x9 = 18 cores (12x9 grid) when I/32
-// divides by 18 but not 16. Down always runs on the group's bottom 2x8 = 16 cores, which keeps the H
-// split at H/64/16 shards per core.
-constexpr uint32_t kParallelExperts = 6;
-constexpr uint32_t kDownCoresPerExpert = 2 * kGridY;
+// The 2x9 gate_up group of the 6-expert path (see kParallelExperts).
 constexpr uint32_t kTallGateUpCoresPerExpert = 2 * (kGridY + 1);
 
 uint32_t largest_divisor_at_most(uint32_t n, uint32_t cap) {
@@ -1825,6 +1815,14 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     return build_program_descriptor(operation_attributes, tensor_args, tensor_return_value, nullptr);
+}
+
+tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce::create_workload_descriptor(
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
+    TT_THROW("fused_experts: all_reduce is not implemented yet");
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts

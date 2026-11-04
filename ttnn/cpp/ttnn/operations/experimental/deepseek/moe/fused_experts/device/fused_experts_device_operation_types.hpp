@@ -8,10 +8,24 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
+
+// The TP all-reduce fused onto the end of the op: each chip's [1, H] partial is summed over
+// `cluster_axis` of the mesh, and every chip on that axis ends with the same sum.
+//
+// Plain aggregate, reflected member by member like operation_attributes_t. Declaring
+// attribute_names / attribute_values() as well makes ttsl's to_json_t ambiguous for it.
+struct FusedAllReduceParams {
+    uint32_t cluster_axis{};
+    // Chips on `cluster_axis`, resolved from the input's mesh in `invoke`.
+    uint32_t ring_size{};
+    uint32_t num_links = 1;
+    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
+};
 
 // Non-tensor parameters of the fused routed-expert FFN.
 struct operation_attributes_t {
@@ -64,6 +78,9 @@ struct operation_attributes_t {
     bool two_hub_gather = true;
 
     tt::tt_metal::MemoryConfig output_memory_config{};
+
+    // Set when the op all-reduces its output over a mesh axis itself (MultiCoreAllReduce).
+    std::optional<FusedAllReduceParams> all_reduce;
 };
 
 // All tensors flowing in/out of the operation. This op is the concrete example of an op that takes
