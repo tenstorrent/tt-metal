@@ -2,14 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
-// RUN: %{blackhole_objdump} -drz %t.o > %t.dump
-// RUN: %{blackhole_compare_codegen} %t.dump
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %t/codegen.cpp -o %t/codegen.o
+// RUN: %{blackhole_objdump} -drz %t/codegen.o > %t/codegen.dump
+// RUN: %{blackhole_compare_codegen} %t/codegen.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -c %t/asserts.cpp -o %t/assert.o
+// RUN: %{blackhole_objdump} -d %t/assert.o | FileCheck %s --check-prefix=ASSERT
 
 // Compare each HAL function with its adjacent reference_ function. Disable
 // identical-code folding so both bodies are emitted independently.
-// LLK_ASSERT is disabled so runtime paths contain only the issued instruction.
+// codegen.cpp is compiled without LLK_ASSERT so runtime paths contain only the
+// issued instruction; asserts.cpp checks the runtime operand asserts.
 // Semaphore selectors are one bit per semaphore: S<n> is bit n.
+
+//--- common.h
+#pragma once
 
 #include <cstdint>
 
@@ -17,12 +24,15 @@
 
 namespace sync = hal::sync;
 
+//--- codegen.cpp
+#include "common.h"
+
 extern "C" __attribute__((noinline, used)) void init_post_get_selectors()
 {
-    sync::semaphore::init<1, 2, sync::Semaphore::S1, sync::Semaphore::S4>();
+    sync::semaphore::init<1 /*Initial*/, 2 /*Maximum*/, sync::Semaphore::S1, sync::Semaphore::S4>();
     sync::semaphore::init<
-        0,
-        15,
+        0 /*Initial*/,
+        15 /*Maximum*/,
         sync::Semaphore::S0,
         sync::Semaphore::S1,
         sync::Semaphore::S2,
@@ -45,7 +55,7 @@ extern "C" __attribute__((noinline, used)) void reference_init_post_get_selector
 
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
-    TTI_INSN((sync::semaphore::init_operation<3, 4, sync::Semaphore::S5>()));
+    TTI_INSN((sync::semaphore::init_operation<3 /*Initial*/, 4 /*Maximum*/, sync::Semaphore::S5>()));
     TTI_INSN((sync::semaphore::post_operation<sync::Semaphore::S6, sync::Semaphore::S7>()));
     TTI_INSN(sync::semaphore::get_operation<sync::Semaphore::S2>());
 }
@@ -117,3 +127,49 @@ extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_init_r
     const std::uint32_t selector = 1u << hal::to_underlying(semaphore);
     return TT_OP_SEMINIT(0 /*max_value*/, initial, selector) + (maximum << 20);
 }
+
+//--- asserts.cpp
+#include "common.h"
+
+// Invalid runtime indices must trap before the MMIO access. MMIO post/get also
+// emit a conditional ebreak for their max/zero checks, so only read has a
+// valid-boundary probe.
+
+extern "C" void reject_invalid_runtime_read()
+{
+    (void)sync::semaphore::read(static_cast<sync::Semaphore>(8));
+}
+
+// ASSERT-LABEL: <reject_invalid_runtime_read>:
+// ASSERT-NOT: lw
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_runtime_mmio_post()
+{
+    sync::semaphore::post<sync::Access::MMIO>(static_cast<sync::Semaphore>(8));
+}
+
+// ASSERT-LABEL: <reject_invalid_runtime_mmio_post>:
+// ASSERT-NOT: sw
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_runtime_mmio_get()
+{
+    sync::semaphore::get<sync::Access::MMIO>(static_cast<sync::Semaphore>(8));
+}
+
+// ASSERT-LABEL: <reject_invalid_runtime_mmio_get>:
+// ASSERT-NOT: sw
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void accept_runtime_read_boundary()
+{
+    (void)sync::semaphore::read(sync::Semaphore::S7);
+}
+
+// ASSERT-LABEL: <accept_runtime_read_boundary>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret

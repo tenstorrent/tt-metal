@@ -2,23 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -fno-ipa-icf -c %s -o %t.unpack.o
-// RUN: %{blackhole_objdump} -t --special-syms -drz %t.unpack.o > %t.unpack.dump
-// RUN: %{blackhole_compare_codegen} %t.unpack.dump
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -fno-ipa-icf -c %s -o %t.math.o
-// RUN: %{blackhole_objdump} -t --special-syms -drz %t.math.o > %t.math.dump
-// RUN: %{blackhole_compare_codegen} %t.math.dump
-// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -fno-ipa-icf -c %s -o %t.pack.o
-// RUN: %{blackhole_objdump} -t --special-syms -drz %t.pack.o > %t.pack.dump
-// RUN: %{blackhole_compare_codegen} %t.pack.dump
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %s -o %t.assert.o
-// RUN: %{blackhole_objdump} -d %t.assert.o | FileCheck %s --check-prefix=ASSERT
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -fno-ipa-icf -c %t/codegen.cpp -o %t/unpack.o
+// RUN: %{blackhole_objdump} -drz %t/unpack.o > %t/unpack.dump
+// RUN: %{blackhole_compare_codegen} %t/unpack.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -fno-ipa-icf -c %t/codegen.cpp -o %t/math.o
+// RUN: %{blackhole_objdump} -drz %t/math.o > %t/math.dump
+// RUN: %{blackhole_compare_codegen} %t/math.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -fno-ipa-icf -c %t/codegen.cpp -o %t/pack.o
+// RUN: %{blackhole_objdump} -drz %t/pack.o > %t/pack.dump
+// RUN: %{blackhole_compare_codegen} %t/pack.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %t/asserts.cpp -o %t/assert.o
+// RUN: %{blackhole_objdump} -d %t/assert.o | FileCheck %s --check-prefix=ASSERT
+
+//--- common.h
+#pragma once
 
 #include <cstdint>
 
 #include "hal/sync.h"
 
 namespace hs = hal::sync;
+
+//--- codegen.cpp
+#include "common.h"
 
 // Encoding must match raw instruction words without issuing instructions or MMIO.
 
@@ -103,7 +110,7 @@ extern "C" __attribute__((noinline, used)) void issue_sync_descriptor()
 
 extern "C" __attribute__((noinline, used)) void reference_issue_sync_descriptor()
 {
-    TTI_SEMWAIT(64, 2, 1);
+    TTI_SEMWAIT(64 /*stall_res*/, 0x02 /*sem_sel*/, 1 /*wait_sem_cond*/);
 }
 
 // Tensix forms combine selector lists into one mask.
@@ -115,8 +122,8 @@ extern "C" __attribute__((noinline, used)) void issue_semaphore_selectors()
 
 extern "C" __attribute__((noinline, used)) void reference_issue_semaphore_selectors()
 {
-    TTI_SEMGET(10);
-    TTI_SEMPOST(129);
+    TTI_SEMGET(0x0a /*sem_sel*/);
+    TTI_SEMPOST(0x81 /*sem_sel*/);
 }
 
 extern "C" __attribute__((noinline, used)) void issue_runtime_semaphore_selectors(hs::Semaphore first, hs::Semaphore second)
@@ -133,8 +140,8 @@ extern "C" __attribute__((noinline, used)) void reference_issue_runtime_semaphor
     const auto first_bit  = 1u << hal::to_underlying(first);
     const auto second_bit = 1u << hal::to_underlying(second);
     TT_SEMPOST(first_bit | second_bit);
-    TT_SEMINIT(15, 5, first_bit | second_bit);
-    TT_SEMWAIT(64, first_bit | second_bit, 1);
+    TT_SEMINIT(15 /*max_value*/, 5 /*init_value*/, first_bit | second_bit);
+    TT_SEMWAIT(64 /*stall_res*/, first_bit | second_bit, 1 /*wait_sem_cond*/);
     TT_SEMGET(second_bit);
     TT_SEMPOST(second_bit);
 }
@@ -148,10 +155,12 @@ extern "C" __attribute__((noinline, used)) void issue_mmio_semaphore_selectors(h
     hs::semaphore::post<hs::Access::MMIO>(selector);
 }
 
+// The MMIO references reuse the ckernel:: helpers that the HAL duplicates.
+// TODO issue #58443: Replace them with raw pc_buf_base accesses when the ckernel:: helpers are removed.
 extern "C" __attribute__((noinline, used)) void reference_issue_mmio_semaphore_selectors(hs::Semaphore selector)
 {
-    ckernel::semaphore_get(1);
-    ckernel::semaphore_post(7);
+    ckernel::semaphore_get(1 /*index*/);
+    ckernel::semaphore_post(7 /*index*/);
     ckernel::semaphore_get(hal::to_underlying(selector));
     ckernel::semaphore_post(hal::to_underlying(selector));
 }
@@ -163,7 +172,7 @@ extern "C" __attribute__((noinline, used)) std::uint8_t read_mmio_semaphore()
 
 extern "C" __attribute__((noinline, used)) std::uint8_t reference_read_mmio_semaphore()
 {
-    return ckernel::semaphore_read(7);
+    return ckernel::semaphore_read(7 /*index*/);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint8_t read_runtime_mmio_semaphore(hs::Semaphore selector)
@@ -176,23 +185,107 @@ extern "C" __attribute__((noinline, used)) std::uint8_t reference_read_runtime_m
     return ckernel::semaphore_read(hal::to_underlying(selector));
 }
 
-#ifdef ENABLE_LLK_ASSERT
+//--- asserts.cpp
+#include "common.h"
 
-extern "C" void reject_invalid_runtime_descriptors()
+// Each invalid runtime operand must emit its own ebreak. One probe per check
+// keeps the expectation independent of how many checks an operand violates.
+
+extern "C" void reject_invalid_mutex_acquire()
 {
     (void)hs::MutexAcquire {static_cast<hs::Mutex>(1)}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_mutex_acquire>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_mutex_release()
+{
+    (void)hs::MutexRelease {static_cast<hs::Mutex>(5)}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_mutex_release>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_semaphore_selector()
+{
     (void)hs::SemaphorePost {static_cast<hs::Semaphore>(8)}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_semaphore_selector>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_semaphore_initial()
+{
     (void)hs::SemaphoreInit {hs::Semaphore::S0, 16, 15}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_semaphore_initial>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_semaphore_maximum()
+{
     (void)hs::SemaphoreInit {hs::Semaphore::S0, 0, 16}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_semaphore_maximum>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_semaphore_initial_above_maximum()
+{
+    (void)hs::SemaphoreInit {hs::Semaphore::S0, 5, 4}.operation();
+}
+
+// ASSERT-LABEL: <reject_semaphore_initial_above_maximum>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_stall_targets()
+{
     (void)hs::StallWait {static_cast<hs::StallTarget>(512), hs::StallCondition::MathIdle}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_stall_targets>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_stall_conditions()
+{
     (void)hs::StallWait {hs::StallTarget::Math, static_cast<hs::StallCondition>(8192)}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_stall_conditions>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_semaphore_wait_targets()
+{
+    (void)hs::SemaphoreWait {static_cast<hs::StallTarget>(512), hs::Semaphore::S0, hs::SemaphoreCondition::WhileZero}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_semaphore_wait_targets>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_empty_semaphore_wait_conditions()
+{
     (void)hs::SemaphoreWait {hs::StallTarget::Math, hs::Semaphore::S0, static_cast<hs::SemaphoreCondition>(0)}.operation();
 }
 
-// ASSERT-LABEL: <reject_invalid_runtime_descriptors>:
-// ASSERT-COUNT-7: ebreak
-// ASSERT-NOT: ebreak
-// ASSERT-NOT: sw
+// ASSERT-LABEL: <reject_empty_semaphore_wait_conditions>:
+// ASSERT: ebreak
 // ASSERT: ret
 
-#endif
+extern "C" void reject_out_of_range_semaphore_wait_conditions()
+{
+    (void)hs::SemaphoreWait {hs::StallTarget::Math, hs::Semaphore::S0, static_cast<hs::SemaphoreCondition>(4)}.operation();
+}
+
+// ASSERT-LABEL: <reject_out_of_range_semaphore_wait_conditions>:
+// ASSERT: ebreak
+// ASSERT: ret

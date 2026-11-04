@@ -2,17 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -fno-ipa-icf -c %s -o %t.unpack.o
-// RUN: %{blackhole_objdump} -t --special-syms -drz %t.unpack.o > %t.unpack.dump
-// RUN: %{blackhole_compare_codegen} %t.unpack.dump
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -fno-ipa-icf -c %s -o %t.math.o
-// RUN: %{blackhole_objdump} -t --special-syms -drz %t.math.o > %t.math.dump
-// RUN: %{blackhole_compare_codegen} %t.math.dump
-// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -fno-ipa-icf -c %s -o %t.pack.o
-// RUN: %{blackhole_objdump} -t --special-syms -drz %t.pack.o > %t.pack.dump
-// RUN: %{blackhole_compare_codegen} %t.pack.dump
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %s -o %t.assert.o
-// RUN: %{blackhole_objdump} -d %t.assert.o | FileCheck %s --check-prefix=ASSERT
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -fno-ipa-icf -c %t/codegen.cpp -o %t/unpack.o
+// RUN: %{blackhole_objdump} -drz %t/unpack.o > %t/unpack.dump
+// RUN: %{blackhole_compare_codegen} %t/unpack.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -fno-ipa-icf -c %t/codegen.cpp -o %t/math.o
+// RUN: %{blackhole_objdump} -drz %t/math.o > %t/math.dump
+// RUN: %{blackhole_compare_codegen} %t/math.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -fno-ipa-icf -c %t/codegen.cpp -o %t/pack.o
+// RUN: %{blackhole_objdump} -drz %t/pack.o > %t/pack.dump
+// RUN: %{blackhole_compare_codegen} %t/pack.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %t/asserts.cpp -o %t/assert.o
+// RUN: %{blackhole_objdump} -d %t/assert.o | FileCheck %s --check-prefix=ASSERT
+
+//--- common.h
+#pragma once
 
 #include <cstdint>
 
@@ -20,6 +24,9 @@
 #include "utils/helpers.h"
 
 namespace hm = hal::misc;
+
+//--- codegen.cpp
+#include "common.h"
 
 // Encoding must match raw instruction words without issuing instructions or MMIO.
 
@@ -73,10 +80,10 @@ extern "C" __attribute__((noinline, used)) void issue_misc_descriptors()
 
 extern "C" __attribute__((noinline, used)) void reference_issue_misc_descriptors()
 {
-    TTI_FLUSHDMA(8);
+    TTI_FLUSHDMA(0x8 /*FlushSpec*/);
     TTI_RSTDMA;
     TTI_TBUFCMD;
-    TTI_RESOURCEDECL(7, 5, 3);
+    TTI_RESOURCEDECL(7 /*linger_time*/, 5 /*resources*/, 3 /*op_class*/);
 }
 
 extern "C" __attribute__((noinline, used)) void issue_runtime_misc_descriptor(hm::ResourceDeclaration descriptor)
@@ -89,20 +96,62 @@ extern "C" __attribute__((noinline, used)) void reference_issue_runtime_misc_des
     TT_RESOURCEDECL(descriptor.linger_time, descriptor.resources, descriptor.instruction_class);
 }
 
-#ifdef ENABLE_LLK_ASSERT
+//--- asserts.cpp
+#include "common.h"
 
-extern "C" void reject_invalid_runtime_descriptors()
+// Each invalid runtime operand must emit its own ebreak. One probe per check
+// keeps the expectation independent of how many checks an operand violates.
+
+extern "C" void reject_invalid_flush_scope()
 {
     (void)hm::FlushTdma {static_cast<hm::FlushScope>(16)}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_flush_scope>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_all_combined_with_component()
+{
+    (void)(hm::FlushScope::All | hm::FlushScope::Packer);
+}
+
+// ASSERT-LABEL: <reject_all_combined_with_component>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_component_combined_with_all()
+{
+    (void)(hm::FlushScope::Packer | hm::FlushScope::All);
+}
+
+// ASSERT-LABEL: <reject_component_combined_with_all>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_instruction_class()
+{
     (void)hm::ResourceDeclaration {16, 0, 1}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_instruction_class>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_resources()
+{
     (void)hm::ResourceDeclaration {0, 512, 1}.operation();
+}
+
+// ASSERT-LABEL: <reject_invalid_resources>:
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_linger_time()
+{
     (void)hm::ResourceDeclaration {0, 0, 16}.operation();
 }
 
-// ASSERT-LABEL: <reject_invalid_runtime_descriptors>:
-// ASSERT-COUNT-4: ebreak
-// ASSERT-NOT: ebreak
-// ASSERT-NOT: sw
+// ASSERT-LABEL: <reject_invalid_linger_time>:
+// ASSERT: ebreak
 // ASSERT: ret
-
-#endif
