@@ -636,9 +636,9 @@ FUSE_SHARED_EXPERT = os.environ.get("DEEPSEEK_V4_FUSE_SHARED_EXPERT", "1") not i
 # expert grid, wherever the gate's weight can be read in place (see :class:`RouterWeights`).
 # ``DEEPSEEK_V4_FUSE_ROUTER=0`` keeps the router as its own ops.
 FUSE_ROUTER = os.environ.get("DEEPSEEK_V4_FUSE_ROUTER", "1") not in ("0", "", "false", "False")
-# All-reduce the TP partial over the first TP axis inside ``fused_experts`` wherever its output is the
-# width-sharded partial (see ``output_memory_config``). ``DEEPSEEK_V4_FUSE_ALL_REDUCE=0`` leaves it to
-# ``width_sharded_all_reduce``.
+# At TP12, all-reduce the TP partial over the first TP axis inside ``fused_experts`` wherever its output
+# is the width-sharded partial (see ``output_memory_config``). Other TP sizes, and
+# ``DEEPSEEK_V4_FUSE_ALL_REDUCE=0``, leave it to ``width_sharded_all_reduce``.
 FUSE_ALL_REDUCE = os.environ.get("DEEPSEEK_V4_FUSE_ALL_REDUCE", "1") not in ("0", "", "false", "False")
 # How many cores of that row run the router (the op's kRouterCores): its gate's tile columns are dealt
 # round-robin over them.
@@ -1018,10 +1018,10 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                     ttnn.ShardOrientation.COL_MAJOR,
                 ),
             )
-        # The mesh axes the TP partials are summed over, in order; the op takes the first itself when it can.
+        # The mesh axes the TP partials are summed over, in order; at TP12 the op takes the first itself.
         self.tp_axes = _tp_cluster_axes(device, tp_size) if tp_size > 1 else ()
         self.fused_all_reduce_axis = (
-            self.tp_axes[0] if self.output_memory_config is not None and FUSE_ALL_REDUCE else None
+            self.tp_axes[0] if self.output_memory_config is not None and FUSE_ALL_REDUCE and tp_size == 12 else None
         )
         self.limit = config.swiglu_limit
         # Applied inside the op on the sparse path, where the weights are derived here
