@@ -20,6 +20,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/observability_event_meta.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // The streaming profiler's host API. A callback registered here receives the profiler records that device kernels emit.
@@ -47,6 +48,9 @@ struct SourceLocation {
 struct ObservabilityEventDescriptor {
     std::string_view name;  // Valid for the lifetime of the process.
     SourceLocation location;
+    // The metadata struct the event was declared with (e.g. ZoneColorMeta for DeviceZoneScopedNC); read it with
+    // meta->as<T>(). Null for events without a record, such as the stall zone. Valid for the lifetime of the process.
+    const tt::observability_event::Metadata* meta = nullptr;
 };
 
 /**

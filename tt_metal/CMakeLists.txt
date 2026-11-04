@@ -112,6 +112,7 @@ target_link_libraries(
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
+        TT::Metalium::ObservabilityApi
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
@@ -179,6 +180,7 @@ include_directories(
 add_subdirectory(logging)
 add_subdirectory(hw)
 add_subdirectory(hostdevcommon)
+add_subdirectory(observability)
 add_subdirectory(common)
 add_subdirectory(jit_build)
 add_subdirectory(llrt)

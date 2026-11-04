@@ -89,6 +89,8 @@ target_include_directories(
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/llk_io"
         "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/common/inc/sfpu"
 )
+# observability/api, which the JIT stages from the host's folder and the device's; this index sees the host's alone.
+target_link_libraries(jit_kernels_index PRIVATE TT::Metalium::ObservabilityApi)
 
 # Add all the specific compiler flags needed for device code compilation
 target_compile_options(

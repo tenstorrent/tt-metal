@@ -54,6 +54,7 @@ ALLOWED_UMD_HEADERS = {
 ALLOWED_PREFIXES = {
     "hostdevcommon",
     "internal",
+    "observability",
     "tt-metalium",
     "tt_stl",
     "tt-umd",
@@ -376,6 +377,10 @@ class Include(NamedTuple):
 
         if not (is_standard or has_valid_prefix):
             return f"{self.source_file}:{self.line_num}: Include is not whitelisted ({self})"
+
+        # The public observability headers are observability/api; there are no others.
+        if self.prefix == "observability" and not self.path.startswith("observability/api/"):
+            return f"{self.source_file}:{self.line_num}: Only observability/api/ headers are public ({self})"
 
         if has_valid_prefix:
             prefix_counts[self.prefix] += 1
