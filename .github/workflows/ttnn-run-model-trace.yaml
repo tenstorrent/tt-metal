@@ -871,13 +871,28 @@ jobs:
           PY
             )
 
-            gh pr create \
-              --base "$BASE_REF" \
-              --head "$BRANCH_NAME" \
-              --title "Add trace: ${MODEL_COUNT} models on ${MACHINE_INFO} (trace_run_id=${TRACE_RUN_ID})" \
-              --body "$PR_BODY"
-
-            echo "::notice::Manifest PR created on branch $BRANCH_NAME"
+            # PR creation on this repo intermittently fails with a generic GraphQL error, and a
+            # failed call can still open the PR, so check for one before each retry.
+            PR_URL=""
+            for attempt in 1 2 3; do
+              if PR_URL=$(gh pr create \
+                  --base "$BASE_REF" \
+                  --head "$BRANCH_NAME" \
+                  --title "Add trace: ${MODEL_COUNT} models on ${MACHINE_INFO} (trace_run_id=${TRACE_RUN_ID})" \
+                  --body "$PR_BODY"); then
+                break
+              fi
+              sleep $((attempt * 30))
+              PR_URL=$(gh pr list --head "$BRANCH_NAME" --state open --json url --jq '.[0].url // ""' || true)
+              if [[ -n "$PR_URL" ]]; then
+                break
+              fi
+            done
+            if [[ -z "$PR_URL" ]]; then
+              echo "::error::Could not open the manifest PR. Open it by hand from branch $BRANCH_NAME (trace_run_id=$TRACE_RUN_ID)."
+              exit 1
+            fi
+            echo "::notice::Manifest PR: $PR_URL"
           else
             echo "::notice::No changes to trace_selection_registry.yaml — skipping PR"
           fi
