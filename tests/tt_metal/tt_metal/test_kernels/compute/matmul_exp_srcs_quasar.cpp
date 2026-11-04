@@ -77,5 +77,5 @@ void kernel_main() {
 
     // ---- TRISC3: exp on every tile of `mid`, result to `out` ---------------------------------
     sfpu_init<op::Exp, SfpuReg::SrcS>(mid_addr_16B, l1_format, out_addr_16B, l1_format, srcs_format);
-    sfpu_tiles<op::Exp, SfpuReg::SrcS>(srcs_format, num_out_tiles);  // unpack -> exp -> pack, per tile
+    sfpu_tiles<op::Exp, SfpuReg::SrcS>(num_out_tiles);  // unpack -> exp -> pack, per tile
 }

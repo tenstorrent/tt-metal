@@ -7,7 +7,7 @@
 //   sfpu_init<op::Exp, SfpuReg::Dest, fmt>();                               // fmt: the tiles' DataFormat
 //   sfpu_tile<op::Exp, SfpuReg::Dest, fmt>(idst);                           // in place, MATH thread
 //   sfpu_init<op::Exp, SfpuReg::SrcS>(in_addr, in_fmt, out_addr, out_fmt, srcs_fmt);
-//   sfpu_tiles<op::Exp, SfpuReg::SrcS>(srcs_fmt, n);                        // L1 -> SrcS -> op -> L1, TRISC3
+//   sfpu_tiles<op::Exp, SfpuReg::SrcS>(n);                                  // L1 -> SrcS -> op -> L1, TRISC3
 
 #pragma once
 
@@ -102,6 +102,11 @@ constexpr void check_dest_format() {
     static_assert((FMT == DataFormat::Int32) == OP::is_int, "this op does not take tiles of this format");
 }
 
+#ifdef TRISC_ISOLATE_SFPU
+// SrcS register format given to the last sfpu_init<OP, SrcS>; sfpu_tiles dispatches on it.
+inline DataFormat srcs_format_ = DataFormat::Invalid;
+#endif
+
 }  // namespace detail
 
 // clang-format off
@@ -169,7 +174,8 @@ ALWI void sfpu_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode ve
 }
 
 // SrcS: the op runs on the SFPU thread over whole tile ranges. The SrcS register format is a runtime
-// value; each call dispatches once to the op's layout (dispatch_sfpu_srcs_op), not per tile.
+// value, given once to sfpu_init; each call dispatches once to the op's layout (dispatch_sfpu_srcs_op), not
+// per tile.
 
 // clang-format off
 /**
@@ -195,6 +201,7 @@ ALWI void sfpu_init(
     DataFormat l1_out_format,
     DataFormat srcs_format) {
     static_assert(REG == SfpuReg::SrcS, "the Dest init takes no arguments: sfpu_init<OP, Dest, FMT>()");
+    SFPU_SRCS((detail::srcs_format_ = srcs_format));
     SFPU_SRCS((sfpu::dispatch_sfpu_srcs_op<OP::template Srcs>(srcs_format, srcs_format, [&](auto op) {
         decltype(op)::init(l1_in_addr_16B, l1_in_format, l1_out_addr_16B, l1_out_format);
     })));
@@ -225,6 +232,7 @@ ALWI void sfpu_init(
     DataFormat l1_out_format,
     DataFormat srcs_format) {
     static_assert(REG == SfpuReg::SrcS, "the Dest init takes no arguments: sfpu_init<OP, Dest, FMT>()");
+    SFPU_SRCS((detail::srcs_format_ = srcs_format));
     SFPU_SRCS((sfpu::dispatch_sfpu_srcs_op<OP::template Srcs>(srcs_format, srcs_format, [&](auto op) {
         decltype(op)::init(l1_in0_addr_16B, l1_in1_addr_16B, l1_in_format, l1_out_addr_16B, l1_out_format);
     })));
@@ -232,22 +240,23 @@ ALWI void sfpu_init(
 
 // clang-format off
 /**
- * Run OP on num_tiles consecutive tiles from the rings given to sfpu_init: per tile, unpack L1 -> SrcS,
- * the op over the tile's slices, pack SrcS -> L1. Only available on the SFPU thread; expands to nothing elsewhere.
+ * Run OP on num_tiles consecutive tiles from the rings given to sfpu_init, in the SrcS format given there:
+ * per tile, unpack L1 -> SrcS, the op over the tile's slices, pack SrcS -> L1. Only available on the SFPU
+ * thread; expands to nothing elsewhere.
  *
  * Return value: None
  *
- * | Argument    | Description                                        | Type       | Valid Range                        | Required |
- * |-------------|----------------------------------------------------|------------|------------------------------------|----------|
- * | srcs_format | Format in the SrcS register, as given to sfpu_init | DataFormat | Float16, Float16_b, Float32, Int32 | True     |
- * | num_tiles   | Tiles to process                                   | uint32_t   |                                    | True     |
+ * | Argument  | Description      | Type     | Valid Range | Required |
+ * |-----------|------------------|----------|-------------|----------|
+ * | num_tiles | Tiles to process | uint32_t |             | True     |
  */
 // clang-format on
 template <typename OP, SfpuReg REG>
-ALWI void sfpu_tiles(DataFormat srcs_format, uint32_t num_tiles) {
+ALWI void sfpu_tiles(uint32_t num_tiles) {
     static_assert(REG == SfpuReg::SrcS, "Dest ops run one tile at a time: sfpu_tile<OP, Dest, FMT>(idst)");
+    SFPU_SRCS((LLK_ASSERT(detail::srcs_format_ != DataFormat::Invalid, "sfpu_tiles before sfpu_init<OP, SrcS>")));
     SFPU_SRCS((sfpu::dispatch_sfpu_srcs_op<OP::template Srcs>(
-        srcs_format, srcs_format, [&](auto op) { decltype(op)::run(num_tiles); })));
+        detail::srcs_format_, detail::srcs_format_, [&](auto op) { decltype(op)::run(num_tiles); })));
 }
 
 }  // namespace ckernel

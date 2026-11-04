@@ -33,7 +33,7 @@ void kernel_main() {
 
     // SFPU thread only; nothing on UNPACK, MATH and PACK.
     sfpu_init<op::Exp, SfpuReg::SrcS>(in_addr_16B, l1_format, out_addr_16B, l1_format, srcs_format);
-    sfpu_tiles<op::Exp, SfpuReg::SrcS>(srcs_format, num_tiles);  // unpack -> exp -> pack, per tile
+    sfpu_tiles<op::Exp, SfpuReg::SrcS>(num_tiles);  // unpack -> exp -> pack, per tile
 
     // Once TRISC3 owns DataflowBuffers (issue #63416) the two calls above take the buffers instead of
     // addresses and formats:
