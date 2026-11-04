@@ -222,8 +222,7 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
 #if defined(ARCH_QUASAR)
 inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
-    // The DE has no Neo, and on Trinity a DE load from the Neo register window never completes.
-    // DE timestamps are DE core cycles, so they are not on the Tensix timeline.
+    // Dispatch engines don't have Neos, so they can't read a Neo wall clock.
     return get_timestamp();
 #else
 #if defined(COMPILE_FOR_TRISC)
