@@ -96,6 +96,15 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
+    constexpr uint32_t rows_writer_min_shard_bytes = 8192;
+    constexpr uint32_t rows_writer_first_divisor = 4;
+    const bool use_rows_writer = input.device()->arch() == tt::ARCH::WORMHOLE_B0 && !convert_df && shard_h >= 2 &&
+                                 num_units_per_shard * input_unit_size >= rows_writer_min_shard_bytes;
+    const uint32_t rows_writer_one_packet = input_unit_size <= hal::get_noc_max_burst_size_bytes() ? 1u : 0u;
+    const auto rows_for_reader = [](uint32_t rows) {
+        return rows < 2 ? 0u : std::clamp<uint32_t>(rows / rows_writer_first_divisor, 1u, rows - 1);
+    };
+
     // ---- Resource names ----
     const DFBSpecName IN_DFB{"in"};    // the resident input shard
     const DFBSpecName OUT_DFB{"out"};  // converted tiles; exists only when converting formats
@@ -130,25 +139,18 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         });
     }
 
-    // Reader kernel (sharded input handed over through the borrowed input DFB). This binds the shared
-    // eltwise/unary Metal 2.0 reader fork, so its accessor and argument names are that kernel's
-    // interface, not this op's choice.
-    const KernelSpec reader{
+    KernelSpec reader{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded_metal2.cpp",
-        .dfb_bindings =
-            {DFBBinding{
-                .dfb_spec_name = IN_DFB,
-                .accessor_name = "in",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            }},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IN_DFB,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
-    // Writer kernel (writes interleaved output to DRAM). Both layout variants present the same binding
-    // interface — dfb::out for the resident block, tensor::dst for the interleaved destination — so only
-    // the source path and the runtime-arg schema differ between them.
     KernelSpec writer{
         .unique_id = WRITER,
         .dfb_bindings =
@@ -182,6 +184,33 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         writer.runtime_arg_schema.runtime_arg_names = {
             "block_height", "block_num_units", "block_width_bytes", "padded_block_width_bytes",
             "input_width_offset_bytes", "start_id"};
+    }
+
+    if (use_rows_writer) {
+        for (KernelSpec* ks : {&reader, &writer}) {
+            ks->source =
+                "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                "writer_sharded_to_interleaved_rows_metal2.cpp";
+            ks->dfb_bindings = {DFBBinding{
+                .dfb_spec_name = IN_DFB,
+                .accessor_name = "shard",
+                .endpoint_type = ks == &reader ? DFBEndpointType::PRODUCER : DFBEndpointType::CONSUMER,
+            }};
+            ks->tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}};
+            ks->compile_time_args = {
+                {"is_tile", is_tile ? 1u : 0u},
+                {"tile_bytes", is_tile ? input_unit_size : 0u},
+                {"one_packet", rows_writer_one_packet}};
+            ks->runtime_arg_schema.runtime_arg_names = {
+                "rows",
+                "row_tiles",
+                "row_bytes",
+                "local_stride",
+                "dst_offset",
+                "dst_stride",
+                "start_id",
+                "local_offset"};
+        }
     }
 
     Group<KernelSpec> kernels;
@@ -226,12 +255,13 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         work_unit_kernels.push_back(COMPUTE);
     }
 
-    // Reader runtime args: identical on every used core.
     KernelRunArgs reader_run_args{.kernel = READER};
     for (const auto& core_range : used_cores.ranges()) {
         for (const auto& core : core_range) {
-            AddRuntimeArgsForNode(
-                reader_run_args.runtime_arg_values, core, {{"num_tiles_per_core", num_units_per_shard}});
+            if (!use_rows_writer) {
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values, core, {{"num_tiles_per_core", num_units_per_shard}});
+            }
         }
     }
 
@@ -262,7 +292,35 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             const uint32_t shard_height = std::min(shard_h, tensor_h - h0);
             const uint32_t shard_width = std::min(shard_w, tensor_w - w0);
 
-            if (is_tile) {
+            if (use_rows_writer) {
+                const uint32_t reader_rows = rows_for_reader(shard_height);
+                const uint32_t local_stride = is_tile ? (shard_w - shard_width) * input_unit_size : padded_shard_width;
+                const uint32_t row_size = is_tile ? shard_w * input_unit_size : padded_shard_width;
+                const uint32_t row_step = is_tile ? tensor_w : 1u;
+                const uint32_t start_id = is_tile ? starting_idx_h + h0 * tensor_w + w0 : h0;
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"rows", reader_rows},
+                     {"row_tiles", is_tile ? shard_width : 0u},
+                     {"row_bytes", is_tile ? 0u : shard_width},
+                     {"local_stride", local_stride},
+                     {"dst_offset", is_tile ? 0u : w0},
+                     {"dst_stride", is_tile ? tensor_w : 0u},
+                     {"start_id", start_id},
+                     {"local_offset", 0u}});
+                AddRuntimeArgsForNode(
+                    writer_run_args.runtime_arg_values,
+                    core,
+                    {{"rows", shard_height - reader_rows},
+                     {"row_tiles", is_tile ? shard_width : 0u},
+                     {"row_bytes", is_tile ? 0u : shard_width},
+                     {"local_stride", local_stride},
+                     {"dst_offset", is_tile ? 0u : w0},
+                     {"dst_stride", is_tile ? tensor_w : 0u},
+                     {"start_id", start_id + reader_rows * row_step},
+                     {"local_offset", reader_rows * row_size}});
+            } else if (is_tile) {
                 AddRuntimeArgsForNode(
                     writer_run_args.runtime_arg_values,
                     core,
