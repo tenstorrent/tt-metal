@@ -2365,3 +2365,47 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     explicit = ttnn.slice(tt_input, start, end, slice_dim=2, num_devices=2, memory_config=mem_config)
     assert list(explicit.memory_config().nd_shard_spec.shard_shape) == [1, 1, 64, 64]
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
+
+
+def test_slice_rm_wide_row_after_l1_fills(device):
+    # The RM factory double-buffers a whole row when it fits the L1 free at program creation and
+    # splits it into 8 KiB chunks when it does not. Slice once with L1 empty, then pin an L1 tensor
+    # that leaves room for the chunked plan only: the second slice must rebuild, not replay the
+    # whole-row program over the pinned tensor.
+    torch.manual_seed(0)
+    width = 128256  # Llama 3 vocabulary
+    row_bytes = width * 2
+    double_buffered_row_bytes = 2 * row_bytes
+    chunked_bytes = 4 * 8192
+    info = ttnn._ttnn.reports.get_device_info(device)
+    if info.cb_limit < double_buffered_row_bytes:
+        pytest.skip(f"needs {double_buffered_row_bytes} B of L1 for a whole-row plan, device offers {info.cb_limit} B")
+
+    torch_input = torch.rand((1, 1, 32, width), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    torch_expected = torch_input[:, :, :8, :]
+
+    warmup = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 8, width])
+    assert torch.equal(ttnn.to_torch(warmup), torch_expected)
+    ttnn.deallocate(warmup)
+
+    tile_bytes = 2048
+    tiles_per_bank = (info.cb_limit - (double_buffered_row_bytes - 64 * 1024)) // tile_bytes
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert chunked_bytes <= headroom < double_buffered_row_bytes, (
+            f"pinned L1 tensor left {headroom} B above the DFB base, "
+            f"needs [{chunked_bytes}, {double_buffered_row_bytes})"
+        )
+
+        output = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 8, width])
+        assert torch.equal(ttnn.to_torch(output), torch_expected)
+    finally:
+        ttnn.deallocate(resident)
