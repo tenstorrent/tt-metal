@@ -22,8 +22,9 @@
 //
 // Multicast walk: the A parts' receivers ack (consumer-ready) right after reserving their slot, before this core's own
 // DRAM reads/barrier; an A receive is then a wait only. The W parts keep the fused ack + wait in the a, a2, b, b2
-// order, so every W multicast still starts after its whole line received A (grid-wide A-then-W phases): concurrent
-// multicasts on one line or crossing A-column / W-row multicasts stall in the NoC (measured up to 16 us).
+// order (small parts: b and b2 acked together, see w_ack_together), so every W multicast still starts after its whole
+// line received A (grid-wide A-then-W phases): concurrent multicasts on one line or crossing A-column / W-row
+// multicasts stall in the NoC (measured up to 16 us).
 //
 // Raw-API notes (design "Helpers considered and rejected"): try_land is a semaphore poll + CB credit of bytes a remote
 // chip wrote; no helper covers a fabric fused-inc counter with host thresholds. rx_ack / rx_wait are the two halves
@@ -148,6 +149,13 @@ void kernel_main() {
     constexpr uint32_t a_part_bytes[2] = {a_split * kb * a_tile_bytes, (core_m - a_split) * kb * a_tile_bytes};
     constexpr uint32_t w_part_off[2] = {0, w_split * core_n * w_tile_bytes};
     constexpr uint32_t w_part_bytes[2] = {w_split * core_n * w_tile_bytes, (kb - w_split) * core_n * w_tile_bytes};
+    // Small W parts (window handshake latency-bound) ack both parts before either is sent or waited for: a part's
+    // sender also receives the other part, so the in-order ack + wait ran the two handshakes back to back (QB2 1x4
+    // ring, traced: GLM-5.3 wk, 8.7 KB parts, 28.0 -> 24.8 us; Llama-70B w2 M=64, 17 KB, 62.7 -> 55.0 us). Larger parts
+    // keep the in-order walk: their two multicasts then share the line (MiniMax M3 dense, 36 KB: +4.5%; forced M folds,
+    // 100+ KB: +9-10%).
+    constexpr uint32_t W_ACK_TOGETHER_MAX_BYTES = 18 * 1024;
+    constexpr bool w_ack_together = mc_b2.active && w_part_bytes[0] <= W_ACK_TOGETHER_MAX_BYTES;
 
     const uint32_t a_addr = get_common_arg_val<uint32_t>(mrs::reader_common::A_ADDR);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(mrs::reader_common::W_ADDR);
@@ -497,20 +505,51 @@ void kernel_main() {
             }
         }
         if (w_moves(s)) {
-            if (w_tx) {
-                w_tx->template send<SourceL1Guard::CallerManaged>(
-                    w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
+            if constexpr (w_ack_together) {
+                // fused order: W is acked only once my A landed (A-then-W phases); both parts before either is sent
+                // or waited for (see w_ack_together)
+                if (!w_tx) {
+                    rx_ack(mc_b, noc);
+                }
+                if constexpr (mc_b2.active) {
+                    if (!w2_tx) {
+                        rx_ack(mc_b2, noc);
+                    }
+                }
+                if (w_tx) {
+                    w_tx->template send<SourceL1Guard::CallerManaged>(
+                        w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
+                }
+                if constexpr (mc_b2.active) {
+                    if (w2_tx) {
+                        w2_tx->template send<SourceL1Guard::CallerManaged>(
+                            w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
+                    }
+                }
+                if (!w_tx) {
+                    rx_wait(mc_b, try_land);
+                }
+                if constexpr (mc_b2.active) {
+                    if (!w2_tx) {
+                        rx_wait(mc_b2, try_land);
+                    }
+                }
             } else {
-                rx_ack(mc_b, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
-                rx_wait(mc_b, try_land);
-            }
-            if constexpr (mc_b2.active) {
-                if (w2_tx) {
-                    w2_tx->template send<SourceL1Guard::CallerManaged>(
-                        w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
+                if (w_tx) {
+                    w_tx->template send<SourceL1Guard::CallerManaged>(
+                        w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
                 } else {
-                    rx_ack(mc_b2, noc);
-                    rx_wait(mc_b2, try_land);
+                    rx_ack(mc_b, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
+                    rx_wait(mc_b, try_land);
+                }
+                if constexpr (mc_b2.active) {
+                    if (w2_tx) {
+                        w2_tx->template send<SourceL1Guard::CallerManaged>(
+                            w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
+                    } else {
+                        rx_ack(mc_b2, noc);
+                        rx_wait(mc_b2, try_land);
+                    }
                 }
             }
         }
