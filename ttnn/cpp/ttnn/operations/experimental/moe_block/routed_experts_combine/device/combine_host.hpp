@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host math of the sparse combine (no device): row pieces, the per-core state layout, the L1 sizing and the automatic
-// configuration (combine_auto), the credit policy, the exchange's arena reserve, and the host model of the device
-// planner (plan_reference). Faithful ports of ttnn/ttnn/bringup/combine_rf/{sparse_combine_rf,combine_plan}.py and
-// models/demos/deepseek_v3_d_p/tt/moe/tt_k3_token_split_moe.py on mstaletovic/moe-trim; compared against them by
+// Host math of the sparse combine (no device): the row's landing slot, the per-core state layout, the L1 sizing and the
+// automatic configuration (combine_auto), the credit policy and the exchange's arena reserve. Checked by
 // tests/ttnn/unit_tests/operations/experimental/moe_block/routed_experts_combine/test_routed_experts_combine_host.py.
 
 #pragma once
@@ -22,7 +20,6 @@
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
 inline constexpr uint32_t kTile = 2048;                 // bf16 tile bytes (rows are handled as flat tiles)
-inline constexpr uint32_t kPieceMax = 7168;             // row bytes per fabric packet at most (default piece_max)
 inline constexpr uint32_t kNumHeaders = 8;              // NH: rotating row headers per destination chip
 inline constexpr uint32_t kHeaderStride = 128;          // HSZ
 inline constexpr uint32_t kMiscBytes = 2048;            // MISC
@@ -33,7 +30,6 @@ inline constexpr uint32_t kAccMax = 16;                 // A_MAX: accumulators a
 inline constexpr uint32_t kMaxChips = 32;               // N at most (the plan's want[16][32], 32-bit masks)
 inline constexpr uint32_t kTabCbBytes = 256 * 8 + 128;  // CB_TAB: the device plan's scratch reads
 inline constexpr uint32_t kWriterWordsRows = 192;       // the L1 hand-off writers' words: 64 B rows
-inline constexpr uint32_t kPlannerCores = 32;           // the exchange planner's cores (k3 PLANNER_CORES)
 
 // Plan tensor word offsets (combine_plan: P_NINJ, P_NRET, P_NLOC, P_WANT, P_ROWS, P_OVER).
 inline constexpr uint32_t kPlanWords = 1024;
@@ -42,17 +38,14 @@ inline constexpr uint32_t kPlanNinj = 0, kPlanNret = 8, kPlanNloc = 16, kPlanWan
 
 inline constexpr uint32_t align64(uint64_t v) { return static_cast<uint32_t>((v + 63) / 64 * 64); }
 
-// _pieces: W-wide bf16 rows as NP equal pieces (64 B multiples), each with a 32 B trailer, PS apart.
-struct RowPieces {
+// A W-wide bf16 row's landing slot: the row (one fabric packet), its 32 B trailer at row_bytes, 64 B aligned.
+struct RowSlot {
     uint32_t row_bytes = 0;
     uint32_t NT = 0;    // bf16 tiles a row
-    uint32_t NP = 0;    // pieces a row
-    uint32_t PD = 0;    // bytes a piece
-    uint32_t PS = 0;    // piece stride
-    uint32_t slot = 0;  // NP x PS
-    bool operator==(const RowPieces&) const = default;
+    uint32_t slot = 0;  // slot stride
+    bool operator==(const RowSlot&) const = default;
 };
-RowPieces row_pieces(uint32_t W, std::optional<uint32_t> piece_max = std::nullopt);
+RowSlot row_slot(uint32_t W);
 
 // _state: byte offsets of the per-core state block; RINGS is its end (the landing pool starts there).
 struct StateLayout {
@@ -90,7 +83,6 @@ CombineLayout combine_l1_layout(
     bool acc_on_ports = false,
     uint32_t inj_slots = 64,
     uint32_t depth = 8,
-    std::optional<uint32_t> piece_max = std::nullopt,
     uint32_t local_keep = 8);
 
 enum class CombineMode : uint8_t { PortsApart = 0, AccOnPorts = 1 };
@@ -120,32 +112,26 @@ CombineAuto combine_auto(
     uint32_t port_cells,
     uint32_t arena_bytes,
     uint32_t depth = 8,
-    std::optional<uint32_t> piece_max = std::nullopt,
     uint32_t a_max = kAccMax,
     std::optional<CombineMode> mode = std::nullopt);
 
-// The credit policy (sparse_combine_rf_prepare): idle snapshots batched on large meshes, SPC_CREDIDLE / SPC_CREDAGE
-// override, SPC_CREDAUTO's end-only policy when every pool holds its call. max_rows_per_token: the most rows any
-// (home, token) takes - the exchange passes no rows_by_chip, so 0 (the bound always holds).
+// The credit policy: a port returns a source's credits once it consumed CRED_THR of its rows; idle snapshots go out
+// at once on small meshes, batched (CRED_IDLE rows, or CRED_AGE cycles old) on meshes of 16 chips or more.
 struct CreditPolicy {
     uint32_t cred_thr = 8;
     uint32_t cred_idle = 1;
     uint32_t cred_age = 0;
-    bool end_only = false;  // cred_policy "end"
     bool operator==(const CreditPolicy&) const = default;
 };
-CreditPolicy credit_policy(
-    uint32_t N, uint32_t S, uint32_t A, uint32_t PSL, const CombineTuning& tuning, uint32_t max_rows_per_token = 0);
+CreditPolicy credit_policy(uint32_t N);
 
-// fused_arena_reserve / exchange_arena_reserve (k3): bytes a bank keeps below the exchange's arena over a call, and
-// the arena budget (bytes a core) the reference's exchange gets from the largest free L1 block.
+// fused_arena_reserve / exchange_arena_reserve: bytes a bank keeps below the combine's arena over a call (the static
+// CBs of the programs that run while it is allocated, the y writers' words, slack), and the arena budget (bytes a
+// core) from the largest free L1 block.
 uint32_t fused_arena_reserve(uint32_t flat_static_bytes);
-// dispatch_static_bytes: sparse_all_gather_2d.static_cb_bytes(N, S, latent, group); manifest_bytes: its per-call
-// manifest shard (64 B aligned).
-uint32_t exchange_arena_reserve(
-    uint32_t flat_static_bytes, uint32_t dispatch_static_bytes, uint32_t manifest_bytes, bool dispatch_in_program);
+uint32_t exchange_arena_reserve(uint32_t static_cb_bytes);
 uint32_t exchange_arena_bytes(uint32_t largest_free_bytes, uint32_t reserve);
-// sparse_all_gather_2d.static_cb_bytes: the dispatch's static CB bytes on its port cores.
+// The dispatch's static CB bytes on its port cores, less its manifest (sparse_dispatch_2d's cb_sizes).
 uint32_t dispatch_static_cb_bytes(
     uint32_t N,
     uint32_t S,
@@ -153,33 +139,5 @@ uint32_t dispatch_static_cb_bytes(
     uint32_t group = 8,
     uint32_t manifest_batch = 16,
     uint32_t dtype_bytes = 2);
-
-// plan_reference (combine_plan): the device planner's per-call tables for chip `me`, host model. ids / wbits: [N][S][K]
-// flattened (global expert ids, bf16 bits of the gate weights). lut: the chip's port LUT (direction * 2 + link).
-struct PlanTables {
-    std::vector<uint32_t> counts;       // [NG]
-    std::vector<uint32_t> regions;      // [NG]
-    std::vector<uint32_t> token_index;  // [rows_cap]
-    std::vector<uint32_t> table;        // [2 rows_cap]
-    std::vector<uint32_t> plan;         // [1024]
-};
-PlanTables plan_reference(
-    const std::vector<uint16_t>& ids,
-    const std::vector<uint16_t>& wbits,
-    uint32_t me,
-    uint32_t R,
-    uint32_t C,
-    uint32_t S,
-    uint32_t K,
-    uint32_t EPC,
-    uint32_t NG,
-    uint32_t A,
-    uint32_t L,
-    uint32_t P,
-    const std::array<uint8_t, 8>& lut,
-    uint32_t rows_cap,
-    bool wrap_x,
-    bool wrap_y,
-    bool token_major);
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

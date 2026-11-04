@@ -15,9 +15,6 @@ void RoutedExpertsCombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         p.flat_config.cmb_rt > 0 && p.flat_config.y_l1, "routed_experts_combine: the flat config's combine overlap");
     TT_FATAL(
-        p.dispatch_in_program == (t.route.has_value() && t.sems.has_value()),
-        "routed_experts_combine: the route words and the dispatch's semaphore words iff the in-program dispatch");
-    TT_FATAL(
         t.plan.dtype() == DataType::UINT32 && t.plan.logical_volume() >= kPlanWords, "routed_experts_combine: plan");
     TT_FATAL(t.table.dtype() == DataType::UINT32, "routed_experts_combine: table");
     TT_FATAL(
@@ -38,7 +35,6 @@ ttsl::hash::hash_t RoutedExpertsCombineDeviceOperation::compute_program_hash(
         p.combine,
         p.S,
         p.W,
-        p.dispatch_in_program,
         // (the flat expert's per-call choices: not in plan_key; its plan, cells and y writers follow from them and it)
         p.flat_config.max_tokens,
         p.flat_config.activation,
@@ -50,7 +46,6 @@ ttsl::hash::hash_t RoutedExpertsCombineDeviceOperation::compute_program_hash(
         t.bar.tensor_spec(),
         t.hcache.tensor_spec(),
         t.lut.has_value(),
-        t.route.has_value() ? std::optional(t.route->tensor_spec()) : std::nullopt,
         t.flat.x.tensor_spec(),
         t.flat.counts.tensor_spec(),
         t.flat.regions.tensor_spec(),

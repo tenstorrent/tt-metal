@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Accumulator reader (sparse_combine_rf._RF_ACC_READER): its local rows (the L1 hand-off ring) and its N - 1 rings (one
-// per source chip, each up to this call's count in the device plan); a consumed slot is one credit, counted on the port
-// that faces the row's source on this accumulator's link to it (that port sends the credits back). Each row goes to
-// the compute with its gate weight. It also zeroes this core's state for the call (combine_zero_gate.hpp); accumulator
-// 0's reader is its chip's gate.
+// Accumulator reader: its local rows (the L1 hand-off ring) and its N - 1 rings (one per source chip, each up to this
+// call's count in the device plan); a consumed slot is one credit, counted on the port that faces the row's source on
+// this accumulator's link to it (that port sends the credits back). Each row goes to the compute with its gate weight.
+// It also zeroes this core's state for the call (combine_zero_gate.hpp); accumulator 0's reader is its chip's gate.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -25,16 +24,14 @@ constexpr uint32_t N = get_compile_time_arg_val(8);
 constexpr uint32_t L = get_compile_time_arg_val(9);
 constexpr uint32_t RET = get_compile_time_arg_val(10), MISC = get_compile_time_arg_val(11),
                    RINGS = get_compile_time_arg_val(12), LAYO = get_compile_time_arg_val(13);
-constexpr uint32_t P = get_compile_time_arg_val(14), PD = get_compile_time_arg_val(15),
-                   PS = get_compile_time_arg_val(16);
-constexpr uint32_t cb_w = get_compile_time_arg_val(17);
-constexpr uint32_t MTAKEN = get_compile_time_arg_val(18), MRTOT = get_compile_time_arg_val(19);
-constexpr uint32_t ALAND = get_compile_time_arg_val(20);    // (128, or 160 when ports share the core)
-constexpr uint32_t ALBASE = get_compile_time_arg_val(21);   // (101, or 103 when ports share the core)
-constexpr uint32_t LOC_OFF = get_compile_time_arg_val(22);  // the local ring (arena-relative)
-constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(23);
-constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(24);
-constexpr uint32_t LASTPB = (P - 1) * PS + (row_bytes - (P - 1) * PD);
+constexpr uint32_t cb_w = get_compile_time_arg_val(14);
+constexpr uint32_t MTAKEN = get_compile_time_arg_val(15), MRTOT = get_compile_time_arg_val(16);
+constexpr uint32_t ALAND = get_compile_time_arg_val(17);    // (128, or 160 when ports share the core)
+constexpr uint32_t ALBASE = get_compile_time_arg_val(18);   // (101, or 103 when ports share the core)
+constexpr uint32_t LOC_OFF = get_compile_time_arg_val(19);  // the local ring (arena-relative)
+constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(20);
+constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(21);
+constexpr uint32_t LASTPB = row_bytes;  // the row's 32 B trailer (one fabric packet a row)
 
 void kernel_main() {
     size_t a = 0;
@@ -44,13 +41,11 @@ void kernel_main() {
     const uint32_t hc = get_arg_val<uint32_t>(a++);  // this chip's index (its own ring is not there)
     const uint32_t bar = get_arg_val<uint32_t>(a++);
     const uint32_t gate_x = get_arg_val<uint32_t>(a++), gate_y = get_arg_val<uint32_t>(a++);
-    // this call's zeroing: the state block and every landing slot's piece trailers (a slot is taken when its trailer
-    // flags are set)
+    // this call's zeroing: the state block and every landing slot's trailer (a slot is taken when its trailer flags
+    // are set)
     const uint32_t call = rec::next_call(bar, BAR_SLOT);
     rec::zero_l1(area, RINGS);
-    for (uint32_t pc = 0; pc < P; ++pc) {
-        rec::zero_l1_strided(area + RINGS + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD), 32, SLOT, PSL);
-    }
+    rec::zero_l1_strided(area + RINGS + LASTPB, 32, SLOT, PSL);
     rec::count_in(gate_x, gate_y, bar);
     uint32_t want[N], px[N], py[N];
     for (uint32_t k = 0; k < N; ++k) {
@@ -146,17 +141,14 @@ void kernel_main() {
         }
     }
     auto ring_slot = [&](uint32_t k, uint32_t tk) { return area + RINGS + (rbase[k] + (tk - t0[k]) % rdep[k]) * SLOT; };
-    auto push_pieces = [&](uint32_t slot, uint32_t t) {  // a row: its gate weight (element 0), its pieces into the CB
+    auto push_row = [&](uint32_t slot, uint32_t t) {  // a row: its gate weight (element 0), the row into the CB
         cb_reserve_back(cb_w, 1);
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w))[0] =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + LASTPB)[1] & 0xFFFF;
         cb_push_back(cb_w, 1);
         cb_reserve_back(cb_row, NT);
         cb_reserve_back(cb_meta, 1);
-        for (uint32_t pc = 0; pc < P; ++pc) {
-            noc_async_read(
-                get_noc_addr(slot + pc * PS), get_write_ptr(cb_row) + pc * PD, pc + 1 == P ? row_bytes - pc * PD : PD);
-        }
+        noc_async_read(get_noc_addr(slot), get_write_ptr(cb_row), row_bytes);
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta))[0] = t / A;
         noc_async_read_barrier();
         cb_push_back(cb_row, NT);
@@ -189,7 +181,7 @@ void kernel_main() {
             return false;
         }
         const uint32_t sl = LB + (li % QL) * SLOT;
-        push_pieces(sl, (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + LASTPB)[0] >> 8) & 0xFFFF);
+        push_row(sl, (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + LASTPB)[0] >> 8) & 0xFFFF);
         ++li;
         ++done;
         const uint32_t g = li + QL < n_local ? li + QL : n_local;
@@ -199,24 +191,16 @@ void kernel_main() {
         }
         return true;
     };
-    auto take_ring = [&](uint32_t k) -> bool {  // the next row of source k's ring, if all its pieces landed
+    auto take_ring = [&](uint32_t k) -> bool {  // the next row of source k's ring, if it landed
         const uint32_t tk = taken[k];
         const uint32_t s = ring_slot(k, tk);
-        for (uint32_t pc = 0; pc < P; ++pc) {
-            volatile tt_l1_ptr uint32_t* tp =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
-            if (tp[3] == 0 || tp[7] == 0) {
-                return false;
-            }
-        }
         volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB);
-        push_pieces(s, (tr[0] >> 8) & 0xFFFF);
-        for (uint32_t pc = 0; pc < P; ++pc) {
-            volatile tt_l1_ptr uint32_t* tp =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
-            tp[3] = 0;
-            tp[7] = 0;
+        if (tr[3] == 0 || tr[7] == 0) {
+            return false;
         }
+        push_row(s, (tr[0] >> 8) & 0xFFFF);
+        tr[3] = 0;
+        tr[7] = 0;
         taken[k] = tk + 1;
         --want[k];
         ++done;

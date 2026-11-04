@@ -16,7 +16,6 @@
 
 #include "ttnn/operations/experimental/moe_block/common/moe_block_resources.hpp"
 #include "ttnn/operations/experimental/moe_block/flat_routed_expert/device/flat_routed_expert_device_operation_types.hpp"
-#include "ttnn/operations/experimental/moe_block/sparse_dispatch_2d/device/sparse_dispatch_2d_plan.hpp"
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
@@ -124,21 +123,15 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->topo = mesh.topo;
     plan->mesh = mesh;
     plan->L = mesh.num_links;
-    plan->tuning = cfg.combine_tuning;
     plan->snap_bits = cfg.snap_bits();
     plan->S = in.S;
     plan->W = in.W;
     const uint32_t N = mesh.topo.num_chips();
     TT_FATAL(N <= kMaxChips, "routed_experts_combine: {} chips > {}", N, kMaxChips);
-    const uint32_t piece = in.piece_max.value_or(std::max<uint32_t>(kPieceMax, 2 * in.W));
-    plan->pc = row_pieces(in.W, piece);
+    plan->pc = row_slot(in.W);
     // (the L1 hand-off's y writers write a row's columns at slot + column offset and its trailer at slot + row bytes:
-    // one piece a row, and a fabric payload >= row + 32 B, else the combine waits for trailers that never come)
-    TT_FATAL(
-        plan->pc.NP == 1,
-        "routed_experts_combine: {} B rows need one piece (piece_max {} < row)",
-        plan->pc.row_bytes,
-        piece);
+    // one fabric packet a row, so the payload must hold a row + 32 B, else the combine waits for trailers that never
+    // come)
     TT_FATAL(
         resources.fabric_max_payload_bytes() >= plan->pc.row_bytes + 32,
         "routed_experts_combine: the fabric payload {} B < a row + its trailer ({} B)",
@@ -155,10 +148,9 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
             }
         }
     }
-    const auto place = cfg.combine_tuning.place;
     uint32_t n_ports = 0;
     {
-        const auto& pp = resources.ports(place, pool);
+        const auto& pp = resources.ports(pool);
         std::vector<CoreCoord> uni;
         for (const auto& [k, c] : pp) {
             if (std::none_of(uni.begin(), uni.end(), [&](const CoreCoord& x) { return same_cell(x, c); })) {
@@ -174,7 +166,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
         }
     }
     const auto au = combine_auto(
-        N, in.S, in.W, pool.size(), n_ports, in.arena_bytes, in.depth, piece, in.n_acc.value_or(kAccMax), in.mode);
+        N, in.S, in.W, pool.size(), n_ports, in.arena_bytes, in.depth, in.n_acc.value_or(kAccMax), in.mode);
     TT_FATAL(
         au.fits,
         "routed_experts_combine: does not fit ({} cells, {} KB): {}",
@@ -194,7 +186,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     // ports and accumulators (sparse_combine_rf_prepare)
     if (plan->fused) {  // the accumulator cells: every chip's nearest-to-Ethernet port cells, then the pool's first
                         // others
-        const auto& free_ports = resources.ports(place, pool);
+        const auto& free_ports = resources.ports(pool);
         std::vector<CoreCoord> aset;
         for (const auto& c : pool) {
             if (std::any_of(
@@ -212,12 +204,12 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
                 aset.push_back(c);
             }
         }
-        plan->port_core = resources.ports(place, aset);
+        plan->port_core = resources.ports(aset);
         for (const auto& [ch, _] : mesh.chips) {
             plan->accs[ch] = aset;
         }
     } else {
-        plan->port_core = resources.ports(place, pool);
+        plan->port_core = resources.ports(pool);
         std::vector<CoreCoord> never;
         for (const auto& c : pool) {
             if (std::none_of(plan->port_core.begin(), plan->port_core.end(), [&](const auto& kv) {
@@ -276,15 +268,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     TT_FATAL(PSL < 4096, "routed_experts_combine: a ring's base / depth are 12-bit fields");
     plan->PSL = static_cast<uint32_t>(PSL);
     plan->D = N > 1 ? plan->PSL / (N - 1) : 0;
-    plan->cred = credit_policy(N, in.S, A, plan->PSL, plan->tuning);
-    plan->la = std::min<uint32_t>(plan->tuning.la, 64);
-    plan->dispatch = cfg.experts_during_dispatch;
-    if (plan->dispatch) {  // (the dispatch's row group and packing: sparse_dispatch_2d's defaults)
-        TT_FATAL(!plan->fused, "routed_experts_combine: the in-program dispatch needs the ports apart");
-        plan->group = sparse_dispatch_2d::default_group(in.W);
-        plan->pack = sparse_dispatch_2d::default_pack(align64(2ull * in.W), resources.fabric_max_payload_bytes());
-    }
-    plan->far = plan->tuning.la > 1 ? plan->tuning.far : 0;
+    plan->cred = credit_policy(N);
     const uint32_t acc_area = plan->st.RINGS + plan->PSL * SLOT;
     uint32_t QP = QP0, QL = 0;
     if (plan->fused) {  // (local ring up to 16 slots, then the injection ring up to QP, from what is left)
@@ -461,91 +445,19 @@ CombineHandles add_combine_program(
         wxy.push_back(v.y);
     }
     const uint32_t W = flat.writers.size();
-    // the RISC split (SPC_SNOC): the sender (and the accumulator writer) on RISCV_0 / NoC1 by default
-    const bool s_riscv0 = plan.tuning.snoc != 0, r_riscv0 = !s_riscv0;
-    const uint32_t s_slot = s_riscv0 ? 0 : 1, r_slot = 1 - s_slot;  // (bar call-count slots per RISC)
+    // the RISC split: the sender (and the accumulator writer) on RISCV_0 / NoC1, the port reader on RISCV_1 / NoC0
+    constexpr bool s_riscv0 = true, r_riscv0 = false;
+    constexpr uint32_t s_slot = 0, r_slot = 1;  // (bar call-count slots per RISC)
 
     std::vector<uint32_t> o_ct;
     tt::tt_metal::TensorAccessorArgs(*bufs[CombineBuf::Out]).append_to(o_ct);
 
-    // the dispatch phase (experts_during_dispatch): its CBs on the port cores (the manifest the first local CB there:
-    // the same address on every port core of every chip), its defines and compile-time args after the port kernels'
-    namespace sd = sparse_dispatch_2d;
-    std::map<std::string, std::string> dis_defs;
-    std::vector<uint32_t> rd_ct_dis, sd_ct_dis;
-    uint32_t ring_offs = 0;
-    if (plan.dispatch) {
-        Buffer* xb = bufs[CombineBuf::Xbuf];
-        Buffer* rb = bufs[CombineBuf::Route];
-        const uint32_t row_bytes = xb->aligned_page_size(), plan_bytes = rb->aligned_page_size();
-        const auto sz = sd::cb_sizes(topo, plan.S, row_bytes, plan_bytes, plan.group, plan.manifest_batch);
-        const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, plan.S);
-        ring_offs = ml.ring1_offset | (ml.ring2_offset << 16);
-        auto local_cb = [&](uint8_t i, uint32_t total, tt::DataFormat fmt, uint32_t page) {
-            tt::tt_metal::CircularBufferConfig c(total, {{i, fmt}});
-            c.set_page_size(i, page);
-            tt::tt_metal::CreateCircularBuffer(program, pset, c);
-        };
-        local_cb(kCbDisManifest, sz.manifest, tt::DataFormat::UInt32, sz.manifest);
-        local_cb(kCbDisRows, sz.rows, tt::DataFormat::Float16_b, row_bytes);
-        local_cb(kCbDisMeta, sz.meta, tt::DataFormat::UInt32, sd::META_PAGE);
-        local_cb(kCbDisPlan, sz.plan, tt::DataFormat::UInt32, sz.plan);
-        local_cb(kCbDisStage, sz.stage, tt::DataFormat::UInt32, sz.stage);
-        local_cb(kCbDisDbg, sz.dbg, tt::DataFormat::UInt32, sz.dbg);
-        const auto span = span_subs(topo.R, topo.C, topo.wrap_x, topo.wrap_y);
-        auto list = [](const std::vector<uint8_t>& v) {
-            std::string out;
-            for (size_t i = 0; i < v.size(); ++i) {
-                out += (i ? "," : "") + std::to_string(v[i]);
-            }
-            return out;
-        };
-        dis_defs = {
-            {"REC_DISPATCH", "1"},
-            {"SA_R", std::to_string(topo.R)},
-            {"SA_C", std::to_string(topo.C)},
-            {"SA_S", std::to_string(plan.S)},
-            {"SA_GMAX", std::to_string(sd::gmax(topo))},
-            {"SA_RW", std::to_string(route_words(N))},
-            {"SA_WRAP_X", span.wrap_x ? "1" : "0"},
-            {"SA_WRAP_Y", span.wrap_y ? "1" : "0"},
-            {"SA_XRING", list(span.xring)},
-            {"SA_YRING", list(span.yring)}};
-        rd_ct_dis = {kCbDisManifest, kCbDisRows, kCbDisMeta, kCbDisPlan, row_bytes, plan.group, plan_bytes, kCbDisDbg};
-        tt::tt_metal::TensorAccessorArgs(*xb).append_to(rd_ct_dis);
-        tt::tt_metal::TensorAccessorArgs(*rb).append_to(rd_ct_dis);
-        tt::tt_metal::TensorAccessorArgs(*rb).append_to(rd_ct_dis);  // (the debug records: never written)
-        sd_ct_dis = {
-            kCbDisManifest, kCbDisRows, kCbDisMeta, kCbDisStage, row_bytes, plan.group, plan.manifest_batch, plan.pack};
-        tt::tt_metal::TensorAccessorArgs(*xb).append_to(sd_ct_dis);
-    }
-    std::vector<uint32_t> relay_xy;
-    for (const auto& c : flat.relays) {
-        const auto v = virt(c);
-        relay_xy.push_back(v.x);
-        relay_xy.push_back(v.y);
-    }
-
     // port readers (ports apart only: fused ports run the hand-off on the sender)
     if (!plan.fused) {
         std::vector<uint32_t> ct = {kCbInj, kCbTab, st.MISC, words_off, r_slot};
-        ct.insert(ct.end(), rd_ct_dis.begin(), rd_ct_dis.end());
-        const auto k = dm_kernel(program, "dataflow/rf_port_reader.cpp", pset, std::move(ct), r_riscv0, dis_defs);
+        const auto k = dm_kernel(program, "dataflow/rf_port_reader.cpp", pset, std::move(ct), r_riscv0);
         for (uint32_t pid = 0; pid < n_pid; ++pid) {
             Args a;
-            if (plan.dispatch) {  // (sparse_dispatch_2d's reader args, then the x relays' ready counts)
-                const auto& p = my[pid];
-                const auto w = sd::wiring(plan.mesh, ch, p.dir);
-                a.buf(CombineBuf::Xbuf);
-                a.buf(CombineBuf::Route);
-                a.buf(CombineBuf::Sems);
-                a.lits({ring_offs, w.ring_mask, ch.r, ch.c, static_cast<uint32_t>(p.dir), p.li});
-                a.buf(CombineBuf::Route);
-                a.lits({sd::port_index(topo, ch, p.dir, p.li), 0u});
-                a.lits({static_cast<uint32_t>(flat.relays.size()), 1 + (pid == 0 ? kXReadyN - n_pid : 0u)});
-                a.buf(CombineBuf::RelayWords, flat_routed_expert::X_READY_OFF);
-                a.lits(relay_xy);
-            }
             a.buf(CombineBuf::Arena);
             a.buf(CombineBuf::Plan);
             a.buf(CombineBuf::Bar);
@@ -578,15 +490,8 @@ CombineHandles add_combine_program(
             plan.cred.cred_thr,
             plan.cred.cred_idle,
             plan.cred.cred_age,
-            plan.far,
-            pc.NP,
-            pc.PD,
-            pc.PS,
             kNumHeaders,
             kHeaderStride,
-            plan.la,
-            1u /*BAR*/,
-            plan.tuning.gbgate ? 1u : 0u,
             kMiscRtot,
             kMiscRdone,
             s_slot,
@@ -604,10 +509,6 @@ CombineHandles add_combine_program(
         if (plan.perchip) {
             defs["REC_ACC_LUT"] = "1";
         }
-        if (plan.dispatch) {
-            defs.insert(dis_defs.begin(), dis_defs.end());
-            ct.insert(ct.end(), sd_ct_dis.begin(), sd_ct_dis.end());
-        }
         const auto k =
             dm_kernel(program, "dataflow/rf_port_sender.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
         std::vector<uint32_t> acc_xy;
@@ -619,29 +520,6 @@ CombineHandles add_combine_program(
         for (uint32_t pid = 0; pid < n_pid; ++pid) {
             const auto& p = my[pid];
             Args a;
-            if (plan.dispatch) {  // (sparse_dispatch_2d's sender args)
-                const auto& mp = *plan.mesh.chips.at(ch)[static_cast<size_t>(p.dir)];
-                const auto w = sd::wiring(plan.mesh, ch, p.dir);
-                const auto ready = virt(plan.port_core.at(PortKey{mp.peer, opposite(p.dir), p.li}));
-                const auto pn = node(mp.peer);
-                a.buf(CombineBuf::Xbuf);
-                a.buf(CombineBuf::Sems);
-                a.lits(
-                    {static_cast<uint32_t>(ready.x),
-                     static_cast<uint32_t>(ready.y),
-                     static_cast<uint32_t>(*pn.mesh_id),
-                     static_cast<uint32_t>(pn.chip_id),
-                     ring_offs});
-                for (const auto& sw : w.streams) {
-                    if (sw.on) {
-                        const auto v = virt(plan.port_core.at(PortKey{mp.peer, sw.target, p.li}));
-                        a.lits({sw.on, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), sw.ring});
-                    } else {
-                        a.lits({0u, 0u, 0u, 0u});
-                    }
-                }
-                a.lits({mp.peer.r, mp.peer.c, static_cast<uint32_t>(p.dir)});
-            }
             a.buf(CombineBuf::Arena);
             a.lits({plan.mesh_id, idx(ch), p.li});
             a.buf(CombineBuf::Bar);
@@ -661,11 +539,6 @@ CombineHandles add_combine_program(
                     a.lits({static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)});
                 } else {
                     a.lits({0u, 0u});
-                }
-            }
-            if (plan.far) {  // (hops to each home chip)
-                for (uint32_t i = 0; i < N; ++i) {
-                    a.lit(static_cast<uint32_t>(route(ch, topo.coord(i), topo).size()));
                 }
             }
             a.buf(CombineBuf::Hcache);
@@ -731,9 +604,6 @@ CombineHandles add_combine_program(
              st.MISC,
              st.RINGS,
              st.LAYO,
-             pc.NP,
-             pc.PD,
-             pc.PS,
              kCbW,
              kMiscTaken,
              kMiscRtot,

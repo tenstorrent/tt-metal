@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Port sender (sparse_combine_rf._RF_SENDER): injects this port's rows (one fabric connection, multi-hop 2D unicasts
+// Port sender: injects this port's rows (one fabric connection, multi-hop 2D unicasts
 // straight into the home accumulator's landing ring), returns credits of the rows its chip's accumulators consumed
 // from the sources whose first hop back is this port, and forwards those sources their rings' layouts for the call.
-// Defines: REC_DISPATCH (experts_during_dispatch: the dispatch's send phase first), REC_FUSED (a port that is also an
+// Defines: REC_FUSED (a port that is also an
 // accumulator, acc_on_ports: this RISC also runs the port's L1 hand-off and the accumulator's output writes),
 // REC_ACC_LUT (per-chip roles: a home chip's accumulator cells from a DRAM table).
 
@@ -15,10 +15,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "combine_zero_gate.hpp"
-#ifdef REC_DISPATCH
-// (experts_during_dispatch: the sparse 2D dispatch's sender runs first on this kernel's connection)
-#include "../../../../sparse_dispatch_2d/device/kernels/dataflow/sparse_dispatch_2d_sender.hpp"
-#endif
 using namespace tt::tt_fabric;
 
 constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
@@ -38,40 +34,28 @@ constexpr uint32_t CRED = get_compile_time_arg_val(8), USED = get_compile_time_a
 constexpr uint32_t CRED_THR = get_compile_time_arg_val(17);  // rows consumed from a source before its credits go back
 constexpr uint32_t CRED_IDLE = get_compile_time_arg_val(18),
                    CRED_AGE = get_compile_time_arg_val(19);  // (idle: CRED_IDLE rows, or CRED_AGE cycles old)
-constexpr uint32_t FAR = get_compile_time_arg_val(20);       // (look-ahead: rows going >= FAR hops first)
-constexpr uint32_t P = get_compile_time_arg_val(21), PD = get_compile_time_arg_val(22),
-                   PS = get_compile_time_arg_val(23);                   // pieces per row, bytes per piece, piece stride
-constexpr uint32_t LASTPB = (P - 1) * PS + (row_bytes - (P - 1) * PD);  // the last piece's trailer
-constexpr uint32_t NH = get_compile_time_arg_val(24);  // rotating row headers: flush (and pop the sent pages) every NH
-constexpr uint32_t HSZ = get_compile_time_arg_val(25);
+constexpr uint32_t LASTPB = row_bytes;                       // the row's 32 B trailer (one fabric packet a row)
+constexpr uint32_t NH = get_compile_time_arg_val(20);  // rotating row headers: flush (and pop the sent pages) every NH
+constexpr uint32_t HSZ = get_compile_time_arg_val(21);
 static_assert(sizeof(PACKET_HEADER_TYPE) <= HSZ, "header stride");
 constexpr uint32_t HW = sizeof(PACKET_HEADER_TYPE) / 4;
-constexpr uint32_t LA = get_compile_time_arg_val(26);  // look-ahead: rows past a blocked one the sender may send
 // barrier: every port core counts one atomic increment from every other chip in a persistent word (bar[0], cumulative;
 // bar[1] its calls) and sends nothing remote before all N - 1 of this call are in; each chip's port facing a chip
 // increments that chip's ports. A chip's ports increment only after its zeroing (combine_zero_gate.hpp).
-constexpr uint32_t BAR = get_compile_time_arg_val(27);
-constexpr uint32_t GBGATE = get_compile_time_arg_val(28);
-constexpr uint32_t MRTOT = get_compile_time_arg_val(29), MRDONE = get_compile_time_arg_val(30);
-constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(31);
-constexpr uint32_t ZERO = get_compile_time_arg_val(32);  // 1: this kernel zeroes the core's state [0, RINGS)
-constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(33);
-constexpr uint32_t LUT_OFF = get_compile_time_arg_val(34);
-constexpr uint32_t LUT_BYTES = get_compile_time_arg_val(35);
-#ifdef REC_DISPATCH
-constexpr uint32_t cb_man = get_compile_time_arg_val(36);  // the dispatch's manifest, then its phase's args from 37
-#endif
+constexpr uint32_t MRTOT = get_compile_time_arg_val(22), MRDONE = get_compile_time_arg_val(23);
+constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(24);
+constexpr uint32_t ZERO = get_compile_time_arg_val(25);  // 1: this kernel zeroes the core's state [0, RINGS)
+constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(26);
+constexpr uint32_t LUT_OFF = get_compile_time_arg_val(27);
+constexpr uint32_t LUT_BYTES = get_compile_time_arg_val(28);
 #ifdef REC_FUSED
-constexpr uint32_t cb_out = get_compile_time_arg_val(36);
-constexpr uint32_t NT_ = get_compile_time_arg_val(37);
-constexpr auto o_args = TensorAccessorArgs<38>();
+constexpr uint32_t cb_out = get_compile_time_arg_val(29);
+constexpr uint32_t NT_ = get_compile_time_arg_val(30);
+constexpr auto o_args = TensorAccessorArgs<31>();
 #endif
 
 void kernel_main() {
     size_t a = 0;
-#ifdef REC_DISPATCH
-    const sa::SenderArgs dargs = sa::sender_args(a, get_write_ptr(cb_man));
-#endif
     const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint32_t me = get_arg_val<uint32_t>(a++), lnk = get_arg_val<uint32_t>(a++);
@@ -124,10 +108,6 @@ void kernel_main() {
         sx[i] = get_arg_val<uint32_t>(a++);
         sy[i] = get_arg_val<uint32_t>(a++);
     }
-    uint8_t hops[N];
-    for (uint32_t i = 0; i < N; ++i) {
-        hops[i] = FAR ? static_cast<uint8_t>(get_arg_val<uint32_t>(a++)) : 0;
-    }
     const uint32_t hc_addr = get_arg_val<uint32_t>(a++), hc_page = get_arg_val<uint32_t>(a++);
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
 
@@ -176,9 +156,6 @@ void kernel_main() {
         rec::wait_released(bar_addr, call);
     }
     conn.open();
-#ifdef REC_DISPATCH
-    sa::send_phase<37>(dargs, conn);  // (the dispatch first)
-#endif
 #ifdef REC_FUSED
     const uint32_t hW = get_arg_val<uint32_t>(a++), hdid = get_arg_val<uint32_t>(a++), hQ = get_arg_val<uint32_t>(a++);
     const uint32_t hwords = area + WORDS_OFF, o_addr = get_arg_val<uint32_t>(a++);
@@ -233,7 +210,7 @@ void kernel_main() {
     auto write_out = [&]() {};
     auto fused_more = [&]() { return false; };
 #endif
-    if constexpr (BAR) {
+    {
         const uint32_t n_bt = get_arg_val<uint32_t>(a++);
         for (uint32_t i = 0; i < n_bt; ++i) {
             const uint32_t ch = get_arg_val<uint32_t>(a++), bx = get_arg_val<uint32_t>(a++),
@@ -280,8 +257,6 @@ void kernel_main() {
         }
     }
     uint32_t inj_done = 0, sent = 0, pend_inj = 0, unflushed = 0;
-    uint64_t ahead = 0;  // (rows sent past the prefix, bit j = pend_inj + j; LA <= 64)
-    (void)ahead;
 
     auto flush = [&]() {
         noc_async_writes_flushed();
@@ -383,8 +358,8 @@ void kernel_main() {
         }
         return t;
     };
-    // one row (P pieces, its trailer's header word at LASTPB) from L1 src to its home's ring; false: not yet (the
-    // ring's layout has not arrived, or the ring is full)
+    // one row (one packet with its trailer, the header word at LASTPB) from L1 src to its home's ring; false: not yet
+    // (the ring's layout has not arrived, or the ring is full)
     auto send_row = [&](uint32_t src) -> bool {
         const uint32_t hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[0];
         const uint32_t home = hdr & 0xFF, t = (hdr >> 8) & 0xFFFF, o = t % A, ci = home * AP + o;
@@ -396,16 +371,13 @@ void kernel_main() {
             return false;
         }
         const uint32_t dst = area + RINGS + (((lw >> 12) & 0xFFF) + (u - u0[ci]) % dep) * SLOT;  // (my ring)
-        for (uint32_t pc = 0; pc < P; ++pc) {
-            const uint32_t pb = (pc + 1 == P ? row_bytes - pc * PD : PD) + 32;
-            auto* h = hdr_at(home, sent % NH);
-            h->to_noc_unicast_write(
-                NocUnicastCommandHeader{get_noc_addr(ACC_X(home, o), ACC_Y(home, o), dst + pc * PS)}, pb);
-            conn.wait_for_empty_write_slot();
-            conn.send_current_slot_non_blocking(src + pc * PS, pb, reinterpret_cast<uint32_t>(h));
-            ++sent;
-            ++unflushed;
-        }
+        constexpr uint32_t pb = row_bytes + 32;
+        auto* h = hdr_at(home, sent % NH);
+        h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(ACC_X(home, o), ACC_Y(home, o), dst)}, pb);
+        conn.wait_for_empty_write_slot();
+        conn.send_current_slot_non_blocking(src, pb, reinterpret_cast<uint32_t>(h));
+        ++sent;
+        ++unflushed;
         used[ci] = u + 1;
         return true;
     };
@@ -417,58 +389,13 @@ void kernel_main() {
         write_out();
         const uint32_t tot = any_ret();
         const bool pending = tot != returned;
-        // (GBGATE: no source reaches CRED_THR unless the total pending does - skip the per-source scan)
-        const bool scan = !GBGATE || tot - returned >= CRED_THR;
-        if (pending && scan && unflushed < NH) {
+        if (pending && unflushed < NH) {
             give_back(false);
         }
         if (lay_pend) {
             send_layouts();
         }
-        if constexpr (LA > 1) {  // rows in queue order, but past a blocked row: its ring (and that ring's later rows)
-                                 // waits
-            uint32_t bci[LA], nb = 0;
-            const uint32_t ilim = get_local_cb_interface(cb_inj).fifo_limit;
-            for (uint32_t sub = FAR ? 0 : 1; sub < 2; ++sub) {  // (FAR: the far rows of the window first, then all)
-                for (uint32_t j = 0; j < LA && unflushed + P <= NH && inj_done < n_inj; ++j) {
-                    if (!cb_pages_available_at_front(cb_inj, pend_inj + j + 1)) {
-                        break;
-                    }
-                    if (ahead >> j & 1) {
-                        continue;
-                    }
-                    uint32_t src = get_read_ptr(cb_inj) + (pend_inj + j) * ISLOT;
-                    if (src >= ilim) {
-                        src -= get_local_cb_interface(cb_inj).fifo_size;
-                    }
-                    const uint32_t hw_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[0];
-                    if (sub == 0 && hops[hw_ & 0xFF] < FAR) {
-                        continue;
-                    }
-                    const uint32_t ci = (hw_ & 0xFF) * AP + ((hw_ >> 8) & 0xFFFF) % A;
-                    bool skip = false;
-                    for (uint32_t q = 0; q < nb && !skip; ++q) {
-                        skip = bci[q] == ci;
-                    }
-                    if (skip) {
-                        continue;
-                    }
-                    if (!send_row(src)) {
-                        bci[nb++] = ci;
-                        continue;
-                    }
-                    ahead |= 1ull << j;
-                    ++inj_done;
-                    did = true;
-                }
-            }
-            while (ahead & 1) {  // (the sent prefix: popped at the next flush)
-                ++pend_inj;
-                ahead >>= 1;
-            }
-        }
-        while (LA <= 1 && unflushed + P <= NH && inj_done < n_inj &&
-               cb_pages_available_at_front(cb_inj, pend_inj + 1)) {
+        while (unflushed < NH && inj_done < n_inj && cb_pages_available_at_front(cb_inj, pend_inj + 1)) {
             uint32_t src = get_read_ptr(cb_inj) + pend_inj * ISLOT;
             const uint32_t ilim = get_local_cb_interface(cb_inj).fifo_limit;
             if (src >= ilim) {

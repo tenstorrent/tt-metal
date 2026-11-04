@@ -13,15 +13,11 @@
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
-RowPieces row_pieces(uint32_t W, std::optional<uint32_t> piece_max) {
-    RowPieces p;
+RowSlot row_slot(uint32_t W) {
+    RowSlot p;
     p.row_bytes = W * 2;
     p.NT = (p.row_bytes + kTile - 1) / kTile;
-    const uint32_t pm = piece_max.value_or(0) ? *piece_max : kPieceMax;
-    p.NP = (p.row_bytes + pm - 1) / pm;
-    p.PD = align64((p.row_bytes + p.NP - 1) / p.NP);
-    p.PS = align64(p.PD + 32);
-    p.slot = p.NP * p.PS;
+    p.slot = align64(align64(p.row_bytes) + 32);
     return p;
 }
 
@@ -57,9 +53,8 @@ CombineLayout combine_l1_layout(
     bool acc_on_ports,
     uint32_t inj_slots,
     uint32_t depth,
-    std::optional<uint32_t> piece_max,
     uint32_t local_keep) {
-    const auto pc = row_pieces(W, piece_max);
+    const auto pc = row_slot(W);
     const int64_t ISLOT = pc.slot, SLOT = pc.slot;
     const int64_t RINGS = state_layout(N, A).RINGS;
     const uint32_t MAXT = (S + A - 1) / A;
@@ -74,10 +69,6 @@ CombineLayout combine_l1_layout(
         out.why = std::move(why);
         return out;
     };
-    if (pc.NP != 1) {
-        return fail(fmt::format(
-            "the L1 hand-off takes one piece a row: piece {} < {} B", piece_max.value_or(kPieceMax), pc.row_bytes));
-    }
     int64_t QP = inj_slots;
     const int64_t keep = acc_on_ports ? (local_keep + std::min<int64_t>(32, QP)) * ISLOT : local_keep * ISLOT;
     // (Python floor division: a negative budget floors toward -inf)
@@ -131,7 +122,6 @@ CombineAuto combine_auto(
     uint32_t port_cells,
     uint32_t arena_bytes,
     uint32_t depth,
-    std::optional<uint32_t> piece_max,
     uint32_t a_max,
     std::optional<CombineMode> mode) {
     CombineAuto res;
@@ -154,8 +144,7 @@ CombineAuto combine_auto(
         CombineLayout last;
         for (const uint32_t keep : {8u, 2u}) {
             for (const uint32_t qp : {64u, 32u, 16u, 8u}) {
-                auto lay = combine_l1_layout(
-                    N, S, W, static_cast<uint32_t>(A), arena_bytes, fused, qp, depth, piece_max, keep);
+                auto lay = combine_l1_layout(N, S, W, static_cast<uint32_t>(A), arena_bytes, fused, qp, depth, keep);
                 if (!lay.fits) {
                     last = lay;
                     continue;
@@ -184,25 +173,12 @@ CombineAuto combine_auto(
     return res;
 }
 
-CreditPolicy credit_policy(
-    uint32_t N, uint32_t S, uint32_t A, uint32_t PSL, const CombineTuning& tuning, uint32_t max_rows_per_token) {
+CreditPolicy credit_policy(uint32_t N) {
     CreditPolicy p;
     // idle credit snapshots batched (at least 8 rows, or 6 us old) where there are many sources (Galaxy: -9 %)
     if (N >= 16) {
         p.cred_idle = 8;
         p.cred_age = 8100;
-    }
-    if (tuning.credidle) {
-        p.cred_idle = tuning.credidle;
-        p.cred_age = tuning.credage;
-    }
-    p.cred_thr = tuning.credthr;
-    const uint32_t MAXT = (S + A - 1) / A;
-    if (tuning.credauto && static_cast<uint64_t>(MAXT) * max_rows_per_token <= PSL) {
-        p.cred_thr = 64;
-        p.cred_idle = 8;
-        p.cred_age = 4050;
-        p.end_only = true;
     }
     return p;
 }
@@ -211,13 +187,7 @@ uint32_t fused_arena_reserve(uint32_t flat_static_bytes) {
     return align64(flat_static_bytes) + kWriterWordsRows * 64 + 2048;
 }
 
-uint32_t exchange_arena_reserve(
-    uint32_t flat_static_bytes, uint32_t dispatch_static_bytes, uint32_t manifest_bytes, bool dispatch_in_program) {
-    if (dispatch_in_program) {
-        return fused_arena_reserve(std::max(flat_static_bytes, dispatch_static_bytes)) + manifest_bytes + 1024;
-    }
-    return fused_arena_reserve(std::max(flat_static_bytes, manifest_bytes + dispatch_static_bytes)) + 1024;
-}
+uint32_t exchange_arena_reserve(uint32_t static_cb_bytes) { return fused_arena_reserve(static_cb_bytes) + 1024; }
 
 uint32_t exchange_arena_bytes(uint32_t largest_free_bytes, uint32_t reserve) {
     const int64_t rows = (static_cast<int64_t>(largest_free_bytes) - reserve) / 64 / 32 * 32 - kWriterWordsRows;
@@ -235,100 +205,7 @@ uint32_t dispatch_static_cb_bytes(
     const uint32_t row_bytes = align64(row_width * dtype_bytes);
     const uint32_t plan_bytes = align64(S * route_words(N) * 4);
     return align64(2 * group * row_bytes) + align64(2 * group * kMetaPage) + align64(plan_bytes) +
-           align64(3 * 2 * manifest_batch * 16) + align64(64);
-}
-
-PlanTables plan_reference(
-    const std::vector<uint16_t>& ids,
-    const std::vector<uint16_t>& wbits,
-    uint32_t me,
-    uint32_t R,
-    uint32_t C,
-    uint32_t S,
-    uint32_t K,
-    uint32_t EPC,
-    uint32_t NG,
-    uint32_t A,
-    uint32_t L,
-    uint32_t P,
-    const std::array<uint8_t, 8>& lut,
-    uint32_t rows_cap,
-    bool wrap_x,
-    bool wrap_y,
-    bool token_major) {
-    const uint32_t N = R * C;
-    TT_FATAL(ids.size() == static_cast<size_t>(N) * S * K && wbits.size() == ids.size(), "plan_reference: [N, S, K]");
-    const auto topo = MeshTopology{R, C, wrap_x, wrap_y};
-    const uint32_t E0 = me * EPC;
-    std::vector<uint32_t> lc(EPC, 0);
-    for (const uint16_t g : ids) {
-        if (g >= E0 && g < E0 + EPC) {
-            ++lc[g - E0];
-        }
-    }
-    PlanTables out;
-    out.counts.assign(NG, 0);
-    out.regions.assign(NG, 0);
-    out.token_index.assign(rows_cap, 0);
-    out.table.assign(2ull * rows_cap, 0);
-    out.plan.assign(kPlanWords, 0);
-    std::vector<uint32_t> fill(EPC, 0);
-    uint32_t off = 0;
-    for (uint32_t e = 0; e < EPC; ++e) {
-        out.counts[E0 + e] = lc[e];
-        out.regions[E0 + e] = off;
-        fill[e] = off;
-        off += (lc[e] + 31) / 32 * 32;
-    }
-    out.plan[kPlanRows] = off;
-    out.plan[kPlanOver] = off > rows_cap ? 1 : 0;
-    auto at = [&](uint32_t o, uint32_t t, uint32_t k) { return (static_cast<size_t>(o) * S + t) * K + k; };
-    auto visit = [&](uint32_t o, uint32_t t) {
-        const uint32_t dh = o == me ? 0 : first_hop_idx(me, o, topo);
-        for (uint32_t k = 0; k < K; ++k) {
-            const uint32_t g = ids[at(o, t, k)], wb = wbits[at(o, t, k)];
-            const uint32_t src = g / EPC;
-            const uint32_t l = link_of(t % A, src, o, L);
-            if (src == me) {
-                const uint32_t e = g - E0;
-                const uint32_t r = fill[e]++;
-                if (r < rows_cap) {
-                    out.token_index[r] = o * S + t;
-                    uint32_t dest = 0;
-                    if (o == me) {
-                        dest = P + t % A;
-                    } else {
-                        dest = lut[dh * 2 + l];
-                        out.plan[kPlanNinj + dest] += 1;
-                    }
-                    out.table[2 * r] = dest | (wb << 16);
-                    out.table[2 * r + 1] = o | (t << 8) | (e << 24);
-                }
-            }
-            if (o == me) {
-                if (src == me) {
-                    out.plan[kPlanNloc + t % A] += 1;
-                } else {
-                    out.plan[kPlanWant + (t % A) * 32 + src] += 1;
-                    out.plan[kPlanNret + lut[first_hop_idx(me, src, topo) * 2 + l]] += 1;
-                }
-            }
-        }
-    };
-    if (token_major) {
-        for (uint32_t t = 0; t < S; ++t) {
-            for (uint32_t o = 0; o < N; ++o) {
-                visit(o, t);
-            }
-        }
-    } else {
-        for (uint32_t o = 0; o < N; ++o) {
-            for (uint32_t t = 0; t < S; ++t) {
-                visit(o, t);
-            }
-        }
-    }
-    return out;
+           align64(3 * 2 * manifest_batch * 16);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

@@ -20,13 +20,12 @@
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
-// The combine's op-specific configuration (the MoE block's CombineTuning / snap come from MoEBlockConfig).
+// The combine's op-specific configuration (combine_snap comes from MoEBlockConfig).
 struct CombineConfig {
     std::optional<uint32_t> n_acc;      // the accumulator count the fused head planned (pins combine_auto's A)
     std::optional<CombineMode> mode;    // ... and its mode
     uint32_t arena_bytes = 0;           // the combine's L1 budget a core; 0: the reference's sizing at the first call
     uint32_t depth = 8;                 // landing pool slots per source chip (average)
-    std::optional<uint32_t> piece_max;  // default max(7168, 2 Hr)
 
     bool operator==(const CombineConfig&) const = default;
 };
@@ -35,7 +34,6 @@ struct RoutedExpertsCombineParams {
     CombineConfig combine;
     uint32_t S = 0;  // home tokens a chip
     uint32_t W = 0;  // the routed width Hr
-    bool dispatch_in_program = false;
     flat_routed_expert::FlatRoutedExpertConfig flat_config;  // with the combine overlap (with_combine_overlap)
     std::vector<tt::tt_metal::CoreCoord> cells;              // the cells the flat plan leaves free
     FlatHandoff flat;                                        // its y writers
@@ -45,8 +43,8 @@ struct RoutedExpertsCombineParams {
     std::shared_ptr<const CombinePlan> plan;
     std::shared_ptr<const flat_routed_expert::FlatRoutedExpertPlan> flat_plan;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("S", "W", "dispatch_in_program", "plan_key");
-    auto attribute_values() const { return std::forward_as_tuple(S, W, dispatch_in_program, plan_key); }
+    static constexpr auto attribute_names = std::forward_as_tuple("S", "W", "plan_key");
+    auto attribute_values() const { return std::forward_as_tuple(S, W, plan_key); }
 };
 
 struct RoutedExpertsCombineInputs {
@@ -56,10 +54,6 @@ struct RoutedExpertsCombineInputs {
     Tensor bar;                 // the start barrier / zero gate words (persistent, every worker core)
     Tensor hcache;              // the senders' routed header cache (persistent DRAM)
     std::optional<Tensor> lut;  // per-chip accumulator roles: the senders' accumulator LUT (persistent DRAM)
-    // experts_during_dispatch: the dispatch's route words [1, 1, 1, RW S] uint32 and its ports' semaphore words
-    // (persistent); its output is flat.x (the dispatch buffer)
-    std::optional<Tensor> route;
-    std::optional<Tensor> sems;
     // the flat routed expert's: x = the dispatched rows, arena = the call's arena (every worker core: the flat
     // expert's buffers on its cells, the combine's on its own, the y writers' words), output = its (unwritten) y
     flat_routed_expert::FlatRoutedExpertInputs flat;

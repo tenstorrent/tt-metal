@@ -71,7 +71,9 @@ class _Call:
         r = lambda *s: torch.randn(*s, generator=g) * 0.02  # noqa: E731  (the saved case's order)
         gids = [list(range(c * EPC, (c + 1) * EPC)) for c in range(N)]
         local = [(r(Hr, I), r(Hr, I), r(I, Hr)) for _ in range(EPC)]  # (every chip the same local experts)
-        layout = weights_py.flat_layout(cfg.get("flat_layout"))
+        # (the saved case's layout fields the op still has)
+        saved = cfg.get("flat_layout") or {}
+        layout = weights_py.flat_layout({k: v for k, v in saved.items() if k in weights_py.FLAT_LAYOUT_FIELDS})
         self.layer = weights_py.FlatRoutedExpert(
             mesh_device, [local] * N, m=cfg["m"], H=Hr, I=I, gids=gids, n_global=E, act=cfg["activation"], pin=1,
             layout=layout,

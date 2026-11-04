@@ -4,8 +4,6 @@
 
 #include "routed_experts_combine.hpp"
 
-#include <set>
-
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
@@ -14,6 +12,7 @@
 #include "ttnn/operations/experimental/moe_block/common/moe_block_resources.hpp"
 #include "ttnn/operations/experimental/moe_block/flat_routed_expert/device/flat_program.hpp"
 #include "ttnn/operations/experimental/moe_block/flat_routed_expert/flat_routed_expert.hpp"
+#include "ttnn/operations/experimental/moe_block/sparse_dispatch_2d/device/sparse_dispatch_2d_plan.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
@@ -33,7 +32,7 @@ struct CombineState {
     FlatHandoff handoff;
     std::shared_ptr<const CombinePlan> plan;
     ttnn::Tensor out, bar, hcache;
-    std::optional<ttnn::Tensor> lut, sems;
+    std::optional<ttnn::Tensor> lut;
     std::optional<tt::tt_metal::TensorSpec> arena_spec;
     std::optional<ttnn::Tensor> y;  // the flat expert's y (never written with the L1 hand-off)
     uint32_t rows_cap = 0;
@@ -49,10 +48,6 @@ fre::FlatRoutedExpertConfig base_flat_config(
     const auto& dims = res.dims();
     const uint32_t N = res.topology().num_chips();
     TT_FATAL(dims.num_experts % N == 0, "routed_experts_combine: {} experts over {} chips", dims.num_experts, N);
-    auto lay = layout;
-    if (res.config().experts_during_dispatch) {
-        lay.x_ready = 8;  // (the dispatch ports a chip at most: each chip's count is padded to it)
-    }
     auto cfg = fre::make_flat_routed_expert_config(
         dims.routed_width(),
         dims.routed_expert_hidden_dim,
@@ -61,10 +56,22 @@ fre::FlatRoutedExpertConfig base_flat_config(
         m,
         res.dtypes().routed_weights == DataType::BFLOAT8_B,
         1,
-        lay);
+        layout);
     cfg.activation = activation;
     cfg.down_fp32 = true;
     return cfg;
+}
+
+// L1 a core the block's own programs that run while its arena is allocated (the dispatch, the flat experts + the
+// combine) take for their static circular buffers: the larger of the flat program's and the dispatch's (its manifest
+// rings and CBs on the port cores).
+uint32_t static_cb_bytes(MoEBlockResources& res, const fre::FlatRoutedExpertPlan& fp) {
+    const auto& topo = res.topology();
+    const uint32_t N = topo.num_chips(), S = res.config().chunk_tokens / N, W = res.dims().routed_width();
+    const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, S);
+    return std::max(
+        align64(fp.static_l1_bytes),
+        align64(ml.total_entries * 16ull) + dispatch_static_cb_bytes(N, S, W, sparse_dispatch_2d::default_group(W)));
 }
 
 CombineState make_state(
@@ -97,7 +104,6 @@ CombineState make_state(
         }
     }
     s.handoff.writers = fre::flat_y_writers(fp);
-    s.handoff.relays = fp.relays;
 
     CombinePlanInputs in;
     in.S = cfg.chunk_tokens / N;
@@ -105,20 +111,10 @@ CombineState make_state(
     in.cells = s.cells;
     in.n_acc = combine.n_acc;
     in.mode = combine.mode;
-    if (cfg.experts_during_dispatch && !in.mode) {
-        in.mode = CombineMode::PortsApart;  // (the dispatch runs on the combine's ports: one a (direction, link))
-    }
     in.depth = combine.depth;
-    in.piece_max = combine.piece_max;
     in.arena_bytes = combine.arena_bytes;
-    if (in.arena_bytes == 0) {  // (the reference's sizing: the largest free L1 block less what stays below it)
-        const uint32_t group = 2 * in.W <= 7168 ? 8 : 2;
-        const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, in.S);
-        const uint32_t reserve = exchange_arena_reserve(
-            fp.static_l1_bytes,
-            dispatch_static_cb_bytes(N, in.S, in.W, group),
-            align64(ml.total_entries * 16ull),
-            cfg.experts_during_dispatch);
+    if (in.arena_bytes == 0) {  // (the largest free L1 block less what stays below it)
+        const uint32_t reserve = exchange_arena_reserve(static_cb_bytes(res, fp));
         const auto stats = mesh.allocator()->get_statistics(tt::tt_metal::BufferType::L1);
         in.arena_bytes = exchange_arena_bytes(static_cast<uint32_t>(stats.largest_free_block_bytes), reserve);
     }
@@ -161,17 +157,6 @@ CombineState make_state(
         s.lut = res.plan<ttnn::Tensor>(
             "routed_experts_combine/lut", [&] { return ttnn::Tensor::from_vector(words, spec, &mesh); });
     }
-    if (s.plan->dispatch) {  // (the dispatch phase's semaphore words: 3 ring counters + the fence's ready, 16 B apart)
-        std::set<std::pair<uint32_t, uint32_t>> cells;
-        for (const auto& [k, c] : s.plan->port_core) {
-            cells.emplace(c.y, c.x);
-        }
-        std::vector<CoreRange> pr;
-        for (const auto& [y, x] : cells) {
-            pr.emplace_back(CoreCoord(x, y), CoreCoord(x, y));
-        }
-        s.sems = res.persistent_words("routed_experts_combine/dispatch_sems", CoreRangeSet(pr), 16);
-    }
     return s;
 }
 
@@ -193,6 +178,16 @@ const CombineState& state(
 }
 
 }  // namespace routed_experts_combine_detail
+
+uint32_t routed_experts_combine_static_cb_bytes(
+    MoEBlockResources& resources,
+    uint32_t max_tokens_per_expert,
+    uint32_t activation,
+    const flat_routed_expert::FlatLayoutOptions& layout) {
+    using namespace routed_experts_combine_detail;
+    const auto cfg = base_flat_config(resources, max_tokens_per_expert, activation, layout);
+    return static_cb_bytes(resources, *fre::flat_routed_expert_plan(resources.mesh_device(), cfg));
+}
 
 tt::tt_metal::TensorSpec routed_experts_combine_arena_spec(
     MoEBlockResources& resources,
@@ -221,17 +216,6 @@ tt::tt_metal::TensorSpec routed_experts_combine_arena_spec(
                 tt::tt_metal::ShardSpec(sh.grid, {rows, 32}, tt::tt_metal::ShardOrientation::ROW_MAJOR))));
 }
 
-flat_routed_expert::FlatRoutedExpertConfig routed_experts_combine_flat_config(
-    MoEBlockResources& resources,
-    uint32_t max_tokens_per_expert,
-    uint32_t activation,
-    const flat_routed_expert::FlatLayoutOptions& layout) {
-    using namespace routed_experts_combine_detail;
-    auto cfg = base_flat_config(resources, max_tokens_per_expert, activation, layout);
-    const auto fr = fre::ensure_flat_routed_expert_resources(resources, cfg);
-    return fre::with_combine_overlap(cfg, *fr.plan, true);
-}
-
 ttnn::Tensor routed_experts_combine(
     const ttnn::Tensor& dispatched,
     const ttnn::Tensor& counts,
@@ -245,7 +229,6 @@ ttnn::Tensor routed_experts_combine(
     MoEBlockResources& resources,
     uint32_t max_tokens_per_expert,
     uint32_t activation,
-    const std::optional<ttnn::Tensor>& route,
     const std::optional<ttnn::Tensor>& arena,
     const flat_routed_expert::FlatLayoutOptions& layout,
     const CombineConfig& combine) {
@@ -274,7 +257,6 @@ ttnn::Tensor routed_experts_combine(
     params.combine = combine;
     params.S = st.plan->S;
     params.W = st.plan->W;
-    params.dispatch_in_program = resources.config().experts_during_dispatch;
     params.flat_config = st.flat_config;
     params.cells = st.cells;
     params.flat = st.handoff;
@@ -290,8 +272,6 @@ ttnn::Tensor routed_experts_combine(
             .bar = st.bar,
             .hcache = st.hcache,
             .lut = st.lut,
-            .route = route,
-            .sems = route ? st.sems : std::nullopt,
             .flat = flat_routed_expert::FlatRoutedExpertInputs{
                 .x = dispatched,
                 .counts = counts,

@@ -7,41 +7,20 @@
 // (grant[d] on every writer, cumulative), and pushes a row once every writer's landed counter here covers it (the
 // column-0 writer also wrote the trailer: header word and flags). Counters are cumulative within a call (misc[101]:
 // this port's rows before this call; the state is zeroed every call). Its row count is the device plan's.
-// (sparse_combine_rf._RF_READER_L1)
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "combine_zero_gate.hpp"
-#ifdef REC_DISPATCH
-// (experts_during_dispatch: the sparse 2D dispatch's reader runs first, as a phase of this kernel)
-#include "../../../../sparse_dispatch_2d/device/kernels/dataflow/sparse_dispatch_2d_reader.hpp"
-#endif
 
 constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
 constexpr uint32_t cb_tab = get_compile_time_arg_val(1);
 constexpr uint32_t MISC = get_compile_time_arg_val(2);
 constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(3);  // the writers' words (arena-relative, on their cores)
 constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(4);
-#ifdef REC_DISPATCH
-constexpr uint32_t cb_man = get_compile_time_arg_val(5);  // the dispatch's manifest, then its phase's args from 6
-#endif
 constexpr uint32_t GRANT_B = 8;  // grants go out in batches of this many slots (or the rest)
 
 void kernel_main() {
     size_t a = 0;
-#ifdef REC_DISPATCH
-    {
-        const sa::ReaderArgs dargs = sa::reader_args(a, get_write_ptr(cb_man));
-        (void)sa::read_phase<6>(dargs);
-        // every row this port's inputs brought has landed: count in on each x relay's ready word
-        const uint32_t nrel = get_arg_val<uint32_t>(a++), inc = get_arg_val<uint32_t>(a++);
-        const uint32_t rw = get_arg_val<uint32_t>(a++);
-        for (uint32_t i = 0; i < nrel; ++i, a += 2) {
-            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1), rw), inc);
-        }
-        noc_async_atomic_barrier();
-    }
-#endif
     const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint32_t plan = get_arg_val<uint32_t>(a++);
     const uint32_t bar = get_arg_val<uint32_t>(a++);

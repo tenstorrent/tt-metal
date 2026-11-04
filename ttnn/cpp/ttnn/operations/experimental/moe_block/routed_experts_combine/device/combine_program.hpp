@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The sparse combine's half of the experts + combine program (sparse_combine_rf.sparse_combine_rf_prepare): its cells
+// The sparse combine's half of the experts + combine program: its cells
 // (fabric ports, accumulators), kernels, circular buffers and runtime args on one chip's Program, next to the flat
 // routed expert's (flat_routed_expert/device/flat_program.hpp) on the cells the flat plan leaves free.
 //
@@ -51,11 +51,6 @@ namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
 // Circular buffer indices on the combine's cores (disjoint from the flat expert's cells; all bound to the arena).
 inline constexpr uint8_t kCbInj = 0, kCbRow = 1, kCbMeta = 2, kCbTab = 3, kCbAcc = 4, kCbOut = 5, kCbW = 6;
-// The dispatch phase's CBs on the port cores (experts_during_dispatch; the reference's DISP_CBS), the manifest first.
-inline constexpr uint8_t kCbDisRows = 24, kCbDisMeta = 25, kCbDisPlan = 26, kCbDisStage = 27, kCbDisDbg = 28,
-                         kCbDisManifest = 29;
-// The dispatch ports a chip at most (4 directions x 2 links): each chip's x-ready count is padded to it.
-inline constexpr uint32_t kXReadyN = 8;
 
 // What the combine is planned from (k3 TtK3TokenSplitMoE.__init__: combine_auto on the flat plan's free cells).
 struct CombinePlanInputs {
@@ -66,7 +61,6 @@ struct CombinePlanInputs {
     std::optional<uint32_t> n_acc;               // the accumulator count the fused head planned (pins A)
     std::optional<CombineMode> mode;             // ... and its mode
     uint32_t depth = 8;
-    std::optional<uint32_t> piece_max;  // default max(7168, 2 W): one piece a row (the L1 hand-off)
 };
 
 // Everything the combine's program needs that depends only on the mesh, the config and the plan inputs: computed once
@@ -75,19 +69,14 @@ struct CombinePlan {
     MeshTopology topo;
     MeshPlan mesh;  // ports: peers and fabric link ids
     uint32_t L = 0;
-    CombineTuning tuning;
     uint32_t snap_bits = 0;
     uint32_t S = 0, W = 0;
-    RowPieces pc;
+    RowSlot pc;
     StateLayout st;
     uint32_t A = 0, MAXT = 0, PSL = 0, D = 0, QP = 0, QL = 0;
     bool fused = false;    // acc_on_ports
     bool perchip = false;  // per-chip accumulator roles (ports apart): the senders' DRAM LUT
     CreditPolicy cred;
-    uint32_t far = 0, la = 0;
-    // experts_during_dispatch: the sparse 2D dispatch as the ports' first phase (sparse_dispatch_2d's kernels)
-    bool dispatch = false;
-    uint32_t group = 0, pack = 0, manifest_batch = 16;
     CombineAutoChoice choice;
 
     // Arena layout (arena-relative offsets; sparse_combine_rf_prepare's placement).
@@ -115,13 +104,12 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
 // The flat expert's side of the L1 hand-off (from its plan).
 struct FlatHandoff {
     std::vector<tt::tt_metal::CoreCoord> writers;  // the y writers (logical), in the flat program's order
-    std::vector<tt::tt_metal::CoreCoord> relays;   // the x relays (logical): the dispatch phase's ready counts
 
     bool operator==(const FlatHandoff&) const = default;
 };
 
 // The buffers the combine's runtime args address (patched on a program-cache hit).
-enum class CombineBuf : uint8_t { Arena, Plan, Table, Out, Bar, Hcache, Lut, Xbuf, Route, Sems, RelayWords, Count };
+enum class CombineBuf : uint8_t { Arena, Plan, Table, Out, Bar, Hcache, Lut, Count };
 struct CombineBuffers {
     std::array<tt::tt_metal::Buffer*, static_cast<size_t>(CombineBuf::Count)> buf{};
     tt::tt_metal::Buffer* operator[](CombineBuf b) const { return buf[static_cast<size_t>(b)]; }
