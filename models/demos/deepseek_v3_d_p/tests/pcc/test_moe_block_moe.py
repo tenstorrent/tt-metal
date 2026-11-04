@@ -20,7 +20,11 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    moe_fabric_payload,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -161,6 +165,14 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config  
 
 _K3_PAYLOAD, _K3_L1_SMALL = moe_block_mesh_params(KimiK3Config, moe_fabric_payload(KimiK3Config), 0, moe_impl="block")
 K3_FINAL_PCC = 0.965  # (test_kimi_k3_moe's final-output bar)
+K3_BLOCK_CHUNK = int(os.environ.get("K3_BLOCK_CHUNK", str(CHUNK)))  # (tokens a call: S/R rows a chip)
+_K3_TRACE_REGION = 64 << 20
+_K3_BLOCK_PARAMS = dict(
+    fabric_payload_size=_K3_PAYLOAD,
+    worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    l1_small_size=_K3_L1_SMALL,
+    trace_region_size=_K3_TRACE_REGION,
+)
 
 
 @pytest.mark.parametrize(
@@ -168,14 +180,21 @@ K3_FINAL_PCC = 0.965  # (test_kimi_k3_moe's final-output bar)
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(
-                fabric_payload_size=_K3_PAYLOAD,
-                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-                l1_small_size=_K3_L1_SMALL,
-            ),
+            torus_xy_device_params(**_K3_BLOCK_PARAMS),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
-        )
+        ),
+        # A 4x4 stage: SP a ring of 4, TP a line of 4 (FABRIC_2D_TORUS_Y). Half a Galaxy - run with
+        # TT_MESH_GRAPH_DESC_PATH=models/demos/deepseek_v3_d_p/experimental_descriptors/
+        # single_bh_galaxy_subtorus_y4_graph_descriptor.textproto and
+        # TT_VISIBLE_DEVICES=2,3,6,7,10,11,14,15,18,19,22,23,26,27,30,31 (as test_prefill_block_perf's subtorus).
+        # K3's 896 experts are 56 a chip here.
+        pytest.param(
+            (4, 4),
+            torus_y_device_params(**_K3_BLOCK_PARAMS),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-y-4x4",
+        ),
     ],
     indirect=True,
 )
@@ -211,7 +230,8 @@ def test_k3_moe_block(mesh_device, device_params):
     }
     ffn = TtK3MoEBlockFfn(mesh_device, KimiK3Config, layer_idx=1, state_dict=sd)
 
-    x = torch.randn(1, 1, CHUNK, H, generator=torch.Generator().manual_seed(7)).to(torch.bfloat16)
+    S = K3_BLOCK_CHUNK
+    x = torch.randn(1, 1, S, H, generator=torch.Generator().manual_seed(7)).to(torch.bfloat16)
     x_tt = ttnn.from_torch(
         x,
         dtype=ttnn.bfloat16,
@@ -220,16 +240,45 @@ def test_k3_moe_block(mesh_device, device_params):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3)),
     )
-    y_tt = ffn(x_tt)
+    t0 = time.perf_counter()
+    y_tt = ffn(x_tt)  # (the weights load here)
     ttnn.synchronize_device(mesh_device)
+    logger.info(f"K3 block {R}x{C}: first call (weights load + compile) {time.perf_counter() - t0:.0f} s")
     comp = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
     y = ttnn.to_torch(y_tt, mesh_composer=comp).float()
     ttnn.deallocate(y_tt)
 
-    want = _k3_moe_reference(x[0, 0], gate, routed, shared, latent)
-    ok, msg = comp_pcc(want.reshape(-1, H), y.reshape(-1, H), K3_FINAL_PCC)
-    logger.info(f"MoE block (Kimi-K3, random weights, {CHUNK} tokens) vs the host K3 MoE: {msg}")
+    want = _k3_moe_reference(x[0, 0], gate, routed, shared, latent).reshape(-1, H)
+    ok, msg = comp_pcc(want, y.reshape(-1, H), K3_FINAL_PCC)
+    logger.info(f"MoE block (Kimi-K3, random weights, {S} tokens, {R}x{C}) vs the host K3 MoE: {msg}")
+
+    # (time a call: eager, then a traced replay - weights resident, programs built)
+    calls = int(os.environ.get("K3_BLOCK_CALLS", "10"))
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(calls):
+        ttnn.deallocate(ffn(x_tt))
+    ttnn.synchronize_device(mesh_device)
+    eager = (time.perf_counter() - t0) / calls
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    y_tr = ffn(x_tt)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(calls):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    traced = (time.perf_counter() - t0) / calls
+    y2 = ttnn.to_torch(y_tr, mesh_composer=comp).float().reshape(-1, H)
+    ttnn.release_trace(mesh_device, tid)
+    ttnn.deallocate(y_tr)
+    ok2, msg2 = comp_pcc(want, y2, K3_FINAL_PCC)
+    logger.info(
+        f"K3BLOCK {R}x{C} {S} tokens ({S // R} rows, {E // (R * C)} experts a chip): eager {eager * 1e3:.2f} ms a call, "
+        f"traced {traced * 1e3:.2f} ms a replay; the traced output vs the host K3 MoE: {msg2}"
+    )
     assert ok, f"MoE block vs the host K3 MoE: {msg} (need {K3_FINAL_PCC})"
+    assert ok2, f"traced MoE block vs the host K3 MoE: {msg2} (need {K3_FINAL_PCC})"
 
 
 # ---- Kimi-K3 on real activations: the vLLM 100k trace's MoE inputs / outputs (moe_io) and the real weights ----
